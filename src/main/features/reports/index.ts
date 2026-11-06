@@ -302,24 +302,51 @@ export async function readAudit(deps: FeatureDeps, tenantId: string, drift: Pick
   } catch (error) {
     return { error: `The audit log could not be read: ${error instanceof Error ? error.message : String(error)}` }
   }
-  const window = `activityDateTime gt ${from} and activityDateTime le ${to}`
-  const intune = await readLog(graph, `deviceManagement/auditEvents?$select=${AUDIT_EVENT_SELECT}&$filter=${encodeURIComponent(`${window} and activityOperationType ne 'Get' and activityOperationType ne 'Search'`)}&$orderby=activityDateTime&$top=200`,
+  // No $orderby: with it, Graph scans the whole audit history from the oldest event and answers
+  // with empty pages until it reaches the window. The report sorts the events itself.
+  const window = (start: string) => `activityDateTime gt ${start} and activityDateTime le ${to}`
+  const intune = await readLog(graph, `deviceManagement/auditEvents?$select=${AUDIT_EVENT_SELECT}&$filter=${encodeURIComponent(`${window(from)} and activityOperationType ne 'Get' and activityOperationType ne 'Search'`)}&$top=200`,
     (raw) => mapAuditEvent(raw as AuditEventRaw), "Intune",
     "Microsoft Graph returned 403 for the Intune audit log. Your account needs an Intune role that can read audit logs.")
   if ("error" in intune) return intune
-  let note: string | null = intune.truncated ? `More than ${MAX_AUDIT_EVENTS} Intune audit events in this window; the newest were not read.` : null
+  const notes: string[] = []
+  if (intune.incomplete) notes.push(incompleteNote("Intune", intune.incomplete))
   const changes = [...intune.changes]
   if (drift.drifts.some((entry) => CONDITIONAL_ACCESS_TYPES.test(entry.type))) {
-    const entra = await readLog(graph, `auditLogs/directoryAudits?$select=${ENTRA_AUDIT_SELECT}&$filter=${encodeURIComponent(`${ENTRA_AUDIT_FILTER} and ${window}`)}&$orderby=${encodeURIComponent("activityDateTime asc")}&$top=200`,
-      (raw) => mapEntraAuditEvent(raw as EntraAuditRaw), "Conditional Access",
-      "Conditional Access changes have no actors: reading the Entra audit log needs the delegated AuditLog.Read.All permission and a role such as Security Reader.")
-    if ("error" in entra) note = [note, entra.error].filter(Boolean).join(" ")
+    const entraPath = (start: string) => `auditLogs/directoryAudits?$select=${ENTRA_AUDIT_SELECT}&$filter=${encodeURIComponent(`${ENTRA_AUDIT_FILTER} and ${window(start)}`)}&$top=200`
+    const entraMap = (raw: Record<string, unknown>) => mapEntraAuditEvent(raw as EntraAuditRaw)
+    const denied = "Conditional Access changes have no actors: reading the Entra audit log needs the delegated AuditLog.Read.All permission and a role such as Security Reader."
+    let entra = await readLog(graph, entraPath(from), entraMap, "Conditional Access", denied)
+    // Entra keeps audit events for 7 or 30 days and refuses an older start; read what it still keeps.
+    const kept = "error" in entra ? retentionStart(entra.error) : null
+    if (kept && kept > from && kept < to) {
+      entra = await readLog(graph, entraPath(kept), entraMap, "Conditional Access", denied)
+      if (!("error" in entra)) notes.push(`Entra keeps Conditional Access audit events only since ${kept.slice(0, 10)}, so earlier Conditional Access changes have no actors.`)
+    }
+    if ("error" in entra) notes.push(entra.error)
     else {
       changes.push(...entra.changes)
-      if (entra.truncated) note = [note, `More than ${MAX_AUDIT_EVENTS} Conditional Access audit events in this window; the newest were not read.`].filter(Boolean).join(" ")
+      if (entra.incomplete) notes.push(incompleteNote("Conditional Access", entra.incomplete))
     }
   }
-  return { changes, note }
+  return { changes, note: notes.length ? notes.join(" ") : null }
+}
+
+/** Pages one audit log read follows; Graph can answer with empty pages while it moves through its partitions. */
+export const MAX_AUDIT_PAGES = 200
+
+function incompleteNote(source: string, reason: "events" | "pages"): string {
+  return reason === "events"
+    ? `More than ${MAX_AUDIT_EVENTS} ${source} audit events in this window; not all of them were read, so some changes may have no actors.`
+    : `The ${source} audit log was not read to the end of this window, so some changes may have no actors.`
+}
+
+/** The oldest start Entra accepts, from its "Minimum allowed time for activityDateTime is ..." refusal, as an ISO time. */
+export function retentionStart(error: string): string | null {
+  const match = /Minimum allowed time for activityDateTime is ([0-9/]+ [0-9:]+ [AP]M)/.exec(error)
+  if (!match) return null
+  const parsed = Date.parse(`${match[1]} UTC`)
+  return Number.isNaN(parsed) ? null : new Date(parsed).toISOString()
 }
 
 async function readLog(
@@ -328,12 +355,12 @@ async function readLog(
   map: (raw: Record<string, unknown>) => AuditChange | null,
   source: string,
   denied: string,
-): Promise<{ changes: Array<AuditChange & { source: string }>; truncated: boolean } | { error: string }> {
+): Promise<{ changes: Array<AuditChange & { source: string }>; incomplete: "events" | "pages" | null } | { error: string }> {
   const changes: Array<AuditChange & { source: string }> = []
   let path: string | null = first
   let pages = 0
   try {
-    while (path && pages < 20 && changes.length < MAX_AUDIT_EVENTS) {
+    while (path && pages < MAX_AUDIT_PAGES && changes.length <= MAX_AUDIT_EVENTS) {
       pages++
       const response: { status: number; body: Record<string, unknown> } = await graph("GET", path)
       if (response.status === 403) return { error: denied }
@@ -347,7 +374,10 @@ async function readLog(
   } catch (error) {
     return { error: `The ${source} audit log could not be read: ${error instanceof Error ? error.message : String(error)}` }
   }
-  return { changes: changes.slice(0, MAX_AUDIT_EVENTS), truncated: Boolean(path) || changes.length > MAX_AUDIT_EVENTS }
+  const incomplete = changes.length > MAX_AUDIT_EVENTS ? "events" : path ? "pages" : null
+  // Unordered pages: the oldest events are kept, so the report still names who started the changes.
+  const kept = changes.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0)).slice(0, MAX_AUDIT_EVENTS)
+  return { changes: kept, incomplete }
 }
 
 async function printReport(deps: FeatureDeps, tenantId: string, report: ChangeReport): Promise<Uint8Array> {
