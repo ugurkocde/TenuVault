@@ -8,6 +8,7 @@ import type { NotificationRule, NotificationsStatus, PublicChannel } from "../..
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
+const opened = vi.hoisted(() => [] as string[])
 const state = vi.hoisted(() => ({ status: null as unknown as NotificationsStatus, watchUpdates: [] as unknown[], pushes: [] as unknown[], added: [] as unknown[] }))
 
 vi.mock("../../src/renderer/features/notifications/api", async (original) => ({
@@ -23,10 +24,10 @@ vi.mock("../../src/renderer/features/notifications/api", async (original) => ({
 }))
 vi.mock("../../src/portal/contexts/TenantContext", () => ({ useTenants: () => [] }))
 vi.mock("../../src/renderer/lib/toast", () => ({ toast: () => undefined }))
-vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { license: { open: vi.fn() } } }))
+vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { license: { open: vi.fn() }, app: { openExternal: async (url: string) => { opened.push(url) } } } }))
 vi.mock("../../src/renderer/features/notifications/optional-permissions", () => ({ useOptionalPermission: () => null }))
 
-import { AlertsTab, ChannelsTab, DeliveriesTab } from "../../src/renderer/features/notifications/NotificationsPanel"
+import { AlertsTab, ChannelsTab, DeliveriesTab, WatchingTab } from "../../src/renderer/features/notifications/NotificationsPanel"
 import { HUBS } from "../../src/renderer/features/hubs"
 
 const roots: Root[] = []
@@ -230,6 +231,39 @@ describe("the Azure watcher card over time", () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe("the watcher's last run on the Change watching tab", () => {
+  it("turns red once the last run is past the threshold, like the Alerts tab, even if the saved check said fresh", async () => {
+    const lastRunAt = new Date(Date.now() - 4 * 3_600_000).toISOString()
+    state.status = { ...empty, signedIn: true, auditWatch: { enabled: false, intervalMinutes: 15, categories: [], ignoreOwnChanges: true, includeActor: false, externalWatcher: true, lastPollAt: null, lastError: null, watermark: null, conditionalAccess: { enabled: false, watermark: null, lastPollAt: null, lastError: null }, watcherCheck: { checkedAt: lastRunAt, lastRunAt, stale: false, error: null } } }
+    const container = await render(WatchingTab, true)
+    const chip = [...container.querySelectorAll("span")].find((entry) => entry.textContent?.startsWith("Azure watcher last ran"))!
+    expect(chip.className).toContain("text-red-700")
+  })
+})
+
+describe("links to the Alerts guide", () => {
+  it("point at sections that exist in the docs page", async () => {
+    const { readFileSync } = await import("node:fs")
+    const source = readFileSync(`${process.cwd()}/src/renderer/features/notifications/NotificationsPanel.tsx`, "utf8")
+    const docs = readFileSync(`${process.cwd()}/docs-site/src/content/docs/notifications.md`, "utf8")
+    // The heading ids Starlight gives the page: lower case, punctuation dropped, spaces to hyphens.
+    const slugs = new Set([...docs.matchAll(/^#{2,3} (.+)$/gm)].map((match) => match[1]!.toLowerCase().replace(/[^a-z0-9 -]/g, "").trim().replace(/ /g, "-")))
+    const sections = [...source.matchAll(/<DocsLink section="([^"]+)"/g)].map((match) => match[1]!)
+    expect(sections.length).toBeGreaterThanOrEqual(7)
+    for (const section of sections) expect(slugs, section).toContain(section)
+  })
+
+  it("opens the guide section in the browser", async () => {
+    opened.length = 0
+    state.status = { ...empty, channels: [teams], signedIn: true }
+    const container = await render(AlertsTab, true)
+    const link = [...container.querySelectorAll("a")].find((anchor) => anchor.textContent === "How alerts work")!
+    expect(link.getAttribute("href")).toBe("https://docs.tenuvault.com/notifications/#alerts")
+    await act(async () => { link.click() })
+    expect(opened).toEqual(["https://docs.tenuvault.com/notifications/#alerts"])
   })
 })
 
