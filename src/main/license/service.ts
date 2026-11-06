@@ -249,6 +249,42 @@ function decodeToken(token: string, publicKey: KeyObject): Entitlement | null {
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
+export const TOKEN_SIGNATURE_PROBLEM =
+  "The license could not be verified: it was not signed by the TenuVault licensing service this app trusts. Update TenuVault to the latest version and retry. If this keeps happening, a proxy or security product may be changing licensing responses."
+
+const clockDate = (ms: number) => new Date(ms).toISOString().slice(0, 16).replace("T", " ") + " UTC"
+
+/**
+ * Why a token is not usable here, in words the admin can act on: a wrong signer (an outdated
+ * app, or something rewriting responses) is told apart from this computer's clock, since both
+ * used to read as "could not be verified" and only the clock is fixed on the machine. The clock
+ * is judged only for a token the service has just issued (fresh): a cached token that expired
+ * after two weeks offline looks the same as a clock two weeks ahead. Null when nothing is wrong
+ * with the token itself.
+ */
+export function tokenProblem(
+  token: string,
+  publicKey: KeyObject,
+  expected: { tenantId: string; installId: string; activationId: string },
+  now: number,
+  fresh: boolean,
+): string | null {
+  const payload = decodeToken(token, publicKey)
+  if (!payload) return TOKEN_SIGNATURE_PROBLEM
+  if (payload.status !== "granted" || !Number.isFinite(payload.exp)) return TOKEN_SIGNATURE_PROBLEM
+  if (!fresh) return null
+  // A fresh token is valid for 14 days from the service's clock, so one that reads as expired
+  // already says this computer's clock is at least that far ahead. A clock behind the service
+  // does not block activation: tokens carry no not-before time.
+  if (payload.exp * 1000 <= now) {
+    return `This computer's clock is ahead: it shows ${clockDate(now)}, but the license was issued on ${clockDate(payload.iat * 1000)}. Set the correct date and time, then retry.`
+  }
+  if (payload.tenantId !== expected.tenantId || payload.installId !== expected.installId || payload.act !== expected.activationId) {
+    return "The licensing service answered for a different tenant or installation. Retry; if this keeps happening, contact support."
+  }
+  return null
+}
+
 // Retry-After in milliseconds: delay seconds or an HTTP date. Null when absent or unreadable.
 function retryAfterMs(value: string | null): number | null {
   if (!value) return null
@@ -623,7 +659,7 @@ export class LicenseService {
         else delete this.state.activations[tenantId]
         this.state.seen = previousSeen
       }
-      throw new Error("The license token could not be verified.")
+      throw new Error(this.problemOf(tenantId, data.token, data.activationId))
     }
     this.message = null
     if (source === "key") {
@@ -913,7 +949,11 @@ export class LicenseService {
           accepted.push({ tenant, data })
           // The same checks accept() applies, made before anything is released, so an
           // unusable answer costs nothing.
-          if (!this.usableActivation(tenant, data)) throw new Error("The license token could not be verified.")
+          if (!this.usableActivation(tenant, data)) {
+            throw new Error(typeof data.token === "string" && typeof data.activationId === "string"
+              ? this.problemOf(tenant, data.token, data.activationId)
+              : "The licensing service returned an invalid response.")
+          }
         } catch (error) {
           if (error instanceof StaleLicenseRequest) throw error
           errors.set(tenant, error)
@@ -1020,6 +1060,12 @@ export class LicenseService {
     } catch {
       /* The release is retried; releasing an activation twice is harmless. */
     }
+  }
+
+  // The reason a token for the tenant is not usable, for an error message.
+  private problemOf(tenantId: string, token: string, activationId: string): string {
+    return tokenProblem(token, this.publicKey, { tenantId, installId: this.installId, activationId }, Date.now(), true) ??
+      "The license could not be verified. Retry activation on the License page."
   }
 
   // Whether accept() would take this activation response for the tenant.
@@ -1397,10 +1443,14 @@ export class LicenseService {
     const key = this.state?.key
     const latest = keyToken as Entitlement | null
     const latestTrial = latest?.v === 2 && latest.trial === true && typeof latest.keyExp === "number"
+    // A saved key activation whose token was not signed by the trusted key says so (an app
+    // update or a rewriting proxy is the fix, not a retry); otherwise it asks for a retry.
+    const keyEntry = Object.entries(this.state?.activations ?? {}).find(([, entry]) => entry.source !== "tenant")
     const keyMessage = !key || latest ? null
       : this.state?.keyFailure ? (REASONS[this.state.keyFailure] ?? null)
-        : Object.values(this.state?.activations ?? {}).some((entry) => entry.source !== "tenant")
-          ? "The saved license could not be verified. Retry activation on the License page."
+        : keyEntry
+          ? (tokenProblem(keyEntry[1].token, this.publicKey, { tenantId: keyEntry[0], installId: this.installId, activationId: keyEntry[1].activationId }, Date.now(), false) ??
+            "The saved license could not be verified. Retry activation on the License page.")
           : null
     const keyState: LicenseStatus["keyState"] = !key ? "none" : latest ? "active" : keyMessage ? "failed" : "pending"
     return {

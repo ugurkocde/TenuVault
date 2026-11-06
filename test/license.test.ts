@@ -9,6 +9,7 @@ import {
   LICENSE_REQUEST_TIMEOUT_MS,
   LicenseService,
   THROTTLE_MAX_WAIT_MS,
+  TOKEN_SIGNATURE_PROBLEM,
   entitlementCurrent,
   type LicenseServiceOptions,
 } from "../src/main/license/service"
@@ -1506,7 +1507,8 @@ describe("LicenseService key replacement", () => {
     const expired = token({ act: "act-2", iat: Math.floor(Date.now() / 1000) - 20 * 86400, exp: Math.floor(Date.now() / 1000) - 60 })
     answer = ({ action }) => (action === "activate" ? Response.json({ token: expired, activationId: "act-2", plan: "pro" }) : Response.json({ success: true }))
     const license = service()
-    await expect(license.replaceKey("TENU-PAID-KEY-0001", [TENANT])).rejects.toThrow("could not be verified")
+    // Freshly issued but already expired: only a clock far ahead explains that.
+    await expect(license.replaceKey("TENU-PAID-KEY-0001", [TENANT])).rejects.toThrow("This computer's clock is ahead")
     expect(calls.filter(({ action, body }) => action === "deactivate" && body.key === "TEST-LICENSE-KEY")).toHaveLength(0)
     expect(JSON.parse(store.get("license.state")!).key).toBe("TEST-LICENSE-KEY")
     expect(entitled(license)).toBe(true)
@@ -1728,6 +1730,53 @@ describe("LicenseService key replacement", () => {
     expect(status.validUntil).toBe(new Date(orgExpiry * 1000).toISOString())
     expect(Date.parse(status.trialEndsAt!)).toBeGreaterThan(Date.parse(status.validUntil!))
     expect(licenseExpiryWarning(status)).toBe("expiring")
+  })
+})
+
+// Task 15: a wrong signer and a wrong clock used to share one message; only the clock is fixed here.
+describe("LicenseService verification diagnostics", () => {
+  // The service's own clock, which issues every token below.
+  const SERVER_NOW = T0
+  const issuedNow = (act: string, key = privateKey) =>
+    token({ act, iat: Math.floor(SERVER_NOW / 1000), exp: Math.floor(SERVER_NOW / 1000) + 14 * 86400 }, key)
+
+  afterEach(() => vi.useRealTimers())
+
+  it("names a token signed by another key as a signer problem", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(SERVER_NOW)
+    const other = generateKeyPairSync("ed25519").privateKey
+    answer = () => Response.json({ token: issuedNow("act-1", other), activationId: "act-1", plan: "pro" })
+    const license = service()
+    await expect(license.setKey("TENU-PRO-KEY-0001", [TENANT])).rejects.toThrow(TOKEN_SIGNATURE_PROBLEM)
+  })
+
+  it.each([
+    ["ahead", 15 * DAY, "This computer's clock is ahead: it shows 2026-09-16 12:00 UTC, but the license was issued on 2026-09-01 12:00 UTC."],
+  ])("names a clock %s of the licensing service", async (_, offset, text) => {
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(SERVER_NOW + offset)
+    answer = () => Response.json({ token: issuedNow("act-1"), activationId: "act-1", plan: "pro" })
+    const license = service()
+    const error = await license.setKey("TENU-PRO-KEY-0001", [TENANT]).then(() => null, (caught: unknown) => caught as Error)
+    expect(error?.message).toContain(text)
+    expect(error?.message).not.toContain("signed")
+  })
+
+  it("names a token issued for another tenant", async () => {
+    answer = () => granted("act-1", {}, { tenantId: TENANT_B })
+    await expect(service().setKey("TENU-PRO-KEY-0001", [TENANT])).rejects.toThrow("answered for a different tenant or installation")
+  })
+
+  it("names a cached token from another signer on the License page, but not a merely expired one", () => {
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(SERVER_NOW)
+    storeLicense(issuedNow("act-1", generateKeyPairSync("ed25519").privateKey))
+    expect(service().status([TENANT]).keyMessage).toBe(TOKEN_SIGNATURE_PROBLEM)
+    // Two weeks offline: the token expired normally, which is no clock problem.
+    storeLicense(issuedNow("act-1"))
+    vi.setSystemTime(SERVER_NOW + 15 * DAY)
+    expect(service().status([TENANT]).keyMessage).toContain("could not be verified. Retry")
   })
 })
 
