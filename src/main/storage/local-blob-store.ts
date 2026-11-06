@@ -179,17 +179,23 @@ export interface InventoryDamage {
 
 const RECOVERY = "Import the recovery key it was made with, or restore the damaged files from a copy. Files that cannot be recovered can be removed from the backup folder."
 
+/** Thrown by decrypt when no key in the keyring opens the data, damaged data included. */
+const WRONG_KEY = "This backup was encrypted with a key this device does not have. Import its recovery key."
+
 /** Why a file could not be read. */
 class Unreadable {
   constructor(readonly reason: string) {}
 }
 
 function unreadableReason(error: unknown): string {
-  if (error instanceof Error && error.message.startsWith("This backup was encrypted with a key")) return "it is damaged, or was encrypted with a key this device does not have"
+  if (error instanceof Error && error.message === WRONG_KEY) return "it is damaged, or was encrypted with a key this device does not have"
   const code = (error as NodeJS.ErrnoException)?.code
   if (typeof code === "string" && /^E[A-Z]+$/.test(code)) return `it could not be read (${code})`
   return "it is damaged or incomplete"
 }
+
+/** Damaged files named in a message at most. */
+export const MAX_NAMED_FILES = 10
 
 const backupFolderOf = (name: string) => /^(backup-[^/]+)\//.exec(name)?.[1] ?? null
 
@@ -341,7 +347,10 @@ export class LocalBlobStore {
   private assertAvailable(entries: Map<string, Entry>, folder: string): void {
     const damage = this.damageOf.get(entries)
     const reason = damage?.unavailable.get(folder)
-    if (damage && reason) throw Object.assign(new IncompleteInventoryError(damage.files.length, `Backup ${folder} is unavailable: ${reason} ${RECOVERY}`), { backup: folder })
+    if (!damage || !reason) return
+    const files = damage.files.filter((file) => file.backup === folder).map((file) => file.file)
+    const named = files.length ? ` Affected file${files.length === 1 ? "" : "s"} in the backup folder: ${files.slice(0, MAX_NAMED_FILES).join(", ")}${files.length > MAX_NAMED_FILES ? `, and ${files.length - MAX_NAMED_FILES} more` : ""}.` : ""
+    throw Object.assign(new IncompleteInventoryError(damage.files.length, `Backup ${folder} is unavailable: ${reason}${named} ${RECOVERY}`), { backup: folder })
   }
 
   /** A blob that is not in the inventory may be in a file that could not be traced, so it is not reported as missing then. */
@@ -862,7 +871,7 @@ export class LocalBlobStore {
         // Try the next (older) key.
       }
     }
-    throw new Error("This backup was encrypted with a key this device does not have. Import its recovery key.")
+    throw new Error(WRONG_KEY)
   }
 }
 

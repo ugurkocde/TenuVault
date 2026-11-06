@@ -290,9 +290,11 @@ export async function POST(request: NextRequest) {
     // Backups on this device: the store says how many files in the folder could not be read, so
     // the list can say that some backups may be missing from it or unavailable.
     let damagedFiles = 0
+    let damagedFileNames: string[] = []
     if (storageAccountName.startsWith(LOCAL_STORAGE_PREFIX)) {
       const properties = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container`, { headers: storageHeaders(accessToken) }).catch(() => null)
       damagedFiles = Number(properties?.headers.get('x-tenuvault-unreadable-files') ?? 0) || 0
+      damagedFileNames = (properties?.headers.get('x-tenuvault-unreadable-file-names') ?? '').split(',').filter((name) => /^[0-9a-f]{1,64}\.tvb$/i.test(name))
     }
     
     // Get details for each backup folder
@@ -329,7 +331,7 @@ export async function POST(request: NextRequest) {
       delete backup.unresolved
     }
 
-    return NextResponse.json({ backups, unresolved, ...(damagedFiles ? { damagedFiles } : {}) })
+    return NextResponse.json({ backups, unresolved, ...(damagedFiles ? { damagedFiles, damagedFileNames } : {}) })
   } catch (error) {
     console.error("List backups error:", error)
     return NextResponse.json(

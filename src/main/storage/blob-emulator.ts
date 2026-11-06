@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks"
 import { BACKUP_CONTAINER, LOCAL_STORAGE_PREFIX, localStorageAccountName } from "../../shared/constants"
-import { BlobAlreadyExistsError, BlobConditionNotMetError, BlobNotFoundError, IncompleteInventoryError, type LocalBlobStore, type StoredBlob } from "./local-blob-store"
+import { BlobAlreadyExistsError, BlobConditionNotMetError, BlobNotFoundError, IncompleteInventoryError, MAX_NAMED_FILES, type LocalBlobStore, type StoredBlob } from "./local-blob-store"
 
 /**
  * Serves the subset of the Azure Blob REST API that the shared API routes use
@@ -188,6 +188,8 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
           headers: {
             "x-tenuvault-unreadable-files": String(damage.files.length),
             "x-tenuvault-unavailable-backups": String(damage.unavailable.size),
+            // The encrypted file names on disk (hex), so the files can be found to restore or remove them.
+            "x-tenuvault-unreadable-file-names": damage.files.slice(0, MAX_NAMED_FILES).map((file) => file.file).join(","),
           },
         })
       }

@@ -287,7 +287,7 @@ export default function BackupRestorePage() {
             {backupList.damagedFiles > 0 && (
               <p className="mb-4 flex items-start gap-2 text-sm text-amber-800">
                 <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-                {damagedFilesNotice(backupList.damagedFiles)}
+                {damagedFilesNotice(backupList.damagedFiles, backupList.damagedFileNames)}
               </p>
             )}
             {backupList.unresolved > 0 && (
