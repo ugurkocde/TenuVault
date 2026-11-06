@@ -24,8 +24,11 @@ const request = (tenant: OibTenant, catalog: OibCatalog, extra: object) => ({
   tenantId: tenant.tenantId, appId: tenant.appId, platform: catalog.platform, commit: catalog.commit, ...(catalog.tag ? { tag: catalog.tag } : {}), ...extra,
 })
 
-/** A toggle that loads its content the first time it opens. */
-function useOnDemand<T>(load: () => Promise<T>, initial?: T) {
+/**
+ * A toggle that loads its content when it opens: the first time, or every time with `reload`
+ * (for content read from the tenant, which can change between opens).
+ */
+function useOnDemand<T>(load: () => Promise<T>, initial?: T, reload = false) {
   const [open, setOpen] = useState(false)
   const [data, setData] = useState<T | undefined>(initial)
   const [error, setError] = useState("")
@@ -37,7 +40,8 @@ function useOnDemand<T>(load: () => Promise<T>, initial?: T) {
   function toggle() {
     const next = !open
     setOpen(next)
-    if (next && data === undefined && !loading) void fetchData()
+    if (!next || loading) return
+    if (reload) { setData(undefined); void fetchData() } else if (data === undefined) void fetchData()
   }
   return { open, data, error, loading, toggle, retry: fetchData }
 }
@@ -56,7 +60,7 @@ function Failure({ error, onRetry }: { error: string; onRetry: () => void }) {
   return <p role="alert" className="mt-2 text-xs text-red-700">{error} <button type="button" className="font-medium underline" onClick={onRetry}>Retry</button></p>
 }
 
-const NamesNote = () => <p className="mt-2 text-xs text-gray-600">Setting names could not be read from Microsoft Graph, so the names are derived from the setting IDs.</p>
+const NamesNote = () => <p className="mt-2 text-xs text-gray-600">Some setting names could not be read from Microsoft Graph, so those names are derived from the setting IDs.</p>
 
 const Lines = ({ lines }: { lines: string[] }) => <span className="block whitespace-pre-wrap break-words">{lines.join("\n")}</span>
 
@@ -94,7 +98,8 @@ export function PolicySettings({ tenant, catalog, source, name }: { tenant: OibT
   const view = useOnDemand(async () => {
     const result = await oibRequest<OibPolicySettings>(request(tenant, catalog, { action: "oib-policy-settings", source }))
     settingsCache.delete(key)
-    settingsCache.set(key, result)
+    // Without every name the result is not kept, so the next open asks Graph again.
+    if (!result.namesMissing) settingsCache.set(key, result)
     while (settingsCache.size > CACHE_SIZE) settingsCache.delete(settingsCache.keys().next().value!)
     return result
   }, settingsCache.get(key))
@@ -125,7 +130,7 @@ function ChangeGroup({ title, count, shown, children }: { title: string; count: 
 
 /** "Show what changes": the tenant policy's settings now, next to the selected OIB version, for the settings that differ. */
 export function PolicyChanges({ tenant, catalog, source, targetId, targetName }: { tenant: OibTenant; catalog: OibCatalog; source: string; targetId: string; targetName: string }) {
-  const view = useOnDemand(() => oibRequest<OibPolicyChanges>(request(tenant, catalog, { action: "oib-policy-changes", source, targetId })))
+  const view = useOnDemand(() => oibRequest<OibPolicyChanges>(request(tenant, catalog, { action: "oib-policy-changes", source, targetId })), undefined, true)
   const data = view.data
   const version = `OIB ${versionLabel(catalog)}`
   const none = data?.supported && !data.counts.changed && !data.counts.added && !data.counts.removed
@@ -139,7 +144,7 @@ export function PolicyChanges({ tenant, catalog, source, targetId, targetName }:
         <p className="text-xs text-gray-600">{none
           ? `The settings of ${data.tenantPolicyName} already match ${version}.`
           : `${data.tenantPolicyName} as it is in the tenant now, compared with ${version}. ${plural(data.unchanged, "setting stays", "settings stay")} the same.`}
-          {" "}Update in place replaces its settings with {version} and keeps its assignments; Create alongside leaves it unchanged.</p>
+          {" "}Update in place applies these changes and keeps its assignments; Create alongside leaves it unchanged.</p>
         {data.namesMissing && <NamesNote />}
         <ChangeGroup title="Changed" count={data.counts.changed} shown={data.changed.length}>
           <div className="mt-1 overflow-x-auto rounded-2xl bg-white px-4"><table className="w-full table-fixed text-left text-xs">
@@ -152,7 +157,11 @@ export function PolicyChanges({ tenant, catalog, source, targetId, targetName }:
           </table></div>
         </ChangeGroup>
         <ChangeGroup title={`Added by ${version}`} count={data.counts.added} shown={data.added.length}><SettingList rows={data.added} total={data.added.length} label={`settings added by ${version}`} /></ChangeGroup>
-        <ChangeGroup title={`Only in ${data.tenantPolicyName}, not in ${version}`} count={data.counts.removed} shown={data.removed.length}><SettingList rows={data.removed} total={data.removed.length} label={`settings only in ${data.tenantPolicyName}`} /></ChangeGroup>
+        <ChangeGroup title={`Only in ${data.tenantPolicyName}, not in ${version}`} count={data.counts.removed} shown={data.removed.length}>
+          <p className="mt-1 text-xs text-gray-600">{data.removal === "removed"
+            ? "Update in place removes these, because it replaces all settings of the policy."
+            : `Update in place sends the ${version} values and may leave some of these set. Check them in Intune after updating.`}</p>
+          <SettingList rows={data.removed} total={data.removed.length} label={`settings only in ${data.tenantPolicyName}`} /></ChangeGroup>
       </>}
     </div>}
   </div>

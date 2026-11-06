@@ -61,29 +61,42 @@ function choiceText(value: unknown, definitionId: string | undefined, names?: Se
   return truncate(value)
 }
 
-function capLines(lines: string[]): string[] {
-  if (lines.length <= MAX_LINES) return lines
-  return [...lines.slice(0, MAX_LINES - 1), FURTHER_NESTED_LINE]
+/** How setting lines are written: names, labels without a name, the line limit and what replaces lines past it. */
+interface Format {
+  names?: SettingNames
+  label: (definitionId: string) => string
+  maxLines: number
+  more: string
+  /** Each item of a group collection under its own "Item n" line, its settings indented. */
+  itemize: boolean
 }
 
-function childLines(children: unknown, depth: number, names?: SettingNames): string[] {
+const summaryFormat = (names?: SettingNames): Format => ({ names, label: (id) => settingNameOf(id, names) ?? shortLabel(id), maxLines: MAX_LINES, more: FURTHER_NESTED_LINE, itemize: false })
+
+function capLines(lines: string[], format: Format): string[] {
+  if (lines.length <= format.maxLines) return lines
+  return [...lines.slice(0, format.maxLines - 1), format.more]
+}
+
+function childLines(children: unknown, depth: number, format: Format): string[] {
   if (!Array.isArray(children)) return []
-  if (depth >= MAX_DEPTH) return [FURTHER_NESTED_LINE]
+  if (depth >= MAX_DEPTH) return [format.more]
   const lines: string[] = []
   for (const child of children) {
-    for (const line of summarizeInternal(child, depth + 1, names)) lines.push(`  ${line}`)
+    for (const line of summarizeInternal(child, depth + 1, format)) lines.push(`  ${line}`)
   }
-  return capLines(lines)
+  return capLines(lines, format)
 }
 
-function valueLines(record: RecordValue, definitionId: string | undefined, depth: number, names?: SettingNames): string[] {
-  if (depth > MAX_DEPTH) return [FURTHER_NESTED_LINE]
+function valueLines(record: RecordValue, definitionId: string | undefined, depth: number, format: Format): string[] {
+  if (depth > MAX_DEPTH) return [format.more]
+  const { names } = format
   const lines: string[] = []
   if ("choiceSettingValue" in record) {
     const choice = record.choiceSettingValue
     if (isRecord(choice)) {
       lines.push(`Selected option: ${choiceText(choice.value, definitionId, names)}`)
-      lines.push(...childLines(choice.children, depth, names))
+      lines.push(...childLines(choice.children, depth, format))
     } else {
       lines.push(`Selected option: ${scalarText(choice)}`)
     }
@@ -99,7 +112,7 @@ function valueLines(record: RecordValue, definitionId: string | undefined, depth
       for (const entry of collection) {
         if (isRecord(entry)) {
           lines.push(`Selected option: ${choiceText(entry.value, definitionId, names)}`)
-          lines.push(...childLines(entry.children, depth, names))
+          lines.push(...childLines(entry.children, depth, format))
         } else {
           lines.push(`Selected option: ${scalarText(entry)}`)
         }
@@ -122,14 +135,18 @@ function valueLines(record: RecordValue, definitionId: string | undefined, depth
   if ("groupSettingCollectionValue" in record) {
     const collection = record.groupSettingCollectionValue
     if (Array.isArray(collection)) {
-      for (const group of collection) {
+      const items = format.itemize && collection.length > 1
+      for (const [index, group] of collection.entries()) {
+        const groupLines: string[] = []
         if (isRecord(group) && Array.isArray(group.children)) {
-          for (const child of group.children) lines.push(...summarizeInternal(child, depth + 1, names))
+          for (const child of group.children) groupLines.push(...summarizeInternal(child, depth + 1, format))
         } else if (isRecord(group)) {
-          lines.push(...(depth >= MAX_DEPTH ? [FURTHER_NESTED_LINE] : valueLines(group, definitionId, depth + 1, names)))
+          groupLines.push(...(depth >= MAX_DEPTH ? [format.more] : valueLines(group, definitionId, depth + 1, format)))
         } else {
-          lines.push(fallbackLine(group))
+          groupLines.push(fallbackLine(group))
         }
+        if (items) lines.push(`Item ${index + 1}`, ...groupLines.map((line) => `  ${line}`))
+        else lines.push(...groupLines)
       }
     } else {
       lines.push(fallbackLine(collection))
@@ -138,12 +155,12 @@ function valueLines(record: RecordValue, definitionId: string | undefined, depth
   if ("groupSettingValue" in record) {
     const group = record.groupSettingValue
     if (isRecord(group) && Array.isArray(group.children)) {
-      for (const child of group.children) lines.push(...summarizeInternal(child, depth + 1, names))
+      for (const child of group.children) lines.push(...summarizeInternal(child, depth + 1, format))
     } else {
       lines.push(fallbackLine(group))
     }
   }
-  return capLines(lines)
+  return capLines(lines, format)
 }
 
 function hasValueKey(record: RecordValue): boolean {
@@ -155,41 +172,47 @@ function hasValueKey(record: RecordValue): boolean {
  * definitions, settings show their display name and choices their option label; without them
  * choice values are shown as their option token only, without claiming an enabled or disabled state.
  */
-function summarizeInternal(value: unknown, depth: number, names?: SettingNames): string[] {
-  if (depth > MAX_DEPTH) return [FURTHER_NESTED_LINE]
+function summarizeInternal(value: unknown, depth: number, format: Format): string[] {
+  if (depth > MAX_DEPTH) return [format.more]
   if (!isRecord(value)) return [fallbackLine(value)]
   const definitionId = typeof value.settingDefinitionId === "string" && value.settingDefinitionId ? value.settingDefinitionId : undefined
   if (definitionId && hasValueKey(value)) {
-    const inner = valueLines(value, definitionId, depth, names)
+    const inner = valueLines(value, definitionId, depth, format)
     if (!inner.length) return [fallbackLine(value)]
-    const label = settingNameOf(definitionId, names) ?? shortLabel(definitionId)
-    return capLines([`${label}: ${inner[0]}`, ...inner.slice(1).map((line) => (line.startsWith("  ") ? line : `  ${line}`))])
+    return capLines([`${format.label(definitionId)}: ${inner[0]}`, ...inner.slice(1).map((line) => (line.startsWith("  ") ? line : `  ${line}`))], format)
   }
   if (hasValueKey(value)) {
-    const inner = valueLines(value, definitionId, depth, names)
-    return inner.length ? capLines(inner) : [fallbackLine(value)]
+    const inner = valueLines(value, definitionId, depth, format)
+    return inner.length ? capLines(inner, format) : [fallbackLine(value)]
   }
   return [fallbackLine(value)]
 }
 
+/** Lines kept per setting by settingValueLines; far more than a policy setting holds in practice. */
+export const MAX_VALUE_LINES = 500
+
 /**
  * The value lines of a Settings Catalog setting instance without its name, for views that show
- * the name separately: the first line is the setting's own value, child settings follow indented.
+ * the name separately: the setting's own value first, child settings indented below it, and each
+ * item of a group collection under its own "Item n" line. `label` names child settings that have
+ * no name from the setting definitions.
  */
-export function settingValueLines(instance: unknown, names?: SettingNames): string[] {
+export function settingValueLines(instance: unknown, names: SettingNames | undefined, label: (definitionId: string) => string): string[] {
+  const format: Format = { names, label: (id) => settingNameOf(id, names) ?? label(id), maxLines: MAX_VALUE_LINES, more: "More values are not shown.", itemize: true }
   try {
     if (!isRecord(instance) || !hasValueKey(instance)) return [fallbackLine(instance)]
     const definitionId = typeof instance.settingDefinitionId === "string" && instance.settingDefinitionId ? instance.settingDefinitionId : undefined
-    const lines = valueLines(instance, definitionId, 0, names)
+    const lines = valueLines(instance, definitionId, 0, format)
     return lines.length ? lines : [fallbackLine(instance)]
   } catch {
-    return [FURTHER_NESTED_LINE]
+    return [format.more]
   }
 }
 
 export function summarizeSetting(value: unknown, names?: SettingNames): string[] {
+  const format = summaryFormat(names)
   try {
-    return capLines(summarizeInternal(value, 0, names))
+    return capLines(summarizeInternal(value, 0, format), format)
   } catch {
     return [FURTHER_NESTED_LINE]
   }

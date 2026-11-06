@@ -1,8 +1,8 @@
 import { settingValueLines } from "../frameworks/setting-summary"
 import type { SettingNames } from "../intune/drift"
-import { definitionLabel, MAX_DEFINITIONS } from "../intune/drift-format"
+import { addDefinitionIds, definitionLabel, MAX_DEFINITIONS } from "../intune/drift-format"
 import type { Item, Json } from "../intune/registry"
-import { adminTemplateIndex, canonical, flatIndex, VALIDATED_FOLDERS, type SettingIndex } from "./compare"
+import { adminTemplateIndex, catalogIndex, flatIndex, VALIDATED_FOLDERS, type SettingIndex } from "./compare"
 
 /**
  * The settings of one OIB policy in plain words, to read before deploying it, and what updating a
@@ -55,6 +55,12 @@ export interface OibPolicyChanges {
   added: OibSettingRow[]
   /** Settings the tenant policy has and the OIB version does not. */
   removed: OibSettingRow[]
+  /**
+   * What updating in place does with `removed`: Settings Catalog and administrative templates are
+   * replaced as a whole, so they are "removed"; other types are patched with the OIB properties,
+   * which may leave some of them in place ("maybe").
+   */
+  removal: "removed" | "maybe"
   /** Settings with the same value on both sides. */
   unchanged: number
   /** Full counts; the lists above hold at most MAX_SETTING_ROWS each. */
@@ -82,15 +88,17 @@ function valueText(value: Json | undefined): string {
 /** "Selected option: Enabled" as "Enabled" and "  Child: Value: 5" as "  Child: 5": the view already says what each line is. */
 const plain = (line: string) => line.replace(/^(\s*)(?:Selected option|Value): /, "$1").replace(/: (?:Selected option|Value): /, ": ")
 
+/** Settings Catalog settings keyed as Policy Validation keys them (one per root definition, the last wins). */
 function catalogEntries(policy: Item, names?: SettingNames): Entry[] {
-  const entries: Entry[] = []
+  const instances = new Map<string, unknown>()
   for (const setting of Array.isArray(policy.settings) ? policy.settings : []) {
     const instance = isObject(setting) ? setting.settingInstance : undefined
-    const id = isObject(instance) && typeof instance.settingDefinitionId === "string" ? instance.settingDefinitionId : undefined
-    if (!id) continue
-    entries.push({ id, label: definitionLabel(id, names), lines: settingValueLines(instance, names).map(plain), key: JSON.stringify(canonical(instance as Json) ?? null) })
+    if (isObject(instance) && typeof instance.settingDefinitionId === "string") instances.set(instance.settingDefinitionId, instance)
   }
-  return entries
+  const label = (id: string) => definitionLabel(id, names)
+  return [...catalogIndex(policy.settings)].map(([id, { value }]) => ({
+    id, label: label(id), lines: settingValueLines(instances.get(id), names, label).map(plain), key: JSON.stringify(value ?? null),
+  }))
 }
 
 function adminEntries(index: SettingIndex): Entry[] {
@@ -129,7 +137,7 @@ export function describePolicy(item: { source: string; name: string; folder: str
 export function policyChanges(item: { source: string; name: string; folder: string; snapshot: Item }, tenant: { id: string; name: string; policy: Item }, names?: SettingNames): OibPolicyChanges {
   const base = { source: item.source, name: item.name, folder: item.folder, tenantPolicyId: tenant.id, tenantPolicyName: tenant.name }
   if (!VALIDATED_FOLDERS.includes(item.folder)) {
-    return { ...base, supported: false, changed: [], added: [], removed: [], unchanged: 0, counts: { changed: 0, added: 0, removed: 0 } }
+    return { ...base, supported: false, changed: [], added: [], removed: [], removal: "maybe", unchanged: 0, counts: { changed: 0, added: 0, removed: 0 } }
   }
   const next = entriesOf(item.folder, item.snapshot, names)
   const current = new Map(entriesOf(item.folder, tenant.policy, names).map((entry) => [entry.id, entry]))
@@ -145,7 +153,7 @@ export function policyChanges(item: { source: string; name: string; folder: stri
   const wanted = new Set(next.map((entry) => entry.id))
   const removed = [...current.values()].filter((entry) => !wanted.has(entry.id))
   return {
-    ...base, supported: true, unchanged,
+    ...base, supported: true, unchanged, removal: item.folder === "ConfigurationPolicies" || item.folder === "GroupPolicyConfigurations" ? "removed" : "maybe",
     changed: changed.slice(0, MAX_SETTING_ROWS), added: added.slice(0, MAX_SETTING_ROWS).map(row), removed: removed.slice(0, MAX_SETTING_ROWS).map(row),
     counts: { changed: changed.length, added: added.length, removed: removed.length },
   }
@@ -154,13 +162,7 @@ export function policyChanges(item: { source: string; name: string; folder: stri
 /** The Settings Catalog setting definition IDs in policies, children included, to read their names. */
 export function definitionIdsOf(...policies: Item[]): string[] {
   const ids = new Set<string>()
-  const walk = (value: unknown, depth: number): void => {
-    if (ids.size >= MAX_DEFINITIONS || depth > 30 || !value || typeof value !== "object") return
-    if (Array.isArray(value)) return value.forEach((entry) => walk(entry, depth + 1))
-    const id = (value as { settingDefinitionId?: unknown }).settingDefinitionId
-    if (typeof id === "string" && id) ids.add(id)
-    for (const entry of Object.values(value)) walk(entry, depth + 1)
-  }
-  for (const policy of policies) walk(policy.settings, 0)
+  // Deeper than drift paths: whole policies nest group collections several levels down.
+  for (const policy of policies) addDefinitionIds(ids, policy.settings, 30)
   return [...ids].slice(0, MAX_DEFINITIONS)
 }

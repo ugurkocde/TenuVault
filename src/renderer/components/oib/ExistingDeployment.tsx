@@ -178,7 +178,8 @@ export function ExistingDeployment({ selections }: { selections: Selections }) {
           const k = rowKey(r), mode = selected.get(k), reason = disabledReason(r)
           const catalog = loader.loaded.find(l => l.catalog.platform === r.platform)?.catalog
           // An update compares with the tenant policy it would replace; other rows show the OIB settings.
-          const changes = r.match.status === "outdated" && r.match.tenant && VALIDATED_FOLDERS.includes(r.policy.folder) ? r.match.tenant : undefined
+          // The tenant policy must be of the same type: a match through an earlier OIBID can be another type.
+          const changes = r.match.status === "outdated" && r.match.tenant?.folder === r.policy.folder && VALIDATED_FOLDERS.includes(r.policy.folder) ? r.match.tenant : undefined
           return <li key={k} className="flex flex-wrap items-start gap-3 p-3 text-sm">
             <input type="checkbox" aria-label={`Select ${r.policy.name}`} checked={!!mode} disabled={!!reason} title={reason} onChange={() => toggle(r)} className="mt-1 h-4 min-h-0 w-4 shrink-0" />
             <div className="min-w-0 flex-1">

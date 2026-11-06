@@ -55,6 +55,23 @@ describe("OIB policy settings", () => {
     expect(view.total).toBe(MAX_SETTING_ROWS + 3)
   })
 
+  it("lists each item of a group collection under its own line, with names derived from IDs for child settings", () => {
+    const group = (children: unknown[]) => ({ children })
+    const rules = { settingInstance: { "@odata.type": "#microsoft.graph.deviceManagementConfigurationGroupSettingCollectionInstance", settingDefinitionId: "com.apple.servicemanagement_rules",
+      groupSettingCollectionValue: [group([child(simple("com.apple.servicemanagement_rules_ruletype", "TeamIdentifier")), child(simple("com.apple.servicemanagement_rules_rulevalue", "UBF8T346G9"))]),
+        group([child(simple("com.apple.servicemanagement_rules_ruletype", "BundleIdentifier"))])] } }
+    expect(describePolicy(catalogPolicy([rules])).settings[0]!.lines).toEqual([
+      "Item 1", "  Rules: Ruletype: TeamIdentifier", "  Rules: Rule value: UBF8T346G9", "Item 2", "  Rules: Ruletype: BundleIdentifier",
+    ])
+    const single = { settingInstance: { ...rules.settingInstance, groupSettingCollectionValue: [rules.settingInstance.groupSettingCollectionValue[1]] } }
+    expect(describePolicy(catalogPolicy([single])).settings[0]!.lines).toEqual(["Rules: Ruletype: BundleIdentifier"])
+  })
+
+  it("keeps one row per setting definition, as Policy Validation does", () => {
+    const view = describePolicy(catalogPolicy([simple("device_vendor_msft_a", 1), simple("device_vendor_msft_a", 2)]))
+    expect(view.settings).toEqual([{ id: "device_vendor_msft_a", label: "A", lines: ["2"] }])
+  })
+
   it("collects every setting definition, children included", () => {
     expect(definitionIdsOf({ settings: [choice(CLOUD, `${CLOUD}_1`, [child(choice(LEVEL, `${LEVEL}_2`))])] } as never).sort()).toEqual([CLOUD, LEVEL].sort())
   })
@@ -65,10 +82,15 @@ describe("OIB policy changes", () => {
     const next = catalogPolicy([simple("device_vendor_msft_a", 1), simple("device_vendor_msft_b", 2), simple("device_vendor_msft_new", 3)])
     const live = { name: "Win - OIB - SC - Defender - v3.0", settings: [{ ...simple("device_vendor_msft_a", 1), id: "7" }, simple("device_vendor_msft_b", 9), simple("device_vendor_msft_old", 4)] }
     const changes = policyChanges(next, { id: "t1", name: "Win - OIB - SC - Defender - v3.0", policy: live as never })
-    expect(changes).toMatchObject({ supported: true, unchanged: 1, tenantPolicyName: "Win - OIB - SC - Defender - v3.0", counts: { changed: 1, added: 1, removed: 1 } })
+    expect(changes).toMatchObject({ supported: true, unchanged: 1, removal: "removed", tenantPolicyName: "Win - OIB - SC - Defender - v3.0", counts: { changed: 1, added: 1, removed: 1 } })
     expect(changes.changed).toEqual([{ id: "device_vendor_msft_b", label: "B", before: ["9"], after: ["2"] }])
     expect(changes.added.map(r => r.id)).toEqual(["device_vendor_msft_new"])
     expect(changes.removed.map(r => r.id)).toEqual(["device_vendor_msft_old"])
+  })
+
+  it("says that patched policy types may keep settings only the tenant has", () => {
+    const changes = policyChanges({ source: "c.json", name: "CP", folder: "CompliancePolicies", snapshot: { passwordRequired: true } }, { id: "t", name: "CP", policy: { passwordRequired: true, bitLockerEnabled: true } })
+    expect(changes).toMatchObject({ removal: "maybe", unchanged: 1, removed: [{ id: "bitLockerEnabled" }] })
   })
 
   it("reports no changes when only the name differs", () => {
@@ -91,7 +113,7 @@ const SC = "WINDOWS/IntuneManagement/SettingsCatalog/Win - OIB - SC - Defender -
 const base = { tenantId, appId, platform: "windows", commit }
 
 /** GitHub, the token endpoint and Graph; `requests` records every call that is not GitHub. */
-function world(requests: string[], options: { batch?: number } = {}) {
+function world(requests: string[], options: { batch?: number; failItem?: boolean } = {}) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
     const method = init?.method ?? "GET"
@@ -106,7 +128,7 @@ function world(requests: string[], options: { batch?: number } = {}) {
     if (method === "POST" && path === "$batch") {
       if (options.batch && options.batch !== 200) return Response.json({}, { status: options.batch })
       const { requests: reads } = JSON.parse(String(init!.body)) as { requests: Array<{ id: string; url: string }> }
-      return Response.json({ responses: reads.map(read => read.url.endsWith(CLOUD)
+      return Response.json({ responses: reads.map(read => options.failItem && !read.url.endsWith(CLOUD) ? { id: read.id, status: 500 } : read.url.endsWith(CLOUD)
         ? { id: read.id, status: 200, body: { displayName: "Allow Cloud Protection", options: [{ itemId: `${CLOUD}_1`, displayName: "Allowed" }] } }
         : { id: read.id, status: 404 }) })
     }
@@ -141,6 +163,14 @@ describe("oib-policy-settings and oib-policy-changes", () => {
     const view = await handleOib({ ...base, action: "oib-policy-settings", source: SC }) as OibPolicySettings
     expect(view).toMatchObject({ total: 2, namesMissing: true })
     expect(view.settings[0]!.label).toBe("Defender: Allow cloud protection")
+  })
+
+  it("says when only some names could be read", async () => {
+    vi.stubGlobal("fetch", world([], { failItem: true }))
+    await handleOib({ action: "oib-source" })
+    const view = await handleOib({ ...base, action: "oib-policy-settings", source: SC }) as OibPolicySettings
+    expect(view).toMatchObject({ namesMissing: true })
+    expect(view.settings[0]!.label).toBe("Allow Cloud Protection")
   })
 
   it("rejects a policy that is not in the pack", async () => {

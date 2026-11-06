@@ -17,7 +17,7 @@ import { withTenantWrite } from "../features/write-lock"
 import { backupBeforeWrite } from "../backup/before-write"
 import type { KeyValueStore } from "../storage/secure-store"
 import { FrameworkError, tokenFor } from "../frameworks/service"
-import { readSettingNames } from "../../portal/lib/drift/setting-names"
+import { readSettingNamesReport } from "../../portal/lib/drift/setting-names"
 import { loadPack, oibDownloads, oibVersions, resolveMain, type LoadedPack } from "./source"
 
 /**
@@ -182,15 +182,16 @@ async function packPolicy(body: RecordJson) {
 
 /**
  * Display names of the Settings Catalog settings in the policies. Names only make the list easier
- * to read, so a failed lookup returns undefined and the view falls back to names from the IDs.
+ * to read, so a failed lookup is not an error: `missing` says that some or all names could not be
+ * read, and those settings fall back to names from their IDs.
  */
 async function namesFor(graph: () => Promise<GraphCall>, folder: string, ...policies: Item[]) {
   if (folder !== "ConfigurationPolicies") return { names: undefined, missing: false }
   const ids = definitionIdsOf(...policies)
   if (!ids.length) return { names: undefined, missing: false }
   try {
-    const names = await readSettingNames(ids, await graph())
-    return { names, missing: !Object.keys(names.settings).length }
+    const { names, failed } = await readSettingNamesReport(ids, await graph())
+    return { names, missing: failed }
   } catch {
     return { names: undefined, missing: true }
   }
@@ -209,6 +210,8 @@ async function policyChangesFor(body: RecordJson): Promise<OibPolicyChanges> {
   if (typeof body.targetId !== "string" || !OBJECT_ID.test(body.targetId)) throw new FrameworkError("Choose the tenant policy to compare.")
   const type = typeForFolder(policy.folder)
   if (!type) throw new FrameworkError("This policy type cannot be read.")
+  // Types Policy Validation does not compare are answered without reading the tenant.
+  if (!VALIDATED_FOLDERS.includes(policy.folder)) return policyChanges(policy, { id: body.targetId, name: body.targetId, policy: {} })
   const graph = graphCaller((await tokenFor(body)).token)
   const live = await readLive(graph, type, body.targetId)
   if (!live) throw new FrameworkError("The tenant policy no longer exists. Compare again.", 404)
