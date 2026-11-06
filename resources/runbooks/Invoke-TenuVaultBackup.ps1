@@ -1636,9 +1636,9 @@ function New-TvChangeReport {
         $names = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
         foreach ($name in @($entry.configName, $(if ($entry.Contains("previousName")) { $entry.previousName } else { $null }))) { if ($name) { [void]$names.Add(([string]$name).ToLowerInvariant()) } }
         $matching = @($events | Where-Object {
-            $resourceIds = if ($null -eq $_.resourceIds) { @() } else { @($_.resourceIds) }
-            $byId = @($resourceIds | Where-Object { $ids.Contains(([string]$_).ToLowerInvariant()) }).Count -gt 0
-            $byName = $resourceIds.Count -eq 0 -and $null -ne $_.resourceName -and $names.Contains(([string]$_.resourceName).ToLowerInvariant())
+            # A name match only when the event names no ID at all, so two items sharing a name are not mixed up.
+            $byId = [bool]$_.resourceId -and $ids.Contains(([string]$_.resourceId).ToLowerInvariant())
+            $byName = -not $_.resourceId -and $null -ne $_.resourceName -and $names.Contains(([string]$_.resourceName).ToLowerInvariant())
             $byId -or $byName
         })
         foreach ($event in $matching) { [void]$used.Add($event.auditId) }
@@ -2000,8 +2000,8 @@ function Get-TvReportEmail {
 }
 
 # ---------------------------------------------------------------------------
-# Audit events (mirror mapAuditEvent in src/shared/notifications/audit.ts, as the watcher does,
-# plus the object IDs a change report matches items by)
+# Audit events (mirror mapAuditEvent in src/shared/notifications/audit.ts, as the watcher does;
+# a change report matches items by resourceId, the object the event names)
 # ---------------------------------------------------------------------------
 
 function Get-TvAuditText {
@@ -2068,7 +2068,7 @@ function ConvertFrom-TvAuditEvent {
         resourceName = $resourceName; resourceType = $resourceType
         actorUpn = Get-TvAuditText (Get-TvProp $actor "userPrincipalName"); actorAppId = Get-TvAuditText (Get-TvProp $actor "applicationId"); actorAppName = Get-TvAuditText (Get-TvProp $actor "applicationDisplayName")
         activity = $(if ($activity) { $activity } else { "Change" })
-        resourceIds = @($resources | ForEach-Object { Get-TvAuditText (Get-TvProp $_ "resourceId") } | Where-Object { $_ } | Select-Object -First 20)
+        resourceId = $(if ($resource) { $resourceIdText = Get-TvAuditText (Get-TvProp $resource "resourceId"); if ($resourceIdText -and $resourceIdText.Length -gt 200) { $resourceIdText.Substring(0, 200) } else { $resourceIdText } } else { $null })
         source = "Intune"
     }
 }
