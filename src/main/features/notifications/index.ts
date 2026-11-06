@@ -2,7 +2,7 @@ import type { RouteModule } from "../../api/host"
 import { allows } from "../../../shared/plans"
 import { NOTIFICATION_EVENT_TYPES, testEvent } from "../../../shared/notifications/envelope"
 import { changeEvent } from "../../../shared/notifications/audit"
-import { describeConditions, hasConditions, isChangeEventType, parseConditions, parseDelivery, WATCHER_ALERTS_SCHEMA, type WatcherAlert, type WatcherAlerts, type WatcherDestination } from "../../../shared/notifications/alerts"
+import { describeConditions, hasConditions, isChangeEventType, parseConditions, parseDelivery, WATCHER_ALERTS_SCHEMA, watcherAlertsHash, type WatcherAlert, type WatcherAlerts, type WatcherDestination } from "../../../shared/notifications/alerts"
 import { DEFAULT_CARD_LAYOUT, isDefaultLayout, parseCardLayout, styleIssues } from "../../../shared/notifications/layout"
 import type { FeatureDeps } from "../deps"
 import { DOMAINS } from "../domains"
@@ -29,7 +29,10 @@ import {
   channelsOf,
   layoutOf,
   checkWatcher,
+  copyRulesToTenants,
   defaultAuditWatch,
+  previewChangeAlert,
+  retryDelivery,
   defaultConditionalAccessWatch,
   deliverToChannel,
   emit,
@@ -63,7 +66,10 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
       channels: channelsOf(deps, tenantId).map(publicChannel),
       rules: rulesOf(deps, tenantId).map(publicRule),
       auditWatch: publicAuditWatch(auditWatchOf(deps, tenantId)),
-      deliveries: outboxOf(deps, tenantId).slice(-30).reverse().map((entry) => ({
+      // Whether the Azure watcher runs these alerts: the hash its heartbeat reported, against now.
+      watcherAlerts: { current: watcherAlertsHash(watcherAlertsDocument(deps, tenantId).document), reported: auditWatchOf(deps, tenantId)?.watcherCheck?.alertsHash ?? null },
+      signedIn: Boolean(deps.actor(tenantId)),
+      deliveries: outboxOf(deps, tenantId).slice(-50).reverse().map((entry) => ({
         id: entry.id,
         eventId: entry.eventId,
         eventType: entry.envelope.type,
@@ -279,20 +285,80 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
     // The alerts as the Azure watcher reads them (setup -AlertRulesPath). Channels become kinds
     // of destinations, because the watcher has its own webhook, Teams URL and mail settings.
     "export-watcher-alerts": ({ tenantId, deps }) => {
-      const channels = channelsOf(deps, tenantId)
-      const alerts: WatcherAlert[] = []
-      const skipped: string[] = []
-      for (const rule of rulesOf(deps, tenantId)) {
-        if (!rule.enabled) continue
-        const destinations = [...new Set(channels.filter((channel) => channel.enabled && rule.channelIds.includes(channel.id)).flatMap((channel): WatcherDestination[] => (channel.kind === "email" ? ["mail"] : channel.kind === "teams" ? ["teams"] : channel.kind === "webhook" ? ["webhook"] : [])))]
-        if (!destinations.length) { skipped.push(rule.title); continue }
-        alerts.push({ id: rule.id, title: rule.title, eventTypes: rule.eventTypes.filter((type) => type !== "test"), minSeverity: rule.minSeverity, destinations: WATCHER_DESTINATIONS.filter((entry) => destinations.includes(entry)), delivery: parseDelivery(rule.delivery), conditions: parseConditions(rule.conditions) })
-      }
-      const document: WatcherAlerts = { schema: WATCHER_ALERTS_SCHEMA, alerts }
+      const { document, skipped } = watcherAlertsDocument(deps, tenantId)
       // Events the watcher produces that no copied alert takes stop reaching any destination.
-      const uncovered = WATCHER_EVENT_TYPES.filter((type) => !alerts.some((alert) => alert.eventTypes.includes(type)))
+      const uncovered = WATCHER_EVENT_TYPES.filter((type) => !document.alerts.some((alert) => alert.eventTypes.includes(type)))
       return { document, json: JSON.stringify(document, null, 2), skipped, uncovered }
     },
+
+    // Policy names from the newest backup and setting names seen in recent alerts, for the
+    // pickers of the alert dialog. A failure to read backups leaves the list empty.
+    "list-alert-suggestions": async ({ tenantId, deps }) => {
+      const settings = new Set<string>()
+      for (const entry of outboxOf(deps, tenantId)) for (const item of entry.envelope.items) for (const name of item.change?.settings ?? []) settings.add(name)
+      for (const rule of rulesOf(deps, tenantId)) for (const name of parseConditions(rule.conditions)?.settingNames ?? []) settings.add(name)
+      let policies: Array<{ name: string; type: string; service: "intune" | "conditionalAccess" }> = []
+      let backup: { id: string; at: string | null } | null = null
+      let error: string | null = null
+      try {
+        const listing = (await (await deps.api("/api/list-backups", tenantId)).json().catch(() => ({}))) as { backups?: Array<{ id?: string; status?: string; timestamp?: string; createdAt?: string }> }
+        const chosen = (listing.backups ?? []).find((entry) => typeof entry.id === "string" && !/fail/i.test(entry.status ?? ""))
+        if (chosen?.id) {
+          backup = { id: chosen.id, at: chosen.timestamp ?? chosen.createdAt ?? null }
+          const contents = (await (await deps.api("/api/list-backup-contents", tenantId, { backupId: chosen.id })).json().catch(() => ({}))) as { content?: { groups?: Array<{ folder?: string; label?: string; policies?: Array<{ displayName?: string }> }> } }
+          const seen = new Set<string>()
+          for (const group of contents.content?.groups ?? []) {
+            const service = /conditionalaccess|namedlocation|authenticationstrength/i.test(group.folder ?? "") ? "conditionalAccess" : "intune"
+            for (const policy of group.policies ?? []) {
+              const name = (policy.displayName ?? "").trim()
+              const key = `${service}|${name.toLowerCase()}`
+              if (!name || seen.has(key)) continue
+              seen.add(key)
+              policies.push({ name: name.slice(0, 200), type: (group.label ?? group.folder ?? "").slice(0, 120), service })
+            }
+          }
+          policies = policies.sort((a, b) => a.name.localeCompare(b.name)).slice(0, 3000)
+        }
+      } catch (failure) {
+        error = failure instanceof Error ? failure.message.slice(0, 200) : "The backups could not be read."
+      }
+      return { policies, settings: [...settings].sort((a, b) => a.localeCompare(b)).slice(0, 500), backup, error }
+    },
+
+    // What an alert, saved or still being edited, would have sent for the last days. Reads the
+    // audit logs; nothing is queued, sent or remembered.
+    "preview-rule": async ({ tenantId, body, deps }) => {
+      const types = eventTypes(body.eventTypes)
+      if (!types.some(isChangeEventType)) throw new FeatureError("A preview reads the audit logs, so the alert needs Intune change or Conditional Access change.")
+      if (!deps.actor(tenantId)) throw new FeatureError("Sign in to this tenant to read its audit logs.")
+      const days = Math.min(30, Math.max(1, Math.round(Number(body.days ?? 7)) || 7))
+      return previewChangeAlert(deps, tenantId, { id: "preview", enabled: true, eventTypes: types, minSeverity: severity(body.minSeverity), conditions: conditions(body.conditions), delivery: delivery(body.delivery) }, days)
+    },
+
+    // One delivery with the event it carried, for the delivery view. Stored data only.
+    "get-delivery": ({ tenantId, body, deps }) => {
+      const entry = outboxOf(deps, tenantId).find((candidate) => candidate.id === text(body, "deliveryId", 100))
+      if (!entry) throw new FeatureError("Delivery not found", 404)
+      const channel = channelsOf(deps, tenantId).find((candidate) => candidate.id === entry.channelId)
+      return { id: entry.id, state: entry.state, attempts: entry.attempts, lastError: entry.lastError, sentAt: entry.sentAt, channelTitle: entry.channelTitle, channelKind: channel?.kind ?? null, envelope: entry.envelope }
+    },
+
+    "retry-delivery": async ({ tenantId, body, deps, actor }) => {
+      const retried = await retryDelivery(deps, tenantId, text(body, "deliveryId", 100), actor)
+      if (!retried) throw new FeatureError("Only a failed delivery can be retried.", 409)
+      return { state: retried.state, lastError: retried.lastError, attempts: retried.attempts }
+    },
+
+    // Copies alerts to other connected tenants of the license (MSP portfolio).
+    "portfolio-copy-rules": ({ tenantId, body, deps, actor, targetTenants }) => {
+      if (!Array.isArray(body.ruleIds) || body.ruleIds.length === 0 || body.ruleIds.some((id) => typeof id !== "string")) throw new FeatureError("Pick at least one alert to copy.")
+      if (targetTenants.length === 0) throw new FeatureError("Pick at least one tenant to copy to.")
+      const known = new Set(rulesOf(deps, tenantId).map((rule) => rule.id))
+      const ruleIds = (body.ruleIds as string[]).filter((id) => known.has(id))
+      if (ruleIds.length === 0) throw new FeatureError("The picked alerts no longer exist.")
+      return { results: copyRulesToTenants(deps, tenantId, ruleIds, targetTenants, actor).map((result) => ({ ...result, tenantName: deps.tenant(result.tenantId)?.name ?? result.tenantId })) }
+    },
+
 
     "revoke-rule": ({ tenantId, body, deps }) => {
       const rule = requireRule(deps, tenantId, body)
@@ -451,6 +517,20 @@ function ruleSummary(rule: RuleRecord): string {
 }
 
 const WATCHER_DESTINATIONS: WatcherDestination[] = ["webhook", "teams", "mail"]
+
+/** The enabled alerts as the Azure watcher reads them, and the alerts left out for having no remote channel. */
+export function watcherAlertsDocument(deps: FeatureDeps, tenantId: string): { document: WatcherAlerts; skipped: string[] } {
+  const channels = channelsOf(deps, tenantId)
+  const alerts: WatcherAlert[] = []
+  const skipped: string[] = []
+  for (const rule of rulesOf(deps, tenantId)) {
+    if (!rule.enabled) continue
+    const destinations = [...new Set(channels.filter((channel) => channel.enabled && rule.channelIds.includes(channel.id)).flatMap((channel): WatcherDestination[] => (channel.kind === "email" ? ["mail"] : channel.kind === "teams" ? ["teams"] : channel.kind === "webhook" ? ["webhook"] : [])))]
+    if (!destinations.length) { skipped.push(rule.title); continue }
+    alerts.push({ id: rule.id, title: rule.title, eventTypes: rule.eventTypes.filter((type) => type !== "test"), minSeverity: rule.minSeverity, destinations: WATCHER_DESTINATIONS.filter((entry) => destinations.includes(entry)), delivery: parseDelivery(rule.delivery), conditions: parseConditions(rule.conditions) })
+  }
+  return { document: { schema: WATCHER_ALERTS_SCHEMA, alerts }, skipped }
+}
 /** The event types the Azure watcher produces. */
 const WATCHER_EVENT_TYPES = ["intune.change", "entra.change", "backup.failed", "backup.warning", "backup.succeeded", "backup.missed"] as const
 

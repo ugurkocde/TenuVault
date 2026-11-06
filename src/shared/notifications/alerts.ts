@@ -9,7 +9,7 @@
  * both use it, so an alert sends the same events whoever watches the tenant.
  */
 import { changeDigest, changeEvent, SERVICE_DIGEST, type AuditChange, type AuditChangeType, type ChangeService } from "./audit"
-import { SEVERITY_RANK, type NotificationEnvelope, type NotificationEventType, type NotificationSeverity } from "./envelope"
+import { canonicalJson, SEVERITY_RANK, sha256Hex, type NotificationEnvelope, type NotificationEventType, type NotificationSeverity } from "./envelope"
 
 export const CHANGE_TYPES: AuditChangeType[] = ["created", "updated", "deleted", "assigned", "unassigned", "changed"]
 
@@ -199,4 +199,14 @@ export interface WatcherAlert {
 export interface WatcherAlerts {
   schema: typeof WATCHER_ALERTS_SCHEMA
   alerts: WatcherAlert[]
+}
+
+/**
+ * The identity of a set of watcher alerts: SHA-256 of its canonical JSON, or "none" without
+ * alerts. The runbook writes the same value (Get-TvWatcherAlertsHash) into its heartbeat, so
+ * the desktop can tell whether the watcher runs the alerts it has now.
+ */
+export function watcherAlertsHash(document: WatcherAlerts | null): string {
+  if (!document || document.alerts.length === 0) return "none"
+  return sha256Hex(canonicalJson(document))
 }

@@ -1041,6 +1041,19 @@ function Get-TvAlertsTaking {
     return ,$ids.ToArray()
 }
 
+# Mirrors watcherAlertsHash in alerts.ts: SHA-256 of the canonical JSON of the alerts, "none"
+# without alerts and "unreadable" for a value that is not JSON. The heartbeat carries it so the
+# desktop can tell whether the watcher runs the alerts it has now.
+function Get-TvWatcherAlertsHash {
+    param([AllowNull()][AllowEmptyString()][string]$Text)
+    if (-not $Text) { return "none" }
+    $document = $null
+    try { $document = ConvertFrom-Json -InputObject $Text -ErrorAction Stop } catch { return "unreadable" }
+    $alerts = Get-TvStyleList $document "alerts"
+    if ($null -eq $alerts -or $alerts.Count -eq 0) { return "none" }
+    return Get-TvSha256Hex (ConvertTo-TenuVaultCanonicalJson $document)
+}
+
 # Where one envelope is owed. Without alerts: every configured destination. With alerts: the
 # destinations of the alerts that planned it (change alerts) or that take its type and
 # severity (everything else), limited to the destinations configured in this watcher.
@@ -2414,6 +2427,7 @@ $eventsSent = 0
 $lastError = $null
 $configVersion = "1"
 $configHash = $null
+$alertsHash = $null
 $leaseId = $null
 $storageToken = $null
 $stateBlobUri = $null
@@ -2462,6 +2476,7 @@ try {
     # says so, because sending too much is safer than silently sending nothing.
     $watcherAlerts = $null
     $alertRulesValue = Get-TvAutomationVariable "TenuVaultAlertRules"
+    $alertsHash = Get-TvWatcherAlertsHash $alertRulesValue
     if ($alertRulesValue) {
         $watcherAlerts = ConvertFrom-TvWatcherAlerts $alertRulesValue
         if ($null -eq $watcherAlerts) { Write-Output "TenuVaultAlertRules could not be read; every event goes to every destination until it is set again." }
@@ -3023,6 +3038,7 @@ try {
         runbookVersion = $runbookVersion
         configVersion = $configVersion
         configHash = $configHash
+        alertsHash = $alertsHash
         watermark = $watermarkIso
         eventsSent = $eventsSent
         lastError = $lastError
@@ -3050,6 +3066,7 @@ try {
                 runbookVersion = $runbookVersion
                 configVersion = $configVersion
                 configHash = $configHash
+                alertsHash = $alertsHash
                 watermark = $watermarkIso
                 eventsSent = $eventsSent
                 lastError = $lastError

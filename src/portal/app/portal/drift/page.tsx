@@ -26,6 +26,7 @@ import {
   ChevronDown,
   Database,
   Search,
+  BellPlus,
 } from "lucide-react"
 import { cn } from "~/lib/utils"
 import { useTenantPlan } from "@desktop/lib/license"
@@ -34,6 +35,7 @@ import { FeatureApiError } from "@desktop/lib/feature-api"
 import { showFeaturePlanError } from "@desktop/lib/plan-dialog"
 import { revertibleDriftCount, shouldShowDriftNote } from "@desktop/lib/plan-notes"
 import { GatedButton } from "@desktop/components/PlanGate"
+import { alertForPolicyHref } from "@desktop/lib/alert-links"
 import { FilterChips, FilterSelect, SearchInput } from "@desktop/components/FilterControls"
 import { cancelDriftScan, loadDriftResult, onDriftScanFinished, startDriftScan, useDriftJob, useDriftResult, useDriftResultFailure } from "@desktop/lib/drift-jobs"
 import { RunOverlay } from "@desktop/components/RunOverlay"
@@ -910,6 +912,16 @@ export default function DriftDetectionPage() {
                             )}
 
                             {drift.changeType !== "modified" && itemDetails(drift)}
+
+                            {drift.changeType !== "deleted" && !drift.isRevertDrift && (
+                              <Link
+                                to={alertForPolicyHref(drift.configName, drift.type)}
+                                className="inline-flex h-8 items-center gap-1.5 rounded-full border border-gray-200 px-3 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+                              >
+                                <BellPlus className="h-4 w-4" aria-hidden="true" />
+                                Alert me about changes to this policy
+                              </Link>
+                            )}
 
                             {drift.revertHistory && drift.revertHistory.length > 0 && (
                               <div className="bg-green-50 rounded-2xl px-4 py-3">

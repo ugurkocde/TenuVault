@@ -70,7 +70,7 @@ export interface FeatureDeps {
  * backup routes require those two but storage never uses them, for local or Azure accounts.
  */
 export type WatcherHeartbeatRead =
-  | { status: "ok"; runAt: string | null; lastError: string | null }
+  | { status: "ok"; runAt: string | null; lastError: string | null; alertsHash?: string | null }
   | { status: "missing" }
   | { status: "error"; message: string }
 

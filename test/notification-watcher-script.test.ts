@@ -125,6 +125,8 @@ describe("Azure notification watcher scripts", () => {
     // An unreadable value falls back to sending everything, never to silence.
     expect(runbook).toContain("every event goes to every destination until it is set again")
     expect(runbook).toContain("holds no alert this runbook can use")
+    // The heartbeat says which alerts the watcher runs, also when a run fails.
+    expect(runbook.match(/alertsHash = \$alertsHash/g)).toHaveLength(2)
     expect(setup).toContain("No alert in the file takes these watcher events")
     expect(runbook).toContain("alertRules=")
   })

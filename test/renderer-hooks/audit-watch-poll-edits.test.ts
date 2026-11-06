@@ -21,6 +21,8 @@ vi.mock("../../src/renderer/features/notifications/api", async (original) => ({
   },
 }))
 vi.mock("../../src/renderer/lib/toast", () => ({ toast: () => undefined }))
+vi.mock("../../src/portal/contexts/TenantContext", () => ({ useTenants: () => [] }))
+vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { license: { open: vi.fn() } } }))
 
 import { WatchingTab } from "../../src/renderer/features/notifications/NotificationsPanel"
 
