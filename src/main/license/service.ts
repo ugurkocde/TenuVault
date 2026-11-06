@@ -94,8 +94,12 @@ export interface LicenseServiceOptions {
   store: KeyValueStore
   /** False when OS encryption is unavailable: the license then lives in memory only. */
   persist: boolean
-  /** Ed25519 public key (SPKI PEM) that verifies entitlement tokens. */
-  publicKey: string
+  /**
+   * Ed25519 public keys (SPKI PEM) that verify entitlement tokens: the current key, and during
+   * a signing key rotation the other key as well (see the rotation runbook in
+   * docs/release-setup.md). A token signed by any of them verifies.
+   */
+  publicKey: string | readonly string[]
   /** Origin of the licensing service, such as https://www.tenuvault.com. */
   apiBase: string
   appVersion: string
@@ -223,14 +227,16 @@ export function entitlementCurrent(
   )
 }
 
-function decodeToken(token: string, publicKey: KeyObject): Entitlement | null {
+function decodeToken(token: string, publicKeys: readonly KeyObject[]): Entitlement | null {
   try {
     // Stored state is only shape-checked on load, so a token can in principle be a non-string
     // here; that must read as "not valid", never throw into a license check.
     if (typeof token !== "string") return null
     const [body, signature, extra] = token.split(".")
     if (!body || !signature || extra !== undefined) return null
-    if (!verify(null, Buffer.from(body), publicKey, Buffer.from(signature, "base64url"))) return null
+    const signed = Buffer.from(body)
+    const signatureBytes = Buffer.from(signature, "base64url")
+    if (!publicKeys.some((publicKey) => verify(null, signed, publicKey, signatureBytes))) return null
     const payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as Entitlement
     if (payload.v !== 1 && payload.v !== 2) return null
     // A renewing subscription has no key expiry: the server omits the field or sends null.
@@ -264,12 +270,12 @@ const clockDate = (ms: number) => new Date(ms).toISOString().slice(0, 16).replac
  */
 export function tokenProblem(
   token: string,
-  publicKey: KeyObject,
+  publicKeys: readonly KeyObject[],
   expected: { tenantId: string; installId: string; activationId: string },
   now: number,
   fresh: boolean,
 ): string | null {
-  const payload = decodeToken(token, publicKey)
+  const payload = decodeToken(token, publicKeys)
   if (!payload) return TOKEN_SIGNATURE_PROBLEM
   if (payload.status !== "granted" || !Number.isFinite(payload.exp)) return TOKEN_SIGNATURE_PROBLEM
   if (!fresh) return null
@@ -308,13 +314,15 @@ export class LicenseService {
   private readonly failures = new Map<string, { error: unknown; until: number }>()
   // Community tenants, until their next check for a license.
   private readonly community = new Map<string, number>()
-  private readonly publicKey: KeyObject
+  private readonly publicKeys: readonly KeyObject[]
   private readonly fetchImpl: typeof fetch
   private readonly idToken: IdTokenProvider
   private readonly clientId: ClientIdProvider
 
   constructor(private readonly options: LicenseServiceOptions) {
-    this.publicKey = createPublicKey(options.publicKey)
+    const pems = typeof options.publicKey === "string" ? [options.publicKey] : options.publicKey
+    if (pems.length === 0) throw new Error("A license verification key is required.")
+    this.publicKeys = pems.map((pem) => createPublicKey(pem))
     this.fetchImpl = options.fetch ?? ((input, init) => globalThis.fetch(input, init))
     this.idToken = options.idToken ?? (async () => null)
     this.clientId = options.clientId ?? (() => null)
@@ -508,7 +516,7 @@ export class LicenseService {
     const tenant = tenantId.toLowerCase()
     const entry = this.state.activations[tenant]
     if (!entry) return null
-    const payload = decodeToken(entry.token, this.publicKey)
+    const payload = decodeToken(entry.token, this.publicKeys)
     const now = this.observe()
     if (
       !payload ||
@@ -623,7 +631,7 @@ export class LicenseService {
     // to the later of the two.
     const previous = this.state.activations[tenantId]
     const previousSeen = this.state.seen
-    const issued = (decodeToken(data.token, this.publicKey)?.iat ?? NaN) * 1000
+    const issued = (decodeToken(data.token, this.publicKeys)?.iat ?? NaN) * 1000
     const now = Date.now()
     this.state.seen = Math.min(previousSeen ?? now, Number.isFinite(issued) ? Math.max(now, issued) : now)
     // shared is left out of a response when the service could not update it, and is false
@@ -664,9 +672,9 @@ export class LicenseService {
     this.message = null
     if (source === "key") {
       delete this.state.keyFailure
-      const payload = decodeToken(data.token, this.publicKey)
+      const payload = decodeToken(data.token, this.publicKeys)
       if (payload?.v === 2 && payload.trial === true && typeof payload.keyExp === "number") {
-        const kept = this.state.trialToken ? decodeToken(this.state.trialToken, this.publicKey) : null
+        const kept = this.state.trialToken ? decodeToken(this.state.trialToken, this.publicKeys) : null
         if (!kept || kept.sub !== payload.sub || kept.iat <= payload.iat) this.state.trialToken = data.token
       } else {
         delete this.state.trialToken
@@ -1064,14 +1072,14 @@ export class LicenseService {
 
   // The reason a token for the tenant is not usable, for an error message.
   private problemOf(tenantId: string, token: string, activationId: string): string {
-    return tokenProblem(token, this.publicKey, { tenantId, installId: this.installId, activationId }, Date.now(), true) ??
+    return tokenProblem(token, this.publicKeys, { tenantId, installId: this.installId, activationId }, Date.now(), true) ??
       "The license could not be verified. Retry activation on the License page."
   }
 
   // Whether accept() would take this activation response for the tenant.
   private usableActivation(tenant: string, data: Record<string, unknown>): boolean {
     if (typeof data.token !== "string" || typeof data.activationId !== "string") return false
-    const payload = decodeToken(data.token, this.publicKey)
+    const payload = decodeToken(data.token, this.publicKeys)
     const now = this.observe()
     return Boolean(
       payload &&
@@ -1379,7 +1387,7 @@ export class LicenseService {
     ]
     for (const token of candidates) {
       if (!token) continue
-      const payload = decodeToken(token, this.publicKey)
+      const payload = decodeToken(token, this.publicKeys)
       if (payload?.v !== 2 || payload.trial !== true || typeof payload.keyExp !== "number") continue
       if (!best || payload.iat > best.iat) best = { token, iat: payload.iat, keyExp: payload.keyExp }
     }
@@ -1449,7 +1457,7 @@ export class LicenseService {
     const keyMessage = !key || latest ? null
       : this.state?.keyFailure ? (REASONS[this.state.keyFailure] ?? null)
         : keyEntry
-          ? (tokenProblem(keyEntry[1].token, this.publicKey, { tenantId: keyEntry[0], installId: this.installId, activationId: keyEntry[1].activationId }, Date.now(), false) ??
+          ? (tokenProblem(keyEntry[1].token, this.publicKeys, { tenantId: keyEntry[0], installId: this.installId, activationId: keyEntry[1].activationId }, Date.now(), false) ??
             "The saved license could not be verified. Retry activation on the License page.")
           : null
     const keyState: LicenseStatus["keyState"] = !key ? "none" : latest ? "active" : keyMessage ? "failed" : "pending"

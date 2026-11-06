@@ -53,7 +53,7 @@ import {
   LICENSE_API_BASE,
   LICENSE_BUY_URL,
   LICENSE_PORTAL_URL,
-  LICENSE_PUBLIC_KEY,
+  LICENSE_PUBLIC_KEYS,
   LICENSE_REFRESH_MS,
 } from "./license/config"
 import { LicenseService } from "./license/service"
@@ -247,7 +247,7 @@ async function bootstrap(): Promise<void> {
     store: appStore,
     // Without OS encryption the key is kept in memory only, never written in plaintext.
     persist: canEncrypt(),
-    publicKey: LICENSE_PUBLIC_KEY,
+    publicKey: LICENSE_PUBLIC_KEYS,
     apiBase: LICENSE_API_BASE,
     appVersion: app.getVersion(),
     // The ID token proves the tenant for organization license sharing; its audience is

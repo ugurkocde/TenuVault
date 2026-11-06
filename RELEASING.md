@@ -31,25 +31,37 @@ rationale live in
   refusal with a known reason may drop a cached entitlement.
 - **Response shapes.** `activate`, `refresh`, and `tenant` answer `{token, activationId}`;
   `deactivate` answers `{success: true}`. Fields are add-only on both sides.
-- **Stored state.** The secure-store keys `license.state`, `license.installId`, and
-  `license.removedTenants`, the `userData` location, and the app identity that protects them
+- **Stored state.** The secure-store keys `license.state`, `license.installId`,
+  `license.removedTenants`, and `license.communityTenant`, the `userData` location, and the app identity that protects them
   (signing identity, product name) never change without a migration that older state survives.
   Losing `license.installId` silently consumes another of a tenant's five installations.
 - **Licensing host.** Requests go to `https://www.tenuvault.com`, never the apex (it redirects,
   and license requests refuse redirects so the key and Microsoft ID token in the body cannot be
   replayed to another origin). Keep `redirect: "error"` on every request that carries a key, a
   token, or an entitlement.
-- **Signing keys.** The app verifies tokens with the single Ed25519 public key baked in at build
-  time. Its fingerprint is pinned in `scripts/license-public-key.ts`; release builds
+- **Signing keys.** The app verifies tokens with the Ed25519 public key baked in at build time,
+  plus the keys in `ROTATION_LICENSE_PUBLIC_KEYS` (empty outside a rotation). The current key's
+  fingerprint is pinned in `scripts/license-public-key.ts`; release builds
   (`TENUVAULT_RELEASE_BUILD=1`, set by the release and manual installer workflows) fail when the
-  configured key is the placeholder or any other key. Never rotate the service signing key
-  until the app accepts both keys and that version has shipped; see task 14 in the plan.
+  configured key is the placeholder or any other key. The website mirrors the fingerprint and
+  its health check fails when the production signer has another. Never switch the service
+  signing key before an app that trusts the new key has shipped; follow "Rotating the license
+  signing key" in `docs/release-setup.md`.
+- **Released state fixtures.** `test/fixtures/license/` holds the license state bytes released
+  versions wrote, and `test/license-upgrade.test.ts` loads them with today's code. Never edit or
+  delete a fixture; add one for each stable release whose state format changes.
 - **Buyer identity.** The Polar checkout email owns billing only. Activation binds the key to a
   tenant and an installation, never to an email address or a signed-in user. Do not add an
   email, UPN, or OID comparison to any licensing route.
 
 Before promoting a nightly to stable, confirm on a machine running that nightly with a real paid
 key that the License page still shows the plan active and a manual refresh succeeds.
+
+A stable release, by tag or by promotion, fails when a commit since the previous stable release
+changed a licensing file (`src/main/license/`, `src/main/storage/secure-store.ts`,
+`scripts/license-public-key.ts`, `electron.vite.config.ts`) and has not been in a nightly for 24
+hours (`.github/scripts/license-soak.mjs`). In an emergency, run the stable promotion by hand
+with `allow_unsoaked_license_change`; a pushed tag has no override.
 
 ## Plan boundary changes
 

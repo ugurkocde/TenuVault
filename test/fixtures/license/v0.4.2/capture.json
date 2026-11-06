@@ -1,0 +1,12 @@
+{
+  "app": "0.4.2",
+  "capturedAt": 1793992872,
+  "installId": "0f9e8d7c-6b5a-4c3d-8e2f-1a0b9c8d7e6f",
+  "tenants": {
+    "TENANT_A": "11111111-2222-4333-8444-555555555555",
+    "TENANT_B": "66666666-7777-4888-8999-aaaaaaaaaaaa",
+    "TENANT_ORG": "99999999-8888-4777-8666-555555555555",
+    "TENANT_REMOVED": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    "TENANT_COMMUNITY": "12121212-3434-4565-8787-909090909090"
+  }
+}

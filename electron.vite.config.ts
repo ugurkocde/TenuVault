@@ -3,7 +3,12 @@ import tailwindcss from "@tailwindcss/vite"
 import react from "@vitejs/plugin-react"
 import { defineConfig } from "electron-vite"
 import { checkFrameworkRights } from "./scripts/check-framework-rights"
-import { PLACEHOLDER_LICENSE_PUBLIC_KEY, checkLicensePublicKey } from "./scripts/license-public-key"
+import {
+  PLACEHOLDER_LICENSE_PUBLIC_KEY,
+  ROTATION_LICENSE_PUBLIC_KEYS,
+  checkLicensePublicKey,
+  checkRotationLicensePublicKeys,
+} from "./scripts/license-public-key"
 
 const desktopRoot = import.meta.dirname
 checkFrameworkRights(desktopRoot)
@@ -42,6 +47,10 @@ const license = {
 // The fingerprint is printed so build logs show which verification key an artifact carries.
 const licenseKeyFingerprint = checkLicensePublicKey(license.publicKey, process.env.TENUVAULT_RELEASE_BUILD === "1")
 console.info(`License public key fingerprint (sha256): ${licenseKeyFingerprint}`)
+// Keys trusted besides it only during a signing key rotation, kept in the repository.
+for (const fingerprint of checkRotationLicensePublicKeys(ROTATION_LICENSE_PUBLIC_KEYS, license.publicKey)) {
+  console.info(`License rotation key fingerprint (sha256): ${fingerprint}`)
+}
 for (const [name, value] of [
   ["TENUVAULT_LICENSE_API_BASE", license.apiBase],
   ["TENUVAULT_LICENSE_BUY_URL", license.buyUrl],
@@ -71,6 +80,7 @@ export default defineConfig({
     define: {
       __TENUVAULT_LICENSE_API_BASE__: JSON.stringify(new URL(license.apiBase).origin),
       __TENUVAULT_LICENSE_PUBLIC_KEY__: JSON.stringify(license.publicKey),
+      __TENUVAULT_LICENSE_ROTATION_KEYS__: JSON.stringify(ROTATION_LICENSE_PUBLIC_KEYS),
       __TENUVAULT_LICENSE_BUY_URL__: JSON.stringify(license.buyUrl),
       __TENUVAULT_LICENSE_PORTAL_URL__: JSON.stringify(license.portalUrl),
     },

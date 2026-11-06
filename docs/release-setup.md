@@ -54,16 +54,22 @@ Create one *License Keys* benefit per plan (Benefits > Create benefit > License 
 | TenuVault Desktop Pro, yearly | Fixed | TenuVault Pro |
 | TenuVault Desktop MSP, monthly | Per unit, quantity = tenants, minimum 3 | TenuVault MSP |
 | TenuVault Desktop MSP, yearly | Per unit, quantity = tenants, minimum 3 | TenuVault MSP |
+| TenuVault Desktop MSP Five, monthly and yearly | Per unit, quantity = tenants | TenuVault MSP |
+| TenuVault Desktop Pro Trial (30 days, no card) | Free, recurring monthly | TenuVault Pro |
 
-**Trial:** every product has a 30 day trial. The key is issued when the trial starts, so trial users
-activate the app right away.
+**Trial:** every paid product has a 30 day trial. The key is issued when the trial starts, so trial
+users activate the app right away. The no-card trial product grants the same Pro benefit; the
+website sets its key to expire after 30 days and the licensing service flags such keys as trials
+through `DESKTOP_TRIAL_PRODUCT_ID`.
 
 ### Checkout links and token
 
 - Create a checkout link for each product (Products > Checkout Links). Set the success URL to
   `https://tenuvault.com/desktop#setup`.
-- Create an organization access token (Settings > Developers) with license key read and write
-  access. It goes into Vercel only.
+- Create an organization access token (Settings > Developers) with the scopes
+  `license_keys:read`, `license_keys:write`, `benefits:read` and `subscriptions:read`. The read
+  scopes are needed for MSP tenant quantities and for telling trial keys apart; without them MSP
+  activation fails with `tenant_quantity_unknown`. It goes into Vercel only.
 - Note the organization ID (Settings > General) and the benefit IDs.
 
 ## 2. Vercel (tenuvault.com)
@@ -78,7 +84,9 @@ preview uses the Polar sandbox and its own signing key):
 | `POLAR_ACCESS_TOKEN` | The organization access token |
 | `DESKTOP_LICENSE_PRO_BENEFIT_ID` | Benefit ID of TenuVault Pro |
 | `DESKTOP_LICENSE_MSP_BENEFIT_ID` | Benefit ID of TenuVault MSP |
-| `DESKTOP_LICENSE_SIGNING_KEY` | Private key from `npm run license:keypair` (base64 of the PEM) |
+| `DESKTOP_LICENSE_SIGNING_KEY` | Private key from `npm run license:keypair` (base64 of the PEM). In production its public half must match `TRUSTED_SIGNER_FINGERPRINTS` in the website's `src/lib/desktop-license/token.ts`, or the health check fails |
+| `DESKTOP_TRIAL_PRODUCT_ID` | Product ID of the no-card trial. Required in production: without it trial keys are issued as paid ones and the health check fails |
+| `LICENSING_HEARTBEAT_URL` | Optional: a heartbeat monitor's ping URL, called after every passed scheduled check (see the website's `docs/licensing-checks.md`) |
 | `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_SUPABASE_URL` | Store for organization license sharing |
 
 Public settings of the /desktop page. Next.js bakes them into the page at build time, so
@@ -110,8 +118,33 @@ Release builds use `https://www.tenuvault.com` as the licensing service and
 `https://tenuvault.com/desktop#pricing` as the checkout page. To test against a preview deployment,
 start a development build with `TENUVAULT_LICENSE_API_BASE=<preview origin>` and
 `TENUVAULT_LICENSE_PUBLIC_KEY=<preview public key>` set (`npm run dev` reads them at build time).
-Rotating the key pair invalidates every issued token; apps get new ones at their next refresh once
-the new public key ships.
+Never replace the key pair in one step: every installed app trusts only the keys it was built
+with, so it would reject every token the service issues from then on. Follow the runbook below.
+
+### Rotating the license signing key
+
+Rotate only when the private key may be exposed, or on a planned schedule. Each step waits for the
+previous one to be live.
+
+1. **Make the new pair offline.** Run `npm run license:keypair` on a trusted machine. Store the
+   private key in the password manager and on an offline backup, and test the backup: restore it
+   on another machine and check that its public half matches.
+2. **Teach the app the new key.** Add the new public key PEM to `ROTATION_LICENSE_PUBLIC_KEYS` in
+   `scripts/license-public-key.ts`, and its fingerprint to `TRUSTED_SIGNER_FINGERPRINTS` in the
+   website's `src/lib/desktop-license/token.ts` (the website then accepts either signer). Ship a
+   stable release.
+3. **Wait for the installed base.** Keep the old signer until the release from step 2 is the
+   oldest version you still support. Apps older than it fail fresh activations and refreshes
+   after step 4, while their cached tokens keep working for up to 14 days.
+4. **Switch the signer.** Set `DESKTOP_LICENSE_SIGNING_KEY` in the production Vercel environment to
+   the new private key and redeploy. Check `https://www.tenuvault.com/api/desktop-license/health`
+   and activate a test key.
+5. **Make the new key current.** Set the `TENUVAULT_LICENSE_PUBLIC_KEY` secret to the new public key,
+   set `PRODUCTION_LICENSE_PUBLIC_KEY_FINGERPRINT` to its fingerprint, and move the old public key
+   into `ROTATION_LICENSE_PUBLIC_KEYS` in its place. Ship a stable release.
+6. **Retire the old key.** At least 14 days after step 4 (the longest a token lives), remove the
+   old key from `ROTATION_LICENSE_PUBLIC_KEYS` and its fingerprint from `TRUSTED_SIGNER_FINGERPRINTS`.
+   Destroy the old private key.
 
 Signing secrets: see sections 4 and 5.
 
@@ -180,3 +213,28 @@ tenants with five installations each) and the MSP key has no practical cap (Pola
 Polar activation cap would prevent customers from reaching the service's per-tenant allowance. The
 production Vercel environment still requires an authenticated operator check. No production license
 was activated or changed during this review.
+
+### Production check, 6 November 2026
+
+Read from the live Polar organization, from the Vercel project's variable names, and from the
+deployed service; nothing was changed.
+
+- Polar, Pro benefit (TenuVault Desktop Pro key): 10 activations, customer deactivation enabled, no
+  expiry, prefix `TENU`. Granted by the Pro monthly and yearly products, the no-card trial product
+  and the nonprofit product.
+- Polar, MSP benefit (TenuVault Desktop MSP key): Polar's maximum activations, customer
+  deactivation enabled, no expiry. Granted by the four MSP products, all with unit-based prices
+  (quantity = tenants).
+- Polar customer portal: seat updates and plan changes enabled; customers cannot change their
+  email there.
+- Vercel production defines every licensing variable above, including `DESKTOP_TRIAL_PRODUCT_ID`
+  and `CRON_SECRET`. Values are marked sensitive and cannot be read back, so they are checked by
+  the service itself: since TenuVault-Website #88 the production health check fails when the
+  signing key does not match the pinned fingerprint or the trial product is missing, and the
+  scheduled check fails when a benefit id is not one of the organization's license key benefits.
+  The health check answered `ok` after that change was deployed, which confirms that the
+  production signer matches the key in the shipped apps.
+- A request with an unknown key to the production activation route was refused with `403
+  not_found`, so the route reaches Polar with a working token.
+- Not yet done: an owner-run purchase rehearsal from sandbox checkout to in-app activation, and
+  the email delivery of a key by Polar.

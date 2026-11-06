@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest"
 import {
   PLACEHOLDER_LICENSE_PUBLIC_KEY,
   PRODUCTION_LICENSE_PUBLIC_KEY_FINGERPRINT,
+  ROTATION_LICENSE_PUBLIC_KEYS,
   checkLicensePublicKey,
+  checkRotationLicensePublicKeys,
   licensePublicKeyFingerprint,
 } from "../scripts/license-public-key"
 
@@ -49,5 +51,25 @@ describe("checkLicensePublicKey", () => {
   it("refuses a key that is not Ed25519 in any build", () => {
     expect(() => checkLicensePublicKey(rsa, false)).toThrow(/must be an Ed25519 public key/)
     expect(() => checkLicensePublicKey(rsa, true)).toThrow(/must be an Ed25519 public key/)
+  })
+})
+
+describe("rotation keys", () => {
+  it("trusts no extra key outside a rotation", () => {
+    expect(ROTATION_LICENSE_PUBLIC_KEYS).toEqual([])
+    expect(checkRotationLicensePublicKeys(ROTATION_LICENSE_PUBLIC_KEYS, PRODUCTION_LICENSE_PUBLIC_KEY)).toEqual([])
+  })
+
+  it("accepts another Ed25519 key and reports its fingerprint", () => {
+    expect(checkRotationLicensePublicKeys([otherEd25519], PRODUCTION_LICENSE_PUBLIC_KEY)).toEqual([licensePublicKeyFingerprint(otherEd25519)])
+  })
+
+  it.each([
+    ["the current key", () => [PRODUCTION_LICENSE_PUBLIC_KEY], /repeats a key/],
+    ["a repeated key", () => [otherEd25519, otherEd25519], /repeats a key/],
+    ["the placeholder", () => [PLACEHOLDER_LICENSE_PUBLIC_KEY], /placeholder/],
+    ["an RSA key", () => [rsa], /only contain Ed25519/],
+  ])("refuses %s", (_, keys, message) => {
+    expect(() => checkRotationLicensePublicKeys(keys(), PRODUCTION_LICENSE_PUBLIC_KEY)).toThrow(message)
   })
 })

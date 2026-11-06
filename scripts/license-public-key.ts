@@ -22,6 +22,15 @@ MCowBQYDK2VwAyEAKxXrhBA4x3ybwuC7hkZm8pyRgkM/Zy51UwCGj8EzsF8=
 export const PRODUCTION_LICENSE_PUBLIC_KEY_FINGERPRINT =
   "71e8a17a5a7cf36a60d057b51ba6742dd33200eb1f1ce17afb7ba6b95e6f2b50"
 
+/**
+ * Further verification keys the app trusts besides TENUVAULT_LICENSE_PUBLIC_KEY, only while the
+ * licensing service's signing key is rotated (runbook: docs/release-setup.md, "Rotating the
+ * license signing key"): the next key before the service switches to it, then the previous key
+ * until every token it signed has expired. Empty outside a rotation. Public keys are not secrets,
+ * so they live here, reviewed like code, rather than in a CI secret.
+ */
+export const ROTATION_LICENSE_PUBLIC_KEYS: readonly string[] = []
+
 /** The key's fingerprint: SHA-256 hex of its SPKI DER encoding, PEM formatting aside. */
 export function licensePublicKeyFingerprint(pem: string): string {
   const der = createPublicKey(pem).export({ type: "spki", format: "der" })
@@ -48,4 +57,27 @@ export function checkLicensePublicKey(pem: string, releaseBuild: boolean): strin
     )
   }
   return fingerprint
+}
+
+/**
+ * Validates the rotation keys against the current key and returns their fingerprints. Each must
+ * be an Ed25519 key, differ from the current key and from each other, and never be the
+ * placeholder, whose private half no longer exists.
+ */
+export function checkRotationLicensePublicKeys(keys: readonly string[], current: string): string[] {
+  const seen = new Set([licensePublicKeyFingerprint(current)])
+  return keys.map((pem) => {
+    if (createPublicKey(pem).asymmetricKeyType !== "ed25519") {
+      throw new Error("ROTATION_LICENSE_PUBLIC_KEYS may only contain Ed25519 public keys.")
+    }
+    const fingerprint = licensePublicKeyFingerprint(pem)
+    if (fingerprint === licensePublicKeyFingerprint(PLACEHOLDER_LICENSE_PUBLIC_KEY)) {
+      throw new Error("ROTATION_LICENSE_PUBLIC_KEYS must not contain the placeholder key.")
+    }
+    if (seen.has(fingerprint)) {
+      throw new Error(`ROTATION_LICENSE_PUBLIC_KEYS repeats a key (fingerprint ${fingerprint}).`)
+    }
+    seen.add(fingerprint)
+    return fingerprint
+  })
 }
