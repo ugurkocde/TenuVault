@@ -47,7 +47,9 @@ inspected live; those items are listed as unverified.
   final rebuilt artifact of a stable promotion too. Mirror the fingerprint as a readiness check
   on the website so a signer change there is caught from the other side.
   Acceptance: an unrelated Ed25519 key and the placeholder both fail nightly and stable gates.
-- [ ] **2. Fix the activation deadline mismatch.** (desktop + website, verified) The desktop
+- [ ] **2. Fix the activation deadline mismatch.** (desktop + website, verified; desktop half
+  done: the request deadline is now the named `LICENSE_REQUEST_TIMEOUT_MS` at 45 seconds.
+  Remaining: bound the service's end-to-end activation work inside that budget) The desktop
   gives up after 20 seconds (`src/main/license/service.ts:428`). The server allows each Polar
   call 10 seconds (`polar.ts:81`) and the route 60 seconds (`activate/route.ts:7`), and
   activation makes several sequential calls (validate, read, allowance, key details, create,
@@ -111,7 +113,10 @@ inspected live; those items are listed as unverified.
   with the previous choice; make the store refuse stale-key overwrites.
   Acceptance: a failed replacement leaves mappings untouched, a successful one preserves an
   opt-out, and an old trial key refresh cannot reclaim a tenant.
-- [ ] **7. Make key replacement crash-safe.** (desktop, verified) `replaceKey` releases the old
+- [ ] **7. Make key replacement crash-safe.** (desktop, verified; the stored-state half is
+  done: token decoding cannot throw on damaged state and malformed activations are dropped on
+  load. Remaining: persist a recoverable record before releasing the old key's activations)
+  `replaceKey` releases the old
   activations before persisting the new state (`service.ts:839`). A crash or failed write in
   between restarts with the old key whose activations are gone. Separately, `load()` validates
   only the outer activations object, so a malformed entry reaches `decodeToken`, whose `split`
