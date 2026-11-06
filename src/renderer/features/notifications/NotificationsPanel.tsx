@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react"
 import { Link, useSearchParams } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { AlertTriangle, Bell, Building2, Cloud, Copy, Eye, History, Pencil, Plus, RotateCw, Search, Shield, Siren, Trash2, X } from "lucide-react"
+import { AlertTriangle, Bell, Building2, Cloud, Copy, ExternalLink, Eye, History, Pencil, Plus, RotateCw, Search, Shield, Siren, Trash2, X } from "lucide-react"
 import { useTenants } from "~/contexts/TenantContext"
 import type { Plan } from "../../../shared/plans"
 import { emailHtml, cardOf, teamsWorkflowsPayload } from "../../../shared/notifications/render"
@@ -19,6 +19,7 @@ import { NOTIFICATION_EVENT_TYPES, type NotificationEventType, type Notification
 import { CHANGE_TYPES, describeConditions, MAX_EACH_PER_CHECK, WATCHER_STALE_HOURS, type AlertConditions, type AlertDelivery } from "../../../shared/notifications/alerts"
 import type { AuditChangeType } from "../../../shared/notifications/audit"
 import { toast } from "../../lib/toast"
+import { bridge } from "../../lib/bridge"
 import type { FeatureTabProps } from "../types"
 import { TeamsCardTile } from "./CardLayoutEditor"
 import { useOptionalPermission } from "./optional-permissions"
@@ -70,6 +71,30 @@ const hasStored = (data: NotificationsStatus) => data.channels.length > 0 || dat
  * page shows its locked preview above; a tab then shows only what was stored on an earlier
  * plan, where turning things off and removing them stays free, and nothing otherwise.
  */
+/**
+ * Whether the Azure watcher counts as not running: the saved check said so, or its last run is
+ * older than the threshold now (checks stop while signed out, so a saved "fresh" can go out of date).
+ */
+function watcherStale(check: { stale: boolean; lastRunAt: string | null } | undefined, now = Date.now()): boolean {
+  if (!check) return false
+  return check.stale || Boolean(check.lastRunAt && now - Date.parse(check.lastRunAt) > WATCHER_STALE_HOURS * 3_600_000)
+}
+
+/** The Alerts guide on the docs site; each link opens the section about what it sits next to. */
+export const ALERTS_DOCS_URL = "https://docs.tenuvault.com/notifications/"
+
+export type AlertsDocsSection = "alerts" | "which-changes-an-alert-sends" | "channels" | "change-watching" | "alerts-while-this-computer-is-off-the-azure-watcher" | "alerts-in-the-watcher" | "troubleshooting"
+
+function DocsLink({ section, children }: { section: AlertsDocsSection; children: ReactNode }) {
+  const url = `${ALERTS_DOCS_URL}#${section}`
+  return (
+    <a href={url} className="inline-flex items-center gap-1 font-medium text-blue-700 underline dark:text-blue-300" onClick={(event) => { event.preventDefault(); void bridge.app.openExternal(url) }}>
+      {children}
+      <ExternalLink className="h-3 w-3" aria-hidden="true" />
+    </a>
+  )
+}
+
 export function AlertsTab({ tenant, plan, allowed }: FeatureTabProps) {
   // "Alert me about this policy" elsewhere in the app opens this tab with a prefilled alert.
   const [params, setParams] = useSearchParams()
@@ -88,7 +113,7 @@ export function AlertsTab({ tenant, plan, allowed }: FeatureTabProps) {
     <WithStatus tenant={tenant}>
       {(data, refresh) => !allowed && !hasStored(data) ? null : (
         <div className="space-y-4">
-          <p className="text-sm text-gray-600" role="note">{data.runtimeNote}</p>
+          <p className="text-sm text-gray-600" role="note">{data.runtimeNote} <DocsLink section="alerts-while-this-computer-is-off-the-azure-watcher">Set up the Azure watcher</DocsLink></p>
           <WatcherSyncCard tenant={tenant} data={data} onChanged={refresh} />
           <RulesTile tenant={tenant} data={data} plan={plan} prefill={prefill} onPrefillUsed={() => setParams({}, { replace: true })} onChanged={refresh} />
         </div>
@@ -146,10 +171,13 @@ function DeliveriesTile({ tenant, data, onChanged }: { tenant: Tenant; data: Not
   return (
     <Tile aria-labelledby="notifications-deliveries-heading" className="gap-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h3 id="notifications-deliveries-heading" className="flex items-center gap-2 text-lg font-medium text-gray-900">
-          <History className="h-4 w-4 text-gray-500" aria-hidden="true" />
-          Recent deliveries
-        </h3>
+        <div>
+          <h3 id="notifications-deliveries-heading" className="flex items-center gap-2 text-lg font-medium text-gray-900">
+            <History className="h-4 w-4 text-gray-500" aria-hidden="true" />
+            Recent deliveries
+          </h3>
+          <p className="text-sm text-gray-600">What was sent, what failed and what waits to retry. <DocsLink section="troubleshooting">Troubleshooting</DocsLink></p>
+        </div>
         <div className="flex flex-wrap gap-2" role="group" aria-label="Show deliveries">
           {DELIVERY_FILTERS.map((entry) => (
             <button key={entry.id} type="button" className={pillClass(filter === entry.id)} aria-pressed={filter === entry.id} onClick={() => setFilter(entry.id)}>
@@ -240,7 +268,7 @@ function ChannelsTile({ tenant, channels, rules, licensed, active, onChanged }: 
             <Bell className="h-4 w-4 text-gray-500" aria-hidden="true" />
             Channels
           </h3>
-          <p className="max-w-3xl text-sm text-gray-600">Where notifications go. A channel on its own sends nothing: an alert on the Alerts tab sends events to it. Messages carry names, counts, statuses and the names of changed settings, never setting values, policy content, tokens or credentials.</p>
+          <p className="max-w-3xl text-sm text-gray-600">Where notifications go. A channel on its own sends nothing: an alert on the Alerts tab sends events to it. Messages carry names, counts, statuses and the names of changed settings, never setting values, policy content, tokens or credentials. <DocsLink section="channels">Channels guide</DocsLink></p>
         </div>
         <div className="flex flex-wrap gap-2">
           {!hasLocal && <Button type="button" variant="outline" size="sm" disabled={!licensed || addLocal.isPending} onClick={() => addLocal.mutate()}>Notify on this computer</Button>}
@@ -704,8 +732,7 @@ function WatcherSyncCard({ tenant, data, onChanged }: { tenant: Tenant; data: No
   const ranWithout = sentAndWaiting && Boolean(lastRunAt && sync?.pushedAt && Date.parse(lastRunAt) > Date.parse(sync.pushedAt))
   const sentNotRun = sentAndWaiting && !ranWithout
   const failedAfterPush = Boolean(sync?.error && (!sync.pushedAt || (sync.errorAt ?? "") > sync.pushedAt))
-  // Judged here too: checks stop while signed out, and a saved "fresh" must not outlive the heartbeat.
-  const stale = data.auditWatch.watcherCheck?.stale === true || Boolean(lastRunAt && Date.now() - Date.parse(lastRunAt) > WATCHER_STALE_HOURS * 3_600_000)
+  const stale = watcherStale(data.auditWatch.watcherCheck)
   // A stale heartbeat says nothing about what the watcher runs now, so it comes first.
   const state: { tone: "success" | "warning" | "neutral"; chip: string; text: string } =
     stale
@@ -732,7 +759,7 @@ function WatcherSyncCard({ tenant, data, onChanged }: { tenant: Tenant; data: No
         </h3>
         <Chip tone={state.tone}>{state.chip}</Chip>
       </div>
-      <p className="text-sm text-gray-600">An Azure watcher owns change alerts for this tenant, so it sends them while this computer is off. {state.text}</p>
+      <p className="text-sm text-gray-600">An Azure watcher owns change alerts for this tenant, so it sends them while this computer is off. {state.text} <DocsLink section="alerts-in-the-watcher">Alerts in the watcher</DocsLink></p>
       {failedAfterPush && <p className="text-sm text-red-700" role="alert">The last update did not reach the watcher: {sync!.error}</p>}
       <div className="flex flex-wrap items-center gap-2">
         <Button type="button" size="sm" disabled={push.isPending || !data.licensed} onClick={() => push.mutate()}><RotateCw className="h-4 w-4" aria-hidden="true" />{push.isPending ? "Updating" : "Update watcher"}</Button>
@@ -772,7 +799,7 @@ function RulesTile({ tenant, data, plan, prefill, onPrefillUsed, onChanged }: { 
             <Siren className="h-4 w-4 text-gray-500" aria-hidden="true" />
             Alerts
           </h3>
-          <p className="max-w-3xl text-sm text-gray-600">An alert sends matching events, at or above its minimum severity, to its channels. Alerts on Intune or Conditional Access changes can pick which changes they send, for example only a policy you care about, and send each change on its own.</p>
+          <p className="max-w-3xl text-sm text-gray-600">An alert sends matching events, at or above its minimum severity, to its channels. Alerts on Intune or Conditional Access changes can pick which changes they send, for example only a policy you care about, and send each change on its own. <DocsLink section="alerts">How alerts work</DocsLink></p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button type="button" variant="ghost" size="sm" disabled={!licensed || rules.length === 0 || copyForWatcher.isPending} onClick={() => copyForWatcher.mutate()}><Copy className="h-4 w-4" aria-hidden="true" />Copy for Azure watcher</Button>
@@ -1046,7 +1073,7 @@ function RuleDialog({ tenant, data, rule, draft, open, onClose, onSaved, onChann
           {changes && (
             <fieldset className="space-y-3 rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
               <legend className="px-1 text-sm font-medium text-gray-900">Which changes</legend>
-              <p className="text-xs text-gray-500">Leave everything empty to send every change. Each filter you fill in narrows the alert further. They apply to Intune and Conditional Access changes only; other event types above are sent as usual.</p>
+              <p className="text-xs text-gray-500">Leave everything empty to send every change. Each filter you fill in narrows the alert further. They apply to Intune and Conditional Access changes only; other event types above are sent as usual. <DocsLink section="which-changes-an-alert-sends">About these filters</DocsLink></p>
               <div className="space-y-1.5">
                 <p className="text-sm text-gray-700" id="alert-change-types">Change types</p>
                 <div className="flex flex-wrap gap-2" role="group" aria-labelledby="alert-change-types">
@@ -1338,7 +1365,7 @@ function AuditWatchTile({ tenant, auditWatch, licensed, onChanged }: { tenant: T
             <Shield className="h-4 w-4 text-gray-500" aria-hidden="true" />
             Change watching
           </h3>
-          <p className="max-w-3xl text-sm text-gray-600">Polls the audit log of each service you pick and sends what changed through your alerts, as the "Intune change" and "Conditional Access change" event types. Alerts send names, change types, times and, for updates, the names of the settings that changed. Setting values are compared on this computer to find those names and are never kept or sent.</p>
+          <p className="max-w-3xl text-sm text-gray-600">Polls the audit log of each service you pick and sends what changed through your alerts, as the "Intune change" and "Conditional Access change" event types. Alerts send names, change types, times and, for updates, the names of the settings that changed. Setting values are compared on this computer to find those names and are never kept or sent. <DocsLink section="change-watching">Change watching guide</DocsLink></p>
         </div>
         <Chip tone={watching.length ? "success" : "neutral"}>{watching.length ? `Watching ${watching.join(" and ")}` : "Off"}</Chip>
       </div>
@@ -1380,7 +1407,7 @@ function AuditWatchTile({ tenant, auditWatch, licensed, onChanged }: { tenant: T
             <div className="flex flex-wrap items-center gap-2 pt-1 text-sm">
               {!check && <span className="text-gray-500">The watcher heartbeat has not been checked yet.</span>}
               {check && !check.error && (
-                <Chip tone={check.stale ? "danger" : "success"}>{check.lastRunAt ? `Azure watcher last ran ${formatTime(check.lastRunAt)}` : "No watcher heartbeat found"}</Chip>
+                <Chip tone={watcherStale(check) ? "danger" : "success"}>{check.lastRunAt ? `Azure watcher last ran ${formatTime(check.lastRunAt)}` : "No watcher heartbeat found"}</Chip>
               )}
               {check?.error && <span className="text-red-700" role="status">Heartbeat could not be read: {check.error}</span>}
               {check && <span className="text-xs text-gray-500">Checked {formatTime(check.checkedAt)}</span>}
