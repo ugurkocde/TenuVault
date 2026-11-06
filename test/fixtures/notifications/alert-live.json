@@ -1,0 +1,372 @@
+{
+  "_source": "Shapes recorded from a lab tenant on 2026-11-06 (ids replaced, permission lists dropped).",
+  "tenantId": "11111111-1111-1111-1111-111111111111",
+  "tenantName": "Contoso",
+  "intune": [
+    {
+      "id": "live-intune-create",
+      "displayName": "Create Microsoft.Management.Services.Api.Windows10CompliancePolicy",
+      "componentName": "DeviceCompliancePolicy",
+      "activity": null,
+      "activityDateTime": "2026-11-06T09:32:29.431005Z",
+      "activityType": "Create DeviceCompliancePolicy",
+      "activityOperationType": "Create",
+      "activityResult": "Success",
+      "category": "Compliance",
+      "actor": {
+        "type": "Application",
+        "auditActorType": "Application",
+        "applicationId": "33333333-0000-0000-0000-000000000003",
+        "applicationDisplayName": "Lab automation",
+        "userPrincipalName": null,
+        "servicePrincipalName": null,
+        "ipAddress": null,
+        "userId": null
+      },
+      "resources": [
+        {
+          "displayName": "TV-ALERTS-TEST compliance",
+          "type": "Windows10CompliancePolicy",
+          "auditResourceType": "Windows10CompliancePolicy",
+          "resourceId": "44444444-0000-0000-0000-000000000004",
+          "modifiedProperties": [
+            {
+              "displayName": "PasswordRequired",
+              "oldValue": null,
+              "newValue": "False"
+            },
+            {
+              "displayName": "PasswordMinimumLength",
+              "oldValue": null,
+              "newValue": "null"
+            },
+            {
+              "displayName": "OsMinimumVersion",
+              "oldValue": null,
+              "newValue": "10.0.19045"
+            },
+            {
+              "displayName": "BitLockerEnabled",
+              "oldValue": null,
+              "newValue": "False"
+            },
+            {
+              "displayName": "PasswordMinutesOfInactivityBeforeLock",
+              "oldValue": null,
+              "newValue": "<null>"
+            },
+            {
+              "displayName": "Id",
+              "oldValue": null,
+              "newValue": "44444444-0000-0000-0000-000000000004"
+            },
+            {
+              "displayName": "CreatedDateTime",
+              "oldValue": null,
+              "newValue": "11/6/2026 9:32:29 AM"
+            },
+            {
+              "displayName": "Description",
+              "oldValue": null,
+              "newValue": "TenuVault alert rules verification, safe to delete"
+            },
+            {
+              "displayName": "Version",
+              "oldValue": null,
+              "newValue": "1"
+            },
+            {
+              "displayName": "DeviceManagementAPIVersion",
+              "oldValue": null,
+              "newValue": "5026-07-07"
+            },
+            {
+              "displayName": "$Collection.RoleScopeTagIds[0]",
+              "oldValue": null,
+              "newValue": "Default"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "live-intune-update",
+      "displayName": "Update device compliance policy and associated ScheduledActionForRule.",
+      "componentName": "DeviceCompliancePolicy",
+      "activity": null,
+      "activityDateTime": "2026-11-06T09:32:33.1250363Z",
+      "activityType": "Patch DeviceCompliancePolicy",
+      "activityOperationType": "Patch",
+      "activityResult": "Success",
+      "category": "Compliance",
+      "actor": {
+        "type": "Application",
+        "auditActorType": "Application",
+        "applicationId": "33333333-0000-0000-0000-000000000003",
+        "applicationDisplayName": "Lab automation",
+        "userPrincipalName": null,
+        "servicePrincipalName": null,
+        "ipAddress": null,
+        "userId": null
+      },
+      "resources": [
+        {
+          "displayName": "TV-ALERTS-TEST compliance",
+          "type": "Windows10CompliancePolicy",
+          "auditResourceType": "Windows10CompliancePolicy",
+          "resourceId": "44444444-0000-0000-0000-000000000004",
+          "modifiedProperties": [
+            {
+              "displayName": "PasswordRequired",
+              "oldValue": "False",
+              "newValue": "True"
+            },
+            {
+              "displayName": "BitLockerEnabled",
+              "oldValue": "False",
+              "newValue": "True"
+            },
+            {
+              "displayName": "OsMinimumVersion",
+              "oldValue": "10.0.19045",
+              "newValue": "10.0.22631"
+            },
+            {
+              "displayName": "DeviceManagementAPIVersion",
+              "oldValue": null,
+              "newValue": "5026-07-07"
+            },
+            {
+              "displayName": "$Collection.RoleScopeTagIds[0]",
+              "oldValue": "Default",
+              "newValue": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "live-catalog-patch",
+      "displayName": null,
+      "componentName": "DeviceConfiguration",
+      "activity": null,
+      "activityDateTime": "2026-11-06T09:33:00.000Z",
+      "activityType": "Patch DeviceManagementConfigurationPolicy",
+      "activityOperationType": "Patch",
+      "activityResult": "Success",
+      "category": "DeviceConfiguration",
+      "actor": {
+        "type": "Application",
+        "auditActorType": "Application",
+        "applicationId": "33333333-0000-0000-0000-000000000003",
+        "applicationDisplayName": "Lab automation",
+        "userPrincipalName": null,
+        "servicePrincipalName": null,
+        "ipAddress": null,
+        "userId": null
+      },
+      "resources": [
+        {
+          "displayName": "Win - Lab - Automatic Restart Sign-On",
+          "type": "DeviceManagementConfigurationPolicy",
+          "auditResourceType": "DeviceManagementConfigurationPolicy",
+          "resourceId": "55555555-0000-0000-0000-000000000005",
+          "modifiedProperties": [
+            {
+              "displayName": "Name",
+              "oldValue": null,
+              "newValue": "Win - Lab - Automatic Restart Sign-On"
+            },
+            {
+              "displayName": "Description",
+              "oldValue": null,
+              "newValue": ""
+            },
+            {
+              "displayName": "Platforms",
+              "oldValue": null,
+              "newValue": "Windows10"
+            },
+            {
+              "displayName": "SettingCount",
+              "oldValue": null,
+              "newValue": "1"
+            },
+            {
+              "displayName": "DeviceManagementAPIVersion",
+              "oldValue": null,
+              "newValue": "5026-06-20"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "entra": [
+    {
+      "id": "IPCGraph_live-ca-create",
+      "category": "Policy",
+      "result": "success",
+      "resultReason": "",
+      "activityDisplayName": "Add conditional access policy",
+      "activityDateTime": "2026-11-06T09:32:39.7964162Z",
+      "loggedByService": "Conditional Access",
+      "operationType": "Add",
+      "initiatedBy": {
+        "user": null,
+        "app": {
+          "appId": "33333333-0000-0000-0000-000000000003",
+          "displayName": "Lab automation",
+          "servicePrincipalId": null,
+          "servicePrincipalName": null
+        }
+      },
+      "targetResources": [
+        {
+          "id": "66666666-0000-0000-0000-000000000006",
+          "displayName": "TV-ALERTS-TEST CA",
+          "type": "Policy",
+          "modifiedProperties": [
+            {
+              "displayName": "ConditionalAccessPolicy",
+              "oldValue": null,
+              "newValue": "{\"id\":\"66666666-0000-0000-0000-000000000006\",\"displayName\":\"TV-ALERTS-TEST CA\",\"createdDateTime\":\"2026-11-06T09:32:38.758256+00:00\",\"state\":\"disabled\",\"conditions\":{\"applications\":{\"includeApplications\":[\"None\"],\"excludeApplications\":[],\"includeUserActions\":[],\"includeAuthenticationContextClassReferences\":[],\"applicationFilter\":null},\"users\":{\"includeUsers\":[\"None\"],\"excludeUsers\":[],\"includeGroups\":[],\"excludeGroups\":[],\"includeRoles\":[],\"excludeRoles\":[]},\"userRiskLevels\":[],\"signInRiskLevels\":[],\"clientAppTypes\":[\"all\"],\"servicePrincipalRiskLevels\":[]},\"grantControls\":{\"operator\":\"OR\",\"builtInControls\":[\"mfa\"],\"customAuthenticationFactors\":[],\"termsOfUse\":[]}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "IPCGraph_live-ca-update",
+      "category": "Policy",
+      "result": "success",
+      "resultReason": "",
+      "activityDisplayName": "Update conditional access policy",
+      "activityDateTime": "2026-11-06T09:34:17.0160657Z",
+      "loggedByService": "Conditional Access",
+      "operationType": "Update",
+      "initiatedBy": {
+        "user": null,
+        "app": {
+          "appId": "33333333-0000-0000-0000-000000000003",
+          "displayName": "Lab automation",
+          "servicePrincipalId": null,
+          "servicePrincipalName": null
+        }
+      },
+      "targetResources": [
+        {
+          "id": "66666666-0000-0000-0000-000000000006",
+          "displayName": "TV-ALERTS-TEST CA",
+          "type": "Policy",
+          "modifiedProperties": [
+            {
+              "displayName": "ConditionalAccessPolicy",
+              "oldValue": "{\"id\":\"66666666-0000-0000-0000-000000000006\",\"displayName\":\"TV-ALERTS-TEST CA\",\"createdDateTime\":\"2026-11-06T09:32:38.758256+00:00\",\"state\":\"disabled\",\"conditions\":{\"applications\":{\"includeApplications\":[\"None\"],\"excludeApplications\":[],\"includeUserActions\":[],\"includeAuthenticationContextClassReferences\":[],\"applicationFilter\":null},\"users\":{\"includeUsers\":[\"None\"],\"excludeUsers\":[],\"includeGroups\":[],\"excludeGroups\":[],\"includeRoles\":[],\"excludeRoles\":[]},\"userRiskLevels\":[],\"signInRiskLevels\":[],\"clientAppTypes\":[\"all\"],\"servicePrincipalRiskLevels\":[]},\"grantControls\":{\"operator\":\"OR\",\"builtInControls\":[\"mfa\"],\"customAuthenticationFactors\":[],\"termsOfUse\":[]}}",
+              "newValue": "{\"id\":\"66666666-0000-0000-0000-000000000006\",\"displayName\":\"TV-ALERTS-TEST CA\",\"createdDateTime\":\"2026-11-06T09:32:38.758256+00:00\",\"state\":\"enabledForReportingButNotEnforced\",\"conditions\":{\"applications\":{\"includeApplications\":[\"None\"],\"excludeApplications\":[],\"includeUserActions\":[],\"includeAuthenticationContextClassReferences\":[],\"applicationFilter\":null},\"users\":{\"includeUsers\":[\"None\"],\"excludeUsers\":[],\"includeGroups\":[],\"excludeGroups\":[],\"includeRoles\":[],\"excludeRoles\":[]},\"userRiskLevels\":[],\"signInRiskLevels\":[],\"clientAppTypes\":[\"browser\",\"mobileAppsAndDesktopClients\"],\"servicePrincipalRiskLevels\":[]},\"grantControls\":{\"operator\":\"OR\",\"builtInControls\":[\"mfa\"],\"customAuthenticationFactors\":[],\"termsOfUse\":[]},\"modifiedDateTime\":\"2026-11-06T09:34:16.0971913+00:00\"}"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "alerts": [
+    {
+      "id": "all",
+      "title": "Everything",
+      "eventTypes": [
+        "intune.change",
+        "entra.change",
+        "backup.failed"
+      ],
+      "minSeverity": "info",
+      "destinations": [
+        "teams"
+      ],
+      "delivery": "digest",
+      "conditions": null
+    },
+    {
+      "id": "compliance-each",
+      "title": "Compliance policy changes",
+      "eventTypes": [
+        "intune.change"
+      ],
+      "minSeverity": "info",
+      "destinations": [
+        "webhook",
+        "mail"
+      ],
+      "delivery": "each",
+      "conditions": {
+        "changeTypes": [
+          "updated",
+          "deleted"
+        ],
+        "categories": [
+          "compliance"
+        ],
+        "policyNames": [
+          "tv-alerts-test"
+        ],
+        "settingNames": [],
+        "excludeActors": []
+      }
+    },
+    {
+      "id": "ca-state",
+      "title": "Conditional Access state",
+      "eventTypes": [
+        "entra.change"
+      ],
+      "minSeverity": "info",
+      "destinations": [
+        "mail"
+      ],
+      "delivery": "each",
+      "conditions": {
+        "changeTypes": [],
+        "categories": [],
+        "policyNames": [],
+        "settingNames": [
+          "state"
+        ],
+        "excludeActors": []
+      }
+    },
+    {
+      "id": "no-lab",
+      "title": "Not by automation",
+      "eventTypes": [
+        "intune.change"
+      ],
+      "minSeverity": "info",
+      "destinations": [
+        "webhook"
+      ],
+      "delivery": "digest",
+      "conditions": {
+        "changeTypes": [],
+        "categories": [],
+        "policyNames": [],
+        "settingNames": [],
+        "excludeActors": [
+          "LAB AUTOMATION"
+        ]
+      }
+    },
+    {
+      "id": "warnings",
+      "title": "Warnings only",
+      "eventTypes": [
+        "intune.change"
+      ],
+      "minSeverity": "warning",
+      "destinations": [
+        "teams"
+      ],
+      "delivery": "digest",
+      "conditions": null
+    }
+  ]
+}

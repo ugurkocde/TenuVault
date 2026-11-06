@@ -857,3 +857,90 @@ describe("Teams card layout", () => {
     expect(paid.status).toBe(402)
   })
 })
+
+describe("alerts with conditions", () => {
+  function alertWorld() {
+    return world({
+      graph: () => async (_method: string, path: string) => (path.startsWith("deviceManagement/auditEvents") ? { status: 200, body: { value: fixture.events } } : { status: 404, body: {} }),
+    })
+  }
+
+  it("stores conditions and delivery, and rejects invalid ones", async () => {
+    const w = alertWorld()
+    const channel = await addWebhook(w)
+    const rule = await addRule(w, [channel.id], { title: "WiFi changes", eventTypes: ["intune.change"], delivery: "each", conditions: { changeTypes: ["updated", "nope"], policyNames: ["WiFi"] } })
+    expect(rule).toMatchObject({ delivery: "each", conditions: { changeTypes: ["updated"], policyNames: ["WiFi"], categories: [], settingNames: [], excludeActors: [] } })
+    expect(rule.summary).toContain('policy names containing "WiFi"')
+    expect(rule.summary).toContain("One alert per change.")
+    const badDelivery = await call(w.routes, PATH, { tenantId: TENANT_A, action: "add-rule", eventTypes: ["intune.change"], channelIds: [channel.id], delivery: "sometimes" })
+    expect(badDelivery.status).toBe(400)
+    const badList = await call(w.routes, PATH, { tenantId: TENANT_A, action: "add-rule", eventTypes: ["intune.change"], channelIds: [channel.id], conditions: { policyNames: "WiFi" } })
+    expect(badList.status).toBe(400)
+    const cleared = await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-rule", ruleId: rule.id, conditions: null, delivery: "digest" })
+    expect(cleared.body.rule).toMatchObject({ conditions: null, delivery: "digest" })
+  })
+
+  it("sends each matching change on its own to one alert's channel and the full summary to another", async () => {
+    const w = alertWorld()
+    const local = await call(w.routes, PATH, { tenantId: TENANT_A, action: "add-channel", kind: "local" })
+    const webhook = await addWebhook(w)
+    await addRule(w, [local.body.channel.id], { eventTypes: ["intune.change"] })
+    await addRule(w, [webhook.id], { eventTypes: ["intune.change"], delivery: "each", conditions: { policyNames: ["wifi"] } })
+    saveAuditWatch(w.deps, TENANT_A, { enabled: true }, { actor: null, reason: "test" })
+    const result = await pollAuditWatch(w.deps, TENANT_A)
+    expect(result).toMatchObject({ changes: 3, error: null })
+    expect(w.deps.notifications.filter((text) => text.includes("Intune changes"))).toHaveLength(1)
+    const bodies = w.posts.map((post) => JSON.parse(String(post.init.body)) as { title: string; items: Array<{ change?: { auditId: string; settings?: string[] } }> })
+    expect(bodies.map((body) => body.title)).toEqual(["Intune change: WiFi Corp updated", "Intune change: WiFi Corp updated"])
+    expect(bodies.map((body) => body.items[0]!.change!.auditId)).toEqual(["audit-1", "audit-2"])
+    expect(bodies[0]!.items[0]!.change!.settings).toEqual(["networkName"])
+    expect(JSON.stringify(bodies)).not.toContain("new-secret")
+    // A second poll sends nothing again.
+    await pollAuditWatch(w.deps, TENANT_A)
+    expect(w.posts).toHaveLength(2)
+  })
+
+  it("an alert whose conditions match nothing stays quiet", async () => {
+    const w = alertWorld()
+    const webhook = await addWebhook(w)
+    await addRule(w, [webhook.id], { eventTypes: ["intune.change"], conditions: { categories: ["Role"] } })
+    saveAuditWatch(w.deps, TENANT_A, { enabled: true }, { actor: null, reason: "test" })
+    expect(await pollAuditWatch(w.deps, TENANT_A)).toMatchObject({ changes: 3, enqueued: 0 })
+    expect(w.posts).toHaveLength(0)
+  })
+
+  it("sends a test alert built from the alert's conditions to its channels, marked as a test", async () => {
+    const w = alertWorld()
+    const webhook = await addWebhook(w)
+    const rule = await addRule(w, [webhook.id], { title: "Compliance", eventTypes: ["intune.change"], conditions: { policyNames: ["Windows baseline"], settingNames: ["BitLocker"] } })
+    const tested = await call(w.routes, PATH, { tenantId: TENANT_A, action: "test-rule", ruleId: rule.id })
+    expect(tested.status).toBe(200)
+    expect(tested.body.results).toEqual([{ channelId: webhook.id, channelTitle: webhook.title, ok: true, error: null }])
+    const body = JSON.parse(String(w.posts[0]!.init.body)) as { test: boolean; title: string; items: Array<{ change: { settings: string[] } }> }
+    expect(body.test).toBe(true)
+    expect(body.title).toBe("Test: Intune change: Windows baseline (sample) updated")
+    expect(body.items[0]!.change.settings).toEqual(["BitLocker"])
+    expect(outboxOf(w.deps, TENANT_A)).toHaveLength(0)
+  })
+
+  it("exports the alerts for the Azure watcher with channel kinds as destinations", async () => {
+    const w = alertWorld()
+    const local = await call(w.routes, PATH, { tenantId: TENANT_A, action: "add-channel", kind: "local" })
+    const webhook = await addWebhook(w)
+    const teams = await call(w.routes, PATH, { tenantId: TENANT_A, action: "add-channel", kind: "teams", url: "https://contoso.webhook.office.com/workflows/abc" })
+    await addRule(w, [webhook.id, teams.body.channel.id, local.body.channel.id], { title: "Changes", eventTypes: ["intune.change", "test"], delivery: "each", conditions: { changeTypes: ["deleted"] } })
+    await addRule(w, [local.body.channel.id], { title: "Only here", eventTypes: ["backup.failed"] })
+    const off = await addRule(w, [webhook.id], { title: "Off", eventTypes: ["backup.failed"] })
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-rule", ruleId: off.id, enabled: false })
+    const exported = await call(w.routes, PATH, { tenantId: TENANT_A, action: "export-watcher-alerts" })
+    expect(exported.status).toBe(200)
+    expect(exported.body.skipped).toEqual(["Only here"])
+    expect(exported.body.uncovered).toEqual(["entra.change", "backup.failed", "backup.warning", "backup.succeeded", "backup.missed"])
+    expect(exported.body.document).toEqual({
+      schema: "tenuvault.watcher-alerts/v1",
+      alerts: [{ id: expect.any(String), title: "Changes", eventTypes: ["intune.change"], minSeverity: "info", destinations: ["webhook", "teams"], delivery: "each", conditions: { changeTypes: ["deleted"], categories: [], policyNames: [], settingNames: [], excludeActors: [] } }],
+    })
+    expect(exported.body.json).not.toContain("webhook.office.com")
+    expect(exported.body.json).not.toContain("hooks.example.test")
+  })
+})

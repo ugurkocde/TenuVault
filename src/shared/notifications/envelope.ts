@@ -3,9 +3,9 @@
  * runbook. Producers build envelopes; channels only render them. The PowerShell watcher
  * implements the same builders and the same canonical JSON, proven by shared fixtures.
  *
- * Payload allowlist: an envelope carries names, counts, statuses, timestamps and, when
- * the admin opted in, actor UPNs. It never carries policy content, audit request bodies,
- * audit property values, tokens or credentials.
+ * Payload allowlist: an envelope carries names, object ids, counts, statuses, timestamps,
+ * the names of changed settings and, when the admin opted in, actor UPNs. It never carries
+ * policy content, audit request bodies, setting values, tokens or credentials.
  */
 
 export const NOTIFICATION_SCHEMA = "tenuvault.notification/v1"
@@ -39,6 +39,24 @@ export interface NotificationItem {
   detail?: string
   actor?: string
   at?: string
+  /** On change lines: the same change as fields, for webhook receivers and alert conditions. */
+  change?: NotificationItemChange
+}
+
+/** One audited change as structured fields. Names only: never a setting value. */
+export interface NotificationItemChange {
+  auditId: string
+  changeType: string
+  category: string
+  resourceId?: string
+  resourceName?: string
+  resourceType?: string
+  /** Changes this line stands for when repeated edits were collapsed into it. */
+  count?: number
+  /** Names of the settings an update changed. */
+  settings?: string[]
+  /** Changed settings beyond the names listed. */
+  settingsMore?: number
 }
 
 export interface NotificationEnvelope {
@@ -63,6 +81,7 @@ const MAX_DETAIL_VALUE = 500
 const MAX_DETAILS = 20
 const MAX_ITEMS = 20
 const MAX_ITEM_TEXT = 300
+const MAX_ITEM_SETTINGS = 15
 
 function clean(value: string, max: number): string {
   // Control characters are stripped on purpose: rendered fields come from tenant data.
@@ -93,6 +112,7 @@ export function buildEnvelope(input: EnvelopeInput): NotificationEnvelope {
     ...(item.detail ? { detail: clean(item.detail, MAX_ITEM_TEXT) } : {}),
     ...(item.actor ? { actor: clean(item.actor, 200) } : {}),
     ...(item.at ? { at: item.at } : {}),
+    ...(item.change ? { change: cleanChange(item.change) } : {}),
   }))
   const envelope: NotificationEnvelope = {
     schema: NOTIFICATION_SCHEMA,
@@ -110,6 +130,22 @@ export function buildEnvelope(input: EnvelopeInput): NotificationEnvelope {
     ...(input.test ? { test: true } : {}),
   }
   return envelope
+}
+
+function cleanChange(change: NotificationItemChange): NotificationItemChange {
+  const settings = (change.settings ?? []).slice(0, MAX_ITEM_SETTINGS).map((name) => clean(name, 120)).filter(Boolean)
+  const more = Math.max(0, Math.floor(change.settingsMore ?? 0)) + Math.max(0, (change.settings ?? []).length - MAX_ITEM_SETTINGS)
+  return {
+    auditId: clean(change.auditId, 200),
+    changeType: clean(change.changeType, 40),
+    category: clean(change.category, 120),
+    ...(change.resourceId ? { resourceId: clean(change.resourceId, 200) } : {}),
+    ...(change.resourceName ? { resourceName: clean(change.resourceName, 200) } : {}),
+    ...(change.resourceType ? { resourceType: clean(change.resourceType, 200) } : {}),
+    ...(change.count && change.count > 1 ? { count: Math.floor(change.count) } : {}),
+    ...(settings.length ? { settings } : {}),
+    ...(more > 0 ? { settingsMore: more } : {}),
+  }
 }
 
 /** The deterministic delivery identity: SHA-256 of tenant, type and natural key. */

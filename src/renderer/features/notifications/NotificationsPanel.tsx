@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Bell, Eye, History, Pencil, Plus, Search, Shield, Trash2, X } from "lucide-react"
+import { Bell, Copy, Eye, History, Pencil, Plus, Search, Shield, Siren, Trash2, X } from "lucide-react"
 import type { Tenant } from "~/contexts/TenantContext"
 import { Chip, Tile } from "~/components/dashboard/tiles"
 import { Button } from "~/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "~/components/ui/dialog"
 import { Input } from "~/components/ui/input"
 import { NOTIFICATION_EVENT_TYPES, type NotificationEventType, type NotificationSeverity } from "../../../shared/notifications/envelope"
+import { CHANGE_TYPES, describeConditions, MAX_EACH_PER_CHECK, type AlertConditions, type AlertDelivery } from "../../../shared/notifications/alerts"
+import type { AuditChangeType } from "../../../shared/notifications/audit"
 import { toast } from "../../lib/toast"
 import { UpgradeNote } from "../../components/UpgradeNote"
 import { TeamsCardTile } from "./CardLayoutEditor"
@@ -95,7 +97,7 @@ function ChannelsTile({ tenant, channels, rules, licensed, active, onChanged }: 
             <Bell className="h-4 w-4 text-gray-500" aria-hidden="true" />
             Channels
           </h3>
-          <p className="max-w-3xl text-sm text-gray-600">Where notifications go. A channel on its own sends nothing: add a rule below to route events to it. Payloads carry names, counts and statuses only, never policy content, tokens or credentials.</p>
+          <p className="max-w-3xl text-sm text-gray-600">Where notifications go. A channel on its own sends nothing: add an alert below to send events to it. Messages carry names, counts, statuses and the names of changed settings, never setting values, policy content, tokens or credentials.</p>
         </div>
         <div className="flex flex-wrap gap-2">
           {!hasLocal && <Button type="button" variant="outline" size="sm" disabled={!licensed || addLocal.isPending} onClick={() => addLocal.mutate()}>Notify on this computer</Button>}
@@ -172,7 +174,7 @@ function ChannelRow({ tenant, channel, licensed, ruleCount, onChanged, onEdit, o
         <Chip tone="neutral">{CHANNEL_KIND_LABELS[channel.kind]}</Chip>
         <span className="text-sm text-gray-500">{channelTarget(channel)}</span>
         {channel.hasSecret && <Chip tone="neutral">{channel.signRequests ? "Signing secret set" : `Secret header ${channel.headerName ?? ""} set`}</Chip>}
-        <span className="text-sm text-gray-500">{ruleCount === 0 ? "Used by no rule" : `Used by ${ruleCount} rule${ruleCount === 1 ? "" : "s"}`}</span>
+        <span className="text-sm text-gray-500">{ruleCount === 0 ? "Used by no alert" : `Used by ${ruleCount} alert${ruleCount === 1 ? "" : "s"}`}</span>
       </div>
       <p className={last && !last.ok ? "text-sm text-red-700" : "text-sm text-gray-600"} role={last && !last.ok ? "status" : undefined}>
         {last ? `${last.ok ? "Last delivery succeeded" : `Last delivery failed after ${last.attempts} attempts: ${last.error ?? "unknown error"}`} (${formatTime(last.at)}${last.test ? ", test" : ""})` : "Nothing delivered yet."}
@@ -204,7 +206,7 @@ function RemoveChannelDialog({ tenant, channel, rules, liveChannelIds, open, onC
         <DialogHeader>
           <DialogTitle>Remove {channel.title}?</DialogTitle>
           <DialogDescription>
-            {rules.length === 1 ? "1 rule sends" : `${rules.length} rules send`} to this channel. Removing it also takes it out of {rules.length === 1 ? "that rule" : "those rules"}. To send to a new URL instead, use Edit and keep the rules as they are.
+            {rules.length === 1 ? "1 alert sends" : `${rules.length} alerts send`} to this channel. Removing it also takes it out of {rules.length === 1 ? "that alert" : "those alerts"}. To send to a new URL instead, use Edit and keep the alerts as they are.
           </DialogDescription>
         </DialogHeader>
         <ul className="space-y-1.5 text-sm">
@@ -357,8 +359,8 @@ function ChannelDialog({ tenant, channel, open, onClose, onSaved }: { tenant: Te
           <DialogTitle>{editing ? `Edit ${channel!.title}` : "Add a channel"}</DialogTitle>
           <DialogDescription>
             {editing
-              ? "URLs and secrets are never shown again. Leave those fields empty to keep what is stored. Rules that send to this channel keep working, and queued deliveries go to the new address."
-              : "Notifications carry names, counts, statuses and timestamps only. Addresses, URLs and secrets entered here stay on this computer and are never shown again in full."}
+              ? "URLs and secrets are never shown again. Leave those fields empty to keep what is stored. Alerts that send to this channel keep working, and queued deliveries go to the new address."
+              : "Notifications carry names, counts, statuses, timestamps and the names of changed settings, never their values. Addresses, URLs and secrets entered here stay on this computer and are never shown again in full."}
           </DialogDescription>
         </DialogHeader>
         <form className="space-y-3" onSubmit={(event) => { event.preventDefault(); if (valid) save.mutate() }}>
@@ -436,17 +438,41 @@ function RulesTile({ tenant, rules, channels, licensed, active, onChanged }: { t
   const [editing, setEditing] = useState<NotificationRule | null>(null)
   const known = new Set(channels.map((channel) => channel.id))
   const channelTitle = (id: string) => channels.find((channel) => channel.id === id)?.title ?? "Removed channel"
+  const copyForWatcher = useMutation({
+    mutationFn: () => notificationsApi.exportWatcherAlerts(tenant),
+    onSuccess: async (result) => {
+      if (result.document.alerts.length === 0) {
+        toast("No alert sends to a webhook, Teams or email channel, so there is nothing for the Azure watcher. It cannot use This computer channels.", "error")
+        return
+      }
+      try {
+        await navigator.clipboard.writeText(result.json)
+        const skipped = result.skipped.length ? ` Left out (only This computer channels): ${result.skipped.join(", ")}.` : ""
+        const uncovered = result.uncovered.length ? ` The watcher will not send ${result.uncovered.map((type) => EVENT_TYPE_LABELS[type] ?? type).join(", ")}: no alert takes them.` : ""
+        toast(`Alerts copied. Save them as a .json file and pass it to the watcher setup with -AlertRulesPath.${skipped}${uncovered}`, "success")
+      } catch {
+        toast("The alerts could not be copied to the clipboard.", "error")
+      }
+    },
+    onError: failed,
+  })
   return (
     <Tile aria-labelledby="notifications-rules-heading" className="gap-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h3 id="notifications-rules-heading" className="text-lg font-medium text-gray-900">Rules</h3>
-          <p className="max-w-3xl text-sm text-gray-600">A rule sends matching events, at or above its minimum severity, to its channels. Intune changes already arrive as one summary per poll.</p>
+          <h3 id="notifications-rules-heading" className="flex items-center gap-2 text-lg font-medium text-gray-900">
+            <Siren className="h-4 w-4 text-gray-500" aria-hidden="true" />
+            Alerts
+          </h3>
+          <p className="max-w-3xl text-sm text-gray-600">An alert sends matching events, at or above its minimum severity, to its channels. Alerts on Intune or Conditional Access changes can pick which changes they send, for example only a policy you care about, and send each change on its own.</p>
         </div>
-        <Button type="button" variant="outline" size="sm" disabled={!licensed || channels.length === 0} onClick={() => setAdding(true)}><Plus className="h-4 w-4" aria-hidden="true" />Add rule</Button>
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="ghost" size="sm" disabled={!licensed || rules.length === 0 || copyForWatcher.isPending} onClick={() => copyForWatcher.mutate()}><Copy className="h-4 w-4" aria-hidden="true" />Copy for Azure watcher</Button>
+          <Button type="button" variant="outline" size="sm" disabled={!licensed || channels.length === 0} onClick={() => setAdding(true)}><Plus className="h-4 w-4" aria-hidden="true" />Add alert</Button>
+        </div>
       </div>
-      {channels.length === 0 && <p className="text-sm text-gray-500">Add a channel first, then route events to it with a rule.</p>}
-      {channels.length > 0 && rules.length === 0 && <p className="text-sm text-gray-500">No rules yet. Channels stay quiet until a rule routes events to them.</p>}
+      {channels.length === 0 && <p className="text-sm text-gray-500">Add a channel first, then send events to it with an alert.</p>}
+      {channels.length > 0 && rules.length === 0 && <p className="text-sm text-gray-500">No alerts yet. Channels stay quiet until an alert sends events to them.</p>}
       <ul className="divide-y divide-gray-100 dark:divide-gray-800">
         {rules.map((rule) => (
           <RuleRow key={rule.id} tenant={tenant} rule={rule} licensed={licensed} onChanged={onChanged} onEdit={() => setEditing(rule)} channelTitle={channelTitle} removedChannels={rule.channelIds.filter((id) => !known.has(id)).length} />
@@ -458,25 +484,41 @@ function RulesTile({ tenant, rules, channels, licensed, active, onChanged }: { t
   )
 }
 
+const watchesChanges = (types: NotificationEventType[]) => types.some((type) => type === "intune.change" || type === "entra.change")
+
 function RuleRow({ tenant, rule, licensed, onChanged, onEdit, channelTitle, removedChannels }: { tenant: Tenant; rule: NotificationRule; licensed: boolean; onChanged: () => void; onEdit: () => void; channelTitle: (id: string) => string; removedChannels: number }) {
   const update = useMutation({ mutationFn: (enabled: boolean) => notificationsApi.updateRule(tenant, rule.id, { enabled }), onSuccess: onChanged, onError: failed })
-  const revoke = useMutation({ mutationFn: () => notificationsApi.revokeRule(tenant, rule.id), onSuccess: () => { toast("Rule removed", "success"); onChanged() }, onError: failed })
+  const revoke = useMutation({ mutationFn: () => notificationsApi.revokeRule(tenant, rule.id), onSuccess: () => { toast("Alert removed", "success"); onChanged() }, onError: failed })
+  const test = useMutation({
+    mutationFn: () => notificationsApi.testRule(tenant, rule.id),
+    onSuccess: (result) => {
+      const failures = result.results.filter((entry) => !entry.ok)
+      toast(failures.length ? `Test failed for ${failures.map((entry) => `${entry.channelTitle}: ${entry.error ?? "unknown error"}`).join("; ")}` : `Test alert sent to ${result.results.map((entry) => entry.channelTitle).join(", ")}`, failures.length ? "error" : "success")
+      onChanged()
+    },
+    onError: failed,
+  })
   const liveChannels = rule.channelIds.length - removedChannels
+  const changes = watchesChanges(rule.eventTypes)
+  const narrowed = changes ? describeConditions(rule.conditions) : null
   return (
     <li className="space-y-2 py-3">
       <div className="flex flex-wrap items-center gap-2">
         <Chip tone={rule.enabled ? "success" : "neutral"}>{rule.enabled ? "On" : "Off"}</Chip>
         <span className="font-medium text-gray-900">{rule.title}</span>
         <Chip tone={rule.minSeverity === "critical" ? "danger" : rule.minSeverity === "warning" ? "warning" : "neutral"}>{rule.minSeverity} and above</Chip>
+        {changes && rule.delivery === "each" && <Chip tone="neutral">One alert per change</Chip>}
         {removedChannels > 0 && <Chip tone="warning">{removedChannels} removed channel{removedChannels === 1 ? "" : "s"}</Chip>}
         {liveChannels === 0 && <Chip tone="danger">Sends nowhere</Chip>}
       </div>
       <p className="text-sm text-gray-600">{rule.eventTypes.map((type) => EVENT_TYPE_LABELS[type] ?? type).join(", ")}</p>
+      {narrowed && <p className="text-sm text-gray-600">Changes: {narrowed}</p>}
       <p className="text-sm text-gray-500">To: {rule.channelIds.map(channelTitle).join(", ") || "no channels"}</p>
-      {(removedChannels > 0 || liveChannels === 0) && <p className="text-xs text-amber-700" role="status">Edit the rule to pick a channel. Removed channels are dropped when you save.</p>}
+      {(removedChannels > 0 || liveChannels === 0) && <p className="text-xs text-amber-700" role="status">Edit the alert to pick a channel. Removed channels are dropped when you save.</p>}
       <div className="flex flex-wrap gap-2">
         <Button type="button" size="sm" variant="outline" onClick={() => update.mutate(!rule.enabled)} disabled={!licensed || update.isPending}>{rule.enabled ? "Turn off" : "Turn on"}</Button>
         <Button type="button" size="sm" variant="outline" onClick={onEdit} disabled={!licensed}><Pencil className="h-4 w-4" aria-hidden="true" />Edit</Button>
+        <Button type="button" size="sm" variant="outline" onClick={() => test.mutate()} disabled={!licensed || test.isPending || liveChannels === 0}>{test.isPending ? "Sending" : "Send test"}</Button>
         <Button type="button" size="sm" variant="outline" onClick={() => revoke.mutate()} disabled={revoke.isPending}><Trash2 className="h-4 w-4" aria-hidden="true" />Remove</Button>
       </div>
     </li>
@@ -487,11 +529,19 @@ function RuleRow({ tenant, rule, licensed, onChanged, onEdit, channelTitle, remo
 const INERT_EVENT_TYPES: ReadonlySet<NotificationEventType> = new Set(["test", "health.finding"])
 
 const EVENT_TYPE_NOTES: Partial<Record<NotificationEventType, string>> = {
-  test: "Sent from a channel Send test button and bypasses rules",
+  test: "Sent from a channel Send test button and bypasses alerts",
   "watcher.stale": "While an Azure watcher owns change alerts",
   "backup.missed": "A slot missed while TenuVault was closed",
   "health.finding": "Configured on the Health review screen",
 }
+
+const CHANGE_TYPE_LABELS: Record<AuditChangeType, string> = { created: "Created", updated: "Updated", deleted: "Deleted", assigned: "Assigned", unassigned: "Unassigned", changed: "Other changes" }
+
+const pillClass = (on: boolean) =>
+  `inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition-colors focus-visible:outline focus-visible:outline-2 disabled:cursor-not-allowed disabled:opacity-50 ${on ? "border-transparent bg-primary text-primary-foreground" : "border-gray-200 text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-900"}`
+
+/** One entry per line, trimmed, empty lines dropped. */
+const lines = (value: string) => value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
 
 function RuleDialog({ tenant, channels, rule, open, onClose, onSaved }: { tenant: Tenant; channels: PublicChannel[]; rule?: NotificationRule; open: boolean; onClose: () => void; onSaved: () => void }) {
   const editing = Boolean(rule)
@@ -502,26 +552,43 @@ function RuleDialog({ tenant, channels, rule, open, onClose, onSaved }: { tenant
   const [eventTypes, setEventTypes] = useState<NotificationEventType[]>(rule ? rule.eventTypes.filter((type) => !INERT_EVENT_TYPES.has(type)) : ["backup.failed"])
   const [minSeverity, setMinSeverity] = useState<NotificationSeverity>(rule?.minSeverity ?? "info")
   const [channelIds, setChannelIds] = useState<string[]>(rule ? rule.channelIds.filter((id) => known.has(id)) : channels[0] ? [channels[0].id] : [])
+  const [changeTypes, setChangeTypes] = useState<AuditChangeType[]>(rule?.conditions?.changeTypes ?? [])
+  const [categories, setCategories] = useState<string[]>(rule?.conditions?.categories ?? [])
+  const [policyNames, setPolicyNames] = useState((rule?.conditions?.policyNames ?? []).join("\n"))
+  const [settingNames, setSettingNames] = useState((rule?.conditions?.settingNames ?? []).join("\n"))
+  const [excludeActors, setExcludeActors] = useState((rule?.conditions?.excludeActors ?? []).join("\n"))
+  const [delivery, setDelivery] = useState<AlertDelivery>(rule?.delivery ?? "digest")
+  const changes = watchesChanges(eventTypes)
+  const intune = eventTypes.includes("intune.change")
+  const categoryList = useQuery({ queryKey: ["notifications-audit-categories", tenant.credentials?.tenantId], queryFn: () => notificationsApi.listAuditCategories(tenant), staleTime: 60 * 60_000, enabled: open && intune && !!tenant.credentials?.tenantId })
   const valid = eventTypes.length + keptInert.length > 0 && channelIds.length > 0
+  const conditions = (): AlertConditions | null => {
+    if (!changes) return null
+    const value: AlertConditions = { changeTypes, categories: intune ? categories : [], policyNames: lines(policyNames), settingNames: lines(settingNames), excludeActors: lines(excludeActors) }
+    return value.changeTypes.length + value.categories.length + value.policyNames.length + value.settingNames.length + value.excludeActors.length ? value : null
+  }
   const save = useMutation({
     mutationFn: () => {
-      const body = { title: title.trim() || undefined, eventTypes: [...eventTypes, ...keptInert], minSeverity, channelIds }
+      const body = { title: title.trim() || undefined, eventTypes: [...eventTypes, ...keptInert], minSeverity, channelIds, conditions: conditions(), delivery: changes ? delivery : "digest" as const }
       return rule ? notificationsApi.updateRule(tenant, rule.id, body) : notificationsApi.addRule(tenant, { ...body, mode: "immediate" })
     },
-    onSuccess: () => { toast(editing ? "Rule saved" : "Rule added", "success"); onSaved() },
+    onSuccess: () => { toast(editing ? "Alert saved" : "Alert added", "success"); onSaved() },
     onError: failed,
   })
   const toggleEvent = (type: NotificationEventType, checked: boolean) => setEventTypes((current) => (checked ? [...current, type] : current.filter((entry) => entry !== type)))
   const toggleChannel = (id: string, checked: boolean) => setChannelIds((current) => (checked ? [...current, id] : current.filter((entry) => entry !== id)))
+  const toggleChangeType = (type: AuditChangeType) => setChangeTypes((current) => (current.includes(type) ? current.filter((entry) => entry !== type) : [...current, type]))
+  const toggleCategory = (name: string) => setCategories((current) => (current.some((entry) => entry.toLowerCase() === name.toLowerCase()) ? current.filter((entry) => entry.toLowerCase() !== name.toLowerCase()) : [...current, name]))
+  const availableCategories = [...new Set([...(categoryList.data?.categories ?? []), ...categories])]
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{editing ? `Edit ${rule!.title}` : "Add a rule"}</DialogTitle>
-          <DialogDescription>Pick the events, the lowest severity that should send, and where they go.</DialogDescription>
+          <DialogTitle>{editing ? `Edit ${rule!.title}` : "Add an alert"}</DialogTitle>
+          <DialogDescription>Pick the events, the lowest severity that should send, which changes count, and where the alert goes.</DialogDescription>
         </DialogHeader>
         <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); if (valid) save.mutate() }}>
-          <label className="block text-sm text-gray-700">Name{editing ? "" : " (optional)"}<Input className="mt-1" maxLength={120} value={title} onChange={(event) => setTitle(event.target.value)} /></label>
+          <label className="block text-sm text-gray-700">Name{editing ? "" : " (optional)"}<Input className="mt-1" maxLength={120} value={title} placeholder="For example: Compliance policy changes" onChange={(event) => setTitle(event.target.value)} /></label>
           <fieldset className="space-y-1.5">
             <legend className="text-sm text-gray-700">Event types</legend>
             <div className="grid gap-1.5 sm:grid-cols-2">
@@ -540,7 +607,7 @@ function RuleDialog({ tenant, channels, rule, open, onClose, onSaved }: { tenant
                 )
               })}
             </div>
-            <p className="text-xs text-gray-500">Greyed out types cannot be picked. Test notifications bypass rules, and health findings are configured on the Health review screen. A rule that already contains one of these types keeps it.</p>
+            <p className="text-xs text-gray-500">Greyed out types cannot be picked. Test notifications bypass alerts, and health findings are configured on the Health review screen. An alert that already contains one of these types keeps it.</p>
           </fieldset>
           <div className="flex flex-wrap items-center gap-4 text-sm">
             <label className="flex items-center gap-2 text-gray-700">
@@ -550,6 +617,62 @@ function RuleDialog({ tenant, channels, rule, open, onClose, onSaved }: { tenant
               </select>
             </label>
           </div>
+          {changes && (
+            <fieldset className="space-y-3 rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
+              <legend className="px-1 text-sm font-medium text-gray-900">Which changes</legend>
+              <p className="text-xs text-gray-500">Leave everything empty to send every change. Each filter you fill in narrows the alert further. They apply to Intune and Conditional Access changes only; other event types above are sent as usual.</p>
+              <div className="space-y-1.5">
+                <p className="text-sm text-gray-700" id="alert-change-types">Change types</p>
+                <div className="flex flex-wrap gap-2" role="group" aria-labelledby="alert-change-types">
+                  {CHANGE_TYPES.map((type) => (
+                    <button key={type} type="button" className={pillClass(changeTypes.includes(type))} aria-pressed={changeTypes.includes(type)} onClick={() => toggleChangeType(type)}>{CHANGE_TYPE_LABELS[type]}</button>
+                  ))}
+                </div>
+                <p className="text-xs text-gray-500">{changeTypes.length === 0 ? "All change types are sent." : `Only ${changeTypes.map((type) => CHANGE_TYPE_LABELS[type].toLowerCase()).join(", ")}.`}</p>
+              </div>
+              {intune && (
+                <div className="space-y-1.5">
+                  <p className="text-sm text-gray-700" id="alert-categories">Intune categories</p>
+                  {categoryList.isLoading && <p className="text-sm text-gray-500">Loading the categories Intune reports...</p>}
+                  <div className="flex flex-wrap gap-2" role="group" aria-labelledby="alert-categories">
+                    {availableCategories.map((name) => {
+                      const on = categories.some((entry) => entry.toLowerCase() === name.toLowerCase())
+                      return <button key={name} type="button" className={pillClass(on)} aria-pressed={on} title={name} onClick={() => toggleCategory(name)}>{categoryLabel(name)}</button>
+                    })}
+                  </div>
+                  <p className="text-xs text-gray-500">{categories.length === 0 ? "All categories are sent." : `Only ${categories.map(categoryLabel).join(", ")}.`} Conditional Access changes have no category and are not filtered by this.</p>
+                </div>
+              )}
+              <label className="block text-sm text-gray-700">
+                Policy names contain
+                <textarea className="mt-1 block w-full rounded-2xl border border-gray-200 bg-white px-3 py-2 text-sm dark:bg-input/30" rows={3} maxLength={4000} value={policyNames} placeholder="One per line, for example Windows compliance" onChange={(event) => setPolicyNames(event.target.value)} />
+                <span className="mt-1 block text-xs text-gray-500">A change counts when its policy name contains one of these, ignoring case. Use the full name for one specific policy.</span>
+              </label>
+              <label className="block text-sm text-gray-700">
+                Changed settings contain
+                <textarea className="mt-1 block w-full rounded-2xl border border-gray-200 bg-white px-3 py-2 text-sm dark:bg-input/30" rows={3} maxLength={4000} value={settingNames} placeholder="One per line, for example BitLocker or conditions.users" onChange={(event) => setSettingNames(event.target.value)} />
+                <span className="mt-1 block text-xs text-gray-500">Only updates name the settings they changed, so with this filled in, creates, deletes and assignments never count. Settings catalog policies do not name their settings in the audit log.</span>
+              </label>
+              <label className="block text-sm text-gray-700">
+                Never alert for changes by
+                <textarea className="mt-1 block w-full rounded-2xl border border-gray-200 bg-white px-3 py-2 text-sm dark:bg-input/30" rows={2} maxLength={4000} value={excludeActors} placeholder="One per line: a user principal name or an app name" onChange={(event) => setExcludeActors(event.target.value)} />
+                <span className="mt-1 block text-xs text-gray-500">Exact matches, ignoring case. Useful for automation accounts whose changes are expected.</span>
+              </label>
+              <div className="space-y-1.5">
+                <p className="text-sm text-gray-700" id="alert-delivery">How to send</p>
+                <div className="space-y-1.5" role="radiogroup" aria-labelledby="alert-delivery">
+                  <label className="flex items-start gap-2 text-sm text-gray-700">
+                    <input type="radio" name="alert-delivery" className="mt-0.5 size-4 accent-coral-600" checked={delivery === "digest"} onChange={() => setDelivery("digest")} />
+                    <span>One summary per check<span className="block text-xs text-gray-500">All matching changes from one poll in one message.</span></span>
+                  </label>
+                  <label className="flex items-start gap-2 text-sm text-gray-700">
+                    <input type="radio" name="alert-delivery" className="mt-0.5 size-4 accent-coral-600" checked={delivery === "each"} onChange={() => setDelivery("each")} />
+                    <span>One alert per change<span className="block text-xs text-gray-500">Each change in its own message with its changed settings. Up to {MAX_EACH_PER_CHECK} per check; any more arrive together in one summary.</span></span>
+                  </label>
+                </div>
+              </div>
+            </fieldset>
+          )}
           <fieldset className="space-y-1.5">
             <legend className="text-sm text-gray-700">Send to</legend>
             {channels.map((channel) => (
@@ -558,12 +681,12 @@ function RuleDialog({ tenant, channels, rule, open, onClose, onSaved }: { tenant
                 {channel.title} <span className="text-gray-500">({CHANNEL_KIND_LABELS[channel.kind]})</span>
               </label>
             ))}
-            {rule && rule.channelIds.some((id) => !known.has(id)) && <p className="text-xs text-amber-700">Removed channels are dropped from this rule when you save.</p>}
+            {rule && rule.channelIds.some((id) => !known.has(id)) && <p className="text-xs text-amber-700">Removed channels are dropped from this alert when you save.</p>}
           </fieldset>
           {!valid && <p className="text-sm text-gray-500">Pick at least one event type and one channel.</p>}
           <div className="flex flex-wrap justify-end gap-2">
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={save.isPending || !valid}>{save.isPending ? "Saving" : editing ? "Save rule" : "Add rule"}</Button>
+            <Button type="submit" disabled={save.isPending || !valid}>{save.isPending ? "Saving" : editing ? "Save alert" : "Add alert"}</Button>
           </div>
         </form>
       </DialogContent>
@@ -652,7 +775,7 @@ function AuditWatchTile({ tenant, auditWatch, licensed, onChanged }: { tenant: T
             <Shield className="h-4 w-4 text-gray-500" aria-hidden="true" />
             Change watching
           </h3>
-          <p className="max-w-3xl text-sm text-gray-600">Polls the audit log of each service you pick and sends one digest per service through your rules, as the "Intune change" and "Conditional Access change" event types. Only names, change types and times are read. Request bodies, setting values and policy content are never read or sent.</p>
+          <p className="max-w-3xl text-sm text-gray-600">Polls the audit log of each service you pick and sends what changed through your alerts, as the "Intune change" and "Conditional Access change" event types. Alerts send names, change types, times and, for updates, the names of the settings that changed. Setting values are compared on this computer to find those names and are never kept or sent.</p>
         </div>
         <Chip tone={watching.length ? "success" : "neutral"}>{watching.length ? `Watching ${watching.join(" and ")}` : "Off"}</Chip>
       </div>
