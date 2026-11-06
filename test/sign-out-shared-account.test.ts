@@ -24,6 +24,7 @@ const HOME = "home-oid.home-tid"
 function manager(profiles: Profile[]) {
   const store = new Map(profiles.map((profile) => [profile.tenantId, profile]))
   const auth = new AuthManager({
+    fetch: async () => new Response("{}"),
     cachePlugin: () => ({ beforeCacheAccess: async () => undefined, afterCacheAccess: async () => undefined }),
     openBrowser: async () => undefined,
     accountStore: {

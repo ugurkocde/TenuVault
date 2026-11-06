@@ -23,6 +23,7 @@ const openBrowser = vi.fn(async () => undefined)
 function manager() {
   const store = new Map()
   return new AuthManager({
+    fetch: async () => new Response("{}"),
     cachePlugin: () => ({ beforeCacheAccess: async () => undefined, afterCacheAccess: async () => undefined }),
     openBrowser,
     accountStore: {

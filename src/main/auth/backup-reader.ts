@@ -6,6 +6,7 @@ import { RESOURCE_SCOPES } from "../../shared/constants"
 import { isGuid } from "../../shared/security"
 import { MODULE_BY_ID } from "../../shared/services/modules"
 import { certificateIdentity, createSelfSignedCertificate, type GeneratedCertificate } from "./certificate"
+import { fetchNetworkClient } from "./network-client"
 
 /**
  * The Backup Reader: an optional, read-only app-only identity a tenant can add so scheduled backups
@@ -97,10 +98,12 @@ export class BackupReaderService {
 
   constructor(
     private readonly store: SecureStore,
-    options: { now?: () => Date; acquire?: AcquireToken } = {},
+    // fetch: the bridged Chromium fetch MSAL token traffic must use, like AuthManager. Token
+    // requests through the bridge are also license-checked there, so this must stay the bridge.
+    options: { now?: () => Date; acquire?: AcquireToken; fetch?: typeof fetch } = {},
   ) {
     this.now = options.now ?? (() => new Date())
-    this.acquire = options.acquire ?? msalAcquire()
+    this.acquire = options.acquire ?? msalAcquire(options.fetch)
   }
 
   status(tenantId: string): BackupReaderStatus | null {
@@ -355,7 +358,7 @@ function refused(error: unknown, options: { permanentOnly?: boolean } = {}): Bac
 }
 
 /** MSAL confidential clients per certificate, with MSAL's in-memory token cache only. */
-function msalAcquire(): AcquireToken {
+function msalAcquire(fetchImpl?: typeof fetch): AcquireToken {
   const apps = new Map<string, ConfidentialClientApplication>()
   return async ({ tenantId, clientId, certificate }, scope, options) => {
     const key = `${tenantId}|${clientId}|${certificate.thumbprintSha256}`
@@ -367,7 +370,10 @@ function msalAcquire(): AcquireToken {
           authority: `https://login.microsoftonline.com/${tenantId}`,
           clientCertificate: { thumbprintSha256: certificate.thumbprintSha256, privateKey: certificate.privateKeyPem },
         },
-        system: { loggerOptions: { logLevel: LogLevel.Warning, piiLoggingEnabled: false, loggerCallback: (_level, message) => console.log(`[msal reader] ${message}`) } },
+        system: {
+          ...(fetchImpl ? { networkClient: fetchNetworkClient(fetchImpl) } : {}),
+          loggerOptions: { logLevel: LogLevel.Warning, piiLoggingEnabled: false, loggerCallback: (_level, message) => console.log(`[msal reader] ${message}`) },
+        },
       })
       apps.set(key, app)
     }

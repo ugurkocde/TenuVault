@@ -9,8 +9,15 @@ import {
 } from "@azure/msal-node"
 import type { SignedInAccount } from "../../shared/ipc"
 import { RESOURCE_SCOPES } from "../../shared/constants"
+import { fetchNetworkClient } from "./network-client"
 
 export interface AuthHost {
+  /**
+   * The fetch MSAL token traffic must use (in production the bridged Chromium fetch), so it
+   * follows the system proxy and OS certificate store like the rest of the app. Required, so
+   * no construction path can fall back to whatever fetch MSAL happens to pick up.
+   */
+  fetch: typeof fetch
   /** Encrypted per-client MSAL cache persistence. */
   cachePlugin: (clientId: string) => ICachePlugin
   /** Opens the system browser for the loopback sign-in flow. */
@@ -353,6 +360,7 @@ export class AuthManager {
         auth: { clientId, authority: authority("organizations") },
         cache: { cachePlugin: this.host.cachePlugin(clientId) },
         system: {
+          networkClient: fetchNetworkClient(this.host.fetch),
           loggerOptions: {
             logLevel: LogLevel.Warning,
             piiLoggingEnabled: false,

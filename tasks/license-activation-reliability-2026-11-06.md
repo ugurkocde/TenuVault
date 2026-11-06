@@ -231,7 +231,9 @@ failures are reported with the Chromium cause code and targeted guidance
 (`src/main/api/network-error.ts:31`). This was fixed after real failures in #4 and #12 and is
 documented in the network requirements. Two gaps remain:
 
-- [ ] **18. Make MSAL's proxy and CA inheritance explicit.** (desktop, verified fragility)
+- [x] **18. Make MSAL's proxy and CA inheritance explicit.** (desktop, verified fragility;
+  done: both MSAL applications take an explicit network module on the bridged Chromium fetch,
+  and the trial and trial-checkout calls pass `chromiumFetch` explicitly)
   Microsoft token calls currently inherit Chromium networking only because msal-node v7 calls
   the bare global `fetch` (`node_modules/@azure/msal-node/dist/network/HttpClient.mjs:103`) and
   the app replaces `globalThis.fetch` during bootstrap. An msal-node upgrade that switches to
