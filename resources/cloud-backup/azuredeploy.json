@@ -46,6 +46,17 @@
       "defaultValue": "",
       "metadata": { "description": "Comma separated type folders to leave out. Wins over the scope. Leave empty for the scope." }
     },
+    "changeReport": {
+      "type": "string",
+      "allowedValues": ["off", "names", "full"],
+      "defaultValue": "off",
+      "metadata": { "description": "Change reports by email through the notification watcher: off, names (which settings changed) or full (with their values). Secret values are never included." }
+    },
+    "changeReportActors": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": { "description": "Name who made each change in change reports, from the Intune audit log." }
+    },
     "includeDeviceCategories": {
       "type": "bool",
       "defaultValue": false,
@@ -95,7 +106,9 @@
       { "name": "[concat('TenuVaultKeyVault-', variables('tenantKey'))]", "value": "[parameters('keyVaultName')]" },
       { "name": "[concat('TenuVaultScope-', variables('tenantKey'))]", "value": "[parameters('scope')]" },
       { "name": "[concat('TenuVaultExcludedFolders-', variables('tenantKey'))]", "value": "[parameters('excludedFolders')]" },
-      { "name": "[concat('TenuVaultAppOnlyExcluded-', variables('tenantKey'))]", "value": "[variables('appOnlyExcluded')]" }
+      { "name": "[concat('TenuVaultAppOnlyExcluded-', variables('tenantKey'))]", "value": "[variables('appOnlyExcluded')]" },
+      { "name": "[concat('TenuVaultChangeReport-', variables('tenantKey'))]", "value": "[parameters('changeReport')]" },
+      { "name": "[concat('TenuVaultChangeReportActors-', variables('tenantKey'))]", "value": "[if(parameters('changeReportActors'), 'true', 'false')]" }
     ],
     "keyVaultSecretsUserRoleId": "4633458b-17de-408a-b874-0445c86b69e6",
     "writerRoleName": "TenuVault Backup Writer"

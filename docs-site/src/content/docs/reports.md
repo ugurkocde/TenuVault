@@ -93,7 +93,11 @@ Turn on **Make a report after every scheduled backup and send it**. After each s
 * Without recipients, reports are saved but not sent.
 * The outcome of the last automatic report shows under **Email and automation**.
 
-Like the scheduled backups themselves, this runs only while TenuVault is running on this computer, and it needs your sign-in to the tenant: a backup made with the [Backup Reader](/backups/backup-reader/) still gets a report only while you are signed in. Reports for [cloud backups](/backups/cloud/) that run in Azure are not made yet.
+Like the scheduled backups themselves, this runs only while TenuVault is running on this computer, and it needs your sign-in to the tenant: a backup made with the [Backup Reader](/backups/backup-reader/) still gets a report only while you are signed in.
+
+## Reports for cloud backups
+
+[Cloud backups](/backups/cloud/) that run in Azure can produce the same report with no computer on: the backup runbook builds it and the [Azure watcher](/notifications/#alerts-while-this-computer-is-off-the-azure-watcher) emails it, with the report attached as HTML and Markdown. The content and wording are the same as in the app. Those reports are emailed only; they do not appear in the **Reports** list. See [Change reports by email](/backups/cloud/#change-reports-by-email) for how to turn them on and what to know first.
 
 ## Related pages
 

@@ -95,6 +95,11 @@
 .PARAMETER MailRecipients
     Optional mail recipients for notification mail.
 
+.PARAMETER ReportRecipients
+    Optional recipients of the change reports cloud backups leave when the cloud backup setup
+    ran with -ChangeReport Names or Full. Any address, inside or outside your organization.
+    Without it, change reports go to -MailRecipients. Sent from -MailSender after verification.
+
 .PARAMETER MailProbeMailbox
     Optional mailbox outside the Exchange application access policy scope. The
     -VerifyMailOnly run must fail to send as this mailbox, which proves Mail.Send
@@ -169,6 +174,7 @@ param(
     [string]$TeamsWebhookUrl,
     [string]$MailSender,
     [string[]]$MailRecipients,
+    [string[]]$ReportRecipients,
     [string]$MailProbeMailbox,
     [string]$AlertEmail,
     [switch]$NoFailureAlert,
@@ -194,7 +200,7 @@ $runbookPath = Join-Path $PSScriptRoot "runbooks/Invoke-TenuVaultNotificationChe
 $automationVariableNames = @(
     "TenuVaultTenantId", "TenuVaultTenantName", "TenuVaultStorageAccount",
     "TenuVaultWebhookUrl", "TenuVaultWebhookSecret", "TenuVaultTeamsWebhookUrl",
-    "TenuVaultMailSender", "TenuVaultMailRecipients", "TenuVaultMailProbeMailbox",
+    "TenuVaultMailSender", "TenuVaultMailRecipients", "TenuVaultReportRecipients", "TenuVaultMailProbeMailbox",
     "TenuVaultMissedBackupHours", "TenuVaultIncludeActor", "TenuVaultConfigVersion",
     "TenuVaultWatchConditionalAccess", "TenuVaultTeamsCardLayout"
 )
@@ -222,6 +228,11 @@ if ($MailSender -and $MailSender -notmatch "^[^@\s]+@[^@\s]+$") {
 foreach ($recipient in $MailRecipients) {
     if ($recipient -notmatch "^[^@\s]+@[^@\s]+$") {
         throw "-MailRecipients entry '$recipient' is not an email address."
+    }
+}
+foreach ($recipient in $ReportRecipients) {
+    if ($recipient -notmatch "^[^@\s]+@[^@\s]+$") {
+        throw "-ReportRecipients entry '$recipient' is not an email address."
     }
 }
 if ($MailProbeMailbox -and $MailProbeMailbox -notmatch "^[^@\s]+@[^@\s]+$") {
@@ -517,6 +528,7 @@ if ($WebhookSecret) { Set-TenuVaultAutomationVariable -Name "TenuVaultWebhookSec
 if ($TeamsWebhookUrl) { Set-TenuVaultAutomationVariable -Name "TenuVaultTeamsWebhookUrl" -Value $TeamsWebhookUrl -Encrypted $true }
 if ($MailSender) { Set-TenuVaultAutomationVariable -Name "TenuVaultMailSender" -Value $MailSender }
 if ($MailRecipients) { Set-TenuVaultAutomationVariable -Name "TenuVaultMailRecipients" -Value ($MailRecipients -join ",") }
+if ($ReportRecipients) { Set-TenuVaultAutomationVariable -Name "TenuVaultReportRecipients" -Value ($ReportRecipients -join ",") }
 if ($MailProbeMailbox) { Set-TenuVaultAutomationVariable -Name "TenuVaultMailProbeMailbox" -Value $MailProbeMailbox }
 Set-TenuVaultAutomationVariable -Name "TenuVaultMissedBackupHours" -Value ([string]$MissedBackupHours)
 Set-TenuVaultAutomationVariable -Name "TenuVaultIncludeActor" -Value $(if ($IncludeActor) { "true" } else { "false" })

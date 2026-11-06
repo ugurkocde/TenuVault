@@ -137,6 +137,8 @@ export function cloudSetupCommand(options: {
   weekday: number
   timeZone: string
   scope: "everything" | "policies"
+  /** Change reports by email through the notification watcher; off when left out. */
+  changeReport?: "off" | "names" | "full"
   /** The tenant's known Azure placement, when the app has it; first setup needs one of these. */
   resourceGroup?: string
   location?: string
@@ -153,7 +155,10 @@ export function cloudSetupCommand(options: {
   if (options.location) parts.push(`-Location ${options.location}`)
   if (options.subscriptionId) parts.push(`-SubscriptionId ${options.subscriptionId}`)
   if (options.frequency === "weekly") parts.push(`-WeekDay ${WEEKDAYS[options.weekday] ?? "Sunday"}`)
-  parts.push(`-TimeZone ${options.timeZone}`, `-Scope ${options.scope}`, "-GrantGraphRoles")
+  parts.push(`-TimeZone ${options.timeZone}`, `-Scope ${options.scope}`)
+  if (options.changeReport === "names") parts.push("-ChangeReport Names")
+  if (options.changeReport === "full") parts.push("-ChangeReport Full")
+  parts.push("-GrantGraphRoles")
   return parts.join(" ")
 }
 

@@ -1580,16 +1580,19 @@ function Send-TvRawMail {
         [Parameter(Mandatory)][string]$Subject,
         [Parameter(Mandatory)][string]$BodyText,
         [Parameter(Mandatory)][string]$GraphToken,
-        [ValidateSet("Text", "HTML")][string]$BodyContentType = "Text"
+        [ValidateSet("Text", "HTML")][string]$BodyContentType = "Text",
+        [object[]]$Attachments = @()
     )
+    $content = [ordered]@{
+        subject = $Subject
+        body = [pscustomobject][ordered]@{ contentType = $BodyContentType; content = $BodyText }
+        toRecipients = @($To | ForEach-Object {
+            [pscustomobject][ordered]@{ emailAddress = [pscustomobject][ordered]@{ address = $_ } }
+        })
+    }
+    if ($Attachments -and $Attachments.Count -gt 0) { $content["attachments"] = @($Attachments) }
     $message = [pscustomobject][ordered]@{
-        message = [pscustomobject][ordered]@{
-            subject = $Subject
-            body = [pscustomobject][ordered]@{ contentType = $BodyContentType; content = $BodyText }
-            toRecipients = @($To | ForEach-Object {
-                [pscustomobject][ordered]@{ emailAddress = [pscustomobject][ordered]@{ address = $_ } }
-            })
-        }
+        message = [pscustomobject]$content
         saveToSentItems = $false
     }
     $senderEncoded = [uri]::EscapeDataString($From)
@@ -1646,6 +1649,235 @@ function Send-TvMail {
     $to = @(($Recipients -split "[,;]") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     if ($to.Count -eq 0) { throw "Mail delivery failed: TenuVaultMailRecipients contains no recipient addresses." }
     Send-TvRawMail -From $MailSender -To $to -Subject $subject -BodyText (Get-TvEmailHtml $Envelope) -GraphToken $GraphToken -BodyContentType "HTML"
+}
+
+# ---------------------------------------------------------------------------
+# Library: change reports left by cloud backups
+# ---------------------------------------------------------------------------
+# With TenuVaultChangeReport set, the cloud backup runbook leaves one report per backup under
+# cloud-change-reports/ in the results container: the email fields and the report as HTML and
+# Markdown, made with the recovery key the watcher never has. The watcher sends it from the
+# verified mailbox and deletes it. A report waits while mail is not verified and is deleted
+# unsent after 7 days. Reports are not part of state.json or the outbox: they are too large.
+
+$script:TvReportPrefix = "cloud-change-reports/"
+$script:TvReportSchema = "tenuvault.cloud-change-report/v1"
+$script:TvReportMaxBytes = 4194304
+# Graph sendMail takes at most 4 MB per request; base64 adds a third.
+$script:TvReportAttachmentBudget = 2500000
+
+# A blob as UTF-8 text. Invoke-WebRequest in Windows PowerShell decodes a body without a
+# charset as ISO-8859-1, which would garble policy names in other languages.
+function Get-TvBlobUtf8 {
+    param([Parameter(Mandatory)][string]$Uri, [Parameter(Mandatory)][string]$Token)
+    try {
+        $response = Invoke-TvStorageRequest -Uri $Uri -Method Get -Token $Token
+    } catch {
+        if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 404) { return $null }
+        throw
+    }
+    $stream = $response.RawContentStream
+    $stream.Position = 0
+    return [Text.Encoding]::UTF8.GetString($stream.ToArray())
+}
+
+# Report notes can be a few MB. Windows PowerShell's ConvertFrom-Json refuses JSON over 2 MB,
+# so there the serializer it uses is called with a higher limit; objects become dictionaries.
+function ConvertFrom-TvReportJson {
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Text)
+    if ($script:TvNoteJsonParser -eq "SystemTextJson") { return ConvertFrom-TvNoteJson $Text }
+    Add-Type -AssemblyName System.Web.Extensions
+    $serializer = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+    $serializer.MaxJsonLength = [int]::MaxValue
+    $serializer.RecursionLimit = 100
+    return , $serializer.DeserializeObject($Text)
+}
+
+function Get-TvReportString {
+    param([object]$Value, [int]$Max)
+    if ($Value -is [string] -and $Value.Length -le $Max) { return $Value }
+    return $null
+}
+
+# A report note of this tenant, checked field by field, or $null.
+function ConvertFrom-TenuVaultChangeReport {
+    param([AllowNull()][object]$Note, [Parameter(Mandatory)][string]$TenantId)
+    if ($null -eq $Note -or $Note -is [string] -or $Note -is [array] -or $Note -is [ValueType]) { return $null }
+    if ((Get-TvNoteField $Note "schema").Value -cne $script:TvReportSchema) { return $null }
+    $tenant = (Get-TvNoteField $Note "tenantId").Value
+    if ($tenant -isnot [string] -or $tenant.ToLowerInvariant() -ne $TenantId.ToLowerInvariant()) { return $null }
+    $folder = (Get-TvNoteField $Note "backupFolder").Value
+    if ($folder -isnot [string] -or $folder -cnotmatch '^backup-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{6}\z') { return $null }
+    $createdAt = ConvertTo-TvIso (Get-TvNoteField $Note "createdAt").Value
+    if (-not $createdAt) { return $null }
+    $email = (Get-TvNoteField $Note "email").Value
+    if ($null -eq $email -or $email -is [string] -or $email -is [array] -or $email -is [ValueType]) { return $null }
+    $severity = Get-TvProp $email "severity"
+    if ($severity -cne "info" -and $severity -cne "warning") { return $null }
+    $title = Get-TvReportString (Get-TvProp $email "title") 400
+    $summary = Get-TvReportString (Get-TvProp $email "summary") 1000
+    $naturalKey = Get-TvReportString (Get-TvProp $email "naturalKey") 300
+    $occurredAt = ConvertTo-TvIso (Get-TvProp $email "occurredAt")
+    $moreCount = Get-TvNoteCount (Get-TvProp $email "moreCount")
+    if (-not $title -or -not $summary -or -not $naturalKey -or -not $occurredAt -or $null -eq $moreCount) { return $null }
+    $details = [System.Collections.Generic.List[object]]::new()
+    foreach ($detail in @(Get-TvProp $email "details")) {
+        if ($null -eq $detail) { continue }
+        $label = Get-TvReportString (Get-TvProp $detail "label") 80
+        $value = Get-TvReportString (Get-TvProp $detail "value") 500
+        if (-not $label -or $null -eq $value -or $details.Count -ge 20) { return $null }
+        $details.Add([pscustomobject][ordered]@{ label = $label; value = $value })
+    }
+    $items = [System.Collections.Generic.List[object]]::new()
+    foreach ($item in @(Get-TvProp $email "items")) {
+        if ($null -eq $item) { continue }
+        $itemTitle = Get-TvReportString (Get-TvProp $item "title") 600
+        if (-not $itemTitle -or $items.Count -ge 20) { return $null }
+        $entry = [ordered]@{ title = $itemTitle }
+        foreach ($field in @("detail", "actor", "at")) {
+            $text = Get-TvReportString (Get-TvProp $item $field) 600
+            if ($text) { $entry[$field] = $text }
+        }
+        $items.Add([pscustomobject]$entry)
+    }
+    $files = [System.Collections.Generic.List[object]]::new()
+    foreach ($file in @((Get-TvNoteField $Note "files").Value)) {
+        if ($null -eq $file) { continue }
+        $name = Get-TvProp $file "name"
+        $contentType = Get-TvProp $file "contentType"
+        $content = Get-TvProp $file "content"
+        if ($name -isnot [string] -or $name -cnotmatch '^change-report-[a-z0-9-]{0,60}[0-9]{4}-[0-9]{2}-[0-9]{2}\.(html|md)\z' -or $content -isnot [string] -or $files.Count -ge 2) { return $null }
+        $expected = if ($name.EndsWith(".html")) { "text/html" } else { "text/markdown" }
+        if ($contentType -cne $expected) { return $null }
+        $files.Add([pscustomobject][ordered]@{ name = $name; contentType = $contentType; content = $content })
+    }
+    return [pscustomobject][ordered]@{
+        backupFolder = $folder; createdAt = $createdAt
+        severity = $severity; title = $title; summary = $summary; naturalKey = $naturalKey; occurredAt = $occurredAt
+        details = $details.ToArray(); items = $items.ToArray(); moreCount = $moreCount; files = $files.ToArray()
+    }
+}
+
+# The email of a report: the same envelope and design as the desktop app's report email.
+function New-TenuVaultChangeReportEnvelope {
+    param([Parameter(Mandatory)][object]$Report, [Parameter(Mandatory)][string]$TenantId, [object]$TenantName, [string]$AttachmentNote)
+    $summary = $Report.summary
+    if ($AttachmentNote) { $summary = "$summary $AttachmentNote" }
+    return New-TvEnvelope -Type "drift.detected" -Severity $Report.severity -TenantId $TenantId -TenantName $TenantName `
+        -OccurredAt $Report.occurredAt -NaturalKey $Report.naturalKey -Title $Report.title -Summary $summary `
+        -Details $Report.details -Items $Report.items -MoreCount $Report.moreCount
+}
+
+# The attachments that fit one Graph request: the HTML (opens in any browser, prints to PDF)
+# and the Markdown, the HTML first.
+function Get-TvReportAttachments {
+    param([Parameter(Mandatory)][object]$Report)
+    $chosen = [System.Collections.Generic.List[object]]::new()
+    $used = 0
+    foreach ($file in @($Report.files | Sort-Object { if ($_.name.EndsWith(".html")) { 0 } else { 1 } })) {
+        if ($null -eq $file) { continue }
+        $bytes = [Text.Encoding]::UTF8.GetBytes([string]$file.content)
+        if ($used + $bytes.Length -gt $script:TvReportAttachmentBudget) { continue }
+        $used += $bytes.Length
+        $chosen.Add([pscustomobject][ordered]@{
+            "@odata.type" = "#microsoft.graph.fileAttachment"
+            name = $file.name
+            contentType = $file.contentType
+            contentBytes = [Convert]::ToBase64String($bytes)
+        })
+    }
+    return , $chosen.ToArray()
+}
+
+# Sends every waiting report and deletes it once Graph accepted the mail. Reports wait while
+# mail is not verified; reports older than MaxAgeDays and invalid ones are deleted unsent.
+function Send-TvChangeReports {
+    param(
+        [Parameter(Mandatory)][string]$ContainerUri,
+        [Parameter(Mandatory)][string]$Token,
+        [Parameter(Mandatory)][string]$TenantId,
+        [object]$TenantName,
+        [bool]$MailEnabled,
+        [string]$MailSender,
+        [string]$Recipients,
+        [string]$GraphToken,
+        [Parameter(Mandatory)][scriptblock]$RenewLease,
+        [DateTime]$Now = [DateTime]::UtcNow,
+        [int]$MaxAgeDays = 7
+    )
+    $oldest = ConvertTo-TvIso ($Now.ToUniversalTime().AddDays(-$MaxAgeDays))
+    # Messages are returned, not written, so the function's output stays one object.
+    $result = [pscustomobject][ordered]@{ Sent = 0; Waiting = 0; Expired = 0; Ignored = 0; Error = $null; Messages = [System.Collections.Generic.List[string]]::new() }
+    $to = @(($Recipients -split "[,;]") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    $canSend = $MailEnabled -and $MailSender -and $GraphToken -and $to.Count -gt 0
+    $names = [System.Collections.Generic.List[object]]::new()
+    $marker = $null
+    try {
+        do {
+            & $RenewLease
+            $listUri = "$ContainerUri`?restype=container&comp=list&prefix=$([uri]::EscapeDataString($script:TvReportPrefix))&maxresults=500"
+            if ($marker) { $listUri += "&marker=$([uri]::EscapeDataString($marker))" }
+            $listText = [string](Invoke-TvStorageRequest -Uri $listUri -Method Get -Token $Token).Content
+            $xmlStart = $listText.IndexOf("<")
+            if ($xmlStart -gt 0) { $listText = $listText.Substring($xmlStart) }
+            [xml]$listXml = $listText
+            $blobsNode = $listXml.EnumerationResults.Blobs
+            foreach ($blob in @(if ($blobsNode) { $blobsNode.Blob })) {
+                if (-not $blob -or -not $blob.Name) { continue }
+                $length = 0L
+                [void][long]::TryParse([string]$blob.Properties.'Content-Length', [ref]$length)
+                $names.Add([pscustomobject]@{ Name = [string]$blob.Name; Length = $length })
+            }
+            $marker = [string]$listXml.EnumerationResults.NextMarker
+            if (-not $marker) { $marker = $null }
+        } while ($marker)
+    } catch {
+        $result.Error = "Change reports could not be listed in this run: $(Get-TvSafeError $_.Exception.Message)"
+        return $result
+    }
+    foreach ($blob in $names) {
+        if (-not $blob.Name.StartsWith($script:TvReportPrefix, [StringComparison]::Ordinal)) { continue }
+        & $RenewLease
+        $encodedName = ($blob.Name -split "/" | ForEach-Object { [uri]::EscapeDataString($_) }) -join "/"
+        $uri = "$ContainerUri/$encodedName"
+        $remove = $false
+        try {
+            $report = $null
+            if ($blob.Length -le $script:TvReportMaxBytes) {
+                $text = Get-TvBlobUtf8 -Uri $uri -Token $Token
+                if ($null -eq $text) { continue }
+                try { $report = ConvertFrom-TenuVaultChangeReport (ConvertFrom-TvReportJson $text) $TenantId } catch { $report = $null }
+            }
+            if ($null -eq $report) {
+                $result.Ignored++
+                $remove = $true
+            } elseif ([StringComparer]::Ordinal.Compare([string]$report.createdAt, $oldest) -lt 0) {
+                $result.Expired++
+                $remove = $true
+            } elseif (-not $canSend) {
+                $result.Waiting++
+            } else {
+                $attachments = Get-TvReportAttachments $report
+                $note = $null
+                if ($attachments.Count -eq 0) { $note = "The report was too large to attach to this message." }
+                $envelope = New-TenuVaultChangeReportEnvelope -Report $report -TenantId $TenantId -TenantName $TenantName -AttachmentNote $note
+                $subject = "TenuVault: $(if ($envelope.severity -eq 'warning') { '[Warning] ' })$($envelope.title)"
+                if ($subject.Length -gt 250) { $subject = $subject.Substring(0, 250) }
+                Send-TvRawMail -From $MailSender -To $to -Subject $subject -BodyText (Get-TvEmailHtml $envelope) -GraphToken $GraphToken -BodyContentType "HTML" -Attachments $attachments
+                $result.Messages.Add("Sent the change report of $($report.backupFolder) to $($to.Count) recipient(s).")
+                $result.Sent++
+                $remove = $true
+            }
+        } catch {
+            if (-not $result.Error) { $result.Error = "A change report could not be sent: $(Get-TvSafeError $_.Exception.Message)" }
+        }
+        if ($remove) {
+            try { Invoke-TvStorageRequest -Uri $uri -Method Delete -Token $Token | Out-Null }
+            catch { $result.Messages.Add("Could not remove the change report $($blob.Name): $(Get-TvSafeError $_.Exception.Message).") }
+        }
+    }
+    if ($result.Waiting -gt 0) { $result.Messages.Add("$($result.Waiting) change report(s) wait for verified mail and report recipients.") }
+    return $result
 }
 
 # ---------------------------------------------------------------------------
@@ -1812,7 +2044,7 @@ if ($LibraryOnly) { return }
 # ---------------------------------------------------------------------------
 
 $ErrorActionPreference = "Stop"
-$runbookVersion = "1.1.0"
+$runbookVersion = "1.2.0"
 $runAt = [DateTime]::UtcNow
 $runAtIso = ConvertTo-TvIso $runAt
 $eventsSent = 0
@@ -1835,6 +2067,8 @@ try {
     $teamsWebhookUrl = Get-TvAutomationVariable "TenuVaultTeamsWebhookUrl"
     $mailSender = Get-TvAutomationVariable "TenuVaultMailSender"
     $mailRecipients = Get-TvAutomationVariable "TenuVaultMailRecipients"
+    # Change reports of cloud backups go here, or to the mail recipients when it is not set.
+    $reportRecipients = Get-TvAutomationVariable "TenuVaultReportRecipients"
     $mailProbeMailbox = Get-TvAutomationVariable "TenuVaultMailProbeMailbox"
     $configVersionValue = Get-TvAutomationVariable "TenuVaultConfigVersion"
     if ($configVersionValue) { $configVersion = $configVersionValue.Trim() }
@@ -1873,6 +2107,7 @@ try {
         "storageAccount=$storageAccount"
         "mailSender=$mailSender"
         "mailRecipients=$mailRecipients"
+        "reportRecipients=$reportRecipients"
         "mailProbeMailbox=$mailProbeMailbox"
         "missedBackupHours=$missedBackupHours"
         "includeActor=$($includeActor.ToString().ToLowerInvariant())"
@@ -2388,6 +2623,13 @@ try {
             }
         }
     }
+
+    # --- Change reports left by cloud backups ---------------------------------------
+    $reportRun = Send-TvChangeReports -ContainerUri $resultsContainerUri -Token $storageToken -TenantId $tenantId -TenantName $tenantName `
+        -MailEnabled ([bool]$mailEnabled) -MailSender $mailSender -Recipients $(if ($reportRecipients) { $reportRecipients } else { $mailRecipients }) `
+        -GraphToken $graphToken -RenewLease $renewLease -Now $runAt
+    foreach ($message in $reportRun.Messages) { Write-Output $message }
+    if ($reportRun.Error -and -not $lastError) { $lastError = $reportRun.Error }
 
     # --- Persist final state and heartbeat ------------------------------------------
     & $saveState

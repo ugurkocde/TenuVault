@@ -79,6 +79,7 @@ td.empty { color: var(--faint); font-style: italic; }
 .more { margin-top: 1.2mm; font-size: 7pt; color: var(--muted); }
 .none { font-size: 8pt; font-style: italic; color: var(--muted); }
 .provenance { margin-top: 8mm; padding-top: 3mm; border-top: 0.2mm solid var(--rule); font-size: 7pt; color: var(--muted); break-inside: avoid; }
+@media screen { body { max-width: 210mm; margin: 0 auto; padding: 10mm 12mm; background: var(--white); } }
 `
 
 export interface ChangeReportDocument {
