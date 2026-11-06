@@ -1,9 +1,9 @@
 ---
-title: "Notifications"
+title: "Alerts"
 description: Get backup, restore, drift, Intune and Conditional Access change alerts in Teams, by email or webhook, for the policies you pick, with the names of the settings that changed, on this computer or from Azure while it is off.
 ---
 
-Notifications tell you when a backup fails or misses its time, when a restore only partly succeeds, when drift is found between backups, when something changed in Intune or Conditional Access, and when the Backup Reader certificate or the Azure watcher needs attention. You set them up per tenant under **Settings**, in the **Notifications** section. Notifications are a Pro feature. Turning a channel off or removing it always works, on every plan.
+Notifications tell you when a backup fails or misses its time, when a restore only partly succeeds, when drift is found between backups, when something changed in Intune or Conditional Access, and when the Backup Reader certificate or the Azure watcher needs attention. You set them up on the **Alerts** page in the sidebar, for the tenant selected there. It has four tabs: **Alerts** (what is sent where), **Channels** (Teams, email, webhooks and this computer, with the Teams card layout), **Change watching** (the Intune and Conditional Access audit logs) and **Deliveries** (what was sent, failed or is waiting to retry). **Settings** > **Notifications** links there. Notifications are a Pro feature. Turning a channel off or removing it always works, on every plan.
 
 Nothing is sent until you add a channel and an alert. A **channel** is a destination. An **alert** picks which events go to which channels, and for Intune and Conditional Access changes, which changes: for example only updates to one compliance policy, each in its own message with the names of the settings that changed.
 
@@ -59,7 +59,7 @@ Messages arrive as an Adaptive Card posted by Workflows: a header tinted by seve
 
 ### Teams card layout
 
-**Teams card** in the Notifications section changes how alerts look in every Teams channel of the tenant. **Customize card** opens an editor with three columns: the parts of the card, the settings of the selected part, and a live preview drawn from the exact card Teams receives, with sample data (never your tenant's policies) in light and dark.
+**Teams card** on the **Channels** tab changes how alerts look in every Teams channel of the tenant. **Customize card** opens an editor with three columns: the parts of the card, the settings of the selected part, and a live preview drawn from the exact card Teams receives, with sample data (never your tenant's policies) in light and dark.
 
 * **Parts:** the header (severity and title) is always first and the button always last. Summary, details, the changes list, a note and the footer can be dragged into any order, or moved with the arrow buttons or the keyboard (space, arrow keys, space), and each can be hidden with its eye.
 * **Whole card:** header color (by severity, accent, neutral or green), comfortable or compact spacing, and readable or ISO times.
@@ -100,7 +100,7 @@ An alert has event types, a minimum severity and one or more channels. A useful 
 
 **Send test** on an alert's row sends a made up change that passes the alert's filters to its channels, marked as a test, so you can see what the alert will look like. It is not queued and does not count as a real event.
 
-Delivery is at least once. An undelivered notification stays queued, retries with backoff, and survives restarting the app. In the rare case a destination accepted a message but the confirmation was lost, the same event can arrive twice; the `eventId` is identical so receivers can dedupe. Recent deliveries, including failures and retries, are listed under the channels. A scheduled backup slot that fails on every retry sends one alert, not one per attempt, and backup alerts list the policies saved and the types that could not be read.
+Delivery is at least once. An undelivered notification stays queued, retries with backoff, and survives restarting the app. In the rare case a destination accepted a message but the confirmation was lost, the same event can arrive twice; the `eventId` is identical so receivers can dedupe. Recent deliveries, including failures and retries, are listed on the **Deliveries** tab. A scheduled backup slot that fails on every retry sends one alert, not one per attempt, and backup alerts list the policies saved and the types that could not be read.
 
 Channels and alerts can be edited with **Edit** on their row. A channel's URL and secret are never shown again: leave those fields empty to keep what is stored, or paste a new URL, for example after a Teams workflow was recreated. Alerts keep sending to the edited channel, and deliveries still queued go to the new address. Removing a channel that alerts use asks first and takes it out of those alerts; an alert left without any channel is turned off, not deleted.
 
@@ -174,7 +174,7 @@ Every line of a change event carries the same change as fields, in `items[].chan
 
 ## Change watching
 
-Change watching reads audit logs through Microsoft Graph and hands new changes to your [alerts](#alerts), which send them as one summary per service and poll or one message per change. Pick the services in the **Change watching** card: **Intune** (`intune.change` events) and **Conditional Access** (`entra.change` events). Both share the interval and the options below; each keeps its own position in its log.
+Change watching reads audit logs through Microsoft Graph and hands new changes to your [alerts](#alerts), which send them as one summary per service and poll or one message per change. Pick the services on the **Change watching** tab: **Intune** (`intune.change` events) and **Conditional Access** (`entra.change` events). Both share the interval and the options below; each keeps its own position in its log.
 
 For Intune, a digest lists what was created, updated, deleted, assigned or unassigned, the policy name when the audit event carries it, and who did it. Read-only audit events (views and searches) are not changes and never appear in a digest. A digest that contains a deletion or a removed assignment is sent with warning severity.
 
@@ -231,7 +231,7 @@ One full setup run looks like this. The storage account is the one from the back
 
 The watcher has its own destinations: one webhook, one Teams Workflows URL and one list of mail recipients, set with the setup parameters. Without alerts it sends every event to each of them. To make it send what your alerts send:
 
-1. In **Settings** > **Notifications** > **Alerts**, click **Copy for Azure watcher**, and save the copied text as a file, for example `alerts.json`.
+1. On the **Alerts** page, on the **Alerts** tab, click **Copy for Azure watcher**, and save the copied text as a file, for example `alerts.json`.
 2. Run the watcher setup again with `-AlertRulesPath ./alerts.json`. The script checks the file before it changes anything in Azure and stores it as the Automation variable `TenuVaultAlertRules`.
 
 The file holds the enabled alerts with their event types, minimum severity, filters and how to send. Channels become kinds of destinations: an alert that sends to a Teams channel sends to the watcher's Teams URL, an email channel to its mail recipients, a webhook to its webhook. Alerts that only send to **This computer** are left out, and the app says which. The file contains no URLs, addresses or secrets.

@@ -133,13 +133,13 @@
 
 .PARAMETER TeamsCardLayoutPath
     Path to a Teams card layout file saved with "Copy for Azure watcher" in TenuVault
-    (Settings > Notifications > Teams card). The watcher then builds its Teams cards
+    (Alerts > Channels > Teams card). The watcher then builds its Teams cards
     with that layout. A rerun without it keeps the saved layout; pass an empty string
     to go back to the standard card.
 
 .PARAMETER AlertRulesPath
-    Path to an alerts file saved with "Copy for Azure watcher" in TenuVault (Settings >
-    Notifications > Alerts). The watcher then sends each event only where an alert sends
+    Path to an alerts file saved with "Copy for Azure watcher" in TenuVault (Alerts >
+    Alerts tab). The watcher then sends each event only where an alert sends
     it: by event type and severity, and for Intune and Conditional Access changes by the
     alert's conditions, as one summary or one alert per change. Each alert's channels
     become the watcher's own destinations of the same kind (webhook, Teams, email).

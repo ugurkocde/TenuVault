@@ -88,7 +88,7 @@ function selectTenant() {
   selectedTenantState.current = { id: 1, name: "Contoso", credentials: { tenantId: "t-1", appId: "app-1", clientSecret: "" } }
 }
 
-const PAID_ENTRIES = [["Audit Log", "/portal/audit"], ["Governance", "/portal/governance"], ["Changes", "/portal/changes"], ["Operations", "/portal/operations"], ["Reports", "/portal/reports"]] as const
+const PAID_ENTRIES = [["Audit Log", "/portal/audit"], ["Governance", "/portal/governance"], ["Changes", "/portal/changes"], ["Operations", "/portal/operations"], ["Reports", "/portal/reports"], ["Alerts", "/portal/alerts"]] as const
 
 function sidebarLink(container: HTMLElement, href: string): HTMLAnchorElement {
   return container.querySelector<HTMLAnchorElement>(`nav[aria-label="Main navigation"] a[href="${href}"]`)!
@@ -98,10 +98,10 @@ describe("sidebar plan badges for paid screens", () => {
   it("badges each hub by all of its tabs and the audit log by its feature", () => {
     expect(NAV_PLAN_FEATURES["/portal/audit"]).toEqual(["auditLog"])
     for (const hub of HUBS) expect(NAV_PLAN_FEATURES[`/portal/${hub.id}`]).toEqual(hub.tabs.map((tab) => tab.feature))
-    expect(Object.keys(NAV_PLAN_FEATURES).sort()).toEqual(["/portal/audit", "/portal/changes", "/portal/governance", "/portal/operations", "/portal/reports"])
+    expect(Object.keys(NAV_PLAN_FEATURES).sort()).toEqual(["/portal/alerts", "/portal/audit", "/portal/changes", "/portal/governance", "/portal/operations", "/portal/reports"])
   })
 
-  it("marks Audit Log, Governance, Changes, Operations and Reports with Pro for Community and keeps them links", async () => {
+  it("marks Audit Log, Governance, Changes, Operations, Reports and Alerts with Pro for Community and keeps them links", async () => {
     licenseStatus.current = statusFor("community")
     selectTenant()
     const container = await render(createElement(DesktopLayout))

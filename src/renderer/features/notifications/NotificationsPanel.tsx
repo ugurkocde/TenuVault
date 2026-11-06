@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react"
+import { useEffect, useState, type ReactNode } from "react"
+import { Link } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Bell, Copy, Eye, History, Pencil, Plus, Search, Shield, Siren, Trash2, X } from "lucide-react"
 import type { Tenant } from "~/contexts/TenantContext"
@@ -10,7 +11,7 @@ import { NOTIFICATION_EVENT_TYPES, type NotificationEventType, type Notification
 import { CHANGE_TYPES, describeConditions, MAX_EACH_PER_CHECK, type AlertConditions, type AlertDelivery } from "../../../shared/notifications/alerts"
 import type { AuditChangeType } from "../../../shared/notifications/audit"
 import { toast } from "../../lib/toast"
-import { UpgradeNote } from "../../components/UpgradeNote"
+import type { FeatureTabProps } from "../types"
 import { TeamsCardTile } from "./CardLayoutEditor"
 import { useOptionalPermission } from "./optional-permissions"
 import type { OptionalPermissionStatus } from "../../../shared/services/optional-permissions"
@@ -24,6 +25,7 @@ import {
   type ChannelKind,
   type EmailRecipient,
   type NotificationRule,
+  type NotificationsStatus,
   type PublicChannel,
   type UpdateChannelBody,
 } from "./api"
@@ -33,51 +35,95 @@ const INTERVALS = [5, 15, 30, 60, 240, 1440]
 const failed = (error: unknown) => toast(error instanceof Error ? error.message : "The request failed.", "error")
 const selectClass = "h-8 rounded-full border border-gray-200 bg-white px-3 text-sm dark:bg-input/30"
 
-/**
- * Per tenant notification setup: channels (this computer, webhook, Teams, email), the
- * rules that route events to them, the Intune audit watch, and recent deliveries.
- * Channel URLs and secrets are write only: the stored value is never shown again.
- */
-export function NotificationsPanel({ tenant, active = true }: { tenant: Tenant; active?: boolean }) {
+/** The notification state of one tenant, shared by the Alerts page tabs through the query cache. */
+function useNotificationsStatus(tenant: Tenant) {
   const tenantId = tenant.credentials?.tenantId
   const client = useQueryClient()
   const status = useQuery({ queryKey: ["notifications-status", tenantId], queryFn: () => notificationsApi.status(tenant), enabled: !!tenantId })
   const refresh = () => void client.invalidateQueries({ queryKey: ["notifications-status", tenantId] })
-  const data = status.data
+  return { status, refresh }
+}
 
-  if (status.isLoading) return <p className="text-sm text-gray-500">Loading notification settings...</p>
-  if (status.error) return <p className="text-sm text-red-700" role="alert">{status.error instanceof Error ? status.error.message : "Notification settings could not be loaded."}</p>
-  if (!data) return null
+/** Loading and error states of a tab; renders the tab once the status is there. */
+function WithStatus({ tenant, children }: { tenant: Tenant; children: (data: NotificationsStatus, refresh: () => void) => ReactNode }) {
+  const { status, refresh } = useNotificationsStatus(tenant)
+  if (status.isLoading) return <p className="text-sm text-gray-500">Loading alert settings...</p>
+  if (status.error) return <p className="text-sm text-red-700" role="alert">{status.error instanceof Error ? status.error.message : "Alert settings could not be loaded."}</p>
+  if (!status.data) return null
+  return <>{children(status.data, refresh)}</>
+}
 
+/** Whether a tenant ever set anything up, so a tab below a locked preview can show it or stay empty. */
+const hasStored = (data: NotificationsStatus) => data.channels.length > 0 || data.rules.length > 0 || Boolean(data.auditWatch?.enabled || data.auditWatch?.conditionalAccess?.enabled)
+
+/**
+ * The tabs of the Alerts page, for the tenant selected in the sidebar. Without the plan the
+ * page shows its locked preview above; a tab then shows only what was stored on an earlier
+ * plan, where turning things off and removing them stays free, and nothing otherwise.
+ */
+export function AlertsTab({ tenant, allowed }: FeatureTabProps) {
   return (
-    <div className="space-y-4">
-      {!data.licensed && <UpgradeNote feature="notifications" />}
-      <p className="text-sm text-gray-600" role="note">{data.runtimeNote}</p>
-      <ChannelsTile tenant={tenant} channels={data.channels} rules={data.rules} licensed={data.licensed} active={active} onChanged={refresh} />
-      <TeamsCardTile tenant={tenant} channels={data.channels} licensed={data.licensed} active={active} />
-      <RulesTile tenant={tenant} rules={data.rules} channels={data.channels} licensed={data.licensed} active={active} onChanged={refresh} />
-      <AuditWatchTile tenant={tenant} auditWatch={data.auditWatch} licensed={data.licensed} onChanged={refresh} />
-      <Tile aria-labelledby="notifications-deliveries-heading" className="gap-3">
-        <h3 id="notifications-deliveries-heading" className="flex items-center gap-2 text-lg font-medium text-gray-900">
-          <History className="h-4 w-4 text-gray-500" aria-hidden="true" />
-          Recent deliveries
-        </h3>
-        {data.deliveries.length === 0 && <p className="text-sm text-gray-500">Nothing has been delivered yet. Send a test from a channel to see it here.</p>}
-        <ul className="divide-y divide-gray-100 dark:divide-gray-800">
-          {data.deliveries.map((delivery) => (
-            <li key={delivery.id} className="flex flex-wrap items-center gap-2 py-2.5 text-sm">
-              <Chip tone={delivery.state === "sent" ? "success" : delivery.state === "failed" ? "danger" : "warning"}>{delivery.state}</Chip>
-              <span className="font-medium text-gray-900">{delivery.title}</span>
-              <span className="text-gray-500">to {delivery.channelTitle} · {delivery.eventType} · {formatTime(delivery.at)}</span>
-              {delivery.attempts > 1 && <span className="text-gray-500">{delivery.attempts} attempts</span>}
-              {delivery.lastError && <span className="text-red-700" role="status">{delivery.lastError}</span>}
-            </li>
-          ))}
-        </ul>
-      </Tile>
-    </div>
+    <WithStatus tenant={tenant}>
+      {(data, refresh) => !allowed && !hasStored(data) ? null : (
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600" role="note">{data.runtimeNote}</p>
+          <RulesTile tenant={tenant} rules={data.rules} channels={data.channels} licensed={data.licensed} active onChanged={refresh} />
+        </div>
+      )}
+    </WithStatus>
   )
 }
+
+export function ChannelsTab({ tenant, allowed }: FeatureTabProps) {
+  return (
+    <WithStatus tenant={tenant}>
+      {(data, refresh) => !allowed && !hasStored(data) ? null : (
+        <div className="space-y-4">
+          <ChannelsTile tenant={tenant} channels={data.channels} rules={data.rules} licensed={data.licensed} active onChanged={refresh} />
+          <TeamsCardTile tenant={tenant} channels={data.channels} licensed={data.licensed} active />
+        </div>
+      )}
+    </WithStatus>
+  )
+}
+
+export function WatchingTab({ tenant, allowed }: FeatureTabProps) {
+  return (
+    <WithStatus tenant={tenant}>
+      {(data, refresh) => !allowed && !hasStored(data) ? null : <AuditWatchTile tenant={tenant} auditWatch={data.auditWatch} licensed={data.licensed} onChanged={refresh} />}
+    </WithStatus>
+  )
+}
+
+export function DeliveriesTab({ tenant, allowed }: FeatureTabProps) {
+  return (
+    <WithStatus tenant={tenant}>
+      {(data) => !allowed && data.deliveries.length === 0 ? null : (
+        <Tile aria-labelledby="notifications-deliveries-heading" className="gap-3">
+          <h3 id="notifications-deliveries-heading" className="flex items-center gap-2 text-lg font-medium text-gray-900">
+            <History className="h-4 w-4 text-gray-500" aria-hidden="true" />
+            Recent deliveries
+          </h3>
+          {data.deliveries.length === 0 && <p className="text-sm text-gray-500">Nothing has been delivered yet. Send a test from an alert or a channel to see it here.</p>}
+          <ul className="divide-y divide-gray-100 dark:divide-gray-800">
+            {data.deliveries.map((delivery) => (
+              <li key={delivery.id} className="flex flex-wrap items-center gap-2 py-2.5 text-sm">
+                <Chip tone={delivery.state === "sent" ? "success" : delivery.state === "failed" ? "danger" : "warning"}>{delivery.state}</Chip>
+                <span className="font-medium text-gray-900">{delivery.title}</span>
+                <span className="text-gray-500">to {delivery.channelTitle} · {delivery.eventType} · {formatTime(delivery.at)}</span>
+                {delivery.attempts > 1 && <span className="text-gray-500">{delivery.attempts} attempts</span>}
+                {delivery.lastError && <span className="text-red-700" role="status">{delivery.lastError}</span>}
+              </li>
+            ))}
+          </ul>
+        </Tile>
+      )}
+    </WithStatus>
+  )
+}
+
+/** Links between the tabs of the Alerts page. */
+export const ALERTS_TAB_HREF = { alerts: "/portal/alerts/alerts", channels: "/portal/alerts/channels", watching: "/portal/alerts/watching", deliveries: "/portal/alerts/deliveries" } as const
 
 function ChannelsTile({ tenant, channels, rules, licensed, active, onChanged }: { tenant: Tenant; channels: PublicChannel[]; rules: NotificationRule[]; licensed: boolean; active: boolean; onChanged: () => void }) {
   const [adding, setAdding] = useState(false)
@@ -97,7 +143,7 @@ function ChannelsTile({ tenant, channels, rules, licensed, active, onChanged }: 
             <Bell className="h-4 w-4 text-gray-500" aria-hidden="true" />
             Channels
           </h3>
-          <p className="max-w-3xl text-sm text-gray-600">Where notifications go. A channel on its own sends nothing: add an alert below to send events to it. Messages carry names, counts, statuses and the names of changed settings, never setting values, policy content, tokens or credentials.</p>
+          <p className="max-w-3xl text-sm text-gray-600">Where notifications go. A channel on its own sends nothing: an alert on the Alerts tab sends events to it. Messages carry names, counts, statuses and the names of changed settings, never setting values, policy content, tokens or credentials.</p>
         </div>
         <div className="flex flex-wrap gap-2">
           {!hasLocal && <Button type="button" variant="outline" size="sm" disabled={!licensed || addLocal.isPending} onClick={() => addLocal.mutate()}>Notify on this computer</Button>}
@@ -105,6 +151,7 @@ function ChannelsTile({ tenant, channels, rules, licensed, active, onChanged }: 
         </div>
       </div>
       {channels.length === 0 && <p className="text-sm text-gray-500">No channels yet. Events are only shown inside TenuVault.</p>}
+      {channels.length > 0 && rules.length === 0 && <p className="text-sm text-gray-500">No alert sends to these channels yet. <Link className="font-medium text-gray-900 underline underline-offset-2" to={ALERTS_TAB_HREF.alerts}>Add an alert</Link></p>}
       <ul className="divide-y divide-gray-100 dark:divide-gray-800">
         {channels.map((channel) => (
           <ChannelRow
@@ -471,7 +518,7 @@ function RulesTile({ tenant, rules, channels, licensed, active, onChanged }: { t
           <Button type="button" variant="outline" size="sm" disabled={!licensed || channels.length === 0} onClick={() => setAdding(true)}><Plus className="h-4 w-4" aria-hidden="true" />Add alert</Button>
         </div>
       </div>
-      {channels.length === 0 && <p className="text-sm text-gray-500">Add a channel first, then send events to it with an alert.</p>}
+      {channels.length === 0 && <p className="text-sm text-gray-500">Add a channel first, then send events to it with an alert. <Link className="font-medium text-gray-900 underline underline-offset-2" to={ALERTS_TAB_HREF.channels}>Open Channels</Link></p>}
       {channels.length > 0 && rules.length === 0 && <p className="text-sm text-gray-500">No alerts yet. Channels stay quiet until an alert sends events to them.</p>}
       <ul className="divide-y divide-gray-100 dark:divide-gray-800">
         {rules.map((rule) => (

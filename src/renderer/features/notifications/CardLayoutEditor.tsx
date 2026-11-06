@@ -80,7 +80,7 @@ const failed = (error: unknown) => toast(error instanceof Error ? error.message 
 const sameLayout = (a: CardLayout, b: CardLayout) => JSON.stringify(a) === JSON.stringify(b)
 
 /**
- * Settings > Notifications > Teams card: how Workflows cards look for this tenant, with a
+ * Alerts > Channels > Teams card: how Workflows cards look for this tenant, with a
  * live thumbnail and the editor. Applies to every Teams channel of the tenant.
  */
 export function TeamsCardTile({ tenant, channels, licensed, active }: { tenant: Tenant; channels: PublicChannel[]; licensed: boolean; active: boolean }) {
