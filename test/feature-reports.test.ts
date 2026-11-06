@@ -243,6 +243,14 @@ describe("reports after scheduled backups", () => {
     expect(w.graphCalls.some((entry) => entry.path === "me/sendMail")).toBe(false)
   })
 
+  it("never throws when the outcome itself cannot be recorded", async () => {
+    const w = world({ drift: { status: 500, error: "Storage unreachable" } })
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "save-settings", afterScheduledBackup: true, recipients })
+    const update = w.deps.records.update.bind(w.deps.records)
+    w.deps.records.update = (() => { throw new Error("The app store is locked") }) as typeof update
+    await expect(afterScheduledBackup(w.deps, TENANT_A, "backup-2026-11-06-020000")).resolves.toBeUndefined()
+  })
+
   it("records a failure instead of throwing", async () => {
     const w = world({ drift: { status: 500, error: "Storage unreachable" } })
     await call(w.routes, PATH, { tenantId: TENANT_A, action: "save-settings", afterScheduledBackup: true, recipients })
