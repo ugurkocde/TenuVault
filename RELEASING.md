@@ -15,6 +15,40 @@ patch after the newest stable tag. The newest 20 nightlies stay on the release p
 Release notes list the pull requests merged and the issues closed since the previous release of
 the same channel. Label pull requests `feature`, `bug`, `security` or `skip-changelog` to group them.
 
+## Licensing invariants
+
+License activation must survive every release. These are contracts with the installed base and
+with the licensing service in the TenuVault-Website repository; changing one needs the
+compatibility order noted here, not just a green test suite. The full hardening plan and its
+rationale live in
+[`tasks/license-activation-reliability-2026-11-06.md`](tasks/license-activation-reliability-2026-11-06.md).
+
+- **Entitlement token versions.** The app accepts token versions 1 and 2. Client support for a
+  new token version ships in a stable release before the service starts issuing it.
+- **Refusal reasons.** The service's `403` reason strings are add-only, and a new reason ships in
+  the app's `REASONS` map (`src/main/license/service.ts`) before the service can send it. An
+  unknown reason is treated as "service unreachable" and must stay that way: only a confirmed
+  refusal with a known reason may drop a cached entitlement.
+- **Response shapes.** `activate`, `refresh`, and `tenant` answer `{token, activationId}`;
+  `deactivate` answers `{success: true}`. Fields are add-only on both sides.
+- **Stored state.** The secure-store keys `license.state`, `license.installId`, and
+  `license.removedTenants`, the `userData` location, and the app identity that protects them
+  (signing identity, product name) never change without a migration that older state survives.
+  Losing `license.installId` silently consumes another of a tenant's five installations.
+- **Licensing host.** Requests go to `https://www.tenuvault.com`, never the apex (it redirects,
+  and license requests refuse redirects so the key and Microsoft ID token in the body cannot be
+  replayed to another origin). Keep `redirect: "error"` on every request that carries a key, a
+  token, or an entitlement.
+- **Signing keys.** The app verifies tokens with the single Ed25519 public key baked in at build
+  time. Never rotate the service signing key until the app accepts both keys and that version
+  has shipped; see task 14 in the plan.
+- **Buyer identity.** The Polar checkout email owns billing only. Activation binds the key to a
+  tenant and an installation, never to an email address or a signed-in user. Do not add an
+  email, UPN, or OID comparison to any licensing route.
+
+Before promoting a nightly to stable, confirm on a machine running that nightly with a real paid
+key that the License page still shows the plan active and a manual refresh succeeds.
+
 ## Plan boundary changes
 
 A change to what a plan includes (`src/shared/plans.ts`, `src/main/api/plan-gates.ts`) takes

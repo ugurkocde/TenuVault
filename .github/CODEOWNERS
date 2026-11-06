@@ -1,0 +1,15 @@
+# Licensing is the one path that must never break in a release: changes here need a
+# maintainer review even though other pull requests merge on green CI alone.
+# See tasks/license-activation-reliability-2026-11-06.md and the licensing invariants
+# in RELEASING.md.
+/src/main/license/ @ugurkocde
+/src/main/storage/secure-store.ts @ugurkocde
+/src/renderer/pages/LicensePage.tsx @ugurkocde
+/src/renderer/components/PurchaseKeyWatcher.tsx @ugurkocde
+/src/renderer/lib/license.tsx @ugurkocde
+/src/shared/plans.ts @ugurkocde
+/src/main/api/plan-gates.ts @ugurkocde
+/electron.vite.config.ts @ugurkocde
+/scripts/generate-license-keypair.mjs @ugurkocde
+/.github/workflows/ @ugurkocde
+/electron-builder.config.cjs @ugurkocde
