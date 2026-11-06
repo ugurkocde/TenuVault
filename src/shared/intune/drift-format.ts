@@ -239,19 +239,27 @@ export const MAX_DEFINITIONS = 500
  */
 export function definitionIdsIn(changes: DriftChange[]): string[] {
   const ids = new Set<string>()
-  const walk = (value: unknown, depth: number): void => {
-    if (ids.size >= MAX_DEFINITIONS || depth > 12 || !value || typeof value !== "object") return
-    if (Array.isArray(value)) return value.forEach((entry) => walk(entry, depth + 1))
-    const id = (value as { settingDefinitionId?: unknown }).settingDefinitionId
-    if (typeof id === "string") ids.add(id)
-    for (const entry of Object.values(value)) walk(entry, depth + 1)
-  }
   for (const change of changes) {
     if (!/^settings\[/.test(change.field)) continue
     for (const match of change.field.matchAll(/\[([^\]"]*[_.][^\]"]*)\]/g)) ids.add(match[1]!)
-    walk(change.oldValue, 0)
-    walk(change.newValue, 0)
+    addDefinitionIds(ids, change.oldValue, 12)
+    addDefinitionIds(ids, change.newValue, 12)
     if (ids.size >= MAX_DEFINITIONS) break
   }
   return [...ids].slice(0, MAX_DEFINITIONS)
+}
+
+/**
+ * Adds every settingDefinitionId inside a value (child settings included) to `ids`, until it
+ * holds MAX_DEFINITIONS. `maxDepth` bounds the walk through nested objects and arrays.
+ */
+export function addDefinitionIds(ids: Set<string>, value: unknown, maxDepth: number): void {
+  const walk = (node: unknown, depth: number): void => {
+    if (ids.size >= MAX_DEFINITIONS || depth > maxDepth || !node || typeof node !== "object") return
+    if (Array.isArray(node)) return node.forEach((entry) => walk(entry, depth + 1))
+    const id = (node as { settingDefinitionId?: unknown }).settingDefinitionId
+    if (typeof id === "string" && id) ids.add(id)
+    for (const entry of Object.values(node)) walk(entry, depth + 1)
+  }
+  walk(value, 0)
 }
