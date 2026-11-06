@@ -1733,6 +1733,33 @@ describe("LicenseService key replacement", () => {
   })
 })
 
+// Task 14: a signing key rotation needs a window in which tokens of both keys verify.
+describe("LicenseService key ring", () => {
+  const next = generateKeyPairSync("ed25519")
+  const nextPem = next.publicKey.export({ type: "spki", format: "pem" }).toString()
+
+  it("accepts tokens of the current and the rotation key during the overlap", async () => {
+    storeLicense(fresh("act-1"))
+    const license = service({ publicKey: [publicPem, nextPem] })
+    expect(entitled(license)).toBe(true)
+    // The service switched to the next key: its tokens are accepted as well.
+    answer = () => Response.json({ token: token({ act: "act-1", iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 14 * 86400 }, next.privateKey), activationId: "act-1", plan: "pro" })
+    await license.refreshAll()
+    expect(calls.map(({ action }) => action)).toEqual(["refresh"])
+    expect(entitled(license)).toBe(true)
+    expect(entitled(service({ publicKey: [nextPem] }))).toBe(true)
+  })
+
+  it("rejects tokens of a key outside the ring", () => {
+    storeLicense(token({ act: "act-1" }, next.privateKey))
+    expect(entitled(service({ publicKey: [publicPem] }))).toBe(false)
+  })
+
+  it("needs at least one key", () => {
+    expect(() => service({ publicKey: [] })).toThrow("verification key is required")
+  })
+})
+
 // Task 15: a wrong signer and a wrong clock used to share one message; only the clock is fixed here.
 describe("LicenseService verification diagnostics", () => {
   // The service's own clock, which issues every token below.
