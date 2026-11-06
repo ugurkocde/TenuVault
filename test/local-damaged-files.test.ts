@@ -215,11 +215,11 @@ describe("damaged local backup files", () => {
 })
 
 describe("backup history with damaged local files", () => {
-  it("lists an unavailable backup with its reason next to the usable ones, in both list modes", async () => {
+  it.each([["a policy file", "CompliancePolicies/a.json"], ["the manifest", "metadata.json"]])("lists a backup whose %s is damaged as unavailable next to the usable ones, in both list modes", async (_what, damagedName) => {
     const { store, dir } = await setup()
     await backup(store, OLD)
     await backup(store, NEW)
-    damage(dir, await fileOf(store, `${OLD}/CompliancePolicies/a.json`), true)
+    damage(dir, await fileOf(store, `${OLD}/${damagedName}`), true)
     const { NextRequest } = await import("../src/main/api/next-server-shim")
     const { POST: listBackups } = await import("../src/portal/app/api/list-backups/route")
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -239,7 +239,7 @@ describe("backup history with damaged local files", () => {
         const byId = Object.fromEntries(data.backups.map((entry: { id: string }) => [entry.id, entry]))
         expect(byId[NEW]).toMatchObject({ status: "Success", totalPolicies: 2 })
         expect(byId[OLD]).toMatchObject({ status: "unavailable" })
-        expect(byId[OLD].error).toContain(`Backup ${OLD} is unavailable: 1 file listed in its manifest is missing or damaged.`)
+        expect(byId[OLD].error).toContain(`Backup ${OLD} is unavailable:`)
       }
     } finally {
       vi.unstubAllGlobals()

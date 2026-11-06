@@ -65,7 +65,9 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
   }
   const metadataRead: Promise<MetadataRead> = inventory?.version
     ? metadataCache.read(inventory.cacheKey, inventory.version, readMetadata)
-    : inventory ? Promise.resolve({ metadata: null }) : readMetadata()
+    // On this device a listing leaves out a metadata.json it cannot read, so a folder listed without
+    // one is asked for it: the store answers 409 when damaged files made the backup unavailable.
+    : inventory ? (storageAccountName.startsWith(LOCAL_STORAGE_PREFIX) ? readMetadata().then((read) => read.unavailable ? read : { metadata: null }) : Promise.resolve({ metadata: null })) : readMetadata()
   // A backup made unavailable by damaged files is still listed, with the reason, so the others stay usable.
   const filesRead: Promise<string | { unavailable: string }> = inventory ? Promise.resolve(inventory.text) : listBlobPages(`https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(`${name}/`)}`, accessToken).catch((error) => {
     const unavailable = error instanceof BlobListError ? unavailableReason(error.status, error.body) : null
