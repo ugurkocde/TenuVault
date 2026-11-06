@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
   CLOCK_TOLERANCE_MS,
   FAILURE_COOLDOWN_MS,
+  LICENSE_REQUEST_TIMEOUT_MS,
   LicenseService,
   entitlementCurrent,
   type LicenseServiceOptions,
@@ -398,6 +399,35 @@ describe("LicenseService storage", () => {
     expect(id).toMatch(/^[0-9a-f-]{36}$/)
     service().status([])
     expect(store.get("license.installId")).toBe(id)
+  })
+
+  it("drops damaged stored activations instead of breaking license checks", () => {
+    const good = token()
+    store.set("license.state", JSON.stringify({
+      key: "TEST-LICENSE-KEY",
+      activations: {
+        [TENANT]: { activationId: "act-1", token: good },
+        [TENANT_B]: { activationId: "act-2", token: 42 },
+        "33333333-4444-5555-6666-777777777777": null,
+        "44444444-5555-6666-7777-888888888888": { token: good },
+        "55555555-6666-7777-8888-999999999999": { activationId: "act-5", token: good, source: "elsewhere" },
+      },
+    }))
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(T0 + DAY)
+    try {
+      const status = service().status([TENANT, TENANT_B])
+      // The well-formed activation still licenses its tenant; the damaged ones read as unlicensed.
+      expect(status.tenants.map((t) => t.entitled)).toEqual([true, false])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("waits long enough for a slow but healthy activation on the service", () => {
+    // The service may take several sequential Polar calls (10 seconds each there); the desktop
+    // deadline must stay well above the old 20 seconds so first activations are not abandoned.
+    expect(LICENSE_REQUEST_TIMEOUT_MS).toBeGreaterThanOrEqual(40_000)
   })
 
   it("keeps the key in memory only when OS encryption is unavailable", async () => {

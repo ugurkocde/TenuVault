@@ -169,6 +169,14 @@ const SEEN_PERSIST_MS = 60 * 60_000
 // for this long instead of calling the licensing service again; user actions skip it.
 export const FAILURE_COOLDOWN_MS = 60_000
 
+// One licensing request may wait this long for an answer. Activation on the service makes
+// several sequential Polar calls (each allowed 10 seconds there, inside a 60 second route
+// budget), so a 20 second desktop deadline used to abandon slow but healthy first activations
+// that then completed on the server. 45 seconds covers the realistic slow path; the service
+// keeps its end-to-end activation work inside this budget, and a retry with the same
+// installation reuses an activation the server already created.
+export const LICENSE_REQUEST_TIMEOUT_MS = 45_000
+
 const STATE_KEY = "license.state"
 // Tenants removed from the app whose activation could not be released yet. Persisted
 // beside the state so a restart cannot make the retained token usable again.
@@ -197,9 +205,12 @@ export function entitlementCurrent(
 }
 
 function decodeToken(token: string, publicKey: KeyObject): Entitlement | null {
-  const [body, signature, extra] = token.split(".")
-  if (!body || !signature || extra !== undefined) return null
   try {
+    // Stored state is only shape-checked on load, so a token can in principle be a non-string
+    // here; that must read as "not valid", never throw into a license check.
+    if (typeof token !== "string") return null
+    const [body, signature, extra] = token.split(".")
+    if (!body || !signature || extra !== undefined) return null
     if (!verify(null, Buffer.from(body), publicKey, Buffer.from(signature, "base64url"))) return null
     const payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as Entitlement
     if (payload.v !== 1 && payload.v !== 2) return null
@@ -302,6 +313,25 @@ export class LicenseService {
         parsed.activations !== null
       ) {
         this.state = parsed as StoredLicense
+        // Keep only well-formed activations under their lowercase tenant id. A damaged entry
+        // must read as "not licensed" for that tenant, never break every license check.
+        const activations: Record<string, StoredActivation> = {}
+        for (const [tenantId, entry] of Object.entries(this.state.activations)) {
+          if (
+            entry &&
+            typeof entry === "object" &&
+            typeof entry.activationId === "string" &&
+            entry.activationId !== "" &&
+            typeof entry.token === "string" &&
+            entry.token !== "" &&
+            (entry.source === undefined || entry.source === "tenant")
+          ) {
+            activations[tenantId.toLowerCase()] = entry
+          } else {
+            console.warn("[license] Stored activation dropped: invalid entry")
+          }
+        }
+        this.state.activations = activations
         if (typeof this.state.keyFailure !== "string" || !Object.hasOwn(REASONS, this.state.keyFailure)) delete this.state.keyFailure
         if (!Number.isFinite(this.state.seen)) delete this.state.seen
         if (typeof this.state.trialToken !== "string") delete this.state.trialToken
@@ -425,7 +455,7 @@ export class LicenseService {
         // The body carries the license key or a Microsoft ID token: a 307 or
         // 308 redirect would replay it to whatever origin the response names.
         redirect: "error",
-        signal: AbortSignal.timeout(20_000),
+        signal: AbortSignal.timeout(LICENSE_REQUEST_TIMEOUT_MS),
       })
       this.assertCurrent(current)
     } catch (error) {
