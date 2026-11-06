@@ -110,7 +110,7 @@ export function App() {
                       <Route path="frameworks/:frameworkId" element={<FrameworksPage />} />
                       <Route path="baselines" element={<BaselinesPage />} />
                       <Route path="baselines/:baselineId" element={<BaselinesPage />} />
-                      {["governance", "changes", "operations"].map((hub) => (
+                      {["governance", "changes", "operations", "reports"].map((hub) => (
                         <Route key={hub} path={`${hub}/:tabId?`} element={<HubPage hubId={hub} />} />
                       ))}
                       <Route path="oib" element={<OibPage />} />

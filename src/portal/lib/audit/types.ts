@@ -53,6 +53,7 @@ export enum AuditEventType {
   // Configuration Events
   CONFIG_UPDATED = 'CONFIG_UPDATED',
   CONFIG_EXPORTED = 'CONFIG_EXPORTED',
+  REPORT_SENT = 'REPORT_SENT',
   
   // Security Events
   SECURITY_PERMISSION_DENIED = 'SECURITY_PERMISSION_DENIED',
@@ -89,6 +90,7 @@ export const DESKTOP_AUDIT_EVENT_TYPES: readonly AuditEventType[] = [
   AuditEventType.GOVERNANCE_CUSTOMIZATION_RECORDED,
   AuditEventType.GOVERNANCE_CUSTOMIZATION_RETIRED,
   AuditEventType.GOVERNANCE_STANDARD_ADOPTED,
+  AuditEventType.REPORT_SENT,
 ]
 
 export const DESKTOP_AUDIT_SEVERITIES: readonly AuditSeverity[] = [

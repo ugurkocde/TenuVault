@@ -1,5 +1,7 @@
 import type { GraphCall } from "../../portal/lib/policies/graph-restore"
 import type { Plan } from "../../shared/plans"
+import type { OibPrintOptions } from "../../shared/oib/report-html"
+import type { PdfBranding } from "../../shared/pdf/theme"
 import { DELEGATED_CLIENT_SECRET } from "../../shared/constants"
 import type { TenantRecords } from "./records"
 
@@ -55,6 +57,10 @@ export interface FeatureDeps {
    * signed-in admin's storage token. "missing" when there is none (or the storage is local).
    */
   watcherHeartbeat?: (tenantId: string) => Promise<WatcherHeartbeatRead>
+  /** Prints report HTML to PDF in a hidden, locked-down window (report-export.ts). */
+  printPdf?: (html: string, options: OibPrintOptions) => Promise<Uint8Array>
+  /** The PDF branding the tenant's plan allows. */
+  pdfBranding?: (tenantId: string) => Promise<PdfBranding | undefined>
   now: () => Date
 }
 

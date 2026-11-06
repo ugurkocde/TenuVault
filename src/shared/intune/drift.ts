@@ -249,6 +249,29 @@ export async function selectBackupPair(options: {
     return { comparison: complete[0]!, baseline: complete[1]! }
   }
 
+  // Only the comparison: that backup, complete, and the newest complete backup of the tenant before
+  // it. A change report after a scheduled backup uses this, so a backup that finished in the
+  // meantime is never compared instead.
+  if (!explicit && typeof options.comparison === "string") {
+    const index = folders.findIndex((entry) => entry.name === options.comparison)
+    if (index < 0) throw new DriftPairError(`Backup ${options.comparison} was not found. It may have been removed by retention.`, "BACKUP_NOT_FOUND", 404)
+    const comparisonFolder = folders[index]!
+    const metadata = await load(comparisonFolder.name)
+    if (!metadata || backupCompleteness(statusOf(metadata)) !== "complete" || !belongsTo(metadata, tenantId)) {
+      throw new DriftPairError(`Backup ${comparisonFolder.name} did not complete without warnings, so it is not compared.`, "BACKUP_INCOMPLETE", 409)
+    }
+    const comparisonTime = Date.parse(comparisonFolder.timestamp)
+    for (const folder of folders.slice(index + 1)) {
+      signal?.throwIfAborted()
+      if (Date.parse(folder.timestamp) >= comparisonTime) continue
+      const previous = await load(folder.name)
+      if (previous && backupCompleteness(statusOf(previous)) === "complete" && belongsTo(previous, tenantId)) {
+        return { baseline: { ...folder, metadata: previous }, comparison: { ...comparisonFolder, metadata } }
+      }
+    }
+    throw new DriftPairError(`There is no complete backup before ${comparisonFolder.name} to compare it with.`, "INSUFFICIENT_BACKUPS", 409)
+  }
+
   if (typeof options.baseline !== "string" || typeof options.comparison !== "string") {
     throw new DriftPairError("Choose both a baseline and a comparison backup.", "INVALID_PAIR", 400)
   }

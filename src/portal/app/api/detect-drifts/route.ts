@@ -5,9 +5,10 @@ import { complianceSettingLabel, complianceSettingValue } from "../../../../shar
 import { withoutUnreadAssignments } from "../../../../shared/intune/read"
 import { coveredFolders, type ScopeMetadata } from "../../../../shared/intune/scope"
 import { itemsOf, sameItem, type BackupFingerprint, type BackupItems } from "../../../../shared/intune/backup-changes"
-import { backupRef, DriftPairError, selectBackupPair, summarizeDrifts, type BackupMetadata, type Drift, type DriftResult, type DriftScanProgress, type DriftWarning, type SelectedBackup } from "../../../../shared/intune/drift"
+import { backupRef, DriftPairError, selectBackupPair, summarizeDrifts, type BackupMetadata, type Drift, type DriftChange, type DriftResult, type DriftScanProgress, type DriftWarning, type SelectedBackup } from "../../../../shared/intune/drift"
 import { CANCELLED_HEADER, driftScanHooks, type DriftScanHooks } from "~/lib/drift/scan-hooks"
 import { mapLimit } from "../../../../shared/map-limit"
+import { REDACTED, redactSecrets } from "../../../../shared/compliance/export"
 import { backupFoldersIn } from "../../../../shared/intune/backup-names"
 import { definitionIdsIn } from "../../../../shared/intune/drift-format"
 import { graphCaller } from "~/lib/policies/graph-restore"
@@ -42,6 +43,8 @@ export async function POST(request: NextRequest) {
       baseline,
       comparison,
     } = body
+    // Change reports document added and deleted items setting by setting; the drift page does not.
+    const documentItems = body.documentItems === true
 
     if (!tenantId || !appId || !clientSecret || !storageAccountName) {
       return NextResponse.json(
@@ -123,7 +126,7 @@ export async function POST(request: NextRequest) {
     }
     const [newerPolicies, olderPolicies] = await Promise.all([list(newerBackup.name), list(olderBackup.name)])
     
-    const { drifts, warnings, stats } = await detectDrifts(newerPolicies, olderPolicies, newerBackup, olderBackup, accessToken, { signal, report, folders: new Set(shared) })
+    const { drifts, warnings, stats } = await detectDrifts(newerPolicies, olderPolicies, newerBackup, olderBackup, accessToken, { signal, report, folders: new Set(shared), documentItems })
     signal?.throwIfAborted()
     
     // Fetch revert metadata for all drift policy IDs
@@ -324,7 +327,7 @@ async function detectDrifts(
   newerBackup: SelectedBackup,
   olderBackup: SelectedBackup,
   accessToken: string,
-  options: { signal?: AbortSignal; report: (progress: DriftScanProgress) => void; /** The type folders both backups cover. */ folders: Set<string> }
+  options: { signal?: AbortSignal; report: (progress: DriftScanProgress) => void; /** The type folders both backups cover. */ folders: Set<string>; /** List every setting of added and deleted items as their changes. */ documentItems?: boolean }
 ): Promise<{ drifts: Drift[]; warnings: DriftWarning[]; stats: DriftResult["stats"] }> {
   const { signal, report } = options
   const detectedAt = new Date().toISOString()
@@ -431,6 +434,7 @@ async function detectDrifts(
           description: `New ${policyType} policy added`,
           impact: determineImpact(policyType, "added", policyContent),
           ...(likelyRestoredCopy ? { likelyRestoredCopy: true } : {}),
+          ...(options.documentItems && policyContent ? { changes: documentItem(policyContent, "added") } : {}),
         }
       }
       if (task.change === 'deleted') {
@@ -446,12 +450,14 @@ async function detectDrifts(
           description: `${policyType} policy deleted`,
           impact: determineImpact(policyType, "deleted", policyContent),
           ...restoreBlockers(task.name, policyContent),
+          ...(options.documentItems && policyContent ? { changes: documentItem(policyContent, "deleted") } : {}),
         }
       }
       const [newerContent, olderContent] = await Promise.all([read(task.newer!, newerBackup.name), read(task.older!, olderBackup.name)])
       // Without both versions there is nothing to compare; the warning says which file is missing.
       if (!newerContent || !olderContent) return null
-      const changes = compareObjects(...withoutUnreadAssignments(typeOfFile(task.name), olderContent, newerContent))
+      const compared = withoutUnreadAssignments(typeOfFile(task.name), olderContent, newerContent)
+      const changes = options.documentItems ? redactedChanges(compared[0], compared[1]) : compareObjects(...compared)
       if (changes.length === 0) return null
       const previousName = olderContent?.displayName || olderContent?.name
       return {
@@ -477,6 +483,54 @@ async function detectDrifts(
   let driftIdCounter = Date.now()
   const drifts = results.filter((drift): drift is Omit<Drift, 'id'> => drift !== null).map(drift => ({ id: `drift-${driftIdCounter++}`, ...drift }))
   return { drifts, warnings, stats: { compared: tasks.length, unchanged } }
+}
+
+/**
+ * Every setting of an added or deleted item, as changes from or to "not set", so a change report
+ * lists them with the same names and values as a modified item. Settings Catalog settings and
+ * OMA-URI settings are one row each; other properties one row per value.
+ */
+export function documentItem(content: unknown, change: "added" | "deleted"): DriftChange[] {
+  const redacted = reportRedact(content)
+  const empty = emptyLike(redacted)
+  // Every row: the report lists the first MAX_REPORT_SETTINGS and counts the rest.
+  return change === "added" ? compareObjects(empty, redacted) : compareObjects(redacted, empty)
+}
+
+/**
+ * The changes of a modified item for a change report, which can leave the device by email:
+ * compared with secret values redacted, plus one "Secret values" row when a secret changed, so
+ * the item still shows as changed without its secret.
+ */
+export function redactedChanges(older: unknown, newer: unknown): DriftChange[] {
+  const changes = compareObjects(reportRedact(older), reportRedact(newer))
+  const shown = new Set(changes.map(change => change.field))
+  const hidden = compareObjects(older, newer).some(change => !shown.has(change.field))
+  return hidden ? [...changes, { field: 'secretValues', oldValue: REDACTED, newValue: REDACTED, displayName: 'Secret values' }] : changes
+}
+
+/**
+ * Secrets redacted as in every export, and the value of every encrypted OMA-URI setting too: its
+ * name is not secret-like, but isEncrypted says the value is one (a Wi-Fi key, a certificate password).
+ */
+function reportRedact(value: unknown): unknown {
+  const visit = (item: unknown): unknown => {
+    if (Array.isArray(item)) return item.map(visit)
+    if (!item || typeof item !== 'object') return item
+    const source = item as Record<string, unknown>
+    return Object.fromEntries(Object.entries(source).map(([key, child]) => [key, source.isEncrypted === true && key === 'value' && child !== null ? REDACTED : visit(child)]))
+  }
+  return redactSecrets(visit(value))
+}
+
+/**
+ * The same shape with every array empty and every value undefined. The keys stay, in their order,
+ * so the documented settings follow the item's own property order.
+ */
+function emptyLike(value: unknown): unknown {
+  if (Array.isArray(value)) return []
+  if (value === null || typeof value !== 'object') return undefined
+  return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, emptyLike(entry)]))
 }
 
 async function fetchPolicyContent(url: string, accessToken: string, signal?: AbortSignal): Promise<PolicyContent> {

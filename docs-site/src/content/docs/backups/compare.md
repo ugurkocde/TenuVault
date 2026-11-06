@@ -66,4 +66,5 @@ To compare the tenant as it is right now with your last backup, run a new backup
 
 ## Related pages
 
+* [Change reports](/reports/): the same changes as a document with who made them, saved as PDF or Markdown or sent by email
 * [Intune drift detection](https://www.tenuvault.com/intune-drift-detection): compare and revert changes, on the product site

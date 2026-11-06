@@ -60,6 +60,7 @@ export function BackupPairPicker({
   onBackUp,
   busy,
   latest,
+  actionLabel = "Compare",
 }: {
   backups: BackupSummary[]
   loading: boolean
@@ -74,6 +75,8 @@ export function BackupPairPicker({
   busy: boolean
   /** The two newest complete backups, offered when another pair is chosen. */
   latest: { baseline: string; comparison: string } | null
+  /** The action button's label; change reports generate instead of comparing. */
+  actionLabel?: string
 }) {
   const offered = comparableBackups(backups)
   const hidden = backups.length - offered.length
@@ -122,7 +125,7 @@ export function BackupPairPicker({
         </label>
         <Button size="lg" className="bg-coral-600 text-white hover:bg-coral-700 xl:ml-auto" onClick={onCompare} disabled={busy || loading || problem !== null}>
           {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <GitCompare className="mr-2 h-4 w-4" />}
-          Compare
+          {actionLabel}
         </Button>
       </div>
       {latest && (latest.baseline !== baseline || latest.comparison !== comparison) && (

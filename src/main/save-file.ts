@@ -3,6 +3,7 @@ const FORMATS = {
   csv: { label: "CSV", encoding: "utf8" },
   json: { label: "JSON", encoding: "utf8" },
   txt: { label: "Text", encoding: "utf8" },
+  md: { label: "Markdown", encoding: "utf8" },
   pdf: { label: "PDF", encoding: "base64" },
 } as const
 

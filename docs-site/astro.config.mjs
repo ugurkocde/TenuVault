@@ -166,6 +166,7 @@ export default defineConfig({
 							],
 						},
 						{ label: 'Drift detection', slug: 'drift' },
+						{ label: 'Change reports', slug: 'reports' },
 						{ label: 'Audit log', slug: 'audit-log' },
 						{ label: 'Governance', slug: 'governance' },
 						{ label: 'Changes', slug: 'changes' },
