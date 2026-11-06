@@ -26,6 +26,8 @@ The trial covers two tenants, like Pro. To evaluate MSP with more tenants, the M
 
 Click **Buy now** on [tenuvault.com/pricing](https://tenuvault.com/pricing) or on the **License** page. The checkout asks for payment right away, monthly or yearly, and your license key arrives by email after checkout. Payments are not refundable, so start with the free trial if you want to evaluate first.
 
+Use an email address at checkout that should own billing and keep the key, such as a shared IT or finance mailbox. The key, the invoices and the customer portal belong to that address, and the customer portal is where you see the full key again if it is lost (the app shows only its last four characters). Who enters the key does not matter: it is tied to the Microsoft tenant signed in to TenuVault, so a different admin can activate it.
+
 If your organization buys through procurement, yearly Pro and MSP plans are also available by quote, purchase order and invoice. Email [support@tenuvault.com](mailto:support@tenuvault.com) for a PDF quote; after your order you receive an invoice from Ugurlabs UG, payable by bank transfer.
 
 Eligible nonprofits can use Pro at no cost. Email [support@tenuvault.com](mailto:support@tenuvault.com) to request it.

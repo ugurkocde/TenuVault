@@ -70,6 +70,14 @@ If the browser shows `AADSTS50011` (redirect URI mismatch), the app registration
 | Only the machine that holds the license key can change sharing. | License sharing can only be changed where the key was entered. | Change **Let other admins in this tenant use this license** on the machine that holds the key. |
 | Sign in to this tenant again to share the license with it. | Sharing needs a recent sign-in to the tenant. | Sign in to the tenant again, then change the setting. |
 | Enter a valid license key. | The key has the wrong format. | Paste the whole key from your email, without extra characters. |
+| This computer's clock is ahead: it shows *date*, but the license was issued on *date*. Set the correct date and time, then retry. | The licensing service issued a license that this computer already considers expired, because its clock is two weeks or more ahead. | Correct the date, time and time zone (or turn on automatic time), then click **Retry** on the **License** page. |
+| The license could not be verified: it was not signed by the TenuVault licensing service this app trusts. | The answer was not signed with the key built into this version of TenuVault. An outdated version, or a proxy or security product that rewrites HTTPS responses, causes this. | Update TenuVault. If it persists, exclude `www.tenuvault.com` from HTTPS content rewriting and contact support. |
+| The licensing service is busy with many requests from your network. Try again in *time*. | Many license requests came from your network at once, for example several admins behind one internet address or many tenants activated together. TenuVault already waited and retried. | Wait the time shown and retry. Tenants that are already active keep working. |
+| The new license key could not be saved. Your current license is unchanged. | Changing the key failed while saving it on this computer, for example because the disk is full. | Free disk space and try **Use a different key** again. The previous key stays active. |
+
+### After Start over or a reinstall on a new profile
+
+Each TenuVault installation has its own installation ID, kept with the app's saved data. When you choose **Start over** after the saved data could not be opened, or set the computer up again without that data, TenuVault gets a new installation ID. The old one still counts toward the 5 installations per tenant. If a tenant reports that it already has 5 active installations, click **Manage subscription** on the **License** page and release the installations you no longer use in the customer portal.
 
 More on licenses: [Activate and manage your license](/licensing/manage/).
 

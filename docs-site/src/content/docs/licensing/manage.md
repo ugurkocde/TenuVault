@@ -147,6 +147,9 @@ To upgrade from Community, start the free trial or click **Buy now** on the **Li
 | TenuVault Community covers one tenant, and it is used for tenant `<tenant ID>`. | Add a Pro or MSP license, or remove the other tenant to use the free plan here. |
 | The licensing service is unavailable. Please try again later. | Wait and click **Retry**. Active tenants keep working offline. |
 | Your Microsoft sign-in could not be verified by the licensing service. | Sign in to the tenant again and retry. |
+| This computer's clock is ahead. | Set the correct date and time, then retry. |
+| The license could not be verified: it was not signed by the TenuVault licensing service this app trusts. | Update TenuVault. If it persists, a proxy may be rewriting licensing responses. See [Troubleshooting](/troubleshooting/#license). |
+| The licensing service is busy with many requests from your network. | Wait the time shown and retry. |
 
 ## Related pages
 
