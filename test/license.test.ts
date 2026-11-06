@@ -1534,6 +1534,64 @@ describe("LicenseService key replacement", () => {
     expect(saved.activations[TENANT]).toMatchObject({ activationId: "act-2" })
   })
 
+  // Task 6: replacing a key must not change who else in the tenant is licensed until it is saved.
+  describe("sharing", () => {
+    const storeShared = (shared: boolean) => store.set("license.state", JSON.stringify({
+      key: "TEST-LICENSE-KEY",
+      activations: { [TENANT]: { activationId: "act-1", token: trialToken(), shared } },
+    }))
+    const activations = () => calls.filter(({ action }) => action === "activate")
+
+    it("stages the new key without sharing, then moves the tenant's sharing to it", async () => {
+      storeShared(true)
+      answer = ({ action, body }) =>
+        action === "activate" ? granted("act-2", { shared: false })
+          : action === "refresh" ? granted("act-2", { shared: body.shareWithTenant === true })
+            : Response.json({ success: true })
+      const license = service()
+      await license.replaceKey("TENU-PAID-KEY-0001", [TENANT])
+      expect(activations()[0]!.body).toMatchObject({ key: "TENU-PAID-KEY-0001", shareWithTenant: false })
+      expect(activations()[0]!.body.idToken).toBeUndefined()
+      expect(calls.map(({ action, body }) => `${action}:${String(body.key)}`)).toEqual([
+        "activate:TENU-PAID-KEY-0001",
+        "refresh:TENU-PAID-KEY-0001",
+        "deactivate:TEST-LICENSE-KEY",
+      ])
+      expect(calls[1]!.body).toMatchObject({ shareWithTenant: true, idToken: "id.token.value", clientId: APP_ID })
+      expect(license.status([TENANT]).tenants[0]!.shared).toBe(true)
+    })
+
+    it("keeps an opt-out through the swap without publishing anything", async () => {
+      storeShared(false)
+      answer = ({ action }) => (action === "activate" ? granted("act-2", { shared: false }) : Response.json({ success: true }))
+      const license = service()
+      await license.replaceKey("TENU-PAID-KEY-0001", [TENANT])
+      expect(calls.map(({ action }) => action)).toEqual(["activate", "deactivate"])
+      expect(JSON.parse(store.get("license.state")!).activations[TENANT]).toMatchObject({ activationId: "act-2", shared: false })
+    })
+
+    it("keeps the sharing choice when publishing it fails, so the next refresh retries", async () => {
+      storeShared(true)
+      vi.spyOn(console, "warn").mockImplementation(() => undefined)
+      answer = ({ action }) =>
+        action === "activate" ? granted("act-2", { shared: false })
+          : action === "refresh" ? Response.json({ reason: "upstream" }, { status: 502 })
+            : Response.json({ success: true })
+      const license = service()
+      await license.replaceKey("TENU-PAID-KEY-0001", [TENANT])
+      expect(JSON.parse(store.get("license.state")!).activations[TENANT]).toMatchObject({ activationId: "act-2", shared: true })
+      expect(entitled(license)).toBe(true)
+      vi.restoreAllMocks()
+    })
+
+    it("asks the service to change no sharing when the swap is refused", async () => {
+      storeShared(true)
+      answer = ({ action }) => (action === "activate" ? denied("not_found") : Response.json({ success: true }))
+      await expect(service().replaceKey("TENU-PAID-KEY-0001", [TENANT])).rejects.toThrow()
+      expect(calls.every(({ body }) => body.idToken === undefined && body.shareWithTenant !== true)).toBe(true)
+    })
+  })
+
   // Task 7: every crash or write failure during a replacement leaves at least one usable key.
   describe("crash safety", () => {
     const savedKey = () => JSON.parse(store.get("license.state")!).key as string
