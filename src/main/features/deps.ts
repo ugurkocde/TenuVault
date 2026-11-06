@@ -57,6 +57,11 @@ export interface FeatureDeps {
    * signed-in admin's storage token. "missing" when there is none (or the storage is local).
    */
   watcherHeartbeat?: (tenantId: string) => Promise<WatcherHeartbeatRead>
+  /**
+   * Writes the Azure watcher's alerts.json next to its state in the tenant's backup storage
+   * account, with the signed-in admin's storage token. The watcher reads it on its next run.
+   */
+  watcherAlertsWrite?: (tenantId: string, text: string) => Promise<WatcherAlertsWrite>
   /** Prints report HTML to PDF in a hidden, locked-down window (report-export.ts). */
   printPdf?: (html: string, options: OibPrintOptions) => Promise<Uint8Array>
   /** The PDF branding the tenant's plan allows. */
@@ -70,9 +75,11 @@ export interface FeatureDeps {
  * backup routes require those two but storage never uses them, for local or Azure accounts.
  */
 export type WatcherHeartbeatRead =
-  | { status: "ok"; runAt: string | null; lastError: string | null; alertsHash?: string | null }
+  | { status: "ok"; runAt: string | null; lastError: string | null; alertsHash?: string | null; runbookVersion?: string | null; alertsSource?: string | null }
   | { status: "missing" }
   | { status: "error"; message: string }
+
+export type WatcherAlertsWrite = { status: "ok" } | { status: "error"; message: string }
 
 export function apiBody(tenantId: string, profile: Pick<TenantProfile, "clientId" | "storageAccountName">, body: Record<string, unknown> = {}): Record<string, unknown> {
   return { subscriptionId: "local", resourceGroupName: "local", ...body, tenantId, appId: profile.clientId, clientSecret: DELEGATED_CLIENT_SECRET, storageAccountName: profile.storageAccountName }

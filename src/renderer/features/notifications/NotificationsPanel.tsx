@@ -80,7 +80,8 @@ export function AlertsTab({ tenant, plan, allowed }: FeatureTabProps) {
         eventTypes: [params.get("service") === "conditionalAccess" ? "entra.change" : "intune.change"],
         minSeverity: "info",
         delivery: "each",
-        conditions: { policyNames: [alertFor.slice(0, 200)] },
+        // The name of one policy picked elsewhere in the app: only that policy, not others containing it.
+        conditions: { policyNames: [alertFor.slice(0, 200)], policyNameMatch: "exact" },
       }
     : null
   return (
@@ -649,7 +650,7 @@ function useCopyForWatcher(tenant: Tenant) {
         await navigator.clipboard.writeText(result.json)
         const skipped = result.skipped.length ? ` Left out (only This computer channels): ${result.skipped.join(", ")}.` : ""
         const uncovered = result.uncovered.length ? ` The watcher will not send ${result.uncovered.map((type) => EVENT_TYPE_LABELS[type] ?? type).join(", ")}: no alert takes them.` : ""
-        toast(`Alerts copied. Save them as a .json file and pass it to the watcher setup with -AlertRulesPath.${skipped}${uncovered}`, "success")
+        toast(`Alerts copied. Save them as a .json file and pass it to the watcher setup with -AlertRulesPath, or use Update watcher on the Azure watcher card.${skipped}${uncovered}`, "success")
       } catch {
         toast("The alerts could not be copied to the clipboard.", "error")
       }
@@ -660,8 +661,8 @@ function useCopyForWatcher(tenant: Tenant) {
 
 /**
  * While an Azure watcher owns the tenant: whether it runs the alerts on this page, from the
- * alerts hash in its last heartbeat. Copying and the setup rerun stay manual: the watcher
- * reads its alerts from an Automation variable only the setup writes.
+ * alerts hash in its last heartbeat. "Update watcher" writes them to the watcher's alerts.json,
+ * which runbook 1.2.0 and later read on every run; older runbooks need one setup rerun first.
  */
 function WatcherSyncCard({ tenant, data, onChanged }: { tenant: Tenant; data: NotificationsStatus; onChanged: () => void }) {
   const copy = useCopyForWatcher(tenant)
@@ -670,18 +671,47 @@ function WatcherSyncCard({ tenant, data, onChanged }: { tenant: Tenant; data: No
     onSuccess: (result) => { if (result.error) toast(`The watcher heartbeat could not be read: ${result.error}`, "error"); onChanged() },
     onError: failed,
   })
+  const push = useMutation({
+    mutationFn: () => notificationsApi.pushWatcherAlerts(tenant),
+    onSuccess: (result) => {
+      const skipped = result.skipped?.length ? ` Left out (only This computer channels): ${result.skipped.join(", ")}.` : ""
+      const uncovered = result.uncovered?.length ? ` The watcher will not send ${result.uncovered.map((type) => EVENT_TYPE_LABELS[type] ?? type).join(", ")}: no alert takes them.` : ""
+      toast(`Alerts sent to the Azure watcher. It uses them from its next run.${skipped}${uncovered}`, "success")
+      onChanged()
+    },
+    onError: (error) => { failed(error); onChanged() },
+  })
+  const auto = useMutation({
+    mutationFn: (on: boolean) => notificationsApi.pushWatcherAlerts(tenant, { auto: on, write: on }),
+    onSuccess: (_result, on) => { toast(on ? "The watcher now gets your alerts whenever an alert or channel changes." : "The watcher gets your alerts only when you update it.", "success"); onChanged() },
+    onError: (error) => { failed(error); onChanged() },
+  })
   if (!data.auditWatch?.externalWatcher) return null
-  const current = data.watcherAlerts?.current ?? "none"
-  const reported = data.watcherAlerts?.reported ?? null
+  const sync = data.watcherAlerts
+  const current = sync?.current ?? "none"
+  const reported = sync?.reported ?? null
   const checkedAt = data.auditWatch.watcherCheck?.checkedAt
-  const state: { tone: "success" | "warning" | "neutral"; text: string } =
-    !checkedAt || reported === null
-      ? { tone: "neutral", text: checkedAt ? "The Azure watcher has not said which alerts it runs. Update it with the current setup script, or check again after its next run." : "The Azure watcher has not been checked yet." }
-      : reported === "unreadable"
-        ? { tone: "warning", text: "The Azure watcher cannot read its alerts, so it sends every event to every destination. Copy them again and rerun its setup." }
-        : reported === current
-          ? { tone: "success", text: current === "none" ? "The Azure watcher has no alerts and sends every event to every destination it has, as these alerts would." : "The Azure watcher runs the alerts on this page." }
-          : { tone: "warning", text: reported === "none" ? "The Azure watcher has no alerts yet, so it sends every event to every destination. Copy these alerts and rerun its setup with -AlertRulesPath." : "The Azure watcher runs older alerts than these. Copy them again and rerun its setup with -AlertRulesPath." }
+  const oldRunbook = sync?.readsAlertsFile === false
+  const lastRunAt = data.auditWatch.watcherCheck?.lastRunAt ?? null
+  const sentAndWaiting = Boolean(sync?.pushedHash && sync.pushedHash === current && reported !== current)
+  // A run after the update that still reports other alerts did not take them: say so instead of waiting forever.
+  const ranWithout = sentAndWaiting && Boolean(lastRunAt && sync?.pushedAt && Date.parse(lastRunAt) > Date.parse(sync.pushedAt))
+  const sentNotRun = sentAndWaiting && !ranWithout
+  const failedAfterPush = Boolean(sync?.error && (!sync.pushedAt || (sync.errorAt ?? "") > sync.pushedAt))
+  const state: { tone: "success" | "warning" | "neutral"; chip: string; text: string } =
+    oldRunbook
+      ? { tone: "warning", chip: "Needs a setup rerun", text: `The watcher runs runbook ${sync?.runbookVersion}, which takes its alerts only from its setup. Rerun the watcher setup script once with the current release to upgrade it. After that, Update watcher sends your alerts from here.` }
+      : ranWithout
+        ? { tone: "warning", chip: "Not using the update", text: `The watcher ran ${formatTime(lastRunAt!)}, after these alerts were sent, but still runs ${sync?.source === "setup" ? "the alerts from its setup" : reported === "none" ? "no alerts" : "other alerts"}. It may not be able to read alerts.json: check the job output in the Automation account, or rerun its setup with -AlertRulesPath.` }
+      : sentNotRun
+        ? { tone: "neutral", chip: "Waiting for its next run", text: `These alerts were sent to the watcher ${formatTime(sync!.pushedAt!)}. It uses them from its next run.` }
+        : !checkedAt || reported === null
+          ? { tone: "neutral", chip: "Unknown", text: checkedAt ? "The Azure watcher has not said which alerts it runs. Update it, or check again after its next run." : "The Azure watcher has not been checked yet." }
+          : reported === "unreadable"
+            ? { tone: "warning", chip: "Needs an update", text: "The Azure watcher cannot read its alerts, so it sends every event to every destination. Update it to send the alerts on this page." }
+            : reported === current
+              ? { tone: "success", chip: "Up to date", text: current === "none" ? "The Azure watcher has no alerts and sends every event to every destination it has, as these alerts would." : "The Azure watcher runs the alerts on this page." }
+              : { tone: "warning", chip: "Needs an update", text: reported === "none" ? "The Azure watcher has no alerts yet, so it sends every event to every destination. Update it to send the alerts on this page." : "The Azure watcher runs older alerts than these. Update it to send the alerts on this page." }
   return (
     <Tile aria-labelledby="notifications-watcher-sync-heading" className="gap-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -689,14 +719,20 @@ function WatcherSyncCard({ tenant, data, onChanged }: { tenant: Tenant; data: No
           <Cloud className="h-4 w-4 text-gray-500" aria-hidden="true" />
           Azure watcher
         </h3>
-        <Chip tone={state.tone}>{state.tone === "success" ? "Up to date" : state.tone === "warning" ? "Needs an update" : "Unknown"}</Chip>
+        <Chip tone={state.tone}>{state.chip}</Chip>
       </div>
       <p className="text-sm text-gray-600">An Azure watcher owns change alerts for this tenant, so it sends them while this computer is off. {state.text}</p>
+      {failedAfterPush && <p className="text-sm text-red-700" role="alert">The last update did not reach the watcher: {sync!.error}</p>}
       <div className="flex flex-wrap items-center gap-2">
+        <Button type="button" size="sm" disabled={push.isPending || !data.licensed} onClick={() => push.mutate()}><RotateCw className="h-4 w-4" aria-hidden="true" />{push.isPending ? "Updating" : "Update watcher"}</Button>
         <Button type="button" size="sm" variant="outline" disabled={copy.isPending || !data.licensed} onClick={() => copy.mutate()}><Copy className="h-4 w-4" aria-hidden="true" />Copy for Azure watcher</Button>
         <Button type="button" size="sm" variant="ghost" disabled={check.isPending || !data.licensed} onClick={() => check.mutate()}>{check.isPending ? "Checking" : "Check now"}</Button>
         {checkedAt && <span className="text-xs text-gray-500">Checked {formatTime(checkedAt)}</span>}
       </div>
+      <label className="flex items-start gap-2 text-sm text-gray-700">
+        <input type="checkbox" className="mt-0.5 size-4 accent-coral-600" checked={sync?.auto ?? false} disabled={auto.isPending || !data.licensed} onChange={(event) => auto.mutate(event.target.checked)} />
+        <span>Update the watcher whenever an alert or channel changes<span className="block text-xs text-gray-500">Writes the alerts to alerts.json in the watcher's storage container with your sign-in. The watcher reads them on its next run, so the setup script does not run again.</span></span>
+      </label>
     </Tile>
   )
 }
@@ -879,6 +915,7 @@ function RuleDialog({ tenant, data, rule, draft, open, onClose, onSaved, onChann
   const [changeTypes, setChangeTypes] = useState<AuditChangeType[]>(start.conditions?.changeTypes ?? [])
   const [categories, setCategories] = useState<string[]>(start.conditions?.categories ?? [])
   const [policyNames, setPolicyNames] = useState((start.conditions?.policyNames ?? []).join("\n"))
+  const [policyExact, setPolicyExact] = useState(start.conditions?.policyNameMatch === "exact")
   const [settingNames, setSettingNames] = useState((start.conditions?.settingNames ?? []).join("\n"))
   const [excludeActors, setExcludeActors] = useState((start.conditions?.excludeActors ?? []).join("\n"))
   const [delivery, setDelivery] = useState<AlertDelivery>(start.delivery ?? "digest")
@@ -892,6 +929,7 @@ function RuleDialog({ tenant, data, rule, draft, open, onClose, onSaved, onChann
     setChangeTypes(template.conditions?.changeTypes ?? [])
     setCategories(template.conditions?.categories ?? [])
     setPolicyNames((template.conditions?.policyNames ?? []).join("\n"))
+    setPolicyExact(template.conditions?.policyNameMatch === "exact")
     setSettingNames((template.conditions?.settingNames ?? []).join("\n"))
     setExcludeActors((template.conditions?.excludeActors ?? []).join("\n"))
     setPreview(null)
@@ -909,6 +947,7 @@ function RuleDialog({ tenant, data, rule, draft, open, onClose, onSaved, onChann
   const conditions = (): AlertConditions | null => {
     if (!changes) return null
     const value: AlertConditions = { changeTypes, categories: intune ? categories : [], policyNames: lines(policyNames), settingNames: lines(settingNames), excludeActors: lines(excludeActors) }
+    if (policyExact && value.policyNames.length) value.policyNameMatch = "exact"
     return value.changeTypes.length + value.categories.length + value.policyNames.length + value.settingNames.length + value.excludeActors.length ? value : null
   }
   const save = useMutation({
@@ -1020,9 +1059,16 @@ function RuleDialog({ tenant, data, rule, draft, open, onClose, onSaved, onChann
                 </div>
               )}
               <div className="space-y-1.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span id="alert-policy-names-label" className="text-sm text-gray-700">{policyExact ? "Policy names are exactly" : "Policy names contain"}</span>
+                  <div role="radiogroup" aria-label="How policy names match" className="flex gap-1">
+                    {([[false, "Contains"], [true, "Exact name"]] as const).map(([exact, label]) => (
+                      <button key={label} type="button" role="radio" aria-checked={policyExact === exact} className={pillClass(policyExact === exact)} onClick={() => { setPreview(null); setPolicyExact(exact) }}>{label}</button>
+                    ))}
+                  </div>
+                </div>
                 <label className="block text-sm text-gray-700">
-                  Policy names contain
-                  <textarea className="mt-1 block w-full rounded-2xl border border-gray-200 bg-white px-3 py-2 text-sm dark:bg-input/30" rows={3} maxLength={4000} value={policyNames} placeholder="One per line, for example Windows compliance" onChange={(event) => { setPreview(null); setPolicyNames(event.target.value) }} />
+                  <textarea aria-labelledby="alert-policy-names-label" className="mt-1 block w-full rounded-2xl border border-gray-200 bg-white px-3 py-2 text-sm dark:bg-input/30" rows={3} maxLength={4000} value={policyNames} placeholder="One per line, for example Windows compliance" onChange={(event) => { setPreview(null); setPolicyNames(event.target.value) }} />
                 </label>
                 <SuggestionPicker
                   items={policyItems}
@@ -1030,7 +1076,9 @@ function RuleDialog({ tenant, data, rule, draft, open, onClose, onSaved, onChann
                   empty={suggestions.isLoading ? "Loading the policies of the newest backup..." : "No backup to pick policies from yet. Type the names instead."}
                   onPick={(name) => { setPreview(null); setPolicyNames((current) => addLine(current, name)) }}
                 />
-                <span className="block text-xs text-gray-500">A change counts when its policy name contains one of these, ignoring case. A full name picks that policy, and any other policy whose name contains it.</span>
+                <span className="block text-xs text-gray-500">{policyExact
+                  ? "A change counts only when its policy is named exactly one of these, ignoring case. Renaming the policy stops its alerts until you change the name here."
+                  : "A change counts when its policy name contains one of these, ignoring case. A full name picks that policy, and any other policy whose name contains it. Choose Exact name for only that policy."}</span>
               </div>
               <div className="space-y-1.5">
                 <label className="block text-sm text-gray-700">

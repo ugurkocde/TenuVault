@@ -124,10 +124,28 @@ export interface AuditWatchRecord {
   /** Settings above (interval, own changes, actor, external watcher) apply to both services. */
   conditionalAccess?: ConditionalAccessWatch
   /** Last heartbeat check of the Azure watcher, made while externalWatcher is on. */
-  watcherCheck?: { checkedAt: string; lastRunAt: string | null; stale: boolean; error: string | null; alertsHash?: string | null }
+  watcherCheck?: { checkedAt: string; lastRunAt: string | null; stale: boolean; error: string | null; alertsHash?: string | null; runbookVersion?: string | null; alertsSource?: string | null }
+  /** The alerts this computer last wrote to the Azure watcher's alerts.json, and whether it does so on every change. */
+  watcherAlertsSync?: WatcherAlertsSync
 }
 
-/** The Azure watcher counts as stale when its heartbeat is older than this. Setup schedules it hourly. */
+export interface WatcherAlertsSync {
+  /** Write the alerts again whenever an alert or channel changes. */
+  auto: boolean
+  pushedAt: string | null
+  /** watcherAlertsHash of what was written; the heartbeat reports the same value once the watcher runs them. */
+  pushedHash: string | null
+  /** Why the last write failed, until one succeeds. */
+  error: string | null
+  errorAt: string | null
+}
+
+/** The first runbook version that reads alerts.json, so alerts update without a setup rerun. */
+export const WATCHER_ALERTS_FILE_RUNBOOK = "1.2.0"
+/** The largest alerts.json written, as the setup script allows for its alerts file. */
+export const MAX_WATCHER_ALERTS_LENGTH = 500_000
+
+/** The Azure watcher counts as stale when its heartbeat is older than this. Setup schedules it hourly by default, or every 15 to 30 minutes. */
 export const WATCHER_STALE_HOURS = 3
 /** How often the desktop reads the watcher heartbeat. */
 export const WATCHER_CHECK_MINUTES = 30

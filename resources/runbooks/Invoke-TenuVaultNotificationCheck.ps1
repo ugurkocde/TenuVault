@@ -938,9 +938,22 @@ function ConvertTo-TvAlertConditions {
         settingNames = Get-TvConditionTextList $Raw "settingNames"
         excludeActors = Get-TvConditionTextList $Raw "excludeActors"
     }
+    # Exact policy names only when there are names to match, as parseConditions.
+    $exact = (Get-TvProp $Raw "policyNameMatch") -ceq "exact" -and $conditions.policyNames.Count -gt 0
+    $conditions | Add-Member -NotePropertyName policyNameExact -NotePropertyValue ([bool]$exact)
     $total = $conditions.changeTypes.Count + $conditions.categories.Count + $conditions.policyNames.Count + $conditions.settingNames.Count + $conditions.excludeActors.Count
     if ($total -eq 0) { return $null }
     return $conditions
+}
+
+# Mirrors equalsAny in alerts.ts: equal ignoring case and the spaces, tabs and no-break spaces
+# around either name.
+function Test-TvEqualsAny {
+    param([AllowNull()][object]$Haystack, [string[]]$Names)
+    if (-not $Haystack) { return $false }
+    $lower = ([regex]::Replace([string]$Haystack, '^[ \t\u00a0]+|[ \t\u00a0]+$', '')).ToLowerInvariant()
+    foreach ($name in $Names) { if (([regex]::Replace($name, '^[ \t\u00a0]+|[ \t\u00a0]+$', '')).ToLowerInvariant() -ceq $lower) { return $true } }
+    return $false
 }
 
 function Test-TvContainsAny {
@@ -962,7 +975,11 @@ function Test-TvChangeMatches {
         foreach ($entry in $Conditions.categories) { if ($entry.ToLowerInvariant() -ceq $category) { $hit = $true; break } }
         if (-not $hit) { return $false }
     }
-    if ($Conditions.policyNames.Count -gt 0 -and -not (Test-TvContainsAny (Get-TvProp $Change "resourceName") $Conditions.policyNames)) { return $false }
+    if ($Conditions.policyNames.Count -gt 0) {
+        $policyName = Get-TvProp $Change "resourceName"
+        $named = if ($Conditions.policyNameExact) { Test-TvEqualsAny $policyName $Conditions.policyNames } else { Test-TvContainsAny $policyName $Conditions.policyNames }
+        if (-not $named) { return $false }
+    }
     if ($Conditions.settingNames.Count -gt 0) {
         $hit = $false
         foreach ($name in @($Change.settings)) { if ($null -ne $name -and (Test-TvContainsAny $name $Conditions.settingNames)) { $hit = $true; break } }
@@ -2422,7 +2439,7 @@ if ($LibraryOnly) { return }
 # ---------------------------------------------------------------------------
 
 $ErrorActionPreference = "Stop"
-$runbookVersion = "1.1.0"
+$runbookVersion = "1.2.0"
 $runAt = [DateTime]::UtcNow
 $runAtIso = ConvertTo-TvIso $runAt
 $eventsSent = 0
@@ -2430,6 +2447,7 @@ $lastError = $null
 $configVersion = "1"
 $configHash = $null
 $alertsHash = $null
+$alertsSource = $null
 $leaseId = $null
 $storageToken = $null
 $stateBlobUri = $null
@@ -2473,46 +2491,11 @@ try {
 
     if (-not $tenantId) { throw "Automation variable TenuVaultTenantId is not set." }
     if (-not $storageAccount) { throw "Automation variable TenuVaultStorageAccount is not set." }
-    # The alerts copied from TenuVault (Alerts page > Copy for Azure watcher).
-    # Without them every event goes to every destination. An unreadable value does the same and
-    # says so, because sending too much is safer than silently sending nothing.
-    $watcherAlerts = $null
-    $alertRulesValue = Get-TvAutomationVariable "TenuVaultAlertRules"
-    $alertsHash = Get-TvWatcherAlertsHash $alertRulesValue
-    if ($alertRulesValue) {
-        $watcherAlerts = ConvertFrom-TvWatcherAlerts $alertRulesValue
-        if ($null -eq $watcherAlerts) { Write-Output "TenuVaultAlertRules could not be read; every event goes to every destination until it is set again." }
-        elseif (@($watcherAlerts).Count -eq 0) {
-            # Set but nothing usable (unknown event types or destinations): never fall silent.
-            $watcherAlerts = $null
-            Write-Output "TenuVaultAlertRules holds no alert this runbook can use; every event goes to every destination until it is set again."
-        }
-        else { Write-Output "Alerts from TenuVault: $(@($watcherAlerts).Count)." }
-    }
+    $alertRulesVariable = Get-TvAutomationVariable "TenuVaultAlertRules"
 
     if ($webhookUrl -and $webhookUrl -notmatch "^https://") { throw "TenuVaultWebhookUrl must use https." }
     if ($teamsWebhookUrl -and $teamsWebhookUrl -notmatch "^https://") { throw "TenuVaultTeamsWebhookUrl must use https." }
 
-    # Fingerprint of the effective configuration for the heartbeat: non-secret values
-    # in full, secrets only as presence flags, so drift is visible without leaking.
-    $configFingerprint = @(
-        "tenantId=$($tenantId.ToLowerInvariant())"
-        "tenantName=$tenantName"
-        "storageAccount=$storageAccount"
-        "mailSender=$mailSender"
-        "mailRecipients=$mailRecipients"
-        "mailProbeMailbox=$mailProbeMailbox"
-        "missedBackupHours=$missedBackupHours"
-        "includeActor=$($includeActor.ToString().ToLowerInvariant())"
-        "watchConditionalAccess=$($watchConditionalAccess.ToString().ToLowerInvariant())"
-        "teamsCardLayout=$(if ($teamsCardLayoutValue) { Get-TvSha256Hex $teamsCardLayoutValue } else { 'standard' })"
-        "alertRules=$(if ($alertRulesValue) { Get-TvSha256Hex $alertRulesValue } else { 'none' })"
-        "configVersion=$configVersion"
-        "webhookUrl=$(if ($webhookUrl) { 'present' } else { 'absent' })"
-        "webhookSecret=$(if ($webhookSecret) { 'present' } else { 'absent' })"
-        "teamsWebhookUrl=$(if ($teamsWebhookUrl) { 'present' } else { 'absent' })"
-    ) -join "|"
-    $configHash = Get-TvSha256Hex $configFingerprint
 
     # Storage first: state, lease and queued deliveries must keep working when
     # Graph token acquisition fails. The Graph failure is deferred like an
@@ -2533,6 +2516,62 @@ try {
     $stateBlobUri = "$stateContainerUri/state.json"
     $heartbeatBlobUri = "$stateContainerUri/heartbeat.json"
     $leaseQueryUri = "$stateBlobUri`?comp=lease"
+    $alertsBlobUri = "$stateContainerUri/alerts.json"
+
+    # The alerts copied from TenuVault. The desktop app writes them to alerts.json next to the
+    # state (Alerts page > Update watcher), and setup -AlertRulesPath writes the same file, so
+    # alerts change without touching the Automation account. A watcher set up before that keeps
+    # the TenuVaultAlertRules variable until alerts.json exists.
+    # Without alerts every event goes to every destination. An unreadable file or value does the
+    # same and says so, because sending too much is safer than silently sending nothing.
+    $alertsSource = "none"
+    $alertRulesValue = $null
+    try {
+        $alertsBlobText = Get-TvBlobText -Uri $alertsBlobUri -Token $storageToken
+        if ($null -ne $alertsBlobText) {
+            $alertsSource = "storage"
+            $alertRulesValue = $alertsBlobText.Trim([char]0xFEFF, ' ', "`t", "`r", "`n")
+            if ($alertRulesValue.Length -gt 1000000) { $alertRulesValue = "too large" }
+        }
+    } catch {
+        Write-Output "alerts.json could not be read ($(Get-TvSafeError $_.Exception.Message)); using the alerts from setup for this run."
+    }
+    if ($alertsSource -eq "none" -and $alertRulesVariable) { $alertsSource = "setup"; $alertRulesValue = $alertRulesVariable }
+    $alertsLabel = if ($alertsSource -eq "storage") { "alerts.json" } else { "TenuVaultAlertRules" }
+    $watcherAlerts = $null
+    $alertsHash = Get-TvWatcherAlertsHash $alertRulesValue
+    if ($alertRulesValue) {
+        $watcherAlerts = ConvertFrom-TvWatcherAlerts $alertRulesValue
+        if ($null -eq $watcherAlerts) { Write-Output "$alertsLabel could not be read; every event goes to every destination until it is set again." }
+        elseif (@($watcherAlerts).Count -eq 0) {
+            # Set but nothing usable (no alerts, unknown event types or destinations): never fall silent.
+            $watcherAlerts = $null
+            Write-Output "$alertsLabel holds no alert this runbook can use; every event goes to every destination until it is set again."
+        }
+        else { Write-Output "Alerts from TenuVault ($alertsLabel): $(@($watcherAlerts).Count)." }
+    }
+
+    # Fingerprint of the effective configuration for the heartbeat: non-secret values
+    # in full, secrets only as presence flags, so drift is visible without leaking.
+    $configFingerprint = @(
+        "tenantId=$($tenantId.ToLowerInvariant())"
+        "tenantName=$tenantName"
+        "storageAccount=$storageAccount"
+        "mailSender=$mailSender"
+        "mailRecipients=$mailRecipients"
+        "mailProbeMailbox=$mailProbeMailbox"
+        "missedBackupHours=$missedBackupHours"
+        "includeActor=$($includeActor.ToString().ToLowerInvariant())"
+        "watchConditionalAccess=$($watchConditionalAccess.ToString().ToLowerInvariant())"
+        "teamsCardLayout=$(if ($teamsCardLayoutValue) { Get-TvSha256Hex $teamsCardLayoutValue } else { 'standard' })"
+        "alertRules=$(if ($alertRulesValue) { Get-TvSha256Hex $alertRulesValue } else { 'none' })"
+        "alertsSource=$alertsSource"
+        "configVersion=$configVersion"
+        "webhookUrl=$(if ($webhookUrl) { 'present' } else { 'absent' })"
+        "webhookSecret=$(if ($webhookSecret) { 'present' } else { 'absent' })"
+        "teamsWebhookUrl=$(if ($teamsWebhookUrl) { 'present' } else { 'absent' })"
+    ) -join "|"
+    $configHash = Get-TvSha256Hex $configFingerprint
 
     # Only configuration version 1 is understood. Anything else stops the run
     # before any polling, with the reason recorded in the heartbeat.
@@ -2545,6 +2584,7 @@ try {
                 configVersion = $configVersion
                 configHash = $configHash
                 alertsHash = $alertsHash
+                alertsSource = $alertsSource
                 watermark = $watermarkIso
                 eventsSent = $eventsSent
                 lastError = $lastError
@@ -2740,6 +2780,7 @@ try {
             configVersion = $configVersion
             configHash = $configHash
             alertsHash = $alertsHash
+            alertsSource = $alertsSource
             watermark = $watermarkIso
             eventsSent = $eventsSent
             lastError = $null
@@ -3043,6 +3084,7 @@ try {
         configVersion = $configVersion
         configHash = $configHash
         alertsHash = $alertsHash
+        alertsSource = $alertsSource
         watermark = $watermarkIso
         eventsSent = $eventsSent
         lastError = $lastError
@@ -3071,6 +3113,7 @@ try {
                 configVersion = $configVersion
                 configHash = $configHash
                 alertsHash = $alertsHash
+                alertsSource = $alertsSource
                 watermark = $watermarkIso
                 eventsSent = $eventsSent
                 lastError = $lastError

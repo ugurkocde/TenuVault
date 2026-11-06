@@ -38,7 +38,7 @@ export interface NotificationOptions {
   sleep?: (ms: number) => Promise<void>
 }
 
-function brief(message: string): string {
+export function brief(message: string): string {
   return message.replace(/\s+/g, " ").trim().slice(0, 200)
 }
 
@@ -641,7 +641,7 @@ export async function checkWatcher(deps: FeatureDeps, tenantId: string, options:
     read = { status: "error", message: brief(error instanceof Error ? error.message : String(error)) }
   }
   if (read.status === "error") {
-    saveAuditWatch(deps, tenant, { watcherCheck: { checkedAt: now.toISOString(), lastRunAt: watch.watcherCheck?.lastRunAt ?? null, stale: watch.watcherCheck?.stale ?? false, error: read.message, alertsHash: watch.watcherCheck?.alertsHash ?? null } }, { actor: null, reason: `Azure watcher heartbeat could not be read: ${read.message}` })
+    saveAuditWatch(deps, tenant, { watcherCheck: { checkedAt: now.toISOString(), lastRunAt: watch.watcherCheck?.lastRunAt ?? null, stale: watch.watcherCheck?.stale ?? false, error: read.message, alertsHash: watch.watcherCheck?.alertsHash ?? null, runbookVersion: watch.watcherCheck?.runbookVersion ?? null, alertsSource: watch.watcherCheck?.alertsSource ?? null } }, { actor: null, reason: `Azure watcher heartbeat could not be read: ${read.message}` })
     return { stale: false, enqueued: 0, error: read.message }
   }
   const lastRunAt = read.status === "ok" ? read.runAt : null
@@ -651,7 +651,7 @@ export async function checkWatcher(deps: FeatureDeps, tenantId: string, options:
     const envelope = watcherStaleEvent({ tenantId: tenant, tenantName: deps.tenant(tenant)?.name ?? null, occurredAt: now.toISOString(), lastRunAt, thresholdHours: WATCHER_STALE_HOURS, lastError: read.status === "ok" ? read.lastError : null, source: "desktop" })
     enqueued = await emit(deps, tenant, envelope, options)
   }
-  saveAuditWatch(deps, tenant, { watcherCheck: { checkedAt: now.toISOString(), lastRunAt, stale, error: null, alertsHash: read.status === "ok" ? read.alertsHash ?? null : null } }, { actor: null, reason: stale ? "Azure watcher heartbeat is stale" : "Azure watcher heartbeat is fresh" })
+  saveAuditWatch(deps, tenant, { watcherCheck: { checkedAt: now.toISOString(), lastRunAt, stale, error: null, alertsHash: read.status === "ok" ? read.alertsHash ?? null : null, runbookVersion: read.status === "ok" ? read.runbookVersion ?? null : null, alertsSource: read.status === "ok" ? read.alertsSource ?? null : null } }, { actor: null, reason: stale ? "Azure watcher heartbeat is stale" : "Azure watcher heartbeat is fresh" })
   return { stale, enqueued, error: null }
 }
 

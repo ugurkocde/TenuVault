@@ -18,7 +18,8 @@
         tenuvault-notification-state and tenuvault-backup-results containers only
       * writes the TenuVault configuration values as Automation variables, with the
         webhook URL, webhook secret and Teams URL stored encrypted when provided
-      * links the runbook to a recurring schedule (hourly by default)
+      * links the runbook to a recurring schedule (hourly by default, or every 15, 20
+        or 30 minutes with -ScheduleIntervalMinutes)
       * with -GrantGraphRoles, also assigns the Microsoft Graph application roles
         the identity needs (DeviceManagementApps.Read.All, plus Mail.Send with
         -IncludeMailSend) and prints a consent receipt. No group read role is
@@ -72,6 +73,16 @@
 
 .PARAMETER ScheduleIntervalHours
     How often the watcher runs, in hours. Default: 1.
+
+.PARAMETER ScheduleIntervalMinutes
+    Run the watcher more often than hourly: 15, 20 or 30 minutes (60 is the same as
+    hourly). Azure Automation schedules run at most once an hour, so the script creates
+    one hourly schedule per run in the hour, spread evenly: TenuVaultNotificationCheck
+    and TenuVaultNotificationCheck-2 up to -4. A rerun without it goes back to the
+    -ScheduleIntervalHours schedule and removes the extra ones. Every run is a job in
+    the Automation account: 15 minutes means about 2,900 jobs a month, so check the job
+    minutes against the free monthly allowance of Azure Automation. Overlapping runs
+    are safe: a run that finds the state lease taken exits without sending.
 
 .PARAMETER WebhookUrl
     Optional https URL that receives the canonical JSON envelope per event. Stored
@@ -143,7 +154,10 @@
     it: by event type and severity, and for Intune and Conditional Access changes by the
     alert's conditions, as one summary or one alert per change. Each alert's channels
     become the watcher's own destinations of the same kind (webhook, Teams, email).
-    Without it, or after an empty string, every event goes to every destination.
+    The file is written to alerts.json in the state container, the same file the
+    "Update watcher" button in TenuVault writes, so later alert changes need no rerun.
+    A rerun without it keeps the saved alerts. An empty string deletes alerts.json:
+    every event then goes to every destination.
 
 .PARAMETER GrantGraphRoles
     Assign the Graph application roles to the managed identity now (needs Global
@@ -174,6 +188,7 @@ param(
     [string]$AutomationAccountName = "aa-tenuvault-notifications",
     [string]$TenantName,
     [ValidateRange(1, 168)][int]$ScheduleIntervalHours = 1,
+    [ValidateSet(15, 20, 30, 60)][int]$ScheduleIntervalMinutes = 60,
     [string]$WebhookUrl,
     [string]$WebhookSecret,
     [string]$TeamsWebhookUrl,
@@ -196,6 +211,13 @@ $ErrorActionPreference = "Stop"
 
 $runbookName = "Invoke-TenuVaultNotificationCheck"
 $scheduleName = "TenuVaultNotificationCheck"
+# Runs more often than hourly use one hourly schedule per run in the hour: the base
+# schedule plus TenuVaultNotificationCheck-2 up to -4, spread evenly over the hour.
+$runsPerHour = [int](60 / $ScheduleIntervalMinutes)
+$scheduleSlotNames = @($scheduleName) + @(if ($runsPerHour -gt 1) { 2..$runsPerHour | ForEach-Object { "$scheduleName-$_" } })
+$scheduleDescription = if ($runsPerHour -gt 1) { "every $ScheduleIntervalMinutes minutes" } else { "every $ScheduleIntervalHours hour(s)" }
+# The desktop app writes the alerts here (Alerts > Update watcher); the runbook reads them.
+$alertsBlobName = "alerts.json"
 $stateContainer = "tenuvault-notification-state"
 # Cloud backups leave their result notes here; the watcher reads and deletes them.
 $resultsContainer = "tenuvault-backup-results"
@@ -282,6 +304,9 @@ if (-not $Remove -and $AlertRulesPath) {
 if ($IncludeMailSend -and (-not $MailSender -or -not $MailRecipients)) {
     throw "-IncludeMailSend requires -MailSender and -MailRecipients. Refusing to grant Mail.Send without a named sender mailbox and recipients."
 }
+if ($runsPerHour -gt 1 -and $ScheduleIntervalHours -ne 1) {
+    throw "-ScheduleIntervalMinutes $ScheduleIntervalMinutes and -ScheduleIntervalHours $ScheduleIntervalHours contradict each other. Pass only one of them."
+}
 if ($AlertEmail -and $NoFailureAlert) {
     throw "-AlertEmail and -NoFailureAlert contradict each other. Pass only one of them."
 }
@@ -339,6 +364,44 @@ function Set-TenuVaultAutomationVariable {
     }
 }
 
+# The watcher schedules this script owns: the base schedule and the extra -2 to -4 ones.
+function Get-TenuVaultWatcherSchedules {
+    @(Get-AzAutomationSchedule -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -ceq $scheduleName -or $_.Name -cmatch "^$([regex]::Escape($scheduleName))-[0-9]+$" })
+}
+
+# Unlinks the runbook from one schedule and deletes the schedule.
+function Remove-TenuVaultWatcherSchedule {
+    [CmdletBinding(SupportsShouldProcess)]
+    param([Parameter(Mandatory)][string]$Name)
+    if (-not $PSCmdlet.ShouldProcess($Name, "Unlink and remove schedule")) { return }
+    try {
+        Unregister-AzAutomationScheduledRunbook -ResourceGroupName $ResourceGroupName `
+            -AutomationAccountName $AutomationAccountName -RunbookName $runbookName `
+            -ScheduleName $Name -Force -ErrorAction Stop | Out-Null
+    } catch { Write-Host "No link to schedule '$Name' to remove." }
+    Remove-AzAutomationSchedule -ResourceGroupName $ResourceGroupName `
+        -AutomationAccountName $AutomationAccountName -Name $Name -Force | Out-Null
+}
+
+# The first whole minute at least 6 minutes from now whose UTC minute is $Minute (Azure needs a
+# start at least 5 minutes ahead). A new base schedule takes the minute 10 minutes from now, so it
+# starts then, not an hour later.
+function Get-TenuVaultNextStart {
+    param([Parameter(Mandatory)][int]$Minute, [DateTime]$Now = [DateTime]::UtcNow)
+    $earliest = $Now.AddMinutes(6)
+    $start = [DateTime]::new($earliest.Year, $earliest.Month, $earliest.Day, $earliest.Hour, $Minute, 0, [DateTimeKind]::Utc)
+    while ($start -lt $earliest) { $start = $start.AddHours(1) }
+    return $start
+}
+
+# The UTC minutes of the hour each schedule starts at: the base schedule keeps its minute and
+# the extra ones follow every $Interval minutes.
+function Get-TenuVaultSlotMinutes {
+    param([Parameter(Mandatory)][int]$BaseMinute, [Parameter(Mandatory)][int]$Interval, [Parameter(Mandatory)][int]$Runs)
+    return ,@(0..($Runs - 1) | ForEach-Object { ($BaseMinute + $_ * $Interval) % 60 })
+}
+
 function Get-TenuVaultAutomationPrincipalId {
     $resource = Get-AzResource -ResourceGroupName $ResourceGroupName -Name $AutomationAccountName `
         -ResourceType "Microsoft.Automation/automationAccounts" -ErrorAction SilentlyContinue
@@ -362,23 +425,9 @@ if ($Remove) {
     }
     $principalId = Get-TenuVaultAutomationPrincipalId
 
-    Write-Host "Removing the schedule link and schedule..."
-    $linked = $null
-    try {
-        $linked = Get-AzAutomationScheduledRunbook -ResourceGroupName $ResourceGroupName `
-            -AutomationAccountName $AutomationAccountName -RunbookName $runbookName `
-            -ScheduleName $scheduleName -ErrorAction Stop
-    } catch { $linked = $null }
-    if ($linked -and $PSCmdlet.ShouldProcess($scheduleName, "Unregister scheduled runbook")) {
-        Unregister-AzAutomationScheduledRunbook -ResourceGroupName $ResourceGroupName `
-            -AutomationAccountName $AutomationAccountName -RunbookName $runbookName `
-            -ScheduleName $scheduleName -Force | Out-Null
-    }
-    $schedule = Get-AzAutomationSchedule -ResourceGroupName $ResourceGroupName `
-        -AutomationAccountName $AutomationAccountName -Name $scheduleName -ErrorAction SilentlyContinue
-    if ($schedule -and $PSCmdlet.ShouldProcess($scheduleName, "Remove schedule")) {
-        Remove-AzAutomationSchedule -ResourceGroupName $ResourceGroupName `
-            -AutomationAccountName $AutomationAccountName -Name $scheduleName -Force | Out-Null
+    Write-Host "Removing the schedule links and schedules..."
+    foreach ($existingSchedule in Get-TenuVaultWatcherSchedules) {
+        Remove-TenuVaultWatcherSchedule -Name $existingSchedule.Name
     }
 
     Write-Host "Removing the runbook..."
@@ -400,10 +449,10 @@ if ($Remove) {
     }
 
     Write-Host ""
-    Write-Host "Watcher schedule, runbook and variables removed." -ForegroundColor Green
+    Write-Host "Watcher schedules, runbook and variables removed." -ForegroundColor Green
     Write-Host "Left in place on purpose: Automation account '$AutomationAccountName', storage account"
-    Write-Host "'$StorageAccountName' and the '$stateContainer' state container with state.json and"
-    Write-Host "heartbeat.json. Delete them in the portal when the history is no longer needed."
+    Write-Host "'$StorageAccountName' and the '$stateContainer' state container with state.json,"
+    Write-Host "heartbeat.json and alerts.json. Delete them in the portal when the history is no longer needed."
     Write-Host ""
     Write-Host "Revoke these Microsoft Graph application roles from the managed identity manually"
     Write-Host "(Entra ID > Enterprise applications > the Automation account identity > Permissions):"
@@ -564,8 +613,40 @@ if ($PSBoundParameters.ContainsKey("TeamsCardLayoutPath")) {
     Set-TenuVaultAutomationVariable -Name "TenuVaultTeamsCardLayout" -Value $teamsCardLayoutJson
 }
 # The alerts follow the same rule: written only when passed, -AlertRulesPath "" clears them.
+# They live in alerts.json in the state container, which the desktop app updates later
+# without this script. The older TenuVaultAlertRules variable is emptied, so only one copy
+# of the alerts exists.
 if ($PSBoundParameters.ContainsKey("AlertRulesPath")) {
-    Set-TenuVaultAutomationVariable -Name "TenuVaultAlertRules" -Value $alertRulesJson
+    if ($alertRulesJson) {
+        Write-Host "Writing the alerts to '$alertsBlobName' in '$stateContainer'..."
+        if ($PSCmdlet.ShouldProcess("$stateContainer/$alertsBlobName", "Write watcher alerts")) {
+            $alertsFile = Join-Path ([IO.Path]::GetTempPath()) ("tenuvault-alerts-" + [Guid]::NewGuid().ToString("N") + ".json")
+            try {
+                # UTF-8 without a byte order mark, as the desktop app writes it.
+                [IO.File]::WriteAllText($alertsFile, $alertRulesJson, [Text.UTF8Encoding]::new($false))
+                Set-AzStorageBlobContent -File $alertsFile -Container $stateContainer -Blob $alertsBlobName -Context $storageContext `
+                    -Properties @{ ContentType = "application/json; charset=utf-8" } -Force | Out-Null
+            } finally {
+                Remove-Item -LiteralPath $alertsFile -Force -ErrorAction SilentlyContinue
+            }
+        }
+    } else {
+        # Only "not found" means there is nothing to delete. Any other failure (for example a
+        # missing data role) stops here: the watcher would otherwise keep filtering by the old file.
+        $savedAlerts = $null
+        try {
+            $savedAlerts = Get-AzStorageBlob -Container $stateContainer -Blob $alertsBlobName -Context $storageContext -ErrorAction Stop
+        } catch {
+            if ($_.Exception.GetType().Name -notmatch "NotFound" -and $_.Exception.Message -notmatch "not exist|not found|Can not find") {
+                throw "Could not check '$alertsBlobName' in '$stateContainer', so the saved alerts were not removed. Check that your account has Storage Blob Data Contributor on the storage account. Cause: $($_.Exception.Message)"
+            }
+        }
+        if ($savedAlerts -and $PSCmdlet.ShouldProcess("$stateContainer/$alertsBlobName", "Delete watcher alerts")) {
+            Write-Host "Deleting '$alertsBlobName': every event goes to every destination."
+            Remove-AzStorageBlob -Container $stateContainer -Blob $alertsBlobName -Context $storageContext -Force | Out-Null
+        }
+    }
+    Set-TenuVaultAutomationVariable -Name "TenuVaultAlertRules" -Value ""
 }
 Set-TenuVaultAutomationVariable -Name "TenuVaultConfigVersion" -Value "1"
 
@@ -657,49 +738,62 @@ if ($AlertEmail) {
 }
 
 # ---------------------------------------------------------------------------
-# Schedule and link. Schedule intervals cannot be edited in place, so a schedule
-# with a different interval is replaced together with its link.
+# Schedules and links. Schedule intervals cannot be edited in place, so a schedule
+# with a different interval or start minute is replaced together with its link.
+# Azure Automation runs a schedule at most hourly, so a watcher that runs every 15,
+# 20 or 30 minutes gets one hourly schedule per run, each starting later in the hour.
 # ---------------------------------------------------------------------------
 
-$schedule = Get-AzAutomationSchedule -ResourceGroupName $ResourceGroupName `
-    -AutomationAccountName $AutomationAccountName -Name $scheduleName -ErrorAction SilentlyContinue
-$scheduleMatches = $schedule -and $schedule.Frequency -eq "Hour" -and $schedule.Interval -eq $ScheduleIntervalHours
-if ($schedule -and -not $scheduleMatches) {
-    Write-Host "Replacing schedule '$scheduleName' so it runs every $ScheduleIntervalHours hour(s)..."
-    if ($PSCmdlet.ShouldProcess($scheduleName, "Replace schedule")) {
-        try {
-            Unregister-AzAutomationScheduledRunbook -ResourceGroupName $ResourceGroupName `
-                -AutomationAccountName $AutomationAccountName -RunbookName $runbookName `
-                -ScheduleName $scheduleName -Force -ErrorAction Stop | Out-Null
-        } catch { Write-Host "No existing schedule link to remove." }
-        Remove-AzAutomationSchedule -ResourceGroupName $ResourceGroupName `
-            -AutomationAccountName $AutomationAccountName -Name $scheduleName -Force | Out-Null
+$existingSchedules = Get-TenuVaultWatcherSchedules
+foreach ($stale in @($existingSchedules | Where-Object { $scheduleSlotNames -cnotcontains $_.Name })) {
+    Write-Host "Removing schedule '$($stale.Name)', which the watcher no longer needs..."
+    Remove-TenuVaultWatcherSchedule -Name $stale.Name
+}
+$baseSchedule = $existingSchedules | Where-Object { $_.Name -ceq $scheduleName } | Select-Object -First 1
+$baseMinute = $null
+if ($baseSchedule -and $baseSchedule.Frequency -eq "Hour" -and $baseSchedule.Interval -eq $ScheduleIntervalHours -and $baseSchedule.StartTime) {
+    $baseMinute = ([DateTimeOffset]$baseSchedule.StartTime).UtcDateTime.Minute
+}
+if ($null -eq $baseMinute) { $baseMinute = [DateTime]::UtcNow.AddMinutes(10).Minute }
+$slotMinutes = Get-TenuVaultSlotMinutes -BaseMinute $baseMinute -Interval $ScheduleIntervalMinutes -Runs $runsPerHour
+
+for ($slot = 0; $slot -lt $scheduleSlotNames.Count; $slot++) {
+    $slotName = $scheduleSlotNames[$slot]
+    $slotMinute = $slotMinutes[$slot]
+    $slotHours = if ($slot -eq 0) { $ScheduleIntervalHours } else { 1 }
+    $schedule = $existingSchedules | Where-Object { $_.Name -ceq $slotName } | Select-Object -First 1
+    # The base schedule defines the minute, so only its interval has to match.
+    $scheduleMatches = $schedule -and $schedule.Frequency -eq "Hour" -and $schedule.Interval -eq $slotHours -and
+        ($slot -eq 0 -or ($schedule.StartTime -and ([DateTimeOffset]$schedule.StartTime).UtcDateTime.Minute -eq $slotMinute))
+    if ($schedule -and -not $scheduleMatches) {
+        Write-Host "Replacing schedule '$slotName' so the watcher runs $scheduleDescription..."
+        Remove-TenuVaultWatcherSchedule -Name $slotName
         $schedule = $null
     }
-}
-if (-not $schedule) {
-    Write-Host "Creating schedule '$scheduleName' (every $ScheduleIntervalHours hour(s), UTC)..."
-    if ($PSCmdlet.ShouldProcess($scheduleName, "Create schedule")) {
-        $startTime = [DateTime]::UtcNow.AddMinutes(10)
-        $schedule = New-AzAutomationSchedule -ResourceGroupName $ResourceGroupName `
-            -AutomationAccountName $AutomationAccountName -Name $scheduleName `
-            -StartTime $startTime -HourInterval $ScheduleIntervalHours -TimeZone "UTC"
+    if (-not $schedule) {
+        $startTime = Get-TenuVaultNextStart -Minute $slotMinute
+        Write-Host "Creating schedule '$slotName' (every $slotHours hour(s) from $($startTime.ToString('HH:mm', [Globalization.CultureInfo]::InvariantCulture)) UTC)..."
+        if ($PSCmdlet.ShouldProcess($slotName, "Create schedule")) {
+            $schedule = New-AzAutomationSchedule -ResourceGroupName $ResourceGroupName `
+                -AutomationAccountName $AutomationAccountName -Name $slotName `
+                -StartTime $startTime -HourInterval $slotHours -TimeZone "UTC"
+        }
     }
-}
-if ($PSCmdlet.ShouldProcess($runbookName, "Link runbook to schedule '$scheduleName'")) {
-    $alreadyLinked = $false
-    try {
-        $alreadyLinked = [bool](Get-AzAutomationScheduledRunbook -ResourceGroupName $ResourceGroupName `
-            -AutomationAccountName $AutomationAccountName -RunbookName $runbookName `
-            -ScheduleName $scheduleName -ErrorAction Stop)
-    } catch { $alreadyLinked = $false }
-    if ($alreadyLinked) {
-        Write-Host "Runbook is already linked to schedule '$scheduleName'."
-    } else {
-        Register-AzAutomationScheduledRunbook -ResourceGroupName $ResourceGroupName `
-            -AutomationAccountName $AutomationAccountName -RunbookName $runbookName `
-            -ScheduleName $scheduleName | Out-Null
-        Write-Host "Runbook linked to schedule '$scheduleName'."
+    if ($PSCmdlet.ShouldProcess($runbookName, "Link runbook to schedule '$slotName'")) {
+        $alreadyLinked = $false
+        try {
+            $alreadyLinked = [bool](Get-AzAutomationScheduledRunbook -ResourceGroupName $ResourceGroupName `
+                -AutomationAccountName $AutomationAccountName -RunbookName $runbookName `
+                -ScheduleName $slotName -ErrorAction Stop)
+        } catch { $alreadyLinked = $false }
+        if ($alreadyLinked) {
+            Write-Host "Runbook is already linked to schedule '$slotName'."
+        } else {
+            Register-AzAutomationScheduledRunbook -ResourceGroupName $ResourceGroupName `
+                -AutomationAccountName $AutomationAccountName -RunbookName $runbookName `
+                -ScheduleName $slotName | Out-Null
+            Write-Host "Runbook linked to schedule '$slotName'."
+        }
     }
 }
 
@@ -776,7 +870,7 @@ if ($WhatIfPreference) {
     Write-Host "Done. The TenuVault notification watcher is in place:" -ForegroundColor Green
 }
 Write-Host "  Automation account:  $AutomationAccountName (resource group $ResourceGroupName)"
-Write-Host "  Runbook:             $runbookName (published, schedule '$scheduleName' every $ScheduleIntervalHours hour(s))"
+Write-Host "  Runbook:             $runbookName (published, runs $scheduleDescription on $($scheduleSlotNames.Count) schedule(s): $($scheduleSlotNames -join ', '))"
 Write-Host "  Storage account:     $StorageAccountName (state container '$stateContainer')"
 if ($principalId) { Write-Host "  Managed identity:    $principalId" }
 if ($alertStatus) { Write-Host "  Failure alert:       $alertStatus" }

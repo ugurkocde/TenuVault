@@ -55,7 +55,7 @@ export interface ConditionalAccessWatchView {
 
 export interface AuditWatch {
   conditionalAccess: ConditionalAccessWatchView
-  watcherCheck?: { checkedAt: string; lastRunAt: string | null; stale: boolean; error: string | null; alertsHash?: string | null }
+  watcherCheck?: { checkedAt: string; lastRunAt: string | null; stale: boolean; error: string | null; alertsHash?: string | null; runbookVersion?: string | null; alertsSource?: string | null }
   enabled: boolean
   intervalMinutes: number
   categories: string[]
@@ -78,6 +78,23 @@ export interface DeliveryView {
   at: string
 }
 
+/** Whether the Azure watcher runs the alerts on the page, and what this computer last wrote to it. */
+export interface WatcherAlertsStatus {
+  current: string
+  /** The alerts hash in the watcher's last heartbeat; null before it reported one. */
+  reported: string | null
+  /** Where the watcher read its alerts: "storage" (alerts.json), "setup" (the older variable) or "none". */
+  source: string | null
+  runbookVersion: string | null
+  /** Whether the watcher's runbook reads alerts.json; null while unknown. */
+  readsAlertsFile: boolean | null
+  auto: boolean
+  pushedAt: string | null
+  pushedHash: string | null
+  error: string | null
+  errorAt: string | null
+}
+
 export interface NotificationsStatus {
   channels: PublicChannel[]
   rules: NotificationRule[]
@@ -86,7 +103,7 @@ export interface NotificationsStatus {
   licensed: boolean
   runtimeNote: string
   /** The hash of the alerts the Azure watcher would get now, and the one its heartbeat reported (null: unknown). */
-  watcherAlerts?: { current: string; reported: string | null }
+  watcherAlerts?: WatcherAlertsStatus
   /** Whether this computer is signed in to the tenant, which desktop change watching needs. */
   signedIn?: boolean
 }
@@ -202,6 +219,8 @@ export const notificationsApi = {
   updateAuditWatch: (tenant: Tenant, body: AuditWatchBody) => featureCall<{ auditWatch: AuditWatch }>(PATH, tenant, "update-audit-watch", { ...body }),
   /** Turning change watching off stays free on every plan. */
   revokeAuditWatch: (tenant: Tenant) => featureCall<{ auditWatch: AuditWatch }>(PATH, tenant, "revoke-audit-watch"),
+  /** Writes the alerts to the watcher's alerts.json; auto turns updating on every change on or off. */
+  pushWatcherAlerts: (tenant: Tenant, body: { auto?: boolean; write?: boolean } = {}) => featureCall<{ watcherAlerts: WatcherAlertsStatus; alerts?: number; skipped?: string[]; uncovered?: NotificationEventType[] }>(PATH, tenant, "push-watcher-alerts", body),
   runWatcherCheck: (tenant: Tenant) => featureCall<{ auditWatch: AuditWatch; stale: boolean; enqueued: number; error: string | null }>(PATH, tenant, "run-watcher-check"),
   runAuditWatch: (tenant: Tenant) => featureCall<{ auditWatch: AuditWatch | null; enqueued: number; changes: number; error: string | null; skipped: "off" | "external" | "busy" | null }>(PATH, tenant, "run-audit-watch"),
   listAuditCategories: (tenant: Tenant) => featureCall<{ categories: string[]; source: "graph" | "known" }>(PATH, tenant, "list-audit-categories"),

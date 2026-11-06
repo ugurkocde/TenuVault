@@ -367,6 +367,53 @@
       ],
       "delivery": "digest",
       "conditions": null
+    },
+    {
+      "id": "exact-hit",
+      "title": "Exactly the lab compliance policy",
+      "eventTypes": [
+        "intune.change",
+        "entra.change"
+      ],
+      "minSeverity": "info",
+      "destinations": [
+        "webhook"
+      ],
+      "delivery": "each",
+      "conditions": {
+        "changeTypes": [],
+        "categories": [],
+        "settingNames": [],
+        "excludeActors": [],
+        "policyNames": [
+          "tv-alerts-test compliance",
+          "TV-ALERTS-TEST CA"
+        ],
+        "policyNameMatch": "exact"
+      }
+    },
+    {
+      "id": "exact-miss",
+      "title": "Only a name that is a part",
+      "eventTypes": [
+        "intune.change",
+        "entra.change"
+      ],
+      "minSeverity": "info",
+      "destinations": [
+        "teams"
+      ],
+      "delivery": "each",
+      "conditions": {
+        "changeTypes": [],
+        "categories": [],
+        "settingNames": [],
+        "excludeActors": [],
+        "policyNames": [
+          "TV-ALERTS-TEST"
+        ],
+        "policyNameMatch": "exact"
+      }
     }
   ]
 }
