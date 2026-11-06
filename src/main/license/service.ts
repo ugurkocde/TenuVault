@@ -74,6 +74,14 @@ interface StoredLicense {
    * is activated.
    */
   trialToken?: string
+  /**
+   * Activations of keys this machine replaced, still to be released, one entry per replaced
+   * key. Written together with the new key, before anything is released, so a crash or failed
+   * write during a key replacement always leaves either the previous key with its activations
+   * or the new key with its own on disk. Releasing is retried after the next refresh until the
+   * service confirms it.
+   */
+  pendingRelease?: { key: string; activationIds: string[] }[]
 }
 
 /** A recent Microsoft ID token for the tenant, or null when none can be had silently. */
@@ -177,6 +185,14 @@ export const FAILURE_COOLDOWN_MS = 60_000
 // installation reuses an activation the server already created.
 export const LICENSE_REQUEST_TIMEOUT_MS = 45_000
 
+// The licensing service limits requests per IP address. Several admins behind one corporate
+// NAT, or an MSP activating many tenants, can reach that limit, and the service then answers
+// 429 with Retry-After. A request waits that long and retries, at most this many times and
+// only while the wait is short, so a throttled batch completes without anyone entering the
+// key again and a background refresh never hangs on a long wait.
+export const THROTTLE_RETRIES = 2
+export const THROTTLE_MAX_WAIT_MS = 20_000
+
 const STATE_KEY = "license.state"
 // Tenants removed from the app whose activation could not be released yet. Persisted
 // beside the state so a restart cannot make the retained token usable again.
@@ -229,6 +245,15 @@ function decodeToken(token: string, publicKey: KeyObject): Entitlement | null {
 }
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error))
+
+// Retry-After in milliseconds: delay seconds or an HTTP date. Null when absent or unreadable.
+function retryAfterMs(value: string | null): number | null {
+  if (!value) return null
+  const text = value.trim()
+  if (/^\d+$/.test(text)) return Number(text) * 1000
+  const at = Date.parse(text)
+  return Number.isFinite(at) ? Math.max(0, at - Date.now()) : null
+}
 
 export class LicenseService {
   private state: StoredLicense | null = null
@@ -335,6 +360,15 @@ export class LicenseService {
         if (typeof this.state.keyFailure !== "string" || !Object.hasOwn(REASONS, this.state.keyFailure)) delete this.state.keyFailure
         if (!Number.isFinite(this.state.seen)) delete this.state.seen
         if (typeof this.state.trialToken !== "string") delete this.state.trialToken
+        const pending: unknown = this.state.pendingRelease
+        const releases = Array.isArray(pending)
+          ? pending.filter((entry: Partial<{ key: unknown; activationIds: unknown }> | null) =>
+            entry && typeof entry.key === "string" && entry.key !== "" &&
+            Array.isArray(entry.activationIds) && entry.activationIds.length > 0 &&
+            entry.activationIds.every((id) => typeof id === "string" && id !== "")) as NonNullable<StoredLicense["pendingRelease"]>
+          : []
+        if (releases.length > 0) this.state.pendingRelease = releases
+        else delete this.state.pendingRelease
         this.savedSeen = this.state.seen ?? 0
         return
       }
@@ -397,7 +431,17 @@ export class LicenseService {
       else this.options.store.delete(STATE_KEY)
       this.savedSeen = this.state?.seen ?? 0
     }
-    this.options.onChange?.()
+    this.notify()
+  }
+
+  // Only a failed write is a failed save: a listener that throws must not make a caller undo
+  // state that is already on disk, or interrupt a rollback.
+  private notify(): void {
+    try {
+      this.options.onChange?.()
+    } catch (error) {
+      console.warn(`[license] Change notification failed: ${errorText(error)}`)
+    }
   }
 
   // Advances the high-water mark of observed time and returns the current time.
@@ -447,23 +491,39 @@ export class LicenseService {
   ): Promise<Record<string, unknown>> {
     this.assertCurrent(current)
     let response: Response
-    try {
-      response = await this.fetchImpl(`${this.options.apiBase}/api/desktop-license/${action}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        // The body carries the license key or a Microsoft ID token: a 307 or
-        // 308 redirect would replay it to whatever origin the response names.
-        redirect: "error",
-        signal: AbortSignal.timeout(LICENSE_REQUEST_TIMEOUT_MS),
-      })
+    for (let attempt = 0; ; attempt++) {
+      try {
+        response = await this.fetchImpl(`${this.options.apiBase}/api/desktop-license/${action}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          // The body carries the license key or a Microsoft ID token: a 307 or
+          // 308 redirect would replay it to whatever origin the response names.
+          redirect: "error",
+          signal: AbortSignal.timeout(LICENSE_REQUEST_TIMEOUT_MS),
+        })
+        this.assertCurrent(current)
+      } catch (error) {
+        this.assertCurrent(current)
+        this.offline = true
+        console.warn(`[license] Licensing service unreachable (${action})`)
+        const { code, guidance } = networkFailure(error, new URL(this.options.apiBase).host)
+        throw new Error(`The licensing service could not be reached. ${guidance}${code ? ` (${code})` : ""}`)
+      }
+      if (response.status !== 429) break
+      const wait = retryAfterMs(response.headers.get("retry-after"))
+      if (wait === null || wait > THROTTLE_MAX_WAIT_MS || attempt >= THROTTLE_RETRIES) {
+        this.assertCurrent(current)
+        this.offline = true
+        console.warn(`[license] ${action} throttled`)
+        const after = wait === null ? "a minute"
+          : wait < 60_000 ? `${Math.max(1, Math.ceil(wait / 1000))} seconds`
+            : `${Math.ceil(wait / 60_000)} minutes`
+        throw new Error(`The licensing service is busy with many requests from your network. Try again in ${after}.`)
+      }
+      await response.body?.cancel().catch(() => undefined)
+      await new Promise((resolve) => setTimeout(resolve, wait))
       this.assertCurrent(current)
-    } catch (error) {
-      this.assertCurrent(current)
-      this.offline = true
-      console.warn(`[license] Licensing service unreachable (${action})`)
-      const { code, guidance } = networkFailure(error, new URL(this.options.apiBase).host)
-      throw new Error(`The licensing service could not be reached. ${guidance}${code ? ` (${code})` : ""}`)
     }
     // A proxy or captive portal can answer with an HTML 401/403 page. It is
     // not a license refusal and must never remove a cached activation.
@@ -510,8 +570,9 @@ export class LicenseService {
     return result
   }
 
-  // Stores the activation the service returned, after verifying its token.
-  private accept(tenantId: string, data: Record<string, unknown>, source: "key" | "tenant"): void {
+  // Stores the activation the service returned, after verifying its token. persist false leaves
+  // writing the state to the caller, which saves several activations at once.
+  private accept(tenantId: string, data: Record<string, unknown>, source: "key" | "tenant", persist = true): void {
     if (typeof data.token !== "string" || typeof data.activationId !== "string") {
       throw new Error("The licensing service returned an invalid response.")
     }
@@ -574,7 +635,7 @@ export class LicenseService {
     }
     this.messages.delete(tenantId)
     this.failures.delete(tenantId)
-    this.save()
+    if (persist) this.save()
   }
 
   private async activate(tenantId: string): Promise<void> {
@@ -716,6 +777,9 @@ export class LicenseService {
         await this.refreshCurrent(tenantId)
       }).catch(() => undefined)
     }
+    // After the refreshes, and outside the key mutation: releasing a replaced key's activations
+    // must never hold up license checks of the tenants in use.
+    await this.releasePrevious()
     this.options.onChange?.()
   }
 
@@ -764,6 +828,7 @@ export class LicenseService {
         ...(previous?.key === trimmed && previous.trialToken ? { trialToken: previous.trialToken } : {}),
         activations: { ...previous?.activations },
         ...(previous?.seen !== undefined ? { seen: previous.seen } : {}),
+        ...(previous?.pendingRelease ? { pendingRelease: previous.pendingRelease } : {}),
       }
       const targets = tenants.filter((id) => this.tenantPresent(id) && !this.valid(id))
       let activated = 0
@@ -866,25 +931,92 @@ export class LicenseService {
         throw (uncovered ? errors.get(uncovered) : undefined) ?? errors.values().next().value
           ?? new Error("The new license key does not cover every tenant on this machine. Your current license is unchanged.")
       }
-      const state = this.state!
-      // The previous key's activations go; organization license activations stay.
-      for (const [tenantId, entry] of Object.entries(state.activations)) {
-        if (entry.source === "tenant") continue
-        try {
-          await this.call("deactivate", { key: previousKey, activationId: entry.activationId }, unchanged)
-        } catch (error) {
-          if (error instanceof StaleLicenseRequest) throw error
-          // The old key stays bound to that activation until it expires or is released in
-          // the customer portal; it no longer licenses anything on this machine.
-          console.warn(`[license] Previous key activation for ${tenantId} not released: ${errorText(error)}`)
-        }
-        delete state.activations[tenantId]
+      const previous = this.state!
+      // The new key and its activations are saved first, together with the previous key's
+      // activations still to be released, and only then is anything released. A crash or a
+      // failed write before the save leaves the previous key and all of its activations in
+      // place; after it, the new key is saved and the release is retried on the next refresh.
+      // Organization license activations do not depend on the key and stay.
+      const activations = Object.fromEntries(Object.entries(previous.activations).filter(([, entry]) => entry.source === "tenant"))
+      // Releases still pending from earlier replacements are kept, so a key replaced twice before
+      // its activations could be released is still released later.
+      const release = [
+        ...(previous.pendingRelease ?? []).filter((entry) => entry.key === previousKey).flatMap((entry) => entry.activationIds),
+        ...Object.values(previous.activations).filter((entry) => !entry.source).map((entry) => entry.activationId),
+      ]
+      const pendingRelease = [
+        ...(previous.pendingRelease ?? []).filter((entry) => entry.key !== previousKey),
+        ...(release.length > 0 ? [{ key: previousKey, activationIds: [...new Set(release)] }] : []),
+      ]
+      this.state = {
+        key: trimmed,
+        activations,
+        ...(previous.seen !== undefined ? { seen: previous.seen } : {}),
+        ...(pendingRelease.length > 0 ? { pendingRelease } : {}),
       }
-      this.state = { key: trimmed, activations: state.activations, ...(state.seen !== undefined ? { seen: state.seen } : {}) }
-      for (const { tenant, data } of accepted) if (covered.has(tenant)) this.accept(tenant, data, "key")
+      try {
+        for (const { tenant, data } of accepted) if (covered.has(tenant)) this.accept(tenant, data, "key", false)
+        this.save()
+      } catch (error) {
+        // Nothing was released yet, so the previous key still holds every activation it had.
+        this.state = previous
+        this.notify()
+        for (const { data } of accepted) {
+          if (typeof data.activationId !== "string") continue
+          await this.call("deactivate", { key: trimmed, activationId: data.activationId }, unchanged).catch((release: unknown) => {
+            console.warn(`[license] New key activation ${data.activationId} not released: ${errorText(release)}`)
+          })
+        }
+        throw new Error(`The new license key could not be saved. Your current license is unchanged. ${errorText(error)}`)
+      }
       this.message = null
-      this.save()
+      await this.releasePrevious()
     })
+  }
+
+  /**
+   * Releases the activations of replaced keys that are still bound to this machine. A release
+   * the service confirms, or refuses because the activation no longer exists, is done. The first
+   * other failure ends the attempt and keeps it and everything after it for the next one, so a
+   * service that cannot be reached costs one request, not one per activation. Never throws.
+   */
+  private async releasePrevious(): Promise<void> {
+    const pending = this.state?.pendingRelease
+    if (!pending) return
+    const key = this.state?.key
+    const current = () => this.state?.key === key && this.state?.pendingRelease === pending
+    const remaining: NonNullable<StoredLicense["pendingRelease"]> = []
+    let stopped = false
+    for (const entry of pending) {
+      const left: string[] = []
+      for (const activationId of entry.activationIds) {
+        if (stopped) {
+          left.push(activationId)
+          continue
+        }
+        try {
+          await this.call("deactivate", { key: entry.key, activationId }, current)
+        } catch (error) {
+          if (error instanceof StaleLicenseRequest) return
+          if (!(error instanceof LicenseDenied)) {
+            // The replaced key stays bound to that activation until it is released here or in the
+            // customer portal; it no longer licenses anything on this machine.
+            console.warn(`[license] Previous key activation ${activationId} not released: ${errorText(error)}`)
+            left.push(activationId)
+            stopped = true
+          }
+        }
+      }
+      if (left.length > 0) remaining.push({ key: entry.key, activationIds: left })
+    }
+    if (!current() || !this.state) return
+    if (remaining.length > 0) this.state.pendingRelease = remaining
+    else delete this.state.pendingRelease
+    try {
+      this.save()
+    } catch {
+      /* The release is retried; releasing an activation twice is harmless. */
+    }
   }
 
   // Whether accept() would take this activation response for the tenant.
@@ -1115,7 +1247,12 @@ export class LicenseService {
     this.load()
     return this.mutate([...this.tenantMutations.keys(), ...Object.keys(this.state?.activations ?? {})], true, async () => {
       if (!this.state) return
-      let failure: unknown = null
+      // A replaced key's activations are released first. One that cannot be released keeps the
+      // machine's state, its record included, so the release is not forgotten.
+      await this.releasePrevious()
+      let failure: unknown = this.state?.pendingRelease
+        ? new Error("A license key this machine used before could not be released. Check your network and try again.")
+        : null
       const key = this.state.key
       for (const [tenantId, entry] of Object.entries(this.state.activations)) {
         const current = this.requestGuard(tenantId, false)

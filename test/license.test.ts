@@ -8,6 +8,7 @@ import {
   FAILURE_COOLDOWN_MS,
   LICENSE_REQUEST_TIMEOUT_MS,
   LicenseService,
+  THROTTLE_MAX_WAIT_MS,
   entitlementCurrent,
   type LicenseServiceOptions,
 } from "../src/main/license/service"
@@ -1531,6 +1532,177 @@ describe("LicenseService key replacement", () => {
     expect(saved.activations[TENANT]).toMatchObject({ activationId: "act-2" })
   })
 
+  // Task 7: every crash or write failure during a replacement leaves at least one usable key.
+  describe("crash safety", () => {
+    const savedKey = () => JSON.parse(store.get("license.state")!).key as string
+    const releases = (key: string) => calls.filter(({ action, body }) => action === "deactivate" && body.key === key)
+
+    it("keeps the previous key and its activations when the new state cannot be written", async () => {
+      storeLicense(trialToken())
+      answer = ({ action }) => (action === "activate" ? granted("act-2") : Response.json({ success: true }))
+      const license = service()
+      license.status([TENANT])
+      const set = store.set
+      store.set = (key, value) => {
+        if (key === "license.state") throw new Error("disk full")
+        set(key, value)
+      }
+      await expect(license.replaceKey("TENU-PAID-KEY-0001", [TENANT])).rejects.toThrow("Your current license is unchanged")
+      store.set = set
+      // Nothing of the previous key was released; the new key's activation was given back.
+      expect(releases("TEST-LICENSE-KEY")).toHaveLength(0)
+      expect(releases("TENU-PAID-KEY-0001").map(({ body }) => body.activationId)).toEqual(["act-2"])
+      expect(license.status([TENANT]).keyHint).toBe("****-KEY")
+      expect(entitled(license)).toBe(true)
+      // And after a restart.
+      expect(savedKey()).toBe("TEST-LICENSE-KEY")
+      expect(entitled(service())).toBe(true)
+    })
+
+    it("saves the new key before releasing anything, so a crash during the release keeps it", async () => {
+      storeLicense(trialToken())
+      const releasing = deferred<Response>()
+      answer = ({ action }) => (action === "activate" ? granted("act-2") : releasing.promise)
+      const license = service()
+      void license.replaceKey("TENU-PAID-KEY-0001", [TENANT]).catch(() => undefined)
+      await vi.waitFor(() => expect(releases("TEST-LICENSE-KEY")).toHaveLength(1))
+      // The app stops here, while the previous key's release is in flight.
+      expect(JSON.parse(store.get("license.state")!)).toMatchObject({
+        key: "TENU-PAID-KEY-0001",
+        activations: { [TENANT]: { activationId: "act-2" } },
+        pendingRelease: [{ key: "TEST-LICENSE-KEY", activationIds: ["act-1"] }],
+      })
+      calls = []
+      answer = () => Response.json({ success: true })
+      const restarted = service()
+      expect(entitled(restarted)).toBe(true)
+      expect(restarted.status([TENANT]).keyHint).toBe("****0001")
+      // The next refresh finishes the release.
+      answer = ({ action }) => (action === "refresh" ? granted("act-2") : Response.json({ success: true }))
+      await restarted.refreshAll()
+      expect(releases("TEST-LICENSE-KEY").map(({ body }) => body.activationId)).toEqual(["act-1"])
+      expect(JSON.parse(store.get("license.state")!).pendingRelease).toBeUndefined()
+      releasing.resolve(Response.json({ success: true }))
+    })
+
+    it("retries a release that failed until the service confirms it", async () => {
+      storeLicense(trialToken())
+      vi.spyOn(console, "warn").mockImplementation(() => undefined)
+      answer = ({ action }) => (action === "activate" ? granted("act-2") : Response.json({ reason: "upstream" }, { status: 502 }))
+      const license = service()
+      await license.replaceKey("TENU-PAID-KEY-0001", [TENANT])
+      expect(JSON.parse(store.get("license.state")!).pendingRelease).toEqual([{ key: "TEST-LICENSE-KEY", activationIds: ["act-1"] }])
+      // A release refused because the activation is gone also counts as done.
+      answer = ({ action }) => (action === "refresh" ? granted("act-2") : denied("not_found"))
+      await service().refreshAll()
+      expect(JSON.parse(store.get("license.state")!).pendingRelease).toBeUndefined()
+      vi.restoreAllMocks()
+    })
+
+    it("releases a pending previous key before deactivating the machine", async () => {
+      store.set("license.state", JSON.stringify({
+        key: "TENU-PAID-KEY-0001",
+        activations: { [TENANT]: { activationId: "act-2", token: fresh("act-2") } },
+        pendingRelease: [{ key: "TEST-LICENSE-KEY", activationIds: ["act-1"] }],
+      }))
+      answer = () => Response.json({ success: true })
+      await service().deactivate()
+      expect(calls.map(({ body }) => `${String(body.key)}:${String(body.activationId)}`)).toEqual([
+        "TEST-LICENSE-KEY:act-1",
+        "TENU-PAID-KEY-0001:act-2",
+      ])
+    })
+
+    it("keeps a replaced key's release when it cannot be released before deactivating", async () => {
+      store.set("license.state", JSON.stringify({
+        key: "TENU-PAID-KEY-0001",
+        activations: { [TENANT]: { activationId: "act-2", token: fresh("act-2") } },
+        pendingRelease: [{ key: "TEST-LICENSE-KEY", activationIds: ["act-1"] }],
+      }))
+      vi.spyOn(console, "warn").mockImplementation(() => undefined)
+      answer = ({ body }) => (body.key === "TEST-LICENSE-KEY" ? Response.json({ reason: "upstream" }, { status: 502 }) : Response.json({ success: true }))
+      await expect(service().deactivate()).rejects.toThrow("could not be released")
+      expect(JSON.parse(store.get("license.state")!).pendingRelease).toEqual([{ key: "TEST-LICENSE-KEY", activationIds: ["act-1"] }])
+      vi.restoreAllMocks()
+    })
+
+    it("keeps every replaced key's release across a second replacement", async () => {
+      storeLicense(trialToken())
+      vi.spyOn(console, "warn").mockImplementation(() => undefined)
+      const unreachable = () => Response.json({ reason: "upstream" }, { status: 502 })
+      answer = ({ action }) => (action === "activate" ? granted("act-2") : unreachable())
+      const license = service()
+      await license.replaceKey("TENU-PAID-KEY-0001", [TENANT])
+      answer = ({ action }) => (action === "activate" ? granted("act-3") : unreachable())
+      await license.replaceKey("TENU-PAID-KEY-0002", [TENANT])
+      expect(JSON.parse(store.get("license.state")!).pendingRelease).toEqual([
+        { key: "TEST-LICENSE-KEY", activationIds: ["act-1"] },
+        { key: "TENU-PAID-KEY-0001", activationIds: ["act-2"] },
+      ])
+      calls = []
+      answer = ({ action }) => (action === "refresh" ? granted("act-3") : Response.json({ success: true }))
+      await service().refreshAll()
+      expect(calls.filter(({ action }) => action === "deactivate").map(({ body }) => `${String(body.key)}:${String(body.activationId)}`)).toEqual([
+        "TEST-LICENSE-KEY:act-1",
+        "TENU-PAID-KEY-0001:act-2",
+      ])
+      expect(JSON.parse(store.get("license.state")!).pendingRelease).toBeUndefined()
+      vi.restoreAllMocks()
+    })
+
+    it("refreshes first and stops releasing at the first unreachable answer", async () => {
+      store.set("license.state", JSON.stringify({
+        key: "TENU-PAID-KEY-0001",
+        activations: { [TENANT]: { activationId: "act-2", token: fresh("act-2") } },
+        pendingRelease: [{ key: "TEST-LICENSE-KEY", activationIds: ["act-a", "act-b", "act-c"] }],
+      }))
+      vi.spyOn(console, "warn").mockImplementation(() => undefined)
+      answer = ({ action }) => (action === "refresh" ? granted("act-2") : Response.json({ reason: "upstream" }, { status: 502 }))
+      await service().refreshAll()
+      expect(calls.map(({ action }) => action)).toEqual(["refresh", "deactivate"])
+      expect(JSON.parse(store.get("license.state")!).pendingRelease).toEqual([{ key: "TEST-LICENSE-KEY", activationIds: ["act-a", "act-b", "act-c"] }])
+      vi.restoreAllMocks()
+    })
+
+    it("gives the new key's activations back even when a change listener throws", async () => {
+      storeLicense(trialToken())
+      vi.spyOn(console, "warn").mockImplementation(() => undefined)
+      answer = ({ action }) => (action === "activate" ? granted("act-2") : Response.json({ success: true }))
+      const license = service({ onChange: () => { throw new Error("listener failed") } })
+      license.status([TENANT])
+      const set = store.set
+      store.set = (key, value) => {
+        if (key === "license.state") throw new Error("disk full")
+        set(key, value)
+      }
+      await expect(license.replaceKey("TENU-PAID-KEY-0001", [TENANT])).rejects.toThrow("Your current license is unchanged")
+      store.set = set
+      expect(releases("TENU-PAID-KEY-0001").map(({ body }) => body.activationId)).toEqual(["act-2"])
+      vi.restoreAllMocks()
+    })
+
+    it("does not undo a saved replacement when a change listener throws", async () => {
+      storeLicense(trialToken())
+      vi.spyOn(console, "warn").mockImplementation(() => undefined)
+      answer = ({ action }) => (action === "activate" ? granted("act-2") : Response.json({ success: true }))
+      const license = service({ onChange: () => { throw new Error("listener failed") } })
+      await license.replaceKey("TENU-PAID-KEY-0001", [TENANT])
+      expect(JSON.parse(store.get("license.state")!)).toMatchObject({ key: "TENU-PAID-KEY-0001", activations: { [TENANT]: { activationId: "act-2" } } })
+      expect(calls.filter(({ action, body }) => action === "deactivate" && body.key === "TENU-PAID-KEY-0001")).toHaveLength(0)
+      vi.restoreAllMocks()
+    })
+
+    it("ignores a damaged release record", () => {
+      store.set("license.state", JSON.stringify({
+        key: "TENU-PAID-KEY-0001",
+        activations: { [TENANT]: { activationId: "act-2", token: fresh("act-2") } },
+        pendingRelease: [{ key: 7, activationIds: "act-1" }, null],
+      }))
+      const license = service()
+      expect(entitled(license)).toBe(true)
+    })
+  })
+
   it("needs a signed-in tenant and a well-formed key", async () => {
     storeLicense(trialToken())
     const license = service()
@@ -1556,6 +1728,66 @@ describe("LicenseService key replacement", () => {
     expect(status.validUntil).toBe(new Date(orgExpiry * 1000).toISOString())
     expect(Date.parse(status.trialEndsAt!)).toBeGreaterThan(Date.parse(status.validUntil!))
     expect(licenseExpiryWarning(status)).toBe("expiring")
+  })
+})
+
+// Task 9: a throttled batch (one NAT, many admins or tenants) completes without entering the key again.
+describe("LicenseService throttled requests", () => {
+  const throttled = (seconds: string | null) =>
+    new Response(JSON.stringify({ reason: "rate_limited" }), {
+      status: 429,
+      headers: { "content-type": "application/json", ...(seconds === null ? {} : { "retry-after": seconds }) },
+    })
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout"] })
+    vi.spyOn(console, "warn").mockImplementation(() => undefined)
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  it("waits as long as the service asks and activates every tenant with one key entry", async () => {
+    let limited = 1
+    answer = ({ body }) => {
+      if (body.tenantId === TENANT_B && limited > 0) {
+        limited--
+        return throttled("3")
+      }
+      return granted(body.tenantId === TENANT_B ? "act-b" : "act-a", {}, { tenantId: body.tenantId })
+    }
+    const license = service()
+    const done = license.setKey("TENU-MSP-KEY-0001", [TENANT, TENANT_B])
+    await vi.advanceTimersByTimeAsync(2_900)
+    expect(calls).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(200)
+    await done
+    expect(calls.map(({ body }) => body.tenantId)).toEqual([TENANT, TENANT_B, TENANT_B])
+    expect(entitled(license, TENANT)).toBe(true)
+    expect(entitled(license, TENANT_B)).toBe(true)
+  })
+
+  it("stops after a bounded number of retries and keeps a cached activation", async () => {
+    storeLicense(fresh("act-1"))
+    answer = () => throttled("1")
+    const license = service()
+    const refreshed = license.refreshAll()
+    await vi.advanceTimersByTimeAsync(10_000)
+    await refreshed
+    expect(calls).toHaveLength(3)
+    expect(entitled(license)).toBe(true)
+    expect(license.status([TENANT]).tenants[0]!.entitled).toBe(true)
+  })
+
+  it.each([
+    [String(THROTTLE_MAX_WAIT_MS / 1000 + 100), "Try again in 2 minutes."],
+    [null, "Try again in a minute."],
+  ])("does not wait for Retry-After %s and says when to retry", async (seconds, text) => {
+    answer = () => throttled(seconds)
+    const license = service()
+    await expect(license.setKey("TENU-PRO-KEY-0001", [TENANT])).rejects.toThrow(text)
+    expect(calls).toHaveLength(1)
   })
 })
 
