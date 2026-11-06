@@ -200,6 +200,9 @@ export function describeConditions(conditions: AlertConditions | null | undefine
   return parts.join("; ")
 }
 
+/** The Azure watcher counts as stale when its last run is older than this. The desktop alerts on it and the Alerts page shows it. */
+export const WATCHER_STALE_HOURS = 3
+
 /** The Azure watcher's copy of the alerts: kinds of destinations instead of desktop channel ids. */
 export const WATCHER_ALERTS_SCHEMA = "tenuvault.watcher-alerts/v1"
 export type WatcherDestination = "webhook" | "teams" | "mail"

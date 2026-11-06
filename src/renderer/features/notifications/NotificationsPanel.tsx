@@ -16,7 +16,7 @@ import { Button } from "~/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "~/components/ui/dialog"
 import { Input } from "~/components/ui/input"
 import { NOTIFICATION_EVENT_TYPES, type NotificationEventType, type NotificationSeverity } from "../../../shared/notifications/envelope"
-import { CHANGE_TYPES, describeConditions, MAX_EACH_PER_CHECK, type AlertConditions, type AlertDelivery } from "../../../shared/notifications/alerts"
+import { CHANGE_TYPES, describeConditions, MAX_EACH_PER_CHECK, WATCHER_STALE_HOURS, type AlertConditions, type AlertDelivery } from "../../../shared/notifications/alerts"
 import type { AuditChangeType } from "../../../shared/notifications/audit"
 import { toast } from "../../lib/toast"
 import type { FeatureTabProps } from "../types"
@@ -698,7 +698,8 @@ function WatcherSyncCard({ tenant, data, onChanged }: { tenant: Tenant; data: No
   const ranWithout = sentAndWaiting && Boolean(lastRunAt && sync?.pushedAt && Date.parse(lastRunAt) > Date.parse(sync.pushedAt))
   const sentNotRun = sentAndWaiting && !ranWithout
   const failedAfterPush = Boolean(sync?.error && (!sync.pushedAt || (sync.errorAt ?? "") > sync.pushedAt))
-  const stale = data.auditWatch.watcherCheck?.stale === true
+  // Judged here too: checks stop while signed out, and a saved "fresh" must not outlive the heartbeat.
+  const stale = data.auditWatch.watcherCheck?.stale === true || Boolean(lastRunAt && Date.now() - Date.parse(lastRunAt) > WATCHER_STALE_HOURS * 3_600_000)
   // A stale heartbeat says nothing about what the watcher runs now, so it comes first.
   const state: { tone: "success" | "warning" | "neutral"; chip: string; text: string } =
     stale

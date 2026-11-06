@@ -772,6 +772,11 @@ for ($slot = 0; $slot -lt $scheduleSlotNames.Count; $slot++) {
         Remove-TenuVaultWatcherSchedule -Name $slotName
         $schedule = $null
     }
+    # A schedule an administrator turned off, or one that expired, starts no runs. It is kept as
+    # it is, because turning it off may have been deliberate, but the gap is reported.
+    if ($schedule -and ($schedule.IsEnabled -eq $false -or ($schedule.ExpiryTime -and ([DateTimeOffset]$schedule.ExpiryTime) -lt [DateTimeOffset]::UtcNow))) {
+        Write-Warning "Schedule '$slotName' is turned off or expired, so it starts no watcher runs. Turn it on in the Automation account (Schedules), or delete it and run this script again."
+    }
     if (-not $schedule) {
         $startTime = Get-TenuVaultNextStart -Minute $slotMinute
         Write-Host "Creating schedule '$slotName' (every $slotHours hour(s) from $($startTime.ToString('HH:mm', [Globalization.CultureInfo]::InvariantCulture)) UTC)..."

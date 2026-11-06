@@ -132,6 +132,12 @@ try {
             Invoke-Setup
             Invoke-Setup @{ AlertRulesPath = "" }
         }
+        "disabled" {
+            Invoke-Setup | Out-Null
+            $global:TvSchedules["TenuVaultNotificationCheck"] | Add-Member -NotePropertyName IsEnabled -NotePropertyValue $false -Force
+            Invoke-Setup 3>&1 | ForEach-Object { [string]$_ }
+            Write-Output (ConvertTo-Json @{ enabled = $global:TvSchedules["TenuVaultNotificationCheck"].IsEnabled } -Compress)
+        }
         "forbidden" {
             Invoke-Setup @{ AlertRulesPath = $alertsPath } | Out-Null
             $global:TvBlobForbidden = $true

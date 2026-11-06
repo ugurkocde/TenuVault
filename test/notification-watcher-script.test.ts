@@ -167,6 +167,10 @@ describe("Azure notification watcher scripts", () => {
     expect(twenty.links).toEqual(names(twenty))
     expect(removed.schedules).toEqual([])
     expect(removed.links).toEqual([])
+    // A schedule turned off by an administrator is reported, never turned back on.
+    const disabled = execFileSync(pwsh!, ["-NoProfile", "-File", script, "-Scenario", "disabled"], { encoding: "utf8" })
+    expect(disabled).toContain("Schedule 'TenuVaultNotificationCheck' is turned off or expired")
+    expect(JSON.parse(disabled.trim().split(/\r?\n/).at(-1)!)).toEqual({ enabled: false })
     const conflict = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script, "-Scenario", "conflict"], { encoding: "utf8" }).trim())
     expect(conflict.error).toContain("contradict each other")
   }, 120_000)

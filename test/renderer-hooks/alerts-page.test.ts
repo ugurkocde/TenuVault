@@ -160,7 +160,7 @@ describe("the Azure watcher card", () => {
     ...empty,
     channels: [teams],
     signedIn: true,
-    auditWatch: { enabled: false, intervalMinutes: 15, categories: [], ignoreOwnChanges: true, includeActor: false, externalWatcher: true, lastPollAt: null, lastError: null, watermark: null, conditionalAccess: { enabled: false, watermark: null, lastPollAt: null, lastError: null }, watcherCheck: { checkedAt: "2026-11-06T09:00:00Z", lastRunAt: "2026-11-06T08:55:00Z", stale: false, error: null, alertsHash: "old", runbookVersion } },
+    auditWatch: { enabled: false, intervalMinutes: 15, categories: [], ignoreOwnChanges: true, includeActor: false, externalWatcher: true, lastPollAt: null, lastError: null, watermark: null, conditionalAccess: { enabled: false, watermark: null, lastPollAt: null, lastError: null }, watcherCheck: { checkedAt: new Date(Date.now() - 5 * 60_000).toISOString(), lastRunAt: new Date(Date.now() - 10 * 60_000).toISOString(), stale: false, error: null, alertsHash: "old", runbookVersion } },
     watcherAlerts: { current: "new", reported: "old", source: "storage", runbookVersion, readsAlertsFile: runbookVersion === null ? null : runbookVersion >= "1.2.0", auto: false, pushedAt: null, pushedHash: null, error: null, errorAt: null, ...watcherAlerts },
   })
   const card = (container: HTMLElement) => container.querySelector('[aria-labelledby="notifications-watcher-sync-heading"]') as HTMLElement
@@ -179,18 +179,18 @@ describe("the Azure watcher card", () => {
   })
 
   it("says when the update waits for the next run, failed, or needs a setup rerun first", async () => {
-    state.status = watched({ pushedHash: "new", pushedAt: "2026-11-06T09:10:00Z" })
+    state.status = watched({ pushedHash: "new", pushedAt: new Date(Date.now() - 60_000).toISOString() })
     let container = await render(AlertsTab, true)
     expect(card(container).textContent).toContain("Waiting for its next run")
     for (const root of roots.splice(0)) act(() => root.unmount())
     // The watcher ran after the update but still reports the old alerts: a warning, not waiting.
-    const ran = watched({ pushedHash: "new", pushedAt: "2026-11-06T08:00:00Z", source: "setup" })
+    const ran = watched({ pushedHash: "new", pushedAt: new Date(Date.now() - 60 * 60_000).toISOString(), source: "setup" })
     state.status = ran
     container = await render(AlertsTab, true)
     expect(card(container).textContent).toContain("Not using the update")
     expect(card(container).textContent).toContain("the alerts from its setup")
     for (const root of roots.splice(0)) act(() => root.unmount())
-    state.status = watched({ error: "Your account cannot write to the watcher's state container.", errorAt: "2026-11-06T09:20:00Z" })
+    state.status = watched({ error: "Your account cannot write to the watcher's state container.", errorAt: new Date().toISOString() })
     container = await render(AlertsTab, true)
     expect(card(container).querySelector('[role="alert"]')?.textContent).toContain("cannot write")
     for (const root of roots.splice(0)) act(() => root.unmount())
@@ -206,6 +206,13 @@ describe("the Azure watcher card", () => {
     container = await render(AlertsTab, true)
     expect(card(container).textContent).toContain("Not running")
     expect(card(container).textContent).not.toContain("Up to date")
+    for (const root of roots.splice(0)) act(() => root.unmount())
+    // Checks stopped (signed out) while the saved check still says fresh: the old run time decides.
+    const old = watched({ reported: "new" })
+    old.auditWatch!.watcherCheck = { ...old.auditWatch!.watcherCheck!, stale: false, lastRunAt: new Date(Date.now() - 4 * 3_600_000).toISOString() }
+    state.status = old
+    container = await render(AlertsTab, true)
+    expect(card(container).textContent).toContain("Not running")
   })
 })
 

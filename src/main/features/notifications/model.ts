@@ -146,7 +146,7 @@ export const WATCHER_ALERTS_FILE_RUNBOOK = "1.2.0"
 export const MAX_WATCHER_ALERTS_LENGTH = 500_000
 
 /** The Azure watcher counts as stale when its heartbeat is older than this. Setup schedules it hourly by default, or every 15 to 30 minutes. */
-export const WATCHER_STALE_HOURS = 3
+export { WATCHER_STALE_HOURS } from "../../../shared/notifications/alerts"
 /** How often the desktop reads the watcher heartbeat. */
 export const WATCHER_CHECK_MINUTES = 30
 
