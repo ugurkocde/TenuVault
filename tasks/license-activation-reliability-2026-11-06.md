@@ -32,7 +32,10 @@ inspected live; those items are listed as unverified.
 ## P0: can break activation for every buyer, or for a buyer who just paid
 
 - [ ] **1. Prove the shipped app carries the production signing key.** (desktop + website,
-  verified gap) The build only checks the baked-in key is *an* Ed25519 key
+  verified gap; desktop gate done: release builds now fail on the placeholder or any key whose
+  fingerprint differs from the one pinned in `scripts/license-public-key.ts`, read back from the
+  shipped 0.4.2 and nightly installers. Remaining: the website-side readiness mirror so a signer
+  change there is caught too) The build only checks the baked-in key is *an* Ed25519 key
   (`electron.vite.config.ts:43`), the placeholder only warns (line 56), and the release workflow
   only checks the secret is non-empty (`.github/workflows/release.yml:170`). A wrong but valid
   key (sandbox, preview, rotated) passes every gate and every entitlement then fails verification

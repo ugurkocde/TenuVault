@@ -179,6 +179,7 @@ jobs:
             exit 1
           fi
           {
+            echo "TENUVAULT_RELEASE_BUILD=1"
             echo "TENUVAULT_LICENSE_API_BASE=https://www.tenuvault.com"
             echo "TENUVAULT_LICENSE_BUY_URL=https://tenuvault.com/desktop#pricing"
             echo "TENUVAULT_LICENSE_PORTAL_URL=$RELEASE_PORTAL_URL"
