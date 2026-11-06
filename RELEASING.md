@@ -57,6 +57,12 @@ rationale live in
 Before promoting a nightly to stable, confirm on a machine running that nightly with a real paid
 key that the License page still shows the plan active and a manual refresh succeeds.
 
+A stable release, by tag or by promotion, fails when a commit since the previous stable release
+changed a licensing file (`src/main/license/`, `src/main/storage/secure-store.ts`,
+`scripts/license-public-key.ts`, `electron.vite.config.ts`) and has not been in a nightly for 24
+hours (`.github/scripts/license-soak.mjs`). In an emergency, run the stable promotion by hand
+with `allow_unsoaked_license_change`; a pushed tag has no override.
+
 ## Plan boundary changes
 
 A change to what a plan includes (`src/shared/plans.ts`, `src/main/api/plan-gates.ts`) takes

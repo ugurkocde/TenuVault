@@ -21,6 +21,10 @@ on:
       version:
         description: Stable version, such as 0.1.0. Defaults to the version the newest nightly previews.
         required: false
+      allow_unsoaked_license_change:
+        description: Emergency only. Promote even though a licensing change has been on nightly for less than 24 hours.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -55,6 +59,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           DISPATCH_CHANNEL: ${{ inputs.channel }}
           DISPATCH_VERSION: ${{ inputs.version }}
+          ALLOW_UNSOAKED: ${{ inputs.allow_unsoaked_license_change }}
           RUN_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
@@ -101,6 +106,15 @@ jobs:
           if ! git merge-base --is-ancestor "$sha" origin/main; then
             echo "::error::Release commit must be reachable from origin/main."
             exit 1
+          fi
+          # Licensing changes reach stable only after a day on the nightly channel, also for tag
+          # releases, which skip the promoted-nightly path (RELEASING.md, licensing invariants).
+          if [ "$channel" = stable ]; then
+            if [ "$EVENT" = "workflow_dispatch" ] && [ "$ALLOW_UNSOAKED" = "true" ]; then
+              echo "::warning::Licensing soak check skipped by allow_unsoaked_license_change."
+            else
+              node .github/scripts/license-soak.mjs "$sha"
+            fi
           fi
           tag=$(echo "$meta" | jq -r .tag)
           if gh release view "$tag" >/dev/null 2>&1; then echo "::error::Release $tag already exists."; exit 1; fi
