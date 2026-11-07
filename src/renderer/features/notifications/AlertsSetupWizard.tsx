@@ -7,7 +7,7 @@ import { Button } from "~/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "~/components/ui/dialog"
 import { Input } from "~/components/ui/input"
 import { LOCAL_STORAGE_PREFIX } from "../../../shared/constants"
-import { buildSetupAlerts, DEFAULT_SETUP_CHOICES, parseWatcherSetup, setupState, setupWatchNeeds, watcherSetupCommand, WATCHER_GUIDE_URL, type SetupChoices } from "../../../shared/notifications/setup"
+import { buildSetupAlerts, DEFAULT_SETUP_CHOICES, deployWatcherToAzureUrl, parseWatcherSetup, setupState, setupWatchNeeds, watcherSetupCommand, WATCHER_GUIDE_URL, type SetupChoices } from "../../../shared/notifications/setup"
 import { bridge } from "../../lib/bridge"
 import { settingsHref } from "../../lib/settings-section"
 import { toast } from "../../lib/toast"
@@ -419,7 +419,13 @@ export function SetupWizard({ tenant, data, onClose, onChanged }: { tenant: Tena
                   <span className="mt-1 block text-xs text-gray-600">Azure Monitor mails this address when a watcher run fails. Without one, replace the placeholder in the command before running it.</span>
                 </label>
                 <div className="space-y-2">
-                  <p className="text-sm text-gray-800">1. Whoever can create Azure resources runs this in PowerShell, next to the two scripts. It needs a Global Administrator for the Graph roles ({needs.conditionalAccess ? "including AuditLog.Read.All for Conditional Access" : "DeviceManagementApps.Read.All"}).</p>
+                  <p className="text-sm text-gray-800"><strong>Fastest: deploy it from the Azure portal.</strong> The button opens a template that creates the Automation account, runbook, schedules, storage roles and failure alert in one go (first deployment only: Azure refuses to reuse its schedule links, so later changes go through the script below). In the portal, pick the subscription of this tenant (its directory is used automatically) and resource group <strong>{tenant.resources?.resourceGroupName && tenant.resources.resourceGroupName !== "local" ? tenant.resources.resourceGroupName : "the storage account's resource group"}</strong>, and enter storage account <strong>{storageAccount}</strong>, a first run time a few minutes ahead, the failure-alert address from above, and the same {watcherDestination === "teams" ? "Teams Workflows URL" : watcherDestination === "email" ? "mail sender, recipients and a probe mailbox outside the Exchange restriction" : watcherDestination === "webhook" ? "webhook URL" : "destination"} as here{needs.conditionalAccess ? ", with Include Conditional Access ticked" : ""}. When it finishes, open its <strong>Outputs</strong> and paste <strong>pasteIntoTenuVault</strong> into step 2 below. A template cannot assign Microsoft Graph roles, so that block honestly says not granted: a Global Administrator still assigns them (the outputs list them), or runs the setup script once with -GrantGraphRoles, whose new block then completes the hand-over here.</p>
+                  <Button type="button" size="sm" onClick={() => void bridge.app.openExternal(deployWatcherToAzureUrl())}>
+                    <Cloud className="h-4 w-4" aria-hidden="true" />Deploy to Azure
+                  </Button>
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm text-gray-800">1. Or whoever can create Azure resources runs this in PowerShell, next to the two scripts. It needs a Global Administrator for the Graph roles ({needs.conditionalAccess ? "including AuditLog.Read.All for Conditional Access" : "DeviceManagementApps.Read.All"}), and works for a storage account in any resource group.</p>
                   <code className="block break-all rounded-lg bg-secondary px-3 py-2 font-mono text-xs">{command}</code>
                   <div className="flex flex-wrap gap-2">
                     {copyButton("command", "Copy setup command", command)}
