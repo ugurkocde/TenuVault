@@ -50,7 +50,7 @@ Backups are encrypted with AES-256-GCM before they are written to disk or upload
 
 ## What TenuVault the company can see
 
-TenuVault talks to its own server, tenuvault.com, for one purpose only: checking your license. The table below lists everything a license check can include. [Network connections and data flows](/security/data-flows/) lists every request in detail.
+TenuVault talks to its own server, tenuvault.com, to check your license and, only when you send it, to receive your feedback. The table below lists everything a license check and a feedback message can include. [Network connections and data flows](/security/data-flows/) lists every request in detail.
 
 | TenuVault can see | When |
 | --- | --- |
@@ -61,6 +61,7 @@ TenuVault talks to its own server, tenuvault.com, for one purpose only: checking
 | Your operating system (Windows or macOS) and the TenuVault version | When a tenant is activated, and with organization license checks. |
 | A Microsoft ID token for your sign-in | When a license is shared with your tenant, or when you use a license your organization shared. The token contains identity claims such as your name and user principal name. The licensing service verifies it with Microsoft's public signing keys to confirm which tenant and app registration you signed in to, and does not store it. |
 | Your public IP address | As with any web request. The licensing service uses it only to rate limit requests. |
+| Feedback you send | Only when you click **Send feedback** in **Share feedback**: your answers, the reply-to email if you enter one, app version, operating system, plan and page name. A screenshot of the window only if you tick it; it may show tenant, policy or user names. Kept up to 12 months. See [Feedback](/security/data-flows/#feedback). |
 
 If you buy a plan, the purchase itself is handled by Polar, the payment provider, which holds your billing details. Your license key and its activations are managed there.
 
@@ -72,7 +73,7 @@ If you buy a plan, the purchase itself is handled by Polar, the payment provider
 | Your backup recovery key | It is created on your machine and only leaves it when you save it to a file yourself. |
 | Your storage account contents | TenuVault has no access to your Azure subscription. |
 
-TenuVault contains no telemetry, analytics or crash reporting.
+TenuVault contains no telemetry, analytics or crash reporting. Feedback is sent only when you choose to send it.
 
 ## Control and revoke access
 

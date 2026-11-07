@@ -792,7 +792,9 @@ function About({ active }: { active: boolean }) {
         <p>TenuVault Desktop {info?.version ?? ""}</p>
         <p>
           TenuVault talks to Microsoft (sign-in, Graph, Azure), to GitHub for the Open Intune Baseline catalog and for
-          updates, and to tenuvault.com for license checks. No tenant configuration or backup is ever sent to TenuVault.
+          updates, and to tenuvault.com for license checks and for feedback you choose to send. No tenant configuration
+          or backup is ever sent to TenuVault. A feedback screenshot, which may show tenant, policy or user names, is
+          attached only if you tick it.
         </p>
         <p>
           <Link to="/license" className="text-blue-600 hover:underline">License</Link>

@@ -61,9 +61,9 @@ See the [installation guide](https://docs.tenuvault.com/getting-started/install/
 ## How it keeps your data yours
 
 - **Runs on your machine.** The app talks to Microsoft (sign-in, Microsoft Graph, Azure) and, for
-  license checks only, to tenuvault.com. It also downloads public updates and optional framework
+  license checks and feedback you choose to send, to tenuvault.com. It also downloads public updates and optional framework
   content from GitHub (see [Outbound network access](#outbound-network-access)). No tenant data or Microsoft access token ever reaches a
-  TenuVault server. License checks can send a Microsoft ID token as proof of the tenant; it is
+  TenuVault server, apart from a feedback screenshot you choose to attach. License checks can send a Microsoft ID token as proof of the tenant; it is
   verified and never stored.
 - **Signs in as you.** Delegated sign-in with your own admin account through an app registration in
   your own tenant: a public client with no secret. MFA and Conditional Access apply as they do in

@@ -127,6 +127,12 @@ const bridge: TenuVaultPreloadBridge = {
     info: () => invoke("app:info"),
     openExternal: (url) => invoke("app:openExternal", url),
   },
+  feedback: {
+    context: () => invoke("feedback:context"),
+    capture: () => invoke("feedback:capture"),
+    send: (input) => invoke("feedback:send", input),
+    discardCapture: () => invoke("feedback:discardCapture"),
+  },
   reports: {
     savePdf: (report, fileName) => invoke("reports:savePdf", report, fileName),
     saveFile: (data, fileName, encoding = "utf8") => invoke("reports:saveFile", data, fileName, encoding),

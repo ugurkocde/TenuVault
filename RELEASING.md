@@ -81,6 +81,11 @@ Put these in the next stable release's notes, then remove them here.
   belong to show as Unavailable in Backup History; other backups stay usable and new backups are
   saved. While any file is damaged, retention deletes nothing and logs "Retention is paused." No
   file format, recovery key or file on disk changes.
+- New **Share feedback** entry in the sidebar, on every plan. It sends the two answers, an
+  optional reply-to email, app version, OS, plan and section name to
+  `https://www.tenuvault.com/api/desktop-feedback`, only when the admin clicks Send feedback. A
+  window screenshot is attached only when ticked. Networks that filter by path need that path
+  allowed; when sending fails, Copy as email opens the same feedback as an email to support.
 
 ## Cutting a stable release
 

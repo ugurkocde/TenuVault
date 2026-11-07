@@ -57,6 +57,9 @@ import {
   LICENSE_REFRESH_MS,
 } from "./license/config"
 import { LicenseService } from "./license/service"
+import { FeedbackScreenshot } from "./feedback/capture"
+import { buildFeedbackPayload, feedbackContext, postFeedback, validateFeedbackInput, type FeedbackPayload } from "./feedback/send"
+import type { FeedbackSendResult } from "../shared/feedback"
 import { planGuard } from "./api/plan-gates"
 import { cisGuard } from "./api/cis-gate"
 import { DisclaimerAcknowledgements, disclaimerGuard } from "./disclaimer"
@@ -1296,6 +1299,40 @@ async function bootstrap(): Promise<void> {
     internalCisBenchmarks: internalCisBenchmarksEnabled(),
   }))
   handleTrusted("app:openExternal", (_event, url: string) => openExternalSafely(url))
+
+  // Share feedback: nothing is sent until the admin clicks Send. The screenshot stays in this
+  // process; the renderer only sees a small preview of it.
+  const feedbackScreenshot = new FeedbackScreenshot()
+  const currentFeedbackContext = () => feedbackContext({
+    appVersion: app.getVersion(),
+    platform: process.platform,
+    systemVersion: process.getSystemVersion(),
+    status: license.status(signedInTenants()),
+  })
+  handleTrusted("feedback:context", () => currentFeedbackContext())
+  handleTrusted("feedback:capture", async () => {
+    feedbackScreenshot.discard()
+    if (!mainWindow) return null
+    try {
+      return feedbackScreenshot.store(await mainWindow.webContents.capturePage())
+    } catch {
+      console.warn("[feedback] Could not capture the window")
+      return null
+    }
+  })
+  handleTrusted("feedback:discardCapture", () => feedbackScreenshot.discard())
+  handleTrusted("feedback:send", async (_event, raw: unknown): Promise<FeedbackSendResult> => {
+    let payload: FeedbackPayload
+    try {
+      const input = validateFeedbackInput(raw)
+      payload = buildFeedbackPayload(input, currentFeedbackContext(), input.includeScreenshot ? feedbackScreenshot.current() : null)
+    } catch (error) {
+      return { ok: false, kind: "rejected", message: error instanceof Error ? error.message : "The feedback could not be read. Try again." }
+    }
+    const result = await postFeedback(chromiumFetch, LICENSE_API_BASE, payload)
+    if (result.ok) feedbackScreenshot.discard()
+    return result
+  })
   handleTrusted("reports:savePdf", async (_event, report: unknown, fileName: unknown) =>
     saveFileWithDialog(await prepareOibReportFile(report, fileName, (html, options) => printHtmlToPdf(html, options, (window) => new BrowserWindow(window))), "Save PDF report"))
   handleTrusted("reports:saveFile", (_event, data: unknown, fileName: unknown, encoding: unknown) => saveExportFile(data, fileName, encoding))
