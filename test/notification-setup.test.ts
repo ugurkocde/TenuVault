@@ -101,6 +101,24 @@ describe("the Azure watcher setup command", () => {
     const command = watcherSetupCommand({ tenantId: TENANT, storageAccount: "tvbkp1234567890ab", resourceGroup: "rg o'brien", includeConditionalAccess: false })
     expect(command).toContain(`-ResourceGroupName 'rg o''brien'`)
   })
+
+  it("cannot be broken out of by a curly quote, which PowerShell also treats as a delimiter", () => {
+    const curly = "\u2019"
+    const command = watcherSetupCommand({ tenantId: TENANT, storageAccount: "tvbkp1234567890ab", resourceGroup: `rg${curly};Write-Output(42);#`, includeConditionalAccess: false })
+    expect(command).not.toContain(curly)
+    expect(command).toContain(`-ResourceGroupName 'rg'';Write-Output(42);#'`)
+    // A crafted address never reaches the command at all; the placeholder takes its place.
+    const mail = watcherSetupCommand({ tenantId: TENANT, storageAccount: "tvbkp1234567890ab", alertEmail: `ops@example.com${curly};Write-Output(42);#`, includeConditionalAccess: false })
+    expect(mail).toContain("-AlertEmail <failure-alert-email>")
+    expect(mail).not.toContain("Write-Output")
+  })
+
+  it("carries the watcher's own destination as a placeholder, never a secret", () => {
+    expect(watcherSetupCommand({ tenantId: TENANT, storageAccount: "tvbkp1234567890ab", includeConditionalAccess: false, destination: "teams" })).toContain("-TeamsWebhookUrl <teams-workflows-url>")
+    expect(watcherSetupCommand({ tenantId: TENANT, storageAccount: "tvbkp1234567890ab", includeConditionalAccess: false, destination: "webhook" })).toContain("-WebhookUrl <webhook-url>")
+    const mail = watcherSetupCommand({ tenantId: TENANT, storageAccount: "tvbkp1234567890ab", alertEmail: "ops@contoso.com", includeConditionalAccess: false, destination: "email" })
+    expect(mail).toContain("-IncludeMailSend -MailSender <sender-mailbox> -MailRecipients ops@contoso.com")
+  })
 })
 
 describe("the watcher setup paste-back block", () => {
@@ -144,5 +162,9 @@ describe("the watcher setup paste-back block", () => {
     expect(parseWatcherSetup(block.replace(TENANT, "not-a-guid"))).toBeNull()
     expect(parseWatcherSetup(block.replace("tvbkp1234567890ab", "Not A Storage Name"))).toBeNull()
     expect(parseWatcherSetup(block.replace("automationAccount=aa-tenuvault-notifications\n", ""))).toBeNull()
+    // A block pasted short, or with the grant line damaged, must never read as granted.
+    expect(parseWatcherSetup(block.replace("\ngraphRolesGranted=true", ""))).toBeNull()
+    expect(parseWatcherSetup(block.replace("graphRolesGranted=true", "graphRolesGranted=yes"))).toBeNull()
+    expect(parseWatcherSetup(block.replace("graphRolesGranted=true", "graphRolesGranted=tru"))).toBeNull()
   })
 })

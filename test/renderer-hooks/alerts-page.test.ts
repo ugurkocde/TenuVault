@@ -9,7 +9,7 @@ import type { NotificationRule, NotificationsStatus, PublicChannel } from "../..
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const opened = vi.hoisted(() => [] as string[])
-const state = vi.hoisted(() => ({ status: null as unknown as NotificationsStatus, watchUpdates: [] as unknown[], pushes: [] as unknown[], added: [] as unknown[], channelsAdded: [] as unknown[], tested: [] as unknown[] }))
+const state = vi.hoisted(() => ({ status: null as unknown as NotificationsStatus, watchUpdates: [] as unknown[], pushes: [] as unknown[], added: [] as unknown[], channelsAdded: [] as unknown[], tested: [] as unknown[], updatedRules: [] as unknown[], updatedChannels: [] as unknown[], afterTest: null as null | (() => void), pushFails: false }))
 
 vi.mock("../../src/renderer/features/notifications/api", async (original) => ({
   ...(await original<typeof import("../../src/renderer/features/notifications/api")>()),
@@ -18,10 +18,13 @@ vi.mock("../../src/renderer/features/notifications/api", async (original) => ({
     updateAuditWatch: async (_tenant: unknown, body: unknown) => { state.watchUpdates.push(body); return { auditWatch: null } },
     listAuditCategories: async () => ({ categories: ["Compliance"], source: "known" }),
     listAlertSuggestions: async () => ({ policies: [], settings: [], backup: null, error: null }),
-    pushWatcherAlerts: async (_tenant: unknown, body: unknown = {}) => { state.pushes.push(body); return { watcherAlerts: state.status.watcherAlerts, skipped: [], uncovered: [] } },
-    addRule: async (_tenant: unknown, body: unknown) => { state.added.push(body); return { rule: body } },
+    pushWatcherAlerts: async (_tenant: unknown, body: unknown = {}) => { state.pushes.push(body); if (state.pushFails && (body as { write?: boolean }).write !== false) throw new Error("storage refused the write"); return { watcherAlerts: state.status.watcherAlerts, skipped: [], uncovered: [] } },
+    exportWatcherAlerts: async () => ({ document: { schema: "tenuvault.watcher-alerts/v1", alerts: [{ id: "r" }] }, json: "{}", skipped: [], uncovered: [] }),
+    addRule: async (_tenant: unknown, body: unknown) => { state.added.push(body); return { rule: { ...(body as object), id: `rule-${state.added.length}` } } },
+    updateRule: async (_tenant: unknown, ruleId: string, body: unknown) => { state.updatedRules.push({ ruleId, body }); return { rule: body } },
+    updateChannel: async (_tenant: unknown, channelId: string, body: unknown) => { state.updatedChannels.push({ channelId, body }); return { channel: null } },
     addChannel: async (_tenant: unknown, body: { kind: string }) => { state.channelsAdded.push(body); return { channel: { id: "new-channel", kind: body.kind, title: "This computer", enabled: true, urlHost: null, headerName: null, hasSecret: false, signRequests: false, recipients: [], lastDelivery: null } } },
-    testChannel: async (_tenant: unknown, channelId: string) => { state.tested.push(channelId); return { delivery: { ok: true, at: "2026-11-06T09:00:00Z", attempts: 1, status: 200, error: null, test: true }, channel: null } },
+    testChannel: async (_tenant: unknown, channelId: string) => { state.tested.push(channelId); state.afterTest?.(); return { delivery: { ok: true, at: "2026-11-06T09:00:00Z", attempts: 1, status: 200, error: null, test: true }, channel: null } },
   },
 }))
 vi.mock("../../src/portal/contexts/TenantContext", () => ({ useTenants: () => [] }))
@@ -42,13 +45,13 @@ const empty: NotificationsStatus = { channels: [], rules: [], auditWatch: null, 
 const teams: PublicChannel = { id: "c1", kind: "teams", title: "IT Ops", enabled: true, urlHost: "contoso.webhook.office.com", headerName: null, hasSecret: false, signRequests: false, recipients: [], lastDelivery: null }
 const tenant = { id: 1, name: "Contoso", credentials: { tenantId: "tenant" } } as unknown as Tenant
 
-async function render(component: typeof AlertsTab, allowed: boolean, url = "/portal/alerts"): Promise<HTMLElement> {
+async function render(component: typeof AlertsTab, allowed: boolean, url = "/portal/alerts", forTenant: Tenant = tenant): Promise<HTMLElement> {
   const container = document.createElement("div")
   document.body.appendChild(container)
   const root = createRoot(container)
   roots.push(root)
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  act(() => root.render(createElement(MemoryRouter, { initialEntries: [url] }, createElement(QueryClientProvider, { client }, createElement(component, { tenant, plan: allowed ? "pro" : "community", allowed })))))
+  act(() => root.render(createElement(MemoryRouter, { initialEntries: [url] }, createElement(QueryClientProvider, { client }, createElement(component, { tenant: forTenant, plan: allowed ? "pro" : "community", allowed })))))
   for (let attempt = 0; attempt < 20 && container.textContent?.includes("Loading"); attempt++) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
   return container
 }
@@ -94,6 +97,86 @@ describe("the Alerts page", () => {
     expect(state.watchUpdates).toEqual([{ enabled: true, conditionalAccessEnabled: true, intervalMinutes: 15 }])
     expect(state.tested).toEqual(["new-channel"])
     expect(document.body.querySelector('[role="dialog"]')!.textContent).toContain("Test delivered")
+  })
+
+  const walkWizard = async (container: HTMLElement, openLabel = "Set up alerts") => {
+    const open = [...container.querySelectorAll("button")].find((button) => button.textContent?.includes(openLabel))!
+    act(() => open.click())
+    const dialogButton = (label: string) => [...document.body.querySelectorAll('[role="dialog"] button')].find((button) => button.textContent === label) as HTMLButtonElement
+    return dialogButton
+  }
+
+  it("keeps the wizard open when its own run completes the setup and refreshes the page", async () => {
+    state.status = empty
+    state.added = []
+    const local: PublicChannel = { id: "new-channel", kind: "local", title: "This computer", enabled: true, urlHost: null, headerName: null, hasSecret: false, signRequests: false, recipients: [], lastDelivery: null }
+    const rule: NotificationRule = { id: "r1", title: "Backup and restore problems", enabled: true, eventTypes: ["backup.failed"], minSeverity: "info", channelIds: ["new-channel"], mode: "immediate", conditions: null, delivery: "digest" }
+    state.afterTest = () => { state.status = { ...empty, channels: [local], rules: [rule] } }
+    try {
+      const container = await render(AlertsTab, true)
+      const dialogButton = await walkWizard(container)
+      act(() => dialogButton("Continue").click())
+      act(() => dialogButton("Continue").click())
+      act(() => dialogButton("Continue").click())
+      await act(async () => { dialogButton("Turn on alerts").click() })
+      for (let attempt = 0; attempt < 20; attempt++) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+      expect(document.body.querySelector('[role="dialog"]')!.textContent).toContain("Alerts are on")
+    } finally {
+      state.afterTest = null
+    }
+  })
+
+  it("repairs a disabled destination and a disabled alert instead of calling them set up", async () => {
+    const offLocal: PublicChannel = { id: "c9", kind: "local", title: "This computer", enabled: false, urlHost: null, headerName: null, hasSecret: false, signRequests: false, recipients: [], lastDelivery: null }
+    const offRule: NotificationRule = { id: "r9", title: "Backup and restore problems", enabled: false, eventTypes: ["backup.failed"], minSeverity: "info", channelIds: [], mode: "immediate", conditions: null, delivery: "digest" }
+    state.status = { ...empty, channels: [offLocal], rules: [offRule], signedIn: true }
+    state.added = []
+    state.updatedRules = []
+    state.updatedChannels = []
+    state.channelsAdded = []
+    const container = await render(AlertsTab, true)
+    const dialogButton = await walkWizard(container, "Finish setup")
+    act(() => dialogButton("Continue").click())
+    act(() => dialogButton("Continue").click())
+    act(() => dialogButton("Continue").click())
+    await act(async () => { dialogButton("Turn on alerts").click() })
+    expect(state.channelsAdded).toEqual([])
+    expect(state.updatedChannels).toEqual([{ channelId: "c9", body: { enabled: true } }])
+    expect(state.updatedRules).toEqual([{ ruleId: "r9", body: { enabled: true, channelIds: ["c9"] } }])
+    expect((state.added as Array<{ title: string }>).map((rule) => rule.title)).toEqual(["Deletions and removed assignments", "Conditional Access changes"])
+  })
+
+  it("hands change alerts back to this computer when sending them to the watcher fails", async () => {
+    const guid = "11111111-1111-4111-8111-111111111111"
+    const azureTenant = { id: 2, name: "Contoso", credentials: { tenantId: guid }, resources: { storageAccountName: "tvbkp1234567890ab", subscriptionId: "22222222-2222-4222-8222-222222222222", resourceGroupName: "rg-tenuvault-backups", resourceGroupLocation: "westeurope" } } as unknown as Tenant
+    state.status = { ...empty, channels: [teams], signedIn: true }
+    state.added = []
+    state.watchUpdates = []
+    state.pushes = []
+    state.pushFails = true
+    try {
+      const container = await render(AlertsTab, true, "/portal/alerts", azureTenant)
+      const dialogButton = await walkWizard(container, "Finish setup")
+      act(() => dialogButton("Continue").click())
+      act(() => dialogButton("Continue").click())
+      const dialog = () => document.body.querySelector('[role="dialog"]')!
+      const azureRadio = [...dialog().querySelectorAll('input[name="setup-azure"]')][1] as HTMLInputElement
+      act(() => azureRadio.click())
+      const paste = dialog().querySelector('textarea[aria-label="Watcher setup output"]') as HTMLTextAreaElement
+      const block = ["--- TenuVault notification watcher setup (paste into TenuVault) ---", `tenantId=${guid}`, "storageAccount=tvbkp1234567890ab", "automationAccount=aa-tenuvault-notifications", "resourceGroup=rg-tenuvault-backups", "subscriptionId=22222222-2222-4222-8222-222222222222", "graphRolesGranted=true"].join("\n")
+      act(() => { Object.getOwnPropertyDescriptor(Object.getPrototypeOf(paste), "value")!.set!.call(paste, block); paste.dispatchEvent(new Event("input", { bubbles: true })); paste.dispatchEvent(new Event("change", { bubbles: true })) })
+      const confirm = [...dialog().querySelectorAll('input[type="checkbox"]')].at(-1) as HTMLInputElement
+      act(() => confirm.click())
+      act(() => dialogButton("Continue").click())
+      await act(async () => { dialogButton("Turn on alerts").click() })
+      for (let attempt = 0; attempt < 20 && !dialog().textContent?.includes("Setup stopped"); attempt++) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+      expect(dialog().textContent).toContain("Change watching stays on this computer")
+      const external = (state.watchUpdates as Array<{ externalWatcher?: boolean }>).filter((body) => body.externalWatcher !== undefined).map((body) => body.externalWatcher)
+      expect(external).toEqual([true, false])
+      expect(state.pushes).toEqual([{ auto: true, write: true }, { auto: false, write: false }])
+    } finally {
+      state.pushFails = false
+    }
   })
 
   it("hides the setup card once a working setup exists", async () => {

@@ -134,18 +134,36 @@ export function setupState(input: { channels: readonly SetupChannelLike[]; rules
   }
 }
 
-/** Single-quotes a value for PowerShell when it is not made of plain word characters. */
+/** An address plain enough to put on a command an administrator will run. Anything else becomes the placeholder. */
+const COMMAND_EMAIL = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/
+
+/**
+ * Single-quotes a value for PowerShell when it is not made of plain word characters.
+ * PowerShell treats the curly single quotes as string delimiters too, so every
+ * quote-class character is doubled to the ASCII escape, and line breaks and control
+ * characters are dropped: no value can end the literal and start a second command.
+ * None of the values this carries (Azure names, ids, an email address) can honestly
+ * contain a quote, so nothing real is changed by it.
+ */
 function psValue(value: string): string {
-  return /^[A-Za-z0-9._@+-]+$/.test(value) ? value : `'${value.replace(/'/g, "''")}'`
+  if (/^[A-Za-z0-9._@+-]+$/.test(value)) return value
+  // oxlint-disable-next-line no-control-regex
+  const cleaned = value.replace(/[\u0000-\u001f\u007f]+/g, "").replace(/['\u2018-\u201b]/g, "''")
+  return `'${cleaned}'`
 }
+
+/** The kind of destination the Azure watcher must be given to send where the desktop sends. */
+export type WatcherSetupDestination = "teams" | "email" | "webhook"
 
 /**
  * The watcher setup command with everything the app already knows filled in, for whoever
- * can create Azure resources. Secrets never go on it: no Teams or webhook URL, no mail
- * sender. The watcher's own destinations are set by its setup parameters or variables,
- * and the alerts themselves are pushed from the app afterwards. Without a failure-alert
- * address the command carries a placeholder to replace, because the script refuses to
- * run a watcher that could fail silently.
+ * can create Azure resources. Secrets never go on it and the alerts themselves are
+ * pushed from the app afterwards, but the watcher sends with its own destinations, so
+ * for the chosen kind the command carries the matching setup parameter as a placeholder
+ * to fill in: without it a fresh watcher would run and deliver nothing. Without a
+ * failure-alert address that parameter is a placeholder too, because the script refuses
+ * to run a watcher that could fail silently. An address that is not plainly an email
+ * address is never put on the command at all.
  */
 export function watcherSetupCommand(options: {
   tenantId: string
@@ -155,6 +173,7 @@ export function watcherSetupCommand(options: {
   subscriptionId?: string
   alertEmail?: string
   includeConditionalAccess: boolean
+  destination?: WatcherSetupDestination
 }): string {
   const parts = [
     "./New-TenuVaultNotificationWatcher.ps1",
@@ -164,7 +183,11 @@ export function watcherSetupCommand(options: {
   if (options.resourceGroup) parts.push(`-ResourceGroupName ${psValue(options.resourceGroup)}`)
   if (options.location) parts.push(`-Location ${psValue(options.location)}`)
   if (options.subscriptionId) parts.push(`-SubscriptionId ${psValue(options.subscriptionId)}`)
-  parts.push(`-AlertEmail ${options.alertEmail?.trim() ? psValue(options.alertEmail.trim()) : "<failure-alert-email>"}`)
+  const alertEmail = options.alertEmail?.trim() ?? ""
+  parts.push(`-AlertEmail ${COMMAND_EMAIL.test(alertEmail) ? psValue(alertEmail) : "<failure-alert-email>"}`)
+  if (options.destination === "teams") parts.push("-TeamsWebhookUrl <teams-workflows-url>")
+  if (options.destination === "webhook") parts.push("-WebhookUrl <webhook-url>")
+  if (options.destination === "email") parts.push("-IncludeMailSend", "-MailSender <sender-mailbox>", `-MailRecipients ${COMMAND_EMAIL.test(alertEmail) ? psValue(alertEmail) : "<recipient-email>"}`)
   parts.push("-GrantGraphRoles")
   if (options.includeConditionalAccess) parts.push("-IncludeConditionalAccess")
   return parts.join(" ")
@@ -199,6 +222,10 @@ export function parseWatcherSetup(text: string): WatcherSetup | null {
   const storageAccount = get("storageaccount")
   const automationAccount = get("automationaccount")
   const resourceGroup = get("resourcegroup")
+  // The grant confirmation decides a hand-over, so it must be said outright: a block
+  // pasted short, or with the line damaged, is not a setup to hand alerts to.
+  const granted = get("graphrolesgranted").toLowerCase()
+  if (granted !== "true" && granted !== "false") return null
   if (!GUID.test(tenantId) || !/^[a-z0-9]{3,24}$/.test(storageAccount) || !automationAccount || !resourceGroup) return null
   return {
     tenantId: tenantId.toLowerCase(),
@@ -206,7 +233,7 @@ export function parseWatcherSetup(text: string): WatcherSetup | null {
     automationAccount,
     resourceGroup,
     subscriptionId: GUID.test(get("subscriptionid")) ? get("subscriptionid").toLowerCase() : "",
-    graphRolesGranted: get("graphrolesgranted").toLowerCase() !== "false",
+    graphRolesGranted: granted === "true",
   }
 }
 

@@ -22,7 +22,7 @@ import { toast } from "../../lib/toast"
 import { bridge } from "../../lib/bridge"
 import type { FeatureTabProps } from "../types"
 import { TeamsCardTile } from "./CardLayoutEditor"
-import { SetupStatusCard } from "./AlertsSetupWizard"
+import { SetupStatusCard, SetupWizardButton } from "./AlertsSetupWizard"
 import { useOptionalPermission } from "./optional-permissions"
 import type { OptionalPermissionStatus } from "../../../shared/services/optional-permissions"
 import {
@@ -811,6 +811,7 @@ function RulesTile({ tenant, data, plan, prefill, onPrefillUsed, onChanged }: { 
           <p className="max-w-3xl text-sm text-gray-700">Which events go where, narrowed to the changes you pick if you want. <DocsLink section="alerts">How alerts work</DocsLink></p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <SetupWizardButton tenant={tenant} data={data} onChanged={onChanged} />
           <Button type="button" variant="ghost" size="sm" disabled={!licensed || rules.length === 0 || copyForWatcher.isPending} onClick={() => copyForWatcher.mutate()}><Copy className="h-4 w-4" aria-hidden="true" />Copy for Azure watcher</Button>
           {otherTenants.length > 0 && (
             <Button type="button" variant="ghost" size="sm" disabled={!licensed || rules.length === 0} onClick={() => setCopying(true)}>

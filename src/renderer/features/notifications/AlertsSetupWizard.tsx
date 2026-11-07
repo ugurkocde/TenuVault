@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Link } from "react-router-dom"
 import { Bell, Check, CheckCircle2, ChevronLeft, Cloud, Copy, ExternalLink, Loader2, Mail, Monitor, TriangleAlert, WandSparkles } from "lucide-react"
 import type { Tenant } from "~/contexts/TenantContext"
@@ -31,12 +31,30 @@ const MISSING_LABELS: Record<string, string> = {
  * The first-run card on the Alerts tab: what is missing, in order, and one button that
  * fixes it. Shown only while the setup cannot send; a working setup needs no banner.
  */
+/** A button that opens the setup, for places that stay mounted after setup completes. */
+export function SetupWizardButton({ tenant, data, onChanged, label = "Setup wizard" }: { tenant: Tenant; data: NotificationsStatus; onChanged: () => void; label?: string }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <Button type="button" variant="ghost" size="sm" disabled={!data.licensed} onClick={() => setOpen(true)}>
+        <WandSparkles className="h-4 w-4" aria-hidden="true" />{label}
+      </Button>
+      {open && <SetupWizard tenant={tenant} data={data} onClose={() => setOpen(false)} onChanged={onChanged} />}
+    </>
+  )
+}
+
 export function SetupStatusCard({ tenant, data, onChanged }: { tenant: Tenant; data: NotificationsStatus; onChanged: () => void }) {
   const [open, setOpen] = useState(false)
   const state = setupState(data)
-  if (!data.licensed || state.complete) return null
+  // An open setup survives the refresh its own run triggers: completing setup must not
+  // unmount the dialog (or remount it from step one) before its result can be read. The
+  // dialog therefore stays the second child whether the card shows or not.
+  if (!data.licensed || (state.complete && !open)) return null
   const started = data.channels.length > 0 || data.rules.length > 0
   return (
+    <>
+    {!state.complete && (
     <Tile aria-labelledby="alerts-setup-heading" className="gap-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="space-y-1">
@@ -61,8 +79,10 @@ export function SetupStatusCard({ tenant, data, onChanged }: { tenant: Tenant; d
           <StatusLine done={state.watching.conditionalAccess} label={state.watching.conditionalAccess ? "Conditional Access changes are watched" : MISSING_LABELS["conditional-access-watching"]!} />
         )}
       </ul>
-      {open && <SetupWizard tenant={tenant} data={data} onClose={() => setOpen(false)} onChanged={onChanged} />}
     </Tile>
+    )}
+    {open && <SetupWizard tenant={tenant} data={data} onClose={() => setOpen(false)} onChanged={onChanged} />}
+    </>
   )
 }
 
@@ -75,7 +95,8 @@ function StatusLine({ done, label }: { done: boolean; label: string }) {
   )
 }
 
-function OptionCard({ selected, disabled, onSelect, icon, title, description, children }: {
+function OptionCard({ name, selected, disabled, onSelect, icon, title, description, children }: {
+  name: string
   selected: boolean
   disabled?: boolean
   onSelect: () => void
@@ -86,15 +107,13 @@ function OptionCard({ selected, disabled, onSelect, icon, title, description, ch
 }) {
   return (
     <div className={`rounded-lg border p-4 ${selected ? "border-gray-900 dark:border-gray-200" : "border-gray-200 dark:border-gray-800"} ${disabled ? "opacity-60" : ""}`}>
-      <button type="button" role="radio" aria-checked={selected} disabled={disabled} onClick={onSelect} className="flex w-full items-start gap-3 rounded-lg text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-not-allowed">
-        <span aria-hidden="true" className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full border border-gray-400">
-          {selected && <span className="size-2.5 rounded-full bg-gray-900 dark:bg-gray-100" />}
-        </span>
+      <label className={`flex w-full items-start gap-3 rounded-lg text-left ${disabled ? "cursor-not-allowed" : "cursor-pointer"}`}>
+        <input type="radio" name={name} className="mt-0.5 size-4 shrink-0 accent-coral-600" checked={selected} disabled={disabled} onChange={onSelect} />
         <span className="space-y-0.5">
           <span className="flex items-center gap-2 text-sm font-medium text-gray-900">{icon}{title}</span>
           <span className="block text-sm text-gray-700">{description}</span>
         </span>
-      </button>
+      </label>
       {selected && children}
     </div>
   )
@@ -117,9 +136,12 @@ export function SetupWizard({ tenant, data, onClose, onChanged }: { tenant: Tena
   const [error, setError] = useState<string | null>(null)
   const [testWarning, setTestWarning] = useState<string | null>(null)
   const [createdChannelId, setCreatedChannelId] = useState<string | null>(null)
-  const [createdTitles, setCreatedTitles] = useState<string[]>([])
+  const [ruleIds, setRuleIds] = useState<Record<string, string>>({})
+  const [watcherDestConfirmed, setWatcherDestConfirmed] = useState(false)
   const [copied, setCopied] = useState<string | null>(null)
   const mailPermission = useOptionalPermission(tenant, "notificationEmail")
+  const titleRef = useRef<HTMLHeadingElement>(null)
+  useEffect(() => { titleRef.current?.focus() }, [step])
 
   const tenantId = tenant.credentials?.tenantId ?? ""
   const storageAccount = tenant.resources?.storageAccountName ?? ""
@@ -136,7 +158,11 @@ export function SetupWizard({ tenant, data, onClose, onChanged }: { tenant: Tena
         : storageAccount && watcherSetup.storageAccount.toLowerCase() !== storageAccount.toLowerCase()
           ? `That watcher uses storage account ${watcherSetup.storageAccount}, but this tenant's backups are in ${storageAccount}. Run its setup again for ${storageAccount}.`
           : null
-  const handOver = azure === "guided" && watcherSetup !== null && !pasteError && watcherSetup.graphRolesGranted
+  // The destination cannot change after a run created it: a retry must finish the setup it started.
+  const destinationLocked = createdChannelId !== null
+  const destKind = destination === "existing" ? data.channels.find((channel) => channel.id === existingId)?.kind : destination
+  const watcherDestination = destKind === "teams" || destKind === "email" || destKind === "webhook" ? destKind : undefined
+  const handOver = azure === "guided" && watcherSetup !== null && !pasteError && watcherSetup.graphRolesGranted && watcherDestination !== undefined && watcherDestConfirmed
   const command = useMemo(
     () => watcherSetupCommand({
       tenantId,
@@ -146,8 +172,9 @@ export function SetupWizard({ tenant, data, onClose, onChanged }: { tenant: Tena
       subscriptionId: tenant.resources?.subscriptionId && tenant.resources.subscriptionId !== "local" ? tenant.resources.subscriptionId : undefined,
       alertEmail: (alertEmail || (destination === "email" ? email : "")).trim() || undefined,
       includeConditionalAccess: needs.conditionalAccess,
+      destination: watcherDestination,
     }),
-    [tenantId, storageAccount, tenant.resources, alertEmail, destination, email, needs.conditionalAccess],
+    [tenantId, storageAccount, tenant.resources, alertEmail, destination, email, needs.conditionalAccess, watcherDestination],
   )
 
   const destinationValid =
@@ -188,31 +215,38 @@ export function SetupWizard({ tenant, data, onClose, onChanged }: { tenant: Tena
     const mark = (label: string) => { done.push(label); setProgress([...done]) }
     try {
       let channelId = createdChannelId
+      let reused = destination === "existing" ? data.channels.find((channel) => channel.id === existingId) : undefined
       if (destination === "existing") channelId = existingId
       if (!channelId) {
         if (destination === "local") {
-          const local = data.channels.find((channel) => channel.kind === "local")
-          channelId = local ? local.id : (await notificationsApi.addChannel(tenant, { kind: "local" })).channel.id
+          reused = data.channels.find((channel) => channel.kind === "local")
+          channelId = reused ? reused.id : (await notificationsApi.addChannel(tenant, { kind: "local" })).channel.id
         } else if (destination === "teams") {
           channelId = (await notificationsApi.addChannel(tenant, { kind: "teams", url: teamsUrl.trim() })).channel.id
         } else if (destination === "email") {
           const address = email.trim()
-          const same = data.channels.find((channel) => channel.kind === "email" && channel.recipients.some((recipient) => recipient.type === "address" && recipient.address.toLowerCase() === address.toLowerCase()))
-          channelId = same ? same.id : (await notificationsApi.addChannel(tenant, { kind: "email", recipients: [{ type: "address", address }] })).channel.id
+          reused = data.channels.find((channel) => channel.kind === "email" && channel.recipients.some((recipient) => recipient.type === "address" && recipient.address.toLowerCase() === address.toLowerCase()))
+          channelId = reused ? reused.id : (await notificationsApi.addChannel(tenant, { kind: "email", recipients: [{ type: "address", address }] })).channel.id
         }
         if (!channelId) throw new Error("No destination was created.")
         setCreatedChannelId(channelId)
       }
+      // A reused destination that was turned off would send nothing while looking set up.
+      if (reused && !reused.enabled) await notificationsApi.updateChannel(tenant, reused.id, { enabled: true })
       mark("Destination ready")
 
-      const knownTitles = new Set([...data.rules.map((rule) => rule.title.toLowerCase()), ...createdTitles.map((title) => title.toLowerCase())])
       for (const alert of alerts) {
-        if (knownTitles.has(alert.title.toLowerCase())) continue
-        await notificationsApi.addRule(tenant, { ...alert, channelIds: [channelId], mode: "immediate" })
-        knownTitles.add(alert.title.toLowerCase())
-        setCreatedTitles((current) => [...current, alert.title])
+        const existing = data.rules.find((rule) => rule.title.toLowerCase() === alert.title.toLowerCase())
+        const knownId = ruleIds[alert.title] ?? existing?.id
+        if (!knownId) {
+          const created = await notificationsApi.addRule(tenant, { ...alert, channelIds: [channelId], mode: "immediate" })
+          setRuleIds((current) => ({ ...current, [alert.title]: created.rule.id }))
+        } else if (existing && (!existing.enabled || !existing.channelIds.includes(channelId))) {
+          // Same name is not the same as set up: a disabled alert, or one sending elsewhere, is repaired.
+          await notificationsApi.updateRule(tenant, existing.id, { enabled: true, channelIds: [...new Set([...existing.channelIds, channelId])] })
+        }
       }
-      mark(alerts.length === 1 ? "Alert created" : `${alerts.length} alerts created`)
+      mark(alerts.length === 1 ? "Alert ready" : `${alerts.length} alerts ready`)
 
       if ((needs.intune || needs.conditionalAccess) && !data.auditWatch?.externalWatcher) {
         await notificationsApi.updateAuditWatch(tenant, {
@@ -224,8 +258,21 @@ export function SetupWizard({ tenant, data, onClose, onChanged }: { tenant: Tena
       }
 
       if (handOver) {
-        await notificationsApi.updateAuditWatch(tenant, { externalWatcher: true })
-        await notificationsApi.pushWatcherAlerts(tenant, { auto: true, write: true })
+        // Nothing is handed over until the watcher would actually get alerts, and a failed
+        // upload gives change alerts back to this computer instead of standing it down.
+        const exported = await notificationsApi.exportWatcherAlerts(tenant)
+        if (exported.document.alerts.length === 0) throw new Error("No alert sends to a Teams, email or webhook channel, so the Azure watcher would have nothing to run. Change watching stays on this computer.")
+        const wasExternal = Boolean(data.auditWatch?.externalWatcher)
+        if (!wasExternal) await notificationsApi.updateAuditWatch(tenant, { externalWatcher: true })
+        try {
+          await notificationsApi.pushWatcherAlerts(tenant, { auto: true, write: true })
+        } catch (pushError) {
+          if (!wasExternal) {
+            await notificationsApi.pushWatcherAlerts(tenant, { auto: false, write: false }).catch(() => undefined)
+            await notificationsApi.updateAuditWatch(tenant, { externalWatcher: false }).catch(() => undefined)
+          }
+          throw new Error(`The alerts could not be sent to the Azure watcher (${pushError instanceof Error ? pushError.message : String(pushError)}). Change watching stays on this computer.`)
+        }
         mark("Azure watcher takes over while this computer is off")
       }
 
@@ -257,7 +304,7 @@ export function SetupWizard({ tenant, data, onClose, onChanged }: { tenant: Tena
     <Dialog open onOpenChange={(next) => !next && phase !== "running" && onClose()}>
       <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Set up alerts</DialogTitle>
+          <DialogTitle ref={titleRef} tabIndex={-1} className="outline-none">Set up alerts</DialogTitle>
           <DialogDescription>For {tenant.name}. You can change or remove everything this creates later.</DialogDescription>
         </DialogHeader>
         {step < 4 && (
@@ -272,8 +319,9 @@ export function SetupWizard({ tenant, data, onClose, onChanged }: { tenant: Tena
 
         {step === 0 && (
           <div className="space-y-3" role="radiogroup" aria-label="Where alerts go">
+            {destinationLocked && <p className="text-sm text-gray-700" role="note">This destination was already created by the earlier try, so it cannot be changed here. Finish the setup, then change it on the Channels tab.</p>}
             {enabledChannels.length > 0 && (
-              <OptionCard selected={destination === "existing"} onSelect={() => setDestination("existing")} icon={<Bell className="h-4 w-4" aria-hidden="true" />} title="Use a destination you already have" description="Nothing new to create.">
+              <OptionCard name="setup-destination" disabled={destinationLocked} selected={destination === "existing"} onSelect={() => setDestination("existing")} icon={<Bell className="h-4 w-4" aria-hidden="true" />} title="Use a destination you already have" description="Nothing new to create.">
                 <div className="mt-3 space-y-1.5 pl-8">
                   {enabledChannels.map((channel) => (
                     <label key={channel.id} className="flex items-center gap-2 text-sm text-gray-800">
@@ -284,12 +332,12 @@ export function SetupWizard({ tenant, data, onClose, onChanged }: { tenant: Tena
                 </div>
               </OptionCard>
             )}
-            <OptionCard selected={destination === "local"} onSelect={() => setDestination("local")} icon={<Monitor className="h-4 w-4" aria-hidden="true" />} title="This computer" description="A system notification while TenuVault runs. Nothing to configure, a good way to start." />
-            <OptionCard selected={destination === "teams"} onSelect={() => setDestination("teams")} icon={<Bell className="h-4 w-4" aria-hidden="true" />} title="A Teams channel" description="Alerts as cards in a channel your team already reads.">
+            <OptionCard name="setup-destination" disabled={destinationLocked} selected={destination === "local"} onSelect={() => setDestination("local")} icon={<Monitor className="h-4 w-4" aria-hidden="true" />} title="This computer" description="A system notification while TenuVault runs. Nothing to configure, a good way to start." />
+            <OptionCard name="setup-destination" disabled={destinationLocked} selected={destination === "teams"} onSelect={() => setDestination("teams")} icon={<Bell className="h-4 w-4" aria-hidden="true" />} title="A Teams channel" description="Alerts as cards in a channel your team already reads.">
               <div className="mt-3 space-y-2 pl-8">
                 <label className="block text-sm text-gray-800">
                   Workflows URL
-                  <Input className="mt-1" type="url" autoComplete="off" spellCheck={false} placeholder="https://" value={teamsUrl} onChange={(event) => setTeamsUrl(event.target.value)} aria-describedby="teams-url-help" />
+                  <Input className="mt-1" type="url" autoComplete="off" spellCheck={false} disabled={destinationLocked} placeholder="https://" value={teamsUrl} onChange={(event) => setTeamsUrl(event.target.value)} aria-describedby="teams-url-help" />
                 </label>
                 <details id="teams-url-help" className="text-sm text-gray-700">
                   <summary className="cursor-pointer font-medium text-gray-900">How to get this URL (2 minutes, in Teams)</summary>
@@ -302,11 +350,11 @@ export function SetupWizard({ tenant, data, onClose, onChanged }: { tenant: Tena
                 </details>
               </div>
             </OptionCard>
-            <OptionCard selected={destination === "email"} onSelect={() => setDestination("email")} icon={<Mail className="h-4 w-4" aria-hidden="true" />} title="Email" description="Sent through Microsoft Graph as the account you are signed in with.">
+            <OptionCard name="setup-destination" disabled={destinationLocked} selected={destination === "email"} onSelect={() => setDestination("email")} icon={<Mail className="h-4 w-4" aria-hidden="true" />} title="Email" description="Sent through Microsoft Graph as the account you are signed in with.">
               <div className="mt-3 space-y-2 pl-8">
                 <label className="block text-sm text-gray-800">
                   Send to
-                  <Input className="mt-1" type="email" autoComplete="email" spellCheck={false} placeholder="name@contoso.com" value={email} onChange={(event) => setEmail(event.target.value)} />
+                  <Input className="mt-1" type="email" autoComplete="email" spellCheck={false} disabled={destinationLocked} placeholder="name@contoso.com" value={email} onChange={(event) => setEmail(event.target.value)} />
                 </label>
                 {mailPermission?.granted === false && (
                   <p className="flex gap-2 text-sm text-amber-800 dark:text-amber-200" role="status">
@@ -343,8 +391,8 @@ export function SetupWizard({ tenant, data, onClose, onChanged }: { tenant: Tena
 
         {step === 2 && (
           <div className="space-y-3" role="radiogroup" aria-label="While this computer is off">
-            <OptionCard selected={azure === "later"} onSelect={() => setAzure("later")} icon={<Monitor className="h-4 w-4" aria-hidden="true" />} title="Only while TenuVault is running" description="Alerts stop when this computer is off, asleep or signed out. You can add the Azure watcher later without redoing this setup." />
-            <OptionCard selected={azure === "guided"} disabled={localStorage} onSelect={() => setAzure("guided")} icon={<Cloud className="h-4 w-4" aria-hidden="true" />} title="Also from Azure, in your own subscription" description={localStorage ? "Needs backups in your Azure storage account first." : "A small runbook in your Automation account sends the same alerts when this computer is off. Whoever owns Azure runs one prepared command."}>
+            <OptionCard name="setup-azure" selected={azure === "later"} onSelect={() => setAzure("later")} icon={<Monitor className="h-4 w-4" aria-hidden="true" />} title="Only while TenuVault is running" description="Alerts stop when this computer is off, asleep or signed out. You can add the Azure watcher later without redoing this setup." />
+            <OptionCard name="setup-azure" selected={azure === "guided"} disabled={localStorage} onSelect={() => setAzure("guided")} icon={<Cloud className="h-4 w-4" aria-hidden="true" />} title="Also from Azure, in your own subscription" description={localStorage ? "Needs backups in your Azure storage account first." : "A small runbook in your Automation account sends the same alerts when this computer is off. Whoever owns Azure runs one prepared command."}>
               <div className="mt-3 space-y-3 pl-8">
                 <label className="block text-sm text-gray-800">
                   If the watcher itself breaks, email
@@ -362,7 +410,13 @@ export function SetupWizard({ tenant, data, onClose, onChanged }: { tenant: Tena
                       <ExternalLink className="h-4 w-4" aria-hidden="true" />Watcher guide
                     </Button>
                   </div>
-                  <p className="text-xs text-gray-600">The command carries no secret. The watcher sends to the destinations set in its setup; these alerts are pushed to it from here after setup.</p>
+                  <p className="text-xs text-gray-600">The command carries no secret, so its destination parameter is a placeholder in angle brackets: fill in the same {watcherDestination === "teams" ? "Teams Workflows URL" : watcherDestination === "email" ? "sender mailbox (and keep the recipient)" : watcherDestination === "webhook" ? "webhook URL" : "destination"} before running it. Without that destination the watcher runs but delivers nothing. The alerts themselves are pushed to it from here after setup.</p>
+                  {!watcherDestination && (
+                    <p className="flex gap-2 text-sm text-amber-800 dark:text-amber-200" role="status">
+                      <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                      <span>Your destination is this computer, which the Azure watcher cannot send to. The watcher can still be set up in Azure, but alerts will not hand over to it until an alert sends to a Teams, email or webhook channel. Pick one in the first step, or add one later and use Update watcher on the Alerts tab.</span>
+                    </p>
+                  )}
                 </div>
                 <div className="space-y-2">
                   <p className="text-sm text-gray-800">2. Paste the block the setup prints at the end. You can also finish now and paste it later from this setup.</p>
@@ -375,6 +429,12 @@ export function SetupWizard({ tenant, data, onClose, onChanged }: { tenant: Tena
                     </p>
                   )}
                   {watcherSetup && !pasteError && watcherSetup.graphRolesGranted && <p className="text-sm text-green-800 dark:text-green-200" role="status">Watcher found in {watcherSetup.automationAccount} ({watcherSetup.resourceGroup}). Turning alerts on will hand change alerts to it.</p>}
+                  {watcherSetup && !pasteError && watcherSetup.graphRolesGranted && watcherDestination && (
+                    <label className="flex items-start gap-2 text-sm text-gray-800">
+                      <input type="checkbox" className="mt-0.5 size-4 shrink-0 accent-coral-600" checked={watcherDestConfirmed} onChange={(event) => setWatcherDestConfirmed(event.target.checked)} />
+                      <span>The watcher setup was given a {watcherDestination === "email" ? "mail sender and recipients" : watcherDestination === "teams" ? "Teams Workflows URL" : "webhook URL"} to send to, with the placeholder in the command filled in{watcherDestination === "email" ? ", and its one-time mail verification is done or planned (mail stays off until it passes, the rest of the watcher works)" : ""}. Without this tick, alerts stay on this computer.</span>
+                    </label>
+                  )}
                 </div>
               </div>
             </OptionCard>
@@ -393,7 +453,7 @@ export function SetupWizard({ tenant, data, onClose, onChanged }: { tenant: Tena
               <li>Send to <strong>{destinationLabel}</strong>{destination === "existing" ? "" : " (created now, stored only on this computer)"}.</li>
               <li>Create {alerts.length === 1 ? "one alert" : `${alerts.length} alerts`}: {alerts.map((alert) => alert.title).join("; ")}. Alerts with these names that already exist are kept, not duplicated.</li>
               {(needs.intune || needs.conditionalAccess) && (
-                <li>Turn on {[needs.intune ? "Intune" : null, needs.conditionalAccess ? "Conditional Access" : null].filter(Boolean).join(" and ")} change watching, checked every {data.auditWatch?.intervalMinutes ?? 15} minutes while TenuVault runs. Changes made through TenuVault itself stay ignored. Who made a change is not included.</li>
+                <li>Turn on {[needs.intune ? "Intune" : null, needs.conditionalAccess ? "Conditional Access" : null].filter(Boolean).join(" and ")} change watching, checked every {data.auditWatch?.intervalMinutes ?? 15} minutes while TenuVault runs. {(data.auditWatch?.ignoreOwnChanges ?? true) ? "Changes made through TenuVault itself stay ignored." : "Changes made through TenuVault itself are included, as currently set."} {(data.auditWatch?.includeActor ?? false) ? "Who made each change is included, as currently set." : "Who made a change is not included."}</li>
               )}
               {handOver && <li>Hand change alerts to the Azure watcher in {watcherSetup!.automationAccount}, and keep it updated whenever an alert or channel changes.</li>}
               {azure === "guided" && !handOver && <li>Keep watching from this computer for now. The Azure hand-over happens when you paste a finished watcher setup in the step before.</li>}
