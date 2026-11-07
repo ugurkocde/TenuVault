@@ -135,6 +135,7 @@ describe("change reports route", () => {
     expect(filters[1]).toContain("activityDateTime gt 2026-11-05T12:00:00.000Z and activityDateTime le 2026-11-06T02:00:00.000Z")
     expect(audit).toMatchObject({ note: "Entra keeps Conditional Access audit events only since 2026-11-05, so earlier Conditional Access changes have no actors." })
     expect(retentionStart("Minimum allowed time for activityDateTime is 10/6/2026 12:00:00 AM")).toBe("2026-10-06T00:00:00.000Z")
+    expect(retentionStart("Minimum allowed time for activityDateTime is 10/6/2026 12:00:00\u202FAM")).toBe("2026-10-06T00:00:00.000Z")
     expect(retentionStart("Something else")).toBeNull()
   })
 

@@ -251,12 +251,13 @@ export function publicAuditNote(note: string | null | undefined): string | null 
   if (!note) return null
   const text = note.replace(/\s+/g, " ").trim()
   if (!text) return null
-  const raw = text.length > 280 || /https?:\/\/|Operation ID|"_version"|[{[]/.test(text)
+  const payload = /[{[]|Operation ID|"_version"|\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i.test(text)
+  const raw = payload || text.length > 280 || /https?:\/\//.test(text)
   if (!raw) return text
   if (/\b429\b|throttl/i.test(text)) return "Microsoft Graph throttled the audit log request (429). Generate the report again in a few minutes."
   const status = /\breturned (\d{3})\b/.exec(text)?.[1]
+  if (payload) return status ? `Microsoft Graph returned ${status}.` : "The audit log could not be read."
   const cleaned = text.replace(/https?:\/\/\S+/g, "").replace(/\s+/g, " ").trim()
-  if (/^[{[]/.test(cleaned) || /Operation ID|"_version"/.test(cleaned)) return status ? `Microsoft Graph returned ${status}.` : "The audit log could not be read."
   return cleaned.length > 240 ? `${cleaned.slice(0, 237).trimEnd()}...` : cleaned
 }
 
@@ -368,7 +369,7 @@ export function activityLine(event: ReportActivity): string {
   return `${verb}${event.who ? ` by ${event.who}` : ""}, ${reportTime(event.at)} (${event.source}: ${event.activity})`
 }
 
-/** The report as JSON, as stored. */
+/** The report as JSON, with the audit note cleaned like every other export. */
 export function changeReportJson(report: ChangeReport): string {
-  return JSON.stringify(report, null, 2)
+  return JSON.stringify({ ...report, audit: { ...report.audit, note: publicAuditNote(report.audit.note) } }, null, 2)
 }

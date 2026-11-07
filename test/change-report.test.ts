@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { buildChangeReport, changeReportMarkdown, describeAssignment, describeValue, publicAuditNote, reportFileName, reportTitle, summaryLine, type ReportAudit } from "../src/shared/reports/change-report"
+import { buildChangeReport, changeReportJson, changeReportMarkdown, describeAssignment, describeValue, publicAuditNote, reportFileName, reportTitle, summaryLine, type ReportAudit } from "../src/shared/reports/change-report"
 import { buildChangeReportDocument } from "../src/shared/reports/change-report-html"
 import { documentItem, redactedChanges } from "../src/portal/app/api/detect-drifts/route"
 import { mapAuditEvent } from "../src/shared/notifications/audit"
@@ -96,6 +96,18 @@ describe("change report model", () => {
     expect(buildChangeReportDocument({ ...report, audit: { ...report.audit, note: raw } }).html).not.toContain("proxy.")
     expect(publicAuditNote("Your account needs an Intune role that can read audit logs.")).toBe("Your account needs an Intune role that can read audit logs.")
     expect(publicAuditNote(null)).toBeNull()
+  })
+
+  it("cleans short prefixed raw errors and the JSON export of a stored report", () => {
+    expect(publicAuditNote(`The Intune audit log could not be read: Microsoft Graph returned 500: {"error":"bad","tenantId":"98cf933b-ffff-9653-1071-110617354693"}`)).toBe("Microsoft Graph returned 500.")
+    expect(publicAuditNote("Could not read the log for tenant 98cf933b-ffff-9653-1071-110617354693 today.")).toBe("The audit log could not be read.")
+    const legacy = buildChangeReport(result(drifts), { changes: [] }, options)
+    const stored = { ...legacy, audit: { status: "unavailable" as const, actors: true, note: `The Intune audit log could not be read: Microsoft Graph returned 503: {"error":"x","tenantId":"98cf933b-ffff-9653-1071-110617354693","url":"https://proxy.example.invalid/auditEvents?$filter=activityDateTime"}` } }
+    for (const exported of [changeReportJson(stored), changeReportMarkdown(stored), buildChangeReportDocument(stored).html]) {
+      expect(exported).not.toContain("98cf933b")
+      expect(exported).not.toContain("proxy.example.invalid")
+      expect(exported).toContain("Microsoft Graph returned 503.")
+    }
   })
 
   it("names the report after the tenant and the backup days", () => {

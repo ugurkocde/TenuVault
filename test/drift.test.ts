@@ -66,6 +66,12 @@ describe('Drift comparison', () => {
     expect(compareObjects({ rules: [{ grace: 0 }, { grace: 24 }] }, { rules: [{ grace: 24 }, { grace: 0 }] })).toEqual([])
   })
 
+  it('ignores an unkeyed item that only changed a field the comparison skips, when another item was added', () => {
+    const before = { assignments: [{ id: 'a', target: { '@odata.type': '#microsoft.graph.groupAssignmentTarget', groupId: 'g' } }] }
+    const after = { assignments: [{ id: 'b', target: { '@odata.type': '#microsoft.graph.groupAssignmentTarget', groupId: 'g' } }, { id: 'c', target: { '@odata.type': '#microsoft.graph.groupAssignmentTarget', groupId: 'h' } }] }
+    expect(compareObjects(before, after)).toEqual([{ field: 'assignments[1]', oldValue: undefined, newValue: after.assignments[1] }])
+  })
+
   it('reports appended items and changed values in unkeyed arrays', () => {
     expect(compareObjects({ roleScopeTagIds: ['0'] }, { roleScopeTagIds: ['0', '12'] })).toEqual([{ field: 'roleScopeTagIds["12"]', oldValue: undefined, newValue: '12' }])
     expect(compareObjects({ rules: [{ grace: 0 }] }, { rules: [{ grace: 0 }, { grace: 24 }] })).toEqual([{ field: 'rules[1]', oldValue: undefined, newValue: { grace: 24 } }])

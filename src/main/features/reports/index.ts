@@ -343,7 +343,10 @@ function incompleteNote(source: string, reason: "events" | "pages"): string {
 
 /** The oldest start Entra accepts, from its "Minimum allowed time for activityDateTime is ..." refusal, as an ISO time. */
 export function retentionStart(error: string): string | null {
-  const match = /Minimum allowed time for activityDateTime is ([0-9/]+ [0-9:]+ [AP]M)/.exec(error)
+  // Entra writes the time with a narrow no-break space before AM/PM; Date.parse does not accept it.
+  // oxlint-disable-next-line no-control-regex
+  const plain = error.replace(/[\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]/g, " ")
+  const match = /Minimum allowed time for activityDateTime is ([0-9/]+ [0-9:]+ [AP]M)/.exec(plain)
   if (!match) return null
   const parsed = Date.parse(`${match[1]} UTC`)
   return Number.isNaN(parsed) ? null : new Date(parsed).toISOString()
