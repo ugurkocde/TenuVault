@@ -229,7 +229,7 @@ Select **Share feedback** in the sidebar, just above **Support**, to tell us wha
 
 Nothing is sent before you select **Send feedback**. Your answers stay in the dialog while TenuVault runs, so you can close it and come back. If sending fails, for example because you are offline or your network blocks `www.tenuvault.com`, the dialog keeps your draft and shows why. Try again later, or select **Copy as email**. It copies the full text (subject, both answers, the same details and the message ID, without the screenshot) to the clipboard and opens a new email to support. The email draft may be shortened to fit what mail apps accept, so if anything is cut off, paste the copied text instead. If no mail app opens, paste the text into an email to support@tenuvault.com.
 
-Feedback is kept for up to 12 months. See [Network connections and data flows](/security/data-flows/#feedback) for exactly what is sent. For a problem that is blocking your work, use **Support** instead.
+Feedback and its screenshot are stored up to 12 months; the email copy to support is kept as support correspondence. See [Network connections and data flows](/security/data-flows/#feedback) for exactly what is sent. For a problem that is blocking your work, use **Support** instead.
 
 ## Still stuck?
 
