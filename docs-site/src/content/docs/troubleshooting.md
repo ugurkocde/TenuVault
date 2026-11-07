@@ -217,6 +217,20 @@ Messages from the OpenIntuneBaseline section and framework comparisons are cover
 * [OpenIntuneBaseline](/baselines/quick-start/#troubleshooting)
 * [Framework coverage](/baselines/frameworks/#troubleshooting-comparisons)
 
+## Share feedback
+
+Select **Share feedback** in the sidebar, just above **Support**, to tell us what you were trying to do and what got in your way. It is available on every plan, including Community and without a license.
+
+1. Open the screen where you got stuck, then select **Share feedback**.
+2. Answer **What were you trying to do?** and **What got in your way, and what would help?** Both are required, up to 500 characters each.
+3. Optionally tick **Attach a screenshot of this window**. The screenshot is taken when you open the dialog, so the dialog itself is not in it. It may show tenant, policy or user names, so it is never attached unless you tick it.
+4. Optionally enter a **Reply-to email** if you would like an answer.
+5. Check **Sent with your feedback**, which lists everything that goes with your answers: the TenuVault version, your operating system and its version, your plan, the section you were on, a random message ID so a retry is not counted twice and, when ticked, the screenshot. Then select **Send feedback**.
+
+Nothing is sent before you select **Send feedback**. Your answers stay in the dialog while TenuVault runs, so you can close it and come back. If sending fails, for example because you are offline or your network blocks `www.tenuvault.com`, the dialog keeps your draft and shows why. Try again later, or select **Copy as email**. It copies the full text (subject, both answers, the same details and the message ID, without the screenshot) to the clipboard and opens a new email to support. The email draft may be shortened to fit what mail apps accept, so if anything is cut off, paste the copied text instead. If no mail app opens, paste the text into an email to support@tenuvault.com.
+
+Feedback and its screenshot are stored up to 12 months; the email copy to support is kept as support correspondence. See [Network connections and data flows](/security/data-flows/#feedback) for exactly what is sent. For a problem that is blocking your work, use **Support** instead.
+
 ## Still stuck?
 
-Check **Settings** > **About** for your TenuVault version and sign-in method, then contact support through **Website and support** on the same page.
+Check **Settings** > **About** for your TenuVault version and sign-in method, then contact support through **Website and support** on the same page, or tell us what got in your way with [Share feedback](#share-feedback).

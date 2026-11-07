@@ -3,7 +3,7 @@ title: "Network connections and data flows"
 description: Every outbound connection TenuVault makes, what it sends, and what happens if you block it.
 ---
 
-TenuVault connects to three groups of services: Microsoft (for your tenant and storage), tenuvault.com (for license checks and, on Pro and MSP, CIS Benchmarks content) and GitHub (for updates and baseline content), plus any notification webhook you configure yourself. This page lists every destination and exactly what is sent to it, so you can review the data flows and configure your firewall or proxy.
+TenuVault connects to three groups of services: Microsoft (for your tenant and storage), tenuvault.com (for license checks, feedback you choose to send and, on Pro and MSP, CIS Benchmarks content) and GitHub (for updates and baseline content), plus any notification webhook you configure yourself. This page lists every destination and exactly what is sent to it, so you can review the data flows and configure your firewall or proxy.
 
 All connections use HTTPS on TCP port 443. TenuVault opens no inbound ports. During browser sign-in, Microsoft redirects your browser to `http://localhost` on your own machine, where TenuVault receives the sign-in result.
 
@@ -16,11 +16,12 @@ All connections use HTTPS on TCP port 443. TenuVault opens no inbound ports. Dur
 | `management.azure.com` | List subscriptions and storage accounts for the storage picker | No |
 | `<your account>.blob.core.windows.net` | Your own Azure storage account, when you store backups there | Yes, encrypted backups in your account |
 | `www.tenuvault.com` | License checks and, on Pro and MSP, CIS Benchmarks content | No configuration or backups. Tenant ID, installation ID and license details only |
+| `www.tenuvault.com/api/desktop-feedback` | Feedback, only when you click **Send feedback** | Your answers, an optional reply-to email, app version, operating system, plan and page name. A screenshot of the window only if you tick it, which may show tenant, policy or user names |
 | `github.com`, `release-assets.githubusercontent.com`, `objects.githubusercontent.com` | App updates | No |
 | `api.github.com`, `raw.githubusercontent.com` | OpenIntuneBaseline content for the OpenIntuneBaseline section and My baselines | No |
 | A webhook URL you configure (optional) | Health review notifications | Counts, severities, finding keys and timestamps only |
 
-TenuVault contains no telemetry, analytics or crash reporting, and sends nothing else.
+TenuVault contains no telemetry, analytics or crash reporting. Apart from the destinations above, it sends nothing. Feedback goes to tenuvault.com only when you click **Send feedback**.
 
 ## Microsoft
 
@@ -105,7 +106,17 @@ As with any web request, the service also sees your public IP address. It uses i
 
 ### What is never sent
 
-Tenant configuration, backups, policy names, device or user information, access tokens, refresh tokens and your backup recovery key are never sent to tenuvault.com.
+Tenant configuration, backups, policy names, device or user records from your tenant, access tokens, refresh tokens and your backup recovery key are never sent to tenuvault.com, with one opt-in exception: feedback you choose to send, that is the text you write and, only if you tick it, a screenshot that may show tenant, policy or user names (see [Feedback](#feedback) below). This is separate from your own sign-in: license requests can carry a Microsoft ID token with your own name and user principal name, as described above, which the licensing service verifies and does not store.
+
+### Feedback
+
+**Share feedback** in the sidebar sends your feedback to `https://www.tenuvault.com/api/desktop-feedback`. Nothing is sent until you click **Send feedback**, and the dialog lists everything that goes with your answers before you send.
+
+* **Sent:** your answers to the two questions, the reply-to email if you enter one, the TenuVault version, the operating system and its version, your plan (Community, Pro, MSP or none) and the name of the section you were on, such as Drift Detection. A random message ID, so a retry of the same draft is not counted twice.
+* **Only if you tick it:** a screenshot of the TenuVault window, taken when you open **Share feedback**. It may show tenant, policy or user names. It is unticked every time the dialog opens, and the app discards it when you close the dialog or the feedback is sent.
+* **Never added automatically:** your installation ID, tenant IDs or names, license keys, tokens, and routes or links that contain IDs. The only exceptions are what you type into the answers and, if you tick it, the screenshot, which can show any of these.
+* **Kept:** stored up to 12 months, with the screenshot, to read and answer feedback; the email copy to support, with the screenshot attached, is kept as support correspondence. A keyed hash of your IP address is stored with the feedback to limit how often feedback can be sent, and is deleted after 24 hours.
+* **If blocked:** sending fails and your draft stays in the dialog. **Copy as email** copies your answers and the same details, without the screenshot, to the clipboard and opens a new email to support. Allow `https://www.tenuvault.com/api/desktop-feedback` if your proxy filters by path.
 
 ### If tenuvault.com is blocked
 

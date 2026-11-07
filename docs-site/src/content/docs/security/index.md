@@ -15,8 +15,8 @@ TenuVault is built so that your Intune configuration, your backups and your Micr
 | Who does TenuVault act as? | You, the signed-in admin. It can never do more than your own roles allow. Only scheduled backups of a tenant with a Backup Reader read as that read-only app. |
 | Do MFA and Conditional Access apply? | Yes, exactly as they do when you sign in to the Intune admin center. The Backup Reader is an application, so Conditional Access for workload identities applies to it instead. See [Conditional Access and TenuVault](/security/conditional-access/). |
 | Where do backups go? | Encrypted on your device, or encrypted into your own Azure storage account. |
-| Does tenant data reach TenuVault servers? | No. Only license checks go to tenuvault.com, and they carry no tenant configuration, backups or access tokens. |
-| Is TenuVault data shared with anyone? | TenuVault receives no tenant data, so there is none to share. |
+| Does tenant data reach TenuVault servers? | No, with one opt-in exception: feedback you choose to send with **Share feedback**. It contains the text you write and, only if you tick it, a screenshot of the window that may show tenant, policy or user names. Otherwise only license checks go to tenuvault.com, and they carry no tenant configuration, backups or access tokens. |
+| Is TenuVault data shared with anyone? | Only with the service providers that run TenuVault's services, and never sold or shared for their own marketing. Each license activation (installation ID, tenant ID, operating system and app version) is recorded with your license key in Polar, the merchant of record. Licenses shared with a tenant are stored with the tenant ID and client ID in TenuVault's database at Supabase, and Vercel hosts the services and keeps request logs. Feedback you choose to send is stored up to 12 months; the email copy to support is kept as support correspondence. See [Service providers](https://www.tenuvault.com/privacy#processors) in the privacy policy. |
 | Can I check this myself? | Yes. The source code is public at [github.com/ugurkocde/TenuVault](https://github.com/ugurkocde/TenuVault). |
 
 ## How TenuVault connects to your tenant
@@ -50,7 +50,7 @@ Backups are encrypted with AES-256-GCM before they are written to disk or upload
 
 ## What TenuVault the company can see
 
-TenuVault talks to its own server, tenuvault.com, for one purpose only: checking your license. The table below lists everything a license check can include. [Network connections and data flows](/security/data-flows/) lists every request in detail.
+TenuVault talks to its own server, tenuvault.com, to check your license and, only when you send it, to receive your feedback. The table below lists everything a license check and a feedback message can include. [Network connections and data flows](/security/data-flows/) lists every request in detail.
 
 | TenuVault can see | When |
 | --- | --- |
@@ -61,18 +61,21 @@ TenuVault talks to its own server, tenuvault.com, for one purpose only: checking
 | Your operating system (Windows or macOS) and the TenuVault version | When a tenant is activated, and with organization license checks. |
 | A Microsoft ID token for your sign-in | When a license is shared with your tenant, or when you use a license your organization shared. The token contains identity claims such as your name and user principal name. The licensing service verifies it with Microsoft's public signing keys to confirm which tenant and app registration you signed in to, and does not store it. |
 | Your public IP address | As with any web request. The licensing service uses it only to rate limit requests. |
+| Feedback you send | Only when you click **Send feedback** in **Share feedback**: your answers, the reply-to email if you enter one, app version, operating system, plan, page name and a random message ID. A screenshot of the window only if you tick it; it may show tenant, policy or user names. Stored up to 12 months; the email copy to support is kept as support correspondence. A keyed hash of your IP address is kept 24 hours for rate limiting. See [Feedback](/security/data-flows/#feedback). |
 
 If you buy a plan, the purchase itself is handled by Polar, the payment provider, which holds your billing details. Your license key and its activations are managed there.
 
+Apart from what you write in feedback and a feedback screenshot you choose to attach, TenuVault never sees:
+
 | TenuVault never sees | |
 | --- | --- |
-| Your Intune configuration | Policies, profiles, apps, scripts and assignments are read and written between your machine and Microsoft Graph only. |
+| Your Intune configuration | Policies, profiles, apps, scripts and assignments are read and written between your machine and Microsoft Graph only. A feedback screenshot you tick may show policy names on screen. |
 | Your backups | Stored on your device or in your Azure storage account, never uploaded to TenuVault. |
 | Access tokens and refresh tokens | They stay in the encrypted token cache on your machine. |
 | Your backup recovery key | It is created on your machine and only leaves it when you save it to a file yourself. |
 | Your storage account contents | TenuVault has no access to your Azure subscription. |
 
-TenuVault contains no telemetry, analytics or crash reporting.
+TenuVault contains no telemetry, analytics or crash reporting. Feedback you choose to send is the only other thing it sends to TenuVault.
 
 ## Control and revoke access
 
