@@ -145,7 +145,7 @@ export interface WatcherAlertsSync {
  * One in-app watcher deployment or hand-over. The plan and step state are kept so a setup
  * interrupted by a restart, a sign-in or a Global Administrator boundary resumes where it
  * stopped. No secret is ever stored here: a copied destination is read from its channel
- * record at the moment of the ARM call, and only the channel id and its update time remain.
+ * record at the moment of the ARM call, and only its id and a non-secret fingerprint remain.
  */
 export interface WatcherDeployRecord {
   title: string
@@ -170,7 +170,7 @@ export interface WatcherDeployRecord {
   deploymentState: string | null
   deploymentSubmittedAt: string | null
   cancelRequestedAt: string | null
-  copiedChannels: Array<{ channelId: string; kind: "teams" | "webhook"; updatedAt: string }>
+  copiedChannels: Array<{ channelId: string; kind: "teams" | "webhook"; fingerprint?: string; updatedAt?: string }>
   principalId: string | null
   alertsHash: string | null
   alertsWrittenAt: string | null

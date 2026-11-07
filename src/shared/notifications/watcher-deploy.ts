@@ -5,7 +5,7 @@
  * shared, so the wizard, the main-process engine and the tests judge a watcher the same way.
  * A plan never carries a secret: destination values stay in the channel records in main.
  */
-import type { WatcherDestination } from "./alerts"
+import { WATCHER_STALE_HOURS, type WatcherDestination } from "./alerts"
 import { canonicalJson, sha256Hex } from "./envelope"
 
 export type WatcherDeployMode = "adopt" | "create"
@@ -253,6 +253,10 @@ export function watcherGrantSnippet(principalId: string, tenantId: string, roles
 
 export interface WatcherHandoverEvidence {
   accountExists: boolean
+  /** The selected account's identity; a heartbeat from any other identity is not its proof. */
+  principalId?: string | null
+  /** When this evidence was read, so a clean heartbeat cannot stay proof forever. */
+  checkedAt?: string | null
   identityTenantMatches: boolean | null
   runbookPublished: boolean | null
   runbookVersion: string | null
@@ -264,9 +268,10 @@ export interface WatcherHandoverEvidence {
   alertsHash: string | null
   alertsWrittenAt: string | null
   /** Set when this setup started a job: only that job, completed, can supply the proof. */
+  jobId?: string | null
   jobStatus?: string | null
   jobSubmittedAt?: string | null
-  heartbeat: { runAt: string | null; lastError: string | null; alertsHash: string | null } | null
+  heartbeat: { runAt: string | null; lastError: string | null; alertsHash: string | null; identityPrincipalId?: string | null; jobId?: string | null } | null
 }
 
 function versionAtLeast(version: string, minimum: string): boolean {
@@ -280,8 +285,9 @@ function versionAtLeast(version: string, minimum: string): boolean {
 
 /**
  * Everything that must be true before this computer stands down for the watcher. The
- * heartbeat is the functional proof: a run after the alerts were written, running exactly
- * those alerts, with no error, means Graph reads and storage writes work. What a heartbeat
+ * heartbeat is the functional proof: a current run by the selected identity after the
+ * alerts were written, running exactly those alerts, with no error, means Graph reads
+ * and storage writes work. What a heartbeat
  * cannot say (which destinations exist) stays with the destination evidence the caller
  * gathered: a copied destination on create, or the admin's confirmation on adopt.
  */
@@ -290,17 +296,25 @@ export function handoverGate(evidence: WatcherHandoverEvidence): { ok: boolean; 
   if (!evidence.accountExists) missing.push("account")
   if (evidence.identityTenantMatches !== true) missing.push("identity-tenant")
   if (evidence.runbookPublished !== true) missing.push("runbook")
-  if (!evidence.runbookVersion || !versionAtLeast(evidence.runbookVersion, "1.2.0")) missing.push("runbook-version")
+  if (!evidence.runbookVersion || !versionAtLeast(evidence.runbookVersion, "1.3.0")) missing.push("runbook-version")
   if (evidence.scheduleLinked !== true) missing.push("schedule")
   if (!evidence.failureAlertOk) missing.push("failure-alert")
   if (!evidence.destinationOk) missing.push("destination")
   if (evidence.needsConditionalAccess && evidence.watchConditionalAccess !== true) missing.push("conditional-access")
-  if (evidence.jobSubmittedAt) {
-    if (evidence.jobStatus !== "Completed") missing.push("test-job")
-    if (!evidence.heartbeat?.runAt || Date.parse(evidence.heartbeat.runAt) < Date.parse(evidence.jobSubmittedAt)) missing.push("test-job-run")
-  }
   const heartbeat = evidence.heartbeat
-  if (!heartbeat?.runAt || !evidence.alertsWrittenAt || Date.parse(heartbeat.runAt) < Date.parse(evidence.alertsWrittenAt)) missing.push("heartbeat-fresh")
+  const runAt = heartbeat?.runAt ? Date.parse(heartbeat.runAt) : Number.NaN
+  const writtenAt = evidence.alertsWrittenAt ? Date.parse(evidence.alertsWrittenAt) : Number.NaN
+  if (evidence.jobSubmittedAt) {
+    const submittedAt = Date.parse(evidence.jobSubmittedAt)
+    if (evidence.jobStatus !== "Completed") missing.push("test-job")
+    if (!Number.isFinite(runAt) || !Number.isFinite(submittedAt) || runAt < submittedAt || (evidence.jobId && heartbeat?.jobId?.toLowerCase() !== evidence.jobId.toLowerCase())) missing.push("test-job-run")
+  }
+  if (!Number.isFinite(runAt) || !Number.isFinite(writtenAt) || runAt < writtenAt) missing.push("heartbeat-fresh")
+  if (evidence.principalId && heartbeat?.identityPrincipalId?.toLowerCase() !== evidence.principalId.toLowerCase()) missing.push("heartbeat-identity")
+  if (evidence.checkedAt && Number.isFinite(runAt)) {
+    const checkedAt = Date.parse(evidence.checkedAt)
+    if (!Number.isFinite(checkedAt) || runAt > checkedAt + 5 * 60_000 || checkedAt - runAt > WATCHER_STALE_HOURS * 3_600_000) missing.push("heartbeat-stale")
+  }
   if (!evidence.alertsHash || !heartbeat || heartbeat.alertsHash !== evidence.alertsHash) missing.push("heartbeat-alerts")
   if (!heartbeat || heartbeat.lastError) missing.push("heartbeat-error")
   return { ok: missing.length === 0, missing }

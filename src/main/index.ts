@@ -439,7 +439,7 @@ async function bootstrap(): Promise<void> {
       if (Notification.isSupported()) new Notification({ title, body }).show()
     },
     // The watcher writes heartbeat.json next to its state in the backup storage account. Only
-    // runAt, lastError and which alerts it runs are kept; the rest of the file is not read.
+    // its run time, error, alerts and run attribution are kept; the rest is not read.
     watcherHeartbeat: async (tenantId) => {
       const profile = tenantProfile(tenantId)
       if (!profile || isLocalAccount(profile.storageAccountName)) return { status: "missing" }
@@ -467,7 +467,10 @@ async function bootstrap(): Promise<void> {
       const alertsHash = typeof body.alertsHash === "string" ? body.alertsHash.slice(0, 80) : null
       const runbookVersion = typeof body.runbookVersion === "string" ? body.runbookVersion.slice(0, 20) : null
       const alertsSource = typeof body.alertsSource === "string" ? body.alertsSource.slice(0, 20) : null
-      return { status: "ok", runAt: body.runAt, lastError, alertsHash, runbookVersion, alertsSource }
+      const guidOf = (value: unknown) => typeof value === "string" && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value) ? value.toLowerCase() : null
+      const identityPrincipalId = guidOf(body.identityPrincipalId)
+      const jobId = guidOf(body.jobId)
+      return { status: "ok", runAt: body.runAt, lastError, alertsHash, runbookVersion, alertsSource, identityPrincipalId, jobId }
     },
     // The alerts the watcher reads on its next run, written next to its state (Alerts > Update watcher).
     watcherAlertsWrite: async (tenantId, text) => {

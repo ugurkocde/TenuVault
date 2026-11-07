@@ -5,6 +5,7 @@ import type { Stored } from "../../records"
 import { armErrorMessage } from "../../../azure/arm"
 import { allows } from "../../../../shared/plans"
 import { isDefaultLayout } from "../../../../shared/notifications/layout"
+import { canonicalJson, sha256Hex } from "../../../../shared/notifications/envelope"
 import { watcherAlertsHash } from "../../../../shared/notifications/alerts"
 import {
   graphRolesFor,
@@ -42,6 +43,7 @@ export class WatcherDeployError extends Error {
 const RUNBOOK = "Invoke-TenuVaultNotificationCheck"
 const ACTIVE_STATES = new Set(["running", "blocked", "interrupted"])
 const TERMINAL_STATES = new Set(["complete", "cancelled"])
+const FINISHED_JOB_STATES = new Set(["Completed", "Failed", "Stopped", "Suspended", "Cancelled"])
 const enc = encodeURIComponent
 
 type Record_ = Record<string, unknown>
@@ -140,36 +142,44 @@ export function kickWatcherDeploy(deps: FeatureDeps, tenantId: string, actor: st
   const controller = new AbortController()
   const promise = (async () => {
     const started = Date.now()
+    let lastState: WatcherDeployView["state"] | null = null
     try {
       while (!controller.signal.aborted && Date.now() - started < 45 * 60_000) {
         const view = await advanceWatcherDeploy(deps, tenantId, actor)
+        lastState = view?.state ?? null
         if (!view || view.state !== "running") break
         await new Promise<void>((resolve) => {
           const timer = setTimeout(resolve, 2000)
           controller.signal.addEventListener("abort", () => { clearTimeout(timer); resolve() }, { once: true })
         })
       }
-      // The runner has a lifetime, the setup does not: persist a resumable state instead
-      // of leaving "running" with nobody driving it.
-      if (!controller.signal.aborted) {
+      // The runner has a lifetime, the setup does not: at the lifetime bound, persist a
+      // resumable state instead of leaving "running" with nobody driving it. An exit for
+      // any other reason must not overwrite a setup an admin has just resumed.
+      const timedOut = Date.now() - started >= 45 * 60_000
+      if (!controller.signal.aborted && timedOut) {
         const current = watcherDeployOf(deps, tenantId)
         if (current?.state === "running" && !current.cancelRequestedAt) {
           if (current.phase === "verify") {
-            saveDeploy(deps, tenantId.toLowerCase(), current, {
+            lastState = saveDeploy(deps, tenantId.toLowerCase(), current, {
               state: "blocked",
               blockedReason: "waiting-heartbeat",
               error: "No clean watcher run of these alerts has been seen yet. It will be checked again while TenuVault runs.",
               pendingHandover: true,
               nextAttemptAt: new Date(deps.now().getTime() + 30 * 60_000).toISOString(),
               steps: stepsWith(current, "verify", "blocked", null, "Waiting for a clean watcher run"),
-            }, actor, "Watcher setup waiting for a scheduled run")
+            }, actor, "Watcher setup waiting for a scheduled run").state
           } else {
-            saveDeploy(deps, tenantId.toLowerCase(), current, { state: "interrupted", error: "The setup has been running for 45 minutes and paused here. Continue it to check Azure again." }, actor, "Azure watcher setup paused")
+            lastState = saveDeploy(deps, tenantId.toLowerCase(), current, { state: "interrupted", error: "The setup has been running for 45 minutes and paused here. Continue it to check Azure again." }, actor, "Azure watcher setup paused").state
           }
         }
       }
     } finally {
       if (map.get(key)?.controller === controller) map.delete(key)
+      const current = watcherDeployOf(deps, tenantId)
+      if (!controller.signal.aborted && lastState !== "running" && current?.state === "running" && !current.cancelRequestedAt) {
+        kickWatcherDeploy(deps, tenantId, actor)
+      }
     }
   })()
   map.set(key, { controller, promise })
@@ -194,6 +204,7 @@ export async function startWatcherDeploy(
     .filter((record) => ACTIVE_STATES.has(record.state))
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]
   if (active) {
+    refuseCancelPending(active)
     if (active.planHash !== preflight.planHash) {
       throw new WatcherDeployError("Another Azure watcher setup is still open for this tenant. Finish or cancel it first.", 409)
     }
@@ -287,6 +298,12 @@ function ageMs(deps: FeatureDeps, at: string | null): number {
   return Number.isNaN(parsed) ? 0 : Math.max(0, deps.now().getTime() - parsed)
 }
 
+function refuseCancelPending(record: WatcherDeployRecord): void {
+  if (!TERMINAL_STATES.has(record.state) && record.cancelRequestedAt) {
+    throw new WatcherDeployError("This Azure watcher setup is being cancelled. Wait for it to stop before starting or continuing it.", 409)
+  }
+}
+
 function prepareResumePatch(record: WatcherDeployRecord): Partial<WatcherDeployRecord> {
   const patch: Partial<WatcherDeployRecord> = { state: "running", blockedReason: null, error: null, nextAttemptAt: null, cancelRequestedAt: null }
   if (record.blockedReason === "roles-not-effective" || record.blockedReason === "test-failed") {
@@ -306,7 +323,7 @@ function prepareResumePatch(record: WatcherDeployRecord): Partial<WatcherDeployR
     patch.deploymentState = null
     patch.deploymentSubmittedAt = null
     patch.copiedChannels = []
-  } else if (record.state === "failed" && record.phase === "deploy") {
+  } else if (record.state === "failed" && record.phase === "deploy" && !record.deploymentName) {
     patch.phase = "discover"
   } else if (record.phase === "test-run" && record.jobStatus === "SubmitFailed") {
     patch.automationJobId = null
@@ -346,13 +363,21 @@ async function advanceDiscover(deps: FeatureDeps, tenant: string, record: Stored
     return block(deps, tenant, withFindings, actor, "plan-changed", "The alerts or Azure target changed since this setup was confirmed. Review the check and start again.")
   }
   const blocker = preflight.findings.find((finding) => finding.severity === "block")
+  const createdNeedsAlerts = preflight.existing.found && withFindings.mode === "create" && Boolean(withFindings.deploymentName) && !withFindings.alertsHash
+  const alertsCanPrecedeBlockers = preflight.findings
+    .filter((finding) => finding.severity === "block")
+    .every((finding) => ["failure-alert-missing", "schedule-missing", "runbook-missing", "conditional-access-off"].includes(finding.code))
+  if (createdNeedsAlerts && alertsCanPrecedeBlockers) {
+    const steps = stepsWith(withFindings, "discover", "done", `${preflight.existing.automationAccountName} in ${preflight.existing.resourceGroupName}`)
+    return progress(deps, tenant, withFindings, actor, { phase: "alerts", steps }, "Partly created watcher gets its alerts first")
+  }
   if (blocker) return block(deps, tenant, withFindings, actor, blocker.code, blocker.message)
   if (preflight.existing.found) {
     let steps = stepsWith(withFindings, "discover", "done", `${preflight.existing.automationAccountName} in ${preflight.existing.resourceGroupName}`)
     if (!withFindings.deploymentName) steps = stepsWith({ ...withFindings, steps }, "deploy", "skipped", "Already in Azure")
-    // A watcher this setup just created gets its alerts before the Graph role boundary:
-    // with no alerts file it would send every event to every destination on schedule.
-    const justCreated = withFindings.mode === "create" && withFindings.deploymentState === "Succeeded" && !withFindings.alertsHash
+    // A watcher this setup created, fully or partly, gets its alerts before the Graph
+    // role boundary: with no alerts file it would send every event to every destination.
+    const justCreated = createdNeedsAlerts
     return progress(deps, tenant, withFindings, actor, {
       mode: withFindings.deploymentName ? withFindings.mode : "adopt",
       phase: justCreated ? "alerts" : "graph-roles",
@@ -364,6 +389,16 @@ async function advanceDiscover(deps: FeatureDeps, tenant: string, record: Stored
     phase: "deploy",
     steps: stepsWith(withFindings, "discover", "done", "No watcher yet"),
   }, "No watcher yet")
+}
+
+function channelFingerprint(channel: ReturnType<typeof channelsOf>[number]): string {
+  return sha256Hex(canonicalJson({
+    kind: channel.kind,
+    url: channel.url,
+    headerName: channel.headerName,
+    headerValue: channel.headerValue,
+    signRequests: channel.signRequests,
+  }))
 }
 
 function usedChannels(deps: FeatureDeps, tenant: string, kind: "teams" | "webhook") {
@@ -452,7 +487,7 @@ async function advanceDeploy(deps: FeatureDeps, tenant: string, record: Stored<W
       webhookSecret = channel.signRequests ? channel.headerValue ?? "" : ""
       if (channel.headerValue && !channel.signRequests) return block(deps, tenant, record, actor, "copy-destination", "That webhook secret is neither a header nor a signing key here, so there is nothing safe to copy.")
     }
-    copied.push({ channelId: channel.id, kind, updatedAt: channel.updatedAt })
+    copied.push({ channelId: channel.id, kind, fingerprint: channelFingerprint(channel) })
   }
 
   const name = `tenuvault-watcher-${record.id.slice(0, 8)}-${randomUUID().slice(0, 8)}`
@@ -489,6 +524,9 @@ async function advanceDeploy(deps: FeatureDeps, tenant: string, record: Stored<W
   const stoppedAfterCreate = cancelRequested(deps, tenant, submitted)
   if (stoppedAfterCreate) return stoppedAfterCreate
   if (created.status >= 300) {
+    if (created.status === 408 || created.status >= 500) {
+      return progress(deps, tenant, submitted, actor, { deploymentState: "Submitting", steps: stepsWith(submitted, "deploy", "running", "Azure did not give a clear answer; checking the deployment") }, "Watcher deployment answer ambiguous; polling it")
+    }
     const account = await arm(tenant, { method: "GET", path: `${accountBase(record)}?api-version=2023-11-01` })
     if (account.status === 200) {
       return progress(deps, tenant, submitted, actor, { deploymentState: "Failed", copiedChannels: [], phase: "discover", steps: stepsWith(submitted, "deploy", "done", "Partly created; checking what is there") }, "Deployment stopped after creating the account")
@@ -581,7 +619,7 @@ async function advanceTestRun(deps: FeatureDeps, tenant: string, record: Stored<
     if (response.status >= 300) return block(deps, tenant, record, actor, "test-run", armErrorMessage(response.body, response.status))
     const status = asRecord(asRecord(response.body).properties).status
     const jobStatus = typeof status === "string" ? status : "Running"
-    if (["Completed", "Failed", "Stopped", "Suspended", "Cancelled"].includes(jobStatus)) {
+    if (FINISHED_JOB_STATES.has(jobStatus)) {
       return progress(deps, tenant, record, actor, { jobStatus, phase: "verify", steps: stepsWith(record, "test-run", jobStatus === "Completed" ? "done" : "blocked", jobStatus) }, `Watcher test run ${jobStatus.toLowerCase()}`)
     }
     if (ageMs(deps, record.jobSubmittedAt) > 20 * 60_000) {
@@ -614,6 +652,9 @@ async function advanceTestRun(deps: FeatureDeps, tenant: string, record: Stored<
     }, "Waiting for a scheduled watcher run")
   }
   if (response.status >= 300) {
+    if (response.status === 408 || response.status >= 500) {
+      return progress(deps, tenant, submitted, actor, { jobStatus: "Submitting", steps: stepsWith(submitted, "test-run", "running", "Azure did not give a clear answer; checking the job") }, "Watcher test run answer ambiguous; polling it")
+    }
     const saved = saveDeploy(deps, tenant, submitted, { jobStatus: "SubmitFailed" }, actor, "Watcher test run refused")
     return block(deps, tenant, saved, actor, "test-run", armErrorMessage(response.body, response.status))
   }
@@ -621,17 +662,20 @@ async function advanceTestRun(deps: FeatureDeps, tenant: string, record: Stored<
   return progress(deps, tenant, submitted, actor, { jobStatus: typeof status === "string" ? status : "Running" }, "Watcher test run accepted")
 }
 
-function gateFor(deps: FeatureDeps, tenant: string, record: WatcherDeployRecord, existing: WatcherDeployRecord["existing"], heartbeat: { runAt: string | null; lastError: string | null; alertsHash: string | null; runbookVersion: string | null } | null) {
+function gateFor(deps: FeatureDeps, tenant: string, record: WatcherDeployRecord, existing: WatcherDeployRecord["existing"], heartbeat: { runAt: string | null; lastError: string | null; alertsHash: string | null; runbookVersion: string | null; identityPrincipalId?: string | null; jobId?: string | null } | null) {
   const channels = channelsOf(deps, tenant)
   const copiedKinds = new Set(record.copiedChannels
     .filter((entry) => {
       const channel = channels.find((candidate) => candidate.id === entry.channelId)
-      return Boolean(channel?.enabled && channel.url && channel.updatedAt === entry.updatedAt)
+      if (!channel?.enabled || !channel.url) return false
+      return entry.fingerprint ? channelFingerprint(channel) === entry.fingerprint : channel.updatedAt === entry.updatedAt
     })
     .map((entry) => entry.kind === "teams" ? "teams" : "webhook"))
   const destinationOk = record.plan.destinationKinds.every((kind) => copiedKinds.has(kind as "teams" | "webhook") || record.ack.destinationConfirmed)
   return handoverGate({
     accountExists: existing.found,
+    principalId: existing.principalId ?? record.principalId,
+    checkedAt: deps.now().toISOString(),
     identityTenantMatches: existing.identityTenantMatches,
     runbookPublished: existing.runbookPublished,
     runbookVersion: heartbeat?.runbookVersion ?? null,
@@ -642,8 +686,8 @@ function gateFor(deps: FeatureDeps, tenant: string, record: WatcherDeployRecord,
     watchConditionalAccess: existing.watchConditionalAccess,
     alertsHash: record.alertsHash,
     alertsWrittenAt: record.alertsWrittenAt,
-    ...(record.automationJobId ? { jobStatus: record.jobStatus, jobSubmittedAt: record.jobSubmittedAt } : {}),
-    heartbeat: heartbeat ? { runAt: heartbeat.runAt, lastError: heartbeat.lastError, alertsHash: heartbeat.alertsHash } : null,
+    ...(record.automationJobId ? { jobId: record.automationJobId, jobStatus: record.jobStatus, jobSubmittedAt: record.jobSubmittedAt } : {}),
+    heartbeat: heartbeat ? { runAt: heartbeat.runAt, lastError: heartbeat.lastError, alertsHash: heartbeat.alertsHash, identityPrincipalId: heartbeat.identityPrincipalId ?? null, jobId: heartbeat.jobId ?? null } : null,
   })
 }
 
@@ -652,12 +696,22 @@ async function readHeartbeat(deps: FeatureDeps, tenant: string) {
   return deps.watcherHeartbeat(tenant).catch((error: unknown) => ({ status: "error" as const, message: brief(error instanceof Error ? error.message : String(error)) }))
 }
 
+function moveToScheduledVerification(deps: FeatureDeps, tenant: string, record: Stored<WatcherDeployRecord>, actor: string | null): Stored<WatcherDeployRecord> {
+  if (!record.automationJobId || !FINISHED_JOB_STATES.has(record.jobStatus ?? "")) return record
+  return saveDeploy(deps, tenant, record, {
+    automationJobId: null,
+    jobSubmittedAt: null,
+    jobStatus: null,
+    steps: stepsWith(record, "test-run", record.jobStatus === "Completed" ? "done" : "blocked", "Waiting for a scheduled run"),
+  }, actor, "Watcher setup moved to scheduled-run verification")
+}
+
 async function advanceVerify(deps: FeatureDeps, tenant: string, record: Stored<WatcherDeployRecord>, actor: string | null): Promise<WatcherDeployView> {
   const heartbeat = await readHeartbeat(deps, tenant)
   const stopped = cancelRequested(deps, tenant, record)
   if (stopped) return stopped
   if (heartbeat.status === "error") return block(deps, tenant, record, actor, "heartbeat-read", heartbeat.message, true)
-  const gate = gateFor(deps, tenant, record, record.existing, heartbeat.status === "ok" ? { runAt: heartbeat.runAt, lastError: heartbeat.lastError, alertsHash: heartbeat.alertsHash ?? null, runbookVersion: heartbeat.runbookVersion ?? null } : null)
+  const gate = gateFor(deps, tenant, record, record.existing, heartbeat.status === "ok" ? { runAt: heartbeat.runAt, lastError: heartbeat.lastError, alertsHash: heartbeat.alertsHash ?? null, runbookVersion: heartbeat.runbookVersion ?? null, identityPrincipalId: heartbeat.identityPrincipalId ?? null, jobId: heartbeat.jobId ?? null } : null)
   const checked = saveDeploy(deps, tenant, record, { heartbeatRunAt: heartbeat.status === "ok" ? heartbeat.runAt : record.heartbeatRunAt }, actor, "Watcher run checked")
   if (gate.ok) {
     return progress(deps, tenant, checked, actor, { phase: "hand-over", pendingHandover: false, steps: stepsWith(checked, "verify", "done", "Clean run of these alerts") }, "Watcher run verified")
@@ -666,8 +720,12 @@ async function advanceVerify(deps: FeatureDeps, tenant: string, record: Stored<W
   if (gate.missing.includes("destination")) {
     return block(deps, tenant, checked, actor, "needs-destination", "The watcher has not been shown a destination for every kind these alerts send to. Set its Teams, webhook or mail variables in Azure, then confirm here.")
   }
+  if (gate.missing.includes("runbook-version") && heartbeat.status === "ok" && heartbeat.runbookVersion) {
+    return block(deps, tenant, checked, actor, "runbook-version", `The watcher runbook is ${heartbeat.runbookVersion}; this setup cannot attribute its runs to the selected watcher and job. Run the current setup script once to upgrade it, then continue here.`)
+  }
   if (lastError && /\b(401|403)\b|forbidden|unauthorized|insufficient privileges|authorization_requestdenied/i.test(lastError)) {
-    return block(deps, tenant, checked, actor, "roles-not-effective", "The watcher still cannot read Microsoft Graph. New role assignments can take minutes (rarely hours) to reach a managed identity. Check again later; nothing has been handed over.", true)
+    const scheduled = moveToScheduledVerification(deps, tenant, checked, actor)
+    return block(deps, tenant, scheduled, actor, "roles-not-effective", "The watcher still cannot read Microsoft Graph. New role assignments can take minutes (rarely hours) to reach a managed identity. Check again later; nothing has been handed over.", true)
   }
   const heartbeatOnly = gate.missing.every((entry) => entry.startsWith("heartbeat") || entry.startsWith("test-job") || entry === "runbook-version")
   if (heartbeatOnly) {
@@ -675,7 +733,10 @@ async function advanceVerify(deps: FeatureDeps, tenant: string, record: Stored<W
     const waited = deps.now().getTime() - writtenAt
     const jobFailed = record.jobStatus !== null && !["Completed", "Running", "Accepted", "Submitting"].includes(record.jobStatus)
     if (jobFailed && lastError) return block(deps, tenant, checked, actor, "test-failed", `The watcher run failed: ${brief(lastError)}`)
-    if (waited > 70 * 60_000) return block(deps, tenant, checked, actor, "waiting-heartbeat", "No clean watcher run of these alerts has been seen yet. It will be checked again while TenuVault runs.", true)
+    if (waited > 70 * 60_000) {
+      const scheduled = moveToScheduledVerification(deps, tenant, checked, actor)
+      return block(deps, tenant, scheduled, actor, "waiting-heartbeat", "No clean watcher run of these alerts has been seen yet. It will be checked again while TenuVault runs.", true)
+    }
     return progress(deps, tenant, checked, actor, { pendingHandover: true, steps: stepsWith(checked, "verify", "running", "Waiting for a clean run") }, "Waiting for a clean watcher run")
   }
   return block(deps, tenant, checked, actor, "verify", `The watcher is not ready to take over yet (${gate.missing.join(", ")}).`)
@@ -712,7 +773,7 @@ async function advanceHandOver(deps: FeatureDeps, tenant: string, record: Stored
   const stoppedAfterHeartbeat = cancelRequested(deps, tenant, rechecked)
   if (stoppedAfterHeartbeat) return stoppedAfterHeartbeat
   if (heartbeat.status === "error") return block(deps, tenant, rechecked, actor, "heartbeat-read", heartbeat.message, true)
-  const gate = gateFor(deps, tenant, rechecked, preflight.existing, heartbeat.status === "ok" ? { runAt: heartbeat.runAt, lastError: heartbeat.lastError, alertsHash: heartbeat.alertsHash ?? null, runbookVersion: heartbeat.runbookVersion ?? null } : null)
+  const gate = gateFor(deps, tenant, rechecked, preflight.existing, heartbeat.status === "ok" ? { runAt: heartbeat.runAt, lastError: heartbeat.lastError, alertsHash: heartbeat.alertsHash ?? null, runbookVersion: heartbeat.runbookVersion ?? null, identityPrincipalId: heartbeat.identityPrincipalId ?? null, jobId: heartbeat.jobId ?? null } : null)
   if (!gate.ok) {
     return progress(deps, tenant, rechecked, actor, { phase: "verify", pendingHandover: true, steps: stepsWith(rechecked, "verify", "running", "Waiting for a clean run") }, "Watcher evidence changed before hand-over")
   }
@@ -757,6 +818,7 @@ export async function resumeWatcherDeploy(deps: FeatureDeps, tenantId: string, a
     const record = watcherDeployOf(deps, tenant, jobId)
     if (!record) throw new WatcherDeployError("No Azure watcher setup was found.", 404)
     if (TERMINAL_STATES.has(record.state)) return publicWatcherDeploy(record, tenant)
+    refuseCancelPending(record)
     const saved = saveDeploy(deps, tenant, record, prepareResumePatch(record), actor, "Azure watcher setup continued")
     return publicWatcherDeploy(saved, tenant)
   })
@@ -770,6 +832,7 @@ export async function confirmWatcherDeploy(deps: FeatureDeps, tenantId: string, 
     const record = watcherDeployOf(deps, tenant, jobId)
     if (!record) throw new WatcherDeployError("No Azure watcher setup was found.", 404)
     if (TERMINAL_STATES.has(record.state)) return publicWatcherDeploy(record, tenant)
+    refuseCancelPending(record)
     const ack = {
       ...record.ack,
       ...(confirmation === "roles" ? { rolesConfirmed: true } : {}),
@@ -844,6 +907,13 @@ export async function resumePendingWatcherHandovers(deps: FeatureDeps): Promise<
         nextAttemptAt: new Date(deps.now().getTime() + 30 * 60_000).toISOString(),
         steps: stepsWith(after, "verify", "blocked", null, "Waiting for a clean watcher run"),
       }, null, "Watcher setup waiting for a scheduled run")
+    } else if (after?.state === "running" && !after.cancelRequestedAt) {
+      saveDeploy(deps, tenantId.toLowerCase(), after, {
+        state: "interrupted",
+        pendingHandover: false,
+        nextAttemptAt: null,
+        error: "The setup changed while it was being checked. Continue it to send and verify the current alerts.",
+      }, null, "Azure watcher setup paused for changed alerts")
     }
   }
 }

@@ -177,9 +177,14 @@ async function failureAlertFor(deps: FeatureDeps, tenantId: string, subscription
   const allOf = Array.isArray(criteria.allOf) ? criteria.allOf.filter((entry): entry is Record_ => Boolean(entry) && typeof entry === "object") : []
   const failedJobs = allOf.some((criterion) => {
     if (criterion.metricName !== "TotalJob" || criterion.metricNamespace !== "Microsoft.Automation/automationAccounts") return false
-    if (criterion.operator !== "GreaterThan" && criterion.operator !== "GreaterThanOrEqual") return false
+    if (criterion.timeAggregation !== "Total" || (criterion.criterionType !== undefined && criterion.criterionType !== "StaticThresholdCriterion")) return false
+    const threshold = typeof criterion.threshold === "number" ? criterion.threshold : Number.NaN
+    const firesOnOneFailure = criterion.operator === "GreaterThan"
+      ? threshold >= 0 && threshold < 1
+      : criterion.operator === "GreaterThanOrEqual" && threshold > 0 && threshold <= 1
+    if (!firesOnOneFailure) return false
     const dimensions = Array.isArray(criterion.dimensions) ? criterion.dimensions.filter((entry): entry is Record_ => Boolean(entry) && typeof entry === "object") : []
-    return dimensions.some((dimension) => dimension.name === "Status" && Array.isArray(dimension.values) && dimension.values.includes("Failed"))
+    return dimensions.some((dimension) => dimension.name === "Status" && dimension.operator === "Include" && Array.isArray(dimension.values) && dimension.values.includes("Failed"))
   })
   if (!failedJobs) return false
   const actions = Array.isArray(properties.actions) ? properties.actions.filter((entry): entry is Record_ => Boolean(entry) && typeof entry === "object") : []
@@ -362,7 +367,7 @@ export async function watcherPreflight(deps: FeatureDeps, tenantId: string, inpu
     let inspected = await inspectAccount(deps, tenant, plan.subscriptionId, plan.resourceGroupName, plan.automationAccountName)
     if (inspected.incomplete) findings.push({ severity: "block", code: "discovery-incomplete", message: `${inspected.incomplete} TenuVault cannot tell whether a watcher is already there, so it will not create or hand over to one.` })
     let automationAccounts: Record_[] = []
-    if (!inspected.existing.found && !inspected.incomplete) {
+    if (!inspected.incomplete) {
       const list = await armGetListAll(deps, tenant, `/subscriptions/${enc(plan.subscriptionId)}/resources?$filter=${enc("resourceType eq 'Microsoft.Automation/automationAccounts'")}&api-version=2021-04-01`)
       automationAccounts = list.items
       if (list.incomplete) {
@@ -388,8 +393,8 @@ export async function watcherPreflight(deps: FeatureDeps, tenantId: string, inpu
           findings.push({ severity: "block", code: "discovery-incomplete", message: "Some Automation accounts in that subscription could not be checked completely. TenuVault cannot tell whether one of them already watches this tenant, so it will not create or hand over to one." })
         }
         if (matches[0]) {
-          inspected = matches[0]
-          if (matches.length > 1) findings.push({ severity: "block", code: "multiple-watchers", message: "More than one watcher points at this tenant and storage account. Remove or disable all but one, so a clean run from another watcher cannot be mistaken for this one's proof." })
+          if (inspected.existing.found || matches.length > 1) findings.push({ severity: "block", code: "multiple-watchers", message: "More than one watcher points at this tenant and storage account. Remove or disable all but one, so a clean run from another watcher cannot be mistaken for this one's proof." })
+          if (!inspected.existing.found) inspected = matches[0]
         }
       }
     }
@@ -429,8 +434,8 @@ export async function watcherPreflight(deps: FeatureDeps, tenantId: string, inpu
       const heartbeatAge = heartbeat.runAt ? deps.now().getTime() - Date.parse(heartbeat.runAt) : Number.POSITIVE_INFINITY
       const recentHeartbeat = Number.isFinite(heartbeatAge) && heartbeatAge <= WATCHER_STALE_HOURS * 3_600_000
       const version = heartbeat.runbookVersion?.split(".").map((part) => Number.parseInt(part, 10) || 0) ?? []
-      if (recentHeartbeat && heartbeat.runbookVersion && (version[0]! < 1 || (version[0] === 1 && (version[1] ?? 0) < 2))) {
-        findings.push({ severity: "block", code: "runbook-version", message: `The watcher runbook is ${heartbeat.runbookVersion}; it cannot read the alerts this app writes. Run the current setup script once to upgrade it, then check again.` })
+      if (recentHeartbeat && heartbeat.runbookVersion && (version[0]! < 1 || (version[0] === 1 && (version[1] ?? 0) < 3))) {
+        findings.push({ severity: "block", code: "runbook-version", message: `The watcher runbook is ${heartbeat.runbookVersion}; this setup cannot attribute its runs to the selected watcher and job. Run the current setup script once to upgrade it, then check again.` })
       }
       if (recentHeartbeat && !existing.found) findings.push({ severity: "block", code: "unseen-watcher", message: "A watcher already runs against this storage account, but this sign-in cannot see its Automation account. Use an account that can, so a second watcher is not created." })
     } else if (heartbeat.status === "error") {

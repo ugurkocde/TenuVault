@@ -22,11 +22,17 @@ const plan: WatcherDeployPlan = {
   createIfMissing: true,
 }
 
+const PRINCIPAL = "33333333-3333-4333-8333-333333333333"
+const JOB = "55555555-5555-4555-8555-555555555555"
+const SCHEDULED_JOB = "66666666-6666-4666-8666-666666666666"
+
 const ready: WatcherHandoverEvidence = {
   accountExists: true,
+  principalId: PRINCIPAL,
+  checkedAt: "2026-11-07T10:05:00.000Z",
   identityTenantMatches: true,
   runbookPublished: true,
-  runbookVersion: "1.2.0",
+  runbookVersion: "1.3.0",
   scheduleLinked: true,
   failureAlertOk: true,
   destinationOk: true,
@@ -34,7 +40,7 @@ const ready: WatcherHandoverEvidence = {
   watchConditionalAccess: true,
   alertsHash: "abc123",
   alertsWrittenAt: "2026-11-07T10:00:00.000Z",
-  heartbeat: { runAt: "2026-11-07T10:02:00.000Z", lastError: null, alertsHash: "abc123" },
+  heartbeat: { runAt: "2026-11-07T10:02:00.000Z", lastError: null, alertsHash: "abc123", identityPrincipalId: PRINCIPAL, jobId: JOB },
 }
 
 describe("watcher deployment plan", () => {
@@ -83,7 +89,7 @@ describe("watcher hand-over gate", () => {
     ["no account", { accountExists: false }, "account"],
     ["identity in another tenant", { identityTenantMatches: false }, "identity-tenant"],
     ["runbook not published", { runbookPublished: false }, "runbook"],
-    ["old runbook", { runbookVersion: "1.1.0" }, "runbook-version"],
+    ["old runbook", { runbookVersion: "1.2.0" }, "runbook-version"],
     ["no schedule link", { scheduleLinked: false }, "schedule"],
     ["no failure alert", { failureAlertOk: false }, "failure-alert"],
     ["destination not proven", { destinationOk: false }, "destination"],
@@ -97,11 +103,20 @@ describe("watcher hand-over gate", () => {
     expect(gate.missing).toContain(missing)
   })
 
+  it("rejects stale, future, invalid and unattributed heartbeats", () => {
+    const heartbeat = ready.heartbeat!
+    expect(handoverGate({ ...ready, checkedAt: "2026-11-07T13:03:00.000Z" }).missing).toContain("heartbeat-stale")
+    expect(handoverGate({ ...ready, heartbeat: { ...heartbeat, runAt: "2026-11-07T10:20:00.000Z" } }).missing).toContain("heartbeat-stale")
+    expect(handoverGate({ ...ready, heartbeat: { ...heartbeat, runAt: "not-a-time" } }).missing).toContain("heartbeat-fresh")
+    expect(handoverGate({ ...ready, heartbeat: { ...heartbeat, identityPrincipalId: SCHEDULED_JOB } }).missing).toContain("heartbeat-identity")
+  })
+
   it("only accepts the completed job this setup started as its proof", () => {
-    const withJob = { ...ready, jobSubmittedAt: "2026-11-07T10:01:00.000Z", jobStatus: "Completed" }
+    const withJob = { ...ready, jobId: JOB, jobSubmittedAt: "2026-11-07T10:01:00.000Z", jobStatus: "Completed" }
     expect(handoverGate(withJob).ok).toBe(true)
     expect(handoverGate({ ...withJob, jobStatus: "Failed" }).missing).toContain("test-job")
-    expect(handoverGate({ ...withJob, heartbeat: { runAt: "2026-11-07T10:00:30.000Z", lastError: null, alertsHash: "abc123" } }).missing).toContain("test-job-run")
+    expect(handoverGate({ ...withJob, heartbeat: { ...ready.heartbeat!, jobId: SCHEDULED_JOB } }).missing).toContain("test-job-run")
+    expect(handoverGate({ ...withJob, heartbeat: { ...ready.heartbeat!, runAt: "2026-11-07T10:00:30.000Z" } }).missing).toContain("test-job-run")
   })
 
   it("does not need Conditional Access in the watcher when no alert reads it", () => {
