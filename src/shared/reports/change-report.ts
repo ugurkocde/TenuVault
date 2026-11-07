@@ -169,7 +169,7 @@ export function buildChangeReport(drift: DriftResult, audit: ReportAudit, option
     items,
     otherActivity: other.slice(-MAX_OTHER_ACTIVITY),
     moreActivity: Math.max(0, other.length - MAX_OTHER_ACTIVITY),
-    audit: { status: "changes" in audit ? "included" : "unavailable", note: "error" in audit ? audit.error : audit.note ?? null, actors: options.includeActors },
+    audit: { status: "changes" in audit ? "included" : "unavailable", note: publicAuditNote("error" in audit ? audit.error : audit.note), actors: options.includeActors },
     values: options.includeValues,
     warnings: drift.warnings.slice(0, 50).map((warning) => `${warning.file} (${warning.backup}): ${warning.message}`),
   }
@@ -223,6 +223,11 @@ export function describeValue(field: string, value: unknown, definitionId?: stri
     const line = describeAssignment(value)
     if (line) return line
   }
+  if (value && typeof value === "object") {
+    const identifier = (value as { mobileAppIdentifier?: Record<string, unknown> }).mobileAppIdentifier ?? (value as Record<string, unknown>)
+    const app = identifier?.packageId ?? identifier?.bundleId
+    if (typeof app === "string" && app) return clip(app)
+  }
   if (/omaSettings\[[^\]]+\]$/.test(field) && value && typeof value === "object") {
     const oma = value as { value?: unknown; omaUri?: unknown }
     return clip(`${typeof oma.omaUri === "string" ? `${oma.omaUri} = ` : ""}${typeof oma.value === "string" || typeof oma.value === "number" || typeof oma.value === "boolean" ? String(oma.value) : JSON.stringify(oma.value ?? null)}`)
@@ -235,6 +240,25 @@ export function describeValue(field: string, value: unknown, definitionId?: stri
 }
 
 const clip = (text: string) => (text.length > MAX_VALUE_LENGTH ? `${text.slice(0, MAX_VALUE_LENGTH - 3)}...` : text)
+
+/**
+ * An audit note fit to show and send: reports are emailed outside the organization, so a raw
+ * Microsoft Graph error (proxy URLs, tenant IDs, the request filter) never belongs in one.
+ * Notes written by current code are already plain sentences and pass through; a stored raw
+ * error is replaced by what it means and what to do about it.
+ */
+export function publicAuditNote(note: string | null | undefined): string | null {
+  if (!note) return null
+  const text = note.replace(/\s+/g, " ").trim()
+  if (!text) return null
+  const raw = text.length > 280 || /https?:\/\/|Operation ID|"_version"|[{[]/.test(text)
+  if (!raw) return text
+  if (/\b429\b|throttl/i.test(text)) return "Microsoft Graph throttled the audit log request (429). Generate the report again in a few minutes."
+  const status = /\breturned (\d{3})\b/.exec(text)?.[1]
+  const cleaned = text.replace(/https?:\/\/\S+/g, "").replace(/\s+/g, " ").trim()
+  if (/^[{[]/.test(cleaned) || /Operation ID|"_version"/.test(cleaned)) return status ? `Microsoft Graph returned ${status}.` : "The audit log could not be read."
+  return cleaned.length > 240 ? `${cleaned.slice(0, 237).trimEnd()}...` : cleaned
+}
 
 const CHANGE_LABELS: Record<ReportChange, string> = { added: "Added", modified: "Changed", deleted: "Deleted" }
 export const changeLabel = (change: ReportChange) => CHANGE_LABELS[change]
@@ -291,7 +315,8 @@ export function changeReportMarkdown(report: ChangeReport): string {
   lines.push(`- To backup: ${report.to.id} (${reportTime(report.to.timestamp)})`)
   lines.push(`- Generated: ${reportTime(report.generatedAt)}${report.trigger === "scheduled" ? " after a scheduled backup" : ""}`)
   lines.push(`- Summary: ${md(summaryLine(report))}`)
-  if (report.audit.note) lines.push(`- Audit log: ${md(report.audit.note)}`)
+  const auditNote = publicAuditNote(report.audit.note)
+  if (auditNote) lines.push(`- Audit log: ${md(auditNote)}`)
   if (!report.values) lines.push("- Setting values are left out of this report.")
   lines.push("")
   if (report.items.length === 0) lines.push("No items were added, changed or deleted between the two backups.", "")

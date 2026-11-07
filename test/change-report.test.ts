@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { buildChangeReport, changeReportMarkdown, describeAssignment, describeValue, reportFileName, reportTitle, summaryLine, type ReportAudit } from "../src/shared/reports/change-report"
+import { buildChangeReport, changeReportMarkdown, describeAssignment, describeValue, publicAuditNote, reportFileName, reportTitle, summaryLine, type ReportAudit } from "../src/shared/reports/change-report"
 import { buildChangeReportDocument } from "../src/shared/reports/change-report-html"
 import { documentItem, redactedChanges } from "../src/portal/app/api/detect-drifts/route"
 import { mapAuditEvent } from "../src/shared/notifications/audit"
@@ -88,6 +88,16 @@ describe("change report model", () => {
     expect(summaryLine(report)).toBe("1 changed, 1 added, 1 deleted. Who made them is unknown: the audit log could not be read.")
   })
 
+  it("never stores or exports a raw Graph error as the audit note", () => {
+    const raw = `The Intune audit log could not be read: Microsoft Graph returned 429: { "_version": 3, "Message": "An error has occurred - Operation ID (for customer support): 00000000-0000-0000-0000-000000000000 - Activity ID: 29bdbd1d - Url: https://proxy.amsub0502.manage.microsoft.com/StatelessAuditingFEService/98cf933b/deviceManagement/auditEvents?api-version=5022-08-30&$filter=activityDateTime", "CustomApiErrorPhrase": "", "RetryAfter": null, "ErrorSourceService": "", "HttpHeaders": "{}" }`
+    const report = buildChangeReport(result(drifts), { error: raw }, options)
+    expect(report.audit.note).toBe("Microsoft Graph throttled the audit log request (429). Generate the report again in a few minutes.")
+    expect(changeReportMarkdown(report)).not.toContain("proxy.")
+    expect(buildChangeReportDocument({ ...report, audit: { ...report.audit, note: raw } }).html).not.toContain("proxy.")
+    expect(publicAuditNote("Your account needs an Intune role that can read audit logs.")).toBe("Your account needs an Intune role that can read audit logs.")
+    expect(publicAuditNote(null)).toBeNull()
+  })
+
   it("names the report after the tenant and the backup days", () => {
     const report = buildChangeReport(result([]), { changes: [] }, options)
     expect(reportTitle(report)).toBe("Changes in Contoso, 5 Nov 2026 to 6 Nov 2026")
@@ -168,6 +178,13 @@ describe("change report PDF document", () => {
 })
 
 describe("audit events name their objects", () => {
+  it("labels a live-shaped event by its activityType when activity is null", () => {
+    const mapped = mapAuditEvent({ id: "live-1", activityDateTime: "2026-11-06T09:32:33Z", displayName: "Update device compliance policy and associated ScheduledActionForRule.", componentName: "DeviceCompliancePolicy", activity: null, activityType: "Patch DeviceCompliancePolicy", activityOperationType: "Patch", activityResult: "Success", category: "Compliance", actor: { applicationDisplayName: "Example app" }, resources: [{ displayName: "TV-ALERTS-TEST compliance", resourceId: "cp-1", type: "Windows10CompliancePolicy" }] })
+    expect(mapped?.activity).toBe("Patch DeviceCompliancePolicy")
+    expect(mapped?.actorAppName).toBe("Example app")
+  })
+
+
   it("keep the ID of the named object for matching: the policy on an assignment event, the Entra target", () => {
     expect(mapAuditEvent({ id: "1", activityDateTime: "2026-11-05T10:00:00Z", activityOperationType: "Patch", activityResult: "Success", resources: [{ resourceId: "assignment-1" }, { displayName: "A", resourceId: "p-1" }] })?.resourceId).toBe("p-1")
     expect(mapEntraAuditEvent({ id: "2", activityDateTime: "2026-11-05T10:00:00Z", activityDisplayName: "Update conditional access policy", operationType: "Update", result: "success", loggedByService: "Conditional Access", targetResources: [{ id: "ca-1", displayName: "Require MFA" }] })?.resourceId).toBe("ca-1")

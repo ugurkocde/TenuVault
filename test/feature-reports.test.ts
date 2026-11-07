@@ -138,6 +138,14 @@ describe("change reports route", () => {
     expect(retentionStart("Something else")).toBeNull()
   })
 
+  it("turns a throttled audit read with a raw proxy error into one plain sentence", async () => {
+    const deps = fakeDeps({
+      graph: (() => async () => ({ status: 429, body: { error: { message: `{ "_version": 3, "Message": "An error has occurred - Operation ID: 00000000 - Url: https://proxy.example.test/StatelessAuditingFEService/tenant-id/deviceManagement/auditEvents?$filter=activityDateTime", "RetryAfter": null }` } } })) as never,
+    })
+    const audit = await readAudit(deps, TENANT_A, driftResult())
+    expect(audit).toEqual({ error: "The Intune audit log could not be read: Microsoft Graph throttled the request (429). Generate the report again in a few minutes." })
+  })
+
   it("keeps the report without actors when the audit log is closed", async () => {
     const w = world({ auditStatus: 403 })
     const report = await generate(w)

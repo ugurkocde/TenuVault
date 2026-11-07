@@ -24,7 +24,7 @@ import type { Stored } from "../records"
 import { recordGovernanceAudit } from "../governance-audit"
 import { featureRoute, FeatureError, type Body } from "../route"
 import { parseRecipients, type EmailRecipient } from "../notifications/model"
-import { graphError, nextPath, resolveRecipients } from "../notifications/service"
+import { brief, graphError, nextPath, resolveRecipients } from "../notifications/service"
 
 /** Reports kept per tenant; the oldest are dropped first. */
 export const MAX_REPORTS = 12
@@ -300,7 +300,7 @@ export async function readAudit(deps: FeatureDeps, tenantId: string, drift: Pick
   try {
     graph = await deps.graph(tenantId)
   } catch (error) {
-    return { error: `The audit log could not be read: ${error instanceof Error ? error.message : String(error)}` }
+    return { error: `The audit log could not be read: ${brief((error instanceof Error ? error.message : String(error)).replace(/https?:\/\/\S+/g, ""))}` }
   }
   // No $orderby: with it, Graph scans the whole audit history from the oldest event and answers
   // with empty pages until it reaches the window. The report sorts the events itself.
@@ -349,6 +349,21 @@ export function retentionStart(error: string): string | null {
   return Number.isNaN(parsed) ? null : new Date(parsed).toISOString()
 }
 
+/**
+ * Why an audit log could not be read, in one plain sentence. The Intune audit endpoint answers
+ * some failures with the whole request (proxy URL, tenant ID, filter) as its error message;
+ * that text is never stored in a report. The Entra retention refusal is kept, because
+ * retentionStart reads the oldest allowed time out of it.
+ */
+function auditFailure(source: string, status: number, body: Record<string, unknown>): string {
+  if (status === 429) return `The ${source} audit log could not be read: Microsoft Graph throttled the request (429). Generate the report again in a few minutes.`
+  const message = graphError(body, status).replace(/^Microsoft Graph returned \d+:\s*/, "")
+  const retention = /Minimum allowed time for activityDateTime is [^"')]+/.exec(message)
+  if (retention) return `The ${source} audit log could not be read: ${retention[0].trim()}`
+  if (/^\s*[{[]/.test(message) || /Operation ID|"_version"|https?:\/\//i.test(message)) return `The ${source} audit log could not be read: Microsoft Graph returned ${status}.`
+  return `The ${source} audit log could not be read: ${brief(message)}`
+}
+
 async function readLog(
   graph: Awaited<ReturnType<FeatureDeps["graph"]>>,
   first: string,
@@ -364,7 +379,7 @@ async function readLog(
       pages++
       const response: { status: number; body: Record<string, unknown> } = await graph("GET", path)
       if (response.status === 403) return { error: denied }
-      if (response.status !== 200) return { error: `The ${source} audit log could not be read: ${graphError(response.body, response.status)}` }
+      if (response.status !== 200) return { error: auditFailure(source, response.status, response.body) }
       for (const raw of Array.isArray(response.body.value) ? (response.body.value as Array<Record<string, unknown>>) : []) {
         const change = map(raw)
         if (change) changes.push({ ...change, source })
@@ -372,7 +387,7 @@ async function readLog(
       path = nextPath(response.body)
     }
   } catch (error) {
-    return { error: `The ${source} audit log could not be read: ${error instanceof Error ? error.message : String(error)}` }
+    return { error: `The ${source} audit log could not be read: ${brief((error instanceof Error ? error.message : String(error)).replace(/https?:\/\/\S+/g, ""))}` }
   }
   const incomplete = changes.length > MAX_AUDIT_EVENTS ? "events" : path ? "pages" : null
   // Unordered pages: the oldest events are kept, so the report still names who started the changes.

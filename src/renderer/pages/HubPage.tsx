@@ -45,6 +45,7 @@ export default function HubPage({ hubId }: { hubId: string }) {
         </p>
       </div>
 
+      {hub.tabs.length > 1 && (
       <nav aria-label={`${hub.title} sections`} className="flex flex-wrap gap-2">
         {hub.tabs.map((candidate) => (
           <Link
@@ -61,6 +62,7 @@ export default function HubPage({ hubId }: { hubId: string }) {
           </Link>
         ))}
       </nav>
+      )}
 
       {!selectedTenant ? (
         <p className="rounded-3xl bg-card p-6 text-sm text-gray-600">Connect or select a tenant to use {hub.title.toLowerCase()}.</p>

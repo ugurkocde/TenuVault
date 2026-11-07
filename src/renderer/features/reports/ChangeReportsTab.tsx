@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react"
+import { Link } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ChevronDown, ChevronRight, Download, FileText, Mail, Play, Trash2 } from "lucide-react"
+import { ChevronDown, ChevronRight, Download, FileText, Mail, Play, RefreshCw, Trash2 } from "lucide-react"
 import { Chip, Tile } from "~/components/dashboard/tiles"
 import { Button } from "~/components/ui/button"
 import { BackupPairPicker } from "~/components/drift/backup-pair-picker"
@@ -34,14 +35,17 @@ export default function ChangeReportsTab({ tenant, allowed }: FeatureTabProps) {
   return (
     <div className="space-y-4">
       {status.error && <p className="text-sm text-red-700" role="alert">{status.error instanceof Error ? status.error.message : "Reports could not be loaded."}</p>}
-      {allowed && <NewReport tenant={tenant} onCreated={(id) => { refresh(); setOpen(id) }} />}
+      {allowed && <NewReport tenant={tenant} reports={reports} onCreated={(id) => { refresh(); setOpen(id) }} onOpen={setOpen} />}
       <Tile aria-labelledby="reports-list-heading" className="gap-4">
         <div>
           <h3 id="reports-list-heading" className="flex items-center gap-2 text-lg font-medium text-gray-900">
             <FileText className="h-4 w-4 text-gray-500" aria-hidden="true" />
             Reports
           </h3>
-          <p className="text-sm text-gray-600">The newest 12 reports of this tenant are kept on this computer. Open one to read it, save it as PDF, Markdown or JSON, or send it by email.</p>
+          <p className="text-sm text-gray-600">
+            The newest 12 reports of this tenant are kept on this computer.
+            {reports.length >= 12 ? " Generating a new one removes the oldest." : ""}
+          </p>
         </div>
         {status.isLoading && <div className="h-16 animate-pulse rounded-2xl bg-gray-50" />}
         {!status.isLoading && reports.length === 0 && <p className="text-sm text-gray-600">No reports yet. Generate one above.</p>}
@@ -56,6 +60,7 @@ export default function ChangeReportsTab({ tenant, allowed }: FeatureTabProps) {
               recipients={data?.settings.recipients.length ?? 0}
               readOnly={!allowed}
               onChanged={refresh}
+              onRegenerated={(id) => { refresh(); setOpen(id) }}
             />
           ))}
         </ul>
@@ -65,7 +70,7 @@ export default function ChangeReportsTab({ tenant, allowed }: FeatureTabProps) {
   )
 }
 
-function NewReport({ tenant, onCreated }: { tenant: FeatureTabProps["tenant"]; onCreated: (id: string) => void }) {
+function NewReport({ tenant, reports, onCreated, onOpen }: { tenant: FeatureTabProps["tenant"]; reports: ListedReport[]; onCreated: (id: string) => void; onOpen: (id: string) => void }) {
   const tenantId = tenant.credentials?.tenantId
   const [period, setPeriod] = useState<Period>("previous")
   const list = useBackupList(tenant)
@@ -94,13 +99,23 @@ function NewReport({ tenant, onCreated }: { tenant: FeatureTabProps["tenant"]; o
     const backup = backups.find((entry) => entry.id === id)
     return backup ? new Date(backup.timestamp).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : id ?? ""
   }
+  const chosen = period === "custom" ? (pair.baseline && pair.comparison ? { baseline: pair.baseline, comparison: pair.comparison } : null) : preset
+  const existing = chosen ? reports.find((report) => report.from.id === chosen.baseline && report.to.id === chosen.comparison) : undefined
+  // "Last 7 days" with only three days of backups compares what there is; say so instead of letting the label overpromise.
+  const shortHistory = period !== "custom" && period !== "previous" && preset
+    ? (() => {
+        const from = backups.find((entry) => entry.id === preset.baseline)
+        const to = backups.find((entry) => entry.id === preset.comparison)
+        return from && to && Date.parse(to.timestamp) - Date.parse(from.timestamp) < Number(period) * 86_400_000
+      })()
+    : false
 
   return (
     <Tile aria-labelledby="new-report-heading" className="gap-4">
       <div>
         <h3 id="new-report-heading" className="text-lg font-medium text-gray-900">New change report</h3>
         <p className="max-w-3xl text-sm text-gray-600">
-          Compares two backups of this tenant setting by setting, documents new and deleted items in full, and names who made each change from the Intune and Entra audit logs. Nothing in the tenant is changed.
+          Names who made each change from the Intune and Entra audit logs. Nothing in the tenant is changed.
         </p>
       </div>
       <div role="radiogroup" aria-label="Report period" className="flex flex-wrap gap-2">
@@ -134,23 +149,36 @@ function NewReport({ tenant, onCreated }: { tenant: FeatureTabProps["tenant"]; o
         <div className="flex flex-wrap items-center gap-3">
           <Button type="button" onClick={() => preset && generate(preset)} disabled={running || !preset}>
             <Play className="h-4 w-4" aria-hidden="true" />
-            {running ? "Generating in background" : "Generate report"}
+            {running ? "Generating in background" : existing ? "Generate again" : "Generate report"}
           </Button>
-          <p className="text-sm text-gray-600">
-            {loading
-              ? "Loading backups..."
-              : preset
-                ? `From ${describe(preset.baseline)} to ${describe(preset.comparison)}`
-                : "Two complete backups are needed. Run a backup first."}
-          </p>
+          {loading ? (
+            <p className="text-sm text-gray-600">Loading backups...</p>
+          ) : preset ? (
+            <p className="text-sm text-gray-600">
+              {`From ${describe(preset.baseline)} to ${describe(preset.comparison)}`}
+              {shortHistory ? " (all the backup history there is)" : ""}
+            </p>
+          ) : (
+            <p className="text-sm text-gray-600">
+              Two complete backups are needed.{" "}
+              <Link to="/portal/backup" className="font-medium text-gray-900 underline underline-offset-2">Run a backup first</Link>
+            </p>
+          )}
         </div>
+      )}
+      {existing && !running && (
+        <p className="text-sm text-gray-600">
+          A report for these two backups already exists.{" "}
+          <button type="button" onClick={() => onOpen(existing.id)} className="font-medium text-gray-900 underline underline-offset-2">Open it</button>
+          {" "}instead of generating it again.
+        </p>
       )}
       {task?.status === "failed" && task.error && <p role="alert" className="text-sm text-red-700">{task.error}</p>}
     </Tile>
   )
 }
 
-function ReportRow({ tenant, report, open, onToggle, recipients, readOnly, onChanged }: {
+function ReportRow({ tenant, report, open, onToggle, recipients, readOnly, onChanged, onRegenerated }: {
   tenant: FeatureTabProps["tenant"]
   report: ListedReport
   open: boolean
@@ -158,7 +186,25 @@ function ReportRow({ tenant, report, open, onToggle, recipients, readOnly, onCha
   recipients: number
   readOnly: boolean
   onChanged: () => void
+  onRegenerated: (id: string) => void
 }) {
+  const [confirmingRemove, setConfirmingRemove] = useState(false)
+  const tenantId = tenant.credentials?.tenantId
+  const regenKey = tenantId ? `change-report:${tenantId.toLowerCase()}` : undefined
+  const regenTask = useBackgroundTask(regenKey)
+  const regenerating = regenTask?.status === "running"
+  const regenerate = () => {
+    if (!regenKey) return
+    startBackgroundTask(regenKey, { title: "Change report", detail: `Comparing backups of ${tenant.name}`, href: "/portal/reports", tenantId }, async () => {
+      const result = await reportsApi.generate(tenant, { baseline: report.from.id, comparison: report.to.id })
+      onRegenerated(result.report.id)
+      return result.report.summary
+    })
+  }
+  const jumpToRecipients = () => {
+    document.getElementById("report-email-settings")?.scrollIntoView({ behavior: "smooth", block: "start" })
+    document.getElementById("report-recipients")?.focus({ preventScroll: true })
+  }
   const detail = useQuery({ queryKey: ["report", tenant.credentials?.tenantId, report.id], queryFn: () => reportsApi.report(tenant, report.id), enabled: open })
   const notice = useSaveNotice()
   const save = (format: ExportFormat) =>
@@ -194,10 +240,11 @@ function ReportRow({ tenant, report, open, onToggle, recipients, readOnly, onCha
           </span>
         </button>
         <span className="flex flex-wrap gap-1.5">
-          <Chip tone={counts.modified ? "warning" : "neutral"}>{counts.modified} changed</Chip>
-          <Chip tone={counts.added ? "success" : "neutral"}>{counts.added} added</Chip>
-          <Chip tone={counts.deleted ? "danger" : "neutral"}>{counts.deleted} deleted</Chip>
-          {report.audit !== "included" && <Chip tone="warning" title="The audit log could not be read for this report">No actors</Chip>}
+          {counts.modified > 0 && <Chip tone="warning">{counts.modified} changed</Chip>}
+          {counts.added > 0 && <Chip tone="success">{counts.added} added</Chip>}
+          {counts.deleted > 0 && <Chip tone="danger">{counts.deleted} deleted</Chip>}
+          {counts.modified + counts.added + counts.deleted === 0 && <Chip>No changes</Chip>}
+          {report.audit !== "included" && <Chip tone="warning">Audit log not read</Chip>}
         </span>
       </div>
       {open && (
@@ -206,23 +253,48 @@ function ReportRow({ tenant, report, open, onToggle, recipients, readOnly, onCha
             <Button type="button" variant="outline" size="sm" disabled={notice.saving} onClick={() => save("pdf")}><Download className="h-4 w-4" aria-hidden="true" />PDF</Button>
             <Button type="button" variant="outline" size="sm" disabled={notice.saving} onClick={() => save("markdown")}><Download className="h-4 w-4" aria-hidden="true" />Markdown</Button>
             <Button type="button" variant="outline" size="sm" disabled={notice.saving} onClick={() => save("json")}><Download className="h-4 w-4" aria-hidden="true" />JSON</Button>
-            {!readOnly && (
-              <Button type="button" variant="outline" size="sm" disabled={send.isPending || recipients === 0} title={recipients === 0 ? "Add email recipients under Email and automation first" : undefined} onClick={() => send.mutate()}>
+            {!readOnly && report.audit !== "included" && (
+              <Button type="button" variant="outline" size="sm" disabled={regenerating} onClick={regenerate}>
+                <RefreshCw className="h-4 w-4" aria-hidden="true" />
+                {regenerating ? "Generating in background" : "Generate again"}
+              </Button>
+            )}
+            {!readOnly && recipients > 0 && (
+              <Button type="button" variant="outline" size="sm" disabled={send.isPending} onClick={() => send.mutate()}>
                 <Mail className="h-4 w-4" aria-hidden="true" />
                 {send.isPending ? "Sending" : "Send by email"}
               </Button>
             )}
-            {!readOnly && (
-              <Button type="button" variant="ghost" size="sm" disabled={remove.isPending} onClick={() => remove.mutate()}>
+            {!readOnly && !confirmingRemove && (
+              <Button type="button" variant="ghost" size="sm" disabled={remove.isPending} onClick={() => setConfirmingRemove(true)}>
                 <Trash2 className="h-4 w-4" aria-hidden="true" />
                 Remove
               </Button>
             )}
+            {!readOnly && confirmingRemove && (
+              <span className="flex items-center gap-2 text-sm text-gray-700">
+                Remove this report from this computer?
+                <Button type="button" variant="destructive" size="sm" disabled={remove.isPending} onClick={() => remove.mutate()}>
+                  {remove.isPending ? "Removing" : "Remove"}
+                </Button>
+                <Button type="button" variant="ghost" size="sm" onClick={() => setConfirmingRemove(false)}>Cancel</Button>
+              </span>
+            )}
           </div>
+          {!readOnly && recipients === 0 && (
+            <p className="text-sm text-gray-600">
+              To send this report by email,{" "}
+              <button type="button" onClick={jumpToRecipients} className="font-medium text-gray-900 underline underline-offset-2">add recipients under Email and automation</button>
+              {" "}below.
+            </p>
+          )}
           <Notice result={notice.result} onDismiss={notice.clear} />
           {detail.isLoading && <div className="h-24 animate-pulse rounded-2xl bg-gray-50" />}
           {detail.error && <p role="alert" className="text-sm text-red-700">{detail.error instanceof Error ? detail.error.message : "The report could not be read."}</p>}
           {detail.data && <ReportView report={detail.data.report} />}
+          {detail.data && (
+            <button type="button" onClick={onToggle} className="text-sm font-medium text-gray-700 underline underline-offset-2">Close this report</button>
+          )}
         </div>
       )}
     </li>
@@ -235,6 +307,7 @@ function SettingsPanel({ tenant, status, onSaved }: { tenant: FeatureTabProps["t
   useEffect(() => setAddresses(recipientText(settings.recipients)), [recipientText(settings.recipients)])
   const save = useMutation({
     mutationFn: (change: Partial<Omit<ReportSettings, "lastAutomatic">>) => reportsApi.saveSettings(tenant, change),
+    onSuccess: () => toast("Report settings saved.", "success"),
     onError: (error) => toast(error instanceof Error ? error.message : "The settings could not be saved.", "error"),
     onSettled: onSaved,
   })
@@ -250,7 +323,7 @@ function SettingsPanel({ tenant, status, onSaved }: { tenant: FeatureTabProps["t
   )
   const last = settings.lastAutomatic
   return (
-    <Tile aria-labelledby="report-settings-heading" className="gap-4">
+    <Tile id="report-email-settings" aria-labelledby="report-settings-heading" className="gap-4">
       <div>
         <h3 id="report-settings-heading" className="flex items-center gap-2 text-lg font-medium text-gray-900">
           <Mail className="h-4 w-4 text-gray-500" aria-hidden="true" />
@@ -268,6 +341,7 @@ function SettingsPanel({ tenant, status, onSaved }: { tenant: FeatureTabProps["t
         <label className="flex min-w-[280px] flex-1 flex-col gap-1.5 text-sm text-gray-700">
           Recipients
           <input
+            id="report-recipients"
             type="text"
             value={addresses}
             onChange={(event) => setAddresses(event.target.value)}

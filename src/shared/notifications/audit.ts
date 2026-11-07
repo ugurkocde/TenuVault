@@ -119,7 +119,10 @@ export function mapAuditEvent(raw: AuditEventRaw): AuditChange | null {
     actorUpn: actor ? text(actor.userPrincipalName) : null,
     actorAppId: actor ? text(actor.applicationId) : null,
     actorAppName: actor ? text(actor.applicationDisplayName) : null,
-    activity: text(raw.activity) ?? text(raw.displayName) ?? "Change",
+    // Live events carry the operation in activityType ("Patch DeviceCompliancePolicy") with
+    // activity null and displayName a full sentence ("Update device compliance policy."),
+    // so activityType is the label that reads like the fixture shape ("Patch ...Policy").
+    activity: text(raw.activity) ?? text(raw.activityType) ?? text(raw.displayName) ?? "Change",
     resourceId: resourceId ? resourceId.slice(0, 200) : null,
     settings: changed.names,
     settingsMore: changed.more,

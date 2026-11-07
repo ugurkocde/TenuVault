@@ -589,10 +589,22 @@ function arrayItemKeys(items: any[], path: string): string[] | null {
   const keys = items.map((item): string | undefined => {
     if (item === null || typeof item !== 'object') return JSON.stringify(item)
     if (path.endsWith('omaSettings')) return item.displayName || item.omaUri
+    // App protection and app list entries are identified by their package or bundle ID; without
+    // it, one added app would shift every later index and read as dozens of changed apps.
+    const identifier = item.mobileAppIdentifier ?? item
+    if (typeof identifier?.packageId === 'string' && identifier.packageId) return identifier.packageId
+    if (typeof identifier?.bundleId === 'string' && identifier.bundleId) return identifier.bundleId
     return item.settingInstance?.settingDefinitionId ?? item.settingDefinitionId
   })
   if (keys.some(key => typeof key !== 'string') || new Set(keys).size !== keys.length) return null
   return keys as string[]
+}
+
+/** Key order independent text of one value, for spotting unchanged items in unkeyed arrays. */
+function canonical(value: any): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'undefined'
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`
+  return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}`
 }
 
 export function compareObjects(
@@ -639,13 +651,31 @@ export function compareObjects(
         if (!oldSet.has(key)) changes.push({ field: `${path}[${key}]`, oldValue: undefined, newValue: newObj[i] })
       })
     } else {
-      const maxLength = Math.max(oldObj.length, newObj.length)
-      for (let i = 0; i < maxLength; i++) {
-        if (i < oldObj.length && i < newObj.length) {
-          changes.push(...compareObjects(oldObj[i], newObj[i], `${path}[${i}]`, { parent: oldObj[i], arrayIndex: i }))
-        } else {
-          changes.push({ field: `${path}[${i}]`, oldValue: oldObj[i], newValue: newObj[i] })
-        }
+      // No stable key: match items that are unchanged anywhere in the list first, so an item
+      // inserted or removed in the middle is reported as itself instead of shifting every
+      // later index. What is left is paired in order only when both sides have the same number
+      // of items left (a changed item, such as an assignment whose target flipped); otherwise
+      // the leftovers are whole added and removed items.
+      const newByValue = new Map<string, number[]>()
+      newObj.forEach((item: any, i: number) => {
+        const key = canonical(item)
+        newByValue.set(key, [...(newByValue.get(key) ?? []), i])
+      })
+      const matchedNew = new Set<number>()
+      const leftoverOld: number[] = []
+      oldObj.forEach((item: any, i: number) => {
+        const match = (newByValue.get(canonical(item)) ?? []).find(index => !matchedNew.has(index))
+        if (match === undefined) leftoverOld.push(i)
+        else matchedNew.add(match)
+      })
+      const leftoverNew = newObj.map((_: any, i: number) => i).filter((i: number) => !matchedNew.has(i))
+      if (leftoverOld.length === leftoverNew.length) {
+        leftoverOld.forEach((oldIndex, position) => {
+          changes.push(...compareObjects(oldObj[oldIndex], newObj[leftoverNew[position]!], `${path}[${oldIndex}]`, { parent: oldObj[oldIndex], arrayIndex: oldIndex }))
+        })
+      } else {
+        for (const i of leftoverOld) changes.push({ field: `${path}[${i}]`, oldValue: oldObj[i], newValue: undefined })
+        for (const i of leftoverNew) changes.push({ field: `${path}[${i}]`, oldValue: undefined, newValue: newObj[i] })
       }
     }
     return changes

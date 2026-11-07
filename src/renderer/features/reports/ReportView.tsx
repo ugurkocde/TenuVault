@@ -1,23 +1,27 @@
+import { useState } from "react"
 import { Chip } from "~/components/dashboard/tiles"
-import { activityLine, changeLabel, reportTime, summaryLine, type ChangeReport, type ReportItem } from "../../../shared/reports/change-report"
+import { activityLine, changeLabel, publicAuditNote, summaryLine, type ChangeReport, type ReportItem } from "../../../shared/reports/change-report"
+import { formatWhen } from "./api"
 
 const CHANGE_TONE = { added: "success", modified: "warning", deleted: "danger" } as const
+const SETTINGS_PREVIEW = 10
 
-/** A stored change report as the app shows it: the same sections and wording as the PDF. */
+/** A stored change report as the app shows it: the same sections and wording as the PDF, with local times like the rest of the app. */
 export function ReportView({ report }: { report: ChangeReport }) {
+  const auditNote = publicAuditNote(report.audit.note)
   return (
     <div className="space-y-5">
       <div className="space-y-1 text-sm text-gray-700">
         <p>{summaryLine(report)}</p>
-        <p className="text-xs text-gray-500">
-          From {report.from.id} ({reportTime(report.from.timestamp)}) to {report.to.id} ({reportTime(report.to.timestamp)}). Generated {reportTime(report.generatedAt)}
+        <p className="text-xs text-gray-500" title={`From backup ${report.from.id} to backup ${report.to.id}`}>
+          From {formatWhen(report.from.timestamp)} to {formatWhen(report.to.timestamp)}. Generated {formatWhen(report.generatedAt)}
           {report.trigger === "scheduled" ? " after a scheduled backup" : ""}.
         </p>
       </div>
-      {report.audit.note && (
-        <p role="status" className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-950">
+      {auditNote && (
+        <p role="status" className="break-words rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-950 [overflow-wrap:anywhere]">
           {report.audit.status === "included" ? "Part of the audit log was not read. " : "Who made the changes is unknown. "}
-          {report.audit.note}
+          {auditNote}
         </p>
       )}
       {!report.values && <p className="rounded-2xl bg-gray-50 px-4 py-3 text-sm text-gray-700">Setting values are left out of this report.</p>}
@@ -63,6 +67,8 @@ export function ReportView({ report }: { report: ChangeReport }) {
 }
 
 function Item({ item, report }: { item: ReportItem; report: ChangeReport }) {
+  const [showAll, setShowAll] = useState(false)
+  const settings = showAll ? item.settings : item.settings.slice(0, SETTINGS_PREVIEW)
   const value = (text: string | null) => (text === null || text === "Not set" ? <span className="italic text-gray-400">Not set</span> : text)
   return (
     <div className="rounded-2xl border border-gray-100 p-4">
@@ -91,7 +97,7 @@ function Item({ item, report }: { item: ReportItem; report: ChangeReport }) {
               </tr>
             </thead>
             <tbody>
-              {item.settings.map((setting, index) => (
+              {settings.map((setting, index) => (
                 <tr key={`${setting.path}:${index}`} className="border-t border-gray-100 align-top">
                   <td className="break-words py-1.5 pr-3 text-gray-900" title={setting.path}>{setting.name}</td>
                   {report.values && item.change === "modified" && (
@@ -105,7 +111,12 @@ function Item({ item, report }: { item: ReportItem; report: ChangeReport }) {
               ))}
             </tbody>
           </table>
-          {item.moreSettings > 0 && <p className="mt-1 text-xs text-gray-500">{item.moreSettings} more settings are not listed.</p>}
+          {item.settings.length > SETTINGS_PREVIEW && (
+            <button type="button" onClick={() => setShowAll(!showAll)} aria-expanded={showAll} className="mt-2 text-sm font-medium text-gray-700 underline underline-offset-2">
+              {showAll ? "Show fewer settings" : `Show all ${item.settings.length} settings`}
+            </button>
+          )}
+          {item.moreSettings > 0 && <p className="mt-1 text-xs text-gray-500">{item.moreSettings} more settings are not listed in this report.</p>}
         </div>
       )}
       {item.restoreFrom && <p className="mt-2 text-xs text-gray-500">The previous version is in backup {item.restoreFrom}.</p>}

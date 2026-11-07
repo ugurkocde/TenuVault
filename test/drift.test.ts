@@ -52,6 +52,20 @@ describe('Drift comparison', () => {
     expect(compareObjects(before, after)).toEqual([{ field: 'assignments[0].target.@odata.type', oldValue: '#microsoft.graph.groupAssignmentTarget', newValue: '#microsoft.graph.exclusionGroupAssignmentTarget' }])
   })
 
+  it('reports an app added to an app protection policy as itself, not as every later app changed', () => {
+    const app = (packageId: string) => ({ mobileAppIdentifier: { '@odata.type': '#microsoft.graph.androidMobileAppIdentifier', packageId } })
+    const before = { displayName: 'BYOD', apps: [app('com.microsoft.office.excel'), app('com.microsoft.office.lync15')] }
+    const after = { displayName: 'BYOD', apps: [app('com.microsoft.o365smb.connections'), app('com.microsoft.office.excel'), app('com.microsoft.office.lync15')] }
+    expect(compareObjects(before, after)).toEqual([{ field: 'apps[com.microsoft.o365smb.connections]', oldValue: undefined, newValue: after.apps[0] }])
+  })
+
+  it('reports an item inserted into an unkeyed array as itself, not as every later item changed', () => {
+    const before = { rules: [{ grace: 0 }, { grace: 24 }] }
+    const after = { rules: [{ grace: 12 }, { grace: 0 }, { grace: 24 }] }
+    expect(compareObjects(before, after)).toEqual([{ field: 'rules[0]', oldValue: undefined, newValue: { grace: 12 } }])
+    expect(compareObjects({ rules: [{ grace: 0 }, { grace: 24 }] }, { rules: [{ grace: 24 }, { grace: 0 }] })).toEqual([])
+  })
+
   it('reports appended items and changed values in unkeyed arrays', () => {
     expect(compareObjects({ roleScopeTagIds: ['0'] }, { roleScopeTagIds: ['0', '12'] })).toEqual([{ field: 'roleScopeTagIds["12"]', oldValue: undefined, newValue: '12' }])
     expect(compareObjects({ rules: [{ grace: 0 }] }, { rules: [{ grace: 0 }, { grace: 24 }] })).toEqual([{ field: 'rules[1]', oldValue: undefined, newValue: { grace: 24 } }])
