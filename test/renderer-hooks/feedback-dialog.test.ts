@@ -8,7 +8,7 @@ globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} 
 
 const mocks = vi.hoisted(() => ({
   send: vi.fn(),
-  discardCapture: vi.fn(async () => undefined),
+  discardCapture: vi.fn(async (_openingId: string) => undefined),
   openExternal: vi.fn(async (_url: string) => undefined),
   toast: vi.fn(),
 }))
@@ -30,7 +30,7 @@ const roots: Root[] = []
 let setOpen: (open: boolean) => void = () => undefined
 const onOpenSupport = vi.fn()
 
-const snapshotWith = (overrides: Partial<FeedbackSnapshot> = {}): FeedbackSnapshot => ({ preview: PREVIEW, context, page: "Drift Detection", ...overrides })
+const snapshotWith = (overrides: Partial<FeedbackSnapshot> = {}): FeedbackSnapshot => ({ id: "opening-1", preview: PREVIEW, context, page: "Drift Detection", ...overrides })
 
 beforeEach(() => {
   mocks.send.mockReset()
@@ -152,7 +152,8 @@ describe("FeedbackDialog", () => {
     await fill("  Restore a policy ", "It failed")
     await clickSend()
     expect(mocks.send).toHaveBeenCalledTimes(1)
-    const sent = mocks.send.mock.calls[0]![0]
+    expect(mocks.send.mock.calls[0]![0]).toBe("opening-1")
+    const sent = mocks.send.mock.calls[0]![1]
     expect(Object.keys(sent).sort()).toEqual(["blocker", "goal", "includeScreenshot", "submissionId"])
     expect(sent).toMatchObject({ includeScreenshot: false })
     expect(sent.submissionId).toMatch(/^[0-9a-f-]{36}$/)
@@ -179,7 +180,7 @@ describe("FeedbackDialog", () => {
     expect(decodeURIComponent(url)).toContain("Plan: Community")
 
     await clickSend()
-    expect(mocks.send.mock.calls[1]![0].submissionId).toBe(mocks.send.mock.calls[0]![0].submissionId)
+    expect(mocks.send.mock.calls[1]![1].submissionId).toBe(mocks.send.mock.calls[0]![1].submissionId)
   })
 
   it("keeps the draft across closing and reopening, and discards the capture on close", async () => {
@@ -188,6 +189,7 @@ describe("FeedbackDialog", () => {
     await act(async () => { button("Cancel")!.click() })
     expect(dialog()).toBeNull()
     expect(mocks.discardCapture).toHaveBeenCalledTimes(1)
+    expect(mocks.discardCapture).toHaveBeenCalledWith("opening-1")
     await act(async () => setOpen(true))
     expect(textareas().map((field) => field.value)).toEqual(["Restore a policy", "It failed"])
   })

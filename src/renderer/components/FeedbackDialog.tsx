@@ -87,17 +87,17 @@ export function FeedbackDialog({ open, onOpenChange, snapshot, onOpenSupport }: 
   const close = (next: boolean) => {
     if (next) return onOpenChange(true)
     if (sending) return
-    void bridge.feedback.discardCapture().catch(() => undefined)
+    if (snapshot) void bridge.feedback.discardCapture(snapshot.id).catch(() => undefined)
     onOpenChange(false)
   }
 
   const send = async () => {
-    if (!canSend) return
+    if (!canSend || !snapshot) return
     setSending(true)
     setFailure(null)
     let result: FeedbackSendResult
     try {
-      result = await bridge.feedback.send({ submissionId, goal, blocker, ...(email ? { replyTo: email } : {}), includeScreenshot: screenshot })
+      result = await bridge.feedback.send(snapshot.id, { submissionId, goal, blocker, ...(email ? { replyTo: email } : {}), includeScreenshot: screenshot })
     } catch {
       result = { ok: false, kind: "server", message: "The feedback could not be sent. Try again, or use Copy as email." }
     }

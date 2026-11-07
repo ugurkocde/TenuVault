@@ -57,7 +57,7 @@ import {
   LICENSE_REFRESH_MS,
 } from "./license/config"
 import { LicenseService } from "./license/service"
-import { FeedbackSnapshots } from "./feedback/capture"
+import { captureFeedbackSnapshot, FeedbackSnapshots, watchFeedbackRenderer } from "./feedback/capture"
 import { feedbackContext, postFeedback, sendFeedbackDraft } from "./feedback/send"
 import { knownFeedbackPage, type FeedbackSendResult, type FeedbackSnapshot } from "../shared/feedback"
 import { planGuard } from "./api/plan-gates"
@@ -1304,28 +1304,30 @@ async function bootstrap(): Promise<void> {
   // snapshot here (screenshot, app version, OS, plan and page); the dialog shows it and Send uses
   // exactly it. The screenshot stays in this process; the renderer only sees a small preview.
   const feedbackSnapshots = new FeedbackSnapshots()
-  handleTrusted("feedback:capture", async (_event, page: unknown): Promise<FeedbackSnapshot> => {
-    feedbackSnapshots.discard()
-    let image: Electron.NativeImage | null = null
-    try {
-      image = mainWindow ? await mainWindow.webContents.capturePage() : null
-    } catch {
-      console.warn("[feedback] Could not capture the window")
+  // A reload, crash or closed window ends the opening, so a capture still running is dropped.
+  const feedbackRenderers = new WeakSet<Electron.WebContents>()
+  handleTrusted("feedback:capture", async (event, page: unknown): Promise<FeedbackSnapshot | null> => {
+    if (!feedbackRenderers.has(event.sender)) {
+      feedbackRenderers.add(event.sender)
+      watchFeedbackRenderer(event.sender, feedbackSnapshots)
     }
-    const context = feedbackContext({
-      appVersion: app.getVersion(),
-      platform: process.platform,
-      systemVersion: process.getSystemVersion(),
-      status: license.status(signedInTenants()),
-    })
-    return feedbackSnapshots.open(context, knownFeedbackPage(page), image)
+    return captureFeedbackSnapshot(
+      feedbackSnapshots,
+      async () => (mainWindow ? mainWindow.webContents.capturePage() : null),
+      () => feedbackContext({
+        appVersion: app.getVersion(),
+        platform: process.platform,
+        systemVersion: process.getSystemVersion(),
+        status: license.status(signedInTenants()),
+      }),
+      knownFeedbackPage(page),
+    )
   })
-  handleTrusted("feedback:discardCapture", () => feedbackSnapshots.discard())
-  handleTrusted("feedback:send", async (_event, raw: unknown): Promise<FeedbackSendResult> => {
-    const snapshot = feedbackSnapshots.current()
-    const result = await sendFeedbackDraft(raw, snapshot, (payload) => postFeedback(chromiumFetch, LICENSE_API_BASE, payload))
-    // Only the snapshot that was sent is released; a newer opening keeps its own.
-    if (result.ok && feedbackSnapshots.current() === snapshot) feedbackSnapshots.discard()
+  handleTrusted("feedback:discardCapture", (_event, id: unknown) => feedbackSnapshots.discard(id))
+  handleTrusted("feedback:send", async (_event, id: unknown, raw: unknown): Promise<FeedbackSendResult> => {
+    // Only the current opening's snapshot is sendable; a stale ID gets the expired message.
+    const result = await sendFeedbackDraft(raw, feedbackSnapshots.current(id), (payload) => postFeedback(chromiumFetch, LICENSE_API_BASE, payload))
+    if (result.ok) feedbackSnapshots.discard(id)
     return result
   })
   handleTrusted("reports:savePdf", async (_event, report: unknown, fileName: unknown) =>

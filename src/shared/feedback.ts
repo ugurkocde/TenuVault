@@ -25,6 +25,8 @@ export interface FeedbackContext {
  * and Send uses the same one, so what is shown is what is sent.
  */
 export interface FeedbackSnapshot {
+  /** The opening ID made by the main process; send and discard name it. */
+  id: string
   /** A small JPEG data URL of the captured window, or null when capture failed. */
   preview: string | null
   context: FeedbackContext

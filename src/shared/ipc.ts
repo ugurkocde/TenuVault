@@ -534,13 +534,14 @@ export interface TenuVaultBridge {
   feedback: {
     /**
      * Records the snapshot of this opening in the main process: the window screenshot, app version,
-     * OS, plan and the page (only a known section name is kept). Returns what the dialog shows.
+     * OS, plan and the page (only a known section name is kept). Returns what the dialog shows,
+     * with the opening ID, or null when a newer opening, a discard or a reload replaced it.
      */
-    capture: (page?: string) => Promise<FeedbackSnapshot>
-    /** Sends feedback with the recorded snapshot and, when ticked, its screenshot. */
-    send: (input: FeedbackInput) => Promise<FeedbackSendResult>
-    /** Drops the recorded snapshot and its screenshot. */
-    discardCapture: () => Promise<void>
+    capture: (page?: string) => Promise<FeedbackSnapshot | null>
+    /** Sends feedback with the snapshot of this opening and, when ticked, its screenshot. */
+    send: (openingId: string, input: FeedbackInput) => Promise<FeedbackSendResult>
+    /** Drops the snapshot of this opening and its screenshot. */
+    discardCapture: (openingId: string) => Promise<void>
   }
   reports: {
     /** Generates a PDF of an OpenIntuneBaseline report in the main process and asks where to save it. */

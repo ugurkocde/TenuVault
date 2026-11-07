@@ -352,6 +352,9 @@ describe("feedback IPC wiring", () => {
     expect(preload).toContain(`capture: (page) => invoke("feedback:capture", page)`)
     // Send uses the stored snapshot; only the capture handler reads the context.
     expect(main.match(/feedbackContext\(/g)).toHaveLength(1)
-    expect(main).toContain("sendFeedbackDraft(raw, snapshot,")
+    expect(main).toContain("sendFeedbackDraft(raw, feedbackSnapshots.current(id),")
+    expect(preload).toContain(`send: (openingId, input) => invoke("feedback:send", openingId, input)`)
+    expect(preload).toContain(`discardCapture: (openingId) => invoke("feedback:discardCapture", openingId)`)
+    expect(main).toContain("watchFeedbackRenderer(event.sender, feedbackSnapshots)")
   })
 })

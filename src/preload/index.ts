@@ -129,8 +129,8 @@ const bridge: TenuVaultPreloadBridge = {
   },
   feedback: {
     capture: (page) => invoke("feedback:capture", page),
-    send: (input) => invoke("feedback:send", input),
-    discardCapture: () => invoke("feedback:discardCapture"),
+    send: (openingId, input) => invoke("feedback:send", openingId, input),
+    discardCapture: (openingId) => invoke("feedback:discardCapture", openingId),
   },
   reports: {
     savePdf: (report, fileName) => invoke("reports:savePdf", report, fileName),
