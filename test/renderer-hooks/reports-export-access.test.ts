@@ -136,19 +136,44 @@ afterEach(() => {
 
 describe("change report export access", () => {
   it("exports a collapsed report from its row Export menu without loading its details", async () => {
+    let finishSave: ((result: { saved: boolean; fileName: string; path: string }) => void) | undefined
+    saveFile.mockImplementation(() => new Promise((resolve) => { finishSave = resolve }))
     const container = await render()
     const trigger = buttons(container).find((button) => button.getAttribute("aria-label")?.startsWith("Export Changes in Contoso Ltd"))
     expect(trigger, "collapsed report Export menu").toBeDefined()
     expect(trigger?.textContent).toContain("Export")
+    trigger!.focus()
 
-    await act(async () => { trigger!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })) })
+    await act(async () => {
+      trigger!.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }))
+      trigger!.click()
+    })
     await flush()
     expect(menuItems().map((item) => item.textContent?.trim())).toEqual(["PDF report", "Markdown", "JSON"])
 
-    await act(async () => { menuItems().find((item) => item.textContent?.trim() === "Markdown")!.click() })
+    const markdown = menuItems().find((item) => item.textContent?.trim() === "Markdown")!
+    await act(async () => {
+      markdown.dispatchEvent(new MouseEvent("pointerup", { bubbles: true }))
+      markdown.click()
+    })
     await flush()
     expect(api.exportFile).toHaveBeenCalledWith(tenant, "report-1", "markdown")
     expect(saveFile).toHaveBeenCalledWith("# Report", "report.md", "utf8")
+    expect(trigger!.disabled).toBe(false)
+    expect(trigger!.getAttribute("aria-disabled")).toBe("true")
+    expect(document.activeElement).toBe(trigger)
+
+    await act(async () => {
+      trigger!.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }))
+      trigger!.click()
+    })
+    await flush()
+    expect(menuItems()).toHaveLength(0)
+
+    await act(async () => { finishSave?.({ saved: true, fileName: "report.md", path: "/tmp/report.md" }) })
+    await flush()
+    expect(trigger!.getAttribute("aria-disabled")).not.toBe("true")
+    expect(document.activeElement).toBe(trigger)
     expect(api.report).not.toHaveBeenCalled()
     expect(container.textContent).toContain("report.md")
   })
@@ -179,8 +204,14 @@ describe("change report export access", () => {
   it("keeps stored reports exportable in read-only mode without write actions", async () => {
     const container = await render(false)
     expect(buttons(container).some((button) => button.getAttribute("aria-label")?.startsWith("Export Changes in Contoso Ltd"))).toBe(true)
-    expect(container.textContent).not.toContain("Send by email")
-    expect(container.textContent).not.toContain("Remove")
-    expect(container.textContent).not.toContain("Regenerate this report")
+
+    const toggle = buttons(container).find((button) => button.textContent?.includes("Changes in Contoso Ltd"))!
+    await act(async () => { toggle.click() })
+    await flush()
+    const actions = container.querySelector<HTMLElement>('[aria-label="Report actions"]')
+    expect(actions?.textContent).toContain("Export")
+    expect(actions?.textContent).not.toContain("Send by email")
+    expect(actions?.textContent).not.toContain("Remove")
+    expect(actions?.textContent).not.toContain("Regenerate this report")
   })
 })

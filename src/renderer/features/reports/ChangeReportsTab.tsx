@@ -144,13 +144,13 @@ function NewReport({ tenant, reports, onCreated, onOpen }: { tenant: FeatureTabP
           latest={periodPair(backups, "previous")}
           onChange={setPair}
           onCompare={() => pair.baseline && pair.comparison && generate({ baseline: pair.baseline, comparison: pair.comparison })}
-          actionLabel="Generate report"
+          actionLabel={existing ? "Regenerate report" : "Generate report"}
         />
       ) : (
         <div className="flex flex-wrap items-center gap-3">
           <Button type="button" onClick={() => preset && generate(preset)} disabled={running || !preset}>
             <Play className="h-4 w-4" aria-hidden="true" />
-            {running ? "Generating in background" : existing ? "Generate again" : "Generate report"}
+            {running ? "Generating in background" : existing ? "Regenerate report" : "Generate report"}
           </Button>
           {loading ? (
             <p className="text-sm text-gray-600">Loading backups...</p>
@@ -181,16 +181,17 @@ function NewReport({ tenant, reports, onCreated, onOpen }: { tenant: FeatureTabP
 
 /** Export stays with the report it acts on, both on the collapsed row and in the expanded action bar. */
 function ReportExportMenu({ reportTitle, saving, onExport }: { reportTitle: string; saving: boolean; onExport: (format: ExportFormat) => void }) {
+  const [open, setOpen] = useState(false)
   const item = (format: ExportFormat, label: string, Icon: typeof FileText) => (
-    <DropdownMenuItem disabled={saving} onSelect={() => onExport(format)} className="gap-2">
+    <DropdownMenuItem disabled={saving} onSelect={() => { if (!saving) onExport(format) }} className="gap-2">
       <Icon className="h-4 w-4" aria-hidden="true" />
       {label}
     </DropdownMenuItem>
   )
   return (
-    <DropdownMenu modal={false}>
+    <DropdownMenu modal={false} open={open} onOpenChange={(nextOpen) => { if (!nextOpen || !saving) setOpen(nextOpen) }}>
       <DropdownMenuTrigger asChild>
-        <Button type="button" variant="outline" size="sm" disabled={saving} aria-label={`Export ${reportTitle}`}>
+        <Button type="button" variant="outline" size="sm" aria-disabled={saving || undefined} aria-busy={saving || undefined} className={saving ? "opacity-50" : undefined} aria-label={`Export ${reportTitle}`}>
           <Download className="h-4 w-4" aria-hidden="true" />
           Export
           <ChevronDown className="h-4 w-4" aria-hidden="true" />
