@@ -2,13 +2,18 @@ name: Licensing canary
 
 # The buyer path against production every 30 minutes, as a shipped app runs it: activate the
 # dedicated canary key, verify the token offline with the pinned production key, refresh,
-# refuse an unknown key, release (scripts/license-canary.ts). A failed run emails the
-# maintainer. It runs here, outside Vercel, so it also catches the website's own scheduled
-# check having stopped.
+# refuse an unknown key, release (scripts/license-canary.ts). A failed run is emailed to the
+# licensing inbox through the website's alerting, and GitHub emails the maintainer as well. It
+# runs here, outside Vercel, so it also catches the website's own scheduled check having stopped.
 on:
   schedule:
     - cron: "11,41 * * * *"
   workflow_dispatch:
+    inputs:
+      test_alert:
+        description: Only send a test alert email, to confirm delivery.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -40,6 +45,9 @@ jobs:
       - name: Run the licensing canary
         env:
           LICENSING_CANARY_KEY: ${{ secrets.LICENSING_CANARY_KEY }}
+          # Failures are emailed to the licensing inbox through the website's alerting.
+          LICENSING_CANARY_ALERT_SECRET: ${{ secrets.LICENSING_CANARY_ALERT_SECRET }}
+          CANARY_TEST_ALERT: ${{ inputs.test_alert && '1' || '' }}
         # Bundled with the locked esbuild, then run with plain Node.
         run: |
           npx esbuild scripts/license-canary.ts --bundle --platform=node --format=esm --log-level=warning --outfile="$RUNNER_TEMP/license-canary.mjs"

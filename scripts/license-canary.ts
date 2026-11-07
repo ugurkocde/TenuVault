@@ -116,14 +116,47 @@ async function main(): Promise<void> {
 
   if (failures.length > 0) {
     for (const failure of failures) console.log(`::error title=Licensing canary::${failure}`)
+    await report(failures)
     process.exit(1)
   }
   console.log("The buyer path works: activate, verify offline, refresh, refuse and release.")
 }
 
+/**
+ * Emails a failed run to the licensing inbox through the website's alerting
+ * (/api/desktop-license/canary-alert), so it lands with every other licensing alert. Best
+ * effort: when the site itself is down, the failed run's GitHub email still arrives. Without
+ * LICENSING_CANARY_ALERT_SECRET (local runs) nothing is sent.
+ */
+async function report(lines: string[], test = false): Promise<void> {
+  const secret = process.env.LICENSING_CANARY_ALERT_SECRET?.trim()
+  if (!secret) return
+  const { GITHUB_SERVER_URL, GITHUB_REPOSITORY, GITHUB_RUN_ID } = process.env
+  const runUrl = GITHUB_SERVER_URL && GITHUB_REPOSITORY && GITHUB_RUN_ID
+    ? `${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}`
+    : undefined
+  try {
+    const response = await fetch(`${API_BASE}/api/desktop-license/canary-alert`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${secret}` },
+      body: JSON.stringify(test ? { test: true, runUrl } : { failures: lines.slice(0, 10).map((line) => line.slice(0, 500)), runUrl }),
+      redirect: "error",
+      signal: AbortSignal.timeout(20_000),
+    })
+    const body = (await response.json().catch(() => null)) as { alerted?: boolean } | null
+    console.log(response.ok && body?.alerted ? "Reported to the licensing inbox." : `::warning title=Licensing canary::The alert email was not sent (${response.status}).`)
+  } catch (error) {
+    console.log(`::warning title=Licensing canary::The alert email could not be requested: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
 if (!process.versions.electron) {
-  main().catch((error: unknown) => {
-    console.log(`::error title=Licensing canary::${error instanceof Error ? error.message : String(error)}`)
+  // CANARY_TEST_ALERT=1 only sends a test alert, to confirm delivery.
+  const run = process.env.CANARY_TEST_ALERT === "1" ? () => report([], true) : main
+  run().catch(async (error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error)
+    console.log(`::error title=Licensing canary::${message}`)
+    await report([message])
     process.exit(1)
   })
 }

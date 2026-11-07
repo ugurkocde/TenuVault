@@ -19,7 +19,11 @@ shipped app would see:
 5. An unknown key is refused as `not_found`.
 6. The activation is released again, so the key never holds more than one tenant slot.
 
-A failed run fails the workflow, and GitHub emails the maintainer. Because it does not depend on
+A failed run emails the failed steps and a link to the run to the licensing inbox
+(ugur@ugurlabs.com), through the website's alerting (`/api/desktop-license/canary-alert`, with the
+repository secret `LICENSING_CANARY_ALERT_SECRET`), at most once an hour. The run also fails, so
+GitHub emails the maintainer too, which still arrives when the website itself is down. To check
+delivery, run the workflow by hand with "Only send a test alert email". Because it does not depend on
 the website's own 15 minute scheduled check, it also notices when that check has stopped.
 
 - **Key:** the repository secret `LICENSING_CANARY_KEY`, a dedicated Pro key of the owner's own
