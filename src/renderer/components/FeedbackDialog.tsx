@@ -26,7 +26,7 @@ function Question({ id, label, value, onChange, disabled }: { id: string; label:
     <div className="space-y-1.5">
       <div className="flex items-baseline justify-between gap-3">
         <Label htmlFor={id}>{label}</Label>
-        <span className="shrink-0 text-xs text-gray-500">Required · <span id={`${id}-count`} aria-live="polite">{value.length}/{FEEDBACK_TEXT_MAX}</span></span>
+        <span className="shrink-0 text-xs text-gray-500">Required · <span id={`${id}-count`}>{value.length}/{FEEDBACK_TEXT_MAX}</span></span>
       </div>
       <textarea id={id} className={textareaClass} rows={3} maxLength={FEEDBACK_TEXT_MAX} required aria-describedby={`${id}-count`} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} />
     </div>
@@ -109,7 +109,7 @@ export function FeedbackDialog({ open, onOpenChange, preview, page, onOpenSuppor
           <DialogTitle>Share feedback</DialogTitle>
           <DialogDescription>
             Something broken or need help?{" "}
-            <button type="button" className="font-medium text-blue-600 hover:underline" onClick={() => { close(false); onOpenSupport() }}>Open Support.</button>
+            <button type="button" className="font-medium text-blue-600 hover:underline disabled:opacity-50" disabled={sending} onClick={() => { close(false); onOpenSupport() }}>Open Support.</button>
           </DialogDescription>
         </DialogHeader>
 

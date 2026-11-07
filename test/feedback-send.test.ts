@@ -163,6 +163,10 @@ describe("feedbackPlan", () => {
     expect(feedbackPlan(status({ communityTenantId: TENANT }))).toBe("community")
   })
 
+  it("is none for a failed key even with a Community tenant, as the License chip shows Inactive", () => {
+    expect(feedbackPlan(status({ hasKey: true, keyState: "failed", communityTenantId: TENANT }, [{ plan: "community" }]))).toBe("none")
+  })
+
   it("is Community on a machine without a key and without uncovered tenants, as the License chip shows", () => {
     expect(feedbackPlan(status())).toBe("community")
     expect(feedbackPlan(status({}, [{ signedIn: false, activated: true }]))).toBe("community")
@@ -194,6 +198,7 @@ describe("mapFeedbackResponse", () => {
   it("says when to try again after 429", () => {
     expect(mapFeedbackResponse(429, "120", { error: "Too many requests" })).toEqual({ ok: false, kind: "rate_limited", message: "Too much feedback was sent from this network. Try again in 2 minutes.", retryAfterSeconds: 120 })
     expect(mapFeedbackResponse(429, "30", null)).toMatchObject({ retryAfterSeconds: 30, message: expect.stringContaining("in 30 seconds") })
+    expect(mapFeedbackResponse(429, "1", null)).toMatchObject({ message: expect.stringContaining("in 1 second.") })
     const result = mapFeedbackResponse(429, null, null)
     expect(result).toMatchObject({ kind: "rate_limited", message: expect.stringContaining("in a few minutes") })
     expect(result).not.toHaveProperty("retryAfterSeconds")
@@ -250,6 +255,13 @@ describe("postFeedback", () => {
   it("does not trust an HTML page from a proxy", async () => {
     const fetchImpl = async () => new Response("<html>Sign in</html>", { status: 200, headers: { "content-type": "text/html" } })
     await expect(postFeedback(fetchImpl as unknown as typeof fetch, "https://www.tenuvault.com", payload)).resolves.toMatchObject({ ok: false, kind: "server" })
+  })
+
+  it("maps a timeout while reading the answer to network, and invalid JSON to server", async () => {
+    const stalled = new Response(new ReadableStream({ start(controller) { controller.error(new DOMException("The operation timed out.", "TimeoutError")) } }), { status: 200, headers: { "content-type": "application/json" } })
+    await expect(postFeedback((async () => stalled) as unknown as typeof fetch, "https://www.tenuvault.com", payload)).resolves.toMatchObject({ ok: false, kind: "network", message: expect.stringContaining("timed out") })
+    const broken = new Response("{not json", { status: 200, headers: { "content-type": "application/json" } })
+    await expect(postFeedback((async () => broken) as unknown as typeof fetch, "https://www.tenuvault.com", payload)).resolves.toMatchObject({ ok: false, kind: "server" })
   })
 
   it("maps a 404 page without JSON to a normal failure", async () => {

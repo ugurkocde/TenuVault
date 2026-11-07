@@ -80,18 +80,16 @@ export function validateFeedbackInput(raw: unknown): ValidFeedbackInput {
 }
 
 /**
- * The plan to report, as the License chip in the sidebar names it: the plan of this machine's key,
- * else a paid license shared with a tenant (MSP over Pro), else Community when a tenant uses the
- * free plan or nothing is inactive. None while a key failed or is still pending, or a signed-in
- * tenant is not covered.
+ * The plan to report, in the order the License chip in the sidebar names it: the plan of this
+ * machine's key, else a paid license shared with a tenant (MSP over Pro), else none while the key
+ * failed or is pending or a signed-in tenant is not covered, else Community.
  */
 export function feedbackPlan(status: LicenseStatus): FeedbackPlan {
   if (status.plan) return status.plan
   const paid = status.tenants.filter((tenant) => tenant.entitled && (tenant.plan === "pro" || tenant.plan === "msp"))
   if (paid.some((tenant) => tenant.plan === "msp")) return "msp"
   if (paid.length) return "pro"
-  if (status.communityTenantId || status.tenants.some((tenant) => tenant.plan === "community")) return "community"
-  const uncovered = status.tenants.some((tenant) => tenant.signedIn && !tenant.entitled)
+  const uncovered = status.tenants.some((tenant) => tenant.signedIn && !tenant.entitled && tenant.plan !== "community")
   return status.keyState === "failed" || status.keyState === "pending" || uncovered ? "none" : "community"
 }
 
@@ -138,7 +136,8 @@ export function retryAfterSeconds(value: string | null, now = Date.now()): numbe
 
 function waitText(seconds: number | undefined): string {
   if (seconds === undefined) return "in a few minutes"
-  if (seconds < 60) return `in ${Math.max(1, seconds)} seconds`
+  if (seconds <= 1) return "in 1 second"
+  if (seconds < 60) return `in ${seconds} seconds`
   const minutes = Math.ceil(seconds / 60)
   if (minutes < 120) return `in ${minutes} minute${minutes === 1 ? "" : "s"}`
   return `in ${Math.ceil(minutes / 60)} hours`
@@ -193,7 +192,18 @@ export async function postFeedback(fetchImpl: typeof fetch, apiBase: string, pay
   const contentType = response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase()
   // A proxy or captive portal can answer with an HTML page; only a JSON body is read.
   let body: unknown = null
-  if (contentType === "application/json") body = await response.json().catch(() => null)
-  else await response.body?.cancel().catch(() => undefined)
+  if (contentType === "application/json") {
+    try {
+      body = await response.json()
+    } catch (error) {
+      // Invalid JSON is an unexpected answer; a timeout or dropped connection while reading is a network failure.
+      if (!(error instanceof SyntaxError)) {
+        const { guidance } = networkFailure(error, new URL(apiBase).host)
+        return { ok: false, kind: "network", message: `TenuVault could not read the answer of the feedback service. ${guidance}` }
+      }
+    }
+  } else {
+    await response.body?.cancel().catch(() => undefined)
+  }
   return mapFeedbackResponse(response.status, response.headers.get("retry-after"), body)
 }
