@@ -16,8 +16,10 @@ coverage floor), #289 (task 1 desktop gate), #290 (tasks 2 and 7, desktop halves
 round: #294 (tasks 7 and 9, desktop), #295 (task 19), #296 (task 10, desktop), #300 (task 15, task
 13 docs), #298 (tasks 11, 14, 16 soak, task 5 record), #299 (task 6, desktop), and
 TenuVault-Website #88 (tasks 1, 2, 3 and 4, website), #89 (task 13), #90 (task 6, website) and #91
-(task 10, website). What remains needs the owner: accounts, purchases or settings
-outside the code (tasks 4, 5, 20, and the last steps of 13 and 14), each noted below.
+(task 10, website). Third round (2026-11-07): the licensing canary and the MITM record (tasks 4,
+5 and 20), and the email ownership note on the Polar checkout (task 13). What remains needs the
+owner in person: Polar's key email in an inbox (task 5), a backup of the signing key (task 14) and
+the web-filter vendor portals (task 20), each noted below.
 
 ## Confirmed model (both reviews agree)
 
@@ -89,12 +91,13 @@ outside the code (tasks 4, 5, 20, and the last steps of 13 and 14), each noted b
   `DESKTOP_TRIAL_PRODUCT_ID` is missing in production.
   Acceptance: an active token without a trial claim can be replaced in place; a lookup outage
   cannot silently relabel a known trial key as paid.
-- [ ] **4. Extend the existing 15 minute cron into a real buyer canary.** (website + ops,
-  verified gap; partly done: the scheduled check verifies both benefit ids are license key
-  benefits of the organization, pings `LICENSING_HEARTBEAT_URL` after a pass, and every request
-  logs an outcome line by `appVersion`. Owner: create a heartbeat monitor and set the variable,
-  and create a dedicated canary key for a real activation, as described in the website's
-  `docs/licensing-checks.md`) Today's probe checks configuration presence and Polar access with a nonexistent
+- [x] **4. Extend the existing 15 minute cron into a real buyer canary.** (website + ops,
+  verified gap; done: the scheduled check verifies the benefit ids and every request logs an
+  outcome line by `appVersion`; and a GitHub workflow every 30 minutes runs the app's own
+  `LicenseService` with the pinned production key against production with a dedicated canary
+  key: activate, verify offline, refresh, refuse an unknown key, release
+  (`docs/license-network-checks.md`). It runs outside Vercel, so it doubles as the heartbeat and
+  `LICENSING_HEARTBEAT_URL` stays unset) Today's probe checks configuration presence and Polar access with a nonexistent
   key. It does not prove that a real key can activate, that activation writes are permitted, that
   the configured benefit IDs match the products on sale, or that a shipped desktop build accepts
   the signature. HTTP success alone is not enough: a wrong baked-in key yields successful server
@@ -110,7 +113,9 @@ outside the code (tasks 4, 5, 20, and the last steps of 13 and 14), each noted b
   live Polar benefits, products and portal settings, the Vercel variable names and the deployed
   service were checked on 6 November and recorded in `docs/release-setup.md`, whose token scopes
   were corrected. Vercel values are sensitive and cannot be read back, so the service now checks
-  them itself. Owner: the sandbox purchase rehearsal and Polar's key email delivery) Checkout
+  them itself. The licensing canary rehearses key to activation against production every 30
+  minutes, and the owner's own test purchases show Polar issuing keys from checkout. Owner:
+  confirm Polar's key email arrives, which needs the buyer's inbox) Checkout
   and licensing use separate configuration, so customers can pay while activation is broken:
   wrong benefit IDs reject genuine keys as `invalid_key`, a wrong Polar environment yields
   `not_found`, missing benefit or subscription read scopes break MSP quantity resolution.
@@ -208,8 +213,8 @@ outside the code (tasks 4, 5, 20, and the last steps of 13 and 14), each noted b
   Acceptance: one copied paid key triggers exactly one activation attempt on return.
 - [x] **13. Tell buyers which email does what.** (website + docs, from the email analysis; done
   on the pricing and support pages, the trial and first getting-started emails, and the docs
-  site. Polar sends the license key email itself; owner: add the same line to the Polar product
-  or benefit description if Polar shows it there) The
+  site, and in the descriptions of the six products sold through Polar checkout, where it shows
+  next to the email field. Polar's own key email cannot carry it) The
   key binds to the tenant signed in to the app, whoever enters it, while billing, invoices, key
   retrieval, and the Polar portal belong to the checkout email. A buyer who pays with a finance
   or personal mailbox and loses that email currently has no way to recover the key (the app only
@@ -223,7 +228,9 @@ outside the code (tasks 4, 5, 20, and the last steps of 13 and 14), each noted b
 
 - [x] **14. Support overlapping signing keys before any rotation.** (both, verified; done: the app
   trusts a key ring, `ROTATION_LICENSE_PUBLIC_KEYS`, and `docs/release-setup.md` has the rotation
-  runbook. Owner: keep an offline backup of the production private key and test restoring it) The desktop
+  runbook. Owner: keep an offline backup of the production private key and test restoring it. On
+  2026-11-07 no copy existed on the maintainer machine and Vercel keeps the value write-only, so
+  losing the Vercel variable would force a rotation by that runbook) The desktop
   trusts exactly one public key and the website signs with one private key. Rotating either side
   first blocks fresh activation on the entire installed base that has not updated; cached tokens
   only soften this for existing tenants. The rotation note in `docs/release-setup.md:113` does
@@ -310,8 +317,9 @@ documented in the network requirements. Two gaps remain:
   Acceptance: behind an authenticated test proxy, sign-in, licensing, and a backup all succeed
   after one credential prompt, and the credentials survive a restart.
 - [ ] **20. Keep tenuvault.com allowlist-friendly and prove the MITM path periodically.** (ops;
-  owner: submit the domain to the web-filter vendors and record a MITM activation check per
-  stable release)
+  partly done: `scripts/license-mitm-check.ts` runs licensing in real Chromium behind mitmproxy,
+  with the first record on 2026-11-07, and no major filtering DNS resolver blocks the domain.
+  Owner: the vendor categorization portals need captchas)
   Web filters often block uncategorized or newly seen domains regardless of certificates, and
   nothing in the app can override that; the current mitigations are the published destination
   list, the 14 day offline grace, and Community working with tenuvault.com fully blocked.
