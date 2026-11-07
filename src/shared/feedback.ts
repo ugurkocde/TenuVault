@@ -152,13 +152,17 @@ export interface FeedbackEmailInput {
   page?: string
   /** The draft's message ID, so support can match it to a send that did arrive. */
   submissionId?: string
+  /** The reply-to address; left out unless it passes isValidFeedbackEmail. */
+  replyTo?: string
 }
 
-/** The email body: both answers (shortened to `max` characters each), the diagnostics and the message ID. */
+/** The email body: both answers (shortened to `max` characters each), the diagnostics, a valid reply-to address and the message ID. */
 function emailBody(input: FeedbackEmailInput, max: number): string {
   const diagnostics = input.context
     ? feedbackDiagnostics(input.context, input.page).map((row) => `${row.label}: ${row.value}`)
     : input.page ? [`Page: ${input.page}`] : []
+  const replyTo = input.replyTo?.trim()
+  if (replyTo && isValidFeedbackEmail(replyTo)) diagnostics.push(`Reply-to email: ${replyTo}`)
   if (input.submissionId) diagnostics.push(`Message ID: ${input.submissionId}`)
   return [
     "What were you trying to do?",
@@ -172,7 +176,7 @@ function emailBody(input: FeedbackEmailInput, max: number): string {
 
 /**
  * The full feedback as a plain-text email for the clipboard: recipient, subject, both answers
- * untruncated, the diagnostics and the message ID. The screenshot is never included.
+ * untruncated, the diagnostics, a valid reply-to address and the message ID. The screenshot is never included.
  */
 export function feedbackEmailText(input: FeedbackEmailInput): string {
   return [`To: ${SUPPORT_EMAIL}`, `Subject: ${FEEDBACK_MAILTO_SUBJECT}`, "", emailBody(input, FEEDBACK_TEXT_MAX)].join("\n")

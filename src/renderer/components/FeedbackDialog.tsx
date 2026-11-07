@@ -119,7 +119,7 @@ export function FeedbackDialog({ open, onOpenChange, snapshot, onOpenSupport }: 
   // The full text goes to the clipboard first: a mailto draft may be shortened, and admins on web
   // mail have no mail app to open at all.
   const copyAsEmail = async () => {
-    const draft = { goal, blocker, context, page, submissionId }
+    const draft = { goal, blocker, context, page, submissionId, ...(email && isValidFeedbackEmail(email) ? { replyTo: email } : {}) }
     let copied = false
     try {
       await navigator.clipboard.writeText(feedbackEmailText(draft))

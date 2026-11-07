@@ -288,6 +288,31 @@ describe("FeedbackDialog", () => {
       expect(mocks.toast).toHaveBeenCalledWith("Your feedback was copied. If the email draft is cut off, paste the copied text.", "success")
     })
 
+    it("includes a valid reply-to address in both the copied text and the email draft", async () => {
+      failOnce()
+      await render()
+      await fill("Restore a policy", "It failed")
+      const email = document.body.querySelector('input[type="email"]') as HTMLInputElement
+      await act(async () => { type(email, " admin@contoso.com ") })
+      await clickSend()
+      await act(async () => { button("Copy as email")!.click() })
+      expect(mocks.writeText.mock.calls[0]![0]).toContain("Reply-to email: admin@contoso.com")
+      expect(decodeURIComponent(mocks.openExternal.mock.calls[0]![0])).toContain("Reply-to email: admin@contoso.com")
+    })
+
+    it("leaves out a reply-to address that does not validate", async () => {
+      failOnce()
+      await render()
+      await fill("Restore a policy", "It failed")
+      await clickSend()
+      // Edited after the failure: the address no longer validates, so it is not added.
+      const email = document.body.querySelector('input[type="email"]') as HTMLInputElement
+      await act(async () => { type(email, "a..b@example.com") })
+      await act(async () => { button("Copy as email")!.click() })
+      expect(mocks.writeText.mock.calls[0]![0]).not.toContain("Reply-to")
+      expect(decodeURIComponent(mocks.openExternal.mock.calls[0]![0])).not.toContain("Reply-to")
+    })
+
     it("says the text is on the clipboard and names the address when no mail app opens", async () => {
       failOnce()
       mocks.openExternal.mockRejectedValue(new Error("No application"))
