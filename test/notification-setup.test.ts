@@ -1,5 +1,10 @@
-import { readFileSync } from "node:fs"
+import { execFileSync } from "node:child_process"
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { describe, expect, it } from "vitest"
+
+const pwsh = ["/usr/local/bin/pwsh", "/opt/homebrew/bin/pwsh", "/usr/bin/pwsh", ...(process.env.HOME ? [`${process.env.HOME}/.local/bin/pwsh`] : [])].find((candidate) => existsSync(candidate))
 import { buildSetupAlerts, parseWatcherSetup, setupState, setupWatchNeeds, watcherSetupCommand } from "../src/shared/notifications/setup"
 
 const TENANT = "11111111-1111-4111-8111-111111111111"
@@ -91,7 +96,7 @@ describe("the Azure watcher setup command", () => {
 
   it("leaves a visible placeholder instead of guessing a failure-alert address, and never carries a secret", () => {
     const command = watcherSetupCommand({ tenantId: TENANT, storageAccount: "tvbkp1234567890ab", includeConditionalAccess: false })
-    expect(command).toContain("-AlertEmail <failure-alert-email>")
+    expect(command).toContain("-AlertEmail '<failure-alert-email>'")
     expect(command).not.toContain("-IncludeConditionalAccess")
     expect(command).not.toContain("Webhook")
     expect(command).not.toContain("Teams")
@@ -109,15 +114,28 @@ describe("the Azure watcher setup command", () => {
     expect(command).toContain(`-ResourceGroupName 'rg'';Write-Output(42);#'`)
     // A crafted address never reaches the command at all; the placeholder takes its place.
     const mail = watcherSetupCommand({ tenantId: TENANT, storageAccount: "tvbkp1234567890ab", alertEmail: `ops@example.com${curly};Write-Output(42);#`, includeConditionalAccess: false })
-    expect(mail).toContain("-AlertEmail <failure-alert-email>")
+    expect(mail).toContain("-AlertEmail '<failure-alert-email>'")
     expect(mail).not.toContain("Write-Output")
   })
 
-  it("carries the watcher's own destination as a placeholder, never a secret", () => {
-    expect(watcherSetupCommand({ tenantId: TENANT, storageAccount: "tvbkp1234567890ab", includeConditionalAccess: false, destination: "teams" })).toContain("-TeamsWebhookUrl <teams-workflows-url>")
-    expect(watcherSetupCommand({ tenantId: TENANT, storageAccount: "tvbkp1234567890ab", includeConditionalAccess: false, destination: "webhook" })).toContain("-WebhookUrl <webhook-url>")
-    const mail = watcherSetupCommand({ tenantId: TENANT, storageAccount: "tvbkp1234567890ab", alertEmail: "ops@contoso.com", includeConditionalAccess: false, destination: "email" })
-    expect(mail).toContain("-IncludeMailSend -MailSender <sender-mailbox> -MailRecipients ops@contoso.com")
+  it("carries the watcher's own destination as a quoted placeholder, never a secret", () => {
+    expect(watcherSetupCommand({ tenantId: TENANT, storageAccount: "tvbkp1234567890ab", includeConditionalAccess: false, destination: "teams" })).toContain("-TeamsWebhookUrl '<teams-workflows-url>'")
+    expect(watcherSetupCommand({ tenantId: TENANT, storageAccount: "tvbkp1234567890ab", includeConditionalAccess: false, destination: "webhook" })).toContain("-WebhookUrl '<webhook-url>'")
+    // The failure-alert address and where watcher mail goes are different addresses.
+    const mail = watcherSetupCommand({ tenantId: TENANT, storageAccount: "tvbkp1234567890ab", alertEmail: "azure-admin@contoso.com", mailRecipient: "ops@contoso.com", includeConditionalAccess: false, destination: "email" })
+    expect(mail).toContain("-AlertEmail azure-admin@contoso.com")
+    expect(mail).toContain("-IncludeMailSend -MailSender '<sender-mailbox>' -MailRecipients ops@contoso.com")
+  })
+
+  it.runIf(Boolean(pwsh))("parses as exactly one PowerShell statement, payloads and filled placeholders included", () => {
+    const curly = "\u2019"
+    const command = watcherSetupCommand({ tenantId: TENANT, storageAccount: "tvbkp1234567890ab", resourceGroup: `rg${curly};Write-Output(42);#`, includeConditionalAccess: true, destination: "teams" })
+      .replace("<teams-workflows-url>", "https://example.com/workflows/triggers/manual/paths/invoke?api-version=2016-06-01&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=abc")
+    const dir = mkdtempSync(join(tmpdir(), "tv-setup-parse-"))
+    const file = join(dir, "command.ps1")
+    writeFileSync(file, command)
+    const out = execFileSync(pwsh!, ["-NoProfile", "-Command", `$t=$null;$e=$null;$a=[System.Management.Automation.Language.Parser]::ParseFile('${file}',[ref]$t,[ref]$e);Write-Output "$($a.EndBlock.Statements.Count) $($e.Count)"`], { encoding: "utf8" }).trim()
+    expect(out).toBe("1 0")
   })
 })
 

@@ -172,6 +172,8 @@ export function watcherSetupCommand(options: {
   location?: string
   subscriptionId?: string
   alertEmail?: string
+  /** Where watcher mail goes. Separate from alertEmail, which only hears about watcher failures. */
+  mailRecipient?: string
   includeConditionalAccess: boolean
   destination?: WatcherSetupDestination
 }): string {
@@ -184,10 +186,13 @@ export function watcherSetupCommand(options: {
   if (options.location) parts.push(`-Location ${psValue(options.location)}`)
   if (options.subscriptionId) parts.push(`-SubscriptionId ${psValue(options.subscriptionId)}`)
   const alertEmail = options.alertEmail?.trim() ?? ""
-  parts.push(`-AlertEmail ${COMMAND_EMAIL.test(alertEmail) ? psValue(alertEmail) : "<failure-alert-email>"}`)
-  if (options.destination === "teams") parts.push("-TeamsWebhookUrl <teams-workflows-url>")
-  if (options.destination === "webhook") parts.push("-WebhookUrl <webhook-url>")
-  if (options.destination === "email") parts.push("-IncludeMailSend", "-MailSender <sender-mailbox>", `-MailRecipients ${COMMAND_EMAIL.test(alertEmail) ? psValue(alertEmail) : "<recipient-email>"}`)
+  const mailRecipient = options.mailRecipient?.trim() ?? ""
+  // Placeholders are quoted, so the value filled in between the quotes (a URL with &
+  // in its query, say) stays one literal instead of starting a second command.
+  parts.push(`-AlertEmail ${COMMAND_EMAIL.test(alertEmail) ? psValue(alertEmail) : "'<failure-alert-email>'"}`)
+  if (options.destination === "teams") parts.push("-TeamsWebhookUrl '<teams-workflows-url>'")
+  if (options.destination === "webhook") parts.push("-WebhookUrl '<webhook-url>'")
+  if (options.destination === "email") parts.push("-IncludeMailSend", "-MailSender '<sender-mailbox>'", `-MailRecipients ${COMMAND_EMAIL.test(mailRecipient) ? psValue(mailRecipient) : "'<recipient-email>'"}`)
   parts.push("-GrantGraphRoles")
   if (options.includeConditionalAccess) parts.push("-IncludeConditionalAccess")
   return parts.join(" ")

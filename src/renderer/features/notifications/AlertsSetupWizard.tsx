@@ -137,6 +137,7 @@ export function SetupWizard({ tenant, data, onClose, onChanged }: { tenant: Tena
   const [testWarning, setTestWarning] = useState<string | null>(null)
   const [createdChannelId, setCreatedChannelId] = useState<string | null>(null)
   const [ruleIds, setRuleIds] = useState<Record<string, string>>({})
+  const [flippedExternal, setFlippedExternal] = useState(false)
   const [watcherDestConfirmed, setWatcherDestConfirmed] = useState(false)
   const [copied, setCopied] = useState<string | null>(null)
   const mailPermission = useOptionalPermission(tenant, "notificationEmail")
@@ -162,6 +163,11 @@ export function SetupWizard({ tenant, data, onClose, onChanged }: { tenant: Tena
   const destinationLocked = createdChannelId !== null
   const destKind = destination === "existing" ? data.channels.find((channel) => channel.id === existingId)?.kind : destination
   const watcherDestination = destKind === "teams" || destKind === "email" || destKind === "webhook" ? destKind : undefined
+  const mailRecipient = destination === "email"
+    ? email.trim()
+    : destination === "existing"
+      ? data.channels.find((channel) => channel.id === existingId)?.recipients.find((recipient) => recipient.type === "address")?.address ?? ""
+      : ""
   const handOver = azure === "guided" && watcherSetup !== null && !pasteError && watcherSetup.graphRolesGranted && watcherDestination !== undefined && watcherDestConfirmed
   const command = useMemo(
     () => watcherSetupCommand({
@@ -170,11 +176,12 @@ export function SetupWizard({ tenant, data, onClose, onChanged }: { tenant: Tena
       resourceGroup: tenant.resources?.resourceGroupName && tenant.resources.resourceGroupName !== "local" ? tenant.resources.resourceGroupName : undefined,
       location: tenant.resources?.resourceGroupLocation || undefined,
       subscriptionId: tenant.resources?.subscriptionId && tenant.resources.subscriptionId !== "local" ? tenant.resources.subscriptionId : undefined,
-      alertEmail: (alertEmail || (destination === "email" ? email : "")).trim() || undefined,
+      alertEmail: (alertEmail || mailRecipient).trim() || undefined,
+      mailRecipient: mailRecipient || undefined,
       includeConditionalAccess: needs.conditionalAccess,
       destination: watcherDestination,
     }),
-    [tenantId, storageAccount, tenant.resources, alertEmail, destination, email, needs.conditionalAccess, watcherDestination],
+    [tenantId, storageAccount, tenant.resources, alertEmail, mailRecipient, needs.conditionalAccess, watcherDestination],
   )
 
   const destinationValid =
@@ -232,7 +239,9 @@ export function SetupWizard({ tenant, data, onClose, onChanged }: { tenant: Tena
         setCreatedChannelId(channelId)
       }
       // A reused destination that was turned off would send nothing while looking set up.
-      if (reused && !reused.enabled) await notificationsApi.updateChannel(tenant, reused.id, { enabled: true })
+      // Checked on every try: a failed repair is retried, not skipped because an id exists.
+      const knownChannel = data.channels.find((channel) => channel.id === channelId) ?? reused
+      if (knownChannel && !knownChannel.enabled) await notificationsApi.updateChannel(tenant, knownChannel.id, { enabled: true })
       mark("Destination ready")
 
       for (const alert of alerts) {
@@ -262,16 +271,26 @@ export function SetupWizard({ tenant, data, onClose, onChanged }: { tenant: Tena
         // upload gives change alerts back to this computer instead of standing it down.
         const exported = await notificationsApi.exportWatcherAlerts(tenant)
         if (exported.document.alerts.length === 0) throw new Error("No alert sends to a Teams, email or webhook channel, so the Azure watcher would have nothing to run. Change watching stays on this computer.")
-        const wasExternal = Boolean(data.auditWatch?.externalWatcher)
-        if (!wasExternal) await notificationsApi.updateAuditWatch(tenant, { externalWatcher: true })
+        const wasExternal = Boolean(data.auditWatch?.externalWatcher) && !flippedExternal
+        if (!wasExternal && !flippedExternal) {
+          await notificationsApi.updateAuditWatch(tenant, { externalWatcher: true })
+          setFlippedExternal(true)
+        }
         try {
           await notificationsApi.pushWatcherAlerts(tenant, { auto: true, write: true })
         } catch (pushError) {
+          const reason = pushError instanceof Error ? pushError.message : String(pushError)
           if (!wasExternal) {
-            await notificationsApi.pushWatcherAlerts(tenant, { auto: false, write: false }).catch(() => undefined)
-            await notificationsApi.updateAuditWatch(tenant, { externalWatcher: false }).catch(() => undefined)
+            // Only claim this computer is watching again when giving ownership back worked.
+            try {
+              await notificationsApi.pushWatcherAlerts(tenant, { auto: false, write: false })
+              await notificationsApi.updateAuditWatch(tenant, { externalWatcher: false })
+              setFlippedExternal(false)
+            } catch (rollbackError) {
+              throw new Error(`The alerts could not be sent to the Azure watcher (${reason}), and handing change alerts back to this computer also failed (${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}). This computer may have stood down: on the Change watching tab, turn off "An Azure watcher owns change alerts for this tenant", save, then run this setup again.`)
+            }
           }
-          throw new Error(`The alerts could not be sent to the Azure watcher (${pushError instanceof Error ? pushError.message : String(pushError)}). Change watching stays on this computer.`)
+          throw new Error(`The alerts could not be sent to the Azure watcher (${reason}). Change watching stays on this computer.`)
         }
         mark("Azure watcher takes over while this computer is off")
       }
@@ -410,7 +429,7 @@ export function SetupWizard({ tenant, data, onClose, onChanged }: { tenant: Tena
                       <ExternalLink className="h-4 w-4" aria-hidden="true" />Watcher guide
                     </Button>
                   </div>
-                  <p className="text-xs text-gray-600">The command carries no secret, so its destination parameter is a placeholder in angle brackets: fill in the same {watcherDestination === "teams" ? "Teams Workflows URL" : watcherDestination === "email" ? "sender mailbox (and keep the recipient)" : watcherDestination === "webhook" ? "webhook URL" : "destination"} before running it. Without that destination the watcher runs but delivers nothing. The alerts themselves are pushed to it from here after setup.</p>
+                  <p className="text-xs text-gray-600">The command carries no secret, so its destination parameter is a quoted placeholder: replace the text between the quotes with the same {watcherDestination === "teams" ? "Teams Workflows URL" : watcherDestination === "email" ? "sender mailbox (and keep the recipient)" : watcherDestination === "webhook" ? "webhook URL" : "destination"} before running it, keeping the quotes. Without that destination the watcher runs but delivers nothing. The alerts themselves are pushed to it from here after setup.</p>
                   {!watcherDestination && (
                     <p className="flex gap-2 text-sm text-amber-800 dark:text-amber-200" role="status">
                       <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
@@ -432,7 +451,7 @@ export function SetupWizard({ tenant, data, onClose, onChanged }: { tenant: Tena
                   {watcherSetup && !pasteError && watcherSetup.graphRolesGranted && watcherDestination && (
                     <label className="flex items-start gap-2 text-sm text-gray-800">
                       <input type="checkbox" className="mt-0.5 size-4 shrink-0 accent-coral-600" checked={watcherDestConfirmed} onChange={(event) => setWatcherDestConfirmed(event.target.checked)} />
-                      <span>The watcher setup was given a {watcherDestination === "email" ? "mail sender and recipients" : watcherDestination === "teams" ? "Teams Workflows URL" : "webhook URL"} to send to, with the placeholder in the command filled in{watcherDestination === "email" ? ", and its one-time mail verification is done or planned (mail stays off until it passes, the rest of the watcher works)" : ""}. Without this tick, alerts stay on this computer.</span>
+                      <span>The watcher setup was given a {watcherDestination === "email" ? "mail sender and recipients" : watcherDestination === "teams" ? "Teams Workflows URL" : "webhook URL"} to send to, with the placeholder in the command filled in{watcherDestination === "email" ? ", and its one-time mail verification has passed (the watcher sends no mail until it does, so run that first)" : ""}. Without this tick, alerts stay on this computer.</span>
                     </label>
                   )}
                 </div>
@@ -453,7 +472,7 @@ export function SetupWizard({ tenant, data, onClose, onChanged }: { tenant: Tena
               <li>Send to <strong>{destinationLabel}</strong>{destination === "existing" ? "" : " (created now, stored only on this computer)"}.</li>
               <li>Create {alerts.length === 1 ? "one alert" : `${alerts.length} alerts`}: {alerts.map((alert) => alert.title).join("; ")}. Alerts with these names that already exist are kept, not duplicated.</li>
               {(needs.intune || needs.conditionalAccess) && (
-                <li>Turn on {[needs.intune ? "Intune" : null, needs.conditionalAccess ? "Conditional Access" : null].filter(Boolean).join(" and ")} change watching, checked every {data.auditWatch?.intervalMinutes ?? 15} minutes while TenuVault runs. {(data.auditWatch?.ignoreOwnChanges ?? true) ? "Changes made through TenuVault itself stay ignored." : "Changes made through TenuVault itself are included, as currently set."} {(data.auditWatch?.includeActor ?? false) ? "Who made each change is included, as currently set." : "Who made a change is not included."}</li>
+                <li>Turn on {[needs.intune ? "Intune" : null, needs.conditionalAccess ? "Conditional Access" : null].filter(Boolean).join(" and ")} change watching, checked every {data.auditWatch?.intervalMinutes ?? 15} minutes while TenuVault runs. {(data.auditWatch?.ignoreOwnChanges ?? true) ? "Changes made through TenuVault itself stay ignored." : "Changes made through TenuVault itself are included, as currently set."} {(data.auditWatch?.includeActor ?? false) ? "Who made each change is included, as currently set." : "Who made a change is not included."}{(data.auditWatch?.categories.length ?? 0) > 0 ? ` Only the ${data.auditWatch!.categories.length} Intune categories already picked on Change watching are read.` : ""}</li>
               )}
               {handOver && <li>Hand change alerts to the Azure watcher in {watcherSetup!.automationAccount}, and keep it updated whenever an alert or channel changes.</li>}
               {azure === "guided" && !handOver && <li>Keep watching from this computer for now. The Azure hand-over happens when you paste a finished watcher setup in the step before.</li>}
