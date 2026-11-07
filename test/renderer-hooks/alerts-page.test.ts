@@ -9,7 +9,7 @@ import type { NotificationRule, NotificationsStatus, PublicChannel } from "../..
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const opened = vi.hoisted(() => [] as string[])
-const state = vi.hoisted(() => ({ status: null as unknown as NotificationsStatus, watchUpdates: [] as unknown[], pushes: [] as unknown[], added: [] as unknown[], channelsAdded: [] as unknown[], tested: [] as unknown[], updatedRules: [] as unknown[], updatedChannels: [] as unknown[], afterTest: null as null | (() => void), pushFails: false }))
+const state = vi.hoisted(() => ({ status: null as unknown as NotificationsStatus, watchUpdates: [] as unknown[], pushes: [] as unknown[], added: [] as unknown[], channelsAdded: [] as unknown[], tested: [] as unknown[], updatedRules: [] as unknown[], updatedChannels: [] as unknown[], deployStarts: [] as unknown[], afterTest: null as null | (() => void), pushFails: false }))
 
 vi.mock("../../src/renderer/features/notifications/api", async (original) => ({
   ...(await original<typeof import("../../src/renderer/features/notifications/api")>()),
@@ -25,6 +25,32 @@ vi.mock("../../src/renderer/features/notifications/api", async (original) => ({
     updateChannel: async (_tenant: unknown, channelId: string, body: unknown) => { state.updatedChannels.push({ channelId, body }); return { channel: null } },
     addChannel: async (_tenant: unknown, body: { kind: string }) => { state.channelsAdded.push(body); return { channel: { id: "new-channel", kind: body.kind, title: "This computer", enabled: true, urlHost: null, headerName: null, hasSecret: false, signRequests: false, recipients: [], lastDelivery: null } } },
     testChannel: async (_tenant: unknown, channelId: string) => { state.tested.push(channelId); state.afterTest?.(); return { delivery: { ok: true, at: "2026-11-06T09:00:00Z", attempts: 1, status: 200, error: null, test: true }, channel: null } },
+    watcherPreflight: async (_tenant: unknown, body: Record<string, unknown>) => ({
+      plan: { subscriptionId: "22222222-2222-4222-8222-222222222222", resourceGroupName: "rg-tenuvault-backups", automationAccountName: "aa-tenuvault-notifications", storageAccountName: "tvbkp1234567890ab", location: "westeurope", alertEmail: body.alertEmail ?? "", noFailureAlert: false, destinationKinds: ["teams"], needsConditionalAccess: true, createIfMissing: true },
+      planHash: "plan-hash",
+      findings: [],
+      capabilities: { canRead: true, canDeploy: true, canAssignRoles: true, canStartJobs: true, canWriteAlertsFile: true },
+      existing: { found: true, automationAccountName: "aa-tenuvault-notifications", resourceGroupName: "rg-tenuvault-backups", location: "westeurope", principalId: "33333333-3333-4333-8333-333333333333", identityTenantMatches: true, runbookPublished: true, scheduleLinked: true, failureAlert: true, watchConditionalAccess: true, heartbeatRunAt: null },
+      graphRoles: ["DeviceManagementApps.Read.All", "AuditLog.Read.All"],
+      graphRoleStatus: "unknown",
+      missingGraphRoles: ["DeviceManagementApps.Read.All", "AuditLog.Read.All"],
+      alertsHash: "hash",
+    }),
+    watcherDeployStart: async (_tenant: unknown, body: unknown) => {
+      state.deployStarts.push(body)
+      return { job: {
+        id: "deploy-1", mode: "adopt", state: "blocked",
+        plan: { subscriptionId: "22222222-2222-4222-8222-222222222222", resourceGroupName: "rg-tenuvault-backups", automationAccountName: "aa-tenuvault-notifications", storageAccountName: "tvbkp1234567890ab", location: "westeurope", alertEmail: "ops@contoso.test", noFailureAlert: false, destinationKinds: ["teams"], needsConditionalAccess: true, createIfMissing: true },
+        planHash: "plan-hash", ack: { destinationConfirmed: true, copyDestinationKinds: [], grantRoles: false, rolesConfirmed: true }, findings: [], capabilities: { canRead: true, canDeploy: true, canAssignRoles: true, canStartJobs: true, canWriteAlertsFile: true },
+        existing: { found: true, automationAccountName: "aa-tenuvault-notifications", resourceGroupName: "rg-tenuvault-backups", location: "westeurope", principalId: "33333333-3333-4333-8333-333333333333", identityTenantMatches: true, runbookPublished: true, scheduleLinked: true, failureAlert: true, watchConditionalAccess: true, heartbeatRunAt: null },
+        steps: [{ id: "discover", label: "Check Azure", status: "done", detail: null, error: null }, { id: "graph-roles", label: "Microsoft Graph roles", status: "blocked", detail: null, error: "needs admin" }],
+        graphRoles: ["DeviceManagementApps.Read.All"], graphRoleStatus: "unknown", principalId: "33333333-3333-4333-8333-333333333333", grantSnippet: "Connect-MgGraph", blockedReason: "needs-admin", error: "A Global Administrator still has to assign the roles.", alertsHash: null, automationJobId: null, createdAt: "2026-11-06T09:00:00Z", updatedAt: "2026-11-06T09:00:00Z",
+      } }
+    },
+    getWatcherDeploy: async () => ({ job: null }),
+    watcherDeployResume: async () => { throw new Error("not used") },
+    watcherDeployConfirm: async () => { throw new Error("not used") },
+    revokeWatcherDeploy: async () => { throw new Error("not used") },
   },
 }))
 vi.mock("../../src/portal/contexts/TenantContext", () => ({ useTenants: () => [] }))
@@ -146,37 +172,40 @@ describe("the Alerts page", () => {
     expect((state.added as Array<{ title: string }>).map((rule) => rule.title)).toEqual(["Deletions and removed assignments", "Conditional Access changes"])
   })
 
-  it("hands change alerts back to this computer when sending them to the watcher fails", async () => {
+  it("never hands over from a pasted setup block: it only fills the verified Azure setup", async () => {
     const guid = "11111111-1111-4111-8111-111111111111"
     const azureTenant = { id: 2, name: "Contoso", credentials: { tenantId: guid }, resources: { storageAccountName: "tvbkp1234567890ab", subscriptionId: "22222222-2222-4222-8222-222222222222", resourceGroupName: "rg-tenuvault-backups", resourceGroupLocation: "westeurope" } } as unknown as Tenant
     state.status = { ...empty, channels: [teams], signedIn: true }
     state.added = []
     state.watchUpdates = []
     state.pushes = []
-    state.pushFails = true
-    try {
-      const container = await render(AlertsTab, true, "/portal/alerts", azureTenant)
-      const dialogButton = await walkWizard(container, "Finish setup")
-      act(() => dialogButton("Continue").click())
-      act(() => dialogButton("Continue").click())
-      const dialog = () => document.body.querySelector('[role="dialog"]')!
-      const azureRadio = [...dialog().querySelectorAll('input[name="setup-azure"]')][1] as HTMLInputElement
-      act(() => azureRadio.click())
-      const paste = dialog().querySelector('textarea[aria-label="Watcher setup output"]') as HTMLTextAreaElement
-      const block = ["--- TenuVault notification watcher setup (paste into TenuVault) ---", `tenantId=${guid}`, "storageAccount=tvbkp1234567890ab", "automationAccount=aa-tenuvault-notifications", "resourceGroup=rg-tenuvault-backups", "subscriptionId=22222222-2222-4222-8222-222222222222", "graphRolesGranted=true"].join("\n")
-      act(() => { Object.getOwnPropertyDescriptor(Object.getPrototypeOf(paste), "value")!.set!.call(paste, block); paste.dispatchEvent(new Event("input", { bubbles: true })); paste.dispatchEvent(new Event("change", { bubbles: true })) })
-      const confirm = [...dialog().querySelectorAll('input[type="checkbox"]')].at(-1) as HTMLInputElement
-      act(() => confirm.click())
-      act(() => dialogButton("Continue").click())
-      await act(async () => { dialogButton("Turn on alerts").click() })
-      for (let attempt = 0; attempt < 20 && !dialog().textContent?.includes("Setup stopped"); attempt++) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
-      expect(dialog().textContent).toContain("Change watching stays on this computer")
-      const external = (state.watchUpdates as Array<{ externalWatcher?: boolean }>).filter((body) => body.externalWatcher !== undefined).map((body) => body.externalWatcher)
-      expect(external).toEqual([true, false])
-      expect(state.pushes).toEqual([{ auto: true, write: true }, { auto: false, write: false }])
-    } finally {
-      state.pushFails = false
-    }
+    state.deployStarts = []
+    const container = await render(AlertsTab, true, "/portal/alerts", azureTenant)
+    const dialogButton = await walkWizard(container, "Finish setup")
+    act(() => dialogButton("Continue").click())
+    act(() => dialogButton("Continue").click())
+    const dialog = () => document.body.querySelector('[role="dialog"]')!
+    const advancedRadio = [...dialog().querySelectorAll('input[name="setup-azure"]')][2] as HTMLInputElement
+    act(() => advancedRadio.click())
+    const paste = dialog().querySelector('textarea[aria-label="Watcher setup output"]') as HTMLTextAreaElement
+    const block = ["--- TenuVault notification watcher setup (paste into TenuVault) ---", `tenantId=${guid}`, "storageAccount=tvbkp1234567890ab", "automationAccount=aa-tenuvault-notifications", "resourceGroup=rg-tenuvault-backups", "subscriptionId=22222222-2222-4222-8222-222222222222", "graphRolesGranted=true"].join("\n")
+    act(() => { Object.getOwnPropertyDescriptor(Object.getPrototypeOf(paste), "value")!.set!.call(paste, block); paste.dispatchEvent(new Event("input", { bubbles: true })); paste.dispatchEvent(new Event("change", { bubbles: true })) })
+    expect(dialog().textContent).toContain("A paste on its own never hands alerts over")
+    const use = [...dialog().querySelectorAll("button")].find((button) => button.textContent === "Use these details and verify from TenuVault") as HTMLButtonElement
+    await act(async () => { use.click() })
+    for (let attempt = 0; attempt < 20 && !dialog().textContent?.includes("Found aa-tenuvault-notifications"); attempt++) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    const failureEmail = dialog().querySelector('input[type="email"]') as HTMLInputElement
+    act(() => { Object.getOwnPropertyDescriptor(Object.getPrototypeOf(failureEmail), "value")!.set!.call(failureEmail, "ops@contoso.test"); failureEmail.dispatchEvent(new Event("input", { bubbles: true })); failureEmail.dispatchEvent(new Event("change", { bubbles: true })) })
+    const confirmLabel = [...dialog().querySelectorAll("label")].find((label) => label.textContent?.includes("If the watcher already exists"))!
+    act(() => (confirmLabel.querySelector('input[type="checkbox"]') as HTMLInputElement).click())
+    act(() => dialogButton("Continue").click())
+    await act(async () => { dialogButton("Turn on alerts").click() })
+    for (let attempt = 0; attempt < 20 && !dialog().textContent?.includes("Azure is finishing"); attempt++) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    expect(dialog().textContent).toContain("needs DeviceManagementApps.Read.All")
+    expect(state.deployStarts).toHaveLength(1)
+    // The paste and the mocked role boundary never flip ownership or push alerts from the renderer.
+    expect((state.watchUpdates as Array<{ externalWatcher?: boolean }>).some((body) => body.externalWatcher !== undefined)).toBe(false)
+    expect(state.pushes).toEqual([])
   })
 
   it("hides the setup card once a working setup exists", async () => {

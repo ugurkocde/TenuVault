@@ -2,7 +2,7 @@ import { createHmac } from "node:crypto"
 import { canonicalJson, SEVERITY_RANK, watcherStaleEvent, type NotificationEnvelope } from "../../../shared/notifications/envelope"
 import { emailHtml, emailSubject, localText, teamsWorkflowsPayload } from "../../../shared/notifications/render"
 import { AUDIT_EVENT_SELECT, filterAuditChanges, mapAuditEvent, type AuditChange, type AuditEventRaw, type ChangeService } from "../../../shared/notifications/audit"
-import { hasConditions, isChangeEventType, parseConditions, parseDelivery, planChangeAlerts, type AlertMatcher } from "../../../shared/notifications/alerts"
+import { hasConditions, isChangeEventType, parseConditions, parseDelivery, planChangeAlerts, WATCHER_ALERTS_SCHEMA, watcherAlertsHash, type AlertMatcher, type WatcherAlert, type WatcherAlerts, type WatcherDestination } from "../../../shared/notifications/alerts"
 import { DEFAULT_CARD_LAYOUT, parseCardLayout, styleFor, type CardLayout } from "../../../shared/notifications/layout"
 import { ENTRA_AUDIT_FILTER, ENTRA_AUDIT_SELECT, mapEntraAuditEvent, type EntraAuditRaw } from "../../../shared/notifications/entra"
 import { allows } from "../../../shared/plans"
@@ -16,6 +16,7 @@ import {
   MAX_OUTBOX_KEPT,
   MAX_RECENT_AUDIT_IDS,
   MAX_RECIPIENTS,
+  MAX_WATCHER_ALERTS_LENGTH,
   WATCHER_CHECK_MINUTES,
   WATCHER_STALE_HOURS,
   type AuditWatchRecord,
@@ -25,6 +26,7 @@ import {
   type DeliveryResult,
   type OutboxRecord,
   type RuleRecord,
+  type WatcherAlertsSync,
 } from "./model"
 
 const DELIVERY_TIMEOUT_MS = 10_000
@@ -653,6 +655,119 @@ export async function checkWatcher(deps: FeatureDeps, tenantId: string, options:
   }
   saveAuditWatch(deps, tenant, { watcherCheck: { checkedAt: now.toISOString(), lastRunAt, stale, error: null, alertsHash: read.status === "ok" ? read.alertsHash ?? null : null, runbookVersion: read.status === "ok" ? read.runbookVersion ?? null : null, alertsSource: read.status === "ok" ? read.alertsSource ?? null : null } }, { actor: null, reason: stale ? "Azure watcher heartbeat is stale" : "Azure watcher heartbeat is fresh" })
   return { stale, enqueued, error: null }
+}
+
+export type WatcherPushResult =
+  | { ok: true; hash: string; pushedAt: string; alerts: number; skipped: string[]; uncovered: string[] }
+  | { ok: false; error: string; status: number }
+
+const WATCHER_DESTINATIONS: WatcherDestination[] = ["webhook", "teams", "mail"]
+
+/** The enabled alerts as the Azure watcher reads them, and the alerts left out for having no remote channel. */
+export function watcherAlertsDocument(deps: FeatureDeps, tenantId: string): { document: WatcherAlerts; skipped: string[] } {
+  const channels = channelsOf(deps, tenantId)
+  const alerts: WatcherAlert[] = []
+  const skipped: string[] = []
+  for (const rule of rulesOf(deps, tenantId)) {
+    if (!rule.enabled) continue
+    const destinations = [...new Set(channels.filter((channel) => channel.enabled && rule.channelIds.includes(channel.id)).flatMap((channel): WatcherDestination[] => (channel.kind === "email" ? ["mail"] : channel.kind === "teams" ? ["teams"] : channel.kind === "webhook" ? ["webhook"] : [])))]
+    if (!destinations.length) { skipped.push(rule.title); continue }
+    alerts.push({ id: rule.id, title: rule.title, eventTypes: rule.eventTypes.filter((type) => type !== "test"), minSeverity: rule.minSeverity, destinations: WATCHER_DESTINATIONS.filter((entry) => destinations.includes(entry)), delivery: parseDelivery(rule.delivery), conditions: parseConditions(rule.conditions) })
+  }
+  return { document: { schema: WATCHER_ALERTS_SCHEMA, alerts }, skipped }
+}
+
+/** The event types the Azure watcher produces. */
+const WATCHER_EVENT_TYPES = ["intune.change", "entra.change", "backup.failed", "backup.warning", "backup.succeeded", "backup.missed"] as const
+
+export function uncoveredWatcherEvents(document: WatcherAlerts): string[] {
+  return WATCHER_EVENT_TYPES.filter((type) => !document.alerts.some((alert) => alert.eventTypes.includes(type)))
+}
+
+export function saveWatcherSync(deps: FeatureDeps, tenantId: string, change: Partial<WatcherAlertsSync>, actor: string | null, reason: string) {
+  const current = auditWatchOf(deps, tenantId)?.watcherAlertsSync
+  const next: WatcherAlertsSync = { auto: false, pushedAt: null, pushedHash: null, error: null, errorAt: null, ...current, ...change }
+  saveAuditWatch(deps, tenantId, { watcherAlertsSync: next }, { actor, reason })
+}
+
+/** Writes per tenant run one after another, so an older document never lands after a newer one. */
+const pushQueues = new Map<string, Promise<unknown>>()
+
+/**
+ * Writes the current alerts to the Azure watcher's alerts.json and records what was written.
+ * Refused without an alert the watcher can send, because the watcher would then send every
+ * event to every destination: that stays a choice made in its setup (-AlertRulesPath "").
+ * The deployment flow writes before ownership flips; every other caller needs an owner.
+ */
+export function writeWatcherAlerts(deps: FeatureDeps, tenantId: string, actor: string | null, options: { requireOwnership?: boolean } = {}): Promise<WatcherPushResult> {
+  const key = tenantId.toLowerCase()
+  const run = (pushQueues.get(key) ?? Promise.resolve()).catch(() => undefined).then(() => writeWatcherAlertsNow(deps, tenantId, actor, options.requireOwnership ?? true))
+  pushQueues.set(key, run)
+  // The caller handles a failure of run; this cleanup must not raise it a second time.
+  run.finally(() => { if (pushQueues.get(key) === run) pushQueues.delete(key) }).catch(() => undefined)
+  return run
+}
+
+export function pushWatcherAlerts(deps: FeatureDeps, tenantId: string, actor: string | null): Promise<WatcherPushResult> {
+  return writeWatcherAlerts(deps, tenantId, actor, { requireOwnership: true })
+}
+
+async function writeWatcherAlertsNow(deps: FeatureDeps, tenantId: string, actor: string | null, requireOwnership: boolean): Promise<WatcherPushResult> {
+  const fail = (error: string, status = 400): WatcherPushResult => {
+    saveWatcherSync(deps, tenantId, { error, errorAt: deps.now().toISOString() }, actor, `Watcher alerts not updated: ${error}`)
+    return { ok: false, error, status }
+  }
+  if (requireOwnership && !auditWatchOf(deps, tenantId)?.externalWatcher) return { ok: false, error: "No Azure watcher owns change alerts for this tenant. Turn on \"An Azure watcher handles change alerts\" in the Watching tab first.", status: 409 }
+  if (!deps.watcherAlertsWrite) return fail("This version of TenuVault cannot write to the watcher's storage.", 501)
+  const { document, skipped } = watcherAlertsDocument(deps, tenantId)
+  if (document.alerts.length === 0) return fail("No alert sends to a webhook, Teams or email channel, so there is nothing for the watcher to run. Add such a channel to an alert first.")
+  const json = JSON.stringify(document, null, 2)
+  if (json.length > MAX_WATCHER_ALERTS_LENGTH) return fail("The alerts are larger than 500 KB. Shorten their conditions.")
+  let written: Awaited<ReturnType<NonNullable<FeatureDeps["watcherAlertsWrite"]>>>
+  try {
+    written = await deps.watcherAlertsWrite(tenantId, json)
+  } catch (error) {
+    written = { status: "error", message: brief(error instanceof Error ? error.message : String(error)) }
+  }
+  if (written.status !== "ok") return fail(written.message, 502)
+  const hash = watcherAlertsHash(document)
+  const pushedAt = deps.now().toISOString()
+  saveWatcherSync(deps, tenantId, { pushedAt, pushedHash: hash, error: null, errorAt: null }, actor, `Watcher alerts updated: ${document.alerts.length} alert${document.alerts.length === 1 ? "" : "s"}`)
+  return { ok: true, hash, pushedAt, alerts: document.alerts.length, skipped, uncovered: uncoveredWatcherEvents(document) }
+}
+
+/**
+ * With automatic updates on, writes the alerts when they differ from what was written last.
+ * Skipped while signed out of the tenant: a storage token would prompt for a sign-in in the
+ * middle of a save. The next save, or Update watcher, catches up.
+ */
+export async function syncWatcherAlerts(deps: FeatureDeps, tenantId: string, actor: string | null, licensed: boolean): Promise<WatcherPushResult | null> {
+  const watch = auditWatchOf(deps, tenantId)
+  if (!licensed || !watch?.externalWatcher || !watch.watcherAlertsSync?.auto || !deps.actor(tenantId)) return null
+  if (watcherAlertsHash(watcherAlertsDocument(deps, tenantId).document) === watch.watcherAlertsSync.pushedHash) return null
+  return pushWatcherAlerts(deps, tenantId, actor)
+}
+
+/**
+ * The one place change alerts move to the watcher, after the deployment gate has passed.
+ * Ownership flips here, in main, together with keeping the watcher updated; a poll still
+ * waiting on Graph is overtaken by raising both generations, as a manual flip does.
+ */
+export function handOverToWatcher(deps: FeatureDeps, tenantId: string, actor: string | null, heartbeat?: { runAt: string | null; alertsHash: string | null; runbookVersion: string | null; alertsSource: string | null }): Stored<AuditWatchRecord> {
+  const current = auditWatchOf(deps, tenantId)
+  const change: AuditWatchChange = {
+    externalWatcher: true,
+    watcherAlertsSync: { pushedAt: null, pushedHash: null, ...current?.watcherAlertsSync, auto: true, error: null, errorAt: null },
+  }
+  if (!current?.externalWatcher) {
+    change.generation = (current?.generation ?? 0) + 1
+    const ca = current?.conditionalAccess ?? defaultConditionalAccessWatch()
+    change.conditionalAccess = { ...ca, generation: (ca.generation ?? 0) + 1 }
+  }
+  if (heartbeat) {
+    change.watcherCheck = { checkedAt: deps.now().toISOString(), lastRunAt: heartbeat.runAt, stale: false, error: null, alertsHash: heartbeat.alertsHash, runbookVersion: heartbeat.runbookVersion, alertsSource: heartbeat.alertsSource }
+  }
+  return saveAuditWatch(deps, tenantId, change, { actor, reason: "Verified Azure watcher took over change alerts" })
 }
 
 const ticking = new WeakSet<FeatureDeps>()
