@@ -115,7 +115,7 @@ Tenant configuration, backups, policy names, device or user records from your te
 * **Sent:** your answers to the two questions, the reply-to email if you enter one, the TenuVault version, the operating system and its version, your plan (Community, Pro, MSP or none) and the name of the section you were on, such as Drift Detection. A random message ID, so a retry of the same draft is not counted twice.
 * **Only if you tick it:** a screenshot of the TenuVault window, taken when you open **Share feedback**. It may show tenant, policy or user names. It is unticked every time the dialog opens, and the app discards it when you close the dialog or the feedback is sent.
 * **Never added automatically:** your installation ID, tenant IDs or names, license keys, tokens, and routes or links that contain IDs. The only exceptions are what you type into the answers and, if you tick it, the screenshot, which can show any of these.
-* **Kept:** stored up to 12 months, with the screenshot, to read and answer feedback; the email copy to support, with the screenshot attached, is kept as support correspondence.
+* **Kept:** stored up to 12 months, with the screenshot, to read and answer feedback; the email copy to support, with the screenshot attached, is kept as support correspondence. A keyed hash of your IP address is stored with the feedback to limit how often feedback can be sent, and is deleted after 24 hours.
 * **If blocked:** sending fails and your draft stays in the dialog. **Copy as email** copies your answers and the same details, without the screenshot, to the clipboard and opens a new email to support. Allow `https://www.tenuvault.com/api/desktop-feedback` if your proxy filters by path.
 
 ### If tenuvault.com is blocked
