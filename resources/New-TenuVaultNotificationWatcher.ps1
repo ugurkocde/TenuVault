@@ -919,4 +919,19 @@ if ($AlertEmail) {
     Write-Host "     Watch for the action group confirmation email and test the alert once."
 }
 
+# The block the TenuVault setup wizard reads back (Alerts > Set up alerts > Also from Azure).
+# graphRolesGranted says whether this run assigned the Graph roles: without it the app keeps
+# watching from the desktop instead of handing change alerts to a watcher that cannot read yet.
+if (-not $WhatIfPreference) {
+    Write-Host ""
+    Write-Host "--- TenuVault notification watcher setup (paste into TenuVault) ---"
+    Write-Host "tenantId=$TenantId"
+    Write-Host "subscriptionId=$($context.Subscription.Id)"
+    Write-Host "resourceGroup=$ResourceGroupName"
+    Write-Host "automationAccount=$AutomationAccountName"
+    Write-Host "storageAccount=$StorageAccountName"
+    Write-Host "graphRolesGranted=$(([bool]$consentReceipt).ToString().ToLowerInvariant())"
+    Write-Host "--- End of TenuVault notification watcher setup ---"
+}
+
 

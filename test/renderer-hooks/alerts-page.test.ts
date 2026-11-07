@@ -9,7 +9,7 @@ import type { NotificationRule, NotificationsStatus, PublicChannel } from "../..
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const opened = vi.hoisted(() => [] as string[])
-const state = vi.hoisted(() => ({ status: null as unknown as NotificationsStatus, watchUpdates: [] as unknown[], pushes: [] as unknown[], added: [] as unknown[] }))
+const state = vi.hoisted(() => ({ status: null as unknown as NotificationsStatus, watchUpdates: [] as unknown[], pushes: [] as unknown[], added: [] as unknown[], channelsAdded: [] as unknown[], tested: [] as unknown[] }))
 
 vi.mock("../../src/renderer/features/notifications/api", async (original) => ({
   ...(await original<typeof import("../../src/renderer/features/notifications/api")>()),
@@ -20,6 +20,8 @@ vi.mock("../../src/renderer/features/notifications/api", async (original) => ({
     listAlertSuggestions: async () => ({ policies: [], settings: [], backup: null, error: null }),
     pushWatcherAlerts: async (_tenant: unknown, body: unknown = {}) => { state.pushes.push(body); return { watcherAlerts: state.status.watcherAlerts, skipped: [], uncovered: [] } },
     addRule: async (_tenant: unknown, body: unknown) => { state.added.push(body); return { rule: body } },
+    addChannel: async (_tenant: unknown, body: { kind: string }) => { state.channelsAdded.push(body); return { channel: { id: "new-channel", kind: body.kind, title: "This computer", enabled: true, urlHost: null, headerName: null, hasSecret: false, signRequests: false, recipients: [], lastDelivery: null } } },
+    testChannel: async (_tenant: unknown, channelId: string) => { state.tested.push(channelId); return { delivery: { ok: true, at: "2026-11-06T09:00:00Z", attempts: 1, status: 200, error: null, test: true }, channel: null } },
   },
 }))
 vi.mock("../../src/portal/contexts/TenantContext", () => ({ useTenants: () => [] }))
@@ -62,11 +64,44 @@ describe("the Alerts page", () => {
     state.status = empty
     const container = await render(AlertsTab, true)
     expect(container.textContent).toContain("Runs while TenuVault runs.")
-    expect(container.textContent).toContain("you can add its channel in the same dialog")
+    expect(container.textContent).toContain("Set up alerts in about a minute")
     const add = [...container.querySelectorAll("button")].find((button) => button.textContent === "Add alert")!
     expect(add.disabled).toBe(false)
     act(() => add.click())
     expect([...document.body.querySelectorAll('[role="dialog"] button')].some((button) => button.textContent === "Add a channel")).toBe(true)
+  })
+
+  it("sets alerts up from the wizard in one run: destination, recommended alerts, watching and a test", async () => {
+    state.status = empty
+    state.channelsAdded = []
+    state.added = []
+    state.watchUpdates = []
+    state.tested = []
+    const container = await render(AlertsTab, true)
+    const open = [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("Set up alerts"))!
+    act(() => open.click())
+    const dialogButton = (label: string) => [...document.body.querySelectorAll('[role="dialog"] button')].find((button) => button.textContent === label) as HTMLButtonElement
+    // Step 1 defaults to This computer, step 2 to the recommended set, step 3 to this computer only.
+    act(() => dialogButton("Continue").click())
+    expect(document.body.querySelector('[role="dialog"]')!.textContent).toContain("Backup and restore problems")
+    act(() => dialogButton("Continue").click())
+    act(() => dialogButton("Continue").click())
+    expect(document.body.querySelector('[role="dialog"]')!.textContent).toContain("Turning alerts on will")
+    await act(async () => { dialogButton("Turn on alerts").click() })
+    for (let attempt = 0; attempt < 20 && !document.body.textContent?.includes("Alerts are on"); attempt++) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    expect(state.channelsAdded).toEqual([{ kind: "local" }])
+    expect((state.added as Array<{ title: string }>).map((rule) => rule.title)).toEqual(["Backup and restore problems", "Deletions and removed assignments", "Conditional Access changes"])
+    expect(state.watchUpdates).toEqual([{ enabled: true, conditionalAccessEnabled: true, intervalMinutes: 15 }])
+    expect(state.tested).toEqual(["new-channel"])
+    expect(document.body.querySelector('[role="dialog"]')!.textContent).toContain("Test delivered")
+  })
+
+  it("hides the setup card once a working setup exists", async () => {
+    const rule: NotificationRule = { id: "r1", title: "Backup and restore problems", enabled: true, eventTypes: ["backup.failed"], minSeverity: "info", channelIds: ["c1"], mode: "immediate", conditions: null, delivery: "digest" }
+    state.status = { ...empty, channels: [teams], rules: [rule] }
+    const container = await render(AlertsTab, true)
+    expect(container.textContent).not.toContain("Set up alerts in about a minute")
+    expect(container.textContent).toContain("Backup and restore problems")
   })
 
   it("points from channels without an alert to the Alerts tab", async () => {
