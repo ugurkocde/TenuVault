@@ -135,7 +135,16 @@ describe("change reports route", () => {
     expect(filters[1]).toContain("activityDateTime gt 2026-11-05T12:00:00.000Z and activityDateTime le 2026-11-06T02:00:00.000Z")
     expect(audit).toMatchObject({ note: "Entra keeps Conditional Access audit events only since 2026-11-05, so earlier Conditional Access changes have no actors." })
     expect(retentionStart("Minimum allowed time for activityDateTime is 10/6/2026 12:00:00 AM")).toBe("2026-10-06T00:00:00.000Z")
+    expect(retentionStart("Minimum allowed time for activityDateTime is 10/6/2026 12:00:00\u202FAM")).toBe("2026-10-06T00:00:00.000Z")
     expect(retentionStart("Something else")).toBeNull()
+  })
+
+  it("turns a throttled audit read with a raw proxy error into one plain sentence", async () => {
+    const deps = fakeDeps({
+      graph: (() => async () => ({ status: 429, body: { error: { message: `{ "_version": 3, "Message": "An error has occurred - Operation ID: 00000000 - Url: https://proxy.example.test/StatelessAuditingFEService/tenant-id/deviceManagement/auditEvents?$filter=activityDateTime", "RetryAfter": null }` } } })) as never,
+    })
+    const audit = await readAudit(deps, TENANT_A, driftResult())
+    expect(audit).toEqual({ error: "The Intune audit log could not be read: Microsoft Graph throttled the request (429). Generate the report again in a few minutes." })
   })
 
   it("keeps the report without actors when the audit log is closed", async () => {

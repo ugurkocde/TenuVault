@@ -468,6 +468,7 @@ function ConvertFrom-TenuVaultAuditEvent {
         if ($resultLower.Contains("fail") -or $resultLower.Contains("error")) { return }
 
         $activity = Get-TvText (Get-TvProp $Raw "activity")
+        if (-not $activity) { $activity = Get-TvText (Get-TvProp $Raw "activityType") }
         if (-not $activity) { $activity = Get-TvText (Get-TvProp $Raw "displayName") }
         $activityTypeText = Get-TvText (Get-TvProp $Raw "activityType")
         $activityText = Get-TvText (Get-TvProp $Raw "activity")

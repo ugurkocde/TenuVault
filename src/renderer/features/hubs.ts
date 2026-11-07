@@ -26,7 +26,7 @@ export const HUBS: Hub[] = [
   {
     id: "reports",
     title: "Reports",
-    description: "What changed in the tenant between two backups, setting by setting, and who changed it. Save as PDF, Markdown or JSON, or send by email after every scheduled backup.",
+    description: "What changed between two backups, setting by setting, and who changed it.",
     tabs: [
       {
         id: "changes",

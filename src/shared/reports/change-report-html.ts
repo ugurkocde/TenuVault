@@ -1,7 +1,7 @@
 import { redactText } from "../compliance/export"
 import { escapeHtml, type OibPrintOptions } from "../oib/report-html"
 import { luminance, resolveBrandTheme, themeCssVariables, type PdfBranding } from "../pdf/theme"
-import { activityLine, changeLabel, reportTime, reportTitle, summaryLine, type ChangeReport, type ReportChange, type ReportItem } from "./change-report"
+import { activityLine, changeLabel, publicAuditNote, reportTime, reportTitle, summaryLine, type ChangeReport, type ReportChange, type ReportItem } from "./change-report"
 
 /**
  * A change report as a standalone HTML document that the main process prints to PDF with
@@ -115,8 +115,9 @@ export function buildChangeReportDocument(report: ChangeReport, options: { brand
   const { summary } = report
   const tile = (label: string, value: number | string) => `<div class="tile"><div class="key">${text(label)}</div><div class="value">${text(String(value))}</div></div>`
   const tiles = `<div class="tiles">${tile("Changed", summary.modified)}${tile("Added", summary.added)}${tile("Deleted", summary.deleted)}${tile("Critical", summary.critical)}${tile("With audit events", report.audit.status === "included" ? summary.attributed : "Unknown")}</div>`
+  const auditNote = publicAuditNote(report.audit.note)
   const callouts = [
-    report.audit.status !== "included" ? `<div class="callout"><b>Who made the changes is unknown.</b> ${text(report.audit.note ?? "The audit log could not be read.")}</div>` : report.audit.note ? `<div class="callout"><b>Part of the audit log was not read.</b> ${text(report.audit.note)}</div>` : "",
+    report.audit.status !== "included" ? `<div class="callout"><b>Who made the changes is unknown.</b> ${text(auditNote ?? "The audit log could not be read.")}</div>` : auditNote ? `<div class="callout"><b>Part of the audit log was not read.</b> ${text(auditNote)}</div>` : "",
     !report.values ? `<div class="callout"><b>Setting values are left out.</b> This report lists which settings changed, not their values.</div>` : "",
   ].join("")
 
