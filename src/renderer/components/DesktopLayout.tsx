@@ -44,7 +44,7 @@ import { DriftScanIndicator, DriftScanNotifier } from "../lib/drift-jobs"
 import { SignInBanner } from "./SignInBanner"
 import { SupportDialog } from "./SupportDialog"
 import { FeedbackDialog } from "./FeedbackDialog"
-import { feedbackPageLabel } from "../../shared/feedback"
+import { feedbackPageLabel, type FeedbackSnapshot } from "../../shared/feedback"
 import { TenantSwitcher } from "./TenantSwitcher"
 import { UpdateSidebarLabel } from "./UpdateSidebarLabel"
 import { WhatsNewAnnouncement, WhatsNewDialog } from "./WhatsNewDialog"
@@ -337,16 +337,15 @@ export function DesktopLayout() {
     tenants.length > 1 ? [{ name: "All tenants", href: "/portal/overview", icon: LayoutGrid }, ...allNavigation] : allNavigation
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [supportOpen, setSupportOpen] = useState(false)
-  const [feedback, setFeedback] = useState<{ open: boolean; preview: string | null; page?: string }>({ open: false, preview: null })
+  const [feedback, setFeedback] = useState<{ open: boolean; snapshot: FeedbackSnapshot | null }>({ open: false, snapshot: null })
   const capturingFeedback = useRef(false)
   // The window is captured before the dialog opens, so the dialog is not in the screenshot.
   const openFeedback = async () => {
     if (capturingFeedback.current || feedback.open) return
     capturingFeedback.current = true
-    const page = feedbackPageLabel(pathname)
-    const capture = await bridge.feedback.capture().catch(() => null)
+    const snapshot = await bridge.feedback.capture(feedbackPageLabel(pathname)).catch(() => null)
     capturingFeedback.current = false
-    setFeedback({ open: true, preview: capture?.preview ?? null, page })
+    setFeedback({ open: true, snapshot })
   }
   const navRef = useRef<HTMLElement>(null)
   const navOverflowing = useOverflowing(navRef)
@@ -494,9 +493,8 @@ export function DesktopLayout() {
       <SupportDialog open={supportOpen} onOpenChange={setSupportOpen} />
       <FeedbackDialog
         open={feedback.open}
-        onOpenChange={(open) => setFeedback((current) => ({ ...current, open, ...(open ? {} : { preview: null }) }))}
-        preview={feedback.preview}
-        page={feedback.page}
+        onOpenChange={(open) => setFeedback((current) => ({ open, snapshot: open ? current.snapshot : null }))}
+        snapshot={feedback.snapshot}
         onOpenSupport={() => setSupportOpen(true)}
       />
       <WhatsNewAnnouncement />

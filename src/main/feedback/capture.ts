@@ -1,4 +1,4 @@
-import { FEEDBACK_SCREENSHOT_MAX_BYTES, type FeedbackCapture } from "../../shared/feedback"
+import { FEEDBACK_SCREENSHOT_MAX_BYTES, type FeedbackContext, type FeedbackSnapshot } from "../../shared/feedback"
 
 /** The part of Electron's NativeImage the encoder uses, so it can be tested without Electron. */
 export interface CapturedImage {
@@ -37,25 +37,43 @@ export function previewDataUrl(image: CapturedImage): string {
   return `data:image/jpeg;base64,${Buffer.from(bytes).toString("base64")}`
 }
 
-/** Holds the latest window capture in main-process memory until it is sent or discarded. */
-export class FeedbackScreenshot {
-  private bytes: Uint8Array | null = null
+export interface HeldFeedbackSnapshot {
+  context: FeedbackContext
+  page?: string
+  screenshot: Uint8Array | null
+}
 
-  /** Keeps the encoded screenshot and returns only a small preview for the renderer. */
-  store(image: CapturedImage): FeedbackCapture | null {
-    this.bytes = null
-    const bytes = encodeScreenshot(image)
-    if (!bytes) return null
-    const preview = previewDataUrl(image)
-    this.bytes = bytes
-    return { preview }
+/**
+ * The snapshot of one Share feedback opening, held in main-process memory until it is sent or
+ * discarded: the encoded screenshot, and the context and page the dialog shows. Send uses exactly
+ * this snapshot, never a fresh one.
+ */
+export class FeedbackSnapshots {
+  private held: HeldFeedbackSnapshot | null = null
+
+  /** Records a new snapshot and returns what the renderer may see: a small preview, not the bytes. */
+  open(context: FeedbackContext, page: string | undefined, image: CapturedImage | null): FeedbackSnapshot {
+    this.held = null
+    let screenshot: Uint8Array | null = null
+    let preview: string | null = null
+    if (image) {
+      try {
+        screenshot = encodeScreenshot(image)
+        if (screenshot) preview = previewDataUrl(image)
+      } catch {
+        screenshot = null
+        preview = null
+      }
+    }
+    this.held = { context, ...(page ? { page } : {}), screenshot: preview ? screenshot : null }
+    return { preview, context, ...(page ? { page } : {}) }
   }
 
-  current(): Uint8Array | null {
-    return this.bytes
+  current(): HeldFeedbackSnapshot | null {
+    return this.held
   }
 
   discard(): void {
-    this.bytes = null
+    this.held = null
   }
 }

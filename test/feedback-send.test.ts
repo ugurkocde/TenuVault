@@ -10,6 +10,10 @@ import {
   postFeedback,
   retryAfterSeconds,
   validateFeedbackInput,
+  FeedbackInputError,
+  FEEDBACK_SNAPSHOT_EXPIRED,
+  sendFeedbackDraft,
+  type FeedbackPayload,
   FEEDBACK_REQUEST_TIMEOUT_MS,
 } from "../src/main/feedback/send"
 
@@ -59,13 +63,12 @@ const context: FeedbackContext = { appVersion: "0.4.1", os: "darwin", osVersion:
 
 describe("validateFeedbackInput", () => {
   it("trims answers and accepts the optional fields", () => {
-    expect(validateFeedbackInput(input({ replyTo: " admin@contoso.com ", page: "Drift Detection" }))).toEqual({
+    expect(validateFeedbackInput(input({ replyTo: " admin@contoso.com " }))).toEqual({
       submissionId: SUBMISSION,
       goal: "Restore a policy",
       blocker: "The button was greyed out",
       replyTo: "admin@contoso.com",
       includeScreenshot: false,
-      page: "Drift Detection",
     })
   })
 
@@ -88,10 +91,29 @@ describe("validateFeedbackInput", () => {
     ["an invalid reply-to address", input({ replyTo: "admin at contoso" })],
     ["a reply-to address over 254 characters", input({ replyTo: `${"a".repeat(250)}@contoso.com` })],
     ["a reply-to address that is not text", input({ replyTo: 5 })],
-    ["a page that is a route", input({ page: `/portal/drift?tenant=${TENANT}` })],
-    ["a page that is not a known section", input({ page: "Tenant Contoso" })],
+    ["a page from the renderer, which comes from the snapshot instead", input({ page: "Drift Detection" })],
+    ["a route as the page", input({ page: `/portal/drift?tenant=${TENANT}` })],
+    ["context from the renderer", input({ plan: "msp" })],
+    ["a reply-to address the service's email rule refuses: leading dot", input({ replyTo: ".admin@example.com" })],
+    ["a reply-to address the service's email rule refuses: double dot", input({ replyTo: "a..b@example.com" })],
+    ["a reply-to address the service's email rule refuses: one letter TLD", input({ replyTo: "admin@example.c" })],
+    ["a goal with NUL", input({ goal: "Restore\u0000 a policy" })],
+    ["a blocker with an unpaired surrogate", input({ blocker: "It failed \uD83D" })],
   ])("rejects %s", (_name, value) => {
     expect(() => validateFeedbackInput(value)).toThrow()
+  })
+
+  it("names the field it refuses, so the dialog can mark it", () => {
+    const refusal = (value: unknown) => { try { validateFeedbackInput(value) } catch (error) { return error } }
+    expect(refusal(input({ goal: "a\u0000" }))).toMatchObject({ field: "goal", message: "Remove unsupported characters." })
+    expect(refusal(input({ blocker: "\uDC00" }))).toMatchObject({ field: "blocker" })
+    expect(refusal(input({ replyTo: "a..b@example.com" }))).toMatchObject({ field: "replyTo" })
+    expect(refusal(input({ submissionId: "x" }))).toBeInstanceOf(FeedbackInputError)
+    expect((refusal(input({ submissionId: "x" })) as FeedbackInputError).field).toBeUndefined()
+  })
+
+  it("accepts a full emoji, which is a valid surrogate pair", () => {
+    expect(validateFeedbackInput(input({ goal: "Restore \u{1F600}" })).goal).toBe("Restore \u{1F600}")
   })
 
   it("accepts answers of exactly 500 characters", () => {
@@ -101,33 +123,33 @@ describe("validateFeedbackInput", () => {
 
 describe("buildFeedbackPayload", () => {
   it("contains exactly the contract keys, with no screenshot unless ticked", () => {
-    const payload = buildFeedbackPayload(validateFeedbackInput(input({ replyTo: "admin@contoso.com", page: "Backup & Restore" })), context, new Uint8Array([1, 2, 3]))
+    const payload = buildFeedbackPayload(validateFeedbackInput(input({ replyTo: "admin@contoso.com" })), { context, page: "Backup & Restore", screenshot: new Uint8Array([1, 2, 3]) })
     expect(Object.keys(payload).sort()).toEqual(["appVersion", "blocker", "goal", "os", "osVersion", "page", "plan", "replyTo", "submissionId"])
     expect(payload).not.toHaveProperty("screenshot")
   })
 
   it("leaves out optional keys that have no value", () => {
-    const payload = buildFeedbackPayload(validateFeedbackInput(input()), { appVersion: "0.4.1", os: "win32", plan: "none" }, null)
+    const payload = buildFeedbackPayload(validateFeedbackInput(input()), { context: { appVersion: "0.4.1", os: "win32", plan: "none" }, screenshot: null })
     expect(Object.keys(payload).sort()).toEqual(["appVersion", "blocker", "goal", "os", "plan", "submissionId"])
   })
 
   it("attaches the held screenshot as base64 JPEG only when ticked", () => {
     const bytes = new Uint8Array([0xff, 0xd8, 0xff, 0xe0])
-    const payload = buildFeedbackPayload(validateFeedbackInput(input({ includeScreenshot: true })), context, bytes)
+    const payload = buildFeedbackPayload(validateFeedbackInput(input({ includeScreenshot: true })), { context, screenshot: bytes })
     expect(payload.screenshot).toEqual({ mime: "image/jpeg", data: Buffer.from(bytes).toString("base64") })
     expect(Buffer.from(payload.screenshot!.data, "base64").byteLength).toBeLessThanOrEqual(FEEDBACK_SCREENSHOT_MAX_BYTES)
   })
 
   it("refuses a ticked screenshot that is no longer held or is too large", () => {
     const ticked = validateFeedbackInput(input({ includeScreenshot: true }))
-    expect(() => buildFeedbackPayload(ticked, context, null)).toThrow(/no longer available/)
-    expect(() => buildFeedbackPayload(ticked, context, new Uint8Array(FEEDBACK_SCREENSHOT_MAX_BYTES + 1))).toThrow(/too large/)
+    expect(() => buildFeedbackPayload(ticked, { context, screenshot: null })).toThrow(/no longer available/)
+    expect(() => buildFeedbackPayload(ticked, { context, screenshot: new Uint8Array(FEEDBACK_SCREENSHOT_MAX_BYTES + 1) })).toThrow(/too large/)
   })
 
   it("never includes installation, tenant or license identifiers", () => {
     const licensed = status({ hasKey: true, keyHint: "****ABCD", plan: "pro", communityTenantId: TENANT }, [{ entitled: true, plan: "pro", displayKey: "****ABCDEF" }])
     const ctx = feedbackContext({ appVersion: "0.4.1", platform: "win32", systemVersion: "10.0.26100", status: licensed })
-    const body = JSON.stringify(buildFeedbackPayload(validateFeedbackInput(input({ page: "Tenants" })), ctx, null))
+    const body = JSON.stringify(buildFeedbackPayload(validateFeedbackInput(input()), { context: ctx, page: "Tenants", screenshot: null }))
     expect(body).not.toContain(TENANT)
     expect(body).not.toContain("ABCD")
     expect(body).not.toMatch(/install/i)
@@ -190,6 +212,17 @@ describe("mapFeedbackResponse", () => {
     expect(mapFeedbackResponse(400, null, null)).toMatchObject({ ok: false, kind: "rejected" })
   })
 
+  it("passes the service's field messages for the answers and the reply-to address", () => {
+    const body = { error: "Check your feedback and try again.", fields: { replyTo: "Enter a valid email address.", goal: "Remove unsupported characters.", appVersion: "Invalid", blocker: 5 } }
+    expect(mapFeedbackResponse(400, null, body)).toEqual({
+      ok: false,
+      kind: "rejected",
+      message: "Check your feedback and try again.",
+      fields: { replyTo: "Enter a valid email address.", goal: "Remove unsupported characters." },
+    })
+    expect(mapFeedbackResponse(400, null, { error: "Bad", fields: { appVersion: "Invalid" } })).not.toHaveProperty("fields")
+  })
+
   it("maps 413 and 415 to rejected", () => {
     expect(mapFeedbackResponse(413, null, null)).toMatchObject({ ok: false, kind: "rejected", message: expect.stringMatching(/screenshot/) })
     expect(mapFeedbackResponse(415, null, null)).toMatchObject({ ok: false, kind: "rejected" })
@@ -230,7 +263,7 @@ describe("mapFeedbackResponse", () => {
 })
 
 describe("postFeedback", () => {
-  const payload = buildFeedbackPayload(validateFeedbackInput(input()), context, null)
+  const payload = buildFeedbackPayload(validateFeedbackInput(input()), { context, screenshot: null })
   const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
     new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json; charset=utf-8", ...headers } })
 
@@ -280,15 +313,45 @@ describe("postFeedback", () => {
   })
 })
 
+describe("sendFeedbackDraft", () => {
+  const snapshot = { context, page: "Drift Detection", screenshot: new Uint8Array([0xff, 0xd8, 0xff, 0xe0]) }
+
+  it("sends the snapshot recorded when the dialog opened, with the screenshot only when ticked", async () => {
+    const post = vi.fn(async (_payload: FeedbackPayload) => ({ ok: true }) as const)
+    await expect(sendFeedbackDraft(input(), snapshot, post)).resolves.toEqual({ ok: true })
+    expect(post.mock.calls[0]![0]).toMatchObject({ appVersion: "0.4.1", os: "darwin", osVersion: "26.2", plan: "community", page: "Drift Detection" })
+    expect(post.mock.calls[0]![0]).not.toHaveProperty("screenshot")
+    await sendFeedbackDraft(input({ includeScreenshot: true }), snapshot, post)
+    expect(post.mock.calls[1]![0]).toHaveProperty("screenshot")
+  })
+
+  it("fails clearly without a snapshot instead of reading fresh details", async () => {
+    const post = vi.fn()
+    await expect(sendFeedbackDraft(input(), null, post)).resolves.toEqual({ ok: false, kind: "rejected", message: FEEDBACK_SNAPSHOT_EXPIRED })
+    expect(post).not.toHaveBeenCalled()
+  })
+
+  it("returns the refused field without posting", async () => {
+    const post = vi.fn()
+    await expect(sendFeedbackDraft(input({ replyTo: ".admin@example.com" }), snapshot, post)).resolves.toMatchObject({ ok: false, kind: "rejected", fields: { replyTo: expect.any(String) } })
+    await expect(sendFeedbackDraft(input({ page: "Tenants" }), snapshot, post)).resolves.toMatchObject({ ok: false, kind: "rejected" })
+    expect(post).not.toHaveBeenCalled()
+  })
+})
+
 describe("feedback IPC wiring", () => {
   const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8")
 
   it("registers every channel the preload bridge invokes", () => {
     const preload = read("../src/preload/index.ts")
     const main = read("../src/main/index.ts")
-    for (const channel of ["feedback:context", "feedback:capture", "feedback:send", "feedback:discardCapture"]) {
+    for (const channel of ["feedback:capture", "feedback:send", "feedback:discardCapture"]) {
       expect(preload).toContain(`invoke("${channel}"`)
       expect(main).toContain(`handleTrusted("${channel}"`)
     }
+    expect(preload).toContain(`capture: (page) => invoke("feedback:capture", page)`)
+    // Send uses the stored snapshot; only the capture handler reads the context.
+    expect(main.match(/feedbackContext\(/g)).toHaveLength(1)
+    expect(main).toContain("sendFeedbackDraft(raw, snapshot,")
   })
 })

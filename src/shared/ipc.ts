@@ -4,7 +4,7 @@ import type { BackupScope } from "./intune/scope"
 import type { ReportPayload } from "./oib/report"
 import type { PdfBranding } from "./pdf/theme"
 import type { ModuleCheck, ModuleId } from "./services/modules"
-import type { FeedbackCapture, FeedbackContext, FeedbackInput, FeedbackSendResult } from "./feedback"
+import type { FeedbackInput, FeedbackSendResult, FeedbackSnapshot } from "./feedback"
 
 /** The saved PDF branding and whether any tenant on this machine is on a plan that applies it. */
 export interface PdfBrandingState {
@@ -532,13 +532,14 @@ export interface TenuVaultBridge {
     openExternal: (url: string) => Promise<void>
   }
   feedback: {
-    /** The app version, operating system and plan the main process adds to feedback. */
-    context: () => Promise<FeedbackContext>
-    /** Captures the window and keeps it in the main process; null when capture failed. */
-    capture: () => Promise<FeedbackCapture | null>
-    /** Sends feedback; the main process adds the context and, when ticked, the held screenshot. */
+    /**
+     * Records the snapshot of this opening in the main process: the window screenshot, app version,
+     * OS, plan and the page (only a known section name is kept). Returns what the dialog shows.
+     */
+    capture: (page?: string) => Promise<FeedbackSnapshot>
+    /** Sends feedback with the recorded snapshot and, when ticked, its screenshot. */
     send: (input: FeedbackInput) => Promise<FeedbackSendResult>
-    /** Drops the held screenshot. */
+    /** Drops the recorded snapshot and its screenshot. */
     discardCapture: () => Promise<void>
   }
   reports: {

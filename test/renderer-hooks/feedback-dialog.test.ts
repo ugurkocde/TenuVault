@@ -1,13 +1,12 @@
 import { act, createElement, useState } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import type { FeedbackContext, FeedbackSendResult } from "../../src/shared/feedback"
+import type { FeedbackContext, FeedbackSendResult, FeedbackSnapshot } from "../../src/shared/feedback"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} } as typeof ResizeObserver
 
 const mocks = vi.hoisted(() => ({
-  context: vi.fn(),
   send: vi.fn(),
   discardCapture: vi.fn(async () => undefined),
   openExternal: vi.fn(async (_url: string) => undefined),
@@ -16,7 +15,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@desktop/lib/bridge", () => ({
   bridge: {
-    feedback: { context: mocks.context, send: mocks.send, discardCapture: mocks.discardCapture },
+    feedback: { send: mocks.send, discardCapture: mocks.discardCapture },
     app: { openExternal: mocks.openExternal },
   },
 }))
@@ -31,8 +30,10 @@ const roots: Root[] = []
 let setOpen: (open: boolean) => void = () => undefined
 const onOpenSupport = vi.fn()
 
+const snapshotWith = (overrides: Partial<FeedbackSnapshot> = {}): FeedbackSnapshot => ({ preview: PREVIEW, context, page: "Drift Detection", ...overrides })
+
 beforeEach(() => {
-  mocks.context.mockResolvedValue(context)
+  mocks.send.mockReset()
 })
 
 afterEach(() => {
@@ -41,18 +42,18 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-function Harness({ preview, page }: { preview: string | null; page?: string }) {
+function Harness({ snapshot }: { snapshot: FeedbackSnapshot | null }) {
   const [open, setState] = useState(true)
   setOpen = setState
-  return createElement(FeedbackDialog, { open, onOpenChange: setState, preview, page, onOpenSupport })
+  return createElement(FeedbackDialog, { open, onOpenChange: setState, snapshot, onOpenSupport })
 }
 
-async function render(preview: string | null = PREVIEW, page: string | null = "Drift Detection") {
+async function render(snapshot: FeedbackSnapshot | null = snapshotWith()) {
   const container = document.createElement("div")
   document.body.appendChild(container)
   const root = createRoot(container)
   roots.push(root)
-  await act(async () => root.render(createElement(Harness, { preview, page: page ?? undefined })))
+  await act(async () => root.render(createElement(Harness, { snapshot })))
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
 }
 
@@ -129,7 +130,7 @@ describe("FeedbackDialog", () => {
   })
 
   it("hides the screenshot option when capture failed", async () => {
-    await render(null)
+    await render(snapshotWith({ preview: null }))
     expect(document.body.querySelector('button[role="checkbox"]')).toBeNull()
     expect(dialog()!.textContent).not.toContain("Attach a screenshot")
   })
@@ -137,11 +138,11 @@ describe("FeedbackDialog", () => {
   it("lists exactly the diagnostics that are sent", async () => {
     await render()
     const items = [...sentList().querySelectorAll("li")].map((item) => item.textContent)
-    expect(items).toEqual(["App version: 0.4.1", "Operating system: macOS 26.2", "Plan: Community", "Page: Drift Detection"])
+    expect(items).toEqual(["App version: 0.4.1", "Operating system: macOS 26.2", "Plan: Community", "Page: Drift Detection", "A random message ID, so a retry is not counted twice"])
   })
 
   it("leaves out the page when it is unknown", async () => {
-    await render(PREVIEW, null)
+    await render(snapshotWith({ page: undefined }))
     expect(sentList().textContent).not.toContain("Page")
   })
 
@@ -152,8 +153,8 @@ describe("FeedbackDialog", () => {
     await clickSend()
     expect(mocks.send).toHaveBeenCalledTimes(1)
     const sent = mocks.send.mock.calls[0]![0]
-    expect(Object.keys(sent).sort()).toEqual(["blocker", "goal", "includeScreenshot", "page", "submissionId"])
-    expect(sent).toMatchObject({ includeScreenshot: false, page: "Drift Detection" })
+    expect(Object.keys(sent).sort()).toEqual(["blocker", "goal", "includeScreenshot", "submissionId"])
+    expect(sent).toMatchObject({ includeScreenshot: false })
     expect(sent.submissionId).toMatch(/^[0-9a-f-]{36}$/)
     expect(mocks.toast).toHaveBeenCalledWith("Thanks, your feedback was sent.", "success")
     expect(dialog()).toBeNull()
@@ -196,5 +197,59 @@ describe("FeedbackDialog", () => {
     await act(async () => { button("Open Support.")!.click() })
     expect(onOpenSupport).toHaveBeenCalledTimes(1)
     expect(dialog()).toBeNull()
+  })
+
+  it("keeps Send disabled and says so when the snapshot could not be recorded", async () => {
+    await render(null)
+    await fill("Restore a policy", "It failed")
+    expect(button("Send feedback")!.disabled).toBe(true)
+    expect(sentList().textContent).toContain("could not be read")
+    expect(document.body.querySelector('button[role="checkbox"]')).toBeNull()
+  })
+
+  it("rejects NUL and unpaired surrogates with a field message", async () => {
+    await render()
+    await fill("Restore\u0000 a policy", "It failed")
+    expect(button("Send feedback")!.disabled).toBe(true)
+    expect(dialog()!.textContent).toContain("Remove unsupported characters.")
+    await fill("Restore a policy", "It failed \uD83D")
+    expect(button("Send feedback")!.disabled).toBe(true)
+    await fill("Restore a policy", "It failed \u{1F600}")
+    expect(button("Send feedback")!.disabled).toBe(false)
+    expect(dialog()!.textContent).not.toContain("Remove unsupported characters.")
+  })
+
+  it("applies the service's email rule", async () => {
+    await render()
+    await fill("Restore a policy", "It failed")
+    const email = document.body.querySelector('input[type="email"]') as HTMLInputElement
+    for (const address of [".admin@example.com", "a..b@example.com", "admin@example.c"]) {
+      await act(async () => { type(email, address) })
+      expect(button("Send feedback")!.disabled).toBe(true)
+    }
+  })
+
+  it("shows the service's field messages until that field is edited", async () => {
+    mocks.send.mockResolvedValue({ ok: false, kind: "rejected", message: "Check your feedback and try again.", fields: { goal: "Describe what you were trying to do.", replyTo: "Enter a valid email address." } } satisfies FeedbackSendResult)
+    await render()
+    await fill("Restore a policy", "It failed")
+    await clickSend()
+    expect(dialog()!.textContent).toContain("Describe what you were trying to do.")
+    expect(dialog()!.textContent).toContain("Enter a valid email address.")
+    expect(textareas()[0]!.getAttribute("aria-invalid")).toBe("true")
+    await act(async () => { type(textareas()[0]!, "Restore one policy") })
+    expect(dialog()!.textContent).not.toContain("Describe what you were trying to do.")
+    expect(dialog()!.textContent).toContain("Enter a valid email address.")
+  })
+
+  it("opens Copy as email even when the draft holds an unpaired surrogate", async () => {
+    mocks.send.mockResolvedValue({ ok: false, kind: "network", message: "TenuVault could not reach the feedback service." } satisfies FeedbackSendResult)
+    await render()
+    await fill("Restore a policy", "It failed")
+    await clickSend()
+    await act(async () => { type(textareas()[1]!, "It failed \uD83D") })
+    await act(async () => { button("Copy as email")!.click() })
+    expect(mocks.openExternal).toHaveBeenCalledTimes(1)
+    expect(decodeURIComponent(mocks.openExternal.mock.calls[0]![0])).toContain("It failed \uFFFD")
   })
 })

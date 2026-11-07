@@ -11,9 +11,12 @@ import {
   FEEDBACK_TEXT_MAX,
   feedbackDiagnostics,
   feedbackMailto,
+  feedbackTextProblem,
   isValidFeedbackEmail,
-  type FeedbackContext,
+  type FeedbackField,
+  type FeedbackFieldErrors,
   type FeedbackSendResult,
+  type FeedbackSnapshot,
 } from "../../shared/feedback"
 import { bridge } from "../lib/bridge"
 import { toast } from "../lib/toast"
@@ -21,14 +24,15 @@ import { toast } from "../lib/toast"
 const textareaClass =
   "w-full resize-none rounded-2xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800 placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
 
-function Question({ id, label, value, onChange, disabled }: { id: string; label: string; value: string; onChange: (value: string) => void; disabled: boolean }) {
+function Question({ id, label, value, onChange, disabled, error }: { id: string; label: string; value: string; onChange: (value: string) => void; disabled: boolean; error?: string }) {
   return (
     <div className="space-y-1.5">
       <div className="flex items-baseline justify-between gap-3">
         <Label htmlFor={id}>{label}</Label>
         <span className="shrink-0 text-xs text-gray-500">Required · <span id={`${id}-count`}>{value.length}/{FEEDBACK_TEXT_MAX}</span></span>
       </div>
-      <textarea id={id} className={textareaClass} rows={3} maxLength={FEEDBACK_TEXT_MAX} required aria-describedby={`${id}-count`} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} />
+      <textarea id={id} className={textareaClass} rows={3} maxLength={FEEDBACK_TEXT_MAX} required aria-invalid={error ? true : undefined} aria-describedby={error ? `${id}-count ${id}-error` : `${id}-count`} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} />
+      {error && <p id={`${id}-error`} className="text-xs text-red-700">{error}</p>}
     </div>
   )
 }
@@ -37,13 +41,14 @@ function Question({ id, label, value, onChange, disabled }: { id: string; label:
  * Two questions, an optional reply-to address and an opt-in screenshot, sent to TenuVault only when
  * the admin clicks Send. The draft stays while the app runs, so closing the dialog loses nothing.
  */
-export function FeedbackDialog({ open, onOpenChange, preview, page, onOpenSupport }: {
+export function FeedbackDialog({ open, onOpenChange, snapshot, onOpenSupport }: {
   open: boolean
   onOpenChange: (open: boolean) => void
-  /** A preview of the window captured before the dialog opened, or null when capture failed. */
-  preview: string | null
-  /** The current section's name, never a route. */
-  page?: string
+  /**
+   * What the main process recorded when the dialog opened: the screenshot preview, the context and
+   * the page. Send uses the same snapshot. Null when it could not be recorded.
+   */
+  snapshot: FeedbackSnapshot | null
   onOpenSupport: () => void
 }) {
   const ids = useId()
@@ -52,24 +57,32 @@ export function FeedbackDialog({ open, onOpenChange, preview, page, onOpenSuppor
   const [replyTo, setReplyTo] = useState("")
   const [submissionId, setSubmissionId] = useState(() => crypto.randomUUID())
   const [includeScreenshot, setIncludeScreenshot] = useState(false)
-  const [context, setContext] = useState<FeedbackContext | null>(null)
   const [sending, setSending] = useState(false)
   const [failure, setFailure] = useState<Extract<FeedbackSendResult, { ok: false }> | null>(null)
+  // The service's or main process's message per answer, until that answer is edited.
+  const [fieldErrors, setFieldErrors] = useState<FeedbackFieldErrors>({})
 
   // Each opening starts with the screenshot unticked and no old error; the answers are kept.
   useEffect(() => {
     if (!open) return
     setIncludeScreenshot(false)
     setFailure(null)
-    let current = true
-    bridge.feedback.context().then((value) => { if (current) setContext(value) }, () => undefined)
-    return () => { current = false }
+    setFieldErrors({})
   }, [open])
 
+  const preview = snapshot?.preview ?? null
+  const context = snapshot?.context ?? null
+  const page = snapshot?.page
+  const edit = (field: FeedbackField, set: (value: string) => void) => (value: string) => {
+    set(value)
+    setFieldErrors(({ [field]: _cleared, ...rest }) => rest)
+  }
   const email = replyTo.trim()
-  const emailInvalid = email !== "" && !isValidFeedbackEmail(email)
+  const emailError = email !== "" && !isValidFeedbackEmail(email) ? "Enter a valid email address, or leave it empty." : fieldErrors.replyTo
+  const goalError = feedbackTextProblem(goal) ?? fieldErrors.goal
+  const blockerError = feedbackTextProblem(blocker) ?? fieldErrors.blocker
   const screenshot = includeScreenshot && preview !== null
-  const canSend = !sending && goal.trim() !== "" && blocker.trim() !== "" && !emailInvalid
+  const canSend = !sending && snapshot !== null && goal.trim() !== "" && blocker.trim() !== "" && !feedbackTextProblem(goal) && !feedbackTextProblem(blocker) && (email === "" || isValidFeedbackEmail(email))
 
   const close = (next: boolean) => {
     if (next) return onOpenChange(true)
@@ -84,12 +97,15 @@ export function FeedbackDialog({ open, onOpenChange, preview, page, onOpenSuppor
     setFailure(null)
     let result: FeedbackSendResult
     try {
-      result = await bridge.feedback.send({ submissionId, goal, blocker, ...(email ? { replyTo: email } : {}), includeScreenshot: screenshot, ...(page ? { page } : {}) })
+      result = await bridge.feedback.send({ submissionId, goal, blocker, ...(email ? { replyTo: email } : {}), includeScreenshot: screenshot })
     } catch {
       result = { ok: false, kind: "server", message: "The feedback could not be sent. Try again, or use Copy as email." }
     }
     setSending(false)
-    if (!result.ok) return setFailure(result)
+    if (!result.ok) {
+      setFieldErrors(result.fields ?? {})
+      return setFailure(result)
+    }
     setGoal("")
     setBlocker("")
     setReplyTo("")
@@ -99,8 +115,6 @@ export function FeedbackDialog({ open, onOpenChange, preview, page, onOpenSuppor
   }
 
   const copyAsEmail = () => void bridge.app.openExternal(feedbackMailto({ goal, blocker, context, page })).catch(() => toast("No email app could be opened.", "error"))
-
-  const rows = context ? feedbackDiagnostics(context, page) : null
 
   return (
     <Dialog open={open} onOpenChange={close}>
@@ -114,8 +128,8 @@ export function FeedbackDialog({ open, onOpenChange, preview, page, onOpenSuppor
         </DialogHeader>
 
         <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); void send() }}>
-          <Question id={`${ids}-goal`} label="What were you trying to do?" value={goal} onChange={setGoal} disabled={sending} />
-          <Question id={`${ids}-blocker`} label="What got in your way, and what would help?" value={blocker} onChange={setBlocker} disabled={sending} />
+          <Question id={`${ids}-goal`} label="What were you trying to do?" value={goal} onChange={edit("goal", setGoal)} disabled={sending} error={goalError} />
+          <Question id={`${ids}-blocker`} label="What got in your way, and what would help?" value={blocker} onChange={edit("blocker", setBlocker)} disabled={sending} error={blockerError} />
 
           {preview !== null && (
             <div className="flex items-start gap-3">
@@ -133,17 +147,18 @@ export function FeedbackDialog({ open, onOpenChange, preview, page, onOpenSuppor
               <Label htmlFor={`${ids}-email`}>Reply-to email</Label>
               <span className="shrink-0 text-xs text-gray-500">Optional</span>
             </div>
-            <Input id={`${ids}-email`} type="email" autoComplete="email" maxLength={FEEDBACK_EMAIL_MAX} value={replyTo} disabled={sending} aria-invalid={emailInvalid || undefined} aria-describedby={emailInvalid ? `${ids}-email-error` : undefined} onChange={(event) => setReplyTo(event.target.value)} />
-            {emailInvalid && <p id={`${ids}-email-error`} className="text-xs text-red-700">Enter a valid email address, or leave it empty.</p>}
+            <Input id={`${ids}-email`} type="email" autoComplete="email" maxLength={FEEDBACK_EMAIL_MAX} value={replyTo} disabled={sending} aria-invalid={emailError ? true : undefined} aria-describedby={emailError ? `${ids}-email-error` : undefined} onChange={(event) => edit("replyTo", setReplyTo)(event.target.value)} />
+            {emailError && <p id={`${ids}-email-error`} className="text-xs text-red-700">{emailError}</p>}
           </div>
 
           <div className="rounded-2xl bg-secondary px-4 py-3 text-sm">
             <div className="font-medium text-foreground">Sent with your feedback</div>
             <ul aria-label="Sent with your feedback" className="mt-1.5 space-y-0.5 break-words text-gray-700">
-              {rows
-                ? rows.map((row) => <li key={row.label}>{row.label}: {row.value}</li>)
-                : <li>App version, operating system and plan</li>}
-              {email && !emailInvalid && <li>Reply-to email: {email}</li>}
+              {context
+                ? feedbackDiagnostics(context, page).map((row) => <li key={row.label}>{row.label}: {row.value}</li>)
+                : <li className="text-red-700">The app details could not be read. Close Share feedback and open it again.</li>}
+              {email && isValidFeedbackEmail(email) && <li>Reply-to email: {email}</li>}
+              <li>A random message ID, so a retry is not counted twice</li>
               {screenshot && <li>Screenshot of this window</li>}
             </ul>
           </div>

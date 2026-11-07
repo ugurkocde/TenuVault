@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { FEEDBACK_SCREENSHOT_MAX_BYTES } from "../src/shared/feedback"
-import { encodeScreenshot, FeedbackScreenshot, SCREENSHOT_MAX_WIDTH, type CapturedImage } from "../src/main/feedback/capture"
+import { FEEDBACK_SCREENSHOT_MAX_BYTES, type FeedbackContext } from "../src/shared/feedback"
+import { encodeScreenshot, FeedbackSnapshots, SCREENSHOT_MAX_WIDTH, type CapturedImage } from "../src/main/feedback/capture"
 
 /** A fake NativeImage whose JPEG size grows with width and quality, recording every encode. */
 function fakeImage(width: number, bytesPerPixelAt100: number, log: Array<{ width: number; quality: number }> = []): CapturedImage {
@@ -45,22 +45,34 @@ describe("encodeScreenshot", () => {
   })
 })
 
-describe("FeedbackScreenshot", () => {
-  it("holds the bytes in memory and returns only a small preview", () => {
-    const held = new FeedbackScreenshot()
-    const capture = held.store(fakeImage(2000, 0.1))
-    expect(capture).not.toBeNull()
-    expect(Object.keys(capture!)).toEqual(["preview"])
-    expect(capture!.preview.startsWith("data:image/jpeg;base64,")).toBe(true)
-    expect(held.current()!.byteLength).toBeGreaterThan(0)
+describe("FeedbackSnapshots", () => {
+  const context: FeedbackContext = { appVersion: "0.4.1", os: "darwin", osVersion: "26.2", plan: "pro" }
+
+  it("holds the screenshot, context and page in memory and returns only a small preview", () => {
+    const held = new FeedbackSnapshots()
+    const snapshot = held.open(context, "Tenants", fakeImage(2000, 0.1))
+    expect(Object.keys(snapshot).sort()).toEqual(["context", "page", "preview"])
+    expect(snapshot.preview!.startsWith("data:image/jpeg;base64,")).toBe(true)
+    expect(snapshot.context).toEqual(context)
+    expect(held.current()).toMatchObject({ context, page: "Tenants" })
+    expect(held.current()!.screenshot!.byteLength).toBeGreaterThan(0)
     held.discard()
     expect(held.current()).toBeNull()
   })
 
-  it("drops an earlier capture when a new one fails", () => {
-    const held = new FeedbackScreenshot()
-    held.store(fakeImage(1200, 0.1))
-    expect(held.store(fakeImage(0, 0.1))).toBeNull()
-    expect(held.current()).toBeNull()
+  it("keeps the context when capture failed, without a screenshot", () => {
+    const held = new FeedbackSnapshots()
+    expect(held.open(context, undefined, null)).toEqual({ preview: null, context })
+    expect(held.current()).toEqual({ context, screenshot: null })
+    const throwing: CapturedImage = { ...fakeImage(1200, 0.1), resize: () => throwing, toJPEG: () => { throw new Error("encoder failed") } }
+    expect(held.open(context, undefined, throwing).preview).toBeNull()
+    expect(held.current()!.screenshot).toBeNull()
+  })
+
+  it("replaces an earlier snapshot when the dialog opens again", () => {
+    const held = new FeedbackSnapshots()
+    held.open(context, "Tenants", fakeImage(1200, 0.1))
+    held.open({ ...context, plan: "community" }, undefined, fakeImage(0, 0.1))
+    expect(held.current()).toEqual({ context: { ...context, plan: "community" }, screenshot: null })
   })
 })

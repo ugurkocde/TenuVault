@@ -2,12 +2,13 @@ import type { LicenseStatus } from "../../shared/ipc"
 import {
   FEEDBACK_EMAIL_MAX,
   FEEDBACK_OS_VERSION_MAX,
-  FEEDBACK_PAGE_LABELS,
-  FEEDBACK_PAGE_MAX,
   FEEDBACK_SCREENSHOT_MAX_BYTES,
   FEEDBACK_TEXT_MAX,
+  feedbackTextProblem,
   isValidFeedbackEmail,
   type FeedbackContext,
+  type FeedbackField,
+  type FeedbackFieldErrors,
   type FeedbackInput,
   type FeedbackOs,
   type FeedbackPlan,
@@ -37,46 +38,47 @@ export interface ValidFeedbackInput {
   blocker: string
   replyTo?: string
   includeScreenshot: boolean
-  page?: string
 }
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-const INPUT_KEYS = new Set(["submissionId", "goal", "blocker", "replyTo", "includeScreenshot", "page"])
+/** A draft the main process refuses; `field` names the answer to mark in the dialog. */
+export class FeedbackInputError extends Error {
+  constructor(message: string, readonly field?: FeedbackField) {
+    super(message)
+  }
+}
 
-function answer(value: unknown, question: string): string {
-  if (typeof value !== "string" || !value.trim()) throw new Error(`Answer "${question}" first.`)
+const UNREADABLE = "The feedback could not be read. Try again."
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const INPUT_KEYS = new Set(["submissionId", "goal", "blocker", "replyTo", "includeScreenshot"])
+
+function answer(value: unknown, field: "goal" | "blocker", question: string): string {
+  if (typeof value !== "string" || !value.trim()) throw new FeedbackInputError(`Answer "${question}" first.`, field)
   const text = value.trim()
-  if (text.length > FEEDBACK_TEXT_MAX) throw new Error(`Keep "${question}" to ${FEEDBACK_TEXT_MAX} characters.`)
+  if (text.length > FEEDBACK_TEXT_MAX) throw new FeedbackInputError(`Keep "${question}" to ${FEEDBACK_TEXT_MAX} characters.`, field)
+  const problem = feedbackTextProblem(text)
+  if (problem) throw new FeedbackInputError(problem, field)
   return text
 }
 
 /** Checks what the renderer sent; nothing from it is trusted beyond these fields. */
 export function validateFeedbackInput(raw: unknown): ValidFeedbackInput {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("The feedback could not be read. Try again.")
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new FeedbackInputError(UNREADABLE)
   const input = raw as Partial<Record<keyof FeedbackInput, unknown>>
-  if (Object.keys(input).some((key) => !INPUT_KEYS.has(key))) throw new Error("The feedback could not be read. Try again.")
-  if (typeof input.submissionId !== "string" || !UUID.test(input.submissionId)) throw new Error("The feedback could not be read. Try again.")
-  if (typeof input.includeScreenshot !== "boolean") throw new Error("The feedback could not be read. Try again.")
-  const goal = answer(input.goal, "What were you trying to do?")
-  const blocker = answer(input.blocker, "What got in your way, and what would help?")
+  // The page and the context come from the main process's snapshot, never from the renderer.
+  if (Object.keys(input).some((key) => !INPUT_KEYS.has(key))) throw new FeedbackInputError(UNREADABLE)
+  if (typeof input.submissionId !== "string" || !UUID.test(input.submissionId)) throw new FeedbackInputError(UNREADABLE)
+  if (typeof input.includeScreenshot !== "boolean") throw new FeedbackInputError(UNREADABLE)
+  const goal = answer(input.goal, "goal", "What were you trying to do?")
+  const blocker = answer(input.blocker, "blocker", "What got in your way, and what would help?")
   let replyTo: string | undefined
   if (input.replyTo !== undefined) {
-    if (typeof input.replyTo !== "string") throw new Error("Enter a valid reply-to email address, or leave it empty.")
+    const invalid = new FeedbackInputError("Enter a valid email address, or leave it empty.", "replyTo")
+    if (typeof input.replyTo !== "string") throw invalid
     const email = input.replyTo.trim()
-    if (email && (email.length > FEEDBACK_EMAIL_MAX || !isValidFeedbackEmail(email))) {
-      throw new Error("Enter a valid reply-to email address, or leave it empty.")
-    }
+    if (email && (email.length > FEEDBACK_EMAIL_MAX || !isValidFeedbackEmail(email))) throw invalid
     replyTo = email || undefined
   }
-  let page: string | undefined
-  if (input.page !== undefined) {
-    // Only the fixed section names are accepted, so no route or ID can be passed through.
-    if (typeof input.page !== "string" || input.page.length > FEEDBACK_PAGE_MAX || !FEEDBACK_PAGE_LABELS.has(input.page)) {
-      throw new Error("The feedback could not be read. Try again.")
-    }
-    page = input.page
-  }
-  return { submissionId: input.submissionId.toLowerCase(), goal, blocker, replyTo, includeScreenshot: input.includeScreenshot, page }
+  return { submissionId: input.submissionId.toLowerCase(), goal, blocker, replyTo, includeScreenshot: input.includeScreenshot }
 }
 
 /**
@@ -107,10 +109,15 @@ export function feedbackContext(options: { appVersion: string; platform: string;
   }
 }
 
-/** Builds the request body with exactly the contract's keys; the screenshot only when ticked. */
-export function buildFeedbackPayload(input: ValidFeedbackInput, context: FeedbackContext, screenshot: Uint8Array | null): FeedbackPayload {
-  if (input.includeScreenshot && !screenshot) throw new Error("The screenshot is no longer available. Untick it, or close and reopen Share feedback.")
-  if (screenshot && screenshot.byteLength > FEEDBACK_SCREENSHOT_MAX_BYTES) throw new Error("The screenshot is too large. Untick it and try again.")
+/**
+ * Builds the request body with exactly the contract's keys from the draft and the snapshot taken
+ * when the dialog opened; the screenshot only when ticked.
+ */
+export function buildFeedbackPayload(input: ValidFeedbackInput, snapshot: { context: FeedbackContext; page?: string; screenshot: Uint8Array | null }): FeedbackPayload {
+  const { context, page } = snapshot
+  const screenshot = input.includeScreenshot ? snapshot.screenshot : null
+  if (input.includeScreenshot && !screenshot) throw new FeedbackInputError("The screenshot is no longer available. Untick it, or close and reopen Share feedback.")
+  if (screenshot && screenshot.byteLength > FEEDBACK_SCREENSHOT_MAX_BYTES) throw new FeedbackInputError("The screenshot is too large. Untick it and try again.")
   return {
     submissionId: input.submissionId,
     goal: input.goal,
@@ -120,8 +127,8 @@ export function buildFeedbackPayload(input: ValidFeedbackInput, context: Feedbac
     os: context.os,
     ...(context.osVersion ? { osVersion: context.osVersion } : {}),
     plan: context.plan,
-    ...(input.page ? { page: input.page } : {}),
-    ...(input.includeScreenshot && screenshot ? { screenshot: { mime: "image/jpeg" as const, data: Buffer.from(screenshot).toString("base64") } } : {}),
+    ...(page ? { page } : {}),
+    ...(screenshot ? { screenshot: { mime: "image/jpeg" as const, data: Buffer.from(screenshot).toString("base64") } } : {}),
   }
 }
 
@@ -152,6 +159,20 @@ function serviceMessage(body: unknown): string | undefined {
   return text || undefined
 }
 
+const FIELDS: readonly FeedbackField[] = ["goal", "blocker", "replyTo"]
+
+/** The service's per-field messages from a 400, for the answers the dialog can mark. */
+function fieldMessages(body: unknown): FeedbackFieldErrors | undefined {
+  const fields = body && typeof body === "object" ? (body as { fields?: unknown }).fields : undefined
+  if (!fields || typeof fields !== "object" || Array.isArray(fields)) return undefined
+  const result: FeedbackFieldErrors = {}
+  for (const field of FIELDS) {
+    const message = serviceMessage({ error: (fields as Record<string, unknown>)[field] })
+    if (message) result[field] = message.slice(0, 200)
+  }
+  return Object.keys(result).length ? result : undefined
+}
+
 const UNAVAILABLE = "The feedback service is not available right now. Try again later, or use Copy as email."
 
 /** Turns the service's answer into a result the dialog can show. */
@@ -166,11 +187,38 @@ export function mapFeedbackResponse(status: number, retryAfter: string | null, b
     const seconds = retryAfterSeconds(retryAfter)
     return { ok: false, kind: "rate_limited", message: `Too much feedback was sent from this network. Try again ${waitText(seconds)}.`, ...(seconds !== undefined ? { retryAfterSeconds: seconds } : {}) }
   }
-  if (status === 400) return { ok: false, kind: "rejected", message: message ?? "The feedback service did not accept this feedback. Check your answers and try again." }
+  if (status === 400) {
+    const fields = fieldMessages(body)
+    return { ok: false, kind: "rejected", message: message ?? "The feedback service did not accept this feedback. Check your answers and try again.", ...(fields ? { fields } : {}) }
+  }
   if (status === 413) return { ok: false, kind: "rejected", message: message ?? "The feedback is too large. Untick the screenshot and try again." }
   if (status === 415) return { ok: false, kind: "rejected", message: message ?? "The feedback service did not accept the request. Update TenuVault and try again." }
   if (status === 404) return { ok: false, kind: "server", message: UNAVAILABLE }
   return { ok: false, kind: "server", message: status >= 500 && message ? message : UNAVAILABLE }
+}
+
+export const FEEDBACK_SNAPSHOT_EXPIRED = "This feedback window has expired. Close Share feedback and open it again; your answers are kept."
+
+/**
+ * Sends a draft with the snapshot recorded when the dialog opened. Without a snapshot (for
+ * example after it was discarded) it fails instead of reading fresh details, which could differ
+ * from what the dialog showed.
+ */
+export async function sendFeedbackDraft(
+  raw: unknown,
+  snapshot: { context: FeedbackContext; page?: string; screenshot: Uint8Array | null } | null,
+  post: (payload: FeedbackPayload) => Promise<FeedbackSendResult>,
+): Promise<FeedbackSendResult> {
+  if (!snapshot) return { ok: false, kind: "rejected", message: FEEDBACK_SNAPSHOT_EXPIRED }
+  let payload: FeedbackPayload
+  try {
+    payload = buildFeedbackPayload(validateFeedbackInput(raw), snapshot)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : UNREADABLE
+    const field = error instanceof FeedbackInputError ? error.field : undefined
+    return { ok: false, kind: "rejected", message, ...(field ? { fields: { [field]: message } } : {}) }
+  }
+  return post(payload)
 }
 
 /** Posts the feedback once. Never throws: every failure becomes a result the dialog can show. */

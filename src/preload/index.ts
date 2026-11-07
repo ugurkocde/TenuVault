@@ -128,8 +128,7 @@ const bridge: TenuVaultPreloadBridge = {
     openExternal: (url) => invoke("app:openExternal", url),
   },
   feedback: {
-    context: () => invoke("feedback:context"),
-    capture: () => invoke("feedback:capture"),
+    capture: (page) => invoke("feedback:capture", page),
     send: (input) => invoke("feedback:send", input),
     discardCapture: () => invoke("feedback:discardCapture"),
   },

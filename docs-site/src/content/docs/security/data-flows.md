@@ -21,7 +21,7 @@ All connections use HTTPS on TCP port 443. TenuVault opens no inbound ports. Dur
 | `api.github.com`, `raw.githubusercontent.com` | OpenIntuneBaseline content for the OpenIntuneBaseline section and My baselines | No |
 | A webhook URL you configure (optional) | Health review notifications | Counts, severities, finding keys and timestamps only |
 
-TenuVault contains no telemetry, analytics or crash reporting, and sends nothing else. Feedback is sent only when you choose to send it.
+TenuVault contains no telemetry, analytics or crash reporting. Apart from the destinations above, it sends nothing. Feedback goes to tenuvault.com only when you click **Send feedback**.
 
 ## Microsoft
 
@@ -106,13 +106,13 @@ As with any web request, the service also sees your public IP address. It uses i
 
 ### What is never sent
 
-Tenant configuration, backups, policy names, device or user information, access tokens, refresh tokens and your backup recovery key are never sent to tenuvault.com. The one exception is a feedback screenshot, attached only if you tick it (see [Feedback](#feedback) below).
+Tenant configuration, backups, policy names, device or user information, access tokens, refresh tokens and your backup recovery key are never sent to tenuvault.com, with one opt-in exception: feedback you choose to send: the text you write and, only if you tick it, a screenshot that may show tenant, policy or user names (see [Feedback](#feedback) below).
 
 ### Feedback
 
 **Share feedback** in the sidebar sends your feedback to `https://www.tenuvault.com/api/desktop-feedback`. Nothing is sent until you click **Send feedback**, and the dialog lists everything that goes with your answers before you send.
 
-* **Sent:** your answers to the two questions, the reply-to email if you enter one, the TenuVault version, the operating system and its version, your plan (Community, Pro, MSP or none) and the name of the section you were on, such as Drift Detection. A random ID for the message lets the service ignore a repeated send of the same draft.
+* **Sent:** your answers to the two questions, the reply-to email if you enter one, the TenuVault version, the operating system and its version, your plan (Community, Pro, MSP or none) and the name of the section you were on, such as Drift Detection. A random message ID, so a retry of the same draft is not counted twice.
 * **Only if you tick it:** a screenshot of the TenuVault window, taken when you open **Share feedback**. It may show tenant, policy or user names. It is unticked every time the dialog opens, and the app discards it when you close the dialog or the feedback is sent.
 * **Never sent:** your installation ID, tenant IDs or names, license keys, tokens, and routes or links that contain IDs.
 * **Kept:** up to 12 months, to read and answer feedback.

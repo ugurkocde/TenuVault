@@ -225,7 +225,7 @@ Stable installs follow stable by default. Enable **Get nightly builds** to recei
 | Item | Shows |
 | --- | --- |
 | Version | **TenuVault Desktop &lt;version&gt;** |
-| Network summary | Which services TenuVault talks to: Microsoft for sign-in, Graph and Azure; GitHub for the Open Intune Baseline catalog and updates; tenuvault.com for license checks and for feedback you choose to send. No tenant configuration or backup is ever sent to TenuVault. A feedback screenshot, which may show tenant, policy or user names, is attached only if you tick it. |
+| Network summary | Which services TenuVault talks to: Microsoft for sign-in, Graph and Azure; GitHub for the Open Intune Baseline catalog and updates; tenuvault.com for license checks and for feedback you choose to send. No tenant configuration or backup is ever sent to TenuVault, apart from feedback you choose to send: the text you write and, only if you tick it, a screenshot that may show tenant, policy or user names. |
 | **License** | Opens the License page. See [Activate and manage your license](/licensing/manage/). |
 | **Website and support** | Opens [tenuvault.com/desktop](https://tenuvault.com/desktop) in your browser. |
 
