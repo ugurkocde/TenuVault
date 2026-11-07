@@ -154,6 +154,8 @@ export interface WatcherDeployRecord {
   mode: WatcherDeployMode
   state: WatcherDeployState
   phase: WatcherDeployStepId
+  /** Incremented on every engine save, so concurrent continuations can tell their writes apart. */
+  revision: number
   plan: WatcherDeployPlan
   planHash: string
   ack: WatcherDeployAck

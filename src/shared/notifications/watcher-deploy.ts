@@ -142,6 +142,8 @@ export interface WatcherDeployView {
   id: string
   mode: WatcherDeployMode
   state: WatcherDeployState
+  phase?: WatcherDeployStepId
+  revision?: number
   plan: WatcherDeployPlan
   planHash: string
   ack: WatcherDeployAck

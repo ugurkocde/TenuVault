@@ -74,7 +74,7 @@ function saveDeploy(deps: FeatureDeps, tenantId: string, record: Stored<WatcherD
         : state === "cancelled"
           ? "Cancelled. Nothing was handed over."
           : "Setting up the Azure watcher."
-  return deps.records.update<WatcherDeployRecord>(DOMAINS.notificationWatcherDeploy, tenantId, record.id, (value) => ({ ...value, ...patch, status: state, summary }), { actor, reason })!
+  return deps.records.update<WatcherDeployRecord>(DOMAINS.notificationWatcherDeploy, tenantId, record.id, (value) => ({ ...value, ...patch, revision: (typeof value.revision === "number" ? value.revision : 0) + 1, status: state, summary }), { actor, reason })!
 }
 
 export function publicWatcherDeploy(record: Stored<WatcherDeployRecord>, tenantId: string): WatcherDeployView {
@@ -86,6 +86,8 @@ export function publicWatcherDeploy(record: Stored<WatcherDeployRecord>, tenantI
     id: record.id,
     mode: record.mode,
     state: record.state,
+    phase: record.phase,
+    revision: record.revision ?? 0,
     plan: record.plan,
     planHash: record.planHash,
     ack: record.ack,
@@ -222,6 +224,7 @@ export async function startWatcherDeploy(
     mode: preflight.existing.found ? "adopt" : "create",
     state: "running",
     phase: "discover",
+    revision: 1,
     plan: preflight.plan,
     planHash: preflight.planHash,
     ack,
@@ -773,7 +776,10 @@ async function advanceHandOver(deps: FeatureDeps, tenant: string, record: Stored
     return block(deps, tenant, rechecked, actor, "plan-changed", "The alerts or Azure target changed since this setup was confirmed. Review the check and start again.")
   }
   const blocker = preflight.findings.find((finding) => finding.severity === "block")
-  if (blocker) return block(deps, tenant, rechecked, actor, blocker.code, blocker.message)
+  if (blocker) {
+    const rediscover = saveDeploy(deps, tenant, rechecked, { phase: "discover" }, actor, "Rechecking Azure after a hand-over blocker")
+    return block(deps, tenant, rediscover, actor, blocker.code, blocker.message)
+  }
   const heartbeat = await readHeartbeat(deps, tenant)
   const stoppedAfterHeartbeat = cancelRequested(deps, tenant, rechecked)
   if (stoppedAfterHeartbeat) return stoppedAfterHeartbeat
@@ -906,26 +912,24 @@ export async function resumePendingWatcherHandovers(deps: FeatureDeps): Promise<
     const record = watcherDeployOf(deps, tenantId)
     if (!record || record.state !== "blocked" || !record.pendingHandover || record.phase !== "verify" || record.cancelRequestedAt) continue
     if (record.nextAttemptAt && Date.parse(record.nextAttemptAt) > deps.now().getTime()) continue
-    const started = await withDeployLock(deps, tenant, async () => {
+    const startedRevision = await withDeployLock(deps, tenant, async () => {
       const current = watcherDeployOf(deps, tenant, record.id)
-      if (!current || current.updatedAt !== record.updatedAt || current.state !== "blocked" || !current.pendingHandover || current.phase !== "verify" || current.cancelRequestedAt) return false
-      saveDeploy(deps, tenant, current, { state: "running", blockedReason: null, error: null }, null, "Checking the watcher again")
-      return true
+      if (!current || (current.revision ?? 0) !== (record.revision ?? 0) || current.state !== "blocked" || !current.pendingHandover || current.phase !== "verify" || current.cancelRequestedAt) return null
+      return saveDeploy(deps, tenant, current, { state: "running", blockedReason: null, error: null }, null, "Checking the watcher again").revision
     })
-    if (!started) continue
-    await advanceWatcherDeploy(deps, tenantId, null, record.id).catch(() => undefined)
-    let after = watcherDeployOf(deps, tenantId, record.id)
-    if (after?.state === "running" && after.phase === "hand-over") {
-      await advanceWatcherDeploy(deps, tenantId, null, record.id).catch(() => undefined)
-      after = watcherDeployOf(deps, tenantId, record.id)
+    if (startedRevision === null) continue
+    let produced = await advanceWatcherDeploy(deps, tenantId, null, record.id).catch(() => null)
+    if (produced?.state === "running" && produced.phase === "hand-over") {
+      produced = await advanceWatcherDeploy(deps, tenantId, null, record.id).catch(() => null)
     }
-    if (after?.state === "running" && !after.cancelRequestedAt) {
-      const observed = after
+    if (produced?.state === "running" && produced.revision !== undefined && produced.phase) {
+      const producedRevision = produced.revision
+      const producedPhase = produced.phase
       await withDeployLock(deps, tenant, async () => {
         const current = watcherDeployOf(deps, tenant, record.id)
-        // An admin continuation between the periodic advances changes the record and
-        // starts its own runner. Only the exact state this check produced may be parked.
-        if (!current || current.updatedAt !== observed.updatedAt || current.state !== "running" || current.phase !== observed.phase || current.cancelRequestedAt) return
+        // Park only the revision this periodic advance itself returned. Rereading the
+        // record here could adopt an admin continuation that landed after the advance.
+        if (!current || (current.revision ?? 0) !== producedRevision || current.state !== "running" || current.phase !== producedPhase || current.cancelRequestedAt) return
         if (current.phase === "verify") {
           saveDeploy(deps, tenant, current, {
             state: "blocked",
