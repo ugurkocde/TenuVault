@@ -324,20 +324,20 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
       return { job: deploy ? publicWatcherDeploy(deploy, tenantId) : null }
     },
 
-    "watcher-deploy-resume": ({ tenantId, body, deps, actor }) => {
+    "watcher-deploy-resume": async ({ tenantId, body, deps, actor }) => {
       try {
-        return { job: resumeWatcherDeploy(deps, tenantId, actor, optionalText(body, "jobId", 100)) }
+        return { job: await resumeWatcherDeploy(deps, tenantId, actor, optionalText(body, "jobId", 100)) }
       } catch (error) {
         if (error instanceof WatcherDeployError) throw new FeatureError(error.message, error.status)
         throw error
       }
     },
 
-    "watcher-deploy-confirm": ({ tenantId, body, deps, actor }) => {
+    "watcher-deploy-confirm": async ({ tenantId, body, deps, actor }) => {
       const confirmation = body.confirmation
       if (confirmation !== "roles" && confirmation !== "destination" && confirmation !== "grant") throw new FeatureError("confirmation must be roles, destination or grant")
       try {
-        return { job: confirmWatcherDeploy(deps, tenantId, actor, optionalText(body, "jobId", 100), confirmation) }
+        return { job: await confirmWatcherDeploy(deps, tenantId, actor, optionalText(body, "jobId", 100), confirmation) }
       } catch (error) {
         if (error instanceof WatcherDeployError) throw new FeatureError(error.message, error.status)
         throw error

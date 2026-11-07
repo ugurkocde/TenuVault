@@ -55,7 +55,8 @@ async function readBody(response: Response): Promise<unknown> {
 /** The one-line reason ARM gives for a failed call, without anything the request carried. */
 export function armErrorMessage(body: unknown, status: number): string {
   const record = body && typeof body === "object" ? body as Record<string, unknown> : null
-  const error = record?.error && typeof record.error === "object" ? record.error as Record<string, unknown> : null
+  const properties = record?.properties && typeof record.properties === "object" ? record.properties as Record<string, unknown> : null
+  const error = [record?.error, properties?.error].find((value): value is Record<string, unknown> => Boolean(value) && typeof value === "object") ?? null
   const details = Array.isArray(error?.details) ? error.details as Array<Record<string, unknown>> : []
   const detail = details.find((entry) => typeof entry?.message === "string")?.message
   const message = [error?.message, detail, record?.message].find((value): value is string => typeof value === "string" && value.trim().length > 0)

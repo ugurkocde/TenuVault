@@ -196,6 +196,8 @@ describe("the Alerts page", () => {
     for (let attempt = 0; attempt < 20 && !dialog().textContent?.includes("Found aa-tenuvault-notifications"); attempt++) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
     const failureEmail = dialog().querySelector('input[type="email"]') as HTMLInputElement
     act(() => { Object.getOwnPropertyDescriptor(Object.getPrototypeOf(failureEmail), "value")!.set!.call(failureEmail, "ops@contoso.test"); failureEmail.dispatchEvent(new Event("input", { bubbles: true })); failureEmail.dispatchEvent(new Event("change", { bubbles: true })) })
+    await act(async () => { ([...dialog().querySelectorAll("button")].find((button) => button.textContent?.startsWith("Check Azure")) as HTMLButtonElement).click() })
+    for (let attempt = 0; attempt < 20 && !dialog().textContent?.includes("Found aa-tenuvault-notifications"); attempt++) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
     const confirmLabel = [...dialog().querySelectorAll("label")].find((label) => label.textContent?.includes("If the watcher already exists"))!
     act(() => (confirmLabel.querySelector('input[type="checkbox"]') as HTMLInputElement).click())
     act(() => dialogButton("Continue").click())

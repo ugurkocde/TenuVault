@@ -284,6 +284,7 @@ export function SetupWizard({ tenant, data, onClose, onChanged }: { tenant: Tena
     : destination === "teams" ? /^https:\/\/.+/.test(teamsUrl.trim())
     : EMAIL.test(email.trim())
   const nativeValid =
+    preflight !== null &&
     deployDestinationKind !== undefined &&
     /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(subscriptionId.trim()) &&
     resourceGroupName.trim().length > 0 &&

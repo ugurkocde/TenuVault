@@ -50,6 +50,11 @@ describe("watcher deployment plan", () => {
     expect(armActionAllowed(grants, "Microsoft.Automation/automationAccounts/jobs/write")).toBe(false)
     expect(armActionAllowed(grants, "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write", true)).toBe(false)
     expect(armActionAllowed([{ actions: [], dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write"] }], "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write", true)).toBe(true)
+    // An exclusion in one role does not cancel another role granting the same action.
+    expect(armActionAllowed([
+      { actions: ["*"], notActions: ["Microsoft.Authorization/roleAssignments/write"] },
+      { actions: ["Microsoft.Authorization/roleAssignments/write"], notActions: [] },
+    ], "Microsoft.Authorization/roleAssignments/write")).toBe(true)
   })
 
   it("only asks for the Graph roles the alerts need", () => {
@@ -61,6 +66,8 @@ describe("watcher deployment plan", () => {
     const snippet = watcherGrantSnippet("33333333-3333-4333-8333-333333333333", "11111111-1111-4111-8111-111111111111", ["DeviceManagementApps.Read.All", "AuditLog.Read.All"])
     expect(snippet).toContain("33333333-3333-4333-8333-333333333333")
     expect(snippet).toContain("DeviceManagementApps.Read.All")
+    expect(snippet).toContain("https://graph.microsoft.com/beta/servicePrincipals")
+    expect(snippet).not.toContain("graph.microsoft.com/v1.0")
     expect(snippet).not.toContain("Mail.Send")
     expect(() => watcherGrantSnippet("x'; Remove-Item", "11111111-1111-4111-8111-111111111111", ["DeviceManagementApps.Read.All"])).toThrow()
     expect(() => watcherGrantSnippet("33333333-3333-4333-8333-333333333333", "11111111-1111-4111-8111-111111111111", ["Directory.ReadWrite.All"])).toThrow()
@@ -88,6 +95,13 @@ describe("watcher hand-over gate", () => {
     const gate = handoverGate({ ...ready, ...patch })
     expect(gate.ok).toBe(false)
     expect(gate.missing).toContain(missing)
+  })
+
+  it("only accepts the completed job this setup started as its proof", () => {
+    const withJob = { ...ready, jobSubmittedAt: "2026-11-07T10:01:00.000Z", jobStatus: "Completed" }
+    expect(handoverGate(withJob).ok).toBe(true)
+    expect(handoverGate({ ...withJob, jobStatus: "Failed" }).missing).toContain("test-job")
+    expect(handoverGate({ ...withJob, heartbeat: { runAt: "2026-11-07T10:00:30.000Z", lastError: null, alertsHash: "abc123" } }).missing).toContain("test-job-run")
   })
 
   it("does not need Conditional Access in the watcher when no alert reads it", () => {

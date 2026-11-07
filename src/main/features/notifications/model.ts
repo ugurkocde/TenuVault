@@ -168,6 +168,8 @@ export interface WatcherDeployRecord {
   grantAttemptedAt: string | null
   deploymentName: string | null
   deploymentState: string | null
+  deploymentSubmittedAt: string | null
+  cancelRequestedAt: string | null
   copiedChannels: Array<{ channelId: string; kind: "teams" | "webhook"; updatedAt: string }>
   principalId: string | null
   alertsHash: string | null

@@ -168,7 +168,10 @@ export function watcherDeployPlanHash(plan: WatcherDeployPlan): string {
   return sha256Hex(canonicalJson({
     ...plan,
     subscriptionId: plan.subscriptionId.toLowerCase(),
+    resourceGroupName: plan.resourceGroupName.toLowerCase(),
+    automationAccountName: plan.automationAccountName.toLowerCase(),
     storageAccountName: plan.storageAccountName.toLowerCase(),
+    location: plan.location.toLowerCase().replace(/\s+/g, ""),
     alertEmail: plan.alertEmail.toLowerCase(),
     destinationKinds: DESTINATION_ORDER.filter((kind) => plan.destinationKinds.includes(kind)),
   }))
@@ -188,15 +191,17 @@ function armPatternMatches(pattern: string, action: string): boolean {
 
 /**
  * Whether the effective Azure permissions allow one action. Wildcards match as ARM spells
- * them and a notAction always wins, as it does in Azure. Advisory only: deny assignments
- * and ABAC conditions do not appear in the permissions list, so callers still treat an ARM
- * refusal as the answer.
+ * them. Exclusions apply inside the role that carries them, then role results are unioned:
+ * Contributor excluding an action does not cancel User Access Administrator granting it.
+ * Advisory only: deny assignments and ABAC conditions do not appear in the permissions
+ * list, so callers still treat an ARM refusal as the answer.
  */
 export function armActionAllowed(grants: readonly ArmPermissionGrant[], action: string, dataAction = false): boolean {
-  const allowed = grants.flatMap((grant) => (dataAction ? grant.dataActions ?? [] : grant.actions ?? []))
-  const denied = grants.flatMap((grant) => (dataAction ? grant.notDataActions ?? [] : grant.notActions ?? []))
-  if (denied.some((pattern) => armPatternMatches(pattern, action))) return false
-  return allowed.some((pattern) => armPatternMatches(pattern, action))
+  return grants.some((grant) => {
+    const allowed = dataAction ? grant.dataActions ?? [] : grant.actions ?? []
+    const denied = dataAction ? grant.notDataActions ?? [] : grant.notActions ?? []
+    return allowed.some((pattern) => armPatternMatches(pattern, action)) && !denied.some((pattern) => armPatternMatches(pattern, action))
+  })
 }
 
 export const WATCHER_GRAPH_ROLES = ["DeviceManagementApps.Read.All", "AuditLog.Read.All", "Mail.Send"] as const
@@ -231,8 +236,8 @@ export function watcherGrantSnippet(principalId: string, tenantId: string, roles
     `Connect-MgGraph -Scopes "AppRoleAssignment.ReadWrite.All", "Application.Read.All" -TenantId "${tenantId.toLowerCase()}" -NoWelcome`,
     `$principalId = "${principalId.toLowerCase()}"`,
     `$wanted = @(${roleList})`,
-    "$graphSp = @((Invoke-MgGraphRequest -Method Get -Uri \"https://graph.microsoft.com/v1.0/servicePrincipals?%24filter=appId%20eq%20'00000003-0000-0000-c000-000000000000'\").value) | Select-Object -First 1",
-    "$uri = \"https://graph.microsoft.com/v1.0/servicePrincipals/$principalId/appRoleAssignments\"",
+    "$graphSp = @((Invoke-MgGraphRequest -Method Get -Uri \"https://graph.microsoft.com/beta/servicePrincipals?%24filter=appId%20eq%20'00000003-0000-0000-c000-000000000000'\").value) | Select-Object -First 1",
+    "$uri = \"https://graph.microsoft.com/beta/servicePrincipals/$principalId/appRoleAssignments\"",
     "$existing = @((Invoke-MgGraphRequest -Method Get -Uri $uri).value)",
     "foreach ($name in $wanted) {",
     "  $role = @($graphSp.appRoles) | Where-Object { $_.value -eq $name -and @($_.allowedMemberTypes) -contains \"Application\" } | Select-Object -First 1",
@@ -258,6 +263,9 @@ export interface WatcherHandoverEvidence {
   watchConditionalAccess: boolean | null
   alertsHash: string | null
   alertsWrittenAt: string | null
+  /** Set when this setup started a job: only that job, completed, can supply the proof. */
+  jobStatus?: string | null
+  jobSubmittedAt?: string | null
   heartbeat: { runAt: string | null; lastError: string | null; alertsHash: string | null } | null
 }
 
@@ -287,6 +295,10 @@ export function handoverGate(evidence: WatcherHandoverEvidence): { ok: boolean; 
   if (!evidence.failureAlertOk) missing.push("failure-alert")
   if (!evidence.destinationOk) missing.push("destination")
   if (evidence.needsConditionalAccess && evidence.watchConditionalAccess !== true) missing.push("conditional-access")
+  if (evidence.jobSubmittedAt) {
+    if (evidence.jobStatus !== "Completed") missing.push("test-job")
+    if (!evidence.heartbeat?.runAt || Date.parse(evidence.heartbeat.runAt) < Date.parse(evidence.jobSubmittedAt)) missing.push("test-job-run")
+  }
   const heartbeat = evidence.heartbeat
   if (!heartbeat?.runAt || !evidence.alertsWrittenAt || Date.parse(heartbeat.runAt) < Date.parse(evidence.alertsWrittenAt)) missing.push("heartbeat-fresh")
   if (!evidence.alertsHash || !heartbeat || heartbeat.alertsHash !== evidence.alertsHash) missing.push("heartbeat-alerts")

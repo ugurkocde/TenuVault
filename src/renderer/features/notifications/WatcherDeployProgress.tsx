@@ -145,7 +145,7 @@ export function WatcherDeployProgress({ tenant, job, onJob, onChanged }: {
           </Button>
         </div>
       )}
-      {job.state === "cancelled" && <p className="text-sm text-gray-700">Stopped. Anything already created in Azure was left in place, and this computer still watches.</p>}
+      {job.state === "cancelled" && <p className="text-sm text-gray-700">Stopped. Anything already created in Azure was left in place, and this computer still watches.{job.alertsHash ? " These alerts were already sent to the watcher, so it can also send them on its schedule until you finish this setup or update it in Azure." : ""}</p>}
     </div>
   )
 }

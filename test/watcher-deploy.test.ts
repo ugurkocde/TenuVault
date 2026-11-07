@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 import { routes } from "../src/main/features/notifications"
 import { DOMAINS } from "../src/main/features/domains"
-import { advanceWatcherDeploy } from "../src/main/features/notifications/watcher-deploy/engine"
+import { advanceWatcherDeploy, markInterruptedWatcherDeploys, resumePendingWatcherHandovers } from "../src/main/features/notifications/watcher-deploy/engine"
 import type { ArmRequest, ArmResponse } from "../src/main/azure/arm"
 import { watcherAlertsHash } from "../src/shared/notifications/alerts"
 import { auditWatchOf } from "../src/main/features/notifications/service"
@@ -23,6 +23,12 @@ class FakeArm {
   tenantId = TENANT_A
   storageFirewall = false
   failureAlert = true
+  failureAlertEnabled = true
+  accountStatus = 200
+  storagePaged = false
+  deploymentOutcome = "Succeeded"
+  deploymentMissing = false
+  throwJobGet = false
   roles = true
   deploymentPuts = 0
   jobPuts = 0
@@ -37,6 +43,9 @@ class FakeArm {
     if (path.startsWith(`/subscriptions/${SUBSCRIPTION}?`)) return ok({ subscriptionId: SUBSCRIPTION, tenantId: this.tenantId, state: "Enabled", subscriptionPolicies: { quotaId: "PayAsYouGo_2014-09-01" } })
     if (path.includes("/resourcegroups/rg-tenuvault-backups?") || path.includes("/resourceGroups/rg-tenuvault-backups?")) return ok({ name: "rg-tenuvault-backups", location: "westeurope" })
     if (path.includes("/providers/Microsoft.Storage/storageAccounts?")) {
+      if (this.storagePaged && !path.includes("$skiptoken=page2")) {
+        return ok({ value: [], nextLink: `https://management.azure.com/subscriptions/${SUBSCRIPTION}/providers/Microsoft.Storage/storageAccounts?api-version=2023-05-01&$skiptoken=page2` })
+      }
       return ok({ value: [{ id: `/subscriptions/${SUBSCRIPTION}/resourceGroups/rg-tenuvault-backups/providers/Microsoft.Storage/storageAccounts/tvbkp1234567890ab`, name: "tvbkp1234567890ab", location: "westeurope", properties: { publicNetworkAccess: "Enabled", networkAcls: { defaultAction: this.storageFirewall ? "Deny" : "Allow" } } }] })
     }
     if (path.includes("/providers/Microsoft.Authorization/permissions")) {
@@ -49,13 +58,15 @@ class FakeArm {
       if (request.method === "PUT") {
         this.deploymentPuts++
         this.order.push("deploy")
-        this.accountExists = true
-        return ok({ properties: { provisioningState: "Succeeded", outputs: { managedIdentityPrincipalId: { value: PRINCIPAL } } } }, 201)
+        if (!this.deploymentMissing) this.accountExists = true
+        return ok({ properties: { provisioningState: this.deploymentOutcome, outputs: { managedIdentityPrincipalId: { value: PRINCIPAL } }, ...(this.deploymentOutcome === "Failed" ? { error: { message: "a resource failed" } } : {}) } }, 201)
       }
       if (request.method === "POST" && path.includes("/cancel")) return ok({}, 204)
-      return ok({ properties: { provisioningState: "Succeeded", outputs: { managedIdentityPrincipalId: { value: PRINCIPAL } } } })
+      if (this.deploymentMissing) return ok({ error: { message: "not found" } }, 404)
+      return ok({ properties: { provisioningState: this.deploymentOutcome, outputs: { managedIdentityPrincipalId: { value: PRINCIPAL } }, ...(this.deploymentOutcome === "Failed" ? { error: { message: "a resource failed" } } : {}) } })
     }
     if (path.includes("/automationAccounts/aa-tenuvault-notifications/jobs/")) {
+      if (request.method === "GET" && this.throwJobGet) throw new Error("network down")
       if (request.method === "PUT") {
         this.jobPuts++
         this.order.push("job")
@@ -72,9 +83,11 @@ class FakeArm {
     if (path.includes("/automationAccounts/aa-tenuvault-notifications/jobSchedules")) return ok({ value: [{ properties: { runbook: { name: "Invoke-TenuVaultNotificationCheck" }, schedule: { name: "TenuVaultNotificationCheck" } } }] })
     if (path.includes("/automationAccounts/aa-tenuvault-notifications/schedules")) return ok({ value: [{ name: "TenuVaultNotificationCheck", properties: { isEnabled: true, nextRun: "2026-11-07T12:15:00.000Z", expiryTime: "9999-12-31T00:00:00.000Z" } }] })
     if (path.includes("/automationAccounts/aa-tenuvault-notifications")) {
+      if (this.accountStatus !== 200) return ok({ error: { message: "temporarily unavailable" } }, this.accountStatus)
       return this.accountExists ? ok({ id: this.accountId(), name: "aa-tenuvault-notifications", location: "westeurope", identity: { type: "SystemAssigned", principalId: PRINCIPAL, tenantId: TENANT_A } }) : ok({ error: { message: "not found" } }, 404)
     }
-    if (path.includes("/microsoft.insights/metricAlerts/")) return this.failureAlert ? ok({ name: "TenuVault watcher failed jobs" }) : ok({ error: { message: "not found" } }, 404)
+    if (path.includes("/microsoft.insights/actionGroups/")) return ok({ properties: { enabled: true, emailReceivers: [{ emailAddress: "ops@contoso.test", status: "Enabled" }] } })
+    if (path.includes("/microsoft.insights/metricAlerts/")) return this.failureAlert ? ok({ name: "TenuVault watcher failed jobs", properties: { enabled: this.failureAlertEnabled, scopes: [this.accountId()], criteria: { allOf: [{ metricName: "TotalJob", metricNamespace: "Microsoft.Automation/automationAccounts", operator: "GreaterThan", threshold: 0, dimensions: [{ name: "Status", values: ["Failed"] }] }] }, actions: [{ actionGroupId: `/subscriptions/${SUBSCRIPTION}/resourceGroups/rg-tenuvault-backups/providers/microsoft.insights/actionGroups/ag-tenuvault-watcher` }] } }) : ok({ error: { message: "not found" } }, 404)
     return ok({ error: { message: `unhandled ${path}` } }, 404)
   }
 
@@ -95,16 +108,35 @@ function graphVerified() {
   }
 }
 
+function graphGranting() {
+  let assigned = false
+  return () => async (method: string, path: string) => {
+    if (path.startsWith("servicePrincipals?")) return { status: 200, body: { value: [{ id: GRAPH_SP, appRoles: [{ id: "role-intune", value: "DeviceManagementApps.Read.All", allowedMemberTypes: ["Application"] }, { id: "role-audit", value: "AuditLog.Read.All", allowedMemberTypes: ["Application"] }] }] } } as never
+    if (method === "POST" && path.includes("/appRoleAssignments")) { assigned = true; return { status: 201, body: {} } as never }
+    if (path.includes("/appRoleAssignments")) return { status: 200, body: { value: assigned ? [{ resourceId: GRAPH_SP, appRoleId: "role-intune" }, { resourceId: GRAPH_SP, appRoleId: "role-audit" }] : [] } } as never
+    return { status: 404, body: {} } as never
+  }
+}
+
 async function world(options: { accountExists?: boolean; graph?: unknown } = {}) {
-  const heartbeat: { current: Heartbeat | null; nextError: string | null } = { current: null, nextError: null }
+  const heartbeat: { current: Heartbeat | null; nextError: string | null; readsAfterJob: number; failAfterReads: number | null } = { current: null, nextError: null, readsAfterJob: 0, failAfterReads: null }
+  const nowState = { current: new Date(NOW) }
   const arm = new FakeArm(heartbeat, options)
   const deps = fakeDeps({
     plans: { [TENANT_A]: "pro" },
-    now: () => NOW,
+    now: () => nowState.current,
     tenant: () => ({ tenantId: TENANT_A, name: "Contoso", clientId: "99999999-9999-9999-9999-999999999999", storageAccountName: "tvbkp1234567890ab" }),
     graph: (options.graph ?? graphUnknown()) as never,
     arm: arm.call,
-    watcherHeartbeat: async () => heartbeat.current ? { status: "ok", runAt: heartbeat.current.runAt, lastError: heartbeat.current.lastError, alertsHash: heartbeat.current.alertsHash, runbookVersion: "1.2.0", alertsSource: "storage" } : { status: "missing" },
+    watcherHeartbeat: async () => {
+      if (arm.jobPuts > 0) {
+        heartbeat.readsAfterJob++
+        if (heartbeat.failAfterReads !== null && heartbeat.readsAfterJob > heartbeat.failAfterReads) {
+          return { status: "ok", runAt: heartbeat.current?.runAt ?? NOW.toISOString(), lastError: "later failure", alertsHash: heartbeat.current?.alertsHash ?? null, runbookVersion: "1.2.0", alertsSource: "storage" }
+        }
+      }
+      return heartbeat.current ? { status: "ok", runAt: heartbeat.current.runAt, lastError: heartbeat.current.lastError, alertsHash: heartbeat.current.alertsHash, runbookVersion: "1.2.0", alertsSource: "storage" } : { status: "missing" }
+    },
     watcherAlertsWrite: async (_tenant, text) => {
       arm.order.push("alerts")
       heartbeat.current = { runAt: "2026-11-07T11:00:00.000Z", lastError: null, alertsHash: watcherAlertsHash(JSON.parse(text)) }
@@ -115,7 +147,7 @@ async function world(options: { accountExists?: boolean; graph?: unknown } = {})
   const channel = (await call(api, PATH, { tenantId: TENANT_A, action: "add-channel", kind: "teams", url: TEAMS_SECRET })).body.channel
   await call(api, PATH, { tenantId: TENANT_A, action: "add-rule", title: "Changes", eventTypes: ["intune.change", "entra.change", "backup.failed"], channelIds: [channel.id] })
   await call(api, PATH, { tenantId: TENANT_A, action: "update-audit-watch", enabled: true, conditionalAccessEnabled: true })
-  return { deps, api, arm, heartbeat, channel }
+  return { deps, api, arm, heartbeat, channel, nowState }
 }
 
 const planBody = {
@@ -127,6 +159,12 @@ const planBody = {
   destinationKinds: ["teams"],
   needsConditionalAccess: true,
   createIfMissing: true,
+}
+
+async function startDeploy(w: Awaited<ReturnType<typeof world>>, ack: unknown, overrides: Record<string, unknown> = {}) {
+  const plan = { ...planBody, ...overrides }
+  const preflight = (await call(w.api, PATH, { tenantId: TENANT_A, action: "watcher-preflight", ...plan })).body
+  return call(w.api, PATH, { tenantId: TENANT_A, action: "watcher-deploy-start", ...plan, planHash: preflight.planHash, ack })
 }
 
 async function drive(w: Awaited<ReturnType<typeof world>>) {
@@ -159,6 +197,45 @@ describe("watcher deployment preflight", () => {
       expect.objectContaining({ severity: "block", code: "storage-firewall" }),
     ]))
   })
+
+  it("treats a transient account read as incomplete discovery, never as absence", async () => {
+    const w = await world()
+    w.arm.accountStatus = 503
+    const result = await call(w.api, PATH, { tenantId: TENANT_A, action: "watcher-preflight", ...planBody })
+    expect(result.body.existing.found).toBe(false)
+    expect(result.body.findings).toEqual(expect.arrayContaining([expect.objectContaining({ severity: "block", code: "discovery-incomplete" })]))
+  })
+
+  it("follows ARM list pages before judging storage", async () => {
+    const w = await world()
+    w.arm.storagePaged = true
+    const result = await call(w.api, PATH, { tenantId: TENANT_A, action: "watcher-preflight", ...planBody })
+    expect(result.body.findings.map((finding: { code: string }) => finding.code)).not.toContain("storage-missing")
+    expect(result.body.findings.map((finding: { code: string }) => finding.code)).not.toContain("storage-read")
+  })
+
+  it("does not let a disabled failure alert satisfy the check", async () => {
+    const w = await world()
+    w.arm.failureAlertEnabled = false
+    const result = await call(w.api, PATH, { tenantId: TENANT_A, action: "watcher-preflight", ...planBody })
+    expect(result.body.existing.failureAlert).toBe(false)
+    expect(result.body.findings).toEqual(expect.arrayContaining([expect.objectContaining({ code: "failure-alert-missing" })]))
+  })
+
+  it("ignores a stale heartbeat from a deleted watcher", async () => {
+    const w = await world({ accountExists: false })
+    w.deps.watcherHeartbeat = async () => ({ status: "ok", runAt: "2026-10-01T00:00:00.000Z", lastError: null, alertsHash: "old", runbookVersion: "1.0.0", alertsSource: "storage" })
+    const result = await call(w.api, PATH, { tenantId: TENANT_A, action: "watcher-preflight", ...planBody })
+    const codes = result.body.findings.map((finding: { code: string }) => finding.code)
+    expect(codes).not.toContain("unseen-watcher")
+    expect(codes).not.toContain("runbook-version")
+  })
+
+  it("keeps watcher email creation on the script path", async () => {
+    const w = await world({ accountExists: false })
+    const result = await call(w.api, PATH, { tenantId: TENANT_A, action: "watcher-preflight", ...planBody, destinationKinds: ["mail"] })
+    expect(result.body.findings).toEqual(expect.arrayContaining([expect.objectContaining({ severity: "block", code: "mail-create" })]))
+  })
 })
 
 describe("watcher deployment engine", () => {
@@ -176,7 +253,7 @@ describe("watcher deployment engine", () => {
 
   it("stops at the Graph role boundary with a snippet and starts no job", async () => {
     const w = await world()
-    const started = await call(w.api, PATH, { tenantId: TENANT_A, action: "watcher-deploy-start", ...planBody, ack: { destinationConfirmed: true, copyDestinationKinds: [], grantRoles: false, rolesConfirmed: false } })
+    const started = await startDeploy(w, { destinationConfirmed: true, copyDestinationKinds: [], grantRoles: false, rolesConfirmed: false })
     const view = await drive(w)
     expect(view).toMatchObject({ state: "blocked", blockedReason: "needs-admin" })
     expect(view.grantSnippet).toContain(PRINCIPAL)
@@ -188,7 +265,7 @@ describe("watcher deployment engine", () => {
   it("does not hand over on a 403 heartbeat, then completes after an explicit recheck", async () => {
     const w = await world()
     w.heartbeat.nextError = "HTTP 403 from Microsoft Graph"
-    await call(w.api, PATH, { tenantId: TENANT_A, action: "watcher-deploy-start", ...planBody, ack: { destinationConfirmed: true, copyDestinationKinds: [], grantRoles: false, rolesConfirmed: true } })
+    await startDeploy(w, { destinationConfirmed: true, copyDestinationKinds: [], grantRoles: false, rolesConfirmed: true })
     const blocked = await drive(w)
     expect(blocked).toMatchObject({ state: "blocked", blockedReason: "roles-not-effective" })
     expect(auditWatchOf(w.deps, TENANT_A)?.externalWatcher).toBe(false)
@@ -204,7 +281,7 @@ describe("watcher deployment engine", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
     try {
       const w = await world({ accountExists: false, graph: graphVerified() })
-      await call(w.api, PATH, { tenantId: TENANT_A, action: "watcher-deploy-start", ...planBody, ack: { destinationConfirmed: false, copyDestinationKinds: ["teams"], grantRoles: false, rolesConfirmed: false } })
+      await startDeploy(w, { destinationConfirmed: false, copyDestinationKinds: ["teams"], grantRoles: false, rolesConfirmed: false }, { location: "West Europe" })
       const view = await drive(w)
       expect(view).toMatchObject({ state: "complete", mode: "create" })
       expect(w.arm.deploymentPuts).toBe(1)
@@ -219,5 +296,98 @@ describe("watcher deployment engine", () => {
     } finally {
       warn.mockRestore()
     }
+  })
+
+  it("refuses to start without the confirmed plan hash", async () => {
+    const w = await world()
+    const result = await call(w.api, PATH, { tenantId: TENANT_A, action: "watcher-deploy-start", ...planBody, ack: { destinationConfirmed: true, copyDestinationKinds: [], grantRoles: false, rolesConfirmed: true } })
+    expect(result.status).toBe(409)
+    expect(w.deps.records.list(DOMAINS.notificationWatcherDeploy, TENANT_A)).toEqual([])
+  })
+
+  it("persists a thrown step error instead of leaving a runner-less running setup", async () => {
+    const w = await world()
+    w.arm.throwJobGet = true
+    await startDeploy(w, { destinationConfirmed: true, copyDestinationKinds: [], grantRoles: false, rolesConfirmed: true })
+    const view = await drive(w)
+    expect(view).toMatchObject({ state: "failed" })
+    expect(view.error).toContain("network down")
+    expect(auditWatchOf(w.deps, TENANT_A)?.externalWatcher).toBe(false)
+  })
+
+  it("rechecks the heartbeat immediately before hand-over", async () => {
+    const w = await world()
+    w.heartbeat.failAfterReads = 1
+    await startDeploy(w, { destinationConfirmed: true, copyDestinationKinds: [], grantRoles: false, rolesConfirmed: true })
+    const view = await drive(w)
+    expect(view.state).not.toBe("complete")
+    expect(auditWatchOf(w.deps, TENANT_A)?.externalWatcher).toBe(false)
+  })
+
+  it("does not treat a partly failed deployment as destination evidence", async () => {
+    const w = await world({ accountExists: false, graph: graphVerified() })
+    w.arm.deploymentOutcome = "Failed"
+    await startDeploy(w, { destinationConfirmed: false, copyDestinationKinds: ["teams"], grantRoles: false, rolesConfirmed: false })
+    const view = await drive(w)
+    expect(view).toMatchObject({ state: "blocked", blockedReason: "needs-destination" })
+    expect(w.arm.deploymentPuts).toBe(1)
+    expect(auditWatchOf(w.deps, TENANT_A)?.externalWatcher).toBe(false)
+  })
+
+  it("bounds a deployment that never appears and submits another only after an exact absence check", async () => {
+    const w = await world({ accountExists: false, graph: graphVerified() })
+    w.arm.deploymentMissing = true
+    await startDeploy(w, { destinationConfirmed: false, copyDestinationKinds: ["teams"], grantRoles: false, rolesConfirmed: false })
+    await advanceWatcherDeploy(w.deps, TENANT_A, "Admin")
+    await advanceWatcherDeploy(w.deps, TENANT_A, "Admin")
+    w.nowState.current = new Date(NOW.getTime() + 3 * 60_000)
+    await drive(w)
+    expect(w.arm.deploymentPuts).toBeGreaterThanOrEqual(2)
+    expect(auditWatchOf(w.deps, TENANT_A)?.externalWatcher).toBe(false)
+  })
+
+  it("grants only the missing Graph roles when the admin approved it", async () => {
+    const w = await world({ graph: graphGranting() })
+    await startDeploy(w, { destinationConfirmed: true, copyDestinationKinds: [], grantRoles: true, rolesConfirmed: false })
+    const view = await drive(w)
+    expect(view).toMatchObject({ state: "complete", graphRoleStatus: "verified" })
+  })
+
+  it("marks a running setup interrupted at startup and resumes it", async () => {
+    const w = await world()
+    const started = await startDeploy(w, { destinationConfirmed: true, copyDestinationKinds: [], grantRoles: false, rolesConfirmed: false })
+    await drive(w)
+    const record = w.deps.records.list(DOMAINS.notificationWatcherDeploy, TENANT_A)[0]!
+    w.deps.records.update(DOMAINS.notificationWatcherDeploy, TENANT_A, record.id, (value: any) => ({ ...value, state: "running", status: "running" }), { actor: "test", reason: "test restart" })
+    markInterruptedWatcherDeploys(w.deps)
+    expect(w.deps.records.list<any>(DOMAINS.notificationWatcherDeploy, TENANT_A)[0].state).toBe("interrupted")
+    const resumed = await call(w.api, PATH, { tenantId: TENANT_A, action: "watcher-deploy-resume", jobId: started.body.job.id })
+    expect(resumed.status).toBe(200)
+    expect((await drive(w))).toMatchObject({ state: "blocked", blockedReason: "needs-admin" })
+  })
+
+  it("completes a pending hand-over from a later clean scheduled heartbeat without another job", async () => {
+    const w = await world()
+    w.heartbeat.nextError = "HTTP 403 from Microsoft Graph"
+    await startDeploy(w, { destinationConfirmed: true, copyDestinationKinds: [], grantRoles: false, rolesConfirmed: true })
+    const blocked = await drive(w)
+    expect(blocked).toMatchObject({ state: "blocked", blockedReason: "roles-not-effective" })
+    const jobs = w.arm.jobPuts
+    w.heartbeat.current = { ...w.heartbeat.current!, lastError: null }
+    const record = w.deps.records.list<any>(DOMAINS.notificationWatcherDeploy, TENANT_A)[0]!
+    w.deps.records.update(DOMAINS.notificationWatcherDeploy, TENANT_A, record.id, (value: any) => ({ ...value, nextAttemptAt: "2026-11-07T11:00:00.000Z" }), { actor: "test", reason: "test retry due" })
+    await resumePendingWatcherHandovers(w.deps)
+    expect(w.deps.records.list<any>(DOMAINS.notificationWatcherDeploy, TENANT_A)[0].state).toBe("complete")
+    expect(w.arm.jobPuts).toBe(jobs)
+    expect(auditWatchOf(w.deps, TENANT_A)?.externalWatcher).toBe(true)
+  })
+
+  it("cancels a setup without handing over", async () => {
+    const w = await world()
+    const started = await startDeploy(w, { destinationConfirmed: true, copyDestinationKinds: [], grantRoles: false, rolesConfirmed: false })
+    await drive(w)
+    const cancelled = await call(w.api, PATH, { tenantId: TENANT_A, action: "revoke-watcher-deploy", jobId: started.body.job.id })
+    expect(cancelled.body.job.state).toBe("cancelled")
+    expect(auditWatchOf(w.deps, TENANT_A)?.externalWatcher).toBe(false)
   })
 })

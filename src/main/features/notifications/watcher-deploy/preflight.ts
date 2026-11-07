@@ -16,7 +16,7 @@ import {
 import type { WatcherDestination } from "../../../../shared/notifications/alerts"
 import { watcherAlertsHash } from "../../../../shared/notifications/alerts"
 import { channelsOf, rulesOf, watcherAlertsDocument, brief } from "../service"
-import { isValidEmailAddress } from "../model"
+import { isValidEmailAddress, WATCHER_STALE_HOURS } from "../model"
 import { checkGraphRoles } from "./graph-roles"
 
 const GUID = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i
@@ -47,7 +47,7 @@ export function normalizeWatcherDeployPlan(deps: FeatureDeps, tenantId: string, 
     resourceGroupName: (input.resourceGroupName || profile?.resourceGroupName || "").trim(),
     automationAccountName: (input.automationAccountName || profile?.automationAccountName || "aa-tenuvault-notifications").trim(),
     storageAccountName: (profile?.storageAccountName ?? "").trim().toLowerCase(),
-    location: (input.location || profile?.location || "").trim().toLowerCase(),
+    location: (input.location || profile?.location || "").trim().toLowerCase().replace(/\s+/g, ""),
     alertEmail: (input.alertEmail ?? "").trim().toLowerCase(),
     noFailureAlert: input.noFailureAlert === true,
     destinationKinds: orderKinds([...documentKinds, ...(input.destinationKinds ?? [])]),
@@ -88,6 +88,43 @@ async function armGet(deps: FeatureDeps, tenantId: string, path: string): Promis
   return deps.arm!(tenantId, { method: "GET", path })
 }
 
+interface ArmList {
+  items: Record_[]
+  status: number
+  body: unknown
+  incomplete: boolean
+}
+
+/**
+ * Every page of an ARM list, or an honest incomplete result. A nextLink is only followed
+ * back into management.azure.com as a path, so a response cannot aim the token elsewhere.
+ * Discovery must know when it has not seen everything: a truncated list is not absence.
+ */
+async function armGetListAll(deps: FeatureDeps, tenantId: string, firstPath: string): Promise<ArmList> {
+  const items: Record_[] = []
+  const seen = new Set<string>()
+  let path: string | null = firstPath
+  let last: ArmResponse = { status: 0, body: null, retryAfterSeconds: null }
+  for (let page = 0; path && page < 50; page++) {
+    if (seen.has(path)) return { items, status: last.status, body: last.body, incomplete: true }
+    seen.add(path)
+    last = await armGet(deps, tenantId, path)
+    if (last.status !== 200) return { items, status: last.status, body: last.body, incomplete: true }
+    items.push(...asList(last.body))
+    const next = asRecord(last.body).nextLink
+    if (next === undefined || next === null || next === "") return { items, status: 200, body: last.body, incomplete: false }
+    if (typeof next !== "string") return { items, status: 200, body: last.body, incomplete: true }
+    try {
+      const url = new URL(next)
+      if (url.origin !== "https://management.azure.com") return { items, status: 200, body: last.body, incomplete: true }
+      path = `${url.pathname}${url.search}`
+    } catch {
+      return { items, status: 200, body: last.body, incomplete: true }
+    }
+  }
+  return { items, status: last.status, body: last.body, incomplete: true }
+}
+
 function parseVariableValue(value: unknown): string | null {
   if (typeof value === "boolean") return value ? "true" : "false"
   if (typeof value !== "string") return null
@@ -110,30 +147,84 @@ interface Inspected {
   existing: ExistingWatcher
   variables: Map<string, string | null>
   status: number
+  /** Why discovery could not classify this account, when it could not. */
+  incomplete: string | null
+}
+
+async function variablesFor(deps: FeatureDeps, tenantId: string, base: string): Promise<{ variables: Map<string, string | null>; incomplete: boolean }> {
+  const list = await armGetListAll(deps, tenantId, `${base}/variables?api-version=2023-11-01`)
+  const variables = new Map<string, string | null>()
+  for (const entry of list.items) {
+    if (typeof entry.name === "string") variables.set(entry.name, parseVariableValue(asRecord(entry.properties).value))
+  }
+  return { variables, incomplete: list.incomplete }
+}
+
+/**
+ * Whether the fixed-name metric alert really watches this account's failed jobs and can
+ * notify someone. Existence alone is not enough: a disabled alert, one scoped to another
+ * account, or an action group with no enabled receiver all fail silently when it matters.
+ */
+async function failureAlertFor(deps: FeatureDeps, tenantId: string, subscriptionId: string, resourceGroup: string, accountId: unknown): Promise<boolean | null> {
+  const response = await armGet(deps, tenantId, `/subscriptions/${enc(subscriptionId)}/resourceGroups/${enc(resourceGroup)}/providers/microsoft.insights/metricAlerts/${enc("TenuVault watcher failed jobs")}?api-version=2018-03-01`)
+  if (response.status === 404) return false
+  if (response.status !== 200) return null
+  const properties = asRecord(asRecord(response.body).properties)
+  if (properties.enabled !== true) return false
+  const scopes = Array.isArray(properties.scopes) ? properties.scopes : []
+  if (typeof accountId !== "string" || !scopes.some((scope) => typeof scope === "string" && scope.toLowerCase() === accountId.toLowerCase())) return false
+  const criteria = asRecord(properties.criteria)
+  const allOf = Array.isArray(criteria.allOf) ? criteria.allOf.filter((entry): entry is Record_ => Boolean(entry) && typeof entry === "object") : []
+  const failedJobs = allOf.some((criterion) => {
+    if (criterion.metricName !== "TotalJob" || criterion.metricNamespace !== "Microsoft.Automation/automationAccounts") return false
+    if (criterion.operator !== "GreaterThan" && criterion.operator !== "GreaterThanOrEqual") return false
+    const dimensions = Array.isArray(criterion.dimensions) ? criterion.dimensions.filter((entry): entry is Record_ => Boolean(entry) && typeof entry === "object") : []
+    return dimensions.some((dimension) => dimension.name === "Status" && Array.isArray(dimension.values) && dimension.values.includes("Failed"))
+  })
+  if (!failedJobs) return false
+  const actions = Array.isArray(properties.actions) ? properties.actions.filter((entry): entry is Record_ => Boolean(entry) && typeof entry === "object") : []
+  let unknown = false
+  for (const action of actions.slice(0, 3)) {
+    const groupId = action.actionGroupId
+    if (typeof groupId !== "string" || !groupId.startsWith("/subscriptions/")) { unknown = true; continue }
+    const group = await armGet(deps, tenantId, `${groupId}?api-version=2023-01-01`)
+    if (group.status !== 200) { unknown = true; continue }
+    const groupProperties = asRecord(asRecord(group.body).properties)
+    if (groupProperties.enabled !== true) continue
+    const receivers = ["emailReceivers", "smsReceivers", "webhookReceivers", "azureAppPushReceivers", "voiceReceivers"]
+      .flatMap((key) => (Array.isArray(groupProperties[key]) ? groupProperties[key] as unknown[] : []))
+      .filter((entry): entry is Record_ => Boolean(entry) && typeof entry === "object")
+    if (receivers.some((receiver) => receiver.status === "Enabled" || receiver.status === undefined)) return true
+  }
+  return unknown ? null : false
 }
 
 async function inspectAccount(deps: FeatureDeps, tenantId: string, subscriptionId: string, resourceGroup: string, accountName: string): Promise<Inspected> {
   const base = `/subscriptions/${enc(subscriptionId)}/resourceGroups/${enc(resourceGroup)}/providers/Microsoft.Automation/automationAccounts/${enc(accountName)}`
   const account = await armGet(deps, tenantId, `${base}?api-version=2023-11-01`)
-  if (account.status !== 200) return { existing: NO_WATCHER, variables: new Map(), status: account.status }
+  if (account.status !== 200) {
+    return {
+      existing: NO_WATCHER,
+      variables: new Map(),
+      status: account.status,
+      incomplete: account.status === 404 ? null : `Automation account ${accountName} could not be read: ${armErrorMessage(account.body, account.status)}`,
+    }
+  }
   const body = asRecord(account.body)
   const identity = asRecord(body.identity)
-  const [variablesResponse, runbookResponse, schedulesResponse, linksResponse, alertResponse] = await Promise.all([
-    armGet(deps, tenantId, `${base}/variables?api-version=2023-11-01`),
+  const [variablesResult, runbookResponse, schedulesList, linksList, failureAlert] = await Promise.all([
+    variablesFor(deps, tenantId, base),
     armGet(deps, tenantId, `${base}/runbooks/${enc(RUNBOOK)}?api-version=2023-11-01`),
-    armGet(deps, tenantId, `${base}/schedules?api-version=2023-11-01`),
-    armGet(deps, tenantId, `${base}/jobSchedules?api-version=2023-11-01`),
-    armGet(deps, tenantId, `/subscriptions/${enc(subscriptionId)}/resourceGroups/${enc(resourceGroup)}/providers/microsoft.insights/metricAlerts/${enc("TenuVault watcher failed jobs")}?api-version=2018-03-01`),
+    armGetListAll(deps, tenantId, `${base}/schedules?api-version=2023-11-01`),
+    armGetListAll(deps, tenantId, `${base}/jobSchedules?api-version=2023-11-01`),
+    failureAlertFor(deps, tenantId, subscriptionId, resourceGroup, body.id),
   ])
-  const variables = new Map<string, string | null>()
-  for (const entry of asList(variablesResponse.body)) {
-    if (typeof entry.name === "string") variables.set(entry.name, parseVariableValue(asRecord(entry.properties).value))
-  }
-  const schedules = new Map(asList(schedulesResponse.body).map((entry) => [String(entry.name ?? ""), asRecord(entry.properties)]))
+  const variables = variablesResult.variables
+  const schedules = new Map(schedulesList.items.map((entry) => [String(entry.name ?? ""), asRecord(entry.properties)]))
   const now = deps.now().getTime()
-  const scheduleLinked = linksResponse.status !== 200 || schedulesResponse.status !== 200
+  const scheduleLinked = linksList.incomplete || schedulesList.incomplete
     ? null
-    : asList(linksResponse.body).some((link) => {
+    : linksList.items.some((link) => {
         const properties = asRecord(link.properties)
         const runbook = asRecord(properties.runbook)
         const schedule = asRecord(properties.schedule)
@@ -148,16 +239,17 @@ async function inspectAccount(deps: FeatureDeps, tenantId: string, subscriptionI
   return {
     status: 200,
     variables,
+    incomplete: variablesResult.incomplete ? `The variables of Automation account ${accountName} could not be read completely.` : null,
     existing: {
       found: true,
       automationAccountName: textOf(body.name) ?? accountName,
       resourceGroupName: resourceGroupOf(body.id) ?? resourceGroup,
-      location: textOf(body.location)?.toLowerCase() ?? null,
+      location: textOf(body.location)?.toLowerCase().replace(/\s+/g, "") ?? null,
       principalId: textOf(identity.principalId),
       identityTenantMatches: typeof identity.tenantId === "string" ? identity.tenantId.toLowerCase() === tenantId.toLowerCase() : null,
       runbookPublished: runbookResponse.status === 200 ? asRecord(asRecord(runbookResponse.body).properties).state === "Published" : runbookResponse.status === 404 ? false : null,
       scheduleLinked,
-      failureAlert: alertResponse.status === 200 ? true : alertResponse.status === 404 ? false : null,
+      failureAlert,
       watchConditionalAccess: ca === undefined || ca === null ? null : ca.toLowerCase() === "true",
       heartbeatRunAt: null,
     },
@@ -216,16 +308,16 @@ export async function watcherPreflight(deps: FeatureDeps, tenantId: string, inpu
 
     const [group, storageList, permissions, automationProvider, insightsProvider] = await Promise.all([
       armGet(deps, tenant, `/subscriptions/${enc(plan.subscriptionId)}/resourcegroups/${enc(plan.resourceGroupName)}?api-version=2022-09-01`),
-      armGet(deps, tenant, `/subscriptions/${enc(plan.subscriptionId)}/providers/Microsoft.Storage/storageAccounts?api-version=2023-05-01`),
-      armGet(deps, tenant, `/subscriptions/${enc(plan.subscriptionId)}/resourceGroups/${enc(plan.resourceGroupName)}/providers/Microsoft.Authorization/permissions?api-version=2022-04-01`),
+      armGetListAll(deps, tenant, `/subscriptions/${enc(plan.subscriptionId)}/providers/Microsoft.Storage/storageAccounts?api-version=2023-05-01`),
+      armGetListAll(deps, tenant, `/subscriptions/${enc(plan.subscriptionId)}/resourceGroups/${enc(plan.resourceGroupName)}/providers/Microsoft.Authorization/permissions?api-version=2022-04-01`),
       armGet(deps, tenant, `/subscriptions/${enc(plan.subscriptionId)}/providers/Microsoft.Automation?api-version=2022-09-01`),
       armGet(deps, tenant, `/subscriptions/${enc(plan.subscriptionId)}/providers/Microsoft.Insights?api-version=2022-09-01`),
     ])
-    if (group.status === 200 && !plan.location) plan.location = textOf(asRecord(group.body).location)?.toLowerCase() ?? ""
+    if (group.status === 200 && !plan.location) plan.location = textOf(asRecord(group.body).location)?.toLowerCase().replace(/\s+/g, "") ?? ""
     if (group.status === 404) findings.push({ severity: "block", code: "resource-group", message: "That resource group was not found in the subscription." })
 
-    const grants = asList(permissions.body)
-    if (permissions.status === 200 && grants.length) {
+    const grants = permissions.items
+    if (!permissions.incomplete && grants.length) {
       capabilities = {
         canRead: armActionAllowed(grants, "Microsoft.Automation/automationAccounts/read"),
         canDeploy: armActionAllowed(grants, "Microsoft.Resources/deployments/write") && armActionAllowed(grants, "Microsoft.Automation/automationAccounts/write"),
@@ -236,8 +328,10 @@ export async function watcherPreflight(deps: FeatureDeps, tenantId: string, inpu
     }
 
     let storageGroup: string | null = null
-    const storage = asList(storageList.body).find((entry) => String(entry.name ?? "").toLowerCase() === plan.storageAccountName)
-    if (storageList.status === 200 && !storage) {
+    const storage = storageList.items.find((entry) => String(entry.name ?? "").toLowerCase() === plan.storageAccountName)
+    if (storageList.incomplete) {
+      findings.push({ severity: "block", code: "storage-read", message: `The storage accounts in that subscription could not be listed completely: ${armErrorMessage(storageList.body, storageList.status)}` })
+    } else if (!storage) {
       findings.push({ severity: "block", code: "storage-missing", message: `Storage account ${plan.storageAccountName} is not in that subscription, so it is not the subscription this tenant's backups use.` })
     }
     if (storage) {
@@ -248,9 +342,9 @@ export async function watcherPreflight(deps: FeatureDeps, tenantId: string, inpu
         findings.push({ severity: "block", code: "storage-firewall", message: "The backup storage account is behind a firewall. An Azure Automation cloud runbook cannot reach it, so this watcher cannot run there." })
       }
       if (typeof storage.id === "string") {
-        const storagePermissions = await armGet(deps, tenant, `${storage.id}/blobServices/default/containers/tenuvault-notification-state/providers/Microsoft.Authorization/permissions?api-version=2022-04-01`)
-        const storageGrants = asList(storagePermissions.body)
-        if (storagePermissions.status === 200 && storageGrants.length) {
+        const storagePermissions = await armGetListAll(deps, tenant, `${storage.id}/blobServices/default/containers/tenuvault-notification-state/providers/Microsoft.Authorization/permissions?api-version=2022-04-01`)
+        const storageGrants = storagePermissions.items
+        if (!storagePermissions.incomplete && storageGrants.length) {
           capabilities.canWriteAlertsFile = armActionAllowed(storageGrants, "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write", true)
           if (!capabilities.canWriteAlertsFile) {
             findings.push({ severity: "block", code: "storage-write", message: "This sign-in cannot write the watcher's alerts file or read its heartbeat. It needs Storage Blob Data Contributor on the backup storage account, as the storage setup grants." })
@@ -266,23 +360,37 @@ export async function watcherPreflight(deps: FeatureDeps, tenantId: string, inpu
     }
 
     let inspected = await inspectAccount(deps, tenant, plan.subscriptionId, plan.resourceGroupName, plan.automationAccountName)
+    if (inspected.incomplete) findings.push({ severity: "block", code: "discovery-incomplete", message: `${inspected.incomplete} TenuVault cannot tell whether a watcher is already there, so it will not create or hand over to one.` })
     let automationAccounts: Record_[] = []
-    if (!inspected.existing.found) {
-      const list = await armGet(deps, tenant, `/subscriptions/${enc(plan.subscriptionId)}/resources?$filter=${enc("resourceType eq 'Microsoft.Automation/automationAccounts'")}&api-version=2021-04-01`)
-      automationAccounts = asList(list.body)
-      const matches: Inspected[] = []
-      for (const candidate of automationAccounts.slice(0, 20)) {
-        const candidateGroup = resourceGroupOf(candidate.id)
-        const candidateName = textOf(candidate.name)
-        if (!candidateGroup || !candidateName || (candidateGroup === plan.resourceGroupName && candidateName === plan.automationAccountName)) continue
-        const checked = await inspectAccount(deps, tenant, plan.subscriptionId, candidateGroup, candidateName)
-        const candidateTenant = checked.variables.get("TenuVaultTenantId")
-        const candidateStorage = checked.variables.get("TenuVaultStorageAccount")
-        if (candidateTenant?.toLowerCase() === tenant && candidateStorage?.toLowerCase() === plan.storageAccountName) matches.push(checked)
-      }
-      if (matches[0]) {
-        inspected = matches[0]
-        if (matches.length > 1) findings.push({ severity: "warn", code: "multiple-watchers", message: "More than one watcher points at this tenant and storage account. The first one found is used; remove the other so alerts are not sent twice." })
+    if (!inspected.existing.found && !inspected.incomplete) {
+      const list = await armGetListAll(deps, tenant, `/subscriptions/${enc(plan.subscriptionId)}/resources?$filter=${enc("resourceType eq 'Microsoft.Automation/automationAccounts'")}&api-version=2021-04-01`)
+      automationAccounts = list.items
+      if (list.incomplete) {
+        findings.push({ severity: "block", code: "discovery-incomplete", message: `The Automation accounts in that subscription could not be listed completely: ${armErrorMessage(list.body, list.status)} TenuVault cannot tell whether a watcher is already there, so it will not create or hand over to one.` })
+      } else {
+        const matches: Inspected[] = []
+        let candidateIncomplete = false
+        for (const candidate of automationAccounts) {
+          const candidateGroup = resourceGroupOf(candidate.id)
+          const candidateName = textOf(candidate.name)
+          if (!candidateGroup || !candidateName || (candidateGroup.toLowerCase() === plan.resourceGroupName.toLowerCase() && candidateName.toLowerCase() === plan.automationAccountName.toLowerCase())) continue
+          const candidateBase = `/subscriptions/${enc(plan.subscriptionId)}/resourceGroups/${enc(candidateGroup)}/providers/Microsoft.Automation/automationAccounts/${enc(candidateName)}`
+          const candidateVariables = await variablesFor(deps, tenant, candidateBase)
+          if (candidateVariables.incomplete) { candidateIncomplete = true; continue }
+          const candidateTenant = candidateVariables.variables.get("TenuVaultTenantId")
+          const candidateStorage = candidateVariables.variables.get("TenuVaultStorageAccount")
+          if (candidateTenant?.toLowerCase() !== tenant || candidateStorage?.toLowerCase() !== plan.storageAccountName) continue
+          const checked = await inspectAccount(deps, tenant, plan.subscriptionId, candidateGroup, candidateName)
+          if (checked.incomplete) candidateIncomplete = true
+          else if (checked.existing.found) matches.push(checked)
+        }
+        if (candidateIncomplete) {
+          findings.push({ severity: "block", code: "discovery-incomplete", message: "Some Automation accounts in that subscription could not be checked completely. TenuVault cannot tell whether one of them already watches this tenant, so it will not create or hand over to one." })
+        }
+        if (matches[0]) {
+          inspected = matches[0]
+          if (matches.length > 1) findings.push({ severity: "block", code: "multiple-watchers", message: "More than one watcher points at this tenant and storage account. Remove or disable all but one, so a clean run from another watcher cannot be mistaken for this one's proof." })
+        }
       }
     }
     existing = inspected.existing
@@ -318,11 +426,13 @@ export async function watcherPreflight(deps: FeatureDeps, tenantId: string, inpu
     const heartbeat = deps.watcherHeartbeat ? await deps.watcherHeartbeat(tenant).catch(() => ({ status: "error" as const, message: "The watcher heartbeat could not be read." })) : { status: "missing" as const }
     if (heartbeat.status === "ok") {
       existing = { ...existing, heartbeatRunAt: heartbeat.runAt }
+      const heartbeatAge = heartbeat.runAt ? deps.now().getTime() - Date.parse(heartbeat.runAt) : Number.POSITIVE_INFINITY
+      const recentHeartbeat = Number.isFinite(heartbeatAge) && heartbeatAge <= WATCHER_STALE_HOURS * 3_600_000
       const version = heartbeat.runbookVersion?.split(".").map((part) => Number.parseInt(part, 10) || 0) ?? []
-      if (heartbeat.runbookVersion && (version[0]! < 1 || (version[0] === 1 && (version[1] ?? 0) < 2))) {
+      if (recentHeartbeat && heartbeat.runbookVersion && (version[0]! < 1 || (version[0] === 1 && (version[1] ?? 0) < 2))) {
         findings.push({ severity: "block", code: "runbook-version", message: `The watcher runbook is ${heartbeat.runbookVersion}; it cannot read the alerts this app writes. Run the current setup script once to upgrade it, then check again.` })
       }
-      if (!existing.found) findings.push({ severity: "block", code: "unseen-watcher", message: "A watcher already runs against this storage account, but this sign-in cannot see its Automation account. Use an account that can, so a second watcher is not created." })
+      if (recentHeartbeat && !existing.found) findings.push({ severity: "block", code: "unseen-watcher", message: "A watcher already runs against this storage account, but this sign-in cannot see its Automation account. Use an account that can, so a second watcher is not created." })
     } else if (heartbeat.status === "error") {
       findings.push({ severity: "warn", code: "heartbeat", message: heartbeat.message })
     }
