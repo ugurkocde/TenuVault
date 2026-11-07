@@ -152,7 +152,7 @@ export const HUBS: Hub[] = [
         feature: "notifications",
         path: "/api/notifications",
         summary: "Alerts that send backup, restore and drift events and Intune and Conditional Access changes to your channels, narrowed to the policies, change types and settings you pick, one summary per check or one message per change.",
-        points: ["Names the settings an update changed; setting values are compared on this computer and never sent.", "Send test shows exactly what an alert sends.", "Copy your alerts to the Azure watcher for alerts while this computer is off."],
+        points: ["Set up alerts creates the recommended set, turns on change watching and sends a test in one run.", "Names the settings an update changed; setting values are compared on this computer and never sent.", "The guided Azure step hands alerts to a watcher in your own subscription for when this computer is off."],
         Component: lazy(() => import("./notifications/NotificationsPanel").then((module) => ({ default: module.AlertsTab }))),
       },
       {

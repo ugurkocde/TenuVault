@@ -22,6 +22,7 @@ import { toast } from "../../lib/toast"
 import { bridge } from "../../lib/bridge"
 import type { FeatureTabProps } from "../types"
 import { TeamsCardTile } from "./CardLayoutEditor"
+import { SetupStatusCard, SetupWizardButton } from "./AlertsSetupWizard"
 import { useOptionalPermission } from "./optional-permissions"
 import type { OptionalPermissionStatus } from "../../../shared/services/optional-permissions"
 import {
@@ -57,8 +58,15 @@ function useNotificationsStatus(tenant: Tenant) {
 /** Loading and error states of a tab; renders the tab once the status is there. */
 function WithStatus({ tenant, children }: { tenant: Tenant; children: (data: NotificationsStatus, refresh: () => void) => ReactNode }) {
   const { status, refresh } = useNotificationsStatus(tenant)
-  if (status.isLoading) return <p className="text-sm text-gray-500">Loading alert settings...</p>
-  if (status.error) return <p className="text-sm text-red-700" role="alert">{status.error instanceof Error ? status.error.message : "Alert settings could not be loaded."}</p>
+  if (status.isLoading) return <p className="text-sm text-gray-600" role="status">Loading alert settings...</p>
+  if (status.error) {
+    return (
+      <div className="space-y-2">
+        <p className="text-sm text-red-700" role="alert">{status.error instanceof Error ? status.error.message : "Alert settings could not be loaded."}</p>
+        <Button type="button" size="sm" variant="outline" onClick={() => void status.refetch()}>Try again</Button>
+      </div>
+    )
+  }
   if (!status.data) return null
   return <>{children(status.data, refresh)}</>
 }
@@ -113,7 +121,8 @@ export function AlertsTab({ tenant, plan, allowed }: FeatureTabProps) {
     <WithStatus tenant={tenant}>
       {(data, refresh) => !allowed && !hasStored(data) ? null : (
         <div className="space-y-4">
-          <p className="text-sm text-gray-600" role="note">{data.runtimeNote} <DocsLink section="alerts-while-this-computer-is-off-the-azure-watcher">Set up the Azure watcher</DocsLink></p>
+          <SetupStatusCard tenant={tenant} data={data} onChanged={refresh} />
+          <p className="text-sm text-gray-700" role="note">{data.runtimeNote} <DocsLink section="alerts-while-this-computer-is-off-the-azure-watcher">Set up the Azure watcher</DocsLink></p>
           <WatcherSyncCard tenant={tenant} data={data} onChanged={refresh} />
           <RulesTile tenant={tenant} data={data} plan={plan} prefill={prefill} onPrefillUsed={() => setParams({}, { replace: true })} onChanged={refresh} />
         </div>
@@ -268,7 +277,7 @@ function ChannelsTile({ tenant, channels, rules, licensed, active, onChanged }: 
             <Bell className="h-4 w-4 text-gray-500" aria-hidden="true" />
             Channels
           </h3>
-          <p className="max-w-3xl text-sm text-gray-600">Where notifications go. A channel on its own sends nothing: an alert on the Alerts tab sends events to it. Messages carry names, counts, statuses and the names of changed settings, never setting values, policy content, tokens or credentials. <DocsLink section="channels">Channels guide</DocsLink></p>
+          <p className="max-w-3xl text-sm text-gray-700">Where notifications go. A channel alone sends nothing, an alert sends to it. <DocsLink section="channels">Channels guide</DocsLink></p>
         </div>
         <div className="flex flex-wrap gap-2">
           {!hasLocal && <Button type="button" variant="outline" size="sm" disabled={!licensed || addLocal.isPending} onClick={() => addLocal.mutate()}>Notify on this computer</Button>}
@@ -464,7 +473,7 @@ function ChannelDialog({ tenant, channel, open, onClose, onSaved }: { tenant: Te
   const mailPermission = useOptionalPermission(tenant, "notificationEmail")
   const groupPermission = useOptionalPermission(tenant, "groupRecipients")
   const editing = Boolean(channel)
-  const [kind, setKind] = useState<ChannelKind>(channel?.kind ?? "webhook")
+  const [kind, setKind] = useState<ChannelKind>(channel?.kind ?? "teams")
   const [title, setTitle] = useState(channel?.title ?? "")
   const [url, setUrl] = useState("")
   const [headerName, setHeaderName] = useState(channel?.headerName ?? "")
@@ -542,9 +551,9 @@ function ChannelDialog({ tenant, channel, open, onClose, onSaved }: { tenant: Te
             <label className="flex items-center gap-2 text-sm text-gray-700">
               Kind
               <select className={selectClass} value={kind} onChange={(event) => setKind(event.target.value as ChannelKind)}>
-                <option value="webhook">Webhook (https POST)</option>
                 <option value="teams">Teams channel (Workflows)</option>
                 <option value="email">Email</option>
+                <option value="webhook">Webhook (https POST)</option>
               </select>
             </label>
           )}
@@ -799,9 +808,10 @@ function RulesTile({ tenant, data, plan, prefill, onPrefillUsed, onChanged }: { 
             <Siren className="h-4 w-4 text-gray-500" aria-hidden="true" />
             Alerts
           </h3>
-          <p className="max-w-3xl text-sm text-gray-600">An alert sends matching events, at or above its minimum severity, to its channels. Alerts on Intune or Conditional Access changes can pick which changes they send, for example only a policy you care about, and send each change on its own. <DocsLink section="alerts">How alerts work</DocsLink></p>
+          <p className="max-w-3xl text-sm text-gray-700">Which events go where, narrowed to the changes you pick if you want. <DocsLink section="alerts">How alerts work</DocsLink></p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <SetupWizardButton tenant={tenant} data={data} onChanged={onChanged} />
           <Button type="button" variant="ghost" size="sm" disabled={!licensed || rules.length === 0 || copyForWatcher.isPending} onClick={() => copyForWatcher.mutate()}><Copy className="h-4 w-4" aria-hidden="true" />Copy for Azure watcher</Button>
           {otherTenants.length > 0 && (
             <Button type="button" variant="ghost" size="sm" disabled={!licensed || rules.length === 0} onClick={() => setCopying(true)}>
@@ -809,12 +819,12 @@ function RulesTile({ tenant, data, plan, prefill, onPrefillUsed, onChanged }: { 
               {!canUse(plan, "portfolio") && plan !== null && <PlanBadge feature="portfolio" />}
             </Button>
           )}
-          <Button type="button" variant="outline" size="sm" disabled={!licensed} onClick={() => setAdding({})}><Plus className="h-4 w-4" aria-hidden="true" />Add alert</Button>
+          <Button type="button" size="sm" disabled={!licensed} onClick={() => setAdding({})}><Plus className="h-4 w-4" aria-hidden="true" />Add alert</Button>
         </div>
       </div>
       {rules.length === 0 && (
-        <p className="text-sm text-gray-500">
-          No alerts yet. {channels.length === 0 ? "Add one from a template; you can add its channel in the same dialog." : "Channels stay quiet until an alert sends events to them."}
+        <p className="text-sm text-gray-600">
+          No alerts yet. The setup above creates the recommended set, or add one manually. Nothing sends until an alert exists.
         </p>
       )}
       <ul className="divide-y divide-gray-100 dark:divide-gray-800">
@@ -874,6 +884,14 @@ function RuleRow({ tenant, rule, licensed, blockers, onChanged, onEdit, channelT
 
 /** Event types a new rule cannot pick: shown disabled so they never look functional. Stored rules that already contain them still render in RuleRow. */
 const INERT_EVENT_TYPES: ReadonlySet<NotificationEventType> = new Set(["test", "health.finding"])
+
+/** Event types grouped the way admins think about them, so the picker scans instead of sprawling. */
+const EVENT_TYPE_GROUPS: Array<{ label: string; types: NotificationEventType[] }> = [
+  { label: "Backups", types: ["backup.failed", "backup.warning", "backup.succeeded", "backup.missed"] },
+  { label: "Restores and drift", types: ["restore.completed", "restore.partial", "restore.failed", "drift.detected"] },
+  { label: "Policy changes", types: ["intune.change", "entra.change"] },
+  { label: "Expiring and watcher", types: ["credential.expiring", "watcher.stale", "health.finding", "test"] },
+]
 
 const EVENT_TYPE_NOTES: Partial<Record<NotificationEventType, string>> = {
   test: "Sent from a channel Send test button and bypasses alerts",
@@ -1042,31 +1060,36 @@ function RuleDialog({ tenant, data, rule, draft, open, onClose, onSaved, onChann
             </div>
           )}
           <label className="block text-sm text-gray-700">Name{editing ? "" : " (optional)"}<Input className="mt-1" maxLength={120} value={title} placeholder="For example: Compliance policy changes" onChange={(event) => setTitle(event.target.value)} /></label>
-          <fieldset className="space-y-1.5">
+          <fieldset className="space-y-3">
             <legend className="text-sm text-gray-700">Event types</legend>
-            <div className="grid gap-1.5 sm:grid-cols-2">
-              {NOTIFICATION_EVENT_TYPES.map((type) => {
-                const inert = INERT_EVENT_TYPES.has(type)
-                const note = EVENT_TYPE_NOTES[type]
-                const kept = keptInert.includes(type)
-                return (
-                  <label key={type} className={inert ? "flex items-center gap-2 text-sm text-gray-400" : "flex items-center gap-2 text-sm text-gray-700"}>
-                    <input type="checkbox" className="size-4 accent-coral-600" disabled={inert} checked={kept || (!inert && eventTypes.includes(type))} onChange={(event) => toggleEvent(type, event.target.checked)} />
-                    <span>
-                      {EVENT_TYPE_LABELS[type]}
-                      {note && <span className="text-gray-500"> ({note})</span>}
-                    </span>
-                  </label>
-                )
-              })}
-            </div>
+            {EVENT_TYPE_GROUPS.map((group) => (
+              <div key={group.label} className="space-y-1.5">
+                <p className="text-xs font-medium text-gray-600" id={`event-group-${group.label.toLowerCase().replace(/[^a-z]+/g, "-")}`}>{group.label}</p>
+                <div className="grid gap-1.5 sm:grid-cols-2" role="group" aria-labelledby={`event-group-${group.label.toLowerCase().replace(/[^a-z]+/g, "-")}`}>
+                  {group.types.map((type) => {
+                    const inert = INERT_EVENT_TYPES.has(type)
+                    const note = EVENT_TYPE_NOTES[type]
+                    const kept = keptInert.includes(type)
+                    return (
+                      <label key={type} className={inert ? "flex items-center gap-2 text-sm text-gray-400" : "flex items-center gap-2 text-sm text-gray-700"}>
+                        <input type="checkbox" className="size-4 accent-coral-600" disabled={inert} checked={kept || (!inert && eventTypes.includes(type))} onChange={(event) => toggleEvent(type, event.target.checked)} />
+                        <span>
+                          {EVENT_TYPE_LABELS[type]}
+                          {note && <span className="text-gray-500"> ({note})</span>}
+                        </span>
+                      </label>
+                    )
+                  })}
+                </div>
+              </div>
+            ))}
             <p className="text-xs text-gray-500">Greyed out types cannot be picked. Test notifications bypass alerts, and health findings are configured on the Health review screen. An alert that already contains one of these types keeps it.</p>
           </fieldset>
           <div className="flex flex-wrap items-center gap-4 text-sm">
             <label className="flex items-center gap-2 text-gray-700">
               Minimum severity
               <select className={selectClass} value={minSeverity} onChange={(event) => { setPreview(null); setMinSeverity(event.target.value as NotificationSeverity) }}>
-                {SEVERITIES.map((severity) => <option key={severity} value={severity}>{severity}</option>)}
+                {SEVERITIES.map((severity) => <option key={severity} value={severity}>{severity[0]!.toUpperCase() + severity.slice(1)}</option>)}
               </select>
             </label>
           </div>
@@ -1293,7 +1316,7 @@ const SKIPPED_POLL = {
 function AuditWatchTile({ tenant, auditWatch, licensed, onChanged }: { tenant: Tenant; auditWatch: AuditWatch | null; licensed: boolean; onChanged: () => void }) {
   const [enabled, setEnabled] = useState(false)
   const [caEnabled, setCaEnabled] = useState(false)
-  const [intervalMinutes, setIntervalMinutes] = useState(60)
+  const [intervalMinutes, setIntervalMinutes] = useState(15)
   const [categories, setCategories] = useState<string[]>([])
   const [ignoreOwnChanges, setIgnoreOwnChanges] = useState(true)
   const [includeActor, setIncludeActor] = useState(false)
@@ -1304,7 +1327,7 @@ function AuditWatchTile({ tenant, auditWatch, licensed, onChanged }: { tenant: T
   const stored = JSON.stringify({
     enabled: auditWatch?.enabled ?? false,
     caEnabled: auditWatch?.conditionalAccess?.enabled ?? false,
-    intervalMinutes: auditWatch?.intervalMinutes ?? 60,
+    intervalMinutes: auditWatch?.intervalMinutes ?? 15,
     categories: auditWatch?.categories ?? [],
     ignoreOwnChanges: auditWatch?.ignoreOwnChanges ?? true,
     includeActor: auditWatch?.includeActor ?? false,
@@ -1365,7 +1388,7 @@ function AuditWatchTile({ tenant, auditWatch, licensed, onChanged }: { tenant: T
             <Shield className="h-4 w-4 text-gray-500" aria-hidden="true" />
             Change watching
           </h3>
-          <p className="max-w-3xl text-sm text-gray-600">Polls the audit log of each service you pick and sends what changed through your alerts, as the "Intune change" and "Conditional Access change" event types. Alerts send names, change types, times and, for updates, the names of the settings that changed. Setting values are compared on this computer to find those names and are never kept or sent. <DocsLink section="change-watching">Change watching guide</DocsLink></p>
+          <p className="max-w-3xl text-sm text-gray-700">Reads the audit logs you pick and hands new changes to your alerts. Setting values are compared on this computer and never kept or sent. <DocsLink section="change-watching">Change watching guide</DocsLink></p>
         </div>
         <Chip tone={watching.length ? "success" : "neutral"}>{watching.length ? `Watching ${watching.join(" and ")}` : "Off"}</Chip>
       </div>
