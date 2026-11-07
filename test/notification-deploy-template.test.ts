@@ -118,7 +118,9 @@ describe("the watcher Deploy to Azure template", () => {
     expect(template.variables.tenantId).toBe("[subscription().tenantId]")
     expect(template.parameters.missedBackupHours?.defaultValue).toBe(48)
     // A failure address or an explicit opt-out, like the script: no silently unalerted watcher.
-    expect(template.parameters.alertEmail?.defaultValue).toBeUndefined()
+    // The address stays optional at the parameter level so noFailureAlert=true deploys alone;
+    // the guard variable enforces the either-or.
+    expect(template.parameters.alertEmail?.defaultValue).toBe("")
     expect(template.parameters.noFailureAlert?.type).toBe("bool")
     expect(String(template.variables.failureAlertGuard)).toContain("noFailureAlert")
     const paste = template.outputs.pasteIntoTenuVault?.value ?? ""
