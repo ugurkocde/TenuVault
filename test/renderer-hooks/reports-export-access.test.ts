@@ -202,6 +202,7 @@ describe("change report export access", () => {
   })
 
   it("keeps stored reports exportable in read-only mode without write actions", async () => {
+    api.status.mockResolvedValue({ licensed: true, runtimeNote: "Runtime note", settings, reports: [listed({ audit: "unavailable" })] })
     const container = await render(false)
     expect(buttons(container).some((button) => button.getAttribute("aria-label")?.startsWith("Export Changes in Contoso Ltd"))).toBe(true)
 
