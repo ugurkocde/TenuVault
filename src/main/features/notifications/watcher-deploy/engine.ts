@@ -803,11 +803,12 @@ async function advanceHandOver(deps: FeatureDeps, tenant: string, record: Stored
 }
 
 /** One bounded step of the deployment. Safe to call again: every step reads state first. */
-export async function advanceWatcherDeploy(deps: FeatureDeps, tenantId: string, actor: string | null, jobId?: string | null): Promise<WatcherDeployView | null> {
+export async function advanceWatcherDeploy(deps: FeatureDeps, tenantId: string, actor: string | null, jobId?: string | null, expectedRevision?: number): Promise<WatcherDeployView | null> {
   const tenant = tenantId.toLowerCase()
   return withDeployLock(deps, tenant, async () => {
     const record = watcherDeployOf(deps, tenant, jobId)
     if (!record) return null
+    if (expectedRevision !== undefined && (record.revision ?? 0) !== expectedRevision) return null
     if (record.state !== "running" || record.cancelRequestedAt) return publicWatcherDeploy(record, tenant)
     try {
       switch (record.phase) {
@@ -920,7 +921,9 @@ export async function resumePendingWatcherHandovers(deps: FeatureDeps): Promise<
     if (startedRevision === null) continue
     let produced = await advanceWatcherDeploy(deps, tenantId, null, record.id).catch(() => null)
     if (produced?.state === "running" && produced.phase === "hand-over") {
-      produced = await advanceWatcherDeploy(deps, tenantId, null, record.id).catch(() => null)
+      const second = await advanceWatcherDeploy(deps, tenantId, null, record.id, produced.revision).catch(() => null)
+      if (!second) continue
+      produced = second
     }
     if (produced?.state === "running" && produced.revision !== undefined && produced.phase) {
       const producedRevision = produced.revision

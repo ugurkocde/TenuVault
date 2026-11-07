@@ -611,6 +611,28 @@ describe("watcher deployment engine", () => {
     expect(auditWatchOf(w.deps, TENANT_A)?.externalWatcher).toBe(false)
   })
 
+  it("does not park an admin continuation that lands before the periodic hand-over advance", async () => {
+    const w = await world()
+    w.heartbeat.nextError = "HTTP 403 from Microsoft Graph"
+    const started = await startDeploy(w, { destinationConfirmed: true, copyDestinationKinds: [], grantRoles: false, rolesConfirmed: true })
+    const blocked = await drive(w)
+    expect(blocked).toMatchObject({ state: "blocked", blockedReason: "roles-not-effective" })
+    w.heartbeat.current = { ...w.heartbeat.current!, lastError: null, identityPrincipalId: PRINCIPAL, jobId: "66666666-6666-4666-8666-666666666666" }
+    const record = w.deps.records.list<any>(DOMAINS.notificationWatcherDeploy, TENANT_A)[0]!
+    w.deps.records.update(DOMAINS.notificationWatcherDeploy, TENANT_A, record.id, (value: any) => ({ ...value, nextAttemptAt: "2026-11-07T11:00:00.000Z" }), { actor: "test", reason: "test retry due" })
+    const originalHeartbeat = w.deps.watcherHeartbeat!
+    let resumePromise: Promise<any> | null = null
+    w.deps.watcherHeartbeat = async (tenantId) => {
+      const result = await originalHeartbeat(tenantId)
+      resumePromise ??= resumeWatcherDeploy(w.deps, TENANT_A, "Admin", started.body.job.id)
+      return result
+    }
+    await resumePendingWatcherHandovers(w.deps)
+    expect(resumePromise).not.toBeNull()
+    expect((await resumePromise!).state).toBe("running")
+    expect(w.deps.records.list<any>(DOMAINS.notificationWatcherDeploy, TENANT_A)[0].state).toBe("running")
+  })
+
   it("rechecks Azure after a blocker found during final hand-over", async () => {
     const w = await world()
     const started = await startDeploy(w, { destinationConfirmed: true, copyDestinationKinds: [], grantRoles: false, rolesConfirmed: true })
