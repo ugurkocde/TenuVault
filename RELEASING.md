@@ -85,7 +85,8 @@ Put these in the next stable release's notes, then remove them here.
   optional reply-to email, app version, OS, plan, section name and a random message ID to
   `https://www.tenuvault.com/api/desktop-feedback`, only when the admin clicks Send feedback. A
   window screenshot is attached only when ticked. Networks that filter by path need that path
-  allowed; when sending fails, Copy as email opens the same feedback as an email to support.
+  allowed. When sending fails, Copy as email copies the full feedback to the clipboard and opens an
+  email to support; that draft may be shortened, so admins paste the copied text if anything is cut.
 
 ## Cutting a stable release
 

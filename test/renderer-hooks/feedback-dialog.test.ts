@@ -11,7 +11,10 @@ const mocks = vi.hoisted(() => ({
   discardCapture: vi.fn(async (_openingId: string) => undefined),
   openExternal: vi.fn(async (_url: string) => undefined),
   toast: vi.fn(),
+  writeText: vi.fn(async (_text: string) => undefined),
 }))
+
+Object.defineProperty(navigator, "clipboard", { value: { writeText: mocks.writeText }, configurable: true })
 
 vi.mock("@desktop/lib/bridge", () => ({
   bridge: {
@@ -34,6 +37,10 @@ const snapshotWith = (overrides: Partial<FeedbackSnapshot> = {}): FeedbackSnapsh
 
 beforeEach(() => {
   mocks.send.mockReset()
+  mocks.writeText.mockReset()
+  mocks.writeText.mockResolvedValue(undefined)
+  mocks.openExternal.mockReset()
+  mocks.openExternal.mockResolvedValue(undefined)
 })
 
 afterEach(() => {
@@ -253,5 +260,54 @@ describe("FeedbackDialog", () => {
     await act(async () => { button("Copy as email")!.click() })
     expect(mocks.openExternal).toHaveBeenCalledTimes(1)
     expect(decodeURIComponent(mocks.openExternal.mock.calls[0]![0])).toContain("It failed \uFFFD")
+  })
+
+  describe("Copy as email", () => {
+    const failOnce = () => mocks.send.mockResolvedValue({ ok: false, kind: "network", message: "TenuVault could not reach the feedback service." } satisfies FeedbackSendResult)
+
+    it("copies the full text before opening the shortened email draft", async () => {
+      failOnce()
+      await render()
+      const goal = "\u00e9".repeat(500)
+      const blocker = "\u00fc".repeat(500)
+      await fill(goal, blocker)
+      await clickSend()
+      await act(async () => { button("Copy as email")!.click() })
+      expect(mocks.writeText).toHaveBeenCalledTimes(1)
+      const text = mocks.writeText.mock.calls[0]![0]
+      expect(text.startsWith("To: support@tenuvault.com\nSubject: TenuVault feedback\n")).toBe(true)
+      expect(text).toContain(goal)
+      expect(text).toContain(blocker)
+      expect(text).toContain("Plan: Community")
+      expect(text).toContain(`Message ID: ${mocks.send.mock.calls[0]![1].submissionId}`)
+      // The clipboard is written before the mail app opens.
+      expect(mocks.writeText.mock.invocationCallOrder[0]!).toBeLessThan(mocks.openExternal.mock.invocationCallOrder[0]!)
+      const url = mocks.openExternal.mock.calls[0]![0]
+      expect(url.length).toBeLessThanOrEqual(1800)
+      expect(decodeURIComponent(url)).not.toContain(goal)
+      expect(mocks.toast).toHaveBeenCalledWith("Your feedback was copied. If the email draft is cut off, paste the copied text.", "success")
+    })
+
+    it("says the text is on the clipboard and names the address when no mail app opens", async () => {
+      failOnce()
+      mocks.openExternal.mockRejectedValue(new Error("No application"))
+      await render()
+      await fill("Restore a policy", "It failed")
+      await clickSend()
+      await act(async () => { button("Copy as email")!.click() })
+      expect(mocks.writeText).toHaveBeenCalledTimes(1)
+      expect(mocks.toast).toHaveBeenCalledWith("No email app could be opened. Your feedback is on the clipboard: paste it into an email to support@tenuvault.com.", "error")
+    })
+
+    it("still opens the email draft when the clipboard is unavailable", async () => {
+      failOnce()
+      mocks.writeText.mockRejectedValue(new Error("Denied"))
+      await render()
+      await fill("Restore a policy", "It failed")
+      await clickSend()
+      await act(async () => { button("Copy as email")!.click() })
+      expect(mocks.openExternal).toHaveBeenCalledTimes(1)
+      expect(mocks.toast).toHaveBeenCalledWith("Your feedback could not be copied; the email draft may be shortened.", "info")
+    })
   })
 })

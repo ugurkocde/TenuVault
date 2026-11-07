@@ -106,7 +106,7 @@ As with any web request, the service also sees your public IP address. It uses i
 
 ### What is never sent
 
-Tenant configuration, backups, policy names, device or user information, access tokens, refresh tokens and your backup recovery key are never sent to tenuvault.com, with one opt-in exception: feedback you choose to send: the text you write and, only if you tick it, a screenshot that may show tenant, policy or user names (see [Feedback](#feedback) below).
+Tenant configuration, backups, policy names, device or user records from your tenant, access tokens, refresh tokens and your backup recovery key are never sent to tenuvault.com, with one opt-in exception: feedback you choose to send, that is the text you write and, only if you tick it, a screenshot that may show tenant, policy or user names (see [Feedback](#feedback) below). This is separate from your own sign-in: license requests can carry a Microsoft ID token with your own name and user principal name, as described above, which the licensing service verifies and does not store.
 
 ### Feedback
 
@@ -116,7 +116,7 @@ Tenant configuration, backups, policy names, device or user information, access 
 * **Only if you tick it:** a screenshot of the TenuVault window, taken when you open **Share feedback**. It may show tenant, policy or user names. It is unticked every time the dialog opens, and the app discards it when you close the dialog or the feedback is sent.
 * **Never added automatically:** your installation ID, tenant IDs or names, license keys, tokens, and routes or links that contain IDs. The only exceptions are what you type into the answers and, if you tick it, the screenshot, which can show any of these.
 * **Kept:** up to 12 months, to read and answer feedback.
-* **If blocked:** sending fails and your draft stays in the dialog. **Copy as email** opens a new email to support with your answers and the same details, without the screenshot. Allow `https://www.tenuvault.com/api/desktop-feedback` if your proxy filters by path.
+* **If blocked:** sending fails and your draft stays in the dialog. **Copy as email** copies your answers and the same details, without the screenshot, to the clipboard and opens a new email to support. Allow `https://www.tenuvault.com/api/desktop-feedback` if your proxy filters by path.
 
 ### If tenuvault.com is blocked
 

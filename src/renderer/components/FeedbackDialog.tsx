@@ -10,6 +10,7 @@ import {
   FEEDBACK_EMAIL_MAX,
   FEEDBACK_TEXT_MAX,
   feedbackDiagnostics,
+  feedbackEmailText,
   feedbackMailto,
   feedbackTextProblem,
   isValidFeedbackEmail,
@@ -18,6 +19,7 @@ import {
   type FeedbackSendResult,
   type FeedbackSnapshot,
 } from "../../shared/feedback"
+import { SUPPORT_EMAIL } from "../../shared/constants"
 import { bridge } from "../lib/bridge"
 import { toast } from "../lib/toast"
 
@@ -114,7 +116,26 @@ export function FeedbackDialog({ open, onOpenChange, snapshot, onOpenSupport }: 
     onOpenChange(false)
   }
 
-  const copyAsEmail = () => void bridge.app.openExternal(feedbackMailto({ goal, blocker, context, page })).catch(() => toast("No email app could be opened.", "error"))
+  // The full text goes to the clipboard first: a mailto draft may be shortened, and admins on web
+  // mail have no mail app to open at all.
+  const copyAsEmail = async () => {
+    const draft = { goal, blocker, context, page, submissionId }
+    let copied = false
+    try {
+      await navigator.clipboard.writeText(feedbackEmailText(draft))
+      copied = true
+    } catch {
+      copied = false
+    }
+    try {
+      await bridge.app.openExternal(feedbackMailto(draft))
+      toast(copied ? "Your feedback was copied. If the email draft is cut off, paste the copied text." : "Your feedback could not be copied; the email draft may be shortened.", copied ? "success" : "info")
+    } catch {
+      toast(copied
+        ? `No email app could be opened. Your feedback is on the clipboard: paste it into an email to ${SUPPORT_EMAIL}.`
+        : `No email app could be opened, and your feedback could not be copied. Email ${SUPPORT_EMAIL} instead.`, "error")
+    }
+  }
 
   return (
     <Dialog open={open} onOpenChange={close}>
@@ -166,7 +187,7 @@ export function FeedbackDialog({ open, onOpenChange, snapshot, onOpenSupport }: 
           {failure && (
             <div role="alert" className="space-y-3 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700">
               <p>{failure.message}</p>
-              <Button type="button" size="sm" variant="outline" onClick={copyAsEmail}>
+              <Button type="button" size="sm" variant="outline" onClick={() => void copyAsEmail()}>
                 <Mail className="mr-2 h-4 w-4" />
                 Copy as email
               </Button>

@@ -145,26 +145,47 @@ function truncate(text: string, max: number): string {
   return points.length <= max ? text : `${points.slice(0, Math.max(0, max - 3)).join("")}...`
 }
 
-/**
- * A mailto link to support with both answers and the diagnostics, for when sending fails. The
- * screenshot is never included. Long answers are shortened until the link fits FEEDBACK_MAILTO_MAX.
- * Never throws, even for text with unpaired surrogates.
- */
-export function feedbackMailto(input: { goal: string; blocker: string; context: FeedbackContext | null; page?: string }): string {
+export interface FeedbackEmailInput {
+  goal: string
+  blocker: string
+  context: FeedbackContext | null
+  page?: string
+  /** The draft's message ID, so support can match it to a send that did arrive. */
+  submissionId?: string
+}
+
+/** The email body: both answers (shortened to `max` characters each), the diagnostics and the message ID. */
+function emailBody(input: FeedbackEmailInput, max: number): string {
   const diagnostics = input.context
     ? feedbackDiagnostics(input.context, input.page).map((row) => `${row.label}: ${row.value}`)
     : input.page ? [`Page: ${input.page}`] : []
-  const build = (max: number) => {
-    const body = [
-      "What were you trying to do?",
-      truncate(encodable(input.goal).trim(), max),
-      "",
-      "What got in your way, and what would help?",
-      truncate(encodable(input.blocker).trim(), max),
-      ...(diagnostics.length ? ["", ...diagnostics.map(encodable)] : []),
-    ].join("\n")
-    return `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(FEEDBACK_MAILTO_SUBJECT)}&body=${encodeURIComponent(body)}`
-  }
+  if (input.submissionId) diagnostics.push(`Message ID: ${input.submissionId}`)
+  return [
+    "What were you trying to do?",
+    truncate(encodable(input.goal).trim(), max),
+    "",
+    "What got in your way, and what would help?",
+    truncate(encodable(input.blocker).trim(), max),
+    ...(diagnostics.length ? ["", ...diagnostics.map(encodable)] : []),
+  ].join("\n")
+}
+
+/**
+ * The full feedback as a plain-text email for the clipboard: recipient, subject, both answers
+ * untruncated, the diagnostics and the message ID. The screenshot is never included.
+ */
+export function feedbackEmailText(input: FeedbackEmailInput): string {
+  return [`To: ${SUPPORT_EMAIL}`, `Subject: ${FEEDBACK_MAILTO_SUBJECT}`, "", emailBody(input, FEEDBACK_TEXT_MAX)].join("\n")
+}
+
+/**
+ * A mailto link to support with both answers and the diagnostics, for when sending fails. The
+ * screenshot is never included. Long answers are shortened until the link fits FEEDBACK_MAILTO_MAX,
+ * so the full text goes to the clipboard as well (feedbackEmailText).
+ * Never throws, even for text with unpaired surrogates.
+ */
+export function feedbackMailto(input: FeedbackEmailInput): string {
+  const build = (max: number) => `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(FEEDBACK_MAILTO_SUBJECT)}&body=${encodeURIComponent(emailBody(input, max))}`
   let max = FEEDBACK_TEXT_MAX
   let url = build(max)
   while (url.length > FEEDBACK_MAILTO_MAX && max > 20) {
