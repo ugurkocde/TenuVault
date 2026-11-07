@@ -101,7 +101,7 @@ export function WatcherDeployProgress({ tenant, job, onJob, onChanged }: {
                   {copied ? <Check className="h-4 w-4" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}
                   {copied ? "Copied" : "Copy commands"}
                 </Button>
-                {!job.ack.grantRoles && (
+                {!job.ack.grantRoles && job.graphRoleStatus === "missing" && (
                   <Button type="button" variant="outline" size="sm" disabled={busy !== null} onClick={() => void act("grant", () => notificationsApi.watcherDeployConfirm(tenant, job.id, "grant"))}>
                     Assign them from this sign-in
                   </Button>
@@ -131,6 +131,9 @@ export function WatcherDeployProgress({ tenant, job, onJob, onChanged }: {
       {blocked && job.blockedReason !== "needs-admin" && job.blockedReason !== "needs-destination" && (
         <div className="space-y-2">
           {job.error && <p className="text-sm text-red-700" role="alert">{job.error}</p>}
+          {job.blockedReason === "plan-changed" && (
+            <p className="text-sm text-gray-700">To use the changed plan, stop this setup below, then open Set up alerts again and check Azure.</p>
+          )}
           <Button type="button" size="sm" disabled={busy !== null} onClick={() => void act("resume", () => notificationsApi.watcherDeployResume(tenant, job.id))}>
             {job.blockedReason === "roles-not-effective" || job.blockedReason === "waiting-heartbeat" || job.blockedReason === "test-timeout" ? "Check again" : "Continue setup"}
           </Button>

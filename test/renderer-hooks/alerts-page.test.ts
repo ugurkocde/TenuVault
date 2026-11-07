@@ -4,7 +4,7 @@ import { MemoryRouter } from "react-router-dom"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { Tenant } from "../../src/portal/contexts/TenantContext"
-import type { NotificationRule, NotificationsStatus, PublicChannel } from "../../src/renderer/features/notifications/api"
+import type { NotificationRule, NotificationsStatus, PublicChannel, WatcherDeployView } from "../../src/renderer/features/notifications/api"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -59,6 +59,7 @@ vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { license: { open: vi.
 vi.mock("../../src/renderer/features/notifications/optional-permissions", () => ({ useOptionalPermission: () => null }))
 
 import { AlertsTab, ChannelsTab, DeliveriesTab, WatchingTab } from "../../src/renderer/features/notifications/NotificationsPanel"
+import { WatcherDeployProgress } from "../../src/renderer/features/notifications/WatcherDeployProgress"
 import { HUBS } from "../../src/renderer/features/hubs"
 
 const roots: Root[] = []
@@ -208,6 +209,36 @@ describe("the Alerts page", () => {
     // The paste and the mocked role boundary never flip ownership or push alerts from the renderer.
     expect((state.watchUpdates as Array<{ externalWatcher?: boolean }>).some((body) => body.externalWatcher !== undefined)).toBe(false)
     expect(state.pushes).toEqual([])
+  })
+
+  it("offers in-app Graph assignment only for missing roles and explains a changed plan", () => {
+    const job = (overrides: Partial<WatcherDeployView> = {}): WatcherDeployView => ({
+      id: "deploy-1", mode: "adopt", state: "blocked",
+      plan: { subscriptionId: "22222222-2222-4222-8222-222222222222", resourceGroupName: "rg-tenuvault-backups", automationAccountName: "aa-tenuvault-notifications", storageAccountName: "tvbkp1234567890ab", location: "westeurope", alertEmail: "ops@contoso.test", noFailureAlert: false, destinationKinds: ["teams"], needsConditionalAccess: true, createIfMissing: true },
+      planHash: "plan-hash", ack: { destinationConfirmed: true, copyDestinationKinds: [], grantRoles: false, rolesConfirmed: false }, findings: [], capabilities: { canRead: true, canDeploy: true, canAssignRoles: true, canStartJobs: true, canWriteAlertsFile: true },
+      existing: { found: true, automationAccountName: "aa-tenuvault-notifications", resourceGroupName: "rg-tenuvault-backups", location: "westeurope", principalId: "33333333-3333-4333-8333-333333333333", identityTenantMatches: true, runbookPublished: true, scheduleLinked: true, failureAlert: true, watchConditionalAccess: true, heartbeatRunAt: null },
+      steps: [], graphRoles: ["DeviceManagementApps.Read.All"], graphRoleStatus: "unknown", principalId: "33333333-3333-4333-8333-333333333333", grantSnippet: "Connect-MgGraph", blockedReason: "needs-admin", error: "A Global Administrator still has to assign the roles.", alertsHash: null, automationJobId: null, createdAt: "2026-11-06T09:00:00Z", updatedAt: "2026-11-06T09:00:00Z",
+      ...overrides,
+    })
+    const renderDeploy = (deploy: WatcherDeployView) => {
+      const container = document.createElement("div")
+      document.body.appendChild(container)
+      const root = createRoot(container)
+      roots.push(root)
+      act(() => root.render(createElement(WatcherDeployProgress, { tenant, job: deploy, onJob: () => undefined, onChanged: () => undefined })))
+      return container
+    }
+
+    const unknown = renderDeploy(job())
+    expect([...unknown.querySelectorAll("button")].some((button) => button.textContent === "Assign them from this sign-in")).toBe(false)
+    expect([...unknown.querySelectorAll("button")].some((button) => button.textContent === "Roles are assigned, check again")).toBe(true)
+
+    const missing = renderDeploy(job({ graphRoleStatus: "missing" }))
+    expect([...missing.querySelectorAll("button")].some((button) => button.textContent === "Assign them from this sign-in")).toBe(true)
+
+    const changed = renderDeploy(job({ blockedReason: "plan-changed", error: "The alerts changed since this setup was confirmed." }))
+    expect(changed.textContent).toContain("To use the changed plan, stop this setup below, then open Set up alerts again and check Azure.")
+    expect([...changed.querySelectorAll("button")].some((button) => button.textContent === "Continue setup")).toBe(true)
   })
 
   it("hides the setup card once a working setup exists", async () => {
