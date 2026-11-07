@@ -56,8 +56,13 @@ describe("the watcher Deploy to Azure template", () => {
     expect(JSON.stringify(encrypted)).toContain("TenuVaultTeamsWebhookUrl")
     expect(JSON.stringify(encrypted)).toContain("TenuVaultWebhookUrl")
     expect(JSON.stringify(encrypted)).toContain("TenuVaultWebhookSecret")
-    // Automation string variables are stored quoted, like the cloud backup template writes them.
-    expect(JSON.stringify(template.resources)).toContain("concat('\\\"'")
+    // Automation string variables are stored JSON encoded, not just wrapped in quotes: a
+    // Teams card layout is itself JSON, and plain quoting would corrupt it at deploy time.
+    const values = template.resources.filter((resource) => resource.type === "Microsoft.Automation/automationAccounts/variables").map((resource) => String(resource.properties.value))
+    for (const value of values) expect(value, value).toContain("string(createArray(")
+    expect(values.join(" ")).not.toContain("concat('\\\"'")
+    // The ARM trick the template uses, string(createArray(v)) without its brackets, is JSON.stringify.
+    for (const raw of ['{"type":"AdaptiveCard","body":[]}', 'a "quoted" \\ path\nline', ""]) expect(JSON.stringify([raw]).slice(1, -1)).toBe(JSON.stringify(raw))
   })
 
   it("scopes storage roles to single containers, read for backups and write for state", () => {
@@ -83,10 +88,13 @@ describe("the watcher Deploy to Azure template", () => {
   it("supports sub-hourly watcher schedules as hourly slots, like the script", () => {
     expect(template.parameters.scheduleIntervalMinutes?.allowedValues).toEqual([15, 20, 30, 60, 120, 180, 240])
     expect(template.variables.scheduleName).toBe("TenuVaultNotificationCheck")
-    const schedules = JSON.stringify(template.resources.filter((resource) => resource.type.includes("schedules")))
+    const schedules = JSON.stringify(template.resources.filter((resource) => resource.type.toLowerCase().includes("schedules")))
     expect(schedules).toContain("variables('scheduleName')")
     expect(schedules).toContain("copyIndex")
     expect(schedules).toContain("dateTimeAdd")
+    expect(schedules).toContain("jobSchedules")
+    // Job links wait for the failure alert, like the script links schedules only after it exists.
+    expect(schedules).toContain("microsoft.insights/metricAlerts")
   })
 
   it("creates the failure alert only with an address, on failed Automation jobs", () => {
@@ -105,8 +113,17 @@ describe("the watcher Deploy to Azure template", () => {
     expect(String(template.variables.graphRoles)).toContain("DeviceManagementApps.Read.All")
     expect(String(template.variables.graphRoles)).toContain("AuditLog.Read.All")
     expect(String(template.variables.graphRoles)).toContain("Mail.Send")
+    // The tenant is the subscription directory, never a typed in value that could disagree with the identity.
+    expect(template.parameters.tenantId).toBeUndefined()
+    expect(template.variables.tenantId).toBe("[subscription().tenantId]")
+    expect(template.parameters.missedBackupHours?.defaultValue).toBe(48)
+    // A failure address or an explicit opt-out, like the script: no silently unalerted watcher.
+    expect(template.parameters.alertEmail?.defaultValue).toBeUndefined()
+    expect(template.parameters.noFailureAlert?.type).toBe("bool")
+    expect(String(template.variables.failureAlertGuard)).toContain("noFailureAlert")
     const paste = template.outputs.pasteIntoTenuVault?.value ?? ""
-    for (const field of ["tenantId=", "subscriptionId=", "resourceGroup=", "automationAccount=", "storageAccount="]) expect(paste, field).toContain(field)
+    const order = [...paste.matchAll(/([a-zA-Z]+)=/g)].map((match) => match[1])
+    expect(order).toEqual(["tenantId", "subscriptionId", "resourceGroup", "automationAccount", "storageAccount", "graphRolesGranted"])
     // No ARM resource can assign Graph application roles, so the paste block must not claim them.
     expect(paste).toContain("graphRolesGranted=false")
     const example = [
