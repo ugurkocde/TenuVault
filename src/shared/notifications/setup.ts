@@ -244,3 +244,15 @@ export function parseWatcherSetup(text: string): WatcherSetup | null {
 
 /** The Alerts guide section about the Azure watcher. */
 export const WATCHER_GUIDE_URL = "https://docs.tenuvault.com/notifications/#alerts-while-this-computer-is-off-the-azure-watcher"
+
+const WATCHER_TEMPLATE_URL =
+  "https://raw.githubusercontent.com/ugurkocde/TenuVault/main/resources/notifications/azuredeploy.json"
+
+/**
+ * The Deploy to Azure portal link for the watcher template. The portal opens the
+ * template, nothing else: it cannot carry what was picked here, so the same tenant,
+ * storage account and destination values are entered there once.
+ */
+export function deployWatcherToAzureUrl(): string {
+  return `https://portal.azure.com/#create/Microsoft.Template/uri/${encodeURIComponent(WATCHER_TEMPLATE_URL)}`
+}

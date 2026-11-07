@@ -1,0 +1,373 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "description": "Deploys the TenuVault notification watcher into your own subscription: an Azure Automation account with a managed identity, the Invoke-TenuVaultNotificationCheck runbook, its Automation variables, container scoped storage roles, its schedules, and an Azure Monitor failure alert. This is the portal friendly bootstrap for New-TenuVaultNotificationWatcher.ps1 and creates the same resources. Three things no template can do stay manual: a Global Administrator assigns the Microsoft Graph application roles listed in the outputs to the managed identity (or the setup script is run once with -GrantGraphRoles), the alerts themselves are pushed from the desktop app afterwards, and watcher email still needs its Exchange restriction and one-time verification (the runbook with -VerifyMailOnly). Deploy into the storage account's resource group: the state containers and container scoped roles are created there. Redeploying overwrites the Automation variables, so re-enter the destination values.",
+    "author": "Ugur Koc"
+  },
+  "parameters": {
+    "tenantId": {
+      "type": "string",
+      "metadata": { "description": "Entra tenant (directory) id GUID the watcher reports on, the tenant selected in TenuVault." }
+    },
+    "tenantName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": { "description": "Display name used in watcher messages. Leave empty to use the tenant id." }
+    },
+    "storageAccountName": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 24,
+      "metadata": { "description": "Existing storage account that holds the intune-backups container, the same account the tenant uses in TenuVault. Deploy this template into that storage account's resource group (New-TenuVaultStorage.ps1 uses rg-tenuvault-backups). For a storage account in another resource group, use New-TenuVaultNotificationWatcher.ps1 instead." }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": { "description": "Region for the Automation account. A Conflict error on creation usually means the regional Automation quota or a taken name; pick another region or account name." }
+    },
+    "automationAccountName": {
+      "type": "string",
+      "defaultValue": "aa-tenuvault-notifications",
+      "metadata": { "description": "Automation account name. One account serves the one Entra tenant its managed identity belongs to." }
+    },
+    "teamsWebhookUrl": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": { "description": "Teams Workflows URL of the channel the watcher posts to. A secret: anyone with it can post to that channel. Stored as an encrypted Automation variable. Leave empty when the watcher does not send to Teams." }
+    },
+    "webhookUrl": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": { "description": "https URL the watcher POSTs notification JSON to. Stored as an encrypted Automation variable. Leave empty when there is no webhook." }
+    },
+    "webhookSecret": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": { "description": "Optional value sent in the X-TenuVault-Secret header with webhook posts. Stored as an encrypted Automation variable." }
+    },
+    "mailSender": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": { "description": "Mailbox the watcher sends mail from (needs the Mail.Send application role plus an Exchange ApplicationAccessPolicy, and the one-time verification run). Leave empty when the watcher does not send mail." }
+    },
+    "mailRecipients": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": { "description": "Comma separated watcher mail recipients. Not the failure alert below." }
+    },
+    "mailProbeMailbox": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": { "description": "Mailbox outside the Exchange restriction that must refuse watcher mail during verification. Leave empty to probe the sender mailbox." }
+    },
+    "alertEmail": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": { "description": "Address Azure Monitor mails when a watcher job fails. Strongly recommended: without it the watcher can fail silently, and no failure alert is created." }
+    },
+    "includeConditionalAccess": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": { "description": "Also watch Conditional Access policy, named location and authentication strength changes (adds AuditLog.Read.All to the roles a Global Administrator assigns)." }
+    },
+    "includeActor": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": { "description": "Name the admin or app behind each change in watcher messages." }
+    },
+    "missedBackupHours": {
+      "type": "int",
+      "minValue": 1,
+      "maxValue": 8760,
+      "defaultValue": 26,
+      "metadata": { "description": "Alert when no new backup has appeared in the storage account for this many hours." }
+    },
+    "scheduleIntervalMinutes": {
+      "type": "int",
+      "allowedValues": [15, 20, 30, 60, 120, 180, 240],
+      "defaultValue": 60,
+      "metadata": { "description": "How often the watcher runs. Azure Automation schedules run at most hourly, so 15, 20 and 30 minutes become several hourly schedules, each starting later in the hour." }
+    },
+    "scheduleStartTime": {
+      "type": "string",
+      "metadata": { "description": "First run, as an ISO 8601 date time with offset, at least 5 minutes in the future, for example 2026-11-07T12:30:00+00:00. Its minute becomes the minute past the hour the watcher runs at." }
+    },
+    "teamsCardLayout": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": { "description": "Optional Teams card layout JSON exported from the desktop app (Alerts > Channels > How Teams cards look). Leave empty for the standard layout. The desktop app also keeps it updated when the alerts are pushed." }
+    },
+    "runbookUri": {
+      "type": "string",
+      "defaultValue": "https://raw.githubusercontent.com/ugurkocde/TenuVault/main/resources/runbooks/Invoke-TenuVaultNotificationCheck.ps1",
+      "metadata": { "description": "Where the published runbook is loaded from. Pin a release tag or your own copy if you prefer." }
+    }
+  },
+  "variables": {
+    "runbookName": "Invoke-TenuVaultNotificationCheck",
+    "scheduleName": "TenuVaultNotificationCheck",
+    "backupContainer": "intune-backups",
+    "stateContainer": "tenuvault-notification-state",
+    "resultsContainer": "tenuvault-backup-results",
+    "runsPerHour": "[if(equals(parameters('scheduleIntervalMinutes'), 15), 4, if(equals(parameters('scheduleIntervalMinutes'), 20), 3, if(equals(parameters('scheduleIntervalMinutes'), 30), 2, 1)))]",
+    "baseIntervalHours": "[if(less(parameters('scheduleIntervalMinutes'), 60), 1, div(parameters('scheduleIntervalMinutes'), 60))]",
+    "backupContainerScope": "[concat('subscriptions/', subscription().subscriptionId, '/resourceGroups/', resourceGroup().name, '/providers/Microsoft.Storage/storageAccounts/', parameters('storageAccountName'), '/blobServices/default/containers/', variables('backupContainer'))]",
+    "stateContainerScope": "[concat('subscriptions/', subscription().subscriptionId, '/resourceGroups/', resourceGroup().name, '/providers/Microsoft.Storage/storageAccounts/', parameters('storageAccountName'), '/blobServices/default/containers/', variables('stateContainer'))]",
+    "resultsContainerScope": "[concat('subscriptions/', subscription().subscriptionId, '/resourceGroups/', resourceGroup().name, '/providers/Microsoft.Storage/storageAccounts/', parameters('storageAccountName'), '/blobServices/default/containers/', variables('resultsContainer'))]",
+    "blobDataReaderRoleId": "2a2b9908-6ea1-4ae2-8e65-a410df84e7d1",
+    "blobDataContributorRoleId": "ba92f5b4-2d11-453d-a403-e96b0029c9fe",
+    "graphRoles": "[concat('DeviceManagementApps.Read.All', if(parameters('includeConditionalAccess'), ', AuditLog.Read.All', ''), if(empty(parameters('mailSender')), '', ', Mail.Send'))]",
+    "plainVariableValues": [
+      { "name": "TenuVaultTenantId", "value": "[parameters('tenantId')]" },
+      { "name": "TenuVaultTenantName", "value": "[parameters('tenantName')]" },
+      { "name": "TenuVaultStorageAccount", "value": "[parameters('storageAccountName')]" },
+      { "name": "TenuVaultMailSender", "value": "[parameters('mailSender')]" },
+      { "name": "TenuVaultMailRecipients", "value": "[parameters('mailRecipients')]" },
+      { "name": "TenuVaultMailProbeMailbox", "value": "[parameters('mailProbeMailbox')]" },
+      { "name": "TenuVaultMissedBackupHours", "value": "[string(parameters('missedBackupHours'))]" },
+      { "name": "TenuVaultIncludeActor", "value": "[if(parameters('includeActor'), 'true', 'false')]" },
+      { "name": "TenuVaultWatchConditionalAccess", "value": "[if(parameters('includeConditionalAccess'), 'true', 'false')]" },
+      { "name": "TenuVaultTeamsCardLayout", "value": "[parameters('teamsCardLayout')]" },
+      { "name": "TenuVaultAlertRules", "value": "" },
+      { "name": "TenuVaultConfigVersion", "value": "1" }
+    ]
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Automation/automationAccounts",
+      "apiVersion": "2023-11-01",
+      "name": "[parameters('automationAccountName')]",
+      "location": "[parameters('location')]",
+      "identity": { "type": "SystemAssigned" },
+      "properties": {
+        "sku": { "name": "Basic" },
+        "disableLocalAuth": true,
+        "publicNetworkAccess": true
+      }
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+      "apiVersion": "2023-01-01",
+      "name": "[concat(parameters('storageAccountName'), '/default/', variables('stateContainer'))]",
+      "properties": { "publicAccess": "None" }
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+      "apiVersion": "2023-01-01",
+      "name": "[concat(parameters('storageAccountName'), '/default/', variables('resultsContainer'))]",
+      "properties": { "publicAccess": "None" }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(variables('backupContainerScope'), parameters('automationAccountName'), variables('blobDataReaderRoleId'))]",
+      "scope": "[concat('Microsoft.Storage/storageAccounts/', parameters('storageAccountName'), '/blobServices/default/containers/', variables('backupContainer'))]",
+      "dependsOn": ["[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]"],
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('blobDataReaderRoleId'))]",
+        "principalId": "[reference(resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName')), '2023-11-01', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal"
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(variables('stateContainerScope'), parameters('automationAccountName'), variables('blobDataContributorRoleId'))]",
+      "scope": "[concat('Microsoft.Storage/storageAccounts/', parameters('storageAccountName'), '/blobServices/default/containers/', variables('stateContainer'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]",
+        "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', variables('stateContainer'))]"
+      ],
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('blobDataContributorRoleId'))]",
+        "principalId": "[reference(resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName')), '2023-11-01', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal"
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(variables('resultsContainerScope'), parameters('automationAccountName'), variables('blobDataContributorRoleId'))]",
+      "scope": "[concat('Microsoft.Storage/storageAccounts/', parameters('storageAccountName'), '/blobServices/default/containers/', variables('resultsContainer'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]",
+        "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', variables('resultsContainer'))]"
+      ],
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('blobDataContributorRoleId'))]",
+        "principalId": "[reference(resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName')), '2023-11-01', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/runbooks",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(parameters('automationAccountName'), '/', variables('runbookName'))]",
+      "location": "[parameters('location')]",
+      "dependsOn": ["[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]"],
+      "properties": {
+        "description": "TenuVault notification watcher",
+        "runbookType": "PowerShell",
+        "logProgress": true,
+        "logVerbose": false,
+        "publishContentLink": {
+          "uri": "[parameters('runbookUri')]",
+          "version": "1.0.0.0"
+        }
+      }
+    },
+    {
+      "copy": {
+        "name": "plainVariables",
+        "count": "[length(variables('plainVariableValues'))]"
+      },
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(parameters('automationAccountName'), '/', variables('plainVariableValues')[copyIndex()].name)]",
+      "dependsOn": ["[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]"],
+      "properties": {
+        "value": "[concat('\"', variables('plainVariableValues')[copyIndex()].value, '\"')]",
+        "isEncrypted": false
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(parameters('automationAccountName'), '/TenuVaultTeamsWebhookUrl')]",
+      "dependsOn": ["[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]"],
+      "properties": {
+        "value": "[concat('\"', parameters('teamsWebhookUrl'), '\"')]",
+        "isEncrypted": true
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(parameters('automationAccountName'), '/TenuVaultWebhookUrl')]",
+      "dependsOn": ["[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]"],
+      "properties": {
+        "value": "[concat('\"', parameters('webhookUrl'), '\"')]",
+        "isEncrypted": true
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(parameters('automationAccountName'), '/TenuVaultWebhookSecret')]",
+      "dependsOn": ["[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]"],
+      "properties": {
+        "value": "[concat('\"', parameters('webhookSecret'), '\"')]",
+        "isEncrypted": true
+      }
+    },
+    {
+      "copy": {
+        "name": "watcherSchedules",
+        "count": "[variables('runsPerHour')]"
+      },
+      "type": "Microsoft.Automation/automationAccounts/schedules",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(parameters('automationAccountName'), '/', if(equals(copyIndex(), 0), variables('scheduleName'), concat(variables('scheduleName'), '-', add(copyIndex(), 1))))]",
+      "dependsOn": ["[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]"],
+      "properties": {
+        "description": "[concat('TenuVault notification watcher for tenant ', parameters('tenantId'))]",
+        "startTime": "[dateTimeAdd(parameters('scheduleStartTime'), concat('PT', mul(copyIndex(), parameters('scheduleIntervalMinutes')), 'M'))]",
+        "expiryTime": "9999-12-31T23:59:59.9999999+00:00",
+        "interval": "[if(equals(copyIndex(), 0), variables('baseIntervalHours'), 1)]",
+        "frequency": "Hour",
+        "timeZone": "UTC"
+      }
+    },
+    {
+      "copy": {
+        "name": "watcherJobSchedules",
+        "count": "[variables('runsPerHour')]"
+      },
+      "type": "Microsoft.Automation/automationAccounts/jobSchedules",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(parameters('automationAccountName'), '/', guid(if(equals(copyIndex(), 0), variables('scheduleName'), concat(variables('scheduleName'), '-', add(copyIndex(), 1))), variables('runbookName')))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts/runbooks', parameters('automationAccountName'), variables('runbookName'))]",
+        "[resourceId('Microsoft.Automation/automationAccounts/schedules', parameters('automationAccountName'), if(equals(copyIndex(), 0), variables('scheduleName'), concat(variables('scheduleName'), '-', add(copyIndex(), 1))))]"
+      ],
+      "properties": {
+        "runbook": { "name": "[variables('runbookName')]" },
+        "schedule": { "name": "[if(equals(copyIndex(), 0), variables('scheduleName'), concat(variables('scheduleName'), '-', add(copyIndex(), 1)))]" },
+        "parameters": {}
+      }
+    },
+    {
+      "condition": "[not(empty(parameters('alertEmail')))]",
+      "type": "microsoft.insights/actionGroups",
+      "apiVersion": "2023-01-01",
+      "name": "ag-tenuvault-watcher",
+      "location": "Global",
+      "properties": {
+        "groupShortName": "tenuvault",
+        "enabled": true,
+        "emailReceivers": [
+          { "name": "TenuVaultAdmins", "emailAddress": "[parameters('alertEmail')]", "useCommonAlertSchema": true }
+        ]
+      }
+    },
+    {
+      "condition": "[not(empty(parameters('alertEmail')))]",
+      "type": "microsoft.insights/metricAlerts",
+      "apiVersion": "2018-03-01",
+      "name": "TenuVault watcher failed jobs",
+      "location": "global",
+      "dependsOn": [
+        "[resourceId('microsoft.insights/actionGroups', 'ag-tenuvault-watcher')]",
+        "[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]"
+      ],
+      "properties": {
+        "description": "TenuVault notification watcher Automation jobs are failing.",
+        "severity": 3,
+        "enabled": true,
+        "scopes": ["[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]"],
+        "evaluationFrequency": "PT15M",
+        "windowSize": "PT1H",
+        "targetResourceType": "Microsoft.Automation/automationAccounts",
+        "targetResourceRegion": "[parameters('location')]",
+        "criteria": {
+          "odata.type": "Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria",
+          "allOf": [
+            {
+              "name": "FailedJobs",
+              "metricName": "TotalJob",
+              "metricNamespace": "Microsoft.Automation/automationAccounts",
+              "operator": "GreaterThan",
+              "threshold": 0,
+              "timeAggregation": "Total",
+              "dimensions": [
+                { "name": "Status", "operator": "Include", "values": ["Failed"] }
+              ],
+              "criterionType": "StaticThresholdCriterion"
+            }
+          ]
+        },
+        "actions": [
+          { "actionGroupId": "[resourceId('microsoft.insights/actionGroups', 'ag-tenuvault-watcher')]" }
+        ]
+      }
+    }
+  ],
+  "outputs": {
+    "managedIdentityPrincipalId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName')), '2023-11-01', 'full').identity.principalId]",
+      "metadata": { "description": "Object (principal) id of the Automation account identity. A Global Administrator assigns it the Graph application roles below, or runs New-TenuVaultNotificationWatcher.ps1 once with -GrantGraphRoles." }
+    },
+    "graphRolesToAssign": {
+      "type": "string",
+      "value": "[variables('graphRoles')]",
+      "metadata": { "description": "Microsoft Graph application roles for the managed identity. Until they are assigned the watcher cannot read the audit logs and runs fail, on purpose. Mail.Send also needs the Exchange ApplicationAccessPolicy and the one-time -VerifyMailOnly run." }
+    },
+    "pasteIntoTenuVault": {
+      "type": "string",
+      "value": "[concat('tenantId=', parameters('tenantId'), '\nsubscriptionId=', subscription().subscriptionId, '\nresourceGroup=', resourceGroup().name, '\nautomationAccount=', parameters('automationAccountName'), '\nstorageAccount=', parameters('storageAccountName'), '\ngraphRolesGranted=false')]",
+      "metadata": { "description": "Paste this block into TenuVault (Alerts > Set up alerts > While this computer is off > Also from Azure). graphRolesGranted=false is honest: no template can assign Graph roles, so TenuVault keeps watching from the desktop until a Global Administrator has assigned them and the setup script has run once with -GrantGraphRoles and its new block was pasted." }
+    }
+  }
+}
