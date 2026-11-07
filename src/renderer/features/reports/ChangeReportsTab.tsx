@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react"
 import { Link } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ChevronDown, ChevronRight, Download, FileText, Mail, Play, RefreshCw, Trash2 } from "lucide-react"
+import { ChevronDown, ChevronRight, Download, FileJson, FileText, Mail, Play, RefreshCw, Trash2 } from "lucide-react"
 import { Chip, Tile } from "~/components/dashboard/tiles"
 import { Button } from "~/components/ui/button"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "~/components/ui/dropdown-menu"
 import { BackupPairPicker } from "~/components/drift/backup-pair-picker"
 import { toast } from "../../lib/toast"
 import { startBackgroundTask, useBackgroundTask } from "../../lib/background-tasks"
@@ -143,13 +144,13 @@ function NewReport({ tenant, reports, onCreated, onOpen }: { tenant: FeatureTabP
           latest={periodPair(backups, "previous")}
           onChange={setPair}
           onCompare={() => pair.baseline && pair.comparison && generate({ baseline: pair.baseline, comparison: pair.comparison })}
-          actionLabel="Generate report"
+          actionLabel={existing ? "Regenerate report" : "Generate report"}
         />
       ) : (
         <div className="flex flex-wrap items-center gap-3">
           <Button type="button" onClick={() => preset && generate(preset)} disabled={running || !preset}>
             <Play className="h-4 w-4" aria-hidden="true" />
-            {running ? "Generating in background" : existing ? "Generate again" : "Generate report"}
+            {running ? "Generating in background" : existing ? "Regenerate report" : "Generate report"}
           </Button>
           {loading ? (
             <p className="text-sm text-gray-600">Loading backups...</p>
@@ -175,6 +176,33 @@ function NewReport({ tenant, reports, onCreated, onOpen }: { tenant: FeatureTabP
       )}
       {task?.status === "failed" && task.error && <p role="alert" className="text-sm text-red-700">{task.error}</p>}
     </Tile>
+  )
+}
+
+/** Export stays with the report it acts on, both on the collapsed row and in the expanded action bar. */
+function ReportExportMenu({ reportTitle, saving, onExport }: { reportTitle: string; saving: boolean; onExport: (format: ExportFormat) => void }) {
+  const [open, setOpen] = useState(false)
+  const item = (format: ExportFormat, label: string, Icon: typeof FileText) => (
+    <DropdownMenuItem disabled={saving} onSelect={() => { if (!saving) onExport(format) }} className="gap-2">
+      <Icon className="h-4 w-4" aria-hidden="true" />
+      {label}
+    </DropdownMenuItem>
+  )
+  return (
+    <DropdownMenu modal={false} open={open} onOpenChange={(nextOpen) => { if (!nextOpen || !saving) setOpen(nextOpen) }}>
+      <DropdownMenuTrigger asChild>
+        <Button type="button" variant="outline" size="sm" aria-disabled={saving || undefined} aria-busy={saving || undefined} className={saving ? "opacity-50" : undefined} aria-label={`Export ${reportTitle}`}>
+          <Download className="h-4 w-4" aria-hidden="true" />
+          Export
+          <ChevronDown className="h-4 w-4" aria-hidden="true" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-44">
+        {item("pdf", "PDF report", FileText)}
+        {item("markdown", "Markdown", FileText)}
+        {item("json", "JSON", FileJson)}
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 
@@ -246,33 +274,37 @@ function ReportRow({ tenant, report, open, onToggle, recipients, readOnly, onCha
           {counts.modified + counts.added + counts.deleted === 0 && <Chip>No changes</Chip>}
           {report.audit !== "included" && <Chip tone="warning">Audit log not read</Chip>}
         </span>
+        {!open && <ReportExportMenu reportTitle={report.title} saving={notice.saving} onExport={save} />}
       </div>
+      {!open && notice.result && (
+        <div className="mt-3 pl-6">
+          <Notice result={notice.result} onDismiss={notice.clear} />
+        </div>
+      )}
       {open && (
         <div className="mt-4 space-y-4 pl-6">
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="outline" size="sm" disabled={notice.saving} onClick={() => save("pdf")}><Download className="h-4 w-4" aria-hidden="true" />PDF</Button>
-            <Button type="button" variant="outline" size="sm" disabled={notice.saving} onClick={() => save("markdown")}><Download className="h-4 w-4" aria-hidden="true" />Markdown</Button>
-            <Button type="button" variant="outline" size="sm" disabled={notice.saving} onClick={() => save("json")}><Download className="h-4 w-4" aria-hidden="true" />JSON</Button>
-            {!readOnly && report.audit !== "included" && (
-              <Button type="button" variant="outline" size="sm" disabled={regenerating} onClick={regenerate}>
-                <RefreshCw className="h-4 w-4" aria-hidden="true" />
-                {regenerating ? "Generating in background" : "Generate again"}
-              </Button>
-            )}
+          <div role="group" aria-label="Report actions" className="sticky top-3 z-20 flex flex-wrap items-center gap-2 rounded-3xl border border-gray-100 bg-white/95 p-2 shadow-sm backdrop-blur">
+            <ReportExportMenu reportTitle={report.title} saving={notice.saving} onExport={save} />
             {!readOnly && recipients > 0 && (
               <Button type="button" variant="outline" size="sm" disabled={send.isPending} onClick={() => send.mutate()}>
                 <Mail className="h-4 w-4" aria-hidden="true" />
                 {send.isPending ? "Sending" : "Send by email"}
               </Button>
             )}
+            {!readOnly && report.audit !== "included" && (
+              <Button type="button" variant="outline" size="sm" disabled={regenerating} onClick={regenerate}>
+                <RefreshCw className="h-4 w-4" aria-hidden="true" />
+                {regenerating ? "Generating in background" : "Regenerate this report"}
+              </Button>
+            )}
             {!readOnly && !confirmingRemove && (
-              <Button type="button" variant="ghost" size="sm" disabled={remove.isPending} onClick={() => setConfirmingRemove(true)}>
+              <Button type="button" variant="ghost" size="sm" className="ml-auto" disabled={remove.isPending} onClick={() => setConfirmingRemove(true)}>
                 <Trash2 className="h-4 w-4" aria-hidden="true" />
                 Remove
               </Button>
             )}
             {!readOnly && confirmingRemove && (
-              <span className="flex items-center gap-2 text-sm text-gray-700">
+              <span className="ml-auto flex items-center gap-2 text-sm text-gray-700">
                 Remove this report from this computer?
                 <Button type="button" variant="destructive" size="sm" disabled={remove.isPending} onClick={() => remove.mutate()}>
                   {remove.isPending ? "Removing" : "Remove"}
