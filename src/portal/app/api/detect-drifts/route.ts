@@ -650,7 +650,7 @@ export function compareObjects(
       const oldSet = new Set(oldKeys)
       oldKeys.forEach((key, i) => {
         const itemPath = `${path}[${key}]`
-        if (newMap.has(key)) changes.push(...compareObjects(oldObj[i], newMap.get(key), itemPath, { parent: oldObj[i], arrayIndex: key }))
+        if (newMap.has(key)) changes.push(...compareObjects(oldObj[i], newMap.get(key), itemPath, { parent: oldObj[i], arrayIndex: key, equalityOnly: context.equalityOnly }))
         else changes.push({ field: itemPath, oldValue: oldObj[i], newValue: undefined })
       })
       newKeys.forEach((key, i) => {
@@ -677,16 +677,21 @@ export function compareObjects(
       let leftoverNew = newObj.map((_: any, i: number) => i).filter((i: number) => !matchedNew.has(i))
       // Items whose text differs only inside a nested keyed list (same settings, another
       // order) are unchanged by the comparison's own rules; match those too before giving up.
-      for (const oldIndex of leftoverOld.slice()) {
-        const equalAt = leftoverNew.findIndex(newIndex => compareObjects(oldObj[oldIndex], newObj[newIndex], `${path}[${oldIndex}]`).length === 0)
-        if (equalAt >= 0) {
-          leftoverNew.splice(equalAt, 1)
-          leftoverOld.splice(leftoverOld.indexOf(oldIndex), 1)
+      // The probe pairs are capped and run with equalityOnly, which disables this same pass
+      // inside them: without that, changed items in nested unkeyed lists would re-run the
+      // all-pairs search at every level and stall the comparison.
+      if (!context.equalityOnly && leftoverOld.length * leftoverNew.length <= 2500) {
+        for (const oldIndex of leftoverOld.slice()) {
+          const equalAt = leftoverNew.findIndex(newIndex => compareObjects(oldObj[oldIndex], newObj[newIndex], `${path}[${oldIndex}]`, { parent: oldObj[oldIndex], arrayIndex: oldIndex, equalityOnly: true }).length === 0)
+          if (equalAt >= 0) {
+            leftoverNew.splice(equalAt, 1)
+            leftoverOld.splice(leftoverOld.indexOf(oldIndex), 1)
+          }
         }
       }
       if (leftoverOld.length === leftoverNew.length) {
         leftoverOld.forEach((oldIndex, position) => {
-          changes.push(...compareObjects(oldObj[oldIndex], newObj[leftoverNew[position]!], `${path}[${oldIndex}]`, { parent: oldObj[oldIndex], arrayIndex: oldIndex }))
+          changes.push(...compareObjects(oldObj[oldIndex], newObj[leftoverNew[position]!], `${path}[${oldIndex}]`, { parent: oldObj[oldIndex], arrayIndex: oldIndex, equalityOnly: context.equalityOnly }))
         })
       } else {
         for (const i of leftoverOld) changes.push({ field: `${path}[${i}]`, oldValue: oldObj[i], newValue: undefined })
@@ -712,7 +717,7 @@ export function compareObjects(
     
     if (typeof oldValue === 'object' && typeof newValue === 'object' && oldValue !== null && newValue !== null) {
       // Recursively compare objects
-      changes.push(...compareObjects(oldValue, newValue, currentPath, { parent: oldObj, arrayIndex: null }))
+      changes.push(...compareObjects(oldValue, newValue, currentPath, { parent: oldObj, arrayIndex: null, equalityOnly: context.equalityOnly }))
     } else if (JSON.stringify(oldValue) !== JSON.stringify(newValue)) {
       const change: any = {
         field: currentPath,

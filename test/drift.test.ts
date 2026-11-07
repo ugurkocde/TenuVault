@@ -72,6 +72,20 @@ describe('Drift comparison', () => {
     expect(compareObjects(before, after)).toEqual([{ field: 'assignments[1]', oldValue: undefined, newValue: after.assignments[1] }])
   })
 
+  it('matches an unkeyed item whose nested keyed settings were only reordered, when another item was added', () => {
+    const group = (label: string, settings: unknown[]) => ({ label, settings })
+    const before = { groups: [group('one', [setting('a', 'a_1'), setting('b', 'b_1')]), group('two', [setting('c', 'c_1')])] }
+    const after = { groups: [group('three', [setting('d', 'd_1')]), group('one', [setting('b', 'b_1'), setting('a', 'a_1')]), group('two', [setting('c', 'c_1')])] }
+    expect(compareObjects(before, after)).toEqual([{ field: 'groups[0]', oldValue: undefined, newValue: after.groups[0] }])
+  })
+
+  it('compares deeply nested unkeyed arrays with changed leaves', () => {
+    const tree = (depth: number, leaf: number): unknown => depth === 0 ? { v: leaf } : { items: [0, 1, 2, 3].map(() => tree(depth - 1, leaf)) }
+    const changes = compareObjects({ root: tree(4, 1) }, { root: tree(4, 2) })
+    expect(changes).toHaveLength(256)
+    expect(changes.every(change => change.field.endsWith('.v'))).toBe(true)
+  })
+
   it('reports appended items and changed values in unkeyed arrays', () => {
     expect(compareObjects({ roleScopeTagIds: ['0'] }, { roleScopeTagIds: ['0', '12'] })).toEqual([{ field: 'roleScopeTagIds["12"]', oldValue: undefined, newValue: '12' }])
     expect(compareObjects({ rules: [{ grace: 0 }] }, { rules: [{ grace: 0 }, { grace: 24 }] })).toEqual([{ field: 'rules[1]', oldValue: undefined, newValue: { grace: 24 } }])
