@@ -306,7 +306,7 @@ function refuseCancelPending(record: WatcherDeployRecord): void {
 
 function prepareResumePatch(record: WatcherDeployRecord): Partial<WatcherDeployRecord> {
   const patch: Partial<WatcherDeployRecord> = { state: "running", blockedReason: null, error: null, nextAttemptAt: null, cancelRequestedAt: null }
-  if (record.blockedReason === "roles-not-effective" || record.blockedReason === "test-failed") {
+  if (record.blockedReason === "roles-not-effective" || record.blockedReason === "test-failed" || record.blockedReason === "runbook-version") {
     patch.phase = "test-run"
     patch.automationJobId = null
     patch.jobSubmittedAt = null
@@ -583,7 +583,12 @@ async function advanceAlerts(deps: FeatureDeps, tenant: string, record: Stored<W
   }
   const currentHash = watcherAlertsHash(document)
   const rolesDone = record.rolesVerifiedAt !== null || record.steps.find((step) => step.id === "graph-roles")?.status === "done"
-  const nextAfterAlerts = rolesDone ? "test-run" as const : "graph-roles" as const
+  // A partly created watcher may reach here ahead of a known blocker solely so it does
+  // not run without alerts. Once written, rediscover and surface that blocker instead
+  // of granting roles or starting a doomed test run against stale evidence.
+  const nextAfterAlerts = record.findings.some((finding) => finding.severity === "block")
+    ? "discover" as const
+    : rolesDone ? "test-run" as const : "graph-roles" as const
   if (record.alertsHash === currentHash && record.alertsWrittenAt) {
     return progress(deps, tenant, record, actor, { phase: nextAfterAlerts, steps: stepsWith(record, "alerts", "done", "Already with the watcher") }, "Watcher alerts already written")
   }
@@ -779,6 +784,11 @@ async function advanceHandOver(deps: FeatureDeps, tenant: string, record: Stored
   }
   const stoppedBeforeHandOver = cancelRequested(deps, tenant, rechecked)
   if (stoppedBeforeHandOver) return stoppedBeforeHandOver
+  // No await between this last hash check and the ownership flip: an edit made while
+  // Azure or the heartbeat was being read must be sent and proved, not handed over old.
+  if (watcherAlertsHash(watcherAlertsDocument(deps, tenant).document) !== record.alertsHash) {
+    return progress(deps, tenant, rechecked, actor, { phase: "alerts", automationJobId: null, jobSubmittedAt: null, jobStatus: null, steps: stepsWith(rechecked, "hand-over", "pending", "Alerts changed; sending them again") }, "Alerts changed during final hand-over check")
+  }
   handOverToWatcher(deps, tenant, actor, heartbeat.status === "ok" ? { runAt: heartbeat.runAt, alertsHash: heartbeat.alertsHash ?? null, runbookVersion: heartbeat.runbookVersion ?? null, alertsSource: heartbeat.alertsSource ?? null } : undefined)
   const current = watcherDeployOf(deps, tenant, record.id) ?? rechecked
   const steps = current.steps.map((step) => step.status === "skipped" ? step : { ...step, status: "done" as const, error: null })
@@ -872,7 +882,11 @@ export async function cancelWatcherDeploy(deps: FeatureDeps, tenantId: string, a
 export function markInterruptedWatcherDeploys(deps: FeatureDeps): void {
   for (const tenantId of deps.tenants()) {
     for (const record of deps.records.list<WatcherDeployRecord>(DOMAINS.notificationWatcherDeploy, tenantId)) {
-      if (record.state === "running") saveDeploy(deps, tenantId.toLowerCase(), record, { state: "interrupted", error: "TenuVault closed during the setup. Nothing was handed over." }, null, "Azure watcher setup interrupted")
+      if (record.cancelRequestedAt && !TERMINAL_STATES.has(record.state)) {
+        saveDeploy(deps, tenantId.toLowerCase(), record, { state: "cancelled", pendingHandover: false, blockedReason: null, nextAttemptAt: null, error: null }, null, "Azure watcher setup cancellation finished after restart. Nothing was handed over")
+      } else if (record.state === "running") {
+        saveDeploy(deps, tenantId.toLowerCase(), record, { state: "interrupted", error: "TenuVault closed during the setup. Nothing was handed over." }, null, "Azure watcher setup interrupted")
+      }
     }
   }
 }
@@ -888,32 +902,48 @@ export async function resumePendingWatcherHandovers(deps: FeatureDeps): Promise<
     try {
       if (!allows(await deps.plan(tenantId), "notifications")) continue
     } catch { continue }
+    const tenant = tenantId.toLowerCase()
     const record = watcherDeployOf(deps, tenantId)
-    if (!record || record.state !== "blocked" || !record.pendingHandover || record.phase !== "verify") continue
+    if (!record || record.state !== "blocked" || !record.pendingHandover || record.phase !== "verify" || record.cancelRequestedAt) continue
     if (record.nextAttemptAt && Date.parse(record.nextAttemptAt) > deps.now().getTime()) continue
-    saveDeploy(deps, tenantId.toLowerCase(), record, { state: "running", blockedReason: null, error: null }, null, "Checking the watcher again")
+    const started = await withDeployLock(deps, tenant, async () => {
+      const current = watcherDeployOf(deps, tenant, record.id)
+      if (!current || current.updatedAt !== record.updatedAt || current.state !== "blocked" || !current.pendingHandover || current.phase !== "verify" || current.cancelRequestedAt) return false
+      saveDeploy(deps, tenant, current, { state: "running", blockedReason: null, error: null }, null, "Checking the watcher again")
+      return true
+    })
+    if (!started) continue
     await advanceWatcherDeploy(deps, tenantId, null, record.id).catch(() => undefined)
     let after = watcherDeployOf(deps, tenantId, record.id)
     if (after?.state === "running" && after.phase === "hand-over") {
       await advanceWatcherDeploy(deps, tenantId, null, record.id).catch(() => undefined)
       after = watcherDeployOf(deps, tenantId, record.id)
     }
-    if (after?.state === "running" && after.phase === "verify" && !after.cancelRequestedAt) {
-      saveDeploy(deps, tenantId.toLowerCase(), after, {
-        state: "blocked",
-        blockedReason: "waiting-heartbeat",
-        error: "No clean watcher run of these alerts has been seen yet. It will be checked again while TenuVault runs.",
-        pendingHandover: true,
-        nextAttemptAt: new Date(deps.now().getTime() + 30 * 60_000).toISOString(),
-        steps: stepsWith(after, "verify", "blocked", null, "Waiting for a clean watcher run"),
-      }, null, "Watcher setup waiting for a scheduled run")
-    } else if (after?.state === "running" && !after.cancelRequestedAt) {
-      saveDeploy(deps, tenantId.toLowerCase(), after, {
-        state: "interrupted",
-        pendingHandover: false,
-        nextAttemptAt: null,
-        error: "The setup changed while it was being checked. Continue it to send and verify the current alerts.",
-      }, null, "Azure watcher setup paused for changed alerts")
+    if (after?.state === "running" && !after.cancelRequestedAt) {
+      const observed = after
+      await withDeployLock(deps, tenant, async () => {
+        const current = watcherDeployOf(deps, tenant, record.id)
+        // An admin continuation between the periodic advances changes the record and
+        // starts its own runner. Only the exact state this check produced may be parked.
+        if (!current || current.updatedAt !== observed.updatedAt || current.state !== "running" || current.phase !== observed.phase || current.cancelRequestedAt) return
+        if (current.phase === "verify") {
+          saveDeploy(deps, tenant, current, {
+            state: "blocked",
+            blockedReason: "waiting-heartbeat",
+            error: "No clean watcher run of these alerts has been seen yet. It will be checked again while TenuVault runs.",
+            pendingHandover: true,
+            nextAttemptAt: new Date(deps.now().getTime() + 30 * 60_000).toISOString(),
+            steps: stepsWith(current, "verify", "blocked", null, "Waiting for a clean watcher run"),
+          }, null, "Watcher setup waiting for a scheduled run")
+        } else {
+          saveDeploy(deps, tenant, current, {
+            state: "interrupted",
+            pendingHandover: false,
+            nextAttemptAt: null,
+            error: "The setup changed while it was being checked. Continue it to send and verify the current alerts.",
+          }, null, "Azure watcher setup paused for changed alerts")
+        }
+      })
     }
   }
 }

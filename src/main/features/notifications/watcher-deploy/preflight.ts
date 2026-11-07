@@ -174,18 +174,33 @@ async function failureAlertFor(deps: FeatureDeps, tenantId: string, subscription
   const scopes = Array.isArray(properties.scopes) ? properties.scopes : []
   if (typeof accountId !== "string" || !scopes.some((scope) => typeof scope === "string" && scope.toLowerCase() === accountId.toLowerCase())) return false
   const criteria = asRecord(properties.criteria)
-  const allOf = Array.isArray(criteria.allOf) ? criteria.allOf.filter((entry): entry is Record_ => Boolean(entry) && typeof entry === "object") : []
-  const failedJobs = allOf.some((criterion) => {
-    if (criterion.metricName !== "TotalJob" || criterion.metricNamespace !== "Microsoft.Automation/automationAccounts") return false
-    if (criterion.timeAggregation !== "Total" || (criterion.criterionType !== undefined && criterion.criterionType !== "StaticThresholdCriterion")) return false
+  const rawAllOf = Array.isArray(criteria.allOf) ? criteria.allOf : []
+  const allOf = rawAllOf.filter((entry): entry is Record_ => Boolean(entry) && typeof entry === "object")
+  // Azure requires every allOf condition to match, so one apparently suitable criterion
+  // is not enough when another condition or dimension narrows the rule away from this
+  // watcher. Accept only the one-criterion shape setup creates, plus a Runbook dimension
+  // that explicitly includes this runbook.
+  const criterion = rawAllOf.length === 1 && allOf.length === 1 ? allOf[0]! : null
+  let failedJobs = false
+  if (criterion) {
     const threshold = typeof criterion.threshold === "number" ? criterion.threshold : Number.NaN
     const firesOnOneFailure = criterion.operator === "GreaterThan"
       ? threshold >= 0 && threshold < 1
       : criterion.operator === "GreaterThanOrEqual" && threshold > 0 && threshold <= 1
-    if (!firesOnOneFailure) return false
-    const dimensions = Array.isArray(criterion.dimensions) ? criterion.dimensions.filter((entry): entry is Record_ => Boolean(entry) && typeof entry === "object") : []
-    return dimensions.some((dimension) => dimension.name === "Status" && dimension.operator === "Include" && Array.isArray(dimension.values) && dimension.values.includes("Failed"))
-  })
+    const rawDimensions = Array.isArray(criterion.dimensions) ? criterion.dimensions : []
+    const dimensions = rawDimensions.filter((entry): entry is Record_ => Boolean(entry) && typeof entry === "object")
+    const includesValue = (dimension: Record_, value: string) => dimension.operator === "Include" && Array.isArray(dimension.values) && dimension.values.includes(value)
+    const dimensionsOk = rawDimensions.length === dimensions.length && dimensions.every((dimension) => dimension.name === "Status"
+      ? includesValue(dimension, "Failed")
+      : dimension.name === "Runbook" && includesValue(dimension, RUNBOOK))
+    failedJobs = criterion.metricName === "TotalJob"
+      && criterion.metricNamespace === "Microsoft.Automation/automationAccounts"
+      && criterion.timeAggregation === "Total"
+      && (criterion.criterionType === undefined || criterion.criterionType === "StaticThresholdCriterion")
+      && firesOnOneFailure
+      && dimensionsOk
+      && dimensions.some((dimension) => dimension.name === "Status")
+  }
   if (!failedJobs) return false
   const actions = Array.isArray(properties.actions) ? properties.actions.filter((entry): entry is Record_ => Boolean(entry) && typeof entry === "object") : []
   let unknown = false

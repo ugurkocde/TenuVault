@@ -25,6 +25,10 @@ class FakeArm {
   failureAlert = true
   failureAlertEnabled = true
   failureAlertOperator = "Include"
+  failureAlertExtraCriterion = false
+  failureAlertRunbookDimension: string | null = null
+  scheduleLinked = true
+  runbookVersion = "1.3.0"
   duplicateWatcher = false
   accountStatus = 200
   storagePaged = false
@@ -78,7 +82,7 @@ class FakeArm {
         this.jobPuts++
         this.order.push("job")
         this.lastJobId = decodeURIComponent(path.split("/jobs/")[1]?.split("?")[0] ?? "")
-        if (this.heartbeat.current) this.heartbeat.current = { ...this.heartbeat.current, runAt: NOW.toISOString(), lastError: this.heartbeat.nextError, identityPrincipalId: PRINCIPAL, jobId: this.lastJobId }
+        if (this.heartbeat.current) this.heartbeat.current = { ...this.heartbeat.current, runAt: NOW.toISOString(), lastError: this.heartbeat.nextError, identityPrincipalId: this.runbookVersion === "1.3.0" ? PRINCIPAL : null, jobId: this.runbookVersion === "1.3.0" ? this.lastJobId : null }
         return ok({ properties: { status: this.jobStatus } }, this.jobPutStatus ?? 201)
       }
       return ok({ properties: { status: this.jobStatus } })
@@ -88,14 +92,14 @@ class FakeArm {
       return ok({ value: [value("TenuVaultTenantId", JSON.stringify(TENANT_A)), value("TenuVaultStorageAccount", JSON.stringify("tvbkp1234567890ab")), value("TenuVaultWatchConditionalAccess", "true")] })
     }
     if (path.includes("/automationAccounts/aa-tenuvault-notifications/runbooks/")) return this.accountExists ? ok({ properties: { state: "Published" } }) : ok({ error: { message: "not found" } }, 404)
-    if (path.includes("/automationAccounts/aa-tenuvault-notifications/jobSchedules")) return ok({ value: [{ properties: { runbook: { name: "Invoke-TenuVaultNotificationCheck" }, schedule: { name: "TenuVaultNotificationCheck" } } }] })
+    if (path.includes("/automationAccounts/aa-tenuvault-notifications/jobSchedules")) return ok({ value: this.scheduleLinked ? [{ properties: { runbook: { name: "Invoke-TenuVaultNotificationCheck" }, schedule: { name: "TenuVaultNotificationCheck" } } }] : [] })
     if (path.includes("/automationAccounts/aa-tenuvault-notifications/schedules")) return ok({ value: [{ name: "TenuVaultNotificationCheck", properties: { isEnabled: true, nextRun: "2026-11-07T12:15:00.000Z", expiryTime: "9999-12-31T00:00:00.000Z" } }] })
     if (path.includes("/automationAccounts/aa-tenuvault-notifications")) {
       if (this.accountStatus !== 200) return ok({ error: { message: "temporarily unavailable" } }, this.accountStatus)
       return this.accountExists ? ok({ id: this.accountId(), name: "aa-tenuvault-notifications", location: "westeurope", identity: { type: "SystemAssigned", principalId: PRINCIPAL, tenantId: TENANT_A } }) : ok({ error: { message: "not found" } }, 404)
     }
     if (path.includes("/microsoft.insights/actionGroups/")) return ok({ properties: { enabled: true, emailReceivers: [{ emailAddress: "ops@contoso.test", status: "Enabled" }] } })
-    if (path.includes("/microsoft.insights/metricAlerts/")) return this.failureAlert ? ok({ name: "TenuVault watcher failed jobs", properties: { enabled: this.failureAlertEnabled, scopes: [this.accountId()], criteria: { allOf: [{ metricName: "TotalJob", metricNamespace: "Microsoft.Automation/automationAccounts", operator: "GreaterThan", threshold: 0, timeAggregation: "Total", criterionType: "StaticThresholdCriterion", dimensions: [{ name: "Status", operator: this.failureAlertOperator, values: ["Failed"] }] }] }, actions: [{ actionGroupId: `/subscriptions/${SUBSCRIPTION}/resourceGroups/rg-tenuvault-backups/providers/microsoft.insights/actionGroups/ag-tenuvault-watcher` }] } }) : ok({ error: { message: "not found" } }, 404)
+    if (path.includes("/microsoft.insights/metricAlerts/")) return this.failureAlert ? ok({ name: "TenuVault watcher failed jobs", properties: { enabled: this.failureAlertEnabled, scopes: [this.accountId()], criteria: { allOf: [{ metricName: "TotalJob", metricNamespace: "Microsoft.Automation/automationAccounts", operator: "GreaterThan", threshold: 0, timeAggregation: "Total", criterionType: "StaticThresholdCriterion", dimensions: [{ name: "Status", operator: this.failureAlertOperator, values: ["Failed"] }, ...(this.failureAlertRunbookDimension ? [{ name: "Runbook", operator: "Include", values: [this.failureAlertRunbookDimension] }] : [])] }, ...(this.failureAlertExtraCriterion ? [{ metricName: "TotalJob", metricNamespace: "Microsoft.Automation/automationAccounts", operator: "GreaterThan", threshold: 999, timeAggregation: "Total", criterionType: "StaticThresholdCriterion", dimensions: [{ name: "Status", operator: "Include", values: ["Completed"] }] }] : [])] }, actions: [{ actionGroupId: `/subscriptions/${SUBSCRIPTION}/resourceGroups/rg-tenuvault-backups/providers/microsoft.insights/actionGroups/ag-tenuvault-watcher` }] } }) : ok({ error: { message: "not found" } }, 404)
     return ok({ error: { message: `unhandled ${path}` } }, 404)
   }
 
@@ -140,10 +144,10 @@ async function world(options: { accountExists?: boolean; graph?: unknown } = {})
       if (arm.jobPuts > 0) {
         heartbeat.readsAfterJob++
         if (heartbeat.failAfterReads !== null && heartbeat.readsAfterJob > heartbeat.failAfterReads) {
-          return { status: "ok", runAt: heartbeat.current?.runAt ?? NOW.toISOString(), lastError: "later failure", alertsHash: heartbeat.current?.alertsHash ?? null, runbookVersion: "1.3.0", alertsSource: "storage", identityPrincipalId: heartbeat.current?.identityPrincipalId ?? PRINCIPAL, jobId: heartbeat.current?.jobId ?? arm.lastJobId }
+          return { status: "ok", runAt: heartbeat.current?.runAt ?? NOW.toISOString(), lastError: "later failure", alertsHash: heartbeat.current?.alertsHash ?? null, runbookVersion: arm.runbookVersion, alertsSource: "storage", identityPrincipalId: heartbeat.current?.identityPrincipalId ?? (arm.runbookVersion === "1.3.0" ? PRINCIPAL : null), jobId: heartbeat.current?.jobId ?? (arm.runbookVersion === "1.3.0" ? arm.lastJobId : null) }
         }
       }
-      return heartbeat.current ? { status: "ok", runAt: heartbeat.current.runAt, lastError: heartbeat.current.lastError, alertsHash: heartbeat.current.alertsHash, runbookVersion: "1.3.0", alertsSource: "storage", identityPrincipalId: heartbeat.current?.identityPrincipalId ?? PRINCIPAL, jobId: heartbeat.current?.jobId ?? arm.lastJobId } : { status: "missing" }
+      return heartbeat.current ? { status: "ok", runAt: heartbeat.current.runAt, lastError: heartbeat.current.lastError, alertsHash: heartbeat.current.alertsHash, runbookVersion: arm.runbookVersion, alertsSource: "storage", identityPrincipalId: heartbeat.current?.identityPrincipalId ?? (arm.runbookVersion === "1.3.0" ? PRINCIPAL : null), jobId: heartbeat.current?.jobId ?? (arm.runbookVersion === "1.3.0" ? arm.lastJobId : null) } : { status: "missing" }
     },
     watcherAlertsWrite: async (_tenant, text) => {
       arm.order.push("alerts")
@@ -236,6 +240,23 @@ describe("watcher deployment preflight", () => {
     const result = await call(w.api, PATH, { tenantId: TENANT_A, action: "watcher-preflight", ...planBody })
     expect(result.body.existing.failureAlert).toBe(false)
     expect(result.body.findings).toEqual(expect.arrayContaining([expect.objectContaining({ code: "failure-alert-missing" })]))
+  })
+
+  it("rejects failure alerts narrowed by another condition or another runbook", async () => {
+    const extra = await world()
+    extra.arm.failureAlertExtraCriterion = true
+    const extraResult = await call(extra.api, PATH, { tenantId: TENANT_A, action: "watcher-preflight", ...planBody })
+    expect(extraResult.body.existing.failureAlert).toBe(false)
+
+    const otherRunbook = await world()
+    otherRunbook.arm.failureAlertRunbookDimension = "SomeOtherRunbook"
+    const otherResult = await call(otherRunbook.api, PATH, { tenantId: TENANT_A, action: "watcher-preflight", ...planBody })
+    expect(otherResult.body.existing.failureAlert).toBe(false)
+
+    const namedRunbook = await world()
+    namedRunbook.arm.failureAlertRunbookDimension = "Invoke-TenuVaultNotificationCheck"
+    const namedResult = await call(namedRunbook.api, PATH, { tenantId: TENANT_A, action: "watcher-preflight", ...planBody })
+    expect(namedResult.body.existing.failureAlert).toBe(true)
   })
 
   it("detects another watcher even when the named account exists", async () => {
@@ -495,6 +516,75 @@ describe("watcher deployment engine", () => {
     expect((await call(w.api, PATH, { tenantId: TENANT_A, action: "watcher-deploy-confirm", jobId: started.body.job.id, confirmation: "roles" })).status).toBe(409)
     expect((await startDeploy(w, { destinationConfirmed: true, copyDestinationKinds: [], grantRoles: false, rolesConfirmed: true })).status).toBe(409)
     expect(w.deps.records.list<any>(DOMAINS.notificationWatcherDeploy, TENANT_A)[0].cancelRequestedAt).toBe(NOW.toISOString())
+    expect(auditWatchOf(w.deps, TENANT_A)?.externalWatcher).toBe(false)
+  })
+
+  it("stops a partly created watcher at its real blocker after writing alerts, then checks Azure again on continue", async () => {
+    const w = await world({ accountExists: false, graph: graphGranting() })
+    w.arm.deploymentOutcome = "Failed"
+    w.arm.scheduleLinked = false
+    const started = await startDeploy(w, { destinationConfirmed: true, copyDestinationKinds: ["teams"], grantRoles: true, rolesConfirmed: false })
+    const blocked = await drive(w)
+    expect(blocked).toMatchObject({ state: "blocked", blockedReason: "schedule-missing" })
+    expect(w.arm.order).toContain("alerts")
+    expect(w.arm.jobPuts).toBe(0)
+    expect(auditWatchOf(w.deps, TENANT_A)?.externalWatcher).toBe(false)
+
+    w.arm.scheduleLinked = true
+    const resumed = await call(w.api, PATH, { tenantId: TENANT_A, action: "watcher-deploy-resume", jobId: started.body.job.id })
+    expect(resumed.status).toBe(200)
+    expect((await drive(w)).state).toBe("complete")
+    expect(w.arm.jobPuts).toBe(1)
+  })
+
+  it("does not hand over alerts changed during the final Azure and heartbeat reads", async () => {
+    const w = await world()
+    await startDeploy(w, { destinationConfirmed: true, copyDestinationKinds: [], grantRoles: false, rolesConfirmed: true })
+    let record: any = null
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await advanceWatcherDeploy(w.deps, TENANT_A, "Admin")
+      record = w.deps.records.list<any>(DOMAINS.notificationWatcherDeploy, TENANT_A)[0]
+      if (record.phase === "hand-over") break
+    }
+    expect(record.phase).toBe("hand-over")
+    const originalHeartbeat = w.deps.watcherHeartbeat!
+    let changed = false
+    w.deps.watcherHeartbeat = async (tenantId) => {
+      const result = await originalHeartbeat(tenantId)
+      if (!changed) {
+        changed = true
+        await call(w.api, PATH, { tenantId: TENANT_A, action: "add-rule", title: "Changed during hand-over", eventTypes: ["backup.failed"], channelIds: [w.channel.id] })
+      }
+      return result
+    }
+    const raced = await advanceWatcherDeploy(w.deps, TENANT_A, "Admin")
+    expect(raced?.state).toBe("running")
+    expect(w.deps.records.list<any>(DOMAINS.notificationWatcherDeploy, TENANT_A)[0].phase).toBe("alerts")
+    expect(auditWatchOf(w.deps, TENANT_A)?.externalWatcher).toBe(false)
+  })
+
+  it("starts a fresh test job after an old runbook is upgraded", async () => {
+    const w = await world()
+    w.arm.runbookVersion = "1.2.0"
+    const started = await startDeploy(w, { destinationConfirmed: true, copyDestinationKinds: [], grantRoles: false, rolesConfirmed: true })
+    const blocked = await drive(w)
+    expect(blocked).toMatchObject({ state: "blocked", blockedReason: "runbook-version" })
+    expect(w.arm.jobPuts).toBe(1)
+    w.arm.runbookVersion = "1.3.0"
+    const resumed = await call(w.api, PATH, { tenantId: TENANT_A, action: "watcher-deploy-resume", jobId: started.body.job.id })
+    expect(resumed.status).toBe(200)
+    expect((await drive(w)).state).toBe("complete")
+    expect(w.arm.jobPuts).toBe(2)
+  })
+
+  it("finalizes a cancellation that was interrupted by the app closing", async () => {
+    const w = await world()
+    await startDeploy(w, { destinationConfirmed: true, copyDestinationKinds: [], grantRoles: false, rolesConfirmed: false })
+    await drive(w)
+    const record = w.deps.records.list<any>(DOMAINS.notificationWatcherDeploy, TENANT_A)[0]!
+    w.deps.records.update(DOMAINS.notificationWatcherDeploy, TENANT_A, record.id, (value: any) => ({ ...value, state: "running", status: "running", cancelRequestedAt: NOW.toISOString() }), { actor: "test", reason: "test interrupted cancellation" })
+    markInterruptedWatcherDeploys(w.deps)
+    expect(w.deps.records.list<any>(DOMAINS.notificationWatcherDeploy, TENANT_A)[0].state).toBe("cancelled")
     expect(auditWatchOf(w.deps, TENANT_A)?.externalWatcher).toBe(false)
   })
 
