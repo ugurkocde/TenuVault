@@ -4,6 +4,7 @@ import type { OibPrintOptions } from "../../shared/oib/report-html"
 import type { PdfBranding } from "../../shared/pdf/theme"
 import { DELEGATED_CLIENT_SECRET } from "../../shared/constants"
 import type { TenantRecords } from "./records"
+import type { ArmRequest, ArmResponse } from "../azure/arm"
 
 /** A connected tenant as the main process knows it. */
 export interface TenantProfile {
@@ -11,6 +12,11 @@ export interface TenantProfile {
   name: string
   clientId: string
   storageAccountName: string
+  /** Azure placement of the backup storage, as the tenant was connected with. Hints only: ARM confirms them. */
+  subscriptionId?: string
+  resourceGroupName?: string
+  location?: string
+  automationAccountName?: string
 }
 
 /** The applied change set a rollback recovers; see features/recovery.ts. */
@@ -62,6 +68,11 @@ export interface FeatureDeps {
    * account, with the signed-in admin's storage token. The watcher reads it on its next run.
    */
   watcherAlertsWrite?: (tenantId: string, text: string) => Promise<WatcherAlertsWrite>
+  /**
+   * Azure Resource Manager with the signed-in admin's delegated token, for the watcher
+   * deployment. Paths only (see azure/arm.ts), so the token reaches no other host.
+   */
+  arm?: (tenantId: string, request: ArmRequest) => Promise<ArmResponse>
   /** Prints report HTML to PDF in a hidden, locked-down window (report-export.ts). */
   printPdf?: (html: string, options: OibPrintOptions) => Promise<Uint8Array>
   /** The PDF branding the tenant's plan allows. */
@@ -75,7 +86,7 @@ export interface FeatureDeps {
  * backup routes require those two but storage never uses them, for local or Azure accounts.
  */
 export type WatcherHeartbeatRead =
-  | { status: "ok"; runAt: string | null; lastError: string | null; alertsHash?: string | null; runbookVersion?: string | null; alertsSource?: string | null }
+  | { status: "ok"; runAt: string | null; lastError: string | null; alertsHash?: string | null; runbookVersion?: string | null; alertsSource?: string | null; identityPrincipalId?: string | null; jobId?: string | null }
   | { status: "missing" }
   | { status: "error"; message: string }
 

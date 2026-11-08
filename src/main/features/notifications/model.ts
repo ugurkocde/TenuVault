@@ -1,5 +1,6 @@
 import type { CardLayout } from "../../../shared/notifications/layout"
 import type { AlertConditions, AlertDelivery } from "../../../shared/notifications/alerts"
+import type { ExistingWatcher, WatcherDeployAck, WatcherDeployCapabilities, WatcherDeployMode, WatcherDeployPlan, WatcherDeployState, WatcherDeployStep, WatcherDeployStepId, WatcherFinding, WatcherGraphRoleStatus } from "../../../shared/notifications/watcher-deploy"
 import { NOTIFICATION_EVENT_TYPES, type NotificationEnvelope, type NotificationEventType, type NotificationSeverity } from "../../../shared/notifications/envelope"
 
 /** Stored notification records. Secret values live only in these records and never reach the renderer. */
@@ -138,6 +139,52 @@ export interface WatcherAlertsSync {
   /** Why the last write failed, until one succeeds. */
   error: string | null
   errorAt: string | null
+}
+
+/**
+ * One in-app watcher deployment or hand-over. The plan and step state are kept so a setup
+ * interrupted by a restart, a sign-in or a Global Administrator boundary resumes where it
+ * stopped. No secret is ever stored here: a copied destination is read from its channel
+ * record at the moment of the ARM call, and only its id and a non-secret fingerprint remain.
+ */
+export interface WatcherDeployRecord {
+  title: string
+  status: WatcherDeployState
+  summary: string
+  mode: WatcherDeployMode
+  state: WatcherDeployState
+  phase: WatcherDeployStepId
+  /** Incremented on every engine save, so concurrent continuations can tell their writes apart. */
+  revision: number
+  plan: WatcherDeployPlan
+  planHash: string
+  ack: WatcherDeployAck
+  findings: WatcherFinding[]
+  capabilities: WatcherDeployCapabilities
+  existing: ExistingWatcher
+  steps: WatcherDeployStep[]
+  graphRoles: string[]
+  graphRoleStatus: WatcherGraphRoleStatus
+  missingGraphRoles: string[]
+  rolesVerifiedAt: string | null
+  grantAttemptedAt: string | null
+  deploymentName: string | null
+  deploymentState: string | null
+  deploymentSubmittedAt: string | null
+  cancelRequestedAt: string | null
+  copiedChannels: Array<{ channelId: string; kind: "teams" | "webhook"; fingerprint?: string; updatedAt?: string }>
+  principalId: string | null
+  alertsHash: string | null
+  alertsWrittenAt: string | null
+  automationJobId: string | null
+  jobSubmittedAt: string | null
+  jobStatus: string | null
+  heartbeatRunAt: string | null
+  blockedReason: string | null
+  error: string | null
+  nextAttemptAt: string | null
+  pendingHandover: boolean
+  startedAt: string
 }
 
 /** The first runbook version that reads alerts.json, so alerts update without a setup rerun. */

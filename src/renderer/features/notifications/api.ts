@@ -3,6 +3,9 @@ import { featureCall } from "../../lib/feature-api"
 import type { NotificationEnvelope, NotificationEventType, NotificationSeverity } from "../../../shared/notifications/envelope"
 import type { CardLayout } from "../../../shared/notifications/layout"
 import type { AlertConditions, AlertDelivery, WatcherAlerts } from "../../../shared/notifications/alerts"
+import type { WatcherDeployAck, WatcherDeployPlanInput, WatcherDeployView, WatcherPreflight } from "../../../shared/notifications/watcher-deploy"
+
+export type { WatcherDeployAck, WatcherDeployPlanInput, WatcherDeployView, WatcherPreflight }
 
 export type ChannelKind = "local" | "webhook" | "teams" | "email"
 
@@ -104,6 +107,8 @@ export interface NotificationsStatus {
   runtimeNote: string
   /** The hash of the alerts the Azure watcher would get now, and the one its heartbeat reported (null: unknown). */
   watcherAlerts?: WatcherAlertsStatus
+  /** The newest in-app Azure watcher setup, so an interrupted one can be continued. */
+  watcherDeploy?: WatcherDeployView | null
   /** Whether this computer is signed in to the tenant, which desktop change watching needs. */
   signedIn?: boolean
 }
@@ -221,6 +226,13 @@ export const notificationsApi = {
   revokeAuditWatch: (tenant: Tenant) => featureCall<{ auditWatch: AuditWatch }>(PATH, tenant, "revoke-audit-watch"),
   /** Writes the alerts to the watcher's alerts.json; auto turns updating on every change on or off. */
   pushWatcherAlerts: (tenant: Tenant, body: { auto?: boolean; write?: boolean } = {}) => featureCall<{ watcherAlerts: WatcherAlertsStatus; alerts?: number; skipped?: string[]; uncovered?: NotificationEventType[] }>(PATH, tenant, "push-watcher-alerts", body),
+  /** Read-only Azure check before an in-app watcher setup. */
+  watcherPreflight: (tenant: Tenant, body: WatcherDeployPlanInput) => featureCall<WatcherPreflight>(PATH, tenant, "watcher-preflight", { ...body }),
+  watcherDeployStart: (tenant: Tenant, body: WatcherDeployPlanInput & { planHash?: string; ack: WatcherDeployAck }) => featureCall<{ job: WatcherDeployView }>(PATH, tenant, "watcher-deploy-start", { ...body }),
+  getWatcherDeploy: (tenant: Tenant, jobId?: string) => featureCall<{ job: WatcherDeployView | null }>(PATH, tenant, "get-watcher-deploy", jobId ? { jobId } : {}),
+  watcherDeployResume: (tenant: Tenant, jobId: string) => featureCall<{ job: WatcherDeployView }>(PATH, tenant, "watcher-deploy-resume", { jobId }),
+  watcherDeployConfirm: (tenant: Tenant, jobId: string, confirmation: "roles" | "destination" | "grant") => featureCall<{ job: WatcherDeployView }>(PATH, tenant, "watcher-deploy-confirm", { jobId, confirmation }),
+  revokeWatcherDeploy: (tenant: Tenant, jobId: string) => featureCall<{ job: WatcherDeployView }>(PATH, tenant, "revoke-watcher-deploy", { jobId }),
   runWatcherCheck: (tenant: Tenant) => featureCall<{ auditWatch: AuditWatch; stale: boolean; enqueued: number; error: string | null }>(PATH, tenant, "run-watcher-check"),
   runAuditWatch: (tenant: Tenant) => featureCall<{ auditWatch: AuditWatch | null; enqueued: number; changes: number; error: string | null; skipped: "off" | "external" | "busy" | null }>(PATH, tenant, "run-audit-watch"),
   listAuditCategories: (tenant: Tenant) => featureCall<{ categories: string[]; source: "graph" | "known" }>(PATH, tenant, "list-audit-categories"),

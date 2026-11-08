@@ -32,6 +32,7 @@ $global:TvRunBlobs = @{}
 $blobText = Get-Content -LiteralPath $AlertsBlobPath -Raw
 if ($blobText) { $global:TvRunBlobs["tenuvault-notification-state/alerts.json"] = $blobText }
 $global:TvRunAlertsReadFails = [bool]$AlertsReadFails
+$global:PSPrivateMetadata = @{ JobId = [guid]"55555555-5555-4555-8555-555555555555" }
 $global:TvRunPosts = [System.Collections.Generic.List[object]]::new()
 $global:TvRunAudit = $fixture.intune
 
@@ -40,7 +41,10 @@ function global:Start-Sleep { }
 
 function global:Invoke-RestMethod {
     param([string]$Uri, [hashtable]$Headers, [string]$Method = "Get", $Body, [string]$ContentType, [int]$TimeoutSec)
-    if ($Uri -like "http://169.254.169.254/*") { return [pscustomobject]@{ access_token = "token" } }
+    if ($Uri -like "http://169.254.169.254/*") {
+        $claims = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('{"oid":"33333333-3333-4333-8333-333333333333"}')).TrimEnd("=").Replace("+", "-").Replace("/", "_")
+        return [pscustomobject]@{ access_token = "header.$claims.signature" }
+    }
     if ($Uri -like "https://graph.microsoft.com/*deviceManagement/auditEvents*") { return [pscustomobject]@{ value = @($global:TvRunAudit) } }
     if ($Uri -like "https://graph.microsoft.com/*") { return [pscustomobject]@{ value = @() } }
     throw "Unexpected REST call to $Uri"

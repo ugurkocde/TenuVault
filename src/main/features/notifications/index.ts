@@ -2,7 +2,7 @@ import type { RouteModule } from "../../api/host"
 import { allows } from "../../../shared/plans"
 import { NOTIFICATION_EVENT_TYPES, testEvent } from "../../../shared/notifications/envelope"
 import { changeEvent } from "../../../shared/notifications/audit"
-import { describeConditions, hasConditions, isChangeEventType, parseConditions, parseDelivery, WATCHER_ALERTS_SCHEMA, watcherAlertsHash, type WatcherAlert, type WatcherAlerts, type WatcherDestination } from "../../../shared/notifications/alerts"
+import { describeConditions, hasConditions, isChangeEventType, parseConditions, parseDelivery, watcherAlertsHash } from "../../../shared/notifications/alerts"
 import { DEFAULT_CARD_LAYOUT, isDefaultLayout, parseCardLayout, styleIssues } from "../../../shared/notifications/layout"
 import type { FeatureDeps } from "../deps"
 import { normalizeBackupStatus } from "../../../portal/lib/backup-health"
@@ -17,7 +17,6 @@ import {
   isSeverity,
   MAX_CHANNELS,
   MAX_RULES,
-  MAX_WATCHER_ALERTS_LENGTH,
   WATCHER_ALERTS_FILE_RUNBOOK,
   parseRecipients,
   urlHost,
@@ -25,12 +24,13 @@ import {
   type CardLayoutRecord,
   type ChannelRecord,
   type RuleRecord,
-  type WatcherAlertsSync,
 } from "./model"
+import { watcherPreflight } from "./watcher-deploy/preflight"
+import { cancelWatcherDeploy, confirmWatcherDeploy, markInterruptedWatcherDeploys, publicWatcherDeploy, resumePendingWatcherHandovers, resumeWatcherDeploy, startWatcherDeploy, watcherDeployOf, WatcherDeployError } from "./watcher-deploy/engine"
+import { EMPTY_WATCHER_DEPLOY_ACK, type WatcherDeployAck, type WatcherDeployPlanInput } from "../../../shared/notifications/watcher-deploy"
 import {
   alertMatcher,
   auditWatchOf,
-  brief,
   cardLayoutOf,
   channelsOf,
   layoutOf,
@@ -46,7 +46,12 @@ import {
   pollAuditWatch,
   rulesOf,
   saveAuditWatch,
+  pushWatcherAlerts,
+  saveWatcherSync,
+  syncWatcherAlerts,
   tick,
+  uncoveredWatcherEvents,
+  watcherAlertsDocument,
   type AuditWatchChange,
 } from "./service"
 
@@ -74,6 +79,7 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
       auditWatch: publicAuditWatch(auditWatchOf(deps, tenantId)),
       // Whether the Azure watcher runs these alerts: the hash its heartbeat reported, against now.
       watcherAlerts: watcherAlertsStatus(deps, tenantId),
+      watcherDeploy: (() => { const deploy = watcherDeployOf(deps, tenantId); return deploy ? publicWatcherDeploy(deploy, tenantId) : null })(),
       signedIn: Boolean(deps.actor(tenantId)),
       deliveries: outboxOf(deps, tenantId).slice(-50).reverse().map((entry) => ({
         id: entry.id,
@@ -297,6 +303,55 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
       const result = await pushWatcherAlerts(deps, tenantId, actor)
       if (!result.ok) throw new FeatureError(result.error, result.status)
       return { ...result, watcherAlerts: watcherAlertsStatus(deps, tenantId) }
+    },
+
+    // Read-only Azure check for the in-app watcher setup: what exists, what this sign-in may
+    // do, and the exact plan a later start must still match.
+    "watcher-preflight": async ({ tenantId, body, deps }) => watcherPreflight(deps, tenantId, watcherPlanInput(body)),
+
+    "watcher-deploy-start": async ({ tenantId, body, deps, actor }) => {
+      try {
+        const job = await startWatcherDeploy(deps, tenantId, actor, watcherPlanInput(body), watcherAck(body), optionalText(body, "planHash", 100))
+        return { job }
+      } catch (error) {
+        if (error instanceof WatcherDeployError) throw new FeatureError(error.message, error.status)
+        throw error
+      }
+    },
+
+    "get-watcher-deploy": ({ tenantId, body, deps }) => {
+      const deploy = watcherDeployOf(deps, tenantId, optionalText(body, "jobId", 100))
+      return { job: deploy ? publicWatcherDeploy(deploy, tenantId) : null }
+    },
+
+    "watcher-deploy-resume": async ({ tenantId, body, deps, actor }) => {
+      try {
+        return { job: await resumeWatcherDeploy(deps, tenantId, actor, optionalText(body, "jobId", 100)) }
+      } catch (error) {
+        if (error instanceof WatcherDeployError) throw new FeatureError(error.message, error.status)
+        throw error
+      }
+    },
+
+    "watcher-deploy-confirm": async ({ tenantId, body, deps, actor }) => {
+      const confirmation = body.confirmation
+      if (confirmation !== "roles" && confirmation !== "destination" && confirmation !== "grant") throw new FeatureError("confirmation must be roles, destination or grant")
+      try {
+        return { job: await confirmWatcherDeploy(deps, tenantId, actor, optionalText(body, "jobId", 100), confirmation) }
+      } catch (error) {
+        if (error instanceof WatcherDeployError) throw new FeatureError(error.message, error.status)
+        throw error
+      }
+    },
+
+    // Cancelling never deletes Azure resources and never flips ownership: it only stops here.
+    "revoke-watcher-deploy": async ({ tenantId, body, deps, actor }) => {
+      try {
+        return { job: await cancelWatcherDeploy(deps, tenantId, actor, optionalText(body, "jobId", 100)) }
+      } catch (error) {
+        if (error instanceof WatcherDeployError) throw new FeatureError(error.message, error.status)
+        throw error
+      }
     },
 
     // The alerts as the Azure watcher reads them (setup -AlertRulesPath). Channels become kinds
@@ -540,68 +595,12 @@ function withWatcherSync(handler: ActionHandler): ActionHandler {
   }
 }
 
-export type WatcherPushResult =
-  | { ok: true; hash: string; pushedAt: string; alerts: number; skipped: string[]; uncovered: string[] }
-  | { ok: false; error: string; status: number }
+export type { WatcherPushResult } from "./service"
+export { pushWatcherAlerts, syncWatcherAlerts, watcherAlertsDocument }
 
-/**
- * Writes the current alerts to the Azure watcher's alerts.json and records what was written.
- * Refused without an alert the watcher can send, because the watcher would then send every
- * event to every destination: that stays a choice made in its setup (-AlertRulesPath "").
- */
-export function pushWatcherAlerts(deps: FeatureDeps, tenantId: string, actor: string | null): Promise<WatcherPushResult> {
-  const key = tenantId.toLowerCase()
-  const run = (pushQueues.get(key) ?? Promise.resolve()).catch(() => undefined).then(() => pushNow(deps, tenantId, actor))
-  pushQueues.set(key, run)
-  // The caller handles a failure of run; this cleanup must not raise it a second time.
-  run.finally(() => { if (pushQueues.get(key) === run) pushQueues.delete(key) }).catch(() => undefined)
-  return run
-}
 
-async function pushNow(deps: FeatureDeps, tenantId: string, actor: string | null): Promise<WatcherPushResult> {
-  const fail = (error: string, status = 400): WatcherPushResult => {
-    saveWatcherSync(deps, tenantId, { error, errorAt: deps.now().toISOString() }, actor, `Watcher alerts not updated: ${error}`)
-    return { ok: false, error, status }
-  }
-  if (!auditWatchOf(deps, tenantId)?.externalWatcher) return { ok: false, error: "No Azure watcher owns change alerts for this tenant. Turn on \"An Azure watcher handles change alerts\" in the Watching tab first.", status: 409 }
-  if (!deps.watcherAlertsWrite) return fail("This version of TenuVault cannot write to the watcher's storage.", 501)
-  const { document, skipped } = watcherAlertsDocument(deps, tenantId)
-  if (document.alerts.length === 0) return fail("No alert sends to a webhook, Teams or email channel, so there is nothing for the watcher to run. Add such a channel to an alert first.")
-  const json = JSON.stringify(document, null, 2)
-  if (json.length > MAX_WATCHER_ALERTS_LENGTH) return fail("The alerts are larger than 500 KB. Shorten their conditions.")
-  let written: Awaited<ReturnType<NonNullable<FeatureDeps["watcherAlertsWrite"]>>>
-  try {
-    written = await deps.watcherAlertsWrite(tenantId, json)
-  } catch (error) {
-    written = { status: "error", message: brief(error instanceof Error ? error.message : String(error)) }
-  }
-  if (written.status !== "ok") return fail(written.message, 502)
-  const hash = watcherAlertsHash(document)
-  const pushedAt = deps.now().toISOString()
-  saveWatcherSync(deps, tenantId, { pushedAt, pushedHash: hash, error: null, errorAt: null }, actor, `Watcher alerts updated: ${document.alerts.length} alert${document.alerts.length === 1 ? "" : "s"}`)
-  return { ok: true, hash, pushedAt, alerts: document.alerts.length, skipped, uncovered: uncoveredWatcherEvents(document) }
-}
 
-/**
- * With automatic updates on, writes the alerts when they differ from what was written last.
- * Skipped while signed out of the tenant: a storage token would prompt for a sign-in in the
- * middle of a save. The next save, or Update watcher, catches up.
- */
-export async function syncWatcherAlerts(deps: FeatureDeps, tenantId: string, actor: string | null, licensed: boolean): Promise<WatcherPushResult | null> {
-  const watch = auditWatchOf(deps, tenantId)
-  if (!licensed || !watch?.externalWatcher || !watch.watcherAlertsSync?.auto || !deps.actor(tenantId)) return null
-  if (watcherAlertsHash(watcherAlertsDocument(deps, tenantId).document) === watch.watcherAlertsSync.pushedHash) return null
-  return pushWatcherAlerts(deps, tenantId, actor)
-}
 
-/** Writes per tenant run one after another, so an older document never lands after a newer one. */
-const pushQueues = new Map<string, Promise<unknown>>()
-
-function saveWatcherSync(deps: FeatureDeps, tenantId: string, change: Partial<WatcherAlertsSync>, actor: string | null, reason: string) {
-  const current = auditWatchOf(deps, tenantId)?.watcherAlertsSync
-  const next: WatcherAlertsSync = { auto: false, pushedAt: null, pushedHash: null, error: null, errorAt: null, ...current, ...change }
-  saveAuditWatch(deps, tenantId, { watcherAlertsSync: next }, { actor, reason })
-}
 
 /** Whether the Azure watcher runs these alerts: what its heartbeat reported, what was written to it, and now. */
 function watcherAlertsStatus(deps: FeatureDeps, tenantId: string) {
@@ -632,13 +631,13 @@ function versionAtLeast(version: string, minimum: string): boolean {
   return true
 }
 
-function uncoveredWatcherEvents(document: WatcherAlerts): string[] {
-  return WATCHER_EVENT_TYPES.filter((type) => !document.alerts.some((alert) => alert.eventTypes.includes(type)))
-}
-
 /** Background work while the app runs: outbox retries and due audit polls every minute. */
 export function start(deps: FeatureDeps): () => void {
-  const timer = setInterval(() => void tick(deps).catch(() => undefined), TICK_MS)
+  markInterruptedWatcherDeploys(deps)
+  const timer = setInterval(() => {
+    void tick(deps).catch(() => undefined)
+    void resumePendingWatcherHandovers(deps).catch(() => undefined)
+  }, TICK_MS)
   timer.unref?.()
   return () => clearInterval(timer)
 }
@@ -657,23 +656,6 @@ function ruleSummary(rule: RuleRecord): string {
   return `${plural(rule.eventTypes.length, "event type")} at ${rule.minSeverity} or above to ${plural(rule.channelIds.length, "channel")}.${narrowed ? ` Changes: ${narrowed}.` : ""}${each}`
 }
 
-const WATCHER_DESTINATIONS: WatcherDestination[] = ["webhook", "teams", "mail"]
-
-/** The enabled alerts as the Azure watcher reads them, and the alerts left out for having no remote channel. */
-export function watcherAlertsDocument(deps: FeatureDeps, tenantId: string): { document: WatcherAlerts; skipped: string[] } {
-  const channels = channelsOf(deps, tenantId)
-  const alerts: WatcherAlert[] = []
-  const skipped: string[] = []
-  for (const rule of rulesOf(deps, tenantId)) {
-    if (!rule.enabled) continue
-    const destinations = [...new Set(channels.filter((channel) => channel.enabled && rule.channelIds.includes(channel.id)).flatMap((channel): WatcherDestination[] => (channel.kind === "email" ? ["mail"] : channel.kind === "teams" ? ["teams"] : channel.kind === "webhook" ? ["webhook"] : [])))]
-    if (!destinations.length) { skipped.push(rule.title); continue }
-    alerts.push({ id: rule.id, title: rule.title, eventTypes: rule.eventTypes.filter((type) => type !== "test"), minSeverity: rule.minSeverity, destinations: WATCHER_DESTINATIONS.filter((entry) => destinations.includes(entry)), delivery: parseDelivery(rule.delivery), conditions: parseConditions(rule.conditions) })
-  }
-  return { document: { schema: WATCHER_ALERTS_SCHEMA, alerts }, skipped }
-}
-/** The event types the Azure watcher produces. */
-const WATCHER_EVENT_TYPES = ["intune.change", "entra.change", "backup.failed", "backup.warning", "backup.succeeded", "backup.missed"] as const
 
 function conditions(value: unknown): RuleRecord["conditions"] {
   if (value === undefined || value === null) return null
@@ -744,6 +726,39 @@ function channelIds(deps: FeatureDeps, tenantId: string, value: unknown): string
   const ids = value.map((entry) => (typeof entry === "string" ? entry : ""))
   if (ids.some((id) => !known.has(id))) throw new FeatureError("A selected channel no longer exists.")
   return [...new Set(ids)]
+}
+
+function destinationKinds(value: unknown): WatcherDeployPlanInput["destinationKinds"] {
+  if (value === undefined) return undefined
+  if (!Array.isArray(value) || value.length > 3 || value.some((entry) => entry !== "webhook" && entry !== "teams" && entry !== "mail")) throw new FeatureError("destinationKinds is invalid")
+  return [...new Set(value)] as WatcherDeployPlanInput["destinationKinds"]
+}
+
+function watcherPlanInput(body: Body): WatcherDeployPlanInput {
+  return {
+    subscriptionId: optionalText(body, "subscriptionId", 100) ?? undefined,
+    resourceGroupName: optionalText(body, "resourceGroupName", 120) ?? undefined,
+    automationAccountName: optionalText(body, "automationAccountName", 120) ?? undefined,
+    location: optionalText(body, "location", 80) ?? undefined,
+    alertEmail: optionalText(body, "alertEmail", 320) ?? undefined,
+    noFailureAlert: bool(body, "noFailureAlert"),
+    destinationKinds: destinationKinds(body.destinationKinds),
+    needsConditionalAccess: bool(body, "needsConditionalAccess"),
+    createIfMissing: bool(body, "createIfMissing"),
+  }
+}
+
+function watcherAck(body: Body): WatcherDeployAck {
+  const raw = body.ack
+  if (raw === undefined) return { ...EMPTY_WATCHER_DEPLOY_ACK }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new FeatureError("ack is invalid")
+  const ack = raw as Body
+  return {
+    destinationConfirmed: bool(ack, "destinationConfirmed") ?? false,
+    copyDestinationKinds: destinationKinds(ack.copyDestinationKinds) ?? [],
+    grantRoles: bool(ack, "grantRoles") ?? false,
+    rolesConfirmed: bool(ack, "rolesConfirmed") ?? false,
+  }
 }
 
 function bool(body: Body, key: string): boolean | undefined {

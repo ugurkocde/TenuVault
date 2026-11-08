@@ -1919,6 +1919,51 @@ function New-TvTeamsPayloadCore {
 # Watcher plumbing: tokens, configuration, storage state, delivery
 # ---------------------------------------------------------------------------
 
+function Get-TvTokenPrincipalId {
+    param([string]$Token)
+    # The managed identity's object id, read from its own token for the heartbeat.
+    # It attributes a run to one Automation account without recording the token.
+    try {
+        $parts = @($Token -split "\.")
+        if ($parts.Count -lt 2) { return $null }
+        $payload = $parts[1].Replace("-", "+").Replace("_", "/")
+        while ($payload.Length % 4) { $payload += "=" }
+        $claims = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($payload)) | ConvertFrom-Json
+        $oid = Get-TvText (Get-TvProp $claims "oid")
+        if ($oid -match "^[0-9a-fA-F-]{36}$") { return $oid.ToLowerInvariant() }
+    } catch { }
+    return $null
+}
+
+function Get-TvAutomationJobId {
+    # Azure Automation exposes the current job in PSPrivateMetadata; the shape differs
+    # between Windows PowerShell, PowerShell 7 and hybrid workers, so accept each form.
+    $candidates = [System.Collections.Generic.List[object]]::new()
+    try {
+        $metadata = Get-Variable -Name PSPrivateMetadata -ValueOnly -ErrorAction SilentlyContinue
+        $job = Get-TvProp $metadata "JobId"
+        if ($job) {
+            $guid = Get-TvProp $job "Guid"
+            if ($guid) { $candidates.Add([string]$guid) }
+            $candidates.Add([string]$job)
+        }
+    } catch { }
+    foreach ($raw in @($env:PSPrivateMetadataJobId, $env:PSPrivateMetadata)) {
+        if ($raw) { $candidates.Add([string]$raw) }
+    }
+    foreach ($candidate in $candidates) {
+        if ($candidate -match "^[0-9a-fA-F-]{36}$") { return $candidate.ToLowerInvariant() }
+        try {
+            $parsed = $candidate | ConvertFrom-Json
+            $job = Get-TvProp $parsed "JobId"
+            $guid = Get-TvProp $job "Guid"
+            $value = if ($guid) { [string]$guid } elseif ($job) { [string]$job } else { $null }
+            if ($value -match "^[0-9a-fA-F-]{36}$") { return $value.ToLowerInvariant() }
+        } catch { }
+    }
+    return $null
+}
+
 function Get-TvManagedIdentityToken {
     param([Parameter(Mandatory)][string]$Resource)
     # Azure Automation and App Service style hosts expose a local identity endpoint
@@ -2440,7 +2485,7 @@ if ($LibraryOnly) { return }
 # ---------------------------------------------------------------------------
 
 $ErrorActionPreference = "Stop"
-$runbookVersion = "1.2.0"
+$runbookVersion = "1.3.0"
 $runAt = [DateTime]::UtcNow
 $runAtIso = ConvertTo-TvIso $runAt
 $eventsSent = 0
@@ -2454,6 +2499,8 @@ $storageToken = $null
 $stateBlobUri = $null
 $heartbeatBlobUri = $null
 $leaseQueryUri = $null
+$heartbeatIdentity = $null
+$heartbeatJobId = Get-TvAutomationJobId
 $watermarkIso = $null
 
 try {
@@ -2506,6 +2553,7 @@ try {
     $graphTokenError = $null
     try {
         $graphToken = Get-TvManagedIdentityToken "https://graph.microsoft.com/"
+        $heartbeatIdentity = Get-TvTokenPrincipalId $graphToken
     } catch {
         $graphTokenError = "Graph token acquisition failed: $(Get-TvSafeError $_.Exception.Message)"
         Write-Output "$graphTokenError Audit ingestion is skipped; missed backup checking and pending deliveries still run."
@@ -2588,6 +2636,8 @@ try {
             $rejectedHeartbeat = [pscustomobject][ordered]@{
                 runAt = $runAtIso
                 runbookVersion = $runbookVersion
+                identityPrincipalId = $heartbeatIdentity
+                jobId          = $heartbeatJobId
                 configVersion = $configVersion
                 configHash = $configHash
                 alertsHash = $alertsHash
@@ -2784,6 +2834,8 @@ try {
         $verifiedHeartbeat = [pscustomobject][ordered]@{
             runAt = $runAtIso
             runbookVersion = $runbookVersion
+            identityPrincipalId = $heartbeatIdentity
+            jobId          = $heartbeatJobId
             configVersion = $configVersion
             configHash = $configHash
             alertsHash = $alertsHash
@@ -3088,6 +3140,8 @@ try {
     $heartbeat = [pscustomobject][ordered]@{
         runAt = $runAtIso
         runbookVersion = $runbookVersion
+        identityPrincipalId = $heartbeatIdentity
+        jobId          = $heartbeatJobId
         configVersion = $configVersion
         configHash = $configHash
         alertsHash = $alertsHash
@@ -3117,6 +3171,8 @@ try {
             $failedHeartbeat = [pscustomobject][ordered]@{
                 runAt = $runAtIso
                 runbookVersion = $runbookVersion
+                identityPrincipalId = $heartbeatIdentity
+                jobId          = $heartbeatJobId
                 configVersion = $configVersion
                 configHash = $configHash
                 alertsHash = $alertsHash

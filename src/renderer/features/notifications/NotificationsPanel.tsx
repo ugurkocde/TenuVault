@@ -50,7 +50,12 @@ const selectClass = "h-8 rounded-full border border-gray-200 bg-white px-3 text-
 function useNotificationsStatus(tenant: Tenant) {
   const tenantId = tenant.credentials?.tenantId
   const client = useQueryClient()
-  const status = useQuery({ queryKey: ["notifications-status", tenantId], queryFn: () => notificationsApi.status(tenant), enabled: !!tenantId })
+  const status = useQuery({
+    queryKey: ["notifications-status", tenantId],
+    queryFn: () => notificationsApi.status(tenant),
+    enabled: !!tenantId,
+    refetchInterval: (query) => query.state.data?.watcherDeploy?.state === "running" ? 5000 : false,
+  })
   const refresh = () => void client.invalidateQueries({ queryKey: ["notifications-status", tenantId] })
   return { status, refresh }
 }

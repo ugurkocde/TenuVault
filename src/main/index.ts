@@ -37,6 +37,7 @@ import { BackupKeys } from "./backup/keys"
 import { readBackupSettings } from "./backup/settings"
 import { localInventoryProblem } from "./backup/local-inventory"
 import { encryptedAzureFetch, registerStorageToken } from "./storage/azure-seal"
+import { createArmCaller } from "./azure/arm"
 import { BackupReaderService } from "./auth/backup-reader"
 // The same setup script the docs site downloads and the card copies, bundled so Save writes it exactly.
 import readerSetupScript from "../../resources/New-TenuVaultBackupReader.ps1?raw"
@@ -438,7 +439,7 @@ async function bootstrap(): Promise<void> {
       if (Notification.isSupported()) new Notification({ title, body }).show()
     },
     // The watcher writes heartbeat.json next to its state in the backup storage account. Only
-    // runAt, lastError and which alerts it runs are kept; the rest of the file is not read.
+    // its run time, error, alerts and run attribution are kept; the rest is not read.
     watcherHeartbeat: async (tenantId) => {
       const profile = tenantProfile(tenantId)
       if (!profile || isLocalAccount(profile.storageAccountName)) return { status: "missing" }
@@ -466,7 +467,10 @@ async function bootstrap(): Promise<void> {
       const alertsHash = typeof body.alertsHash === "string" ? body.alertsHash.slice(0, 80) : null
       const runbookVersion = typeof body.runbookVersion === "string" ? body.runbookVersion.slice(0, 20) : null
       const alertsSource = typeof body.alertsSource === "string" ? body.alertsSource.slice(0, 20) : null
-      return { status: "ok", runAt: body.runAt, lastError, alertsHash, runbookVersion, alertsSource }
+      const guidOf = (value: unknown) => typeof value === "string" && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value) ? value.toLowerCase() : null
+      const identityPrincipalId = guidOf(body.identityPrincipalId)
+      const jobId = guidOf(body.jobId)
+      return { status: "ok", runAt: body.runAt, lastError, alertsHash, runbookVersion, alertsSource, identityPrincipalId, jobId }
     },
     // The alerts the watcher reads on its next run, written next to its state (Alerts > Update watcher).
     watcherAlertsWrite: async (tenantId, text) => {
@@ -488,6 +492,17 @@ async function bootstrap(): Promise<void> {
       if (response.status === 404) return { status: "error", message: "The storage account has no tenuvault-notification-state container. Run the watcher setup once, then try again." }
       if (response.status === 403) return { status: "error", message: "Your account cannot write to the watcher's state container. It needs Storage Blob Data Contributor on the backup storage account, as New-TenuVaultStorage.ps1 grants." }
       return { status: "error", message: `The storage account answered HTTP ${response.status} when the watcher alerts were written.` }
+    },
+    // Azure Resource Manager for the watcher setup, with the signed-in admin's token.
+    // The caller only accepts ARM paths, so the token reaches no other host.
+    arm: async (tenantId, request) => {
+      const profile = tenantProfile(tenantId)
+      if (!profile) throw new Error("Sign in to this tenant first.")
+      const caller = createArmCaller({
+        getToken: async () => (await tokenFor(tenantId, profile.clientId, RESOURCE_SCOPES.management)).accessToken,
+        fetch: bridgedFetch,
+      })
+      return caller(request)
     },
     now: () => new Date(),
   }
@@ -579,11 +594,19 @@ async function bootstrap(): Promise<void> {
         name?: string
         domain?: string
         credentials?: { tenantId?: string; appId?: string }
-        resources?: { storageAccountName?: string }
+        resources?: { storageAccountName?: string; subscriptionId?: string; resourceGroupName?: string; resourceGroupLocation?: string; automationAccountName?: string }
       }>
       const tenant = tenants.find((t) => t.credentials?.tenantId?.toLowerCase() === tenantId.toLowerCase())
       if (!tenant?.credentials?.appId || !tenant.resources?.storageAccountName) return null
-      return { name: backupTenantLabel(tenant), clientId: tenant.credentials.appId, storageAccountName: tenant.resources.storageAccountName }
+      return {
+        name: backupTenantLabel(tenant),
+        clientId: tenant.credentials.appId,
+        storageAccountName: tenant.resources.storageAccountName,
+        subscriptionId: tenant.resources.subscriptionId,
+        resourceGroupName: tenant.resources.resourceGroupName,
+        location: tenant.resources.resourceGroupLocation,
+        automationAccountName: tenant.resources.automationAccountName,
+      }
     } catch {
       return null
     }
