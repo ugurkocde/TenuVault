@@ -5,6 +5,8 @@ description: Install TenuVault and take your first encrypted Microsoft Intune ba
 
 This section takes you from a fresh computer to a first successful Intune backup. Follow the pages in order; each one ends where the next one starts.
 
+For an overview before you start, see [Intune backup](https://www.tenuvault.com/intune-backup) on the product site.
+
 ## Before you begin
 
 Check the [Requirements](/getting-started/requirements/) first. In short, you need:

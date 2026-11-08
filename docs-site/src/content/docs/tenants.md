@@ -78,6 +78,8 @@ The Drift tile and the audit part of Recent Activity come from the audit log. Th
 
 When two or more tenants are connected, the sidebar shows **All tenants** at the top, and TenuVault opens on this page when it starts.
 
+If you manage customer tenants, see [Intune backup for MSPs](https://www.tenuvault.com/solutions/msps) for an overview of the multi-tenant workflow.
+
 The top row counts **Tenants connected**, **Signed in**, **Licensed** and **Automatic backups on**. Below it, each tenant has a card with:
 
 * **Signed in** or **Not signed in**

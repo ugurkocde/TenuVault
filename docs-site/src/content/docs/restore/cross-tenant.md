@@ -5,6 +5,8 @@ description: Copy items from one tenant's backup into other connected tenants (M
 
 With TenuVault MSP you can copy items from a backup of one tenant into one or more other tenants you have connected. Use it to roll a known good configuration out to customer tenants, or to rebuild configuration in a replacement tenant.
 
+For the planning steps around the copy itself, see the [Intune tenant to tenant migration](https://www.tenuvault.com/guides/intune-tenant-to-tenant-migration) guide.
+
 ## Requirements
 
 * **MSP plan on every tenant involved.** Copying to other tenants is an MSP feature. TenuVault checks the plan of the source tenant and of every target tenant before anything is written, and stops with an upgrade message if one of them is not covered.

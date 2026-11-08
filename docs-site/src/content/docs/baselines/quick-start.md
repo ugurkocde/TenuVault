@@ -7,6 +7,8 @@ The **OpenIntuneBaseline** section deploys, compares and validates [OpenIntuneBa
 
 OpenIntuneBaseline is published by SkipToTheEndpoint and contributors under the GPL-3.0 license. TenuVault downloads the policy files from the upstream GitHub repository when you use them; they are not bundled with the app.
 
+For an overview of the workflows before you choose one, see [OpenIntuneBaseline](https://www.tenuvault.com/openintunebaseline) on the product site.
+
 ## Where to find it
 
 Select **OpenIntuneBaseline** in the sidebar. The section works on the tenant selected in the sidebar. OpenIntuneBaseline is not part of the [Frameworks](/baselines/frameworks/) catalog.
