@@ -28,6 +28,8 @@ Work through this checklist for every tenant you protect:
 6. **Know who owns external artifacts.** Record where the original app installers and Apple tokens come from, and who can renew them.
 7. **Practice a restore.** Restore a few items with **Create copies**. Copies are unassigned by default and never change existing items, so a test is safe.
 
+For a rehearsal checklist, follow the guide to [practice an Intune restore](https://www.tenuvault.com/guides/intune-restore-drill).
+
 ## Choose the right workflow
 
 | Situation | What to use |

@@ -14,7 +14,7 @@ TenuVault offers two views of changes:
 | Shows | Added, changed and deleted items, with the changed settings | The same changes, with impact, severity, export and one-click actions |
 | Use it to | Review the history of the tenant | Act on recent changes. See [Drift detection](/drift/). |
 
-This page covers the first view.
+This page covers the first view. For a walkthrough of how to [detect configuration drift in Intune](https://www.tenuvault.com/guides/detect-intune-configuration-drift), see the guide on the product site.
 
 ## See the number of changes
 

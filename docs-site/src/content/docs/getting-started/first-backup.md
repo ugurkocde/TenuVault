@@ -76,6 +76,8 @@ TenuVault is set up. Next:
 * Keep TenuVault running in the menu bar on macOS or the tray on Windows so schedules run. See [Settings reference](/settings/#background-runner).
 * Learn how to [restore Intune policies](/restore/) and [detect drift](/drift/).
 
+Once you have a successful backup, [practice an Intune restore](https://www.tenuvault.com/guides/intune-restore-drill) before you need one in an incident.
+
 ## Related pages
 
 * [Set up and schedule Microsoft Intune backups](https://www.tenuvault.com/guides/intune-backup-setup): the setup guide, on the product site

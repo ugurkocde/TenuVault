@@ -9,6 +9,8 @@ Nothing is sent until you add a channel and an alert. A **channel** is a destina
 
 **Fastest start: Set up alerts.** While a tenant cannot send yet, the **Alerts** tab starts with a setup card that says what is missing. **Set up alerts** walks through four short steps: where alerts go (this computer, a Teams channel, email, or a destination you already have), what should alert you (the recommended set is ticked: backup and restore problems, policies deleted or unassigned, and Conditional Access changes, but not successful backups), whether alerts should also run from Azure while this computer is off, and a review. **Turn on alerts** then creates the destination and the alerts, turns on the change watching they need (every 15 minutes, TenuVault's own changes ignored, who made a change not included) and sends one test message. Everything it creates is an ordinary channel, alert and change watching setting, editable in the same tabs at any time. Webhooks, group recipients, several destinations, one policy or one setting, and the Teams card layout stay one click deeper in those tabs, as described below. If a step fails halfway, the setup says what was already saved and trying again continues without duplicates: alerts it recognizes by their name are kept. A test that cannot be delivered, for example because `Mail.Send` is still missing, does not undo the setup.
 
+For the recovery options behind restore alerts, see the overview of how to [restore Intune policies](https://www.tenuvault.com/intune-restore).
+
 ## Events
 
 | Event | When it fires | Default severity |

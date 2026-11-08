@@ -7,6 +7,8 @@ Drift detection shows what changed in your Intune configuration between two back
 
 TenuVault compares backups, not the live tenant. To include the latest changes, run a backup first. See [Run a backup](/backups/).
 
+For the product overview, see [Intune drift detection](https://www.tenuvault.com/intune-drift-detection). For an investigation walkthrough, follow the guide to [detect configuration drift in Intune](https://www.tenuvault.com/guides/detect-intune-configuration-drift).
+
 ## Requirements
 
 * The tenant is signed in and has a storage location.

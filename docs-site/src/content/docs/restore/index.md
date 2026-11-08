@@ -97,6 +97,8 @@ Click **Next** when your selection is ready, or **Other backup** to go back.
 
 The details of each option, including which types support assignment restore, are in [Restore modes and assignments](/restore/modes/). Copying to other tenants is covered in [Restore to another tenant](/restore/cross-tenant/).
 
+If you are recovering one missing policy, follow the guide to [restore a deleted Intune policy](https://www.tenuvault.com/guides/restore-deleted-intune-policy) for a worked recovery scenario.
+
 Click **Review** to continue, or **Items** to go back.
 
 ## Step 4: Review
