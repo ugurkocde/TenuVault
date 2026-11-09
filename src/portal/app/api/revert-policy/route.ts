@@ -148,7 +148,7 @@ export async function POST(request: NextRequest) {
     }
 
     const policyContent = await backupResponse.json()
-    if (action === "revert" && policyContent.id !== policyId) throw new Error("The backup snapshot does not belong to the selected policy")
+    if (action === "revert" && policyContent.id !== policyId) return NextResponse.json({ error: "The backup snapshot does not belong to the selected policy" }, { status: 400 })
     try { verifySnapshot(policyContent, checked.manifest?.get(backupPath)) }
     catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 }) }
     

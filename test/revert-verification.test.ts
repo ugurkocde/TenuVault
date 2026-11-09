@@ -49,6 +49,15 @@ describe('revert and recreate from a backup', () => {
     expect(graph).toEqual([])
   })
 
+  it('refuses a snapshot of another policy with 400 and the reason, before any Graph write', async () => {
+    const other = { ...snapshot, id: 'someone-else' }
+    const graph = stub({ [`${backupId}/metadata.json`]: manifest(other), [backupPath]: other })
+    const response = await revert()
+    expect(response.status).toBe(400)
+    expect((await response.json()).error).toBe('The backup snapshot does not belong to the selected policy')
+    expect(graph).toEqual([])
+  })
+
   it('refuses a file the backup manifest does not list', async () => {
     const graph = stub({ [`${backupId}/metadata.json`]: { ...manifest(snapshot), Items: {} }, [backupPath]: snapshot })
     const response = await revert()
