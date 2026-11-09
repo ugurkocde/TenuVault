@@ -386,7 +386,7 @@ export default function LicensePage() {
       })
     }
   }
-  const activeKeyTenants = status.tenants.filter((t) => t.entitled && t.source === "key").length
+  const activeKeyTenants = status.tenants.filter((t) => t.entitled && (t.source === "key" || !status.hasKey && t.source === "trial")).length
   const signedIn = status.tenants.filter((t) => t.signedIn).length
 
   const activate = () => activateKey(key.trim())
