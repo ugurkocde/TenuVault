@@ -170,8 +170,8 @@
 
 .PARAMETER IncludeMailSend
     With -GrantGraphRoles, also assign Mail.Send so the watcher can send mail from
-    -MailSender. Requires -MailSender and -MailRecipients: the script stops before
-    granting anything when either is missing.
+    -MailSender. Requires -MailSender and -MailRecipients or -ReportRecipients: the script
+    stops before granting anything when the sender or both recipient lists are missing.
 
 .PARAMETER Remove
     Remove the schedule link, schedule, runbook and Automation variables, then list

@@ -115,7 +115,7 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     expect(warnings!.error).toBeNull()
     expect(warnings!.output).toContain("No change report: the backup completed with warnings.")
     expect(warnings!.calls.some((call) => call.uri.includes("comp=list"))).toBe(false)
-  })
+  }, 60_000)
 
   it.runIf(Boolean(pwsh))("puts only plain JSON blobs during a run, records early failures and never calls Key Vault", () => {
     const [run, failed, claimed] = runPlainFixture()
@@ -257,7 +257,7 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
     expect(setup).toContain('-Force -Confirm:$false | Out-Null\n    Publish-AzAutomationRunbook')
   })
 
-  type SetupScenario = { scenario: string; plain: boolean; reason: string | null; error: string | null; actions: string[]; legacyVariableKept: boolean; changeReport?: string | null; changeReportActors?: string | null; variables: string[]; schedule: boolean; link: boolean; output: string[] }
+  type SetupScenario = { scenario: string; plain: boolean; reason: string | null; error: string | null; actions: string[]; legacyVariableKept: boolean; changeReport?: string | null; changeReportActors?: string | null; tenantName?: string | null; variables: string[]; schedule: boolean; link: boolean; output: string[] }
   let setupScenarios: Map<string, SetupScenario> | undefined
   const setupRun = (name: string) => {
     if (!setupScenarios) {
@@ -271,11 +271,12 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
 
   it.runIf(Boolean(pwsh))("keeps the change report level and actors on a rerun without their parameters, and sets them when passed", () => {
     // An upgrade with a command that does not carry the change report choice keeps it.
-    expect(setupRun("rerun-keeps-report")).toMatchObject({ error: null, changeReport: "names", changeReportActors: "false" })
-    expect(setupRun("rerun-sets-report")).toMatchObject({ error: null, changeReport: "full", changeReportActors: "true" })
+    expect(setupRun("rerun-keeps-report")).toMatchObject({ error: null, changeReport: "names", changeReportActors: "false", tenantName: "Contoso" })
+    // An empty -TenantName clears the saved name to the tenant id, never to an empty value.
+    expect(setupRun("rerun-sets-report")).toMatchObject({ error: null, changeReport: "full", changeReportActors: "true", tenantName: "11111111-2222-3333-4444-555555555555" })
     expect(setup).toContain('$changeReportPassed = $PSBoundParameters.ContainsKey("ChangeReport")')
     expect(setup).toContain('$changeReportActorsPassed = $PSBoundParameters.ContainsKey("ChangeReportWithoutActors")')
-  })
+  }, 60_000)
 
   it.runIf(Boolean(pwsh))("removes the Key Vault variable only when the published runbook reads back as plain", () => {
     const approved = setupRun("approved")

@@ -2101,6 +2101,18 @@ function ConvertTo-TvReportHtml {
 
 # The email summary the watcher sends (mirror reportEmail in src/main/features/reports): the
 # watcher builds the notification envelope and its HTML from these fields.
+# An email field clipped to the length the watcher accepts, so a long policy or tenant name
+# shortens one line of the email instead of getting the whole report refused.
+function Get-TvEmailText {
+    param([AllowNull()][object]$Text, [Parameter(Mandatory)][int]$Max)
+    if ($null -eq $Text) { return $null }
+    $value = [string]$Text
+    if ($value.Length -le $Max) { return $value }
+    return $value.Substring(0, $Max - 3) + "..."
+}
+
+# The email fields of a report, within the limits ConvertFrom-TenuVaultChangeReport in the watcher
+# checks: title 400, summary 1000, natural key 300, detail values 500, item fields 600.
 function Get-TvReportEmail {
     param([Parameter(Mandatory)][object]$Report)
     $s = $Report.summary
@@ -2109,17 +2121,17 @@ function Get-TvReportEmail {
         $count = @($_.settings).Count + $_.moreSettings
         $detail = $_.type
         if (@($_.settings).Count) { $detail += ", $count $(if ($_.change -eq 'modified') { 'changed ' })$(if ($count -eq 1) { 'setting' } else { 'settings' })" }
-        $entry = [ordered]@{ title = "$($verbs[$_.change]): $($_.name)"; detail = $detail }
+        $entry = [ordered]@{ title = Get-TvEmailText "$($verbs[$_.change]): $($_.name)" 600; detail = Get-TvEmailText $detail 600 }
         $first = @($_.activity) | Select-Object -First 1
-        if ($first -and $first.who) { $entry.actor = $first.who }
+        if ($first -and $first.who) { $entry.actor = Get-TvEmailText $first.who 600 }
         if ($first) { $entry.at = $first.at }
         $entry
     })
     return [ordered]@{
         severity = if ($s.deleted -gt 0 -or $s.critical -gt 0) { "warning" } else { "info" }
-        title = Get-TvReportTitle $Report
-        summary = Get-TvSummaryLine $Report
-        naturalKey = "report:$($Report.from.id):$($Report.to.id):$($Report.generatedAt)"
+        title = Get-TvEmailText (Get-TvReportTitle $Report) 400
+        summary = Get-TvEmailText (Get-TvSummaryLine $Report) 1000
+        naturalKey = Get-TvEmailText "report:$($Report.from.id):$($Report.to.id):$($Report.generatedAt)" 300
         occurredAt = $Report.generatedAt
         details = @(
             [ordered]@{ label = "From backup"; value = $Report.from.id },

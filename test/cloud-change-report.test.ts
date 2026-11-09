@@ -136,7 +136,7 @@ describe.runIf(Boolean(pwsh))("cloud change reports match the desktop app", () =
     // Setting names come from Graph, read one definition at a time.
     expect(note.files[1].content).toContain("| Allow Cloud Protection | Allowed. Turns on Cloud Protection. | Not allowed. Turns off Cloud Protection. |")
     // Read past the empty first audit page Graph answers with: the changes still have actors.
-    expect(run.output.join("\n")).toContain("Left a change report for the notification watcher: 8 changed, 2 added, 1 deleted; 3 of 11 with matching audit events.")
+    expect(run.output.join("\n")).toContain("Left a change report for the notification watcher: 8 changed, 2 added, 1 deleted; 4 of 11 with matching audit events.")
   }, 60_000)
 
   it("accepts an earlier backup recorded as Succeeded with no failures, like the app's status normalizer", () => {
@@ -217,7 +217,8 @@ describe.runIf(Boolean(pwsh))("cloud change reports match the desktop app", () =
       const sent = run(true)
       expect(sent.result).toMatchObject({ Sent: 1, Expired: 1, Ignored: 1, Waiting: 0 })
       // A report dropped because it expired is never silent.
-      expect(sent.result.Error).toBe("1 change report(s) were deleted unsent because they were older than 7 days (they waited for verified mail or for room in the watcher state).")
+      expect(sent.result.Error).toBe("1 change report(s) were deleted unsent because they were older than 7 days (they waited for verified mail or for room in the watcher state). 1 change report(s) were deleted unsent because they are not valid for this watcher (1 refused by the report checks).")
+      expect(sent.result.Messages).toContain("1 change report(s) were deleted unsent because they are not valid for this watcher (1 refused by the report checks).")
       expect(sent.deleted.sort()).toEqual(["cloud-change-reports/backup-2026-10-20-020000.json", "cloud-change-reports/backup-2026-11-05-020000.json", "cloud-change-reports/backup-2026-11-06-020000.json"])
       expect(sent.mails).toHaveLength(1)
       expect(sent.mails[0]).toMatchObject({ from: "reports@contoso.example", to: ["security@contoso.example", "auditor@fabrikam.example"], attachments: [`${cloud.fileName}.html`, `${cloud.fileName}.md`] })
@@ -337,6 +338,24 @@ describe.runIf(Boolean(pwsh))("cloud change reports match the desktop app", () =
     }
   }, 180_000)
 
+  it("clips long tenant and policy names in the email fields so the watcher accepts the report", () => {
+    const cloud = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script, "-FixturePath", fixturePath, "-LongNames", "true"], { encoding: "utf8", maxBuffer: 20_000_000 })) as { email: { title: string; items: Array<{ title: string }> } }
+    expect(cloud.email.title.length).toBe(400)
+    expect(cloud.email.title.endsWith("...")).toBe(true)
+    expect(Math.max(...cloud.email.items.map((item) => item.title.length))).toBe(600)
+    const folder = mkdtempSync(join(tmpdir(), "tenuvault-report-long-"))
+    try {
+      const notePath = join(folder, "note.json")
+      writeFileSync(notePath, JSON.stringify({ schema: "tenuvault.cloud-change-report/v1", tenantId: fixture.tenantId, runId: "run-1", backupFolder: fixture.newer.name, createdAt: fixture.generatedAt, changes: 1, email: cloud.email, files: [] }))
+      // Not refused: the mail fixture throws on a refused note.
+      const mail = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", mailScript, "-NotePath", notePath, "-TenantId", fixture.tenantId], { encoding: "utf8", maxBuffer: 20_000_000 }))
+      expect(mail.title).toMatch(/^Changes in Contoso Contoso/)
+      expect(mail.html).toContain("Policy Policy")
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  }, 60_000)
+
   it("covers the cases that matter in the fixture", async () => {
     const { report, html } = await desktopReport({ values: true, actors: true })
     const json = JSON.stringify(report)
@@ -345,6 +364,8 @@ describe.runIf(Boolean(pwsh))("cloud change reports match the desktop app", () =
     expect(report.items.find((item) => item.name === "Wi-Fi")!.settings.map((setting) => setting.name)).toContain("Secret values")
     expect(report.items.find((item) => item.name === "Windows 11 - Compliance")).toMatchObject({ previousName: "Win11 Compliance" })
     expect(report.items.find((item) => item.name === "macOS - FileVault")!.activity[0]).toMatchObject({ who: "alex@contoso.example" })
+    // A live-shaped event (activity null, the operation in activityType) reads as its activityType.
+    expect(report.items.find((item) => item.name === "APP - Android")!.activity[0]).toMatchObject({ who: "sam@contoso.example", activity: "Patch AndroidManagedAppProtection" })
     expect(report.otherActivity).toHaveLength(1)
     // Unkeyed and app lists are matched like the desktop: an inserted app, an exclusion inserted
     // before an unchanged assignment, and a removed app are reported as themselves; a reorder
@@ -373,7 +394,8 @@ describe("cloud change report setup", () => {
     expect(template.parameters.changeReport).toMatchObject({ defaultValue: "off", allowedValues: ["off", "names", "full"] })
     expect(template.parameters.changeReportActors).toMatchObject({ defaultValue: true })
     // Reports name the tenant, so the name is stored with the cloud backup's own variables.
-    expect(setup).toContain('Set-TenuVaultAutomationVariable -Name "TenuVaultTenantName-$tenantKey" -Value $TenantName.Trim()')
+    expect(setup).toContain('Set-TenuVaultAutomationVariable -Name "TenuVaultTenantName-$tenantKey" -Value $savedName')
+    expect(template.parameters.tenantName).toMatchObject({ maxLength: 200 })
     expect(setup).toContain('"TenuVaultTenantName-$tenantKey"')
     expect(template.parameters.tenantName).toMatchObject({ defaultValue: "" })
   })

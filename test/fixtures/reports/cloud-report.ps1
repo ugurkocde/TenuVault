@@ -1,6 +1,6 @@
 # Builds the change report of test/fixtures/reports/cloud-backups.json with the cloud backup runbook,
 # for test/cloud-change-report.test.ts. Prints the report, its Markdown and HTML, and the email fields.
-param([Parameter(Mandatory)][string]$FixturePath, [string]$Level = "full", [string]$Actors = "true", [string]$AuditError = "")
+param([Parameter(Mandatory)][string]$FixturePath, [string]$Level = "full", [string]$Actors = "true", [string]$AuditError = "", [string]$LongNames = "false")
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "../../../resources/runbooks/Invoke-TenuVaultBackup.ps1") -LibraryOnly
 $fixture = ConvertFrom-TvJson ([IO.File]::ReadAllText($FixturePath))
@@ -26,5 +26,10 @@ $changes = @($fixture.audit | ForEach-Object { ConvertFrom-TvAuditEvent $_ } | W
 $options = @{ TenantId = $fixture.tenantId; TenantName = $fixture.tenantName; GeneratedAt = $fixture.generatedAt; IncludeValues = $Level -eq "full"; IncludeActors = $Actors -eq "true" }
 $audit = if ($AuditError) { @{ Error = $AuditError } } else { @{ Changes = $changes; Note = $null } }
 $report = New-TvChangeReport -Drift $drift -Audit $audit -Options $options
+# With -LongNames, a tenant and a policy name far over what one email line takes.
+if ($LongNames -eq "true") {
+    $report.tenantName = "Contoso " * 80
+    @($report.items)[0].name = "Policy " * 120
+}
 $output = [ordered]@{ ids = $ids; report = $report; markdown = ConvertTo-TvReportMarkdown $report; html = ConvertTo-TvReportHtml $report; email = Get-TvReportEmail $report; fileName = Get-TvReportFileName $report }
 [Console]::Out.Write((ConvertTo-TvJsJson $output))

@@ -769,6 +769,26 @@
       "activityOperationType": "Patch",
       "activityResult": "Failure",
       "resources": []
+    },
+    {
+      "id": "e8",
+      "activityDateTime": "2026-11-05T13:40:00Z",
+      "activity": null,
+      "activityOperationType": "Patch",
+      "activityResult": "Success",
+      "category": "DeviceConfiguration",
+      "actor": {
+        "userPrincipalName": "sam@contoso.example"
+      },
+      "resources": [
+        {
+          "displayName": "APP - Android",
+          "type": "AndroidManagedAppProtection",
+          "resourceId": "m-android"
+        }
+      ],
+      "activityType": "Patch AndroidManagedAppProtection",
+      "displayName": "Update android managed app protection."
     }
   ]
 }

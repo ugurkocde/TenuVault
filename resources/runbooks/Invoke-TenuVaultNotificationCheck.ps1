@@ -2486,6 +2486,9 @@ function Send-TvChangeReports {
     $oldest = ConvertTo-TvIso ($Now.ToUniversalTime().AddDays(-$MaxAgeDays))
     # Messages are returned, not written, so the function's output stays one object.
     $result = [pscustomobject][ordered]@{ Sent = 0; Waiting = 0; Held = 0; Expired = 0; Ignored = 0; Error = $null; Messages = [System.Collections.Generic.List[string]]::new() }
+    # Why notes were deleted unsent as invalid: over 4 MB, not readable as JSON, or refused by
+    # the report checks (another tenant, or a field over its limit or not in the expected form).
+    $ignoredWhy = [ordered]@{ "too large" = 0; "not valid JSON" = 0; "refused by the report checks" = 0 }
     $to = @(($Recipients -split "[,;]") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     $canSend = $MailEnabled -and $MailSender -and $GraphToken -and $to.Count -gt 0
     $names = [System.Collections.Generic.List[object]]::new()
@@ -2542,7 +2545,14 @@ function Send-TvChangeReports {
             } elseif ($blob.Length -le $script:TvReportMaxBytes) {
                 $text = Get-TvBlobUtf8 -Uri $uri -Token $Token
                 if ($null -eq $text) { continue }
-                try { $report = ConvertFrom-TenuVaultChangeReport (ConvertFrom-TvReportJson $text) $TenantId } catch { $report = $null }
+                $parsed = $null
+                try { $parsed = ConvertFrom-TvReportJson $text } catch { $ignoredWhy["not valid JSON"]++ }
+                if ($null -ne $parsed) {
+                    try { $report = ConvertFrom-TenuVaultChangeReport $parsed $TenantId } catch { $report = $null }
+                    if ($null -eq $report) { $ignoredWhy["refused by the report checks"]++ }
+                }
+            } else {
+                $ignoredWhy["too large"]++
             }
             if ($sent) {
             } elseif ($null -eq $report) {
@@ -2616,6 +2626,13 @@ function Send-TvChangeReports {
         $expired = "$($result.Expired) change report(s) were deleted unsent because they were older than $MaxAgeDays days (they waited for verified mail or for room in the watcher state)."
         $result.Messages.Add($expired)
         $result.Error = if ($result.Error) { "$($result.Error) $expired" } else { $expired }
+    }
+    if ($result.Ignored -gt 0) {
+        # A refused report is never silent either: the admin otherwise only sees no email.
+        $reasons = @($ignoredWhy.Keys | Where-Object { $ignoredWhy[$_] -gt 0 } | ForEach-Object { "$($ignoredWhy[$_]) $_" }) -join ", "
+        $ignored = "$($result.Ignored) change report(s) were deleted unsent because they are not valid for this watcher ($reasons)."
+        $result.Messages.Add($ignored)
+        $result.Error = if ($result.Error) { "$($result.Error) $ignored" } else { $ignored }
     }
     if ($result.Waiting -gt 0) { $result.Messages.Add("$($result.Waiting) change report(s) wait for verified mail and report recipients.") }
     return $result

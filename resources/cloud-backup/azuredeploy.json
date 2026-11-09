@@ -40,6 +40,7 @@
     "tenantName": {
       "type": "string",
       "defaultValue": "",
+      "maxLength": 200,
       "metadata": { "description": "The tenant's name as change reports show it. Leave empty to name the tenant by its id." }
     },
     "changeReport": {

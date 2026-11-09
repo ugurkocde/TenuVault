@@ -94,7 +94,8 @@
 
 .PARAMETER TenantName
     The tenant's name as change reports show it, in titles, the email subject and the file
-    name. Without it, reports name the tenant by its id.
+    name, at most 200 characters. A rerun without it keeps the name an earlier setup saved;
+    pass -TenantName '' to name the tenant by its id again. Without any, reports use the id.
 
 .PARAMETER ChangeReport
     Off (default), Names or Full. With Names or Full, every complete backup is compared with the
@@ -184,6 +185,8 @@ $plainRunbookVersion = "1.2.0"
 # so an upgrade with an older command never turns a report off or its actors back on.
 $changeReportPassed = $PSBoundParameters.ContainsKey("ChangeReport")
 $changeReportActorsPassed = $PSBoundParameters.ContainsKey("ChangeReportWithoutActors")
+# Like the report choice: omitted keeps the saved name, an empty -TenantName clears it.
+$tenantNamePassed = $PSBoundParameters.ContainsKey("TenantName")
 
 # Validate every input before the first Azure write.
 if ($TenantId -notmatch '^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$') {
@@ -732,7 +735,13 @@ Set-TenuVaultAutomationVariable -Name "TenuVaultScope-$tenantKey" -Value $Scope
 Set-TenuVaultAutomationVariable -Name "TenuVaultExcludedFolders-$tenantKey" -Value $ExcludedFolders
 Set-TenuVaultAutomationVariable -Name "TenuVaultAppOnlyExcluded-$tenantKey" -Value $appOnlyExcluded
 if ($changeReportPassed) { Set-TenuVaultAutomationVariable -Name "TenuVaultChangeReport-$tenantKey" -Value $ChangeReport.ToLowerInvariant() }
-if ($TenantName) { Set-TenuVaultAutomationVariable -Name "TenuVaultTenantName-$tenantKey" -Value $TenantName.Trim() }
+if ($tenantNamePassed) {
+    # Cleared to the tenant id, never to an empty value, which the runbook would skip for an
+    # unscoped TenuVaultTenantName variable. At most 200 characters, like the app passes it.
+    $savedName = if ("$TenantName".Trim()) { "$TenantName".Trim() } else { $TenantId }
+    if ($savedName.Length -gt 200) { $savedName = $savedName.Substring(0, 200).TrimEnd() }
+    Set-TenuVaultAutomationVariable -Name "TenuVaultTenantName-$tenantKey" -Value $savedName
+}
 if ($changeReportActorsPassed) { Set-TenuVaultAutomationVariable -Name "TenuVaultChangeReportActors-$tenantKey" -Value $(if ($ChangeReportWithoutActors) { "false" } else { "true" }) }
 
 # Upgrade from a setup before runbook 1.2.0: name the old Key Vault, then drop its variable once
