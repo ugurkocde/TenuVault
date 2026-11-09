@@ -832,6 +832,14 @@ export class LicenseService {
       throw new Error(this.problemOf(tenantId, data.token, data.activationId))
     }
     this.message = null
+    const previousTrial = this.trialRecords[tenantId]
+    if (source !== "trial" && previousTrial?.activationId) {
+      delete previousTrial.token
+      delete previousTrial.activationId
+      previousTrial.refusal = TRIAL_REASONS.used
+      previousTrial.stopped = true
+      this.saveTrials()
+    }
     if (source === "trial" && this.options.store.get(COMMUNITY_KEY) === tenantId) this.options.store.delete(COMMUNITY_KEY)
     if (source === "key") {
       delete this.state.keyFailure

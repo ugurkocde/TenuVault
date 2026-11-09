@@ -133,6 +133,10 @@ describe("tenant trials", () => {
     if (source === "key") await license.setKey("PAID-KEY-12345", [tenant])
     else await license.refreshAll()
     expect(license.status([tenant]).tenants[0]).toMatchObject({ source, trial: false })
+    response = () => Response.json({ reason: "expired" }, { status: 403 })
+    await license.refreshAll()
+    expect(license.status([tenant]).tenants[0]?.trialEndsAt).toBeNull()
+    expect(license.status([tenant]).trialEndedAt).toBeNull()
   })
   it("keeps contact and end failures from dropping cached coverage", async () => {
     const license = service()
