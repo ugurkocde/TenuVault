@@ -27,7 +27,8 @@
     backup until a backup with an admin's sign-in captures it.
 
     The runbook deletes nothing. Retention is applied by the next desktop backup made with an
-    admin's sign-in, or by an Azure lifecycle rule on the container. A per tenant
+    admin's sign-in. An age-based lifecycle rule on the container is no substitute: it keeps none
+    of the desktop protections (newest backup kept, failed runs never counted). A per tenant
     cloud-backup-status-<tenant>.json blob in the container records the last run so the desktop
     app can show cloud status without opening the Automation account.
 
