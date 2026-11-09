@@ -13,7 +13,7 @@ TenuVault recognises Multi Admin Approval and explains it, but does not run the 
 
 MAA intercepts a call only when all three are true:
 
-1. The tenant has turned MAA on for that area. It is opt-in per area (an access policy for apps, compliance policies, scripts and so on). Tenants without an access policy see no change at all.
+1. The tenant has turned MAA on for that area. It is opt-in per area (an access policy for apps, compliance policies, scripts and so on). Tenants without an access policy see no change for any other resource type. The one exception is the access policies themselves: creating, changing or deleting one always needs approval, even in a tenant that has none yet (verified in the E2E run).
 2. The call is a write: POST, PATCH, PUT or DELETE. GET is never intercepted.
 3. The object type is in a protected area (see the table below). Legacy configuration profiles, administrative templates, update rings, enrollment and branding are not protected today.
 
@@ -27,7 +27,7 @@ MAA never breaks a tenant. The problem is how TenuVault reports it today:
 4. **Mixed runs.** In one restore the unprotected items apply and the protected ones are refused. Without a per-item reason the admin cannot tell what was restored.
 5. **The tenants most likely to use MAA** (MSPs and larger organisations) are the ones TenuVault matters most to, and they hit this on their first restore.
 
-The fix is therefore to say clearly, per item: "Multi Admin Approval protects this policy type in this tenant. Nothing was changed. Make this change in the Intune admin center." and to keep run reports accurate. Making the write succeed through MAA is not the goal.
+The fix is therefore to say clearly, per item: "Multi Admin Approval protects this policy type in this tenant. Nothing was changed. Make this change in the Intune admin center." When an earlier step of the same item was already written, the message says exactly what was written and what was blocked instead (Phase 1, item 3). Run reports must stay accurate either way. Making the write succeed through MAA is not the goal.
 
 ## Summary
 
@@ -292,7 +292,9 @@ Small, ships independently, removes the "unclear failure" problem.
 
 1. **Return headers from the Graph caller.** Extend `GraphCall`'s result with the approval code (parsed once in `graphCaller` from the header, the inner `HttpHeaders` or the message), not the whole header map.
 2. **`approvalSignal(status, headers, body)`** in a shared module, implementing the detection rule above, with unit tests for the 400, 403 and 412 shapes and for a code found only in the body.
-3. **New outcome `approval-required`** in restore results and change-set operations, distinct from `rejected` and `unknown`. Message: "Multi Admin Approval protects <type> in this tenant. Nothing was changed." plus a link to the existing admin center target `TENANT_ADMIN("multiAdminApproval")` (`src/shared/intune/admin-links.ts:114`). The journal entry is removed as for any rejection, because nothing was written.
+3. **New outcome `approval-required`** in restore results and change-set operations, distinct from `rejected` and `unknown`. Two cases, each with a link to the existing admin center target `TENANT_ADMIN("multiAdminApproval")` (`src/shared/intune/admin-links.ts:114`):
+   - **No step was written** (the first write of the operation was intercepted): "Multi Admin Approval protects <type> in this tenant. Nothing was changed." The journal entry is removed as for any rejection.
+   - **An earlier step succeeded** (for example the create went through and `/assign` or a settings step was intercepted): never say "Nothing was changed". Say what was written and what was blocked ("<name> was created, but its assignments need approval by a second admin. Add them in the Intune admin center."), keep the journal entry and the created object's ID so the object stays tracked and visible, and report the operation as partial, not as created.
 4. **Preflight.** Before a restore, promotion, CIS remediation, change-set apply or OIB deployment, call `retrieveOperationsRequiringApproval` once per tenant and run (fallback: list `operationApprovalPolicies`), map the policy types to the operations in the run, and say up front which ones will need approval. A 403 or failure of the preflight must never block the run.
 5. **Change-set engine.** An `approval-required` operation is terminal for this run. The engine continues with independent operations as today, and the change-set summary counts them separately so the admin knows the run is incomplete.
 6. **Flag `MultiAdminApprovalPolicies` restore** as "requires approval by a second admin, make this change in the Intune admin center". Creating or changing access policies is always protected.
