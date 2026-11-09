@@ -134,7 +134,7 @@ export function recordSyncLinks(deps: FeatureDeps, targetTenantId: string, sourc
   for (const promotion of promotions) {
     const changeSet = changeSets.get(promotion.changeSetId!)
     if (!changeSet || changeSet.kind !== "change") continue
-    for (const [key, link] of Object.entries(verifiedLinks(promotion, changeSet, linkedAt))) if (!gone(link) && replaces(link, verified[key])) verified[key] = link
+    for (const [key, link] of Object.entries(verifiedLinks(promotion, changeSet, linkedAt))) if (replaces(link, verified[key])) verified[key] = link
     // An applied rollback settled what the run wrote, so its creates are no longer unconfirmed.
     if (promotion.rollbackChangeSetId && changeSets.get(promotion.rollbackChangeSetId)?.status === "applied") continue
     for (const operation of changeSet.operations) {
@@ -144,6 +144,9 @@ export function recordSyncLinks(deps: FeatureDeps, targetTenantId: string, sourc
       unresolved[key] = { name: operation.source.label || operation.name, promotionIds: [...(unresolved[key]?.promotionIds ?? []), promotion.id] }
     }
   }
+  // The newest verified link of each policy is chosen first; when a rollback deleted that object,
+  // the policy has no link at all. An older, superseded link is never brought back.
+  for (const [key, link] of Object.entries(verified)) if (gone(link)) delete verified[key]
   const stored = linksRecord(deps, target, source)
   const changed = Object.entries(verified).filter(([key, link]) => replaces(link, stored?.links[key]))
   const removed = Object.entries(stored?.links ?? {}).filter(([, link]) => gone(link)).length

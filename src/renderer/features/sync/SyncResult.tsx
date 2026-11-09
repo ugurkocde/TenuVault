@@ -92,14 +92,14 @@ function share(entry: ResultTarget): number {
   if (FINISHED.includes(entry.phase)) return 1
   const stage = applyStage(entry.target, !!entry.active)
   if (!stage) return 0
-  const { done, total } = progress(entry.target)
-  return [0.05, 0.15, 0.25 + 0.6 * (total ? done / total : 0), 0.92][stage.step]!
+  // Writing follows verified results only; nothing estimates a write in flight.
+  return [0.05, 0.15, 0.25 + 0.7 * (stage.total ? stage.verified / stage.total : 0)][stage.step]!
 }
 
-/** The four stages of a writing target: done ones checked, the current one beating, the rest waiting. */
+/** The stages of a writing target: done ones checked, the current one beating, the rest waiting. */
 function StageList({ stage }: { stage: ApplyStage }) {
   return (
-    <ol aria-label="Stages" className="mt-3 grid grid-cols-4 gap-1.5">
+    <ol aria-label="Stages" className="mt-3 grid grid-cols-[1fr_1fr_1.6fr] gap-1.5">
       {stage.steps.map((label, index) => {
         const done = index < stage.step
         const current = index === stage.step

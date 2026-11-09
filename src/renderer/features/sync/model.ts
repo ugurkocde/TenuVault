@@ -247,36 +247,36 @@ export function linkPath(x1: number, y1: number, x2: number, y2: number): { d: s
 // Progress, outcome and recent runs
 
 export interface ApplyStage {
-  /** 0 approve, 1 back up or save the current versions, 2 write, 3 verify. */
-  step: 0 | 1 | 2 | 3
+  /** 0 approve, 1 back up or save the current versions, 2 write and verify. */
+  step: 0 | 1 | 2
   /** What the target does now, for its node and its accessible name. */
   label: string
-  /** The four stages, named for this target's backup choice. */
-  steps: [string, string, string, string]
+  /** The three stages, named for this target's backup choice. */
+  steps: [string, string, string]
+  /** Operations verified so far, and how many there are. */
+  verified: number
+  total: number
 }
-
-const SETTLED = new Set(["verified", "failed", "uncertain", "approval"])
 
 /**
  * The stage a writing target is at, read from its stored change set and target record, never
  * from a timer: approving while the change set is still in review; then the pre-change backup
  * (or, without a backup, saving the current versions) until the pre-change capture is stored;
- * then writing operation N of M; verifying once every operation was sent and the last read-back
- * is outstanding. Null for a target that is not writing.
+ * then writing and verifying. Writing and verifying are one stage: an operation is stored as
+ * writing before its write is sent and nothing marks the step between write and read-back, so
+ * only verified results count as done. A failed result, also one an earlier attempt left before
+ * a retry, counts as nothing. Null for a target that is not writing.
  */
 export function applyStage(target: SyncTarget, active: boolean): ApplyStage | null {
   const changeSet = target.changeSet
   if (!changeSet || !(active || changeSet.status === "applying")) return null
   const skip = backupOf(target) === "none"
-  const steps: ApplyStage["steps"] = ["Approve", skip ? "Save" : "Back up", "Write", "Verify"]
-  if (changeSet.status === "in-review") return { step: 0, label: "Approving", steps }
-  if (!changeSet.preChange) return { step: 1, label: skip ? "Saving current versions" : "Backing up", steps }
+  const steps: ApplyStage["steps"] = ["Approve", skip ? "Save" : "Back up", "Write and verify"]
   const total = changeSet.operations.length
-  const statuses = changeSet.operations.map((operation) => changeSet.results[operation.key]?.status)
-  const settled = statuses.filter((status) => status && SETTLED.has(status)).length
-  const sent = settled + statuses.filter((status) => status === "writing").length
-  if (total > 0 && sent === total) return { step: 3, label: "Verifying", steps }
-  return { step: 2, label: `Writing ${Math.min(settled + 1, Math.max(total, 1))} of ${total}`, steps }
+  const verified = verifiedCount(changeSet)
+  if (changeSet.status === "in-review") return { step: 0, label: "Approving", steps, verified, total }
+  if (!changeSet.preChange) return { step: 1, label: skip ? "Saving current versions" : "Backing up", steps, verified, total }
+  return { step: 2, label: `Writing and verifying ${verified} of ${total}`, steps, verified, total }
 }
 
 /** What a target's sync did per operation: created and updated (verified), skipped as in sync, failed or unconfirmed. */

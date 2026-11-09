@@ -199,8 +199,9 @@ export async function planSync(deps: FeatureDeps, sourceTenantId: string, input:
   const inSync = results.filter((result) => !result.error && !result.promotion).length
   run = deps.records.update<SyncRunRecord>(DOMAINS.syncRuns, source, run.id, (current) => ({
     ...current,
-    status: failed === 0 ? "planned" : planned === 0 ? "failed" : "partial",
-    summary: inSync === results.length ? "Already in sync, nothing to write." : `${planned} of ${results.length} target${results.length === 1 ? "" : "s"} planned${inSync ? `, ${inSync} already in sync` : ""}${blocked ? `, ${blocked} blocked by findings` : ""}${failed ? `; ${failed} could not be planned` : ""}.`,
+    // A run discarded while it was planned stays discarded; the planner never clears it.
+    status: current.status === "discarded" ? current.status : failed === 0 ? "planned" : planned === 0 ? "failed" : "partial",
+    summary: current.status === "discarded" ? current.summary : inSync === results.length ? "Already in sync, nothing to write." : `${planned} of ${results.length} target${results.length === 1 ? "" : "s"} planned${inSync ? `, ${inSync} already in sync` : ""}${blocked ? `, ${blocked} blocked by findings` : ""}${failed ? `; ${failed} could not be planned` : ""}.`,
   }), { actor, reason: "Planned every target" })!
   return { run, targets: results }
 }

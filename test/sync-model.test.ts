@@ -132,14 +132,16 @@ describe("Sync apply stages", () => {
   it("derives each stage from the stored change set and target record", () => {
     // The approval request of this screen is running and the change set is still in review.
     expect(stage("in-review", {}, {}, undefined, true)).toMatchObject({ step: 0, label: "Approving" })
-    expect(stage("approved", { attempts: 0 }, {}, "new", true)).toMatchObject({ step: 1, label: "Backing up", steps: ["Approve", "Back up", "Write", "Verify"] })
+    expect(stage("approved", { attempts: 0 }, {}, "new", true)).toMatchObject({ step: 1, label: "Backing up", steps: ["Approve", "Back up", "Write and verify"] })
     expect(stage("applying", { attempts: 1, backupChoice: "new" }, {}, "new")).toMatchObject({ step: 1, label: "Backing up" })
-    expect(stage("applying", { attempts: 1, backupChoice: "none" }, {}, "none")).toMatchObject({ step: 1, label: "Saving current versions", steps: ["Approve", "Save", "Write", "Verify"] })
-    expect(stage("applying", { attempts: 1, ...capture("b") }, {}, "new")).toMatchObject({ step: 2, label: "Writing 1 of 3" })
-    expect(stage("applying", { attempts: 1, ...capture("b") }, { "op-1": { status: "verified" }, "op-2": { status: "writing" } }, "new")).toMatchObject({ step: 2, label: "Writing 2 of 3" })
-    expect(stage("applying", { attempts: 1, ...capture("b") }, { "op-1": { status: "verified" }, "op-2": { status: "failed" } }, "new")).toMatchObject({ step: 2, label: "Writing 3 of 3" })
-    // Every operation was sent; the last one's read-back is outstanding.
-    expect(stage("applying", { attempts: 1, ...capture(null) }, { "op-1": { status: "verified" }, "op-2": { status: "verified" }, "op-3": { status: "writing" } }, "none")).toMatchObject({ step: 3, label: "Verifying" })
+    expect(stage("applying", { attempts: 1, backupChoice: "none" }, {}, "none")).toMatchObject({ step: 1, label: "Saving current versions", steps: ["Approve", "Save", "Write and verify"] })
+    // Writing and verifying are one stage: an operation is stored as writing before its write
+    // is sent, so only verified results count.
+    expect(stage("applying", { attempts: 1, ...capture("b") }, {}, "new")).toMatchObject({ step: 2, label: "Writing and verifying 0 of 3" })
+    expect(stage("applying", { attempts: 1, ...capture("b") }, { "op-1": { status: "verified" }, "op-2": { status: "writing" } }, "new")).toMatchObject({ step: 2, label: "Writing and verifying 1 of 3" })
+    expect(stage("applying", { attempts: 1, ...capture(null) }, { "op-1": { status: "verified" }, "op-2": { status: "verified" }, "op-3": { status: "writing" } }, "none")).toMatchObject({ step: 2, label: "Writing and verifying 2 of 3" })
+    // A failed result, also one an earlier attempt left on a retry, counts as nothing written.
+    expect(stage("applying", { attempts: 2, ...capture("b") }, { "op-1": { status: "failed" }, "op-2": { status: "verified" } }, "new")).toMatchObject({ step: 2, label: "Writing and verifying 1 of 3" })
   })
 
   it("has no stage for a target that is not writing", () => {

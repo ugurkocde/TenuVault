@@ -138,8 +138,19 @@ function runOutcome(deps: FeatureDeps, run: SyncRunRecord, inSync: boolean): Run
   if (tried.some((changeSet) => changeSet.status === "applying")) return "applying"
   if (records.every((entry) => entry.rollback?.status === "applied")) return "rolled-back"
   if (tried.every((changeSet) => changeSet.status === "applied")) return "applied"
-  if (tried.every((changeSet) => changeSet.status === "failed" && !Object.values(changeSet.results).some((result) => result.status === "verified"))) return "failed"
+  if (tried.every(nothingWritten)) return "failed"
   return "partial"
+}
+
+/**
+ * An applied change set that wrote nothing: it failed with no verified write, or it stopped
+ * before writing (a pre-change backup or capture that failed leaves no capture and no written,
+ * verified or unconfirmed result).
+ */
+function nothingWritten(changeSet: ChangeSetRecord): boolean {
+  const results = Object.values(changeSet.results)
+  if (changeSet.status === "failed") return !results.some((result) => result.status === "verified")
+  return !changeSet.preChange && !results.some((result) => result.status === "verified" || result.status === "uncertain" || result.status === "writing")
 }
 
 /** The stored promotion, change set and rollback of a target; reads only. */
@@ -215,6 +226,8 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
     "discard-run": ({ tenantId, body, actor }) => {
       const run = syncRun(deps, tenantId, body)
       if (run.status === DISCARDED) return { run }
+      // The planner still writes the run's targets; a discard would race it.
+      if (run.status === "planning") throw new FeatureError("This sync is still being planned. Discard it once planning finished.", 409)
       if (run.targets.some((target) => everApproved(deps, target))) throw new FeatureError("A target of this sync was approved, so it cannot be discarded. Open it to see its result.", 409)
       const busy = run.targets.find((target) => tenantWriteLabel(target.targetTenantId) !== undefined)
       if (busy) throw new FeatureError("A target tenant of this sync is being changed. Try again when it finishes.", 409)
