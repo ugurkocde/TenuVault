@@ -1,12 +1,37 @@
-import { readFileSync } from "node:fs"
+import { execFileSync } from "node:child_process"
+import { existsSync, readFileSync } from "node:fs"
+import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
 import { COMPLIANCE_SETTING_KEYS, COMPLIANCE_SETTINGS_ID } from "../src/shared/intune/compliance-settings"
-import { cloudStatusBlobName } from "../src/shared/cloud-backup"
+import { PLAIN_CLOUD_RUNBOOK, cloudRunbookNeedsUpgrade, cloudStatusBlobName, parseCloudStatus } from "../src/shared/cloud-backup"
+import { resolveBackupOwnership } from "../src/shared/backup-ownership"
+import { BACKUP_OWNER_FILE } from "../src/shared/constants"
+import { OTHER_TENANT_BACKUP, readOwnedBackup } from "../src/portal/lib/policies/backup-owner"
+
+const pwsh = ["/usr/local/bin/pwsh", "/opt/homebrew/bin/pwsh", "/usr/bin/pwsh", ...(process.env.HOME ? [`${process.env.HOME}/.local/bin/pwsh`] : [])].find((candidate) => existsSync(candidate))
 
 const runbook = readFileSync(new URL("../resources/runbooks/Invoke-TenuVaultBackup.ps1", import.meta.url), "utf8")
 const setup = readFileSync(new URL("../resources/New-TenuVaultCloudBackup.ps1", import.meta.url), "utf8")
-const azureSeal = readFileSync(new URL("../src/main/storage/azure-seal.ts", import.meta.url), "utf8")
+type RunCall = { uri: string; method: string; contentType: string | null; ifNoneMatch: string | null; body: string | null }
+type Run = { calls: RunCall[]; error?: string | null }
+let plainRuns: Run[] | undefined
+/** The three scenarios of the plain-run fixture: a full run, an early failure and a failed manifest. */
+function runPlainFixture(): Run[] {
+  const script = fileURLToPath(new URL("./fixtures/cloud-backup/plain-run.ps1", import.meta.url))
+  plainRuns ??= execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }).trim().split(/\r?\n/).map((line) => JSON.parse(line) as Run)
+  return plainRuns
+}
+const TENANT = "11111111-2222-3333-4444-555555555555"
+const BACKUP_CONTAINER_URL = "https://stcontoso.blob.core.windows.net/intune-backups/"
+/** The blobs a run wrote to the backup container, by blob name, as a reader of the container sees them. */
+function writtenBlobs(run: Run): Map<string, string> {
+  return new Map(run.calls.filter((call) => call.method === "Put" && call.uri.startsWith(BACKUP_CONTAINER_URL))
+    .map((call) => [decodeURIComponent(call.uri.slice(BACKUP_CONTAINER_URL.length)), call.body!]))
+}
+const read = (blobs: Map<string, string>) => async (name: string) => blobs.has(name) ? new Response(blobs.get(name)!, { status: 200, headers: { "content-type": "application/json" } }) : new Response(null, { status: 404 })
+const folderOf = (blobs: Map<string, string>) => [...blobs.keys()].find((name) => name.endsWith(`/${BACKUP_OWNER_FILE}`))!.split("/")[0]!
+
 const template = JSON.parse(readFileSync(new URL("../resources/cloud-backup/azuredeploy.json", import.meta.url), "utf8")) as {
   parameters: Record<string, unknown>
   resources: Array<{ type: string }>
@@ -48,17 +73,102 @@ describe("Invoke-TenuVaultBackup.ps1 type table", () => {
 })
 
 describe("Invoke-TenuVaultBackup.ps1 format", () => {
-  it("seals with the same TVAZ1 envelope as the desktop app", () => {
-    expect(azureSeal).toContain("'tenuvault-azure-backup-v1'")
-    expect(runbook).toContain('"tenuvault-azure-backup-v1"')
-    expect(runbook).toContain('"TVAZ1`n"')
-    expect(runbook).toContain("HKDF")
-    expect(runbook).toContain("AesGcm")
-    expect(runbook).toContain("tenuvault-recovery-key")
-    // Every storage write goes through the sealed path; no plaintext PUT helper exists.
+  it("writes plain JSON and never reads Key Vault or the recovery key", () => {
+    for (const sealing of ['"TVAZ1`n"', "HKDF", "AesGcm", "tenuvault-azure-backup-v1", "tenuvault-recovery-key", "vault.azure.net", "application/octet-stream"]) {
+      expect(runbook, sealing).not.toContain(sealing)
+    }
+    expect(runbook).not.toMatch(/Get-TvRequiredVariable "TenuVaultKeyVault"/)
+    expect(runbook).not.toMatch(/Set-TvSealedBlob|Protect-TvAzureBlob|Get-TvRecoveryMasterKey/)
+    // Every backup container write goes through one helper, as JSON.
     expect(runbook.match(/Invoke-TvHttp -Uri \$target\.Uri -Token \$Token -Method "Put"/g)).toHaveLength(1)
+    expect(runbook).toContain('-BodyBytes ([Text.Encoding]::UTF8.GetBytes($Body)) -ContentType "application/json"')
     expect(runbook).toContain('headers["If-None-Match"] = "*"')
   })
+
+  it("carries the first plain runbook version, which the app does not flag for upgrade", () => {
+    const version = /\$script:RunbookVersion = "([^"]+)"/.exec(runbook)?.[1]
+    expect(version).toBe(PLAIN_CLOUD_RUNBOOK)
+    expect(cloudRunbookNeedsUpgrade(version!)).toBe(false)
+    expect(cloudRunbookNeedsUpgrade("1.1.0")).toBe(true)
+    expect(cloudRunbookNeedsUpgrade("1.0.0")).toBe(true)
+    expect(cloudRunbookNeedsUpgrade("0.9.9")).toBe(true)
+    expect(cloudRunbookNeedsUpgrade("1.10.0")).toBe(false)
+    expect(cloudRunbookNeedsUpgrade("2.0.0")).toBe(false)
+    expect(cloudRunbookNeedsUpgrade("")).toBe(false)
+    expect(cloudRunbookNeedsUpgrade("desktop")).toBe(false)
+  })
+
+  it.runIf(Boolean(pwsh))("puts only plain JSON blobs during a run, records early failures and never calls Key Vault", () => {
+    const [run, failed, claimed] = runPlainFixture()
+    for (const scenario of [run!, failed!, claimed!]) {
+      expect(scenario.calls.some((call) => call.uri.includes("vault.azure.net"))).toBe(false)
+      const puts = scenario.calls.filter((call) => call.method === "Put")
+      expect(puts.length).toBeGreaterThan(0)
+      for (const put of puts) {
+        expect(put.contentType, put.uri).toBe("application/json")
+        expect(put.body!.startsWith("TVAZ1")).toBe(false)
+        expect(() => JSON.parse(put.body!), put.uri).not.toThrow()
+      }
+    }
+    const puts = run!.calls.filter((call) => call.method === "Put")
+    const backup = "https://stcontoso.blob.core.windows.net/intune-backups/"
+    const names = puts.map((call) => call.uri.replace(/backup-\d{4}-\d{2}-\d{2}-\d{6}/, "backup-<time>"))
+    expect(names).toEqual(expect.arrayContaining([
+      `${backup}backup-<time>/.tenuvault-owner.json`,
+      `${backup}backup-<time>/DeviceConfigurations/Baseline%20Wi-Fi.json`,
+      `${backup}backup-<time>/metadata.json`,
+      `${backup}cloud-backup-status-11111111.json`,
+    ]))
+    // The claim comes first and is create-only; the policy file is the Graph object as read.
+    expect(names[0]).toBe(`${backup}backup-<time>/.tenuvault-owner.json`)
+    expect(puts[0]!.ifNoneMatch).toBe("*")
+    const policy = JSON.parse(puts.find((call) => call.uri.includes("/DeviceConfigurations/"))!.body!)
+    expect(policy).toMatchObject({ id: "cfg-1", displayName: "Baseline Wi-Fi" })
+    expect(policy["@odata.context"]).toBeUndefined()
+    const metadata = JSON.parse(puts.find((call) => call.uri.endsWith("/metadata.json"))!.body!)
+    expect(metadata).toMatchObject({ Status: "Success", RunbookVersion: PLAIN_CLOUD_RUNBOOK, Source: "TenuVault Cloud Backup", TenantId: "11111111-2222-3333-4444-555555555555" })
+    const status = JSON.parse(puts.find((call) => call.uri.endsWith("/cloud-backup-status-11111111.json"))!.body!)
+    expect(parseCloudStatus(status, "11111111-2222-3333-4444-555555555555")).toMatchObject({ lastStatus: "Success", runbookVersion: PLAIN_CLOUD_RUNBOOK })
+    // A run that fails before any backup write still records why, in the status blob and the note.
+    expect(failed!.error).toContain("managed identity token")
+    const failedStatus = failed!.calls.find((call) => call.method === "Put" && call.uri.endsWith("/cloud-backup-status-11111111.json"))
+    expect(parseCloudStatus(JSON.parse(failedStatus!.body!), "11111111-2222-3333-4444-555555555555")).toMatchObject({ lastStatus: "Failed" })
+    expect(failed!.calls.some((call) => call.method === "Put" && call.uri.includes("/tenuvault-backup-results/cloud-backup-outcomes/run-"))).toBe(true)
+    expect(failed!.calls.some((call) => call.uri.includes("/intune-backups/backup-"))).toBe(false)
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("leaves the tenant evidence the app's ownership check needs, in complete, failed and in-flight backups", async () => {
+    const [run, , claimed] = runPlainFixture()
+    for (const scenario of [run!, claimed!]) {
+      const blobs = writtenBlobs(scenario)
+      const folder = folderOf(blobs)
+      const manifest = JSON.parse(blobs.get(`${folder}/metadata.json`)!)
+      const marker = JSON.parse(blobs.get(`${folder}/${BACKUP_OWNER_FILE}`)!)
+      expect(typeof manifest.TenantId).toBe("string")
+      expect(typeof marker.TenantId).toBe("string")
+      expect(manifest.RunId).toBe(marker.RunId)
+      // Restore, revert and recreate go through this check: owned by the manifest's tenant, refused for any other.
+      const owned = await readOwnedBackup(read(blobs), folder, TENANT.toUpperCase(), "stcontoso")
+      expect(owned).toMatchObject({ ok: true, owned: true, metadata: { TenantId: TENANT, Source: "TenuVault Cloud Backup" } })
+      expect(await readOwnedBackup(read(blobs), folder, "99999999-2222-3333-4444-555555555555", "stcontoso")).toEqual({ ok: false, status: 403, error: OTHER_TENANT_BACKUP })
+      const resolved = await resolveBackupOwnership(async (file) => {
+        const body = blobs.get(`${folder}/${file}`)
+        return body === undefined ? { kind: "missing" } : { kind: "found", value: JSON.parse(body) }
+      }, TENANT)
+      expect(resolved.owner).toMatchObject({ kind: "owned", source: "manifest", tenantId: TENANT, runId: manifest.RunId })
+    }
+    expect(JSON.parse(writtenBlobs(claimed!).get(`${folderOf(writtenBlobs(claimed!))}/metadata.json`)!)).toMatchObject({ Status: "Failed", Error: "HTTP 401" })
+    // While a run is still writing, before metadata.json exists, the claim alone places the folder.
+    const inFlight = writtenBlobs(run!)
+    const folder = folderOf(inFlight)
+    inFlight.delete(`${folder}/metadata.json`)
+    const resolved = await resolveBackupOwnership(async (file) => {
+      const body = inFlight.get(`${folder}/${file}`)
+      return body === undefined ? { kind: "missing" } : { kind: "found", value: JSON.parse(body) }
+    }, TENANT)
+    expect(resolved.owner).toMatchObject({ kind: "owned", source: "marker", tenantId: TENANT })
+    expect(await readOwnedBackup(read(inFlight), folder, TENANT, "stcontoso")).toMatchObject({ ok: true, owned: true, metadata: null })
+  }, 60_000)
 
   it("writes the desktop manifest shape and the per tenant status blob", () => {
     for (const field of ["BackupDate", "BackupFolder", "StartTime", "EndTime", "Duration", "DurationSeconds", "ItemCounts", "Status", "RunbookVersion", "BackupFormat", "Source", "TenantId", "Trigger", "RunId", "Scope", "Failures", "SkippedTypes", "FailedTypes", "AuthMode", "Items"]) {
@@ -73,9 +183,6 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
   it("hashes with the desktop parser and ordinal key order, not ConvertFrom-Json dates or culture sort", () => {
     expect(runbook).toContain("System.Text.Json.JsonDocument")
     expect(runbook).toContain("[StringComparer]::Ordinal")
-    // Single-argument AesGcm ctor: the Automation 7.2 runtime (.NET 6) lacks the tag size one.
-    expect(runbook).toContain("[Security.Cryptography.AesGcm]::new($key)")
-    expect(runbook).not.toContain("AesGcm]::new($key, 16)")
   })
 
   it("reads with a managed identity and deletes nothing", () => {
@@ -98,13 +205,155 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
     expect(setup).toContain("DeviceCategories,DeviceCleanupRules")
   })
 
-  it("keeps the recovery key off the command line and refuses to guess about alerting", () => {
-    expect(setup).toContain("Read-Host")
-    expect(setup).toContain("-AsSecureString")
+  it("creates no Key Vault, asks for no recovery key and refuses to guess about alerting", () => {
+    for (const keyVault of ["Read-Host", "-AsSecureString", "Az.KeyVault", "New-AzKeyVault", "Set-AzKeyVaultSecret", "Get-AzKeyVaultSecret", "Key Vault Secrets", "tenuvault-recovery-key", "$KeyVaultName", "keyVault="]) {
+      expect(setup, keyVault).not.toContain(keyVault)
+    }
     expect(setup).not.toMatch(/\[string\]\$RecoveryKey/)
+    expect(setup).not.toContain('Set-TenuVaultAutomationVariable -Name "TenuVaultKeyVault')
     expect(setup).toContain("-NoFailureAlert")
     expect(setup).toContain("Decide how failed cloud backups will be noticed")
   })
+
+  it("upgrades an older setup in place and names its Key Vault for deletion", () => {
+    expect(setup).toContain('$legacyKeyVaultVariable = "TenuVaultKeyVault-$tenantKey"')
+    // A rerun drops the variable the runbook no longer reads, after the current variables are written.
+    const removal = setup.indexOf("Remove-TenuVaultLegacyKeyVaultVariable -Runbook $runbook")
+    expect(removal).toBeGreaterThan(setup.indexOf('Set-TenuVaultAutomationVariable -Name "TenuVaultAppOnlyExcluded-$tenantKey"'))
+    expect(removal).toBeGreaterThan(setup.indexOf("$runbook = Publish-TenuVaultRunbook"))
+    expect(setup).toContain("Publish-AzAutomationRunbook")
+    // -Remove deletes it too and, like a rerun, names the old vault before it is gone.
+    expect(setup).toContain("foreach ($name in @($variableNames) + $legacyKeyVaultVariable)")
+    expect(setup).toContain("if ($Remove) {\n    Remove-TenuVaultCloudBackupSetup\n    return\n}")
+    const removeMode = setup.slice(setup.indexOf("function Remove-TenuVaultCloudBackupSetup"), setup.indexOf("function Assert-TenuVaultAuthorizationActions"))
+    expect(removeMode.indexOf("$legacyKeyVaults = Get-TenuVaultLegacyKeyVaults")).toBeLessThan(removeMode.indexOf("Remove-AzAutomationVariable"))
+    expect(removeMode).toContain("Write-TenuVaultLegacyKeyVaultNote $legacyKeyVaults")
+    expect(setup).toContain('-ResourceType "Microsoft.KeyVault/vaults"')
+    expect(setup).toContain('$_.Name -like "kv-tenuvault-*"')
+    expect(setup).toContain("TenuVault setup in this or any other Automation account still has a TenuVaultKeyVault variable")
+    expect(setup).toContain("open in TenuVault with it")
+    // The variable goes only when the published runbook, read back from Azure, no longer reads it.
+    expect(setup).toContain("-Slot Published -OutputFolder $folder")
+    expect(setup).toContain('$plainRunbookVersion = "1.2.0"')
+    expect(setup).toContain('-Force -Confirm:$false | Out-Null\n    Publish-AzAutomationRunbook')
+  })
+
+  type SetupScenario = { scenario: string; plain: boolean; reason: string | null; error: string | null; actions: string[]; legacyVariableKept: boolean; variables: string[]; schedule: boolean; link: boolean; output: string[] }
+  let setupScenarios: Map<string, SetupScenario> | undefined
+  const setupRun = (name: string) => {
+    if (!setupScenarios) {
+      const script = fileURLToPath(new URL("./fixtures/cloud-backup/setup-upgrade.ps1", import.meta.url))
+      const lines = execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }).split(/\r?\n/).filter((line) => line.startsWith("{"))
+      setupScenarios = new Map(lines.map((line) => JSON.parse(line) as SetupScenario).map((run) => [run.scenario, run]))
+    }
+    return setupScenarios.get(name)!
+  }
+  const DELETE_ADVICE = "Delete the vault once no"
+
+  it.runIf(Boolean(pwsh))("removes the Key Vault variable only when the published runbook reads back as plain", () => {
+    const approved = setupRun("approved")
+    expect(approved).toMatchObject({ plain: true, legacyVariableKept: false, error: null })
+    // The import is told not to prompt again after the one approval, and the result is read back from the Published slot.
+    expect(approved.actions).toEqual(["import confirm=False", "publish", "export Published", "remove TenuVaultKeyVault-11111111"])
+    expect(approved.output.join(" ")).toContain(DELETE_ADVICE)
+    for (const [name, reason] of [
+      ["outer-declined", "the runbook import and publish was not approved"],
+      // The import's own prompt declined with an older draft present: that draft is what got published.
+      ["import-declined", "the published runbook is still version 1.1.0, older than 1.2.0"],
+      ["published-older", "the published runbook is still version 1.1.0, older than 1.2.0"],
+    ] as const) {
+      const run = setupRun(name)
+      expect(run, name).toMatchObject({ plain: false, reason, legacyVariableKept: true })
+      expect(run.output, name).toContain(`Kept 'TenuVaultKeyVault-11111111': ${reason}. Run this script again to finish the upgrade.`)
+      expect(run.output.join(" "), name).toContain(`Keep Key Vault kv-tenuvault-abc123: ${reason}`)
+      expect(run.output.join(" "), name).not.toContain(DELETE_ADVICE)
+    }
+    expect(setupRun("outer-declined").actions).toEqual([])
+    // A publish that throws stops the run before any variable changes.
+    expect(setupRun("publish-throws")).toMatchObject({ error: "Publishing the runbook failed.", legacyVariableKept: true })
+    expect(setupRun("publish-throws").actions).toEqual(["import confirm=False", "publish"])
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("advises deleting the vault after -Remove only when the tenant's setup is gone", () => {
+    const complete = setupRun("remove-complete")
+    expect(complete).toMatchObject({ schedule: false, link: false, legacyVariableKept: false, variables: [] })
+    expect(complete.output).toContain("Cloud backup schedule and variables for tenant 11111111-2222-3333-4444-555555555555 removed.")
+    expect(complete.output.join(" ")).toContain(DELETE_ADVICE)
+    for (const name of ["remove-whatif", "remove-variable-declined"]) {
+      const run = setupRun(name)
+      expect(run.output.join(" "), name).toContain("were not fully removed. Still in place:")
+      expect(run.output.join(" "), name).toContain("Keep Key Vault kv-tenuvault-abc123: this tenant's cloud backup setup was not fully removed")
+      expect(run.output.join(" "), name).not.toContain(DELETE_ADVICE)
+      expect(run.output, name).not.toContain("Cloud backup schedule and variables for tenant 11111111-2222-3333-4444-555555555555 removed.")
+    }
+    // -WhatIf changes nothing; a declined variable is named as left in place.
+    expect(setupRun("remove-whatif")).toMatchObject({ actions: [], schedule: true, link: true, legacyVariableKept: true })
+    expect(setupRun("remove-variable-declined").output.join(" ")).toContain("Still in place: variable 'TenuVaultScope-11111111'.")
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("treats a failed -Remove lookup as unverified, not as removed", () => {
+    // -WhatIf removes nothing, and every lookup fails with a transport error instead of "not found".
+    const run = setupRun("remove-whatif-lookups-fail")
+    expect(run).toMatchObject({ schedule: true, link: true, legacyVariableKept: true })
+    const text = run.output.join(" ")
+    expect(text).toContain("The removal could not be verified. Could not check: the link of 'Invoke-TenuVaultBackup' to 'TenuVaultBackup-11111111' (The SSL connection could not be established.); schedule 'TenuVaultBackup-11111111'")
+    expect(text).toContain("variable 'TenuVaultKeyVault-11111111' (The SSL connection could not be established.)")
+    expect(text).toContain("Keep Key Vault kv-tenuvault-abc123: the removal of this tenant's cloud backup setup could not be verified")
+    expect(text).not.toContain("removed.")
+    expect(text).not.toContain(DELETE_ADVICE)
+    // A real "not found" still counts as gone.
+    expect(setupRun("remove-complete").output.join(" ")).not.toContain("could not be verified")
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("decides variable absence from one complete list, not from a by-name read the client reports as not found", () => {
+    // Az.Automation turns a 403 or 500 on one variable into ResourceNotFoundException. The list still shows the variable.
+    const declined = setupRun("remove-scope-read-403-declined")
+    expect(declined.variables).toEqual(["TenuVaultScope-11111111"])
+    expect(declined.output.join(" ")).toContain("were not fully removed. Still in place: variable 'TenuVaultScope-11111111'.")
+    expect(declined.output.join(" ")).toContain("Keep Key Vault kv-tenuvault-abc123: this tenant's cloud backup setup was not fully removed")
+    expect(declined.output.join(" ")).not.toContain(DELETE_ADVICE)
+    expect(declined.output).not.toContain("Cloud backup schedule and variables for tenant 11111111-2222-3333-4444-555555555555 removed.")
+    // The same misreport during removal does not skip the variable: the list says it exists, so it is removed and verified gone.
+    const served = setupRun("remove-scope-read-500")
+    expect(served.actions).toContain("remove TenuVaultScope-11111111")
+    expect(served.variables).toEqual([])
+    expect(served.output).toContain("Cloud backup schedule and variables for tenant 11111111-2222-3333-4444-555555555555 removed.")
+    // The upgrade finds the vault variable through the list too, so it is removed rather than left behind unnoticed.
+    const upgrade = setupRun("upgrade-vault-read-translated")
+    expect(upgrade).toMatchObject({ plain: true, legacyVariableKept: false })
+    expect(upgrade.actions).toContain("remove TenuVaultKeyVault-11111111")
+    // A failing list leaves every variable unknown: never removed, never advice.
+    const listFails = setupRun("remove-list-fails")
+    const text = listFails.output.join(" ")
+    expect(text).toContain("The removal could not be verified. Could not check: variable 'TenuVaultTenantId-11111111' (The SSL connection could not be established.)")
+    expect(text).toContain("variable 'TenuVaultKeyVault-11111111' (The SSL connection could not be established.)")
+    expect(text).toContain("Keep Key Vault kv-tenuvault-abc123: the removal of this tenant's cloud backup setup could not be verified")
+    expect(text).not.toContain(DELETE_ADVICE)
+    expect(listFails.output).not.toContain("Cloud backup schedule and variables for tenant 11111111-2222-3333-4444-555555555555 removed.")
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("keeps the vault while another tenant in the Automation account still has its variable, or when that cannot be checked", () => {
+    for (const name of ["upgrade-tenant-b-remains", "remove-tenant-b-remains"]) {
+      const run = setupRun(name)
+      const text = run.output.join(" ")
+      expect(run.variables, name).toContain("TenuVaultKeyVault-22222222")
+      expect(run.variables, name).not.toContain("TenuVaultKeyVault-11111111")
+      expect(text, name).toContain("Keep Key Vault kv-tenuvault-abc123: tenant key(s) 22222222 in Automation account 'aa-tenuvault' still have a TenuVaultKeyVault variable; run this script for those tenants too")
+      expect(text, name).not.toContain(DELETE_ADVICE)
+    }
+    expect(setupRun("upgrade-tenant-b-remains").plain).toBe(true)
+    // A failing variable list: the upgrade keeps the vault variable, and the vault, because nothing can be called absent.
+    const upgradeListFails = setupRun("upgrade-list-fails")
+    expect(upgradeListFails.legacyVariableKept).toBe(true)
+    expect(upgradeListFails.output.join(" ")).toContain("Kept 'TenuVaultKeyVault-11111111' if it exists: the Automation account's variables could not be listed (The SSL connection could not be established.)")
+    expect(upgradeListFails.output.join(" ")).toContain("Keep Key Vault kv-tenuvault-abc123: the variables of Automation account 'aa-tenuvault' could not be read to check which setups still use it")
+    expect(upgradeListFails.output.join(" ")).not.toContain(DELETE_ADVICE)
+    // With no TenuVaultKeyVault variable left, the advice stays neutral: it never claims the vault is unused elsewhere.
+    const advice = setupRun("approved").output.join(" ")
+    expect(advice).toContain("no tenant in Automation account 'aa-tenuvault' still has a TenuVaultKeyVault variable")
+    expect(advice).toContain("Delete the vault once no TenuVault setup in this or any other Automation account still has a TenuVaultKeyVault variable")
+    expect(advice).not.toContain("is no longer read")
+  }, 60_000)
 
   it("scopes the writer role to the container without delete and prints the paste block", () => {
     expect(setup).toContain('"TenuVault Backup Writer"')
@@ -123,10 +372,8 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
     expect(setup).toContain("Microsoft.Authorization/roleDefinitions/write")
     expect(setup).not.toContain("blobs/delete")
     expect(setup).toContain("containers/$backupContainer")
-    // The runbook needs the .NET HKDF and AesGcm types, which the default 5.1 runtime lacks.
+    // The runbook parses with System.Text.Json, which the default 5.1 runtime lacks.
     expect(setup).toContain("-Type PowerShell72")
-    expect(setup).toContain("Parameters.ContainsKey('EnableRbacAuthorization')")
-    expect(setup).toContain("Key Vault Secrets User")
     expect(setup).toContain("--- TenuVault cloud backup setup (paste into TenuVault) ---")
     expect(setup).toContain("tenantKey=$tenantKey")
   })
@@ -140,18 +387,29 @@ describe("azuredeploy.json", () => {
       "Microsoft.Automation/automationAccounts/runbooks",
       "Microsoft.Automation/automationAccounts/schedules",
       "Microsoft.Automation/automationAccounts/jobSchedules",
-      "Microsoft.KeyVault/vaults",
-      "Microsoft.KeyVault/vaults/secrets",
       "Microsoft.Authorization/roleDefinitions",
     ]) expect(types, type).toContain(type)
     const runbookResource = template.resources.find((resource) => resource.type === "Microsoft.Automation/automationAccounts/runbooks") as unknown as { properties: { runbookType: string } }
     expect(runbookResource.properties.runbookType).toBe("PowerShell72")
-    expect((template.parameters.recoveryKey as { type: string }).type).toBe("securestring")
     expect(Object.keys(template.outputs)).toContain("pasteIntoTenuVault")
     const paste = (template.outputs.pasteIntoTenuVault as { value: string }).value
     expect(paste).toContain("time=")
     expect(paste).toContain("substring(parameters('scheduleStartTime'), 11, 5)")
     expect(Object.keys(template.outputs)).toContain("graphRolesToAssign")
+  })
+
+  it("creates no Key Vault, secret or vault role and takes no recovery key", () => {
+    expect(template.resources.filter((resource) => resource.type.startsWith("Microsoft.KeyVault/"))).toEqual([])
+    expect(Object.keys(template.parameters)).not.toContain("recoveryKey")
+    expect(Object.keys(template.parameters)).not.toContain("keyVaultName")
+    expect(Object.values(template.parameters).map((parameter) => (parameter as { type: string }).type)).not.toContain("securestring")
+    // The description may name the old vault for upgrades; nothing the template deploys or outputs does.
+    const text = JSON.stringify({ ...template, metadata: undefined })
+    for (const keyVault of ["keyVault", "TenuVaultKeyVault", "tenuvault-recovery-key", "keyVaultSecretsUserRoleId", "4633458b-17de-408a-b874-0445c86b69e6"]) {
+      expect(text, keyVault).not.toContain(keyVault)
+    }
+    // The vault assignment is gone; the two writer assignments on the containers remain.
+    expect(template.resources.filter((resource) => resource.type === "Microsoft.Authorization/roleAssignments")).toHaveLength(2)
   })
 
   it("lets the identity leave result notes in the watcher's container with the same write-only role", () => {

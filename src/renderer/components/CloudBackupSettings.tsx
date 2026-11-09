@@ -6,6 +6,7 @@ import setupScript from "../../../resources/New-TenuVaultCloudBackup.ps1?raw"
 import runbookScript from "../../../resources/runbooks/Invoke-TenuVaultBackup.ps1?raw"
 import {
   CLOUD_BACKUP_GUIDE_URL,
+  cloudRunbookNeedsUpgrade,
   cloudSchedulePortalUrl,
   cloudSetupCommand,
   deployToAzureUrl,
@@ -173,8 +174,9 @@ export function CloudBackupSettings({ tenant, community, cloud, scopeVersion = 0
       <p className="text-sm text-gray-700">
         A runbook in an Azure Automation account in your own subscription backs up {tenantName} on a schedule, with a
         managed identity and read-only permissions. No computer has to run, no admin has to stay signed in, and
-        Conditional Access sign-in frequency cannot stop it. Backups are sealed with your recovery key (kept in Key
-        Vault) and land in the same storage as your other backups, so they appear in Backup History like any backup.
+        Conditional Access sign-in frequency cannot stop it. Backups land in the same storage as your other backups,
+        so they appear in Backup History like any backup. Azure encrypts them at rest and your role assignments decide
+        who can read them; no recovery key or Key Vault is involved.
       </p>
 
       {community && <UpgradeNote feature="azureStorage" />}
@@ -224,6 +226,14 @@ export function CloudBackupSettings({ tenant, community, cloud, scopeVersion = 0
                 This tenant's storage is now {storageAccount}, but the cloud runner still writes to {config.storageAccount},
                 so its backups and status do not appear here. Run the setup again for the new account and paste its
                 output, or change the storage back in step 1.
+              </p>
+            )}
+            {cloud.status && cloudRunbookNeedsUpgrade(cloud.status.runbookVersion) && (
+              <p className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                The cloud runner still uses runbook {cloud.status.runbookVersion}, which encrypts backups with the
+                recovery key from Key Vault. Run the setup script again with the same values to update it to plain
+                backups. Delete the old Key Vault only once no TenuVault setup still has a TenuVaultKeyVault variable. Backups made before stay
+                readable here with the recovery key.
               </p>
             )}
             {!config.linked && (
@@ -323,8 +333,8 @@ export function CloudBackupSettings({ tenant, community, cloud, scopeVersion = 0
               <code className="mt-3 block break-all rounded-lg bg-secondary px-3 py-2 font-mono text-xs">{command}</code>
               <p className="mt-2 text-xs text-gray-500">
                 Add <span className="font-mono">-AlertEmail you@contoso.com</span> to the command (or{" "}
-                <span className="font-mono">-NoFailureAlert</span>). The script asks for the backup recovery key at a
-                hidden prompt and stores it in Key Vault. Without it, cloud backups cannot be sealed and do not run.
+                <span className="font-mono">-NoFailureAlert</span>). Neither path asks for the recovery key or creates a
+                Key Vault.
               </p>
             </li>
             <li>

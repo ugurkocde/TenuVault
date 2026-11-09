@@ -13,7 +13,11 @@ export interface CloudBackupConfig {
   resourceGroup: string
   automationAccount: string
   storageAccount: string
-  keyVault: string
+  /**
+   * Only in setup output from before runbook 1.2.0, which kept the recovery key in this Key
+   * Vault. Current setups create no vault and print no keyVault line.
+   */
+  keyVault?: string
   scheduleName: string
   frequency: "daily" | "weekly"
   /** Local time in `timeZone`, "HH:MM". Empty when the template path could not report it. */
@@ -87,7 +91,7 @@ export function parseCloudSetup(text: string): CloudBackupConfig | null {
     resourceGroup,
     automationAccount,
     storageAccount,
-    keyVault: get("keyvault"),
+    ...(get("keyvault") ? { keyVault: get("keyvault") } : {}),
     scheduleName: get("schedulename") || `TenuVaultBackup-${cloudTenantKey(tenantId)}`,
     frequency,
     time,
@@ -114,6 +118,24 @@ export function parseCloudStatus(value: unknown, tenantId: string): CloudBackupS
   }
 }
 
+/** The first runbook that writes plain JSON and reads no Key Vault. */
+export const PLAIN_CLOUD_RUNBOOK = "1.2.0"
+
+/**
+ * True when the runbook that reported this status still seals backups with the recovery key
+ * from Key Vault (before 1.2.0), so setup should run again. Unknown versions are not flagged.
+ */
+export function cloudRunbookNeedsUpgrade(version: string): boolean {
+  const parse = (text: string) => /^(\d+)\.(\d+)\.(\d+)$/.exec(text.trim())?.slice(1).map(Number)
+  const current = parse(version)
+  const plain = parse(PLAIN_CLOUD_RUNBOOK)!
+  if (!current) return false
+  for (let index = 0; index < 3; index++) {
+    if (current[index]! !== plain[index]!) return current[index]! < plain[index]!
+  }
+  return false
+}
+
 /** Deep link to the tenant's schedule in the Azure portal. */
 export function cloudSchedulePortalUrl(config: CloudBackupConfig): string {
   const path = [
@@ -126,8 +148,7 @@ export function cloudSchedulePortalUrl(config: CloudBackupConfig): string {
 
 /**
  * The setup command an admin copies for whoever can create Azure resources, with the choices
- * made in the app already filled in. The recovery key is pasted at the script's hidden prompt,
- * never on a command line.
+ * made in the app already filled in. It carries no secret: cloud backups need no recovery key.
  */
 export function cloudSetupCommand(options: {
   tenantId: string

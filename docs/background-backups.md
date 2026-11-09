@@ -55,8 +55,10 @@ Cloud backups (`resources/runbooks/Invoke-TenuVaultBackup.ps1`, set up by
 `resources/New-TenuVaultCloudBackup.ps1` or `resources/cloud-backup/azuredeploy.json`) are the
 server-side counterpart: an Azure Automation runbook in the customer's subscription with a managed
 identity, the same read-only Graph roles as the Backup Reader, the container scoped Backup Writer
-role, and the recovery key in Key Vault. It writes the same sealed TVAZ1 backup format and a
-`cloud-backup-status-<tenant>.json` status blob per run, reads nothing from the desktop app, and
+role, and no Key Vault or recovery key. It writes the same plain JSON backup format the desktop
+app writes to Azure (runbooks before 1.2.0 sealed it with TVAZ1 and the recovery key from Key
+Vault; the app still opens those) and a `cloud-backup-status-<tenant>.json` status blob per
+run, reads nothing from the desktop app or the container, and
 deletes nothing, so desktop retention still governs expiry. The desktop only records the pasted
 setup output (`src/renderer/lib/cloud-backup.ts`) and reads the status blob
 (`src/portal/app/api/cloud-backup-status/route.ts`); it never creates or edits Azure resources.

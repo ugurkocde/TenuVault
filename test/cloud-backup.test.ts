@@ -9,7 +9,8 @@ import {
 } from "../src/shared/cloud-backup"
 
 const TENANT = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"
-const SETUP_BLOCK = `noise before
+// What setups before runbook 1.2.0 printed: they also named the Key Vault holding the recovery key.
+const LEGACY_SETUP_BLOCK = `noise before
 --- TenuVault cloud backup setup (paste into TenuVault) ---
 tenantId=${TENANT}
 subscriptionId=11111111-2222-3333-4444-555555555555
@@ -25,16 +26,18 @@ timeZone=Europe/Berlin
 tenantKey=aaaaaaaa
 linked=true
 --- End of TenuVault cloud backup setup ---`
+// What current setups print: no Key Vault.
+const SETUP_BLOCK = LEGACY_SETUP_BLOCK.replace("keyVault=kv-tenuvault-abc123\n", "")
 
 describe("parseCloudSetup", () => {
   it("reads the block the setup script prints", () => {
+    expect(SETUP_BLOCK).not.toContain("keyVault")
     expect(parseCloudSetup(SETUP_BLOCK)).toEqual({
       tenantId: TENANT.toLowerCase(),
       subscriptionId: "11111111-2222-3333-4444-555555555555",
       resourceGroup: "rg-tenuvault-backups",
       automationAccount: "aa-tenuvault",
       storageAccount: "tvbkp1234567890ab",
-      keyVault: "kv-tenuvault-abc123",
       scheduleName: "TenuVaultBackup-aaaaaaaa",
       frequency: "weekly",
       time: "02:30",
@@ -43,6 +46,16 @@ describe("parseCloudSetup", () => {
       tenantKey: "aaaaaaaa",
       linked: true,
     })
+  })
+
+  it("still reads the block of an older setup that named a Key Vault", () => {
+    const legacy = parseCloudSetup(LEGACY_SETUP_BLOCK)
+    expect(legacy).toEqual({ ...parseCloudSetup(SETUP_BLOCK), keyVault: "kv-tenuvault-abc123" })
+    // The stored JSON form of an older setup round trips too.
+    const stored = Object.entries(legacy!).map(([k, v]) => `${k}=${String(v)}`).join("\n")
+    expect(parseCloudSetup(stored)).toEqual(legacy)
+    // A saved current setup has no keyVault key at all, not an empty one.
+    expect(Object.keys(JSON.parse(JSON.stringify(parseCloudSetup(SETUP_BLOCK))))).not.toContain("keyVault")
   })
 
   it("round trips the stored JSON form and refuses half a setup", () => {

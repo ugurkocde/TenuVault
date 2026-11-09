@@ -1,9 +1,10 @@
 /**
  * The result note a cloud backup run leaves for the Azure watcher, and the alert it becomes.
  *
- * Backups and their status are sealed with the recovery key, which the watcher never has. So
- * the cloud backup runbook (Invoke-TenuVaultBackup.ps1) writes, after every run, one small
- * unsealed note to its own container `tenuvault-backup-results` under `cloud-backup-outcomes/`.
+ * The watcher never opens backups or their status: backups from runbooks before 1.2.0 are sealed
+ * with the recovery key, which the watcher never has, and policy content stays out of its reach.
+ * So the cloud backup runbook (Invoke-TenuVaultBackup.ps1) writes, after every run, one small
+ * note to its own container `tenuvault-backup-results` under `cloud-backup-outcomes/`.
  * A container of its own, because the backup identity may write there: in the watcher's state
  * container it could rewrite the watcher's state. It holds only what a backup alert shows anyway: status, folder
  * name, counts, failed type names and the time. Never policy content, names or messages.

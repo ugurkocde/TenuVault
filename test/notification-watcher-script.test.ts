@@ -54,7 +54,7 @@ describe("Azure notification watcher scripts", () => {
     expect(deliveryAt).toBeGreaterThan(leaseAt)
   })
 
-  it("keeps the backup recovery key and sealed manifests out of the watcher", () => {
+  it("keeps the backup recovery key and backup manifests out of the watcher", () => {
     expect(runbook).not.toContain("TVAZ1")
     expect(runbook).not.toContain("metadata.json")
     expect(runbook).toContain("intune-backups")

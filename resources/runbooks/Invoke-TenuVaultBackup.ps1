@@ -11,11 +11,13 @@
     and a metadata.json summary with per item fingerprints, so Backup History, compare, drift
     detection and restore treat cloud backups like desktop backups.
 
-    Every blob is sealed before upload with the same TVAZ1 envelope the desktop app uses
-    (AES-256-GCM, key derived with HKDF-SHA256 from the current backup recovery key, the tenant,
-    host and blob path as additional data). The recovery key is read from Azure Key Vault at the
-    start of the run and never logged. Without it the run stops: plaintext backups are never
-    uploaded.
+    Every blob is written as plain JSON (application/json), like the desktop app writes to Azure.
+    TenuVault does not encrypt backups in the customer's storage account: Azure encrypts it at rest,
+    and Azure role assignments decide who can read it. Anyone who can write to intune-backups is
+    trusted like an Intune admin. Runbooks before 1.2.0 sealed every blob with the TVAZ1 envelope
+    and the recovery key from Key Vault; the desktop app still opens those backups with the
+    recovery key. This runbook never reads an existing blob (it only creates new ones), so older
+    sealed backups in the container never affect a run, and it needs no Key Vault.
 
     The type table below mirrors src/shared/intune/registry.ts in the desktop app (paths, expands,
     selects, extras, the singleton and the built-in skips). test/cloud-backup-runbook.test.ts
@@ -25,7 +27,8 @@
     backup until a backup with an admin's sign-in captures it.
 
     The runbook deletes nothing. Retention is applied by the next desktop backup made with an
-    admin's sign-in, or by an Azure lifecycle rule on the container. A per tenant
+    admin's sign-in. An age-based lifecycle rule on the container is no substitute: it keeps none
+    of the desktop protections (newest backup kept, failed runs never counted). A per tenant
     cloud-backup-status-<tenant>.json blob in the container records the last run so the desktop
     app can show cloud status without opening the Automation account.
 
@@ -33,12 +36,12 @@
     accepted outside Azure Automation so the flow can be exercised locally):
       TenuVaultTenantId          Entra tenant id (GUID) to back up. Required.
       TenuVaultStorageAccount    Storage account holding the intune-backups container. Required.
-      TenuVaultKeyVault          Key Vault holding the recovery key secret. Required.
       TenuVaultScope             "everything" (default when unset) or "policies" (leave out Apps).
       TenuVaultExcludedFolders   Comma separated type folders to leave out; wins over the scope.
       TenuVaultAppOnlyExcluded   Comma separated folders the managed identity has no permission
                                  for by design (setup sets DeviceCategories,DeviceCleanupRules
                                  unless the device inventory permission was granted).
+    TenuVaultKeyVault, set by setups before 1.2.0, is no longer read.
 
     Dot source the file with -LibraryOnly to load the library functions without running a backup.
 #>
@@ -51,7 +54,7 @@ param(
     [string]$TenantKey = ""
 )
 
-$script:RunbookVersion = "1.1.0"
+$script:RunbookVersion = "1.2.0"
 $script:GraphBeta = "https://graph.microsoft.com/beta"
 $script:Container = "intune-backups"
 # One status blob per tenant, so status blobs never collide when tenants share tooling.
@@ -268,63 +271,6 @@ function Get-TvKeys {
 }
 
 # ---------------------------------------------------------------------------
-# TVAZ1 sealing (mirror src/main/storage/azure-seal.ts)
-# ---------------------------------------------------------------------------
-
-function Get-TvRecoveryMasterKey {
-    param([Parameter(Mandatory)][string]$RecoveryKey)
-    $trimmed = $RecoveryKey.Trim()
-    $encoded = $null
-    if ($trimmed.StartsWith("TVK2.")) { $encoded = ($trimmed.Substring(5) -split "\.")[0] }
-    elseif ($trimmed.StartsWith("TVK1.")) { $encoded = $trimmed.Substring(5) }
-    if (-not $encoded -or $encoded -notmatch '^[A-Za-z0-9_-]{43}$') {
-        throw "The Key Vault secret is not a TenuVault recovery key. Save the TVK2 bundle (or a legacy TVK1 key) from TenuVault Settings, Storage and recovery, Save recovery key."
-    }
-    $base64 = $encoded.Replace("-", "+").Replace("_", "/") + "="
-    $key = [Convert]::FromBase64String($base64)
-    if ($key.Length -ne 32) { throw "The Key Vault secret is not a TenuVault recovery key." }
-    return $key
-}
-
-function Get-TvAzureKey {
-    param([Parameter(Mandatory)][byte[]]$Master)
-    return [Security.Cryptography.HKDF]::DeriveKey(
-        [Security.Cryptography.HashAlgorithmName]::SHA256, $Master, 32,
-        [byte[]]::new(0), [Text.Encoding]::UTF8.GetBytes("tenuvault-azure-backup-v1"))
-}
-
-# Seals one blob body. $Pathname is the URL pathname of the blob, still percent encoded.
-function Protect-TvAzureBlob {
-    param(
-        [Parameter(Mandatory)][byte[]]$Plain,
-        [Parameter(Mandatory)][byte[]]$Master,
-        [Parameter(Mandatory)][string]$TenantId,
-        [Parameter(Mandatory)][string]$HostName,
-        [Parameter(Mandatory)][string]$Pathname
-    )
-    $decodedPath = [uri]::UnescapeDataString($Pathname)
-    $aadJson = ConvertTo-TvCanonicalJson @($TenantId.ToLowerInvariant(), $HostName, $decodedPath)
-    # Canonical JSON of an array is the same compact form JSON.stringify produces for the AAD.
-    $aad = [Text.Encoding]::UTF8.GetBytes($aadJson)
-    $key = Get-TvAzureKey $Master
-    $nonce = [byte[]]::new(12)
-    [Security.Cryptography.RandomNumberGenerator]::Fill($nonce)
-    $cipher = [byte[]]::new($Plain.Length)
-    $tag = [byte[]]::new(16)
-    # Single argument on purpose: the Automation PowerShell 7.2 runtime (.NET 6) has no
-    # tag size constructor. Its only tag size is the same 16 bytes the envelope uses.
-    $aes = [Security.Cryptography.AesGcm]::new($key)
-    try { $aes.Encrypt($nonce, $Plain, $cipher, $tag, $aad) } finally { $aes.Dispose() }
-    $magic = [Text.Encoding]::ASCII.GetBytes("TVAZ1`n")
-    $sealed = [byte[]]::new($magic.Length + $nonce.Length + $tag.Length + $cipher.Length)
-    [Buffer]::BlockCopy($magic, 0, $sealed, 0, $magic.Length)
-    [Buffer]::BlockCopy($nonce, 0, $sealed, $magic.Length, $nonce.Length)
-    [Buffer]::BlockCopy($tag, 0, $sealed, $magic.Length + $nonce.Length, $tag.Length)
-    [Buffer]::BlockCopy($cipher, 0, $sealed, $magic.Length + $nonce.Length + $tag.Length, $cipher.Length)
-    return $sealed
-}
-
-# ---------------------------------------------------------------------------
 # Tokens and configuration
 # ---------------------------------------------------------------------------
 
@@ -453,43 +399,39 @@ function Invoke-TvHttp {
 }
 
 # ---------------------------------------------------------------------------
-# Storage writes, always sealed
+# Storage writes, plain JSON. The runbook only writes; it never reads a blob back.
 # ---------------------------------------------------------------------------
 
 function Get-TvBlobTarget {
     param([Parameter(Mandatory)][string]$Account, [Parameter(Mandatory)][string]$BlobName)
-    $hostName = "$Account.blob.core.windows.net"
     $encoded = ($BlobName -split "/" | ForEach-Object { [uri]::EscapeDataString($_) }) -join "/"
-    $pathname = "/$script:Container/$encoded"
-    return @{ HostName = $hostName; Pathname = $pathname; Uri = "https://$hostName$pathname" }
+    return @{ Uri = "https://$Account.blob.core.windows.net/$script:Container/$encoded" }
 }
 
-function Set-TvSealedBlob {
+function Set-TvBlob {
     param(
         [Parameter(Mandatory)][string]$Account,
         [Parameter(Mandatory)][string]$BlobName,
         [Parameter(Mandatory)][string]$Body,
         [Parameter(Mandatory)][string]$Token,
-        [Parameter(Mandatory)][byte[]]$Master,
-        [Parameter(Mandatory)][string]$TenantId,
         [switch]$CreateOnly
     )
     $target = Get-TvBlobTarget $Account $BlobName
-    $sealed = Protect-TvAzureBlob ([Text.Encoding]::UTF8.GetBytes($Body)) $Master $TenantId $target.HostName $target.Pathname
     $headers = @{
         "x-ms-blob-type" = "BlockBlob"
         "x-ms-version"   = "2021-12-02"
         "x-ms-date"      = [DateTime]::UtcNow.ToString("R", [Globalization.CultureInfo]::InvariantCulture)
     }
     if ($CreateOnly) { $headers["If-None-Match"] = "*" }
-    [void](Invoke-TvHttp -Uri $target.Uri -Token $Token -Method "Put" -Headers $headers -BodyBytes $sealed -ContentType "application/octet-stream")
+    [void](Invoke-TvHttp -Uri $target.Uri -Token $Token -Method "Put" -Headers $headers -BodyBytes ([Text.Encoding]::UTF8.GetBytes($Body)) -ContentType "application/json")
 }
 
 # ---------------------------------------------------------------------------
 # The result note for the notification watcher (mirror src/shared/notifications/cloud-outcome.ts)
 # ---------------------------------------------------------------------------
-# The one write that is not sealed, on purpose: the notification watcher has no recovery
-# key, so it can only alert on a result it can read. The note goes to a container of its
+# The notification watcher never opens backups or the status blob: backups from runbooks
+# before 1.2.0 are sealed with the recovery key, which it never has, and policy content stays
+# out of its reach. So it alerts on this note. The note goes to a container of its
 # own, never to intune-backups and never to the watcher's state container (where this
 # identity could otherwise rewrite the watcher's state), and carries a fixed set of fields: status, folder
 # name, counts, failed type names, run id and time. No policy content, names or messages.
@@ -777,7 +719,7 @@ function Set-TvCloudStatus {
         Source         = "TenuVault Cloud Backup"
         TenantId       = $Context.TenantId.ToLowerInvariant()
     } | ConvertTo-Json
-    try { Set-TvSealedBlob $Context.StorageAccount "$script:StatusBlobPrefix$($Context.TenantId.Substring(0, 8).ToLowerInvariant()).json" $body $Context.StorageToken $Context.Master $Context.TenantId }
+    try { Set-TvBlob $Context.StorageAccount "$script:StatusBlobPrefix$($Context.TenantId.Substring(0, 8).ToLowerInvariant()).json" $body $Context.StorageToken }
     catch { Write-Output "Could not record the cloud backup status: $(Get-TvSafeError $_.Exception.Message)" }
 }
 
@@ -788,7 +730,6 @@ function Invoke-TvBackup {
     if ($tenantId -notmatch '^[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$') { throw "TenuVaultTenantId is not a tenant id (GUID)." }
     $storageAccount = Get-TvRequiredVariable "TenuVaultStorageAccount"
     if ($storageAccount -notmatch '^[a-z0-9]{3,24}$') { throw "TenuVaultStorageAccount is not a storage account name." }
-    $keyVault = Get-TvRequiredVariable "TenuVaultKeyVault"
 
     $scope = Get-TvAutomationVariable "TenuVaultScope"
     $excluded = Get-TvFolderList (Get-TvAutomationVariable "TenuVaultExcludedFolders")
@@ -797,17 +738,14 @@ function Invoke-TvBackup {
     $appOnlyExcluded = Get-TvFolderList (Get-TvAutomationVariable "TenuVaultAppOnlyExcluded")
 
     Write-Output "Backing up tenant $tenantId to storage account $storageAccount (runbook $script:RunbookVersion, run $runId)."
-    # The storage token comes first: the result note needs only it, so every later failure
-    # (Graph token, Key Vault, a scope that leaves nothing) still reaches the notification
-    # watcher as Failed. A run that cannot even get a storage token is reported by the
-    # Azure Monitor alert on failed jobs.
+    # The storage token comes first: the status blob and the result note need only it, so
+    # every later failure (Graph token, a scope that leaves nothing) is still recorded and
+    # reaches the notification watcher as Failed. A run that cannot even get a storage token
+    # is reported by the Azure Monitor alert on failed jobs.
     $storageToken = Get-TvManagedIdentityToken "https://storage.azure.com/"
+    $context = @{ TenantId = $tenantId; StorageAccount = $storageAccount; StorageToken = $storageToken }
     try {
         $graphToken = Get-TvManagedIdentityToken "https://graph.microsoft.com/"
-        $vaultToken = Get-TvManagedIdentityToken "https://vault.azure.net"
-        $secret = Invoke-TvHttp -Uri "https://$keyVault.vault.azure.net/secrets/tenuvault-recovery-key/?api-version=7.4" -Token $vaultToken -Method "Get"
-        $master = Get-TvRecoveryMasterKey ([string](Get-TvProp ($secret.Text | ConvertFrom-Json) "value"))
-        $context = @{ TenantId = $tenantId; StorageAccount = $storageAccount; StorageToken = $storageToken; Master = $master }
 
         $allTypes = Get-TvTypes
         $known = @($allTypes | ForEach-Object { $_.Folder })
@@ -816,6 +754,7 @@ function Invoke-TvBackup {
         $types = @($allTypes | Where-Object { $excluded -notcontains $_.Folder -and $appOnlyExcluded -notcontains $_.Folder })
         if (-not $types.Count) { throw "The configured scope leaves nothing to back up." }
     } catch {
+        Set-TvCloudStatus $context "Failed" (Get-TvSafeError $_.Exception.Message) $null
         Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status "Failed" -BackupFolder $null -TotalPolicies $null
         throw
     }
@@ -823,8 +762,7 @@ function Invoke-TvBackup {
     if ($notReadable.Count) { Write-Output "Leaving out $($notReadable.Count) type(s) the cloud identity has no permission for: $($notReadable -join ', '). Desktop backups include them." }
 
     # List everything first, like the desktop engine, so a denied list is reported per type.
-    # A run that stops anywhere before the write phase still records why, now that the key and
-    # tokens exist; failures before the key was read cannot be recorded anywhere sealed.
+    # A run that stops anywhere before the write phase still records why.
     try {
     $counts = [ordered]@{}
     foreach ($type in $types) { $counts[$type.Folder] = 0 }
@@ -875,7 +813,7 @@ function Invoke-TvBackup {
     $backupFolder = "backup-$(ConvertTo-TvFolderTimestamp $started)"
     $owner = [ordered]@{ Source = "TenuVault Cloud Backup"; TenantId = $tenantId.ToLowerInvariant(); RunId = $runId } | ConvertTo-Json -Compress
     try {
-        Set-TvSealedBlob $storageAccount "$backupFolder/.tenuvault-owner.json" $owner $storageToken $master $tenantId -CreateOnly
+        Set-TvBlob $storageAccount "$backupFolder/.tenuvault-owner.json" $owner $storageToken -CreateOnly
     } catch [TvHttpError] {
         if ($_.Exception.Status -in @(409, 412)) {
             throw "Backup folder $backupFolder is already in use by another backup for this tenant and storage. Nothing from this backup was written. Wait for the other backup to finish, then try again."
@@ -903,7 +841,7 @@ function Invoke-TvBackup {
                     $outcome = @{ Masked = $false }
                     $detail = Read-TvObject $type $id $graphToken $outcome
                     $body = $detail | ConvertTo-Json -Depth 100
-                    Set-TvSealedBlob $storageAccount "$backupFolder/$($type.Folder)/$fileName.json" $body $storageToken $master $tenantId
+                    Set-TvBlob $storageAccount "$backupFolder/$($type.Folder)/$fileName.json" $body $storageToken
                     $record = [ordered]@{ file = "$fileName.json"; hash = Get-TvSnapshotHash $detail }
                     if ($type.AssignmentsFormerlyExpanded) {
                         $without = Copy-TvDeep $detail
@@ -967,7 +905,7 @@ function Invoke-TvBackup {
         if ($notReadable.Count) { $metadata.AppOnlyExcludedTypes = $notReadable }
         if ($maskedItems.Count) { $metadata.MaskedSecretItems = @($maskedItems) }
         $metadata.Items = $sortedItems
-        Set-TvSealedBlob $storageAccount "$backupFolder/metadata.json" ($metadata | ConvertTo-Json -Depth 100) $storageToken $master $tenantId
+        Set-TvBlob $storageAccount "$backupFolder/metadata.json" ($metadata | ConvertTo-Json -Depth 100) $storageToken
         Write-Output "Backup completed: $totalPolicies policies in $($metadata.Duration) ($status). Older backups were kept: the cloud identity cannot delete. The next desktop backup made with an admin's sign-in applies retention."
         Set-TvCloudStatus $context $status "Backup $status, $totalPolicies policies." $backupFolder
         Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status $status -BackupFolder $backupFolder -TotalPolicies $totalPolicies -Failures $failures -FailedTypes @($failedTypes)
@@ -998,7 +936,7 @@ function Invoke-TvBackup {
             }
             if ($notReadable.Count) { $failed.AppOnlyExcludedTypes = $notReadable }
             if ($maskedItems.Count) { $failed.MaskedSecretItems = @($maskedItems) }
-            Set-TvSealedBlob $storageAccount "$backupFolder/metadata.json" ($failed | ConvertTo-Json -Depth 100) $storageToken $master $tenantId -CreateOnly
+            Set-TvBlob $storageAccount "$backupFolder/metadata.json" ($failed | ConvertTo-Json -Depth 100) $storageToken -CreateOnly
         } catch { Write-Output "Could not record this backup as Failed: $(Get-TvSafeError $_.Exception.Message). It is listed as incomplete." }
         Set-TvCloudStatus $context "Failed" $reason $backupFolder
         Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status "Failed" -BackupFolder $backupFolder -TotalPolicies $totalPolicies -Failures ([Math]::Max(1, $failures)) -FailedTypes @($failedTypes)
