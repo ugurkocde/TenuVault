@@ -6,7 +6,7 @@ import { Chip } from "~/components/dashboard/tiles"
 import { cn } from "~/lib/utils"
 import { ChangeSetFlow } from "../shared/ChangeSetFlow"
 import { syncRollbackActions, syncTargetActions, type SyncTarget } from "./api"
-import { backupOf, excludedReason, failedItems, initials, intuneLink, linkPath, plural, progress, targetPhase, type TargetPhase } from "./model"
+import { backupOf, excludedReason, failedItems, initials, intuneLink, linkPath, mayHaveWritten, plural, progress, targetPhase, type TargetPhase } from "./model"
 
 export interface ResultTarget {
   target: SyncTarget
@@ -225,7 +225,7 @@ export function SyncFlowchart({ source, policyCount, targets, errors, notes, pla
             {finished && (phase === "partial" || phase === "failed") && retryable(target) && (
               <p id={`retry-${id}`} className="mt-2 text-xs text-gray-500">{backupOf(target) === "none" ? "Retry applies without a backup, as this sync started." : "Retry backs up first."}</p>
             )}
-            {done > 0 && !entry.storage && <p className="mt-2 text-xs text-amber-800">{NO_ROLLBACK}</p>}
+            {mayHaveWritten(target) && !entry.storage && <p className="mt-2 text-xs text-amber-800">{NO_ROLLBACK}</p>}
           </div>
         )
       })}
@@ -258,7 +258,7 @@ export function SyncResult({ source, policyCount, entries, errors, notes, platfo
   const verified = involved.filter((entry) => entry.phase === "verified" || entry.phase === "in-sync").length
   const attention = involved.length - verified
   // Targets something was written to; a rollback can run only where the tenant has backup storage.
-  const wrote = involved.filter((entry) => progress(entry.target).done > 0)
+  const wrote = involved.filter((entry) => mayHaveWritten(entry.target))
   const anyWritten = wrote.length > 0
   const rollbacks = wrote.filter((entry) => entry.storage).length
   // Targets already in sync wrote nothing, so they took no backup and decide nothing here. The

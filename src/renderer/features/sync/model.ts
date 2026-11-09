@@ -142,6 +142,19 @@ export function targetPhase(target: SyncTarget, active: boolean, error: string |
 }
 
 /** Verified and planned operations of a target, for its progress bar. */
+/**
+ * Whether anything may have been written to the target: an operation was verified, or its write
+ * was sent and the outcome is not known (uncertain or still writing). Rollback availability
+ * depends on this, not on verified writes only.
+ */
+export function mayHaveWritten(target: SyncTarget): boolean {
+  const changeSet = target.changeSet
+  return !!changeSet && changeSet.operations.some((operation) => {
+    const status = changeSet.results[operation.key]?.status
+    return status === "verified" || status === "uncertain" || status === "writing"
+  })
+}
+
 export function progress(target: SyncTarget): { done: number; total: number } {
   const changeSet = target.changeSet
   return changeSet ? { done: verifiedCount(changeSet), total: changeSet.operations.length } : { done: 0, total: 0 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { SyncStatusEntry, SyncTarget } from "../src/renderer/features/sync/api"
-import { excludedReason, failedItems, initials, intuneLink, linkPath, policyStatus, progress, readiness, targetPhase } from "../src/renderer/features/sync/model"
+import { excludedReason, failedItems, initials, intuneLink, linkPath, mayHaveWritten, policyStatus, progress, readiness, targetPhase } from "../src/renderer/features/sync/model"
 
 const TARGET = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 const SOURCE_POLICY = "11111111-1111-4111-8111-111111111111"
@@ -50,6 +50,16 @@ describe("Sync result states", () => {
     expect(failedItems(target("failed", { "op-1": { status: "failed", message: "Intune answered 403." } }).changeSet)).toEqual([{ name: "Defender", message: "Intune answered 403." }])
     expect(excludedReason(target("in-review"))).toBe("Reviewed but not approved.")
     expect(excludedReason(target(null))).toBe("Blocked by findings in the review.")
+  })
+
+  it("counts a write whose outcome is unknown as possibly written, for rollback availability", () => {
+    const ops = [{ key: "op-1", folder: "ConfigurationPolicies", name: "A" }]
+    expect(mayHaveWritten(target("failed", { "op-1": { status: "uncertain" } }, ops))).toBe(true)
+    expect(mayHaveWritten(target("applying", { "op-1": { status: "writing" } }, ops))).toBe(true)
+    expect(mayHaveWritten(target("partial", { "op-1": { status: "verified" } }, ops))).toBe(true)
+    expect(mayHaveWritten(target("failed", { "op-1": { status: "failed", message: "403" } }, ops))).toBe(false)
+    expect(mayHaveWritten(target(null))).toBe(false)
+    expect(progress(target("failed", { "op-1": { status: "uncertain" } }, ops)).done).toBe(0)
   })
 
   it("keeps a target without backup storage out only when a backup is asked for", () => {
