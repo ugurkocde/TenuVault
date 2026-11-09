@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import type { SyncStatusEntry, SyncTarget } from "../src/renderer/features/sync/api"
-import { excludedReason, failedItems, initials, intuneLink, linkPath, mayHaveWritten, policyStatus, progress, readiness, targetPhase } from "../src/renderer/features/sync/model"
+import { applyStage, discardable, excludedReason, failedItems, initials, intuneLink, linkPath, mayHaveWritten, outcomeCounts, policyStatus, progress, readiness, relativeTime, reviewRows, runOutcome, targetPhase } from "../src/renderer/features/sync/model"
+import { stillReading } from "../src/renderer/features/sync/loading"
 
 const TARGET = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 const SOURCE_POLICY = "11111111-1111-4111-8111-111111111111"
@@ -91,5 +92,104 @@ describe("Flowchart geometry", () => {
     expect(linkPath(0, 100, 200, 20)).toEqual({ d: "M0,100 C100,100 100,20 200,20", mid: { x: 100, y: 60 } })
     expect(initials("Contoso Lab")).toBe("CL")
     expect(initials("Fabrikam")).toBe("FA")
+  })
+})
+
+const changed = (changedIn: SyncStatusEntry["changedIn"]): SyncStatusEntry => ({ ...entry("changed"), changedIn })
+
+describe("Sync status chips name where a policy changed", () => {
+  it("names the source, one target, several targets or both sides", () => {
+    expect(policyStatus([{ tenantName: "Germany", entry: changed("source") }], [], "Contoso Lab").label).toBe("Changed in Contoso Lab")
+    expect(policyStatus([{ tenantName: "Germany", entry: changed("target") }], [], "Contoso Lab").label).toBe("Changed in Germany")
+    expect(policyStatus([{ tenantName: "Germany", entry: changed("target") }, { tenantName: "France", entry: changed("target") }], [], "Contoso Lab").label).toBe("Changed in 2 targets")
+    expect(policyStatus([{ tenantName: "Germany", entry: changed("both") }], [], "Contoso Lab").label).toBe("Changed in both")
+    expect(policyStatus([{ tenantName: "Germany", entry: changed("source") }, { tenantName: "France", entry: changed("target") }], [], "Contoso Lab").label).toBe("Changed in both")
+    expect(policyStatus([{ tenantName: "Germany", entry: changed("target") }], [], "Contoso Lab").title).toContain("Germany: changed since the last sync (edited in this tenant)")
+  })
+})
+
+describe("Sync review rows", () => {
+  it("shows the same-name finding once, from the live preview, and keeps it when no preview was read", () => {
+    const planned = target("in-review")
+    planned.promotion = { id: "pr", status: "in-review", items: [{ folder: "ConfigurationPolicies", sourceId: SOURCE_POLICY, sourceName: "Defender", action: "create", blocked: false, findings: [{ code: "display-name-only", severity: "warning", message: "1 object(s) named \"Defender\" already exist in the destination. A name match is not a mapping." }] }] } as unknown as SyncTarget["promotion"]
+    const preview = { changeSet: { operations: [{ key: "op-1", diff: [{ path: "x" }], diffTruncated: false, blockers: [], warnings: ["1 object(s) named \"Defender\" already exist; this creates another one."] }] } } as never
+    const notes = reviewRows(planned, preview)[0]!.notes.map((note) => note.message)
+    expect(notes).toEqual(["1 object(s) named \"Defender\" already exist; this creates another one."])
+    expect(reviewRows(planned, null)[0]!.notes.map((note) => note.message)).toEqual(["1 object(s) named \"Defender\" already exist in the destination. A name match is not a mapping."])
+  })
+})
+
+describe("Sync apply stages", () => {
+  const ops = [{ key: "op-1", folder: "ConfigurationPolicies", name: "A" }, { key: "op-2", folder: "ConfigurationPolicies", name: "B" }, { key: "op-3", folder: "ConfigurationPolicies", name: "C" }]
+  const stage = (status: string, extra: Record<string, unknown>, results: Record<string, { status: string }> = {}, backup?: "new" | "none", active = false) => {
+    const entry = target(status, results, ops)
+    Object.assign(entry.changeSet!, extra)
+    if (backup) (entry.promotion as unknown as { sync: unknown }).sync = { runId: "r", backup }
+    return applyStage(entry, active)
+  }
+  const capture = (backupFolder: string | null) => ({ preChange: { capturedAt: "t", backupFolder, captureId: "c", objects: [] } })
+
+  it("derives each stage from the stored change set and target record", () => {
+    // The approval request of this screen is running and the change set is still in review.
+    expect(stage("in-review", {}, {}, undefined, true)).toMatchObject({ step: 0, label: "Approving" })
+    expect(stage("approved", { attempts: 0 }, {}, "new", true)).toMatchObject({ step: 1, label: "Backing up", steps: ["Approve", "Back up", "Write", "Verify"] })
+    expect(stage("applying", { attempts: 1, backupChoice: "new" }, {}, "new")).toMatchObject({ step: 1, label: "Backing up" })
+    expect(stage("applying", { attempts: 1, backupChoice: "none" }, {}, "none")).toMatchObject({ step: 1, label: "Saving current versions", steps: ["Approve", "Save", "Write", "Verify"] })
+    expect(stage("applying", { attempts: 1, ...capture("b") }, {}, "new")).toMatchObject({ step: 2, label: "Writing 1 of 3" })
+    expect(stage("applying", { attempts: 1, ...capture("b") }, { "op-1": { status: "verified" }, "op-2": { status: "writing" } }, "new")).toMatchObject({ step: 2, label: "Writing 2 of 3" })
+    expect(stage("applying", { attempts: 1, ...capture("b") }, { "op-1": { status: "verified" }, "op-2": { status: "failed" } }, "new")).toMatchObject({ step: 2, label: "Writing 3 of 3" })
+    // Every operation was sent; the last one's read-back is outstanding.
+    expect(stage("applying", { attempts: 1, ...capture(null) }, { "op-1": { status: "verified" }, "op-2": { status: "verified" }, "op-3": { status: "writing" } }, "none")).toMatchObject({ step: 3, label: "Verifying" })
+  })
+
+  it("has no stage for a target that is not writing", () => {
+    expect(stage("applied", { attempts: 1, ...capture("b") }, { "op-1": { status: "verified" } }, "new")).toBeNull()
+    expect(stage("in-review", {})).toBeNull()
+    expect(applyStage(target(null), true)).toBeNull()
+  })
+})
+
+describe("Sync outcomes and recent runs", () => {
+  it("counts created, updated, skipped and failed operations of a target", () => {
+    const entry = target("partial", { "op-1": { status: "verified" }, "op-2": { status: "verified" }, "op-3": { status: "uncertain" } }, [{ key: "op-1", folder: "ConfigurationPolicies", name: "A" }, { key: "op-2", folder: "ConfigurationPolicies", name: "B" }, { key: "op-3", folder: "ConfigurationPolicies", name: "C" }])
+    entry.changeSet!.operations[1]!.action = "update"
+    entry.skipped = [{ folder: "ConfigurationPolicies", sourceId: "x", sourceName: "X", reason: "already in sync" }]
+    expect(outcomeCounts(entry)).toEqual({ created: 1, updated: 1, skipped: 1, failed: 1 })
+  })
+
+  it("can discard only while no target was approved or applied", () => {
+    const review = target("in-review")
+    Object.assign(review.changeSet!, { attempts: 0, review: null })
+    expect(discardable([review, target(null)])).toBe(true)
+    const approved = target("approved")
+    Object.assign(approved.changeSet!, { attempts: 0, review: { decision: "approved" } })
+    expect(discardable([review, approved])).toBe(false)
+    const bound = target("in-review")
+    Object.assign(bound.changeSet!, { attempts: 0, review: null })
+    ;(bound.promotion as unknown as { sync: unknown }).sync = { runId: "r", backup: "none" }
+    expect(discardable([bound])).toBe(false)
+  })
+
+  it("reads a run's outcome, falling back for runs listed without one", () => {
+    expect(runOutcome({ outcome: "rolled-back", applied: true })).toBe("rolled-back")
+    expect(runOutcome({ applied: true })).toBe("applied")
+    expect(runOutcome({ inSync: true })).toBe("in-sync")
+    expect(runOutcome({})).toBe("not-applied")
+  })
+
+  it("says how long ago a run was planned", () => {
+    const now = Date.parse("2026-11-09T12:00:00Z")
+    expect(relativeTime("2026-11-09T11:59:40Z", now)).toBe("just now")
+    expect(relativeTime("2026-11-09T11:55:00Z", now)).toBe("5 minutes ago")
+    expect(relativeTime("2026-11-09T10:00:00Z", now)).toBe("2 hours ago")
+    expect(relativeTime("2026-11-09T11:00:20Z", now)).toBe("1 hour ago")
+    expect(relativeTime("2026-11-08T11:00:00Z", now)).toBe("yesterday")
+    expect(relativeTime("2026-11-02T12:00:00Z", now)).toBe("last week")
+    expect(relativeTime("not a date", now)).toBe("")
+  })
+
+  it("says a read is still running once it took 5 seconds", () => {
+    expect(stillReading(4)).toBeNull()
+    expect(stillReading(12)).toBe("Still reading, 12 s")
   })
 })

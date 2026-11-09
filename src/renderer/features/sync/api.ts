@@ -5,6 +5,7 @@ import type { SyncStatus, SyncStatusEntry } from "../../../main/features/sync/st
 import type { PromotionPreview } from "../../../main/features/promotion/engine"
 import type { Promotion, PolicyOption } from "../promotion/api"
 import type { ChangeSet, ChangeSetActions, ChangeSetPreview, RollbackPreview } from "../shared/change-set"
+import type { RunOutcome } from "./model"
 
 export type { PolicyOption, Promotion, SyncStatusEntry }
 
@@ -34,8 +35,13 @@ export const MAX_SYNC_POLICIES = 25
 const PATH = "/api/sync"
 const named = (tenantIds: string[]) => tenantIds.map((tenantId) => ({ tenantId }))
 
-/** Runs from the source tenant, newest first; `applied` tells whether any target was ever applied. */
-export const listSyncRuns = (source: Tenant) => featureCall<{ runs: Array<SyncRun & { applied?: boolean; inSync?: boolean }> }>(PATH, source, "list-runs")
+/**
+ * Runs from the source tenant, newest first, without discarded ones; `applied` tells whether any
+ * target was ever applied, `outcome` what the run did.
+ */
+export const listSyncRuns = (source: Tenant) => featureCall<{ runs: Array<SyncRun & { applied?: boolean; inSync?: boolean; outcome?: RunOutcome }> }>(PATH, source, "list-runs")
+/** Discards a run none of whose targets was approved; the record is kept and leaves Recent syncs. */
+export const discardSyncRun = (source: Tenant, id: string) => featureCall<{ run: SyncRun }>(PATH, source, "discard-run", { id })
 export const getSyncRun = (source: Tenant, id: string) => featureCall<{ run: SyncRun; targets: SyncTarget[] }>(PATH, source, "get-run", { id })
 export const syncPolicies = (source: Tenant, folder: string) => featureCall<{ source: PolicyOption[] }>(PATH, source, "policies", { folder })
 export const syncTargets = (source: Tenant) => featureCall<{ multiple: boolean; targets: SyncTargetOption[] }>(PATH, source, "targets")

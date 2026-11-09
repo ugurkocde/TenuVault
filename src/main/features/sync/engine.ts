@@ -200,7 +200,7 @@ export async function planSync(deps: FeatureDeps, sourceTenantId: string, input:
   run = deps.records.update<SyncRunRecord>(DOMAINS.syncRuns, source, run.id, (current) => ({
     ...current,
     status: failed === 0 ? "planned" : planned === 0 ? "failed" : "partial",
-    summary: `${planned} of ${results.length} target${results.length === 1 ? "" : "s"} planned${inSync ? `, ${inSync} already in sync` : ""}${blocked ? `, ${blocked} blocked by findings` : ""}${failed ? `; ${failed} could not be planned` : ""}.`,
+    summary: inSync === results.length ? "Already in sync, nothing to write." : `${planned} of ${results.length} target${results.length === 1 ? "" : "s"} planned${inSync ? `, ${inSync} already in sync` : ""}${blocked ? `, ${blocked} blocked by findings` : ""}${failed ? `; ${failed} could not be planned` : ""}.`,
   }), { actor, reason: "Planned every target" })!
   return { run, targets: results }
 }

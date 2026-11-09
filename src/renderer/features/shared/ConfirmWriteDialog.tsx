@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useId, useState } from "react"
 import { AlertTriangle } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "~/components/ui/dialog"
@@ -6,7 +6,9 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 /**
  * The explicit confirmation before a tenant write. It names the target tenant, lists what
  * cannot be undone and what no rollback covers, and stays disabled until the admin ticks that
- * they read it. `backupSkipped` says no backup runs, for a change set bound to skipping it.
+ * they read it. `backupSkipped` says no backup runs, for a change set bound to skipping it. The
+ * backup it names is the pre-change backup of the change-set engine: a backup with the tenant's
+ * backup settings that must hold every policy type the change writes.
  */
 export function ConfirmWriteDialog({
   open,
@@ -32,6 +34,8 @@ export function ConfirmWriteDialog({
   backupSkipped?: boolean
 }) {
   const [understood, setUnderstood] = useState(false)
+  const titleId = useId()
+  const descriptionId = useId()
   // Every opening asks again, also when the parent closed the dialog itself after a write.
   const [wasOpen, setWasOpen] = useState(open)
   if (open !== wasOpen) {
@@ -40,14 +44,14 @@ export function ConfirmWriteDialog({
   }
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!busy) onOpenChange(next) }}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-2xl" aria-labelledby={titleId} aria-describedby={descriptionId}>
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
+          <DialogTitle id={titleId} className="flex items-center gap-2">
             <AlertTriangle className="h-4 w-4 text-amber-600" aria-hidden="true" />
             {title}
           </DialogTitle>
-          <DialogDescription>
-            This writes to the tenant <strong className="text-gray-900 dark:text-gray-100">{tenantName}</strong>. {backupSkipped ? "No backup runs: the current state of every affected object is captured first, and the write stops if that fails." : "A full backup runs first and the current state of every affected object is captured; the write stops if either fails."}
+          <DialogDescription id={descriptionId}>
+            This writes to the tenant <strong className="text-gray-900 dark:text-gray-100">{tenantName}</strong>. {backupSkipped ? "No backup runs: the current state of every affected object is captured first, and the write stops if that fails." : "A backup with this tenant's backup settings runs first and must hold every policy type this change writes. The current state of every affected object is captured too; the write stops if either fails."}
           </DialogDescription>
         </DialogHeader>
         <div className="max-h-[50vh] space-y-4 overflow-y-auto text-sm">

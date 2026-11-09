@@ -27,13 +27,30 @@ export function initials(name: string): string {
  * in. Not linked anywhere: not synced yet. Otherwise the state that needs attention first. A
  * target whose status could not be read (`unread`) leaves the policy's state there unknown.
  */
-export function policyStatus(links: Array<{ tenantName: string; entry: SyncStatusEntry }>, unread: Array<{ tenantName: string; error: string }> = []): { label: string; tone: Tone; title?: string } {
+export function policyStatus(links: Array<{ tenantName: string; entry: SyncStatusEntry }>, unread: Array<{ tenantName: string; error: string }> = [], sourceName = "the source"): { label: string; tone: Tone; title?: string } {
   if (!links.length && !unread.length) return { label: "Not synced yet", tone: "neutral" }
-  const title = [...links.map(({ tenantName, entry }) => `${tenantName}: ${STATE_WORDS[entry.state]}${entry.error ? `. ${entry.error}` : ""}`), ...unread.map(({ tenantName, error }) => `${tenantName}: ${error}`)].join("\n")
+  const title = [...links.map(({ tenantName, entry }) => `${tenantName}: ${STATE_WORDS[entry.state]}${entry.changedIn ? ` (${CHANGED_WORDS[entry.changedIn]})` : ""}${entry.error ? `. ${entry.error}` : ""}`), ...unread.map(({ tenantName, error }) => `${tenantName}: ${error}`)].join("\n")
   if (links.some(({ entry }) => entry.state === "missing-in-target")) return { label: "Missing in target", tone: "warning", title }
-  if (links.some(({ entry }) => entry.state === "changed")) return { label: "Changed since last sync", tone: "warning", title }
+  const changed = links.filter(({ entry }) => entry.state === "changed")
+  if (changed.length) return { label: changedLabel(changed, sourceName), tone: "warning", title }
   if (unread.length || links.some(({ entry }) => entry.state !== "in-sync")) return { label: "Unknown", tone: "neutral", title }
   return { label: links.length === 1 ? `In sync with ${links[0]!.tenantName}` : `In sync with ${links.length} tenants`, tone: "success", title }
+}
+
+const CHANGED_WORDS: Record<NonNullable<SyncStatusEntry["changedIn"]>, string> = { source: "edited in the source", target: "edited in this tenant", both: "edited on both sides" }
+
+/**
+ * Where a changed policy was edited since its last sync, from the status's `changedIn`: the
+ * source, one target by name, several targets, or both sides. Without it, only that it changed.
+ */
+function changedLabel(changed: Array<{ tenantName: string; entry: SyncStatusEntry }>, sourceName: string): string {
+  const sides = changed.map(({ entry }) => entry.changedIn)
+  if (sides.some((side) => side === null)) return "Changed since last sync"
+  const inSource = sides.some((side) => side === "source" || side === "both")
+  const inTargets = changed.filter(({ entry }) => entry.changedIn === "target" || entry.changedIn === "both")
+  if (inSource && inTargets.length) return "Changed in both"
+  if (inSource) return `Changed in ${sourceName}`
+  return inTargets.length === 1 ? `Changed in ${inTargets[0]!.tenantName}` : `Changed in ${inTargets.length} targets`
 }
 
 const STATE_WORDS: Record<SyncStatusEntry["state"], string> = {
@@ -75,14 +92,20 @@ export function reviewRows(target: SyncTarget, preview: SyncPreview | null): Rev
     const operation = target.changeSet?.operations.find((entry) => entry.folder === item.folder && entry.source?.objectId?.toLowerCase() === item.sourceId.toLowerCase())
     const live = operation ? preview?.changeSet.operations.find((entry) => entry.key === operation.key) : undefined
     const kind: ReviewRow["kind"] = item.blocked ? "blocked" : item.action === "create" ? "create" : live && !live.diff.length && !live.diffTruncated ? "same" : "update"
+    // The live preview names objects of the same name with the current count; the plan's
+    // display-name finding says the same, so it is shown once, from the preview.
+    const liveSameName = (live?.warnings ?? []).some((message) => SAME_NAME.test(message))
     const notes: ReviewRow["notes"] = [
-      ...item.findings.map((finding) => ({ tone: finding.severity === "blocking" ? "danger" as const : finding.severity === "warning" ? "warning" as const : "neutral" as const, message: finding.message })),
+      ...item.findings.filter((finding) => !(liveSameName && finding.code === "display-name-only" && finding.severity === "warning")).map((finding) => ({ tone: finding.severity === "blocking" ? "danger" as const : finding.severity === "warning" ? "warning" as const : "neutral" as const, message: finding.message })),
       ...(live?.blockers ?? []).map((message) => ({ tone: "danger" as const, message })),
       ...(live?.warnings ?? []).map((message) => ({ tone: "warning" as const, message })),
     ]
     return { key: policyKey(item.folder, item.sourceId), name: item.sourceName, kind, notes }
   }), ...skipped]
 }
+
+/** The preview's warning about objects of the same name that a create adds to. */
+const SAME_NAME = /already exist; this creates another one\.$/
 
 /** Every selected policy of the target is in sync there, so its plan has nothing to write. */
 export const allInSync = (target: SyncTarget) => !target.error && !target.promotion && !!target.skipped?.length
@@ -218,4 +241,101 @@ export function linkPath(x1: number, y1: number, x2: number, y2: number): { d: s
   const dx = (x2 - x1) / 2
   // At t = 0.5 this curve passes through the middle of its end points.
   return { d: `M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}`, mid: { x: (x1 + x2) / 2, y: (y1 + y2) / 2 } }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Progress, outcome and recent runs
+
+export interface ApplyStage {
+  /** 0 approve, 1 back up or save the current versions, 2 write, 3 verify. */
+  step: 0 | 1 | 2 | 3
+  /** What the target does now, for its node and its accessible name. */
+  label: string
+  /** The four stages, named for this target's backup choice. */
+  steps: [string, string, string, string]
+}
+
+const SETTLED = new Set(["verified", "failed", "uncertain", "approval"])
+
+/**
+ * The stage a writing target is at, read from its stored change set and target record, never
+ * from a timer: approving while the change set is still in review; then the pre-change backup
+ * (or, without a backup, saving the current versions) until the pre-change capture is stored;
+ * then writing operation N of M; verifying once every operation was sent and the last read-back
+ * is outstanding. Null for a target that is not writing.
+ */
+export function applyStage(target: SyncTarget, active: boolean): ApplyStage | null {
+  const changeSet = target.changeSet
+  if (!changeSet || !(active || changeSet.status === "applying")) return null
+  const skip = backupOf(target) === "none"
+  const steps: ApplyStage["steps"] = ["Approve", skip ? "Save" : "Back up", "Write", "Verify"]
+  if (changeSet.status === "in-review") return { step: 0, label: "Approving", steps }
+  if (!changeSet.preChange) return { step: 1, label: skip ? "Saving current versions" : "Backing up", steps }
+  const total = changeSet.operations.length
+  const statuses = changeSet.operations.map((operation) => changeSet.results[operation.key]?.status)
+  const settled = statuses.filter((status) => status && SETTLED.has(status)).length
+  const sent = settled + statuses.filter((status) => status === "writing").length
+  if (total > 0 && sent === total) return { step: 3, label: "Verifying", steps }
+  return { step: 2, label: `Writing ${Math.min(settled + 1, Math.max(total, 1))} of ${total}`, steps }
+}
+
+/** What a target's sync did per operation: created and updated (verified), skipped as in sync, failed or unconfirmed. */
+export function outcomeCounts(target: SyncTarget): { created: number; updated: number; skipped: number; failed: number } {
+  const changeSet = target.changeSet
+  const counts = { created: 0, updated: 0, skipped: target.skipped?.length ?? 0, failed: 0 }
+  for (const operation of changeSet?.operations ?? []) {
+    const status = changeSet!.results[operation.key]?.status
+    if (status === "verified") counts[operation.action === "create" ? "created" : "updated"]++
+    else if (status === "failed" || status === "uncertain") counts.failed++
+  }
+  return counts
+}
+
+/** A target planned for review: its change set is still in review. */
+export const awaitingReview = (target: SyncTarget) => target.changeSet?.status === "in-review"
+
+/**
+ * Whether a run can be discarded, as the main process decides it: no target was ever approved
+ * or applied (no stored backup choice, approval or claimed apply).
+ */
+export function discardable(targets: SyncTarget[]): boolean {
+  return targets.every((target) => {
+    const changeSet = target.changeSet
+    if (target.promotion?.sync?.backup) return false
+    return !changeSet || (changeSet.review?.decision !== "approved" && changeSet.attempts === 0 && ["in-review", "rejected", "stale"].includes(changeSet.status))
+  })
+}
+
+export type RunOutcome = "applied" | "partial" | "failed" | "applying" | "rolled-back" | "not-applied" | "in-sync"
+
+/** The outcome of a listed run; runs listed before outcomes were stored fall back to `applied` and `inSync`. */
+export function runOutcome(run: { outcome?: RunOutcome; applied?: boolean; inSync?: boolean }): RunOutcome {
+  return run.outcome ?? (run.inSync ? "in-sync" : run.applied ? "applied" : "not-applied")
+}
+
+export const OUTCOME_CHIP: Record<RunOutcome, { label: string; tone: Tone }> = {
+  applied: { label: "Applied", tone: "success" },
+  partial: { label: "Partly applied", tone: "warning" },
+  failed: { label: "Failed", tone: "danger" },
+  applying: { label: "Syncing", tone: "coral" },
+  "rolled-back": { label: "Rolled back", tone: "neutral" },
+  "not-applied": { label: "Not applied", tone: "warning" },
+  "in-sync": { label: "Already in sync", tone: "success" },
+}
+
+const UNITS: Array<[Intl.RelativeTimeFormatUnit, number]> = [["minute", 60], ["hour", 60], ["day", 24], ["week", 7], ["month", 4.35], ["year", 12]]
+
+/** "2 hours ago", "yesterday", "just now": how long ago an ISO time was, in English. */
+export function relativeTime(iso: string, now = Date.now()): string {
+  let value = (Date.parse(iso) - now) / 60_000
+  if (!Number.isFinite(value)) return ""
+  if (Math.abs(value) < 1) return "just now"
+  const format = new Intl.RelativeTimeFormat("en", { numeric: "auto" })
+  for (let index = 0; index < UNITS.length; index++) {
+    const [unit] = UNITS[index]!
+    const next = UNITS[index + 1]
+    if (!next || Math.abs(Math.round(value)) < next[1]) return format.format(Math.round(value), unit)
+    value /= next[1]
+  }
+  return ""
 }

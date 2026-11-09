@@ -70,6 +70,11 @@ export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollb
   }
 
   const loadPreview = () => run("preview", async () => { setPreview(await actions!.preview()) })
+  // After an approval the shown review is read again, so it states the approval just stored
+  // instead of the one read before it. A failed read only hides the review.
+  const refreshPreview = async () => {
+    try { setPreview(await actions!.preview()) } catch { setPreview(null) }
+  }
   const step = stepOf(changeSet, preview)
   // A stale change set is finished; only a new preview of the change creates a reviewable one.
   const canReview = !!actions && ["in-review", "approved"].includes(changeSet.status)
@@ -165,10 +170,12 @@ export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollb
               {decisionFields && <label className="flex flex-col gap-1 text-xs text-gray-500">Reviewer<input className={inputClass} value={reviewer} maxLength={200} onChange={(event) => setReviewer(event.target.value)} placeholder="Name of the reviewer" /></label>}
               {decisionFields && <label className="flex flex-col gap-1 text-xs text-gray-500">Decision note<input className={inputClass} value={note} maxLength={2000} onChange={(event) => setNote(event.target.value)} placeholder="Why this change is approved or rejected" /></label>}
               <div className="flex flex-wrap gap-2 sm:col-span-2">
-                <Button type="button" size="sm" disabled={!!busy} onClick={() => void run("approve", () => actions!.approve({ contentHash: preview.contentHash, targetFingerprint: preview.targetFingerprint, reviewer, note }), "Approved. The approval is bound to this content and target state.")}>
-                  <ShieldCheck className="h-4 w-4" />
-                  Approve this content and target state
-                </Button>
+                {!preview.approval.valid && (
+                  <Button type="button" size="sm" disabled={!!busy} onClick={() => void run("approve", async () => { await actions!.approve({ contentHash: preview.contentHash, targetFingerprint: preview.targetFingerprint, reviewer, note }); await refreshPreview() }, "Approved. The approval is bound to this content and target state.")}>
+                    <ShieldCheck className="h-4 w-4" />
+                    Approve this content and target state
+                  </Button>
+                )}
                 <Button type="button" size="sm" variant="outline" disabled={!!busy} onClick={() => void run("reject", () => actions!.reject({ reviewer, note }), "Rejected.")}>
                   <XCircle className="h-4 w-4" />
                   Reject
@@ -256,7 +263,8 @@ export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollb
         busy={busy === "apply"}
         onConfirm={() => {
           const hash = changeSet.contentHash
-          void run("apply", () => (confirm === "retry" ? actions!.retry(hash) : actions!.apply(hash)), "Finished. Check the result of every operation.", onApplied).then(() => setConfirm(null))
+          // The review read before the write is out of date once anything was written, also after a failure.
+          void run("apply", () => (confirm === "retry" ? actions!.retry(hash) : actions!.apply(hash)), "Finished. Check the result of every operation.", onApplied).then(() => { setConfirm(null); setPreview(null) })
         }}
       />
     </div>

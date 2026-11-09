@@ -1,8 +1,8 @@
-import { useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
+import { AlertTriangle, ArrowRight, CheckCircle2, Clock, Loader2, Undo2, XCircle } from "lucide-react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useSelectedTenant, useTenants, type Tenant } from "~/contexts/TenantContext"
 import { Button } from "~/components/ui/button"
-import { Chip } from "~/components/dashboard/tiles"
 import { canUse, LockedPreview } from "../components/PlanGate"
 import { useLicense, useTenantPlan } from "../lib/license"
 import { showFeaturePlanError } from "../lib/plan-dialog"
@@ -10,6 +10,7 @@ import { formatDate } from "../features/shared/change-set"
 import {
   applySyncTarget,
   approveSyncTarget,
+  discardSyncRun,
   getSyncRun,
   listSyncRuns,
   MAX_SYNC_POLICIES,
@@ -26,7 +27,7 @@ import {
   type SyncTarget,
   type SyncTargetOption,
 } from "../features/sync/api"
-import { needsSecretAck, plural, policyKey, policyStatus, readiness, type ReviewState } from "../features/sync/model"
+import { awaitingReview, discardable, excludedReason, needsSecretAck, OUTCOME_CHIP, plural, policyKey, policyStatus, readiness, relativeTime, runOutcome, type ReviewState } from "../features/sync/model"
 import { card, ChooseSettings, ChooseTargets, ReviewStep, Stepper, type SelectedPolicy } from "../features/sync/SyncSteps"
 import { resultEntries, SyncResult } from "../features/sync/SyncResult"
 
@@ -52,7 +53,7 @@ export default function SyncPage() {
       {!selectedTenant?.credentials?.tenantId ? (
         <p className="rounded-3xl bg-card p-6 text-sm text-gray-600">Connect or select a tenant to use Sync.</p>
       ) : !status ? (
-        <div className="h-24 animate-pulse rounded-3xl bg-card" />
+        <div className="h-24 rounded-3xl bg-card motion-safe:animate-pulse" />
       ) : !canUse(plan, "sync") ? (
         <LockedPreview
           feature="sync"
@@ -91,16 +92,23 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
   const [active, setActive] = useState<ReadonlySet<string>>(new Set())
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [notes, setNotes] = useState<Record<string, string>>({})
+  const [discarding, setDiscarding] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null })
   const planRequest = useRef(0)
   const shownRun = useRef(runId)
   shownRun.current = runId
   const source = tenantOf(sourceId) ?? selected
   const pending = (id: string | null) => !!id && [...active].some((key) => key.startsWith(`${id}:`))
 
-  const policies = useQuery({ queryKey: ["sync", "policies", sourceId, folder], queryFn: () => syncPolicies(source, folder) })
+  // Policies and their sync status are read again when the window regains focus and after every
+  // sync, rollback or new start, so a chip never shows a state from before a change.
+  const policies = useQuery({ queryKey: ["sync", "policies", sourceId, folder], queryFn: () => syncPolicies(source, folder), refetchOnWindowFocus: true })
   const options = useQuery({ queryKey: ["sync", "targets", sourceId], queryFn: () => syncTargets(source) })
   const eligible = (options.data?.targets ?? []).filter((option) => option.eligible).map((option) => option.tenantId).slice(0, 25)
-  const status = useQuery({ queryKey: ["sync", "status", sourceId, eligible.join()], queryFn: () => syncStatus(source, eligible), enabled: eligible.length > 0, staleTime: 60_000 })
+  const status = useQuery({ queryKey: ["sync", "status", sourceId, eligible.join()], queryFn: () => syncStatus(source, eligible), enabled: eligible.length > 0, staleTime: 10_000, refetchOnWindowFocus: true })
+  const refreshStatus = () => {
+    void queryClient.invalidateQueries({ queryKey: ["sync", "status", sourceId] })
+    void queryClient.invalidateQueries({ queryKey: ["sync", "policies", sourceId] })
+  }
   const runs = useQuery({ queryKey: ["sync", "runs", sourceId], queryFn: () => listSyncRuns(source) })
   const run = useQuery({
     queryKey: ["sync", "run", sourceId, runId],
@@ -139,7 +147,7 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
     if (!eligible.length) return options.isLoading ? null : { label: "Not synced yet", tone: "neutral" as const }
     if (status.isLoading) return null
     if (status.error) return { label: "Unknown", tone: "neutral" as const, title: message(status.error, "The sync status could not be read.") }
-    return policyStatus(statusByPolicy.byPolicy.get(policyKey(policy.folder, policy.id)) ?? [], statusByPolicy.unread)
+    return policyStatus(statusByPolicy.byPolicy.get(policyKey(policy.folder, policy.id)) ?? [], statusByPolicy.unread, source.name)
   }
 
   const toggle = (policy: PolicyOption) => {
@@ -166,6 +174,29 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
 
   const fetchRun = (id: string) => queryClient.fetchQuery({ queryKey: ["sync", "run", sourceId, id], queryFn: () => getSyncRun(source, id) })
 
+  /**
+   * Reads every target of a planned run against its live state, each on its own, and keeps the
+   * result of a target only while `current` holds. A target no longer in review cannot be
+   * approved, so it shows why. Nothing is written.
+   */
+  const checkTargets = async (detail: { targets: SyncTarget[] }, current: () => boolean) => {
+    await Promise.all(detail.targets.map(async (target) => {
+      if (!target.promotionId || !target.changeSet || target.promotion?.status === "blocked") return
+      let state: ReviewState
+      if (!awaitingReview(target)) state = { preview: null, error: excludedReason(target) }
+      else {
+        const tenant = tenantOf(target.targetTenantId)
+        try {
+          if (!tenant) throw new Error("This tenant is no longer connected to this app.")
+          state = { preview: await previewSyncTarget(tenant, target.promotionId), error: null }
+        } catch (error) {
+          state = { preview: null, error: message(error, "This tenant could not be read.") }
+        }
+      }
+      if (current()) setReviews((shown) => ({ ...shown, [target.targetTenantId]: state }))
+    }))
+  }
+
   /** Plans the run, then reads every planned target live. Nothing is written. */
   const review = async (acknowledgeRedacted: boolean) => {
     // Only the latest plan request may show its result; leaving the review or opening a recent
@@ -175,6 +206,8 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
     setPlanning(true)
     setPlanError(null)
     setReviews({})
+    // A new review starts from its own plan; planning again for the acknowledgement keeps the targets shown.
+    if (!acknowledgeRedacted) setRunId(null)
     setStep(3)
     try {
       const items = Object.values(chosen)
@@ -184,24 +217,61 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
       setRunId(planned.run.id)
       const detail = await fetchRun(planned.run.id)
       if (!current()) return
-      await Promise.all(detail.targets.map(async (target) => {
-        if (!target.promotionId || target.changeSet?.status !== "in-review") return
-        const tenant = tenantOf(target.targetTenantId)
-        let state: ReviewState
-        try {
-          if (!tenant) throw new Error("This tenant is no longer connected to this app.")
-          state = { preview: await previewSyncTarget(tenant, target.promotionId), error: null }
-        } catch (error) {
-          state = { preview: null, error: message(error, "This tenant could not be read.") }
-        }
-        if (current()) setReviews((shown) => ({ ...shown, [target.targetTenantId]: state }))
-      }))
+      await checkTargets(detail, current)
     } catch (error) {
       if (!current()) return
       showFeaturePlanError(error)
       setPlanError(message(error, "The sync could not be planned."))
     } finally {
       if (current()) setPlanning(false)
+    }
+  }
+
+  /**
+   * Opens a run that was planned and never approved at Review again, with its stored plan: its
+   * policies, targets and acknowledgement, and every target read against its live state again.
+   */
+  const continueReview = async (id: string) => {
+    const token = ++planRequest.current
+    const current = () => token === planRequest.current
+    setPlanning(true)
+    setPlanError(null)
+    setReviews({})
+    setNotes({})
+    setErrors({})
+    setDiscarding({ busy: false, error: null })
+    setStep(3)
+    try {
+      const detail = await fetchRun(id)
+      if (!current()) return
+      const named = new Map(detail.targets.flatMap((target) => target.promotion?.items ?? []).map((item) => [policyKey(item.folder, item.sourceId), item.sourceName]))
+      setChosen(Object.fromEntries(detail.run.items.map((item) => {
+        const key = policyKey(item.folder, item.sourceId)
+        return [key, { folder: item.folder, sourceId: item.sourceId, name: item.sourceName ?? named.get(key) ?? item.sourceId, platforms: chosen[key]?.platforms ?? null }]
+      })))
+      setTargets(detail.run.targets.map((target) => target.targetTenantId))
+      setAck(detail.run.options.acknowledgeRedacted)
+      setRunId(id)
+      await checkTargets(detail, current)
+    } catch (error) {
+      if (current()) setPlanError(message(error, "The sync could not be read."))
+    } finally {
+      if (current()) setPlanning(false)
+    }
+  }
+
+  /** Discards the run shown; the main process refuses once a target was approved. */
+  const discardRun = async (id: string) => {
+    setDiscarding({ busy: true, error: null })
+    try {
+      await discardSyncRun(source, id)
+      await queryClient.invalidateQueries({ queryKey: ["sync", "runs", sourceId] })
+      // Only the run still shown is left; another run opened meanwhile stays as it is.
+      if (shownRun.current === id) restart()
+    } catch (error) {
+      if (shownRun.current === id) setDiscarding({ busy: false, error: message(error, "This sync could not be discarded.") })
+    } finally {
+      setDiscarding((current) => (current.busy ? { ...current, busy: false } : current))
     }
   }
 
@@ -269,6 +339,7 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
     setRunId(entry.id)
     setNotes({})
     setErrors({})
+    setDiscarding({ busy: false, error: null })
     setStep(4)
   }
 
@@ -282,9 +353,20 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
     setErrors({})
     setAck(false)
     setPlanError(null)
+    setDiscarding({ busy: false, error: null })
+    refreshStatus()
   }
 
+  // Once the run shown stops writing, the status of its policies is read again.
+  const writing = runTargets.some((target) => target.changeSet?.status === "applying") || pending(runId)
+  const wasWriting = useRef(false)
+  useEffect(() => {
+    if (wasWriting.current && !writing) refreshStatus()
+    wasWriting.current = writing
+  })
+
   const runSource = run.data ? tenantOf(run.data.run.sourceTenantId) : source
+  const runPolicies = run.data ? run.data.run.items.map((item) => item.sourceName ?? chosen[policyKey(item.folder, item.sourceId)]?.name ?? runTargets.flatMap((target) => target.promotion?.items ?? []).find((entry) => policyKey(entry.folder, entry.sourceId) === policyKey(item.folder, item.sourceId))?.sourceName ?? "Policy") : []
   const platforms = Object.fromEntries(Object.values(chosen).map((policy) => [policy.sourceId.toLowerCase(), policy.platforms]))
   const sources = tenants
 
@@ -292,6 +374,7 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
     <div className="space-y-6">
       <Stepper step={step} />
 
+      <div key={step} className="sync-step">
       {step === 1 && (
         <ChooseSettings
           sources={sources}
@@ -331,6 +414,7 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
           reviews={reviews}
           planning={planning}
           planError={planError}
+          reading={{ source: source.name, targets: targets.length }}
           tenantOf={tenantOf}
           backup={backup}
           onBackup={setBackup}
@@ -349,11 +433,12 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
 
       {step === 4 && (
         <section aria-label="Sync result" className={`${card} p-6`}>
-          {run.isLoading && <div className="h-40 animate-pulse rounded-2xl bg-gray-100" />}
+          {run.isLoading && <div aria-busy="true" aria-label="Reading the sync" className="sync-skeleton h-40 rounded-2xl bg-gray-100" />}
           {run.error && <p className="text-sm text-red-700">{message(run.error, "The sync could not be read.")}</p>}
           {run.data && (
             <SyncResult
               source={{ name: runSource?.name ?? run.data.run.sourceTenantId, domain: runSource?.domain ?? "" }}
+              policies={runPolicies}
               policyCount={run.data.run.items.length}
               entries={resultEntries(runTargets, tenantOf, shownActive, shownErrors)}
               errors={shownErrors}
@@ -362,7 +447,10 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
               onRetry={retry}
               retrying={shownActive.size > 0}
               tenantOf={tenantOf}
-              onChanged={() => void run.refetch()}
+              onChanged={() => { void run.refetch(); void runs.refetch(); refreshStatus() }}
+              onContinue={runTargets.some(awaitingReview) && runId ? () => void continueReview(runId) : undefined}
+              onDiscard={runId && runTargets.length > 0 && discardable(runTargets) && !shownActive.size ? () => void discardRun(runId) : undefined}
+              discard={discarding}
             />
           )}
           <div className="mt-6 flex flex-wrap justify-between gap-3">
@@ -370,29 +458,54 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
           </div>
         </section>
       )}
+      </div>
 
       <section aria-label="Recent syncs" className={`${card} space-y-3 p-6`}>
         <h2 className="text-lg font-semibold text-gray-900">Recent syncs</h2>
-        {runs.isLoading && <div className="h-12 animate-pulse rounded-2xl bg-gray-100" />}
+        {runs.isLoading && <div aria-busy="true" aria-label="Loading recent syncs" className="sync-skeleton h-12 rounded-2xl bg-gray-100" />}
         {runs.error && <p className="text-sm text-red-700">{message(runs.error, "Recent syncs could not be loaded.")}</p>}
         {runs.data && !runs.data.runs.length && <p className="text-sm text-gray-600">No syncs from {source.name} yet.</p>}
         {!!runs.data?.runs.length && (
           <ul className="max-h-80 divide-y divide-gray-100 overflow-y-auto">
-            {runs.data.runs.map((entry) => (
-              <li key={entry.id}>
-                <button type="button" aria-pressed={runId === entry.id && step === 4} disabled={planning} onClick={() => openRun(entry)} className="flex w-full flex-wrap items-center gap-3 rounded-2xl px-2 py-3 text-left hover:bg-gray-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-60">
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium text-gray-900">{entry.title}</span>
-                    <span className="block text-xs text-gray-500">{formatDate(entry.createdAt)}. To {entry.targets.map((target) => tenantOf(target.targetTenantId)?.name ?? target.targetTenantId).join(", ")}. {entry.summary}</span>
-                  </span>
-                  {entry.inSync ? <Chip tone="success">Already in sync</Chip> : !entry.applied && <Chip tone="warning">Not applied</Chip>}
-                  <Chip>{plural(entry.targets.length, "target", "targets")}</Chip>
-                </button>
-              </li>
-            ))}
+            {runs.data.runs.map((entry) => {
+              const chip = OUTCOME_CHIP[runOutcome(entry)]
+              const names = entry.targets.map((target) => tenantOf(target.targetTenantId)?.name ?? target.targetTenantId)
+              const from = tenantOf(entry.sourceTenantId)?.name ?? source.name
+              return (
+                <li key={entry.id}>
+                  <button type="button" aria-pressed={runId === entry.id && step === 4} disabled={planning || discarding.busy} onClick={() => openRun(entry)} className="flex w-full flex-wrap items-center gap-3 rounded-2xl px-2 py-3 text-left transition-colors hover:bg-gray-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-60 aria-pressed:bg-secondary">
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium text-gray-900">{entry.title}</span>
+                      <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-gray-500">
+                        <span className="truncate">{from}</span>
+                        <ArrowRight className="h-3 w-3 shrink-0" aria-label="to" />
+                        <span className="truncate" title={names.join(", ")}>{names.length === 1 ? names[0] : plural(names.length, "target", "targets")}</span>
+                        <span aria-hidden="true">·</span>
+                        <time dateTime={entry.createdAt} title={formatDate(entry.createdAt)} className="shrink-0">{relativeTime(entry.createdAt)}</time>
+                      </span>
+                    </span>
+                    <OutcomeChip label={chip.label} tone={chip.tone} />
+                  </button>
+                </li>
+              )
+            })}
           </ul>
         )}
       </section>
     </div>
+  )
+}
+
+const OUTCOME_ICON = { success: CheckCircle2, warning: AlertTriangle, danger: XCircle, coral: Loader2, neutral: Undo2 } as const
+
+/** A run's outcome as a pill with an icon; Not applied shows a clock instead of the warning sign. */
+function OutcomeChip({ label, tone }: { label: string; tone: keyof typeof OUTCOME_ICON }) {
+  const Icon = label === "Not applied" ? Clock : OUTCOME_ICON[tone]
+  const tones = { success: "bg-green-50 text-green-700", warning: "bg-amber-50 text-amber-800", danger: "bg-red-50 text-red-700", coral: "bg-blue-50 text-blue-700", neutral: "bg-secondary text-gray-700" }
+  return (
+    <span className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-medium ${tones[tone]}`}>
+      <Icon className={`h-3.5 w-3.5${tone === "coral" ? " motion-safe:animate-spin" : ""}`} aria-hidden="true" />
+      {label}
+    </span>
   )
 }
