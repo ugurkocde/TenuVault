@@ -71,7 +71,7 @@ describe("legacy sealed Azure backups notice", () => {
     expect([...container.querySelectorAll("button")].map((button) => button.textContent?.trim())).toEqual(["Import recovery key"])
   })
 
-  it("lists the backups again after an import and says so when the key did not open them", async () => {
+  it("lists the backups again after an import and says so when some still cannot be opened", async () => {
     backups.importRecoveryKey.mockResolvedValue(settings)
     const onImported = vi.fn(async () => undefined)
     const { container } = render(1, onImported)
@@ -79,7 +79,7 @@ describe("legacy sealed Azure backups notice", () => {
     await importKey(container)
     expect(backups.importRecoveryKey).toHaveBeenCalledWith("TVK2.example")
     expect(onImported).toHaveBeenCalledOnce()
-    expect(container.textContent).toContain("The imported key does not open this backup")
+    expect(container.textContent).toContain("This device still cannot open this backup")
   })
 
   it("goes away once the list after an import has no such backups", async () => {
@@ -91,6 +91,6 @@ describe("legacy sealed Azure backups notice", () => {
     await importKey(rendered.container)
     expect(rendered.container.textContent).toBe("")
     rendered.draw(1)
-    expect(rendered.container.textContent).not.toContain("The imported key does not open")
+    expect(rendered.container.textContent).not.toContain("still cannot open")
   })
 })

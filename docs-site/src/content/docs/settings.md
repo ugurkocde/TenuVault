@@ -28,7 +28,7 @@ If no tenant is connected, the card shows **No tenants yet.** with a link to **S
 | Control | What it does |
 | --- | --- |
 | **Sign in** / **Sign in again** | Opens a Microsoft sign-in for the tenant, pre-filled with the account last used. You must sign in to the same tenant; otherwise TenuVault shows **You signed in to a different tenant. Sign in with an account from this tenant.** Signing in again also rechecks the tenant's license. |
-| **Change storage** | Opens **Backup storage for &lt;tenant&gt;**, where you choose between **This device, encrypted** and **Your Azure storage account, encrypted**. |
+| **Change storage** | Opens **Backup storage for &lt;tenant&gt;**, where you choose between **This device, encrypted** and **Your Azure storage account**. For Azure, **Save** is available once **Check access** shows **Access confirmed**. |
 
 ### Change storage
 
@@ -70,22 +70,22 @@ After an import, TenuVault shows **Imported &lt;backup&gt;. Select this device a
 
 ### Encryption key
 
-The backup encryption key is protected by your Windows account or macOS Keychain. The same key encrypts backups on this device and backups uploaded to Azure storage.
+The backup encryption key is protected by your Windows account or macOS Keychain. It encrypts backups on this device. Backups in Azure storage are not encrypted by TenuVault and do not need it, except Azure backups that an earlier TenuVault version encrypted with it.
 
 | Control | What it does |
 | --- | --- |
 | **Key fingerprint** | Identifies the current key. The recovery key file name includes it. |
-| **Save recovery key** | Saves the recovery key to a text file, by default `Documents/TenuVault recovery key <fingerprint>.txt`. The saved bundle includes all previous keys on this device. Required before the first Azure backup. |
+| **Save recovery key** | Saves the recovery key to a text file, by default `Documents/TenuVault recovery key <fingerprint>.txt`. The saved bundle includes all previous keys on this device. |
 | **Import a recovery key** | Opens a field where you paste a recovery key (`TVK2.` bundle, or a legacy `TVK1.` key) and select **Import**. |
 
-After you import a key, the imported key encrypts new backups, and backups made with the previous key stay readable. Save a new bundle after importing keys, so your saved recovery key covers every key on this device.
+After you import a key, the imported key encrypts new backups on this device, and backups made with the previous key stay readable. Save a new bundle after importing keys, so your saved recovery key covers every key on this device.
 
 TenuVault reads the backup inventory of each tenant connected on this device that keeps its backups in the folder, exactly as a backup would. When that inventory holds backups this device cannot read, because another installation made them with a different key or the files are damaged, the card and **All tenants** show **This folder has backups this device cannot read**, with **Import recovery key** and **Choose another folder**. Backups to an affected tenant fail until one of the two is done. See [A folder with backups this device cannot read](/backups/storage/#a-folder-with-backups-this-device-cannot-read).
 
-When local backup files exist or a tenant uses local storage, **Settings** and **Overview** show a recovery key notice if no export is recorded for the current key. Select **Go to Save recovery key** to reach the export action. The notice disappears after you save the key. It does not block local backups. Starting over deletes the backup encryption key from the active app state. Existing local and Azure backups become unreadable unless you exported their recovery key.
+When local backup files exist or a tenant uses local storage, **Settings** and **Overview** show a recovery key notice if no export is recorded for the current key. Select **Go to Save recovery key** to reach the export action. The notice disappears after you save the key. It does not block local backups. Starting over deletes the backup encryption key from the active app state. Backups on this device become unreadable unless you exported their recovery key, and so do Azure backups that an earlier TenuVault version encrypted with it. Azure backups made by this version stay readable.
 
 :::caution
-Without the recovery key, backups can only be read on this computer by this user account. Save it in your password manager and delete the file. See [Encryption and recovery key](/security/encryption/).
+Without the recovery key, backups on this device can only be read on this computer by this user account. Save it in your password manager and delete the file. See [Encryption and recovery key](/security/encryption/).
 :::
 
 ### Restore write history

@@ -14,6 +14,7 @@ This page is for rolling TenuVault out to several admins: installing it on manag
 3. **Give admins the right roles.** Each admin needs an Intune role, and **Storage Blob Data Contributor** on the storage account if backups go to Azure. See [Requirements](/getting-started/requirements/#admins-who-use-tenuvault).
 4. **Decide how updates reach devices.** Either let TenuVault update itself, or turn automatic updates off by policy and deploy new versions yourself. See [Control automatic updates](#control-automatic-updates).
 5. **Share licenses.** The admin who holds the license key can share it with the tenant's other admins, so they do not need the key. See [Activate and manage your license](/licensing/manage/).
+6. **Share one storage account.** When every admin picks the same Azure storage account, they all see, compare and restore the same backups, with no recovery key to hand over. See [Work with other admins in one tenant](/getting-started/multiple-admins/) for what is shared and what stays on each computer.
 
 ## Deploy with Intune
 

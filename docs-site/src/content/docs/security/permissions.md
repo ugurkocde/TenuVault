@@ -80,7 +80,7 @@ TenuVault reads this from the sign-in it already has, without a new request to M
 
 | Permission | Why TenuVault needs it |
 | --- | --- |
-| `user_impersonation` | Lists the Azure subscriptions and storage accounts you can see, so you can pick a storage account for backups. Used only when you choose **Your Azure storage account, encrypted** as backup storage. TenuVault only reads these lists; it does not create or change subscriptions or storage accounts. |
+| `user_impersonation` | Lists the Azure subscriptions and storage accounts you can see, so you can pick a storage account for backups. Used only when you choose **Your Azure storage account** as backup storage. TenuVault only reads these lists; it does not create or change subscriptions or storage accounts. |
 
 ### Azure Storage
 

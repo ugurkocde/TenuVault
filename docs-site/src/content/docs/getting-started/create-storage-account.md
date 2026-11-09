@@ -1,6 +1,6 @@
 ---
 title: "Create a storage account for TenuVault"
-description: Create the Azure storage account TenuVault stores encrypted backups in, with a script or in the Azure portal, and grant your Intune admins access.
+description: Create the Azure storage account TenuVault stores Intune backups in, with a script or in the Azure portal, and grant your Intune admins access.
 ---
 
 TenuVault stores Azure backups in a storage account in your own subscription and never creates Azure resources itself. This page is for the Azure administrator who creates that account, for example when an Intune administrator asks for one. If a suitable storage account already exists, only the role assignments below are needed.
@@ -101,10 +101,10 @@ Backups are Intune configuration as JSON files, so most tenants store a modest a
 * **Immutability policies and legal holds** on the `intune-backups` container block the deletes that retention performs. Older backups then stay in place and TenuVault reports that old backups could not be removed.
 * **Lifecycle management rules** that move backup blobs to Cool, Cold or Archive, or that delete them, fight with TenuVault retention and can remove files a backup still lists. Let TenuVault decide what to delete.
 * A **CannotDelete** resource lock is compatible and recommended: it blocks deleting the storage account itself, while blob writes and deletes continue normally.
-* Blob names are not encrypted and include each object's display name, and audit log events are plain JSON. Everyone who can list the containers can see them, so keep the roles above limited to the admin group. Backup file contents are encrypted before upload.
+* Backups are stored as plain JSON policies, protected by Azure encryption at rest and these role assignments, and audit log events are plain JSON too. Everyone who can read the containers can read the backups, including the plain-text values of secret OMA-URI settings, and everyone who can write to `intune-backups` is trusted like an Intune admin, because a restore writes what it finds there. Keep the roles above limited to the admin group. See [Backups in Azure](/security/encryption/#backups-in-azure).
 
 ## After the account exists
 
 1. Tell the Intune administrators the storage account name.
-2. Each administrator chooses **Your Azure storage account, encrypted** during tenant setup or in **Settings** > **Sign-in** > **Change storage**, picks the account and selects **Check access**. See [Choose where backups are stored](/getting-started/choose-storage/).
-3. Each administrator saves their recovery key in **Settings** before the first Azure backup; TenuVault refuses the upload until they have. See [Save your recovery key](/getting-started/choose-storage/#save-your-recovery-key).
+2. Each administrator chooses **Your Azure storage account** during tenant setup or in **Settings** > **Sign-in** > **Change storage**, picks the account and selects **Check access**. See [Choose where backups are stored](/getting-started/choose-storage/).
+3. Every administrator in the group then sees, compares and restores the same backups. No recovery key is handed over. See [Work with other admins in one tenant](/getting-started/multiple-admins/).

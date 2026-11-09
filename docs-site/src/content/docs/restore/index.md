@@ -21,7 +21,7 @@ An Intune restore brings Microsoft Intune policies back as they were when a back
 * The tenant is signed in and its license is active. If not, TenuVault shows a notice with **Open sign-in settings** and **Open license** above the page. See [Sign in to your tenant](/getting-started/connect-tenant/) and [Activate and manage your license](/licensing/manage/).
 * The tenant has backup storage chosen, and at least one backup with items in it. See [Run a backup](/backups/).
 * Your admin account has an Intune role that can write the item types you restore, for example Intune Administrator. TenuVault uses delegated permissions, so it can never do more than your account can.
-* If the backup is in Azure storage and you are on a different device than the one that made it, import the recovery key first. See [Encryption and recovery key](/security/encryption/).
+* If the backup is in a folder from another device, import that device's recovery key first. Azure backups need no key, except older Azure backups that an earlier TenuVault version encrypted. See [Encryption and recovery key](/security/encryption/).
 
 ## What your plan includes
 

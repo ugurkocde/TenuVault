@@ -14,7 +14,7 @@ TenuVault is built so that your Intune configuration, your backups and your Micr
 | Is there a client secret or certificate? | Never a secret. The app registration you sign in with is a public client with no credentials. The optional Backup Reader uses a certificate whose private key never leaves your computer. |
 | Who does TenuVault act as? | You, the signed-in admin. It can never do more than your own roles allow. Only scheduled backups of a tenant with a Backup Reader read as that read-only app. |
 | Do MFA and Conditional Access apply? | Yes, exactly as they do when you sign in to the Intune admin center. The Backup Reader is an application, so Conditional Access for workload identities applies to it instead. See [Conditional Access and TenuVault](/security/conditional-access/). |
-| Where do backups go? | Encrypted on your device, or encrypted into your own Azure storage account. |
+| Where do backups go? | Encrypted on your device, or into your own Azure storage account, where Azure encrypts them at rest and your role assignments decide who reads them. |
 | Does tenant data reach TenuVault servers? | No, with one opt-in exception: feedback you choose to send with **Share feedback**. It contains the text you write and, only if you tick it, a screenshot of the window that may show tenant, policy or user names. Otherwise only license checks go to tenuvault.com, and they carry no tenant configuration, backups or access tokens. |
 | Is TenuVault data shared with anyone? | Only with the service providers that run TenuVault's services, and never sold or shared for their own marketing. Each license activation (installation ID, tenant ID, operating system and app version) is recorded with your license key in Polar, the merchant of record. Licenses shared with a tenant are stored with the tenant ID and client ID in TenuVault's database at Supabase, and Vercel hosts the services and keeps request logs. Feedback you choose to send is stored up to 12 months; the email copy to support is kept as support correspondence. See [Service providers](https://www.tenuvault.com/privacy#processors) in the privacy policy. |
 | Can I check this myself? | Yes. The source code is public at [github.com/ugurkocde/TenuVault](https://github.com/ugurkocde/TenuVault). |
@@ -46,7 +46,7 @@ TenuVault keeps its working data in an encrypted store in your user profile, pro
 
 If the operating system cannot provide this protection, the packaged app refuses to start rather than store this data in plain text.
 
-Backups are encrypted with AES-256-GCM before they are written to disk or uploaded to Azure. See [Encryption and recovery key](/security/encryption/).
+Backups on your device are encrypted with AES-256-GCM before they are written to disk. Backups in your Azure storage account are stored as plain JSON policies: Azure encrypts them at rest, and access follows your Azure role assignments, so every admin with access sees the same backups. Anyone who can write to the backup container is trusted like an Intune admin. See [Encryption and recovery key](/security/encryption/).
 
 ## What TenuVault the company can see
 
@@ -89,7 +89,7 @@ You stay in control of the app registration at all times, because it lives in yo
 
 ## Review the source
 
-The TenuVault Desktop source code is public at [github.com/ugurkocde/TenuVault](https://github.com/ugurkocde/TenuVault) so you and your security team can review how it signs in, what it sends and how it encrypts backups. TenuVault is commercial software; the source is published for transparency and review.
+The TenuVault Desktop source code is public at [github.com/ugurkocde/TenuVault](https://github.com/ugurkocde/TenuVault) so you and your security team can review how it signs in, what it sends and how it protects backups. TenuVault is commercial software; the source is published for transparency and review.
 
 Windows builds are signed with Azure Trusted Signing. macOS builds are signed and notarized by Apple.
 
@@ -97,5 +97,5 @@ Windows builds are signed with Azure Trusted Signing. macOS builds are signed an
 
 * [App registration and delegated permissions](/security/permissions/): every permission and why it is needed.
 * [Network connections and data flows](/security/data-flows/): every outbound destination and what is sent to it.
-* [Encryption and recovery key](/security/encryption/): how backups are encrypted and how to keep your recovery key safe.
+* [Encryption and recovery key](/security/encryption/): how backups on your device and in Azure are protected, and when you need the recovery key.
 * [Conditional Access and TenuVault](/security/conditional-access/): how your policies apply, and how to keep scheduled backups running under sign-in frequency.

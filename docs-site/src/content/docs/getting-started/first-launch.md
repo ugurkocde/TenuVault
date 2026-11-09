@@ -62,7 +62,7 @@ TenuVault keeps its settings, sign-ins and license in a file encrypted with your
   * On Windows, the data may belong to another Windows user. Start TenuVault as that user.
 * **Delete backup key and start over:** TenuVault keeps the unreadable data as a backup file and starts fresh. This deletes the backup encryption key from the active app state, along with your sign-ins and license. You sign in to your tenants and activate your license again.
 
-Existing local and Azure backups become unreadable unless you exported their [recovery key](/security/encryption/). Starting over leaves the backup files in your backup folder or storage account. To export the key first, choose **Quit**, restore access to the saved data, then select **Settings** > **Storage and recovery** > **Save recovery key**. If you already exported it, use **Import a recovery key** in the same Settings section after starting over.
+Backups on this device become unreadable unless you exported their [recovery key](/security/encryption/), and so do Azure backups that an earlier TenuVault version encrypted with it. Azure backups made by this version stay readable. Starting over leaves the backup files in your backup folder or storage account. To export the key first, choose **Quit**, restore access to the saved data, then select **Settings** > **Storage and recovery** > **Save recovery key**. If you already exported it, use **Import a recovery key** in the same Settings section after starting over.
 
 ## Next step
 

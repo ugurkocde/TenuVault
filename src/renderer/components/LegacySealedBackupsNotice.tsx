@@ -64,7 +64,7 @@ export function LegacySealedBackupsNotice({ count, onImported }: LegacySealedBac
       {refreshing && (
         <p className="flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Checking the backups again...</p>
       )}
-      {checked && !refreshing && <p className="text-red-700">The imported key does not open {plural ? "these backups" : "this backup"}. Import the key of the device that made {plural ? "them" : "it"}.</p>}
+      {checked && !refreshing && <p className="text-red-700">This device still cannot open {plural ? `${count} of these backups` : "this backup"}. Import the recovery key of the device that made {plural ? "them" : "it"}.</p>}
       {error && <p className="text-red-700">{error}</p>}
     </div>
   )

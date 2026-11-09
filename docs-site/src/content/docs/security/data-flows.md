@@ -14,7 +14,7 @@ All connections use HTTPS on TCP port 443. TenuVault opens no inbound ports. Dur
 | `login.microsoftonline.com` | Microsoft sign-in and tokens | Your sign-in only. With the optional Backup Reader, also its certificate sign-in for scheduled backups (no tenant data) |
 | `graph.microsoft.com` | Read and write your Intune configuration | Yes, between your machine and Microsoft |
 | `management.azure.com` | List subscriptions and storage accounts for the storage picker | No |
-| `<your account>.blob.core.windows.net` | Your own Azure storage account, when you store backups there | Yes, encrypted backups in your account |
+| `<your account>.blob.core.windows.net` | Your own Azure storage account, when you store backups there | Yes, backups in your account, over HTTPS |
 | `www.tenuvault.com` | License checks and, on Pro and MSP, CIS Benchmarks content | No configuration or backups. Tenant ID, installation ID and license details only |
 | `www.tenuvault.com/api/desktop-feedback` | Feedback, only when you click **Send feedback** | Your answers, an optional reply-to email, app version, operating system, plan and page name. A screenshot of the window only if you tick it, which may show tenant, policy or user names |
 | `github.com`, `release-assets.githubusercontent.com`, `objects.githubusercontent.com` | App updates | No |
@@ -47,7 +47,7 @@ Nothing from these calls is sent anywhere else. Results are written only to the 
 
 ### Azure Resource Manager: `management.azure.com`
 
-Used only when you choose **Your Azure storage account, encrypted** as backup storage. TenuVault lists the subscriptions and storage accounts you can access so you can pick one. It sends only your token and the list requests.
+Used only when you choose **Your Azure storage account** as backup storage. TenuVault lists the subscriptions and storage accounts you can access so you can pick one. It sends only your token and the list requests.
 
 ### Azure Storage: `<your account>.blob.core.windows.net`
 
@@ -55,11 +55,11 @@ Used only when you store backups in your own Azure storage account. TenuVault us
 
 | Container | Contents | Encrypted by TenuVault |
 | --- | --- | --- |
-| `intune-backups` | Your backups | Yes. Each file is encrypted with AES-256-GCM on your machine before upload. |
+| `intune-backups` | Your backups | No. Stored as plain JSON, protected by Azure encryption at rest and your role assignments. Backups made by earlier TenuVault versions stay encrypted with the device key that made them. |
 | `audit-logs` | The TenuVault audit log for the tenant, including which admin started each action | No. Protected by your storage account's own encryption and access control. |
 | `tenant-metadata` | Tenant profile information TenuVault keeps for the tenant | No. Protected by your storage account's own encryption and access control. |
 
-See [Encryption and recovery key](/security/encryption/) for how backup encryption works.
+See [Encryption and recovery key](/security/encryption/) for how backups are protected and who is trusted to change them.
 
 When backups are stored on **This device, encrypted**, TenuVault makes no storage connection at all. Backups, the audit log and tenant metadata are all written encrypted to the folder you choose.
 

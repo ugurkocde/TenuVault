@@ -109,7 +109,7 @@ TenuVault proves your sign-in to the licensing service with a fresh Microsoft ID
 
 Deactivating releases every activation of that machine and removes the key from it. If you no longer have access to the old machine, release its installation in the customer portal instead (see below).
 
-To read your existing backups on the new machine, import your backup recovery key. See [Encryption and recovery key](/security/encryption/).
+Azure backups are readable on the new machine as soon as you choose the same storage account. To read backups kept on the old device, or Azure backups an earlier TenuVault version encrypted, import your backup recovery key. See [Encryption and recovery key](/security/encryption/).
 
 ## Change your license key
 

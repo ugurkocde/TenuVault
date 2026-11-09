@@ -1,9 +1,9 @@
 ---
 title: "Choose where backups are stored"
-description: Keep backups encrypted on this device or in your own Azure storage account, and save your recovery key.
+description: Keep Intune backups encrypted on this device or in your own Azure storage account, and know when you need the recovery key.
 ---
 
-On the **Storage** step, **Choose where backups are stored**, you choose where this tenant's backups go. Both options encrypt every backup with AES-256-GCM before it is written, and neither sends anything to TenuVault.
+On the **Storage** step, **Choose where backups are stored**, you choose where this tenant's backups go. On this device, TenuVault encrypts every backup with AES-256-GCM. In your Azure storage account, Azure encrypts the backups at rest and your Azure role assignments decide who can read them. Neither option sends anything to TenuVault.
 
 You can change the location later in **Settings** > **Sign-in** > **Change storage**.
 
@@ -18,14 +18,15 @@ You can change the plan later on the **License** page.
 
 ## Compare the options
 
-| | **This device, encrypted** | **Your Azure storage account, encrypted** |
+| | **This device, encrypted** | **Your Azure storage account** |
 | --- | --- | --- |
 | Plan | All plans | Pro and MSP |
 | Where backups live | A folder on this computer or a network share, by default `Documents/TenuVault Backups` | The `intune-backups` container in a storage account in your Azure subscription |
 | Azure resources needed | None | An existing storage account |
 | Extra roles | None | **Storage Blob Data Contributor** on the storage account, plus read access to the storage account (for example **Reader**) so it appears in the list |
-| Other computers can read the backups | With the recovery key and a copy of the folder | With the recovery key and access to the storage account |
-| Before the first backup | Saving the recovery key is strongly recommended | Saving the recovery key is required |
+| Protection | AES-256-GCM by TenuVault, with a key protected by your Windows account or macOS Keychain | Azure Storage encryption at rest, and your Azure role assignments |
+| Other computers can read the backups | With the recovery key and a copy of the folder | Every admin with access to the storage account, no key needed |
+| Before the first backup | Saving the recovery key is strongly recommended | Nothing else |
 
 ## Option 1: This device, encrypted
 
@@ -39,7 +40,7 @@ Backups are encrypted with a key protected by your Windows account or macOS Keyc
 
 To use a different folder, such as a network share, change it in **Settings** > **Storage and recovery** > **Change folder**. See [Backup storage and retention](/backups/storage/).
 
-## Option 2: Your Azure storage account, encrypted
+## Option 2: Your Azure storage account
 
 :::note
 On Community, this option is locked and marked **Pro**, with the note **Backups in your own Azure storage account: included in TenuVault Pro and MSP. Upgrade on the License page.** Select **See plans** to compare plans.
@@ -47,17 +48,20 @@ On Community, this option is locked and marked **Pro**, with the note **Backups 
 
 You need an existing storage account in a subscription of the tenant you signed in to. TenuVault does not create Azure resources. If none exists yet, ask your Azure administrator to create one with [Create a storage account for TenuVault](/getting-started/create-storage-account/): the page has a script that creates the account and grants your admin group access in one run.
 
-1. Select **Your Azure storage account, encrypted**. TenuVault shows **Checking your recovery key...** and **Loading your storage accounts...** while it checks your key and lists the storage accounts your account can see across your subscriptions. If your current recovery key is not saved yet, **Save your recovery key before you continue** appears with a **Save recovery key** button; **Continue** stays unavailable until you save it.
+1. Select **Your Azure storage account**. TenuVault shows **Loading your storage accounts...** while it lists the storage accounts your account can see across your subscriptions.
 2. In **Storage account**, choose the account. Each entry shows its name, resource group and region. If the account was created while this step is open, select **Refresh** to list the accounts again.
 3. Select **Check access**. TenuVault creates the `intune-backups` container if it does not exist, then writes and deletes a small test file to confirm you can store backups there.
-4. When the button shows **Access confirmed** and your recovery key is saved, select **Continue**.
+4. When the button shows **Access confirmed**, select **Continue**.
+
+Azure encrypts the backups at rest, and access follows your Azure role assignments: every admin with access to the account sees the same backups. Anyone who can write to the `intune-backups` container is trusted like an Intune admin, so grant the blob data roles only to your admin group. See [Backups in Azure](/security/encryption/#backups-in-azure) and [Work with other admins in one tenant](/getting-started/multiple-admins/).
+
+If the storage account already holds backups from TenuVault on another computer, you see them as soon as the tenant is set up. Backups that an earlier TenuVault version encrypted need the recovery key of the device that made them; **Backup & Restore** offers **Import recovery key** for them, and **Continue** is never held back by them. See [Older encrypted Azure backups](/security/encryption/#older-encrypted-azure-backups).
 
 While **Continue** is unavailable, a hint next to it says what is missing, in the order you fix it:
 
 | Hint | What to do |
 | --- | --- |
 | **Azure storage needs Pro or MSP. Choose This device to continue on Community.** | Start the trial or enter a key, or choose **This device, encrypted**. |
-| **To continue, save your recovery key.** | Select **Save recovery key**. |
 | **To continue, ask an Azure administrator for a storage account, or choose This device.** | No storage account is listed. See below. |
 | **To continue, choose a storage account.** | Choose one in **Storage account**. |
 | **To continue, select Check access.** | Select **Check access**. |
@@ -75,20 +79,16 @@ If no storage account is listed, **No storage account yet?** offers **Copy setup
 
 ## Save your recovery key
 
-TenuVault keeps one backup encryption key per computer, protected by your Windows account or macOS Keychain. The recovery key is an exported copy of it. You need it to read your backups on another computer, after reinstalling, or after a new Windows or macOS profile.
+TenuVault keeps one backup encryption key per computer, protected by your Windows account or macOS Keychain. The recovery key is an exported copy of it. You need it to read backups on this device from another computer, after reinstalling, or after a new Windows or macOS profile. Azure backups do not need it, except older Azure backups that an earlier TenuVault version encrypted.
 
-:::caution
-For Azure storage, TenuVault blocks uploads until you have saved the current recovery key. The Storage step therefore keeps **Continue** unavailable until the key is saved, so a first backup cannot fail for a missing key. In **Settings** > **Change storage**, **Save** stays unavailable in the same way.
-:::
-
-During setup, select **Save recovery key** in the Storage step itself. Later, or after importing a key, use **Settings**:
+After the first backup to this device, setup offers **Save recovery key** among the next steps. At any time, or after importing a key, use **Settings**:
 
 1. Open **Settings** > **Storage and recovery**.
 2. Under **Encryption key**, select **Save recovery key**.
 3. Choose where to save the file. By default it is `Documents/TenuVault recovery key <fingerprint>.txt`.
 4. Move the key into your password manager or another safe place, then delete the file.
 
-Anyone with the recovery key and your backup files can read your Intune configuration. Store it like a password. For how the key works, see [Encryption and recovery key](/security/encryption/).
+Anyone with the recovery key and your backup files on this device can read your Intune configuration. Store it like a password. For how the key works, see [Encryption and recovery key](/security/encryption/).
 
 ## Continue
 
