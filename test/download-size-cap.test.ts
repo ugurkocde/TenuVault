@@ -77,3 +77,33 @@ it('excludes directory and ownership marker blobs from the size cap and the arch
     `/intune-backups/${args.backupId}/DeviceConfigurations/A.json`,
   ])
 })
+
+it('refuses oversized metadata during the ownership check without reading it whole', async () => {
+  const listing = blob(`${args.backupId}/metadata.json`) + blob(`${args.backupId}/DeviceConfigurations/A.json`, 10)
+  const chunk = new Uint8Array(1024 * 1024)
+  let pulled = 0
+  const policyReads: string[] = []
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const url = new URL(String(input))
+    if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
+    if (url.searchParams.get('comp') === 'list') return new Response(`<Blobs>${listing}</Blobs>`)
+    if (url.pathname.endsWith('/.tenuvault-owner.json')) return new Response('', { status: 404 })
+    if (!url.pathname.endsWith('/metadata.json')) {
+      policyReads.push(url.pathname)
+      return Response.json({ policy: 'x' })
+    }
+    // 40 MiB with no content length, streamed so the reader has to stop at the cap.
+    return new Response(new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pulled >= 40) return controller.close()
+        pulled++
+        controller.enqueue(chunk)
+      },
+    }))
+  }))
+  const response = await download(request())
+  expect(response.status).toBe(413)
+  expect((await response.json()).error).toContain('32 MiB')
+  expect(pulled).toBeLessThan(40)
+  expect(policyReads).toEqual([])
+})

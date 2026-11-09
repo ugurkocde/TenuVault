@@ -1,8 +1,10 @@
-import { localStorageAccountName } from "../../../shared/constants"
+import { localStorageAccountName, MAX_BACKUP_ARCHIVE_BYTES } from "../../../shared/constants"
+import { readBytesCapped } from "../../../shared/capped-body"
 import { DAMAGED_OWNER_MARKER, INVALID_MANIFEST_TENANT, resolveBackupOwnership, type OwnershipFile } from "../../../shared/backup-ownership"
 import { isLegacyOtherTenantError } from "../../../shared/legacy-sealed"
 
 export const OTHER_TENANT_BACKUP = "This backup belongs to another tenant."
+export const OVERSIZED_OWNERSHIP_FILE = "This backup's metadata is larger than the 32 MiB TenuVault reads, so its tenant cannot be checked."
 const SEALED_BACKUP = "This backup was encrypted by an earlier TenuVault version and could not be opened for this tenant. It belongs to another tenant, or it needs the recovery key of the device that made it."
 
 /** Why a backup without tenant evidence cannot change live policies; it can still be restored as an unassigned copy. */
@@ -55,7 +57,10 @@ export async function readOwnedBackup(read: (name: string) => Promise<Response>,
     if (response.status === 404) return { kind: "missing" }
     const manifest = file === "metadata.json"
     if (!response.ok) return { kind: "unreadable", error: new RefusedRead(500, manifest ? "Failed to read backup metadata" : "The backup's ownership record could not be read.") }
-    try { return { kind: "found", value: await response.json() } }
+    // Capped like every other backup read: an oversized or replaced body is never buffered whole.
+    const bytes = await readBytesCapped(response, MAX_BACKUP_ARCHIVE_BYTES)
+    if (bytes === null) return { kind: "unreadable", error: new RefusedRead(413, OVERSIZED_OWNERSHIP_FILE) }
+    try { return { kind: "found", value: JSON.parse(new TextDecoder().decode(bytes)) } }
     catch { return { kind: "unreadable", error: manifest ? new RefusedRead(500, "The backup metadata could not be read.") : new Error(DAMAGED_OWNER_MARKER) } }
   }
   const { manifest, owner } = await resolveBackupOwnership(readFile, tenantId)
