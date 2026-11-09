@@ -38,9 +38,17 @@ $Scope = "policies"
 $ExcludedFolders = ""
 $appOnlyExcluded = "DeviceCategories,DeviceCleanupRules"
 $graphRoleNames = @("DeviceManagementConfiguration.Read.All")
+$ChangeReport = "Off"
+$ChangeReportWithoutActors = $false
+$TenantName = ""
+# Whether the setup command passed -ChangeReport and -ChangeReportWithoutActors.
+$changeReportPassed = $false
+$changeReportActorsPassed = $false
+$tenantNamePassed = $false
 $variableNames = @(
     "TenuVaultTenantId-$tenantKey", "TenuVaultStorageAccount-$tenantKey",
-    "TenuVaultScope-$tenantKey", "TenuVaultExcludedFolders-$tenantKey", "TenuVaultAppOnlyExcluded-$tenantKey"
+    "TenuVaultScope-$tenantKey", "TenuVaultExcludedFolders-$tenantKey", "TenuVaultAppOnlyExcluded-$tenantKey",
+    "TenuVaultChangeReport-$tenantKey", "TenuVaultChangeReportActors-$tenantKey", "TenuVaultTenantName-$tenantKey"
 )
 $legacyKeyVaultVariable = "TenuVaultKeyVault-$tenantKey"
 $plainRunbookVersion = "1.2.0"
@@ -178,6 +186,9 @@ function Write-Scenario {
         error = $ErrorText
         actions = @($script:actions.ToArray())
         legacyVariableKept = $script:variables.ContainsKey($legacyKeyVaultVariable)
+        changeReport = $script:variables["TenuVaultChangeReport-$tenantKey"]
+        changeReportActors = $script:variables["TenuVaultChangeReportActors-$tenantKey"]
+        tenantName = $script:variables["TenuVaultTenantName-$tenantKey"]
         variables = @($script:variables.Keys | Sort-Object)
         schedule = $script:schedule
         link = $script:link
@@ -206,6 +217,31 @@ foreach ($scenario in "approved", "outer-declined", "import-declined", "publish-
         $output += @(Write-TenuVaultLegacyKeyVaultNote $legacyKeyVaults -KeptBecause $runbook.Reason 6>&1)
     } catch { $errorText = $_.Exception.Message }
     $PSDefaultParameterValues = @{}
+    Write-Scenario -Name $scenario -Runbook $runbook -ErrorText $errorText -Output $output
+}
+
+# Reruns with change reports set up before (names, without actors): a command without the change
+# report parameters keeps both and the saved tenant name; one that passes them sets both, and an
+# empty -TenantName names the tenant by its id again.
+foreach ($scenario in "rerun-keeps-report", "rerun-sets-report") {
+    Reset-OldSetup
+    $script:variables["TenuVaultChangeReport-$tenantKey"] = "names"
+    $script:variables["TenuVaultChangeReportActors-$tenantKey"] = "false"
+    $script:variables["TenuVaultTenantName-$tenantKey"] = "Contoso"
+    $changeReportPassed = $scenario -eq "rerun-sets-report"
+    $changeReportActorsPassed = $changeReportPassed
+    $tenantNamePassed = $changeReportPassed
+    $TenantName = ""
+    $ChangeReport = "Full"
+    $ChangeReportWithoutActors = $false
+    $runbook = $null
+    $errorText = $null
+    $output = @()
+    try { $output = @(. $upgradeStep 6>&1) } catch { $errorText = $_.Exception.Message }
+    $changeReportPassed = $false
+    $changeReportActorsPassed = $false
+    $tenantNamePassed = $false
+    $ChangeReport = "Off"
     Write-Scenario -Name $scenario -Runbook $runbook -ErrorText $errorText -Output $output
 }
 

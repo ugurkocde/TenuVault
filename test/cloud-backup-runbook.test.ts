@@ -12,11 +12,12 @@ import { OTHER_TENANT_BACKUP, readOwnedBackup } from "../src/portal/lib/policies
 const pwsh = ["/usr/local/bin/pwsh", "/opt/homebrew/bin/pwsh", "/usr/bin/pwsh", ...(process.env.HOME ? [`${process.env.HOME}/.local/bin/pwsh`] : [])].find((candidate) => existsSync(candidate))
 
 const runbook = readFileSync(new URL("../resources/runbooks/Invoke-TenuVaultBackup.ps1", import.meta.url), "utf8")
+const RUNBOOK_VERSION = /\$script:RunbookVersion = "([^"]+)"/.exec(runbook)?.[1]
 const setup = readFileSync(new URL("../resources/New-TenuVaultCloudBackup.ps1", import.meta.url), "utf8")
 type RunCall = { uri: string; method: string; contentType: string | null; ifNoneMatch: string | null; body: string | null }
-type Run = { calls: RunCall[]; error?: string | null }
+type Run = { calls: RunCall[]; error?: string | null; output?: string[] }
 let plainRuns: Run[] | undefined
-/** The three scenarios of the plain-run fixture: a full run, an early failure and a failed manifest. */
+/** The scenarios of the plain-run fixture: a full run, an early failure, a failed manifest, and two runs with change reports on. */
 function runPlainFixture(): Run[] {
   const script = fileURLToPath(new URL("./fixtures/cloud-backup/plain-run.ps1", import.meta.url))
   plainRuns ??= execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }).trim().split(/\r?\n/).map((line) => JSON.parse(line) as Run)
@@ -74,7 +75,10 @@ describe("Invoke-TenuVaultBackup.ps1 type table", () => {
 
 describe("Invoke-TenuVaultBackup.ps1 format", () => {
   it("writes plain JSON and never reads Key Vault or the recovery key", () => {
-    for (const sealing of ['"TVAZ1`n"', "HKDF", "AesGcm", "tenuvault-azure-backup-v1", "tenuvault-recovery-key", "vault.azure.net", "application/octet-stream"]) {
+    // The legacy envelope is only recognised, so a sealed earlier backup is skipped, never opened.
+    expect(runbook.match(/"TVAZ1`n"/g)).toHaveLength(1)
+    expect(runbook).toMatch(/function Test-TvSealedBlob \{[^}]*"TVAZ1`n"/)
+    for (const sealing of ["HKDF", "AesGcm", "Decrypt(", "tenuvault-azure-backup-v1", "tenuvault-recovery-key", "vault.azure.net", "application/octet-stream"]) {
       expect(runbook, sealing).not.toContain(sealing)
     }
     expect(runbook).not.toMatch(/Get-TvRequiredVariable "TenuVaultKeyVault"/)
@@ -85,9 +89,11 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     expect(runbook).toContain('headers["If-None-Match"] = "*"')
   })
 
-  it("carries the first plain runbook version, which the app does not flag for upgrade", () => {
-    const version = /\$script:RunbookVersion = "([^"]+)"/.exec(runbook)?.[1]
-    expect(version).toBe(PLAIN_CLOUD_RUNBOOK)
+  it("carries a plain runbook version, which the app does not flag for upgrade", () => {
+    const version = RUNBOOK_VERSION
+    // 1.3.0 adds change reports on top of the first plain runbook, 1.2.0.
+    expect(version).toBe("1.3.0")
+    expect(PLAIN_CLOUD_RUNBOOK).toBe("1.2.0")
     expect(cloudRunbookNeedsUpgrade(version!)).toBe(false)
     expect(cloudRunbookNeedsUpgrade("1.1.0")).toBe(true)
     expect(cloudRunbookNeedsUpgrade("1.0.0")).toBe(true)
@@ -97,6 +103,19 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     expect(cloudRunbookNeedsUpgrade("")).toBe(false)
     expect(cloudRunbookNeedsUpgrade("desktop")).toBe(false)
   })
+
+  it.runIf(Boolean(pwsh))("never lets the optional change report fail a backup, and says when a backup with warnings gets none", () => {
+    const [, , , reportFails, warnings] = runPlainFixture()
+    // The report step meets an unexpected error: the backup is still recorded as a success.
+    expect(reportFails!.error).toBeNull()
+    expect(reportFails!.output).toContain("No change report was made: storage listing is unavailable")
+    const status = reportFails!.calls.filter((call) => call.method === "Put" && call.uri.endsWith("/cloud-backup-status-11111111.json")).map((call) => JSON.parse(call.body!).LastStatus)
+    expect(status).toEqual(["Success"])
+    // A backup with warnings gets no report, and the job output says so.
+    expect(warnings!.error).toBeNull()
+    expect(warnings!.output).toContain("No change report: the backup completed with warnings.")
+    expect(warnings!.calls.some((call) => call.uri.includes("comp=list"))).toBe(false)
+  }, 60_000)
 
   it.runIf(Boolean(pwsh))("puts only plain JSON blobs during a run, records early failures and never calls Key Vault", () => {
     const [run, failed, claimed] = runPlainFixture()
@@ -126,9 +145,9 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     expect(policy).toMatchObject({ id: "cfg-1", displayName: "Baseline Wi-Fi" })
     expect(policy["@odata.context"]).toBeUndefined()
     const metadata = JSON.parse(puts.find((call) => call.uri.endsWith("/metadata.json"))!.body!)
-    expect(metadata).toMatchObject({ Status: "Success", RunbookVersion: PLAIN_CLOUD_RUNBOOK, Source: "TenuVault Cloud Backup", TenantId: "11111111-2222-3333-4444-555555555555" })
+    expect(metadata).toMatchObject({ Status: "Success", RunbookVersion: RUNBOOK_VERSION, Source: "TenuVault Cloud Backup", TenantId: "11111111-2222-3333-4444-555555555555" })
     const status = JSON.parse(puts.find((call) => call.uri.endsWith("/cloud-backup-status-11111111.json"))!.body!)
-    expect(parseCloudStatus(status, "11111111-2222-3333-4444-555555555555")).toMatchObject({ lastStatus: "Success", runbookVersion: PLAIN_CLOUD_RUNBOOK })
+    expect(parseCloudStatus(status, "11111111-2222-3333-4444-555555555555")).toMatchObject({ lastStatus: "Success", runbookVersion: RUNBOOK_VERSION })
     // A run that fails before any backup write still records why, in the status blob and the note.
     expect(failed!.error).toContain("managed identity token")
     const failedStatus = failed!.calls.find((call) => call.method === "Put" && call.uri.endsWith("/cloud-backup-status-11111111.json"))
@@ -238,7 +257,7 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
     expect(setup).toContain('-Force -Confirm:$false | Out-Null\n    Publish-AzAutomationRunbook')
   })
 
-  type SetupScenario = { scenario: string; plain: boolean; reason: string | null; error: string | null; actions: string[]; legacyVariableKept: boolean; variables: string[]; schedule: boolean; link: boolean; output: string[] }
+  type SetupScenario = { scenario: string; plain: boolean; reason: string | null; error: string | null; actions: string[]; legacyVariableKept: boolean; changeReport?: string | null; changeReportActors?: string | null; tenantName?: string | null; variables: string[]; schedule: boolean; link: boolean; output: string[] }
   let setupScenarios: Map<string, SetupScenario> | undefined
   const setupRun = (name: string) => {
     if (!setupScenarios) {
@@ -249,6 +268,15 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
     return setupScenarios.get(name)!
   }
   const DELETE_ADVICE = "Delete the vault once no"
+
+  it.runIf(Boolean(pwsh))("keeps the change report level and actors on a rerun without their parameters, and sets them when passed", () => {
+    // An upgrade with a command that does not carry the change report choice keeps it.
+    expect(setupRun("rerun-keeps-report")).toMatchObject({ error: null, changeReport: "names", changeReportActors: "false", tenantName: "Contoso" })
+    // An empty -TenantName clears the saved name to the tenant id, never to an empty value.
+    expect(setupRun("rerun-sets-report")).toMatchObject({ error: null, changeReport: "full", changeReportActors: "true", tenantName: "11111111-2222-3333-4444-555555555555" })
+    expect(setup).toContain('$changeReportPassed = $PSBoundParameters.ContainsKey("ChangeReport")')
+    expect(setup).toContain('$changeReportActorsPassed = $PSBoundParameters.ContainsKey("ChangeReportWithoutActors")')
+  }, 60_000)
 
   it.runIf(Boolean(pwsh))("removes the Key Vault variable only when the published runbook reads back as plain", () => {
     const approved = setupRun("approved")

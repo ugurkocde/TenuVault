@@ -158,6 +158,16 @@ export function cloudSetupCommand(options: {
   weekday: number
   timeZone: string
   scope: "everything" | "policies"
+  /**
+   * Change reports by email through the notification watcher, when the admin chose a level in this
+   * hand-off. Left out, the command carries no change report parameter, so a rerun keeps the
+   * level and actors an earlier setup chose (off for a new setup).
+   */
+  changeReport?: "off" | "names" | "full"
+  /** With a names or full report: leave out who made each change. */
+  withoutActors?: boolean
+  /** The tenant's name for change reports; passed only when a report is on. */
+  tenantName?: string
   /** The tenant's known Azure placement, when the app has it; first setup needs one of these. */
   resourceGroup?: string
   location?: string
@@ -174,7 +184,21 @@ export function cloudSetupCommand(options: {
   if (options.location) parts.push(`-Location ${options.location}`)
   if (options.subscriptionId) parts.push(`-SubscriptionId ${options.subscriptionId}`)
   if (options.frequency === "weekly") parts.push(`-WeekDay ${WEEKDAYS[options.weekday] ?? "Sunday"}`)
-  parts.push(`-TimeZone ${options.timeZone}`, `-Scope ${options.scope}`, "-GrantGraphRoles")
+  parts.push(`-TimeZone ${options.timeZone}`, `-Scope ${options.scope}`)
+  const reportOn = options.changeReport === "names" || options.changeReport === "full"
+  if (options.changeReport === "off") parts.push("-ChangeReport Off")
+  if (options.changeReport === "names") parts.push("-ChangeReport Names")
+  if (options.changeReport === "full") parts.push("-ChangeReport Full")
+  // A level chosen here sets the actors too, so the command does what the hand-off shows.
+  if (reportOn) parts.push(options.withoutActors ? "-ChangeReportWithoutActors" : "-ChangeReportWithoutActors:$false")
+  // Single quoted for PowerShell: nothing in it is expanded, a quote is doubled, control characters go.
+  // oxlint-disable-next-line no-control-regex
+  const cleaned = options.tenantName?.replace(/[\u0000-\u001f\u007f]/g, " ").trim()
+  // At most 200 UTF-16 units, never cut between the two halves of a surrogate pair.
+  const cut = cleaned && cleaned.length > 200 && /[\uD800-\uDBFF]/.test(cleaned[199]!) ? 199 : 200
+  const name = cleaned?.slice(0, cut).trim()
+  if (name && reportOn) parts.push(`-TenantName '${name.replace(/'/g, "''")}'`)
+  parts.push("-GrantGraphRoles")
   return parts.join(" ")
 }
 

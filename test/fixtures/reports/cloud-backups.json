@@ -1,0 +1,794 @@
+{
+  "tenantId": "8c6f2b1e-4d3a-4f7b-9e21-6a5d0c3b7f14",
+  "tenantName": "Contoso <Müller> & Co",
+  "generatedAt": "2026-11-06T02:14:00.000Z",
+  "older": {
+    "name": "backup-2026-11-05-020000",
+    "metadata": {
+      "Status": "Success",
+      "Trigger": "scheduled",
+      "TenantId": "8c6f2b1e-4d3a-4f7b-9e21-6a5d0c3b7f14",
+      "Scope": {
+        "Excluded": [
+          "Apps"
+        ],
+        "Included": [
+          "DeviceConfigurations",
+          "ConfigurationPolicies",
+          "CompliancePolicies",
+          "CompliancePolicySettings",
+          "ConditionalAccessPolicies",
+          "AppProtectionAndroid",
+          "AppProtectionIOS"
+        ]
+      },
+      "Items": {
+        "ConfigurationPolicies/p-defender": {
+          "file": "WIN - Defender.json",
+          "hash": "a1"
+        },
+        "ConfigurationPolicies/p-same": {
+          "file": "Unchanged.json",
+          "hash": "s1"
+        },
+        "ConfigurationPolicies/p-unread": {
+          "file": "Unread assignments.json",
+          "hash": "u1"
+        },
+        "DeviceConfigurations/d-filevault": {
+          "file": "macOS - FileVault.json",
+          "hash": "f1"
+        },
+        "DeviceConfigurations/d-wifi": {
+          "file": "Wi-Fi.json",
+          "hash": "w1"
+        },
+        "CompliancePolicies/c-win": {
+          "file": "Win11 Compliance.json",
+          "hash": "c1"
+        },
+        "CompliancePolicySettings/CompliancePolicySettings": {
+          "file": "Compliance policy settings.json",
+          "hash": "cs1"
+        },
+        "ConditionalAccessPolicies/ca-1": {
+          "file": "CA001.json",
+          "hash": "ca1"
+        },
+        "AppProtectionAndroid/m-android": {
+          "file": "APP - Android.json",
+          "hash": "ma1"
+        },
+        "AppProtectionIOS/m-ios": {
+          "file": "APP - iOS.json",
+          "hash": "mi1"
+        }
+      }
+    },
+    "files": {
+      "ConfigurationPolicies/WIN - Defender.json": {
+        "id": "p-defender",
+        "name": "WIN - Defender",
+        "description": "x",
+        "platforms": "windows10",
+        "roleScopeTagIds": [
+          "0"
+        ],
+        "settings": [
+          {
+            "id": "0",
+            "settingInstance": {
+              "@odata.type": "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance",
+              "settingDefinitionId": "device_vendor_msft_policy_config_defender_allowcloudprotection",
+              "choiceSettingValue": {
+                "value": "device_vendor_msft_policy_config_defender_allowcloudprotection_1",
+                "children": []
+              }
+            }
+          },
+          {
+            "id": "1",
+            "settingInstance": {
+              "@odata.type": "#microsoft.graph.deviceManagementConfigurationSimpleSettingInstance",
+              "settingDefinitionId": "device_vendor_msft_policy_config_defender_avgcpuloadfactor",
+              "simpleSettingValue": {
+                "value": 50
+              }
+            }
+          },
+          {
+            "id": "2",
+            "settingInstance": {
+              "settingDefinitionId": "com.apple.applicationaccess_com.apple.applicationaccess",
+              "groupSettingCollectionValue": []
+            }
+          }
+        ],
+        "assignments": [
+          {
+            "id": "a1",
+            "target": {
+              "@odata.type": "#microsoft.graph.groupAssignmentTarget",
+              "groupId": "g-1"
+            }
+          }
+        ]
+      },
+      "ConfigurationPolicies/Unchanged.json": {
+        "id": "p-same",
+        "name": "Unchanged"
+      },
+      "ConfigurationPolicies/Unread assignments.json": {
+        "id": "p-unread",
+        "name": "Unread assignments",
+        "assignments@odata.context": "x",
+        "assignments": [],
+        "platforms": "windows10"
+      },
+      "DeviceConfigurations/macOS - FileVault.json": {
+        "id": "d-filevault",
+        "displayName": "macOS - FileVault",
+        "@odata.type": "#microsoft.graph.macOSEndpointProtectionConfiguration",
+        "fileVaultEnabled": true,
+        "fileVaultNumberOfTimesUserCanIgnore": 3,
+        "fileVaultRecoveryKeyEscrowLocationDescription": "IT | <b>desk</b>",
+        "assignments": [
+          {
+            "target": {
+              "@odata.type": "#microsoft.graph.exclusionGroupAssignmentTarget",
+              "groupId": "g-2",
+              "deviceAndAppManagementAssignmentFilterType": "none"
+            }
+          }
+        ]
+      },
+      "DeviceConfigurations/Wi-Fi.json": {
+        "id": "d-wifi",
+        "displayName": "Wi-Fi",
+        "ssid": "corp",
+        "preSharedKey": "old-key",
+        "omaSettings": [
+          {
+            "displayName": "Cert password",
+            "omaUri": "./Vendor/MSFT/x",
+            "isEncrypted": true,
+            "value": "old-secret"
+          },
+          {
+            "displayName": "Plain",
+            "omaUri": "./Vendor/MSFT/y",
+            "value": 1
+          }
+        ]
+      },
+      "CompliancePolicies/Win11 Compliance.json": {
+        "id": "c-win",
+        "displayName": "Win11 Compliance",
+        "passwordMinimumLength": 12,
+        "passwordRequired": true,
+        "osMinimumVersion": "10.0.22000",
+        "assignments": [
+          {
+            "target": {
+              "@odata.type": "#microsoft.graph.allDevicesAssignmentTarget"
+            }
+          }
+        ]
+      },
+      "CompliancePolicySettings/Compliance policy settings.json": {
+        "id": "CompliancePolicySettings",
+        "secureByDefault": false,
+        "deviceComplianceCheckinThresholdDays": 30
+      },
+      "ConditionalAccessPolicies/CA001.json": {
+        "id": "ca-1",
+        "displayName": "CA001 - Require MFA",
+        "state": "enabled",
+        "conditions": {
+          "users": {
+            "includeUsers": [
+              "All"
+            ],
+            "excludeUsers": []
+          }
+        }
+      },
+      "AppProtectionAndroid/APP - Android.json": {
+        "id": "m-android",
+        "displayName": "APP - Android",
+        "@odata.type": "#microsoft.graph.androidManagedAppProtection",
+        "pinRequired": false,
+        "allowedDataStorageLocations": [
+          "oneDriveForBusiness",
+          "sharePoint"
+        ],
+        "apps": [
+          {
+            "id": "com.microsoft.office.outlook.package-1",
+            "version": "1",
+            "mobileAppIdentifier": {
+              "@odata.type": "#microsoft.graph.androidMobileAppIdentifier",
+              "packageId": "com.microsoft.office.outlook"
+            }
+          },
+          {
+            "id": "com.microsoft.teams.package-1",
+            "version": "1",
+            "mobileAppIdentifier": {
+              "@odata.type": "#microsoft.graph.androidMobileAppIdentifier",
+              "packageId": "com.microsoft.teams"
+            }
+          },
+          {
+            "id": "com.microsoft.skydrive.package-1",
+            "version": "1",
+            "mobileAppIdentifier": {
+              "@odata.type": "#microsoft.graph.androidMobileAppIdentifier",
+              "packageId": "com.microsoft.skydrive"
+            }
+          }
+        ],
+        "assignments": [
+          {
+            "id": "a-1",
+            "target": {
+              "@odata.type": "#microsoft.graph.groupAssignmentTarget",
+              "groupId": "aaaaaaaa-1111-4111-8111-111111111111",
+              "deviceAndAppManagementAssignmentFilterId": null,
+              "deviceAndAppManagementAssignmentFilterType": "none"
+            }
+          }
+        ]
+      },
+      "AppProtectionIOS/APP - iOS.json": {
+        "id": "m-ios",
+        "displayName": "APP - iOS",
+        "@odata.type": "#microsoft.graph.iosManagedAppProtection",
+        "pinRequired": false,
+        "apps": [
+          {
+            "id": "com.microsoft.Office.Outlook.bundle-1",
+            "version": "1",
+            "mobileAppIdentifier": {
+              "@odata.type": "#microsoft.graph.iosMobileAppIdentifier",
+              "bundleId": "com.microsoft.Office.Outlook"
+            }
+          },
+          {
+            "id": "com.microsoft.skype.teams.bundle-1",
+            "version": "1",
+            "mobileAppIdentifier": {
+              "@odata.type": "#microsoft.graph.iosMobileAppIdentifier",
+              "bundleId": "com.microsoft.skype.teams"
+            }
+          }
+        ],
+        "assignments": [
+          {
+            "id": "i-1",
+            "target": {
+              "@odata.type": "#microsoft.graph.groupAssignmentTarget",
+              "groupId": "aaaaaaaa-1111-4111-8111-111111111111",
+              "deviceAndAppManagementAssignmentFilterId": null,
+              "deviceAndAppManagementAssignmentFilterType": "none"
+            }
+          },
+          {
+            "id": "i-2",
+            "target": {
+              "@odata.type": "#microsoft.graph.groupAssignmentTarget",
+              "groupId": "cccccccc-3333-4333-8333-333333333333",
+              "deviceAndAppManagementAssignmentFilterId": null,
+              "deviceAndAppManagementAssignmentFilterType": "none"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "newer": {
+    "name": "backup-2026-11-06-020000",
+    "metadata": {
+      "Status": "Success",
+      "Trigger": "scheduled",
+      "TenantId": "8c6f2b1e-4d3a-4f7b-9e21-6a5d0c3b7f14",
+      "Scope": {
+        "Excluded": [
+          "Apps"
+        ],
+        "Included": [
+          "DeviceConfigurations",
+          "ConfigurationPolicies",
+          "CompliancePolicies",
+          "CompliancePolicySettings",
+          "ConditionalAccessPolicies",
+          "AppProtectionAndroid",
+          "AppProtectionIOS"
+        ]
+      },
+      "Items": {
+        "ConfigurationPolicies/p-defender": {
+          "file": "WIN - Defender.json",
+          "hash": "a2"
+        },
+        "ConfigurationPolicies/p-same": {
+          "file": "Unchanged.json",
+          "hash": "s1"
+        },
+        "ConfigurationPolicies/p-unread": {
+          "file": "Unread assignments.json",
+          "hash": "u2"
+        },
+        "ConfigurationPolicies/p-edge": {
+          "file": "WIN - Edge.json",
+          "hash": "e1"
+        },
+        "ConfigurationPolicies/p-copy": {
+          "file": "[Restored] Kiosk.json",
+          "hash": "k1"
+        },
+        "DeviceConfigurations/d-wifi": {
+          "file": "Wi-Fi.json",
+          "hash": "w2"
+        },
+        "CompliancePolicies/c-win": {
+          "file": "Windows 11 - Compliance.json",
+          "hash": "c2"
+        },
+        "CompliancePolicySettings/CompliancePolicySettings": {
+          "file": "Compliance policy settings.json",
+          "hash": "cs2"
+        },
+        "ConditionalAccessPolicies/ca-1": {
+          "file": "CA001.json",
+          "hash": "ca2"
+        },
+        "AppProtectionAndroid/m-android": {
+          "file": "APP - Android.json",
+          "hash": "ma2"
+        },
+        "AppProtectionIOS/m-ios": {
+          "file": "APP - iOS.json",
+          "hash": "mi2"
+        }
+      }
+    },
+    "files": {
+      "ConfigurationPolicies/WIN - Defender.json": {
+        "id": "p-defender",
+        "name": "WIN - Defender",
+        "description": "changed",
+        "platforms": "windows10",
+        "roleScopeTagIds": [
+          "0",
+          "12"
+        ],
+        "settings": [
+          {
+            "id": "0",
+            "settingInstance": {
+              "@odata.type": "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance",
+              "settingDefinitionId": "device_vendor_msft_policy_config_defender_allowcloudprotection",
+              "choiceSettingValue": {
+                "value": "device_vendor_msft_policy_config_defender_allowcloudprotection_0",
+                "children": []
+              }
+            }
+          },
+          {
+            "id": "1",
+            "settingInstance": {
+              "@odata.type": "#microsoft.graph.deviceManagementConfigurationSimpleSettingInstance",
+              "settingDefinitionId": "device_vendor_msft_policy_config_defender_avgcpuloadfactor",
+              "simpleSettingValue": {
+                "value": 1.5
+              }
+            }
+          },
+          {
+            "id": "3",
+            "settingInstance": {
+              "settingDefinitionId": "device_vendor_msft_policy_config_defender_cloudblocklevel",
+              "choiceSettingValue": {
+                "value": "device_vendor_msft_policy_config_defender_cloudblocklevel_2",
+                "children": []
+              }
+            }
+          }
+        ],
+        "assignments": [
+          {
+            "id": "a1",
+            "target": {
+              "@odata.type": "#microsoft.graph.groupAssignmentTarget",
+              "groupId": "g-1"
+            }
+          },
+          {
+            "id": "a2",
+            "target": {
+              "@odata.type": "#microsoft.graph.allLicensedUsersAssignmentTarget",
+              "deviceAndAppManagementAssignmentFilterId": "f-9",
+              "deviceAndAppManagementAssignmentFilterType": "exclude"
+            }
+          }
+        ]
+      },
+      "ConfigurationPolicies/Unchanged.json": {
+        "id": "p-same",
+        "name": "Unchanged"
+      },
+      "ConfigurationPolicies/Unread assignments.json": {
+        "id": "p-unread",
+        "name": "Unread assignments",
+        "assignments": [
+          {
+            "target": {
+              "@odata.type": "#microsoft.graph.allDevicesAssignmentTarget"
+            }
+          }
+        ],
+        "platforms": "macOS"
+      },
+      "ConfigurationPolicies/WIN - Edge.json": {
+        "id": "p-edge",
+        "name": "WIN - Edge </td><script>alert(1)</script>",
+        "platforms": "windows10",
+        "technologies": "mdm",
+        "settingCount": 2,
+        "settings": [
+          {
+            "id": "0",
+            "settingInstance": {
+              "settingDefinitionId": "device_vendor_msft_policy_config_microsoft_edge~policy~microsoft_edge_passwordmanagerenabled",
+              "choiceSettingValue": {
+                "value": "device_vendor_msft_policy_config_microsoft_edge~policy~microsoft_edge_passwordmanagerenabled_0",
+                "children": []
+              }
+            }
+          },
+          {
+            "id": "1",
+            "settingInstance": {
+              "settingDefinitionId": "vendor_msft_wifi_key",
+              "simpleSettingValue": {
+                "@odata.type": "#microsoft.graph.deviceManagementConfigurationSecretSettingValue",
+                "value": "hunter2"
+              }
+            }
+          }
+        ],
+        "assignments": [
+          {
+            "target": {
+              "@odata.type": "#microsoft.graph.groupAssignmentTarget",
+              "groupId": "g-3",
+              "deviceAndAppManagementAssignmentFilterId": "f-1",
+              "deviceAndAppManagementAssignmentFilterType": "include"
+            }
+          }
+        ]
+      },
+      "ConfigurationPolicies/[Restored] Kiosk.json": {
+        "id": "p-copy",
+        "name": "[Restored] Kiosk",
+        "platforms": "windows10"
+      },
+      "DeviceConfigurations/Wi-Fi.json": {
+        "id": "d-wifi",
+        "displayName": "Wi-Fi",
+        "ssid": "corp-2",
+        "preSharedKey": "new-key",
+        "omaSettings": [
+          {
+            "displayName": "Cert password",
+            "omaUri": "./Vendor/MSFT/x",
+            "isEncrypted": true,
+            "value": "new-secret"
+          },
+          {
+            "displayName": "Plain",
+            "omaUri": "./Vendor/MSFT/y",
+            "value": 2
+          }
+        ]
+      },
+      "CompliancePolicies/Windows 11 - Compliance.json": {
+        "id": "c-win",
+        "displayName": "Windows 11 - Compliance",
+        "passwordMinimumLength": 8,
+        "passwordRequired": true,
+        "osMinimumVersion": "10.0.22631",
+        "assignments": [
+          {
+            "target": {
+              "@odata.type": "#microsoft.graph.allDevicesAssignmentTarget"
+            }
+          },
+          {
+            "target": {
+              "@odata.type": "#microsoft.graph.exclusionGroupAssignmentTarget",
+              "groupId": "g-4"
+            }
+          }
+        ]
+      },
+      "CompliancePolicySettings/Compliance policy settings.json": {
+        "id": "CompliancePolicySettings",
+        "secureByDefault": true,
+        "deviceComplianceCheckinThresholdDays": 0
+      },
+      "ConditionalAccessPolicies/CA001.json": {
+        "id": "ca-1",
+        "displayName": "CA001 - Require MFA",
+        "state": "enabledForReportingButNotEnforced",
+        "conditions": {
+          "users": {
+            "includeUsers": [
+              "All"
+            ],
+            "excludeUsers": [
+              "u-break-glass"
+            ]
+          }
+        }
+      },
+      "AppProtectionAndroid/APP - Android.json": {
+        "id": "m-android",
+        "displayName": "APP - Android",
+        "@odata.type": "#microsoft.graph.androidManagedAppProtection",
+        "pinRequired": false,
+        "allowedDataStorageLocations": [
+          "sharePoint",
+          "oneDriveForBusiness",
+          "box"
+        ],
+        "apps": [
+          {
+            "id": "com.microsoft.emmx.package-2",
+            "version": "2",
+            "mobileAppIdentifier": {
+              "@odata.type": "#microsoft.graph.androidMobileAppIdentifier",
+              "packageId": "com.microsoft.emmx"
+            }
+          },
+          {
+            "id": "com.microsoft.office.outlook.package-2",
+            "version": "2",
+            "mobileAppIdentifier": {
+              "@odata.type": "#microsoft.graph.androidMobileAppIdentifier",
+              "packageId": "com.microsoft.office.outlook"
+            }
+          },
+          {
+            "id": "com.microsoft.skydrive.package-2",
+            "version": "2",
+            "mobileAppIdentifier": {
+              "@odata.type": "#microsoft.graph.androidMobileAppIdentifier",
+              "packageId": "com.microsoft.skydrive"
+            }
+          }
+        ],
+        "assignments": [
+          {
+            "id": "a-9",
+            "target": {
+              "@odata.type": "#microsoft.graph.exclusionGroupAssignmentTarget",
+              "groupId": "bbbbbbbb-2222-4222-8222-222222222222",
+              "deviceAndAppManagementAssignmentFilterId": null,
+              "deviceAndAppManagementAssignmentFilterType": "none"
+            }
+          },
+          {
+            "id": "a-2",
+            "target": {
+              "@odata.type": "#microsoft.graph.groupAssignmentTarget",
+              "groupId": "aaaaaaaa-1111-4111-8111-111111111111",
+              "deviceAndAppManagementAssignmentFilterId": null,
+              "deviceAndAppManagementAssignmentFilterType": "none"
+            }
+          }
+        ]
+      },
+      "AppProtectionIOS/APP - iOS.json": {
+        "id": "m-ios",
+        "displayName": "APP - iOS",
+        "@odata.type": "#microsoft.graph.iosManagedAppProtection",
+        "pinRequired": true,
+        "apps": [
+          {
+            "id": "com.microsoft.skype.teams.bundle-2",
+            "version": "2",
+            "mobileAppIdentifier": {
+              "@odata.type": "#microsoft.graph.iosMobileAppIdentifier",
+              "bundleId": "com.microsoft.skype.teams"
+            }
+          },
+          {
+            "id": "com.microsoft.Office.Outlook.bundle-2",
+            "version": "2",
+            "mobileAppIdentifier": {
+              "@odata.type": "#microsoft.graph.iosMobileAppIdentifier",
+              "bundleId": "com.microsoft.Office.Outlook"
+            }
+          }
+        ],
+        "assignments": [
+          {
+            "id": "i-4",
+            "target": {
+              "@odata.type": "#microsoft.graph.groupAssignmentTarget",
+              "groupId": "cccccccc-3333-4333-8333-333333333333",
+              "deviceAndAppManagementAssignmentFilterId": null,
+              "deviceAndAppManagementAssignmentFilterType": "none"
+            }
+          },
+          {
+            "id": "i-3",
+            "target": {
+              "@odata.type": "#microsoft.graph.groupAssignmentTarget",
+              "groupId": "aaaaaaaa-1111-4111-8111-111111111111",
+              "deviceAndAppManagementAssignmentFilterId": null,
+              "deviceAndAppManagementAssignmentFilterType": "none"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "definitions": {
+    "device_vendor_msft_policy_config_defender_allowcloudprotection": {
+      "displayName": "Allow Cloud Protection",
+      "options": [
+        {
+          "itemId": "device_vendor_msft_policy_config_defender_allowcloudprotection_0",
+          "displayName": "Not allowed. Turns off Cloud Protection."
+        },
+        {
+          "itemId": "device_vendor_msft_policy_config_defender_allowcloudprotection_1",
+          "displayName": "Allowed. Turns on Cloud Protection."
+        }
+      ]
+    },
+    "device_vendor_msft_policy_config_defender_cloudblocklevel": {
+      "displayName": "Cloud Block Level",
+      "options": [
+        {
+          "itemId": "device_vendor_msft_policy_config_defender_cloudblocklevel_2",
+          "displayName": " High "
+        }
+      ]
+    },
+    "com.apple.applicationaccess_com.apple.applicationaccess": {
+      "displayName": "Top Level Setting Group Collection",
+      "keywords": [
+        "",
+        " Restrictions "
+      ]
+    },
+    "device_vendor_msft_policy_config_microsoft_edge~policy~microsoft_edge_passwordmanagerenabled": null
+  },
+  "audit": [
+    {
+      "id": "e1",
+      "activityDateTime": "2026-11-05T09:14:00Z",
+      "activity": "Patch DeviceManagementConfigurationPolicy",
+      "activityOperationType": "Patch",
+      "activityResult": "Success",
+      "category": "DeviceConfiguration",
+      "actor": {
+        "userPrincipalName": "megan@contoso.example"
+      },
+      "resources": [
+        {
+          "displayName": "WIN - Defender",
+          "resourceId": "p-defender",
+          "type": "DeviceManagementConfigurationPolicy"
+        }
+      ]
+    },
+    {
+      "id": "e2",
+      "activityDateTime": "2026-11-05T11:05:00Z",
+      "activity": "Patch DeviceCompliancePolicy",
+      "activityOperationType": "Patch",
+      "activityResult": "Success",
+      "category": "Compliance",
+      "actor": {
+        "applicationDisplayName": "Graph Explorer"
+      },
+      "resources": [
+        {
+          "displayName": "Windows 11 - Compliance"
+        }
+      ]
+    },
+    {
+      "id": "e3",
+      "activityDateTime": "2026-11-05T11:06:00Z",
+      "activity": "Assign DeviceCompliancePolicy",
+      "activityOperationType": "Assign",
+      "activityResult": "Success",
+      "category": "Compliance",
+      "actor": {
+        "userPrincipalName": "megan@contoso.example"
+      },
+      "resources": [
+        {
+          "displayName": "Windows 11 - Compliance",
+          "resourceId": "c-win"
+        }
+      ]
+    },
+    {
+      "id": "e4",
+      "activityDateTime": "2026-11-05T16:20:00Z",
+      "activity": "Patch DeviceConfiguration",
+      "activityOperationType": "Patch",
+      "activityResult": "Success",
+      "category": "DeviceConfiguration",
+      "actor": {
+        "userPrincipalName": "lidia|<x>@contoso.example"
+      },
+      "resources": [
+        {
+          "displayName": "Kiosk | settings",
+          "resourceId": "d-kiosk"
+        }
+      ]
+    },
+    {
+      "id": "e5",
+      "activityDateTime": "2026-11-05T15:52:00Z",
+      "activity": "Delete DeviceConfiguration",
+      "activityOperationType": "Delete",
+      "activityResult": "Success",
+      "category": "DeviceConfiguration",
+      "actor": {
+        "userPrincipalName": "alex@contoso.example"
+      },
+      "resources": [
+        {
+          "displayName": "macOS - FileVault",
+          "resourceId": "D-FILEVAULT"
+        }
+      ]
+    },
+    {
+      "id": "e6",
+      "activityDateTime": "2026-11-05T15:00:00Z",
+      "activity": "Get DeviceConfiguration",
+      "activityOperationType": "Get",
+      "activityResult": "Success",
+      "resources": []
+    },
+    {
+      "id": "e7",
+      "activityDateTime": "2026-11-05T15:30:00Z",
+      "activity": "Patch DeviceConfiguration",
+      "activityOperationType": "Patch",
+      "activityResult": "Failure",
+      "resources": []
+    },
+    {
+      "id": "e8",
+      "activityDateTime": "2026-11-05T13:40:00Z",
+      "activity": null,
+      "activityOperationType": "Patch",
+      "activityResult": "Success",
+      "category": "DeviceConfiguration",
+      "actor": {
+        "userPrincipalName": "sam@contoso.example"
+      },
+      "resources": [
+        {
+          "displayName": "APP - Android",
+          "type": "AndroidManagedAppProtection",
+          "resourceId": "m-android"
+        }
+      ],
+      "activityType": "Patch AndroidManagedAppProtection",
+      "displayName": "Update android managed app protection."
+    }
+  ]
+}

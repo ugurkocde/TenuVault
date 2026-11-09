@@ -92,6 +92,25 @@
 .PARAMETER ExcludedFolders
     Comma separated type folders to leave out. Wins over -Scope.
 
+.PARAMETER TenantName
+    The tenant's name as change reports show it, in titles, the email subject and the file
+    name, at most 200 characters. A rerun without it keeps the name an earlier setup saved;
+    pass -TenantName '' to name the tenant by its id again. Without any, reports use the id.
+
+.PARAMETER ChangeReport
+    Off (default), Names or Full. With Names or Full, every complete backup is compared with the
+    previous complete plain backup of the tenant, and a change report (what changed, setting by
+    setting, and who changed it from the Intune audit log) is left in the 'tenuvault-backup-results'
+    container for the notification watcher to send by email. Names lists which settings changed
+    without their values; Full includes the values. Secret values are never included. Like the
+    backups, the report is plain JSON; it is deleted once sent, or unsent after 7 days. Backups
+    sealed before runbook 1.2.0 cannot be opened in Azure and are never compared. A rerun
+    without -ChangeReport keeps the level an earlier setup chose (off when none did).
+
+.PARAMETER ChangeReportWithoutActors
+    Leave out who made each change (user principal names are personal data). Pass
+    -ChangeReportWithoutActors:$false to name them again. A rerun without it keeps the earlier choice.
+
 .PARAMETER GrantGraphRoles
     Assign the Graph application roles to the managed identity now. Needs Global Administrator.
 
@@ -119,6 +138,9 @@ param(
     [string]$TimeZone = "UTC",
     [ValidateSet("everything", "policies")][string]$Scope = "policies",
     [string]$ExcludedFolders,
+    [string]$TenantName,
+    [ValidateSet("Off", "Names", "Full")][string]$ChangeReport = "Off",
+    [switch]$ChangeReportWithoutActors,
     [string]$AlertEmail,
     [switch]$NoFailureAlert,
     [switch]$IncludeDeviceCategories,
@@ -151,13 +173,20 @@ $appOnlyExcluded = if ($IncludeDeviceCategories) { "" } else { "DeviceCategories
 
 $variableNames = @(
     "TenuVaultTenantId-$tenantKey", "TenuVaultStorageAccount-$tenantKey",
-    "TenuVaultScope-$tenantKey", "TenuVaultExcludedFolders-$tenantKey", "TenuVaultAppOnlyExcluded-$tenantKey"
+    "TenuVaultScope-$tenantKey", "TenuVaultExcludedFolders-$tenantKey", "TenuVaultAppOnlyExcluded-$tenantKey",
+    "TenuVaultChangeReport-$tenantKey", "TenuVaultChangeReportActors-$tenantKey", "TenuVaultTenantName-$tenantKey"
 )
 # Setups before runbook 1.2.0 also wrote the Key Vault that held the recovery key. The runbook
 # no longer reads it; a rerun or -Remove deletes that variable.
 $legacyKeyVaultVariable = "TenuVaultKeyVault-$tenantKey"
 # The first runbook that writes plain backups and reads no Key Vault.
 $plainRunbookVersion = "1.2.0"
+# A rerun without -ChangeReport or -ChangeReportWithoutActors keeps what an earlier setup chose,
+# so an upgrade with an older command never turns a report off or its actors back on.
+$changeReportPassed = $PSBoundParameters.ContainsKey("ChangeReport")
+$changeReportActorsPassed = $PSBoundParameters.ContainsKey("ChangeReportWithoutActors")
+# Like the report choice: omitted keeps the saved name, an empty -TenantName clears it.
+$tenantNamePassed = $PSBoundParameters.ContainsKey("TenantName")
 
 # Validate every input before the first Azure write.
 if ($TenantId -notmatch '^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$') {
@@ -705,6 +734,19 @@ Set-TenuVaultAutomationVariable -Name "TenuVaultStorageAccount-$tenantKey" -Valu
 Set-TenuVaultAutomationVariable -Name "TenuVaultScope-$tenantKey" -Value $Scope
 Set-TenuVaultAutomationVariable -Name "TenuVaultExcludedFolders-$tenantKey" -Value $ExcludedFolders
 Set-TenuVaultAutomationVariable -Name "TenuVaultAppOnlyExcluded-$tenantKey" -Value $appOnlyExcluded
+if ($changeReportPassed) { Set-TenuVaultAutomationVariable -Name "TenuVaultChangeReport-$tenantKey" -Value $ChangeReport.ToLowerInvariant() }
+if ($tenantNamePassed) {
+    # Cleared to the tenant id, never to an empty value, which the runbook would skip for an
+    # unscoped TenuVaultTenantName variable. At most 200 characters, like the app passes it.
+    $savedName = if ("$TenantName".Trim()) { "$TenantName".Trim() } else { $TenantId }
+    if ($savedName.Length -gt 200) {
+        # Never cut between the two halves of a surrogate pair.
+        $cut = if ([char]::IsHighSurrogate($savedName[199])) { 199 } else { 200 }
+        $savedName = $savedName.Substring(0, $cut).TrimEnd()
+    }
+    Set-TenuVaultAutomationVariable -Name "TenuVaultTenantName-$tenantKey" -Value $savedName
+}
+if ($changeReportActorsPassed) { Set-TenuVaultAutomationVariable -Name "TenuVaultChangeReportActors-$tenantKey" -Value $(if ($ChangeReportWithoutActors) { "false" } else { "true" }) }
 
 # Upgrade from a setup before runbook 1.2.0: name the old Key Vault, then drop its variable once
 # the published runbook was read back as one that no longer reads it.
@@ -875,6 +917,9 @@ Write-Host "  Runbook:             $runbookName ($(if ($runbook.Plain) { "publis
 Write-Host "  Storage account:     $StorageAccountName (container '$backupContainer', writer role has no delete)"
 Write-Host "  Backup results:      '$outcomeContainer' (result notes for the notification watcher, same writer role)"
 Write-Host "  Encryption:          Azure encryption at rest; backups are plain JSON, readable by whoever your role assignments allow"
+$changeReportSummary = if (-not $changeReportPassed) { "unchanged (as an earlier setup chose; off when none did)" } else { switch ($ChangeReport) { 'Off' { 'off' } 'Names' { 'names only, sent by the notification watcher' } default { 'with setting values, sent by the notification watcher' } } }
+if ($changeReportActorsPassed) { $changeReportSummary += $(if ($ChangeReportWithoutActors) { ', without who made each change' } else { ', naming who made each change' }) }
+Write-Host "  Change reports:      $changeReportSummary"
 if ($principalId) { Write-Host "  Managed identity:    $principalId" }
 if ($alertStatus) { Write-Host "  Failure alert:       $alertStatus" }
 Write-Host "  Schedule:            $(if ($linked) { "$Frequency at $Time $TimeZone ('$scheduleName')" } else { 'not linked yet' })"

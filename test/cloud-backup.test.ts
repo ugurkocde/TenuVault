@@ -140,4 +140,23 @@ describe("cloudSetupCommand", () => {
     expect(command.toLowerCase()).not.toContain("recovery")
     expect(command.toLowerCase()).not.toContain("secret")
   })
+
+  it("passes the change report choice only when one was made, so a rerun keeps the earlier one", () => {
+    const base = { tenantId: TENANT, storageAccount: "tvbkp1", frequency: "daily", time: "02:00", weekday: 0, timeZone: "UTC", scope: "policies" } as const
+    // No choice made in this hand-off: no parameter, and the setup keeps level and actors.
+    expect(cloudSetupCommand(base)).not.toContain("-ChangeReport")
+    expect(cloudSetupCommand({ ...base, tenantName: "Contoso" })).not.toContain("-TenantName")
+    expect(cloudSetupCommand({ ...base, changeReport: "off" })).toContain("-Scope policies -ChangeReport Off -GrantGraphRoles")
+    expect(cloudSetupCommand({ ...base, changeReport: "names" })).toContain("-Scope policies -ChangeReport Names -ChangeReportWithoutActors:$false -GrantGraphRoles")
+    expect(cloudSetupCommand({ ...base, changeReport: "full", withoutActors: true })).toContain("-ChangeReport Full -ChangeReportWithoutActors -GrantGraphRoles")
+    expect(cloudSetupCommand({ ...base, changeReport: "off", withoutActors: true })).not.toContain("WithoutActors")
+    // The tenant name goes with a report, quoted so PowerShell expands nothing in it.
+    expect(cloudSetupCommand({ ...base, changeReport: "full", tenantName: "O'Brien $(Get-Secret) & Co" })).toContain("-ChangeReport Full -ChangeReportWithoutActors:$false -TenantName 'O''Brien $(Get-Secret) & Co' -GrantGraphRoles")
+    expect(cloudSetupCommand({ ...base, changeReport: "off", tenantName: "Contoso" })).not.toContain("-TenantName")
+    // Clipped to 200 units without splitting an emoji that starts at the 200th.
+    const long = cloudSetupCommand({ ...base, changeReport: "names", tenantName: "a".repeat(199) + "\u{1F600}" + "b".repeat(20) })
+    expect(long).toContain(`-TenantName '${"a".repeat(199)}' -GrantGraphRoles`)
+    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(long)).toBe(false)
+    expect(cloudSetupCommand({ ...base, changeReport: "names", tenantName: "c".repeat(250) })).toContain(`-TenantName '${"c".repeat(200)}' -GrantGraphRoles`)
+  })
 })

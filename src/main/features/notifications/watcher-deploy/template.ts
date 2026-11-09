@@ -34,6 +34,7 @@ export function watcherDeploymentBody(plan: WatcherDeployPlan, values: WatcherDe
         webhookSecret: parameter(values.webhookSecret),
         mailSender: parameter(""),
         mailRecipients: parameter(""),
+        reportRecipients: parameter(""),
         mailProbeMailbox: parameter(""),
         alertEmail: parameter(plan.alertEmail),
         noFailureAlert: parameter(plan.noFailureAlert),

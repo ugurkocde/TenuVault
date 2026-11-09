@@ -70,6 +70,13 @@
         "description": "Comma separated watcher mail recipients. Not the failure alert below."
       }
     },
+    "reportRecipients": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Comma separated recipients of the change reports cloud backups leave when their setup turned change reports on. Any address. Leave empty to send them to the mail recipients. Sent from the mail sender after verification."
+      }
+    },
     "mailProbeMailbox": {
       "type": "string",
       "defaultValue": "",
@@ -185,6 +192,10 @@
       {
         "name": "TenuVaultMailRecipients",
         "value": "[parameters('mailRecipients')]"
+      },
+      {
+        "name": "TenuVaultReportRecipients",
+        "value": "[parameters('reportRecipients')]"
       },
       {
         "name": "TenuVaultMailProbeMailbox",

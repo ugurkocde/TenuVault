@@ -21,6 +21,8 @@ if (-not $RunbookPath) {
 $script:calls = [System.Collections.Generic.List[object]]::new()
 $script:failGraphToken = $false
 $script:failDetail = $false
+$script:failReportList = $false
+$script:failCompliance = $false
 
 function Get-TvManagedIdentityToken {
     param([string]$Resource)
@@ -30,7 +32,9 @@ function Get-TvManagedIdentityToken {
 }
 
 function Invoke-TvHttp {
-    param([string]$Uri, [string]$Token, [string]$Method = "Get", [hashtable]$Headers, [byte[]]$BodyBytes, [string]$ContentType)
+    param([string]$Uri, [string]$Token, [string]$Method = "Get", [hashtable]$Headers, [byte[]]$BodyBytes, [string]$ContentType, [long]$MaxBytes = 0)
+    if ($script:failReportList -and $Uri -like "*comp=list*") { throw [InvalidOperationException]::new("storage listing is unavailable") }
+    if ($script:failCompliance -and $Uri -like "https://graph.microsoft.com/beta/deviceManagement/deviceCompliancePolicies*") { throw [TvHttpError]::new(500, "HTTP 500") }
     $body = if ($null -ne $BodyBytes) { [Text.Encoding]::UTF8.GetString($BodyBytes) } else { $null }
     $script:calls.Add([pscustomobject]@{ uri = $Uri; method = $Method; contentType = $ContentType; ifNoneMatch = $Headers["If-None-Match"]; body = $body })
     $text = '{"value":[]}'
@@ -63,3 +67,26 @@ $script:failDetail = $true
 $errorText = $null
 try { $output = @(Invoke-TvBackup) } catch { $errorText = $_.Exception.Message }
 Write-Output (@{ calls = @($script:calls.ToArray()); error = $errorText } | ConvertTo-Json -Compress -Depth 5)
+
+# 4. Change reports on, and the report step meets an unexpected storage error: the backup still
+#    succeeds and the job output says why there is no report.
+[Environment]::SetEnvironmentVariable("TenuVaultChangeReport", "names")
+$script:calls.Clear()
+$script:OutcomeSent = $false
+$script:failDetail = $false
+$script:failReportList = $true
+$errorText = $null
+$output = @()
+try { $output = @(Invoke-TvBackup) } catch { $errorText = $_.Exception.Message }
+Write-Output (@{ calls = @($script:calls.ToArray()); output = @($output | ForEach-Object { [string]$_ }); error = $errorText } | ConvertTo-Json -Compress -Depth 5)
+
+# 5. Change reports on and a backup with warnings: no report, and the job output says so.
+$script:calls.Clear()
+$script:OutcomeSent = $false
+$script:failReportList = $false
+$script:failCompliance = $true
+$errorText = $null
+$output = @()
+try { $output = @(Invoke-TvBackup) } catch { $errorText = $_.Exception.Message }
+[Environment]::SetEnvironmentVariable("TenuVaultChangeReport", $null)
+Write-Output (@{ calls = @($script:calls.ToArray()); output = @($output | ForEach-Object { [string]$_ }); error = $errorText } | ConvertTo-Json -Compress -Depth 5)
