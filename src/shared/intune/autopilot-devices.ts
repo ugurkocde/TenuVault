@@ -9,7 +9,7 @@ import { csvCell } from "../security"
  * device's registration details and cannot register a deleted device again. Restore puts the properties
  * Intune lets admins edit back on a device that is still registered, with updateDeviceProperties. That
  * action leaves properties its body does not name unchanged, clears the group tag and the device name with
- * "", and refuses an empty user: unassignUserFromDevice clears the user and its friendly name instead.
+ * "", and refuses an empty user or friendly name: unassignUserFromDevice clears both instead.
  * Intune applies the changes asynchronously, property by property, within a few minutes.
  */
 
@@ -50,13 +50,38 @@ const FIELDS: Array<{ key: string; label: string }> = [
 const text = (value: Json | undefined): string => (typeof value === "string" ? value : "")
 const shown = (value: Json | undefined): string => text(value) || "Not set"
 
+/**
+ * How the assigned user and its friendly name are put back. updateDeviceProperties refuses an empty user,
+ * an empty friendly name and a friendly name without a user, so a friendly name is only sent with the
+ * backed-up user, and unassignUserFromDevice is the only way to clear either. A friendly name the backup
+ * leaves empty while it keeps a user, or holds without a user, cannot be written.
+ */
+function userRestore(snapshot: Item, current: Item): { body: Item; unassign: boolean; friendlyRestored: boolean } {
+  const user = text(snapshot.userPrincipalName)
+  const friendly = text(snapshot.addressableUserName)
+  const liveUser = text(current.userPrincipalName)
+  const liveFriendly = text(current.addressableUserName)
+  if (!user) {
+    // Unassigning clears the user and its friendly name; with no live user there is nothing to unassign.
+    const unassign = Boolean(liveUser)
+    return { body: {}, unassign, friendlyRestored: !friendly && (unassign || !liveFriendly) }
+  }
+  const body: Item = {}
+  if (user !== liveUser || (friendly && friendly !== liveFriendly)) {
+    body.userPrincipalName = user
+    if (friendly) body.addressableUserName = friendly
+  }
+  return { body, unassign: false, friendlyRestored: friendly ? true : !liveFriendly }
+}
+
 /** The editable properties that differ between the live device and the backup. */
 export function autopilotDeviceChanges(snapshot: Item, current: Item): ReviewChange[] {
+  const { friendlyRestored } = userRestore(snapshot, current)
   return FIELDS.filter(({ key }) => text(snapshot[key]) !== text(current[key])).map(({ key, label }) => ({
     label,
     from: shown(current[key]),
     to: shown(snapshot[key]),
-    restored: true,
+    restored: key !== "addressableUserName" || friendlyRestored,
   }))
 }
 
@@ -64,21 +89,11 @@ export function autopilotDeviceChanges(snapshot: Item, current: Item): ReviewCha
 export function autopilotDeviceUpdate(snapshot: Item, current: Item): Step[] {
   const body: Item = {}
   for (const key of ["groupTag", "displayName"]) if (text(snapshot[key]) !== text(current[key])) body[key] = text(snapshot[key])
-  const user = text(snapshot.userPrincipalName)
-  const liveUser = text(current.userPrincipalName)
-  const friendly = text(snapshot.addressableUserName)
-  const userChanged = user !== liveUser || friendly !== text(current.addressableUserName)
+  const user = userRestore(snapshot, current)
+  Object.assign(body, user.body)
   const steps: Step[] = []
-  if (userChanged && user) {
-    body.userPrincipalName = user
-    body.addressableUserName = friendly
-  } else if (userChanged && !liveUser) {
-    // No user either side: only the friendly name differs, which the action sets on its own.
-    body.addressableUserName = friendly
-  }
   if (Object.keys(body).length) steps.push({ method: "POST", path: "{collection}/{id}/updateDeviceProperties", body, kind: "content" })
-  // The backup has no user: unassigning clears the user and its friendly name.
-  if (userChanged && !user && liveUser) steps.push({ method: "POST", path: "{collection}/{id}/unassignUserFromDevice", body: {}, kind: "content" })
+  if (user.unassign) steps.push({ method: "POST", path: "{collection}/{id}/unassignUserFromDevice", body: {}, kind: "content" })
   return steps
 }
 

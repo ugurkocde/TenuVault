@@ -125,6 +125,24 @@ describe("Restoring Autopilot device properties", () => {
     expect(steps).toEqual([{ method: "POST", path: "{collection}/{id}/updateDeviceProperties", body: { userPrincipalName: "ana@contoso.com", addressableUserName: "Ana" }, kind: "content" }])
   })
 
+  it("never sends an empty friendly name or a friendly name without a user, which Graph refuses", () => {
+    // The backed-up user has no friendly name: only the user is sent, and the live friendly name stays.
+    const kept = snapshot({ userPrincipalName: "ana@contoso.com" })
+    const live = snapshot({ userPrincipalName: "ben@contoso.com", addressableUserName: "Ben" })
+    expect(autopilotDeviceUpdate(kept, live)).toEqual([{ method: "POST", path: "{collection}/{id}/updateDeviceProperties", body: { userPrincipalName: "ana@contoso.com" }, kind: "content" }])
+    expect(autopilotDeviceChanges(kept, live)).toEqual([
+      { label: "Assigned user", from: "ben@contoso.com", to: "ana@contoso.com", restored: true },
+      { label: "User friendly name", from: "Ben", to: "Not set", restored: false },
+    ])
+    // A friendly name without a user cannot be written, so nothing is sent for it.
+    const orphan = snapshot({ addressableUserName: "Ana" })
+    expect(autopilotDeviceUpdate(orphan, snapshot())).toEqual([])
+    expect(autopilotDeviceChanges(orphan, snapshot())).toEqual([{ label: "User friendly name", from: "Not set", to: "Ana", restored: false }])
+    // Only the friendly name differs while the user matches: the user is sent again with it.
+    expect(autopilotDeviceUpdate(snapshot({ userPrincipalName: "ana@contoso.com", addressableUserName: "Ana" }), snapshot({ userPrincipalName: "ana@contoso.com", addressableUserName: "A" })))
+      .toEqual([{ method: "POST", path: "{collection}/{id}/updateDeviceProperties", body: { userPrincipalName: "ana@contoso.com", addressableUserName: "Ana" }, kind: "content" }])
+  })
+
   it("unassigns the user when the backup has none, because Graph refuses an empty user", () => {
     const steps = autopilotDeviceUpdate(snapshot({ groupTag: "Sales" }), snapshot({ groupTag: "Old", userPrincipalName: "ben@contoso.com", addressableUserName: "Ben" }))
     expect(steps).toEqual([
