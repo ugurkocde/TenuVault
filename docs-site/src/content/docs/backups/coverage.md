@@ -108,7 +108,7 @@ Apps are the slowest type to back up. Because installer files are never download
 
 ### Windows Autopilot devices
 
-A backup records each device registered in Windows Autopilot, one file per device, named by its serial number. It keeps what identifies the device and what admins set on it: serial number, manufacturer, model, group tag, purchase order, assigned user and its friendly name, device name, and the Entra device ID. It leaves out what changes on its own, such as the last contact time, the enrollment state and the profile status, so a device shows as changed only when someone changes it. The product key and the Surface Hub device account password are never stored.
+A backup records each device registered in Windows Autopilot, one file per device, named by its serial number. It keeps what identifies the device and what admins set on it: serial number, manufacturer, model, group tag, purchase order, assigned user and its friendly name, and device name. It leaves out what changes on its own, such as the last contact time, the enrollment state, the profile status and the Intune and Entra device IDs, so a device shows as changed only when someone changes it. The product key and the Surface Hub device account password are never stored.
 
 The backup does not include the hardware hash. Microsoft Graph returns a device's hash only while it is being imported, never once the device is registered, so no backup tool can read it. Keep the files you imported devices with, or get the hashes again from the device or from your OEM or reseller.
 

@@ -15,8 +15,8 @@ import { csvCell } from "../security"
 
 /**
  * What a backup keeps of each device. Status and contact times change on their own, the product key and
- * the Surface Hub device account password are never stored, and the Intune device ID changes on every
- * enrollment.
+ * the Surface Hub device account password are never stored, and the Intune and Entra device IDs change
+ * when a device is enrolled again or rejoins Entra.
  */
 export const AUTOPILOT_DEVICE_PROPERTIES = [
   "serialNumber",
@@ -30,7 +30,6 @@ export const AUTOPILOT_DEVICE_PROPERTIES = [
   "addressableUserName",
   "displayName",
   "resourceName",
-  "azureAdDeviceId",
   "deviceAccountUpn",
   "deviceFriendlyName",
 ]

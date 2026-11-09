@@ -78,7 +78,7 @@ describe("Windows Autopilot devices backup", () => {
   it("keeps the registration details and leaves out status, contact times, the product key and secrets", () => {
     const snapshot = listSnapshot(type, listed())
     expect(Object.keys(snapshot)).toEqual(["id", ...type.keep!])
-    for (const left of ["productKey", "deviceAccountPassword", "managedDeviceId", "lastContactedDateTime", "enrollmentState", "deploymentProfileAssignmentStatus", "remediationState", "userlessEnrollmentStatus"]) {
+    for (const left of ["productKey", "deviceAccountPassword", "managedDeviceId", "azureAdDeviceId", "azureActiveDirectoryDeviceId", "lastContactedDateTime", "enrollmentState", "deploymentProfileAssignmentStatus", "remediationState", "userlessEnrollmentStatus"]) {
       expect(snapshot).not.toHaveProperty(left)
     }
     expect(snapshot).toMatchObject({ id: ID, serialNumber: "1215-1407-0240", groupTag: "Sales", deviceFriendlyName: "" })
