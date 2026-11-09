@@ -1292,10 +1292,8 @@ export class LicenseService {
     this.assertCurrent(() => this.tenantPresent(tenant))
     const owner = this.options.store.get(COMMUNITY_KEY)
     if (!owner && this.uncoveredTenants().length > 1) {
-      const message = this.communityChoices().length > 1
-        ? "Choose which tenant continues on Community on the License page. Backups of this tenant are kept. Add a license to use it again."
-        : "Coverage is still being checked. Retry all tenants on the License page before choosing Community."
-      throw new CommunityLimitError(tenant, message)
+      if (this.communityChoices().length < 2) throw new Error("Coverage is still being checked. Retry all tenants on the License page before choosing Community.")
+      throw new CommunityLimitError(tenant, "Choose which tenant continues on Community on the License page. Backups of this tenant are kept. Add a license to use it again.")
     }
     if (owner && owner !== tenant) throw new CommunityLimitError(owner, communityLimit(owner))
     if (owner !== tenant) this.options.store.set(COMMUNITY_KEY, tenant)
