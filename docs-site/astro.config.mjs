@@ -162,6 +162,7 @@ export default defineConfig({
 								{ label: 'Restore modes and assignments', slug: 'restore/modes' },
 								{ label: 'Restore to another tenant', slug: 'restore/cross-tenant' },
 								{ label: 'What cannot be restored', slug: 'restore/limitations' },
+								{ label: 'Multi Admin Approval', slug: 'restore/multi-admin-approval' },
 								{ label: 'Disaster recovery', slug: 'restore/disaster-recovery' },
 							],
 						},
