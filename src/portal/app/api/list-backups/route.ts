@@ -86,8 +86,8 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
   const [metadataResult, listing] = await Promise.all([metadataRead, filesRead])
   const unavailable = typeof listing === 'string' ? (metadataResult.unavailable ? metadataResult.metadataError! : null) : listing.unavailable
   const filesText = typeof listing === 'string' && !unavailable ? listing : ''
-  const metadata = unavailable ? null : metadataResult.metadata
-  const metadataError = unavailable ?? metadataResult.metadataError
+  const listedMetadata = unavailable ? null : metadataResult.metadata
+  const readError = unavailable ?? metadataResult.metadataError
   // Ownership comes from the shared resolver (shared/backup-ownership.ts): the manifest's tenant,
   // else the ownership marker, read just for those folders and only when the listing holds one.
   // For a folder without a manifest the marker's run id lets the Dashboard count a failed run once.
@@ -101,8 +101,8 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
       return { kind: 'unreadable', error }
     }
   }
-  const { owner } = await resolveBackupOwnership(async (file) => {
-    if (file === 'metadata.json') return metadata ? { kind: 'found', value: metadata } : metadataError ? { kind: 'unreadable', error: new Error(metadataError) } : { kind: 'missing' }
+  const { manifest, owner } = await resolveBackupOwnership(async (file) => {
+    if (file === 'metadata.json') return listedMetadata ? { kind: 'found', value: listedMetadata } : readError ? { kind: 'unreadable', error: new Error(readError) } : { kind: 'missing' }
     if (!filesText.includes(`<Name>${name}/${BACKUP_OWNER_FILE}</Name>`)) return { kind: 'missing' }
     return inventory?.owner ? ownerCache.read(inventory.cacheKey, inventory.owner, readMarker) : readMarker()
   }, tenantId)
@@ -110,6 +110,9 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
   // tenant's, or a key this device lacks). One that could not be read otherwise (any status but 404,
   // a network error, a body that cannot be parsed or names no tenant) leaves the folder unresolved
   // until it can be. A missing sign-in on this device leaves the marker unreadable until it is fixed.
+  // Metadata the resolver could not use (it records an invalid tenant) is shown as unreadable, as it is for every other caller.
+  const metadata = listedMetadata && manifest.kind === 'found' ? listedMetadata : null
+  const metadataError = readError ?? (listedMetadata && manifest.kind === 'unreadable' && manifest.error instanceof Error ? manifest.error.message : undefined)
   const markerFailure = owner.kind === 'unreadable' ? owner.error : null
   const foreignMarker = markerFailure instanceof Error && markerFailure.name === 'FetchApplicationError'
   // A folder whose manifest could not be read is not matched to its run: its status is unknown, so the run counts once, through its attempt record.
@@ -181,6 +184,7 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
     runbookVersion: metadata?.RunbookVersion ?? metadata?.runbookVersion ?? null,
     runId,
     ownerTenantId: owner.kind === 'owned' || owner.kind === 'other' ? owner.tenantId : null,
+    ownerKind: owner.kind,
     foreign: foreignMarker || Boolean(metadataResult.foreign),
     unresolved: owner.kind === 'unreadable' && !foreignMarker,
     // Sealed by an earlier version and not opened on this device: its manifest, or its ownership marker.
@@ -320,20 +324,10 @@ export async function POST(request: NextRequest) {
     // to import a recovery key. Without the key nobody can tell whose such a folder is, so it counts
     // only when a readable record names this tenant, or when nothing in the container shows another
     // tenant: in a container another tenant also uses it may be theirs, and a key would not help.
-    const tenantLower = String(tenantId).toLowerCase()
-    const recordedOwner = (backup: typeof described[number]): string | null => {
-      const owner = (backup.fingerprint as { TenantId?: unknown } | null | undefined)?.TenantId ?? backup.ownerTenantId
-      return typeof owner === 'string' ? owner.toLowerCase() : null
-    }
-    const otherTenantSeen = described.some((backup) => {
-      const owner = recordedOwner(backup)
-      return (owner !== null && owner !== tenantLower) || (backup.foreign && !backup.sealed)
-    })
-    const sealed = described.filter((backup) => backup.sealed && (recordedOwner(backup) === tenantLower || (recordedOwner(backup) === null && !otherTenantSeen))).length
-    backups.push(...described.filter((backup) => {
-      const owner = (backup.fingerprint as { TenantId?: unknown } | null | undefined)?.TenantId ?? backup.ownerTenantId
-      return !backup.foreign && !backup.unresolved && (typeof owner !== 'string' || owner.toLowerCase() === String(tenantId).toLowerCase())
-    }))
+    // Filtering and attribution use only the shared resolver's outcome, never a raw manifest field.
+    const otherTenantSeen = described.some((backup) => backup.ownerKind === 'other' || (backup.foreign && !backup.sealed))
+    const sealed = described.filter((backup) => backup.sealed && (backup.ownerKind === 'owned' || (backup.ownerKind !== 'other' && !otherTenantSeen))).length
+    backups.push(...described.filter((backup) => !backup.foreign && !backup.unresolved && backup.ownerKind !== 'other'))
 
     // Sort by timestamp descending
     backups.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
@@ -350,6 +344,7 @@ export async function POST(request: NextRequest) {
     for (const backup of backups) {
       delete backup.fingerprint
       delete backup.ownerTenantId
+      delete (backup as { ownerKind?: unknown }).ownerKind
       delete backup.foreign
       delete backup.unresolved
       delete backup.sealed

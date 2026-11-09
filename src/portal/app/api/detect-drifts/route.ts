@@ -117,7 +117,7 @@ export async function POST(request: NextRequest) {
       catch (error) { return { kind: 'unreadable', error } }
     }
     const unreadableBackup = (name: string, error: unknown) => new DriftPairError(
-      isLegacySealedError(error) || isLegacyOtherTenantError(error) ? (error as Error).message : `Backup ${name} cannot be read: ${error instanceof Error ? error.message : String(error)}`,
+      isLegacySealedError(error) ? (error as Error).message : `Backup ${name} cannot be read: ${error instanceof Error ? error.message : String(error)}`,
       "BACKUP_UNREADABLE",
       409,
     )
@@ -127,14 +127,20 @@ export async function POST(request: NextRequest) {
       const { manifest, owner } = await resolveBackupOwnership((file) => readFile(name, file), tenantId)
       checked++
       report({ phase: "checking", detail: `Checking the backups: ${checked - 1} read`, done: checked, total: 0 })
+      // Known foreign ownership wins over a missing or unreadable manifest: another tenant's backup is
+      // refused as such, as restore refuses it, also when only its marker or a legacy seal says so.
+      const foreign = owner.kind === 'other'
+        || (manifest.kind === 'unreadable' && isLegacyOtherTenantError(manifest.error))
+        || (owner.kind === 'unreadable' && isLegacyOtherTenantError(owner.error))
+      if (foreign) throw new DriftPairError(`Backup ${name} belongs to another tenant.`, "BACKUP_OTHER_TENANT", 403)
       if (manifest.kind === 'missing') return null
       if (manifest.kind === 'unreadable') throw unreadableBackup(name, manifest.error)
       if (owner.kind === 'unreadable') throw unreadableBackup(name, owner.error)
-      return owner.kind === 'untagged' ? manifest.metadata as BackupMetadata : { ...manifest.metadata, TenantId: owner.tenantId } as BackupMetadata
+      return manifest.metadata as BackupMetadata
     }
-    // A backup that cannot be opened here (an older encrypted one without its key, another tenant's,
-    // damaged JSON or a damaged marker) is skipped when TenuVault picks the pair; a chosen one fails.
-    const unopened = (error: unknown) => error instanceof DriftPairError && error.code === 'BACKUP_UNREADABLE'
+    // Another tenant's backup, and one that cannot be opened here (an older encrypted one without its
+    // key, damaged JSON or a damaged marker), is skipped when TenuVault picks the pair; a chosen one fails.
+    const unopened = (error: unknown) => error instanceof DriftPairError && (error.code === 'BACKUP_UNREADABLE' || error.code === 'BACKUP_OTHER_TENANT')
     const pair = await selectBackupPair({ folders: backupFolders, tenantId, baseline, comparison, limit: typeof backupLimit === "number" && backupLimit > 0 ? backupLimit : undefined, load: loadMetadata, unopened, signal })
     const newerBackup = pair.comparison
     const olderBackup = pair.baseline

@@ -100,7 +100,7 @@ describe('Backup pair selection', () => {
 
 /** A storage account with backups, served the way the blob endpoints answer the route. */
 interface FakeBackup { metadata: Record<string, unknown> | null; files: Record<string, unknown> }
-function fakeStorage(backups: Record<string, FakeBackup>, options: { unreadable?: string[]; sealed?: string[]; beforeRead?: (path: string) => Promise<void> | void } = {}) {
+function fakeStorage(backups: Record<string, FakeBackup>, options: { unreadable?: string[]; sealed?: string[]; otherTenant?: string[]; beforeRead?: (path: string) => Promise<void> | void } = {}) {
   const reads: string[] = []
   const stub = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input))
@@ -127,6 +127,7 @@ function fakeStorage(backups: Record<string, FakeBackup>, options: { unreadable?
     const path = rest.join('/')
     // A manifest an earlier version encrypted with a key this device lacks fails as the legacy reader does.
     if (path === 'metadata.json' && options.sealed?.includes(backup!)) throw new LegacySealedError()
+    if (path === 'metadata.json' && options.otherTenant?.includes(backup!)) throw new LegacySealedError(undefined, true)
     if (path === 'metadata.json') return backups[backup!]?.metadata ? Response.json(backups[backup!]!.metadata) : new Response('', { status: 404 })
     reads.push(`${backup}/${path}`)
     await options.beforeRead?.(`${backup}/${path}`)
@@ -230,6 +231,26 @@ describe('Drift scan', () => {
     const chosen = await drift(request({ baseline: NEW, comparison: DAMAGED }))
     expect(chosen.status).toBe(409)
     expect(await chosen.json()).toMatchObject({ code: 'BACKUP_UNREADABLE', error: expect.stringContaining('ownership record is damaged') })
+  })
+
+  it('refuses another tenant\'s backup as such before missing or unreadable handling, and skips it when picking', async () => {
+    const MANIFESTLESS = 'backup-2026-09-24-120000', SEALED = 'backup-2026-09-25-120000'
+    fakeStorage({
+      ...twoBackups(true),
+      // Another tenant's run that stopped before its manifest.
+      [MANIFESTLESS]: { metadata: null, files: { '.tenuvault-owner.json': { TenantId: OTHER_TENANT } } },
+      // An older encrypted manifest that a key here opens only for another signed-in tenant.
+      [SEALED]: { metadata: { Status: 'Success' }, files: {} },
+    }, { sealed: [], otherTenant: [SEALED] })
+    for (const comparison of [MANIFESTLESS, SEALED]) {
+      const chosen = await drift(request({ baseline: NEW, comparison }))
+      expect(chosen.status).toBe(403)
+      expect(await chosen.json()).toMatchObject({ code: 'BACKUP_OTHER_TENANT' })
+    }
+    const picked = await drift(request())
+    expect(picked.status).toBe(200)
+    const result = await picked.json()
+    expect([result.baseline.id, result.comparison.id]).toEqual([OLD, NEW])
   })
 
   it('reports an unreadable file as a warning instead of failing the scan', async () => {

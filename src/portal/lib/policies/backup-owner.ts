@@ -1,6 +1,6 @@
 import { belongsTo, type BackupMetadata } from "../../../shared/intune/drift"
 import { localStorageAccountName } from "../../../shared/constants"
-import { DAMAGED_OWNER_MARKER, resolveBackupOwnership, type OwnershipFile } from "../../../shared/backup-ownership"
+import { DAMAGED_OWNER_MARKER, INVALID_MANIFEST_TENANT, resolveBackupOwnership, type OwnershipFile } from "../../../shared/backup-ownership"
 import { isLegacyOtherTenantError } from "../../../shared/legacy-sealed"
 
 export const OTHER_TENANT_BACKUP = "This backup belongs to another tenant."
@@ -41,7 +41,7 @@ const sealedError = (error: unknown) => isLegacyOtherTenantError(error) ? OTHER_
 function refusal(error: unknown, fallback: string): { ok: false; status: number; error: string } {
   if (sealedElsewhere(error)) return { ok: false, status: 403, error: sealedError(error) }
   if (error instanceof RefusedRead) return { ok: false, status: error.status, error: error.message }
-  if (error instanceof Error && error.message === DAMAGED_OWNER_MARKER) return { ok: false, status: 403, error: DAMAGED_OWNER_MARKER }
+  if (error instanceof Error && (error.message === DAMAGED_OWNER_MARKER || error.message === INVALID_MANIFEST_TENANT)) return { ok: false, status: 403, error: error.message }
   return { ok: false, status: 500, error: fallback }
 }
 

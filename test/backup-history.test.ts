@@ -129,6 +129,36 @@ describe("backups the list cannot place", () => {
     }
   })
 
+  it.each([42, "", null])("trusts only the resolved owner for a manifest whose TenantId is %j, in both list modes (review repro)", async (invalid) => {
+    const placed = "backup-2026-09-27-020000", unplaced = "backup-2026-09-28-020000"
+    storage({
+      ...blobs,
+      [`${placed}/metadata.json`]: { TenantId: invalid, Status: "Success" },
+      [`${placed}/${BACKUP_OWNER_FILE}`]: { TenantId: "other", RunId: "desktop-other" },
+      [`${placed}/DeviceConfigurations/A.json`]: { id: "1" },
+      [`${unplaced}/metadata.json`]: { TenantId: invalid, Status: "Success" },
+      [`${unplaced}/DeviceConfigurations/A.json`]: { id: "1" },
+    })
+    for (const summary of [false, true]) {
+      const listed = await (await listBackups(request({ summary }))).json()
+      const ids = listed.backups.map((backup: { id: string }) => backup.id)
+      // The marker names another tenant, so its row never reaches this tenant.
+      expect(ids).not.toContain(placed)
+      // A tenant the manifest records but nobody can read is not "no tenant": left out and counted.
+      expect(ids).not.toContain(unplaced)
+      expect(listed.unresolved).toBe(1)
+    }
+  })
+
+  it("lists a backup whose manifest records an invalid tenant only when its marker names this tenant", async () => {
+    const own = "backup-2026-09-27-020000"
+    storage({ ...blobs, [`${own}/metadata.json`]: { TenantId: 42, Status: "Success" }, [`${own}/${BACKUP_OWNER_FILE}`]: { TenantId: "tenant" }, [`${own}/DeviceConfigurations/A.json`]: { id: "1" } })
+    for (const summary of [false, true]) {
+      const listed = await (await listBackups(request({ summary }))).json()
+      expect(listed.backups.find((backup: { id: string }) => backup.id === own)).toMatchObject({ status: "unknown", error: expect.stringContaining("records a tenant that is not valid") })
+    }
+  })
+
   it("places a folder whose manifest cannot be read by its ownership marker, in both list modes", async () => {
     const foreignBoth = "backup-2026-09-27-020000"
     const foreignMarker = "backup-2026-09-28-020000"
