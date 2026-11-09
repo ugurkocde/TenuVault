@@ -3,11 +3,18 @@
 Date: 2026-11-07
 Graph version: beta (every MAA endpoint exists only in beta)
 Lab: Ugur Koc Lab, app-only Lokka connection plus one delegated admin sign-in for the E2E run, no access policies configured
-Status: research done, scope decided (2026-11-09). The responses TenuVault actually receives were verified live (see the E2E run). Approving and completing a request were not exercised, and do not need to be: TenuVault will not run the approval flow (see Decision).
+Status: implemented for restore (2026-11-09). The full round trip (request, approval by a second admin, completion) was verified live with two test admins (see the two-admin lab run).
 
 ## Decision
 
-TenuVault recognises Multi Admin Approval and explains it, but does not run the approval flow. It sends no justification header, creates no approval requests, offers no approvals inbox and never completes a request. Approval stays in the Intune admin center. The scope is Phase 1 below. The Phase 2 notes are kept only as background in case this is revisited.
+Revised on 2026-11-09 after the two-admin lab run (the first decision, "detect and explain only", is superseded):
+
+- **Every writer** (restore, change sets, CIS remediation, baselines, OIB deployment, framework baseline creation) detects MAA and reports it clearly, never as a retryable failure, and reports partial writes accurately.
+- **Restore** (same tenant, copies and replace in place) sends protected items to Intune as approval requests with the admin's justification, keeps a pending record in the encrypted desktop store, and lets the original requester complete them after approval, including the separate assignments round.
+- **Approval stays in the Intune admin center.** TenuVault never approves or rejects; there is no approvals inbox.
+- **Change sets and OIB do not submit requests** yet. Their operations are marked as blocked by MAA and are applied in the admin center.
+
+Phase 2 below describes the original design; where the lab run contradicts it, the lab run wins.
 
 ## When MAA triggers, and why TenuVault cares
 
@@ -27,7 +34,7 @@ MAA never breaks a tenant. The problem is how TenuVault reports it today:
 4. **Mixed runs.** In one restore the unprotected items apply and the protected ones are refused. Without a per-item reason the admin cannot tell what was restored.
 5. **The tenants most likely to use MAA** (MSPs and larger organisations) are the ones TenuVault matters most to, and they hit this on their first restore.
 
-The fix is therefore to say clearly, per item: "Multi Admin Approval protects this policy type in this tenant. Nothing was changed. Make this change in the Intune admin center." When an earlier step of the same item was already written, the message says exactly what was written and what was blocked instead (Phase 1, item 3). Run reports must stay accurate either way. Making the write succeed through MAA is not the goal.
+The fix is therefore to say clearly, per item: "Multi Admin Approval protects this policy type in this tenant. Nothing was changed. Make this change in the Intune admin center." When an earlier step of the same item was already written, the message says exactly what was written and what was blocked instead (Phase 1, item 3). Run reports must stay accurate either way. For restore, TenuVault now also sends protected items for approval and completes them afterwards (see Decision).
 
 ## Summary
 
@@ -241,7 +248,7 @@ The request object carries undocumented fields beyond the Graph reference:
 What this changes:
 
 - **Expiry is 4 days**, not the documented 3 (`expirationDateTime` minus `requestDateTime`). Show the server's `expirationDateTime`, never a computed one.
-- **Intune keeps the exact body** (`payload`). TenuVault does not have to store secret-bearing bodies locally: it can keep a hash and, at completion, resend `payload` after checking the hash. The flip side for the docs: anyone who can read approval requests (DeviceManagementConfiguration.Read.All plus an Intune role) sees the full body, script content included.
+- **Intune keeps the body** (`payload`), but in its internal format (OData types rewritten to `microsoft.management.services.api.*`). Graph rejects it as a resend body (verified in the two-admin run), so TenuVault stores the exact serialized body itself. The flip side for the docs: anyone who can read approval requests sees the full body, script content included.
 - `payloadOperation`, `payloadName` and `payloadType` give the approvals inbox readable rows without TenuVault storing anything.
 - `requestor.user.id` lets TenuVault check that the signed-in admin is the requester before offering Complete or Withdraw.
 
@@ -300,14 +307,14 @@ Small, ships independently, removes the "unclear failure" problem.
 6. **Flag `MultiAdminApprovalPolicies` restore** as "requires approval by a second admin, make this change in the Intune admin center". Creating or changing access policies is always protected.
 7. **Docs.** A docs-site page on MAA: what TenuVault reads (nothing changes), what it writes, what the admin sees, and why app exclusions do not apply.
 
-### Phase 2: full approval round trip (not planned)
+### Phase 2: full approval round trip (original design)
 
-Out of scope by decision (2026-11-09). Kept as background only.
+Implemented for restore in a narrower form (no approvals inbox, no change-set submission). Kept for reference; see the two-admin lab run for verified behaviour.
 
 1. **Ask for a justification.** When the preflight or a Phase 1 signal shows approval is needed, the confirm dialog gets a justification field, prefilled (for example "TenuVault restore of <policy name> from the backup of <date>"), editable, capped at 700 characters, required. TenuVault never creates an approval request on its own.
 2. **Submit.** Send the write with `x-msft-approval-justification`. On the pending signal, store a **pending approval record**: tenant, signed-in user object ID, the operation's write key, method, path, the exact body sent (or its hash plus the frozen change-set content it came from), the code, `expirationDateTime`, the follow-up steps still to run, and the origin (restore, change set, OIB).
    - Bodies of restores of updates depend on the live object at the time (`buildUpdatePlan` reads `current`), so the body must be stored, not rebuilt.
-   - Store bodies with the same protection as change-set content. Script bodies can contain secrets. Intune also keeps the exact body in the request's `payload`, so a hash plus `payload` is enough for the main request; follow-up steps that were never sent still need their bodies stored.
+   - Store bodies with the same protection as change-set content. Script bodies can contain secrets. Intune's `payload` cannot be resent (internal format), so the exact body string must be stored for every step.
 3. **Track.** A "Waiting for approval" list per tenant (and on the change-set page) shows each request with its status, the approver's note and the time left. Poll `GET operationApprovalRequests/{code}` when the list is open (once a minute at most) and at app start; no background polling across tenants.
 4. **Complete.** When the status is `approved`, the requester presses Complete. TenuVault checks that the signed-in user is the requester, takes a fresh pre-change backup (days may have passed), verifies the stored body hash, resends with `x-msft-approval-code`, then continues with the follow-up steps and the usual read-back.
 5. **Follow-up steps can need their own approval.** A create may be approved and then its `/assign` (or a settings step) intercepted again. Each step gets its own pending record, chained to the first. The UI shows "step 2 of 3 waiting for approval".
@@ -327,15 +334,44 @@ Out of scope by decision (2026-11-09). Kept as background only.
 
 ## Still unverified
 
-These need a tenant with an access policy and two admins. None of them blocks Phase 1, because the detection rule tolerates all documented variants. Items 2, 4, 5 and 8 only matter for Phase 2, which is not planned.
+Items 2, 4, 5 and 7 were settled by the two-admin lab run on 2026-11-09.
 
 1. ~~The current status code with and without the justification header, for a delegated token.~~ Settled on 2026-11-09: 400 without, 412 with (see the E2E run).
-2. Whether `/assign`, settings steps and other follow-up calls after an approved create each need their own approval, per area.
+2. ~~Whether `/assign` after an approved create or update needs its own approval~~: yes, always (Settings Catalog verified). Settings steps of other types are still unverified.
 3. Which of `deviceHealthScripts`, `deviceComplianceScripts`, `mobileAppConfigurations`, endpoint security policies and scope tags are intercepted.
-4. Whether the approval code is single-use, whether only the requester can complete, and the error for an expired, rejected or reused code.
-5. Whether the resend body must match byte for byte or semantically.
+4. ~~Single use, requester-only completion, errors~~: the code is single use; only the requester can complete; a rejected, reused or not-yet-approved code and completion by another admin all return a generic 403. Expired was not observed.
+5. ~~Byte for byte or semantic match~~: byte for byte. Reordered keys fail with a generic 403, and the request stays approved.
 6. ~~Whether `$filter=requestId eq` filters or is ignored~~ (it returns nothing, settled on 2026-11-09), and the valid `entityType` values for `retrieveRequestStatus`.
-7. The shape of the "a request is already pending for this object" refusal.
+7. ~~The "already pending" refusal~~: another admin gets 409 "An active Approval Request already exists for this entity"; the same requester gets 412 with the existing code. Creates are not locked.
 8. Whether an approval recorded through `/approve` by a delegated approver behaves exactly like one made in the admin center.
 
-A customer or partner tenant that already runs MAA can answer most of these with a short scripted session (one Settings Catalog policy, one script, one app assignment), with the responses sanitized before they come back.
+Still open: whether Complete in the admin center works for a request submitted through Graph (the browser automation failed), item 3, item 8, and settings steps of types other than Settings Catalog.
+
+## Two-admin lab run (2026-11-09)
+
+Lab tenant, two test admins in an assigned security group with a temporary custom Intune role (Settings Catalog and compliance permissions plus all Multi Admin Approval permissions), signed in through the lab's TenuVault app registration (delegated). Requester A, approver B. Everything below was cleaned up afterwards (access policy, test policies, role, role assignment).
+
+| Step | Result |
+| --- | --- |
+| A creates an access policy for `configurationPolicy`, with justification | 412, code in header and message |
+| A approves own request | 403 "Request can not be approved by requestor" |
+| A completes before approval | Generic 403 |
+| B approves (`POST .../{code}/approve`) | 200, status `approved`; the request records the approving app (TenuVault) |
+| B completes A's request | Generic 403 |
+| A completes with the exact body and `x-msft-approval-code` | 200, policy created, status `completed` |
+| A reuses the completed code | Generic 403 |
+| Enforcement delay | About 2 minutes after completion; writes in between go through unapproved |
+| Settings Catalog create with an empty `settings` list | 400 validation error before MAA interception |
+| PUT (replace in place) with justification | 412, `payloadOperation: Update` |
+| While pending: A sends PATCH or `/assign` on the same object | 412 with the existing code, no new request |
+| While pending: B sends PATCH | 409 "An active Approval Request already exists for this entity" |
+| A completes with a changed name, a different call, or reordered keys | Generic 403 each; request stays `approved` |
+| A completes with the exact body | 204 |
+| `/assign` after the completed PUT | 412, new code, `payloadOperation: Assign`; completed after approval with 200 |
+| PATCH rejected by B, then completed by A | Generic 403, status `rejected` |
+| Same create sent twice | Two separate requests (creates are not locked) |
+| Complete a create with Intune's stored `payload` | 400 "Invalid OData type specified: microsoft.management.services.api..." |
+| Complete a create with the exact body | 201, then `/assign` needed a second round (412, approve, 200) |
+| `cancelMyRequest` with `{"requestId": ...}` | 500; with `{"id": ...}` 204 |
+| Compliance policy and legacy device configuration create (not protected by this access policy) | 201, deleted normally |
+| DELETE of a protected policy and of the access policy | 412, approve, complete 200 |
