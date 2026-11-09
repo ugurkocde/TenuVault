@@ -1,0 +1,46 @@
+{
+  "pending": {
+    "error": {
+      "code": "BadRequest",
+      "message": "{\r\n  \"_version\": 3,\r\n  \"Message\": \"Approval Required. Request Approval using the request ID returned as part of the x-msft-approval-code response header. x-msft-approval-code: 11111111-1111-4111-8111-111111111111 - Operation ID (for customer support): 11111111-1111-4111-8111-111111111111 - Activity ID: 11111111-1111-4111-8111-111111111111 - Url: https://graph.example.test/fake\",\r\n  \"CustomApiErrorPhrase\": \"\",\r\n  \"RetryAfter\": null,\r\n  \"ErrorSourceService\": \"\",\r\n  \"HttpHeaders\": \"{\\\"x-msft-approval-code\\\":\\\"11111111-1111-4111-8111-111111111111\\\"}\"\r\n}",
+      "innerError": {
+        "date": "2026-11-09T16:11:14",
+        "request-id": "11111111-1111-4111-8111-111111111111",
+        "client-request-id": "11111111-1111-4111-8111-111111111111"
+      }
+    }
+  },
+  "refused": {
+    "error": {
+      "code": "Forbidden",
+      "message": "{\r\n  \"_version\": 3,\r\n  \"Message\": \"An error has occurred - Operation ID (for customer support): 11111111-1111-4111-8111-111111111111 - Activity ID: 11111111-1111-4111-8111-111111111111 - Url: https://graph.example.test/fake\",\r\n  \"CustomApiErrorPhrase\": \"\",\r\n  \"RetryAfter\": null,\r\n  \"ErrorSourceService\": \"\",\r\n  \"HttpHeaders\": \"{}\"\r\n}",
+      "innerError": {
+        "date": "2026-11-09T16:11:24",
+        "request-id": "11111111-1111-4111-8111-111111111111",
+        "client-request-id": "11111111-1111-4111-8111-111111111111"
+      }
+    }
+  },
+  "required": {
+    "error": {
+      "code": "BadRequest",
+      "message": "{\r\n  \"_version\": 3,\r\n  \"Message\": \"Header 'x-msft-approval-justification' is required to request approval - Operation ID (for customer support): 11111111-1111-4111-8111-111111111111 - Activity ID: 11111111-1111-4111-8111-111111111111 - Url: https://graph.example.test/fake\",\r\n  \"CustomApiErrorPhrase\": \"\",\r\n  \"RetryAfter\": null,\r\n  \"ErrorSourceService\": \"\",\r\n  \"HttpHeaders\": \"{}\"\r\n}",
+      "innerError": {
+        "date": "2026-11-09T16:13:19",
+        "request-id": "11111111-1111-4111-8111-111111111111",
+        "client-request-id": "11111111-1111-4111-8111-111111111111"
+      }
+    }
+  },
+  "locked": {
+    "error": {
+      "code": "Conflict",
+      "message": "{\r\n  \"_version\": 3,\r\n  \"Message\": \"An active Approval Request already exists for this entity - Operation ID (for customer support): 11111111-1111-4111-8111-111111111111 - Activity ID: 11111111-1111-4111-8111-111111111111 - Url: https://graph.example.test/fake - Operation ID (for customer support): 11111111-1111-4111-8111-111111111111 - Activity ID: 11111111-1111-4111-8111-111111111111 - Url: https://graph.example.test/fake\",\r\n  \"CustomApiErrorPhrase\": \"\",\r\n  \"RetryAfter\": null,\r\n  \"ErrorSourceService\": \"\",\r\n  \"HttpHeaders\": \"{}\"\r\n}",
+      "innerError": {
+        "date": "2026-11-09T16:14:09",
+        "request-id": "11111111-1111-4111-8111-111111111111",
+        "client-request-id": "11111111-1111-4111-8111-111111111111"
+      }
+    }
+  }
+}

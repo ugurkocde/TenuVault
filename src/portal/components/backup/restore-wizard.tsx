@@ -1,3 +1,6 @@
+"use client"
+
+import { RestoreApprovals } from "./restore-approvals"
 import { reviewedDependencyMappings, type RecoveryReadiness } from "../../../shared/intune/recovery"
 import { settingDefinitionIds, type DeprecatedSettingHit } from "../../../shared/intune/settings-catalog"
 import { typeForFolder, type ReviewChange } from "../../../shared/intune/registry"
@@ -5,7 +8,6 @@ import { moduleForFolder } from "../../../shared/services/modules"
 import { inTenant, type AdminLink } from "../../../shared/intune/admin-links"
 import { passwordResetWarning } from "../../../shared/intune/restore-plan"
 import { ACKNOWLEDGEMENT_REQUIRED } from "../../../shared/disclaimer"
-"use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
 import {
@@ -141,6 +143,9 @@ interface BackupValidation {
 type Plan = "create" | "copy" | "recreate" | "overwrite" | "skip" | "cannot" | "unchecked"
 
 interface Outcome {
+  approvalId?: string
+  approvalState?: "required" | "submitted"
+  approval?: unknown
   path: string
   success: boolean
   action?: "created" | "updated" | "skipped" | "unchanged"
@@ -250,6 +255,21 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   const [review, setReview] = useState<Record<string, LiveState> | null>(null)
   const [reviewError, setReviewError] = useState("")
   const [confirmed, setConfirmed] = useState(false)
+  const [approvalOpenRevision, setApprovalOpenRevision] = useState(0)
+  const [usesApproval, setUsesApproval] = useState(false)
+  const [justification, setJustification] = useState("")
+  useEffect(() => {
+    setUsesApproval(false)
+    if (step !== "review" || copying) return
+    const controller = new AbortController()
+    void post<{ enabled: boolean }>("/api/restore-backup", { ...tenant.credentials, approvalAction: "detect" }, controller.signal).then(data => {
+      if (!controller.signal.aborted) {
+        setUsesApproval(data.enabled)
+        if (data.enabled) setJustification(current => current || `TenuVault restore of ${selected.size} item(s) from the backup of ${backup?.timestamp ? formatDate(backup.timestamp) : backupId}`.slice(0, 700))
+      }
+    }).catch(() => {})
+    return () => controller.abort()
+  }, [step, copying, tenant.credentials.tenantId])
 
   const [validating, setValidating] = useState(false)
   const [validation, setValidation] = useState<BackupValidation | null>(null)
@@ -385,7 +405,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     setSelected((current) => {
       if (maxSelection === 1) return on ? new Set(paths.slice(0, 1)) : new Set([...current].filter((path) => !paths.includes(path)))
       const next = new Set(current)
-      for (const path of paths) (on ? next.add(path) : next.delete(path))
+      for (const path of paths) { if (on) next.add(path); else next.delete(path) }
       return next
     })
 
@@ -503,6 +523,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
           selectedPolicies: batch.paths.map((path) => ({ path, repairToken: previous.find((item) => item.path === path && item.targetTenantId?.toLowerCase() === batch.targetTenantId)?.repairToken })),
           dependencyMappings,
           confirmMappings: mappingsConfirmed,
+          justification: copying ? undefined : justification.trim() || undefined,
           mode: copying ? "copy" : mode,
           assignments: copying ? false : assignments,
           progressId: id,
@@ -514,11 +535,11 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
       }
       const outcomes = mergeOutcomes(previous, completed)
       const handled = outcomes.filter((outcome) => outcome.success).length
-      const failed = outcomes.filter((outcome) => !outcome.success && outcome.action !== "skipped").length
+      const failed = outcomes.filter((outcome) => !outcome.success && !outcome.approval && outcome.action !== "skipped").length
       const skipped = outcomes.filter((outcome) => !outcome.success && outcome.action === "skipped").length
       setProgress((current) => (current ? { ...current, done: current.total, current: null } : current))
-      setResult({ outcome: failed === 0 && handled > 0 ? "success" : handled > 0 || outcomes.some((item) => item.partial) ? "partial" : "failed",
-        message: restoreSummary(handled, failed, skipped), results: outcomes })
+      setResult({ outcome: failed === 0 && handled > 0 && !outcomes.some(item => item.approval) ? "success" : handled > 0 || outcomes.some((item) => item.partial || item.approval) ? "partial" : "failed",
+        message: `${restoreSummary(handled, failed, skipped)}${outcomes.some(item => item.approval) ? ` ${outcomes.filter(item => item.approval).length} awaiting approval.` : ""}`, results: outcomes })
     } catch (error) {
       showPlanError(error)
       const missing = (batch: (typeof batches)[number], outcome: Omit<Outcome, "path" | "targetTenantId">): Outcome[] => {
@@ -564,6 +585,10 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
 
   return (
     <div className="space-y-6">
+      <RestoreApprovals key={tenant.credentials.tenantId} tenant={tenant} enabled={usesApproval || !!result?.results.some(outcome => outcome.approval)} revision={result?.results.length ?? 0} openRevision={approvalOpenRevision} onOutcome={outcome => setResult(current => {
+        const results = mergeOutcomes(current?.results ?? [], [outcome])
+        return { results, outcome: results.every(item => item.success) ? "success" : "partial", message: outcome.error ?? "Approval completed. Check the result of every item." }
+      })} />
       <ol className="flex flex-wrap items-center gap-2" aria-label="Restore steps">
         {STEPS.map((entry, index) => (
           <li key={entry.id} className="flex items-center gap-2">
@@ -1000,6 +1025,10 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
             </>
           )}
 
+          {usesApproval && <label className="mt-5 block rounded-xl border bg-white p-4 text-sm">Justification
+            <textarea className="mt-2 block w-full rounded border p-2" name="justification" autoComplete="off" maxLength={700} required value={justification} onChange={event => setJustification(event.target.value)} aria-describedby="approval-help" />
+            <span id="approval-help" className="mt-2 block text-gray-500">Protected items are sent to Intune for approval by a second admin.</span>
+          </label>}
           <div className="mt-5 rounded-2xl border border-gray-200 p-4">
             <p className="flex items-center gap-2 text-sm font-medium text-gray-900">
               <ShieldCheck className="h-4 w-4 text-gray-500" /> Validate this backup (no changes)
@@ -1056,7 +1085,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
               </Button>
               <Button
                 className="bg-coral-600 text-white hover:bg-coral-700"
-                disabled={!review || actionable.length === 0 || (changesTenant && !confirmed)}
+                disabled={!review || actionable.length === 0 || (changesTenant && !confirmed) || (usesApproval && !justification.trim())}
                 onClick={() => void run(actionable)}
               >
                 <RefreshCw className="h-4 w-4" /> Restore {actionable.length} item{actionable.length === 1 ? "" : "s"}
@@ -1100,7 +1129,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
 
           <ul className="mt-4 max-h-[26rem] divide-y divide-gray-100 overflow-y-auto">
             {(result?.results ?? progress?.results ?? []).map((outcome, index) => {
-              const Icon = outcome.success ? (outcome.action === "unchanged" ? SkipForward : CheckCircle) : outcome.action === "skipped" ? Ban : XCircle
+              const Icon = outcome.approval ? ShieldCheck : outcome.success ? (outcome.action === "unchanged" ? SkipForward : CheckCircle) : outcome.action === "skipped" ? Ban : XCircle
               const text = outcome.success
                 ? outcome.action === "unchanged"
                   ? "Already matched the backup"
@@ -1114,16 +1143,17 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                 : outcome.error ?? "Failed"
               return (
                 <li key={`${outcome.targetTenantId ?? ""}:${outcome.path}:${index}`} className="flex items-start gap-3 py-2.5 text-sm">
-                  <Icon className={cn("mt-0.5 h-4 w-4 flex-shrink-0", outcome.success ? "text-green-600" : outcome.action === "skipped" ? "text-gray-500" : "text-red-600")} />
+                  <Icon className={cn("mt-0.5 h-4 w-4 flex-shrink-0", outcome.approval ? "text-amber-700" : outcome.success ? "text-green-600" : outcome.action === "skipped" ? "text-gray-500" : "text-red-600")} />
                   <span className="min-w-0 flex-1">
                     <span className="block break-words text-gray-900">
                       {outcome.targetTenantId && `${tenantName(outcome.targetTenantId)}: `}
                       {itemByPath.get(outcome.path)?.name ?? outcome.path.split("/").pop()}
                     </span>
                     <span className="block text-xs text-gray-500"><LinkedMessage text={text} /></span>
-                    {outcome.partial && outcome.policyId && <span className="block text-xs text-amber-800">Incomplete object: {outcome.policyId}. {outcome.repairToken ? "Retry repairs the remaining steps without creating another object. Repair is available for one hour in this app session." : "Check and repair it in Intune."}</span>}
+                    {outcome.approvalState === "required" && <Button variant="outline" className="mt-2" aria-controls="restore-approval-list" onClick={() => setApprovalOpenRevision(value => value + 1)}>Submit for approval</Button>}
+                    {outcome.partial && !outcome.approvalId && outcome.policyId && <span className="block text-xs text-amber-800">Incomplete object: {outcome.policyId}. {outcome.repairToken ? "Retry repairs the remaining steps without creating another object. Repair is available for one hour in this app session." : "Check and repair it in Intune."}</span>}
                     {/* A skipped item was refused before any write, so there is nothing to check. */}
-                    {outcome.retryable === false && !outcome.success && outcome.action !== "skipped" && <span className="block text-xs text-amber-800">Check this item in {adminCenter(itemByPath.get(outcome.path)?.folder)} before retrying; a write may already have completed.</span>}
+                    {outcome.retryable === false && !outcome.success && !outcome.approvalId && (!outcome.approval || outcome.partial) && outcome.action !== "skipped" && <span className="block text-xs text-amber-800">Check this item in {adminCenter(itemByPath.get(outcome.path)?.folder)} before retrying; a write may already have completed.</span>}
                     {outcome.warnings?.map((warning) => (
                       <span key={warning} className="block text-xs text-amber-800">
                         <LinkedMessage text={warning} />

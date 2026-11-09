@@ -48,6 +48,7 @@ import { assertStorageAccountName } from "../shared/storage-account"
 import { hostname } from "node:os"
 import { handleLocalBlobRequest, isLocalAccount, localRoutesRunning } from "./storage/blob-emulator"
 import { LocalBlobStore } from "./storage/local-blob-store"
+import { setRestoreApprovalStore } from "./storage/restore-approvals"
 import { setRestoreJournalStore, setRestoreJournalAuthorization } from "./storage/restore-journal"
 import { accountStore, secureCachePlugin } from "./auth/stores"
 import {
@@ -278,6 +279,7 @@ async function bootstrap(): Promise<void> {
   // Backups kept on this device: encrypted blob storage in a folder the admin chooses.
   const backupKeys = new BackupKeys(appStore)
   setRestoreJournalStore(appStore)
+  setRestoreApprovalStore(appStore)
   const localFolder = () => appStore.get(LOCAL_FOLDER_KEY) ?? join(app.getPath("documents"), "TenuVault Backups")
   let localStore: LocalBlobStore | null = null
   const getLocalStore = () => (localStore ??= new LocalBlobStore(localFolder(), backupKeys.keyring()))

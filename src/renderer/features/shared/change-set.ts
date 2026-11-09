@@ -38,6 +38,7 @@ export function statusLabel(status: string): string {
 }
 
 export const RESULT_TONE: Record<OperationResult["status"], "neutral" | "success" | "warning" | "danger"> = {
+  approval: "warning",
   pending: "neutral",
   writing: "warning",
   verified: "success",

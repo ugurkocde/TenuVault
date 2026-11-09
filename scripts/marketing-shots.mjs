@@ -353,7 +353,7 @@ const MOCK = {
 const MAIN_OVERRIDES = `(() => {
   const req = process.getBuiltinModule("module").createRequire(process.cwd() + "/marketing-shots.cjs")
   const { ipcMain, BrowserWindow } = req("electron")
-  const M = ${JSON.stringify(MOCK)}
+  const M = globalThis.__marketingMock = ${JSON.stringify(MOCK)}
   const json = (status, value) => ({ status, statusText: status === 200 ? "OK" : "Not Found", headers: { "content-type": "application/json" }, body: new TextEncoder().encode(JSON.stringify(value)) })
   const handle = (channel, fn) => { ipcMain.removeHandler(channel); ipcMain.handle(channel, (_event, ...args) => fn(...args)) }
   const readBody = (request) => { try { return request.body ? JSON.parse(new TextDecoder().decode(request.body)) : {} } catch { return {} } }
@@ -456,6 +456,14 @@ const MAIN_OVERRIDES = `(() => {
     const tenant = String(body.tenantId ?? "").toLowerCase()
     switch (path) {
       case "/api/oib": return oib(event, body).catch((error) => json(500, { error: String(error.message || error) }))
+      case "/api/list-backup-contents": return json(200, { content: { groups: [{ folder: "ConfigurationPolicies", label: "configuration policy", area: "Devices", policies: [{ path: body.backupId + "/ConfigurationPolicies/defender.json", displayName: "WIN - Defender Antivirus - Baseline" }] }] } })
+      case "/api/restore-preview": return json(200, { items: (body.paths ?? []).map(path => ({ path, name: "WIN - Defender Antivirus - Baseline", snapshot: { name: "WIN - Defender Antivirus - Baseline", settings: [] } })) })
+      case "/api/restore-backup": {
+        if (body.approvalAction === "detect") return json(200, { enabled: !M.noMaa })
+        if (body.approvalAction === "list") return json(200, { records: M.noMaa ? [] : [{ id: "11111111-1111-4111-8111-111111111111", label: "WIN - Defender Antivirus - Baseline", operation: "create", status: "approved", approverNote: "Reviewed against our change window. Ready to restore.", expiresAt: new Date(Date.now() + 2 * 86400000).toISOString(), stepNumber: 1, totalSteps: 2, canComplete: true, requesterName: "Taylor Morgan" }] })
+        return json(200, { success: true, details: { results: (body.selectedPolicies ?? []).map(item => ({ path: item.path, success: false, retryable: false, approvalId: "11111111-1111-4111-8111-111111111111", approvalState: "submitted", approval: { kind: "pending", code: "11111111-1111-4111-8111-111111111111" }, error: "Submitted for approval" })) } })
+      }
+      case "/api/restore-backup/progress": return json(200, { done: 1, total: 1, current: null, results: [] })
       case "/api/list-backups": return json(200, { backups: M.backups[tenant] ?? [] })
       case "/api/audit/logs": return json(200, { data: M.audit[tenant] ?? [], total: (M.audit[tenant] ?? []).length })
       case "/api/audit/stats": return json(200, { total: 0 })
@@ -638,6 +646,39 @@ try {
   await assertText("All tenants", 30000)
   await disableAnimations()
 
+  if (process.env.MAA_SHOTS === "1") {
+    await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1120, deviceScaleFactor: 1, mobile: false })
+    await go("#/portal/backup?tab=restore", "Choose a backup")
+    await evaluate(`document.querySelector('[role="option"]').click()`)
+    await assertText("Select all")
+    await click("Select all")
+    await click("Next")
+    await click("Review")
+    await assertText("Justification")
+    await evaluate(`document.querySelector("textarea[aria-describedby='approval-help']").scrollIntoView({ block: "center" })`)
+    await scrollAll(0)
+    await screenshot("maa-confirm")
+    await click("Restore 1 item")
+    await assertText("Submitted for approval")
+    await screenshot("maa-submitted")
+    await click("Waiting for approval")
+    await assertText("Reviewed against our change window")
+    await scrollAll(0)
+    await screenshot("maa-approved")
+    await main.evaluate(`globalThis.__marketingMock.noMaa = true`)
+    await go("#/portal/overview", "All tenants")
+    await go("#/portal/backup?tab=restore", "Choose a backup")
+    await evaluate(`document.querySelector('[role="option"]').click()`)
+    await assertText("Select all")
+    await click("Select all")
+    await click("Next")
+    await click("Review")
+    await assertText("Restore 1 item")
+    const approvalVisible = await evaluate(`!!document.querySelector("textarea[aria-describedby='approval-help'], #restore-approval-list")`)
+    if (approvalVisible) throw new Error("Non-MAA tenant shows approval controls")
+    await scrollAll(0)
+    await screenshot("restore-no-maa-confirm")
+  } else {
   // All tenants overview.
   await assertText("Adatum Corporation")
   await assertText("admin@contoso.onmicrosoft.com")
@@ -761,6 +802,8 @@ try {
   await sleep(1500)
   await scrollAll(0)
   await screenshot("frameworks-light")
+
+  }
 
   if (assetsDir) {
     const names = {

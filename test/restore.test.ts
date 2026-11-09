@@ -62,6 +62,22 @@ describe('Restore results', () => {
     }))
     return payloads
   }
+  it('preserves the original non-MAA result message byte for byte', async () => {
+    mock(false)
+    const data = await (await POST(request(body))).json()
+    expect(data.message).toBe('Created 2 unassigned [Restored] copies; 0 failed')
+  })
+  it.each([false, true])('counts approval blocks without reporting a failed write, mixed=%s', async mixed => {
+    mock(false)
+    const original = fetch
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes('graph.microsoft.com') && (!mixed || String(init?.body).includes('Two'))) return Response.json({ error: { message: "Header 'x-msft-approval-justification' is required to request approval" } }, { status: 400 })
+      return original(input, init)
+    }))
+    const result = await (await POST(request(body))).json()
+    expect(result).toMatchObject({ success: false, status: mixed ? 'PartiallyCompleted' : 'AwaitingApproval', details: { failedCount: 0, approvalCount: mixed ? 1 : 2 } })
+    expect(result.details.results.filter((item: { approval?: unknown }) => item.approval).every((item: { retryable?: boolean }) => item.retryable === false)).toBe(true)
+  })
   it('follows all storage pages and reports complete success', async () => {
     mock(false)
     const result = await (await POST(request(body))).json()

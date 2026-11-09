@@ -1,3 +1,4 @@
+import { approvalMessage, type ApprovalSignal } from "../../../shared/intune/approval"
 import { readLive, type GraphCall } from "../../../portal/lib/policies/graph-restore"
 import { buildRestorePlan, buildUpdatePlan, resolveStep } from "../../../shared/intune/restore-plan"
 import type { IntuneType, Item, Json, Step } from "../../../shared/intune/registry"
@@ -133,6 +134,7 @@ export async function observe(graph: GraphCall, type: IntuneType, operation: { a
 }
 
 export type WriteOutcome =
+  | { state: "approval"; objectId: string | null; message: string; partial: boolean }
   /** Every request succeeded; read back next. */
   | { state: "written"; objectId: string }
   /** Graph rejected the first request, so nothing was written; safe to fix and retry. */
@@ -140,12 +142,13 @@ export type WriteOutcome =
   /** A request may or may not have completed, or a follow-up step failed after a write. */
   | { state: "unknown"; objectId: string | null; message: string }
 
-type Sent = { ok: true; body: Item } | { ok: false; rejected: boolean; message: string }
+type Sent = { ok: true; body: Item } | { ok: false; rejected: boolean; message: string; approval?: ApprovalSignal }
 
 async function send(graph: GraphCall, method: Step["method"], path: string, body?: Item): Promise<Sent> {
   try {
     const response = await graph(method, path, body)
     if (response.status < 300) return { ok: true, body: response.body }
+    if (response.approval) return { ok: false, rejected: true, message: "", approval: response.approval }
     // Already gone; the read-back confirms it.
     if (method === "DELETE" && notFound(response)) return { ok: true, body: {} }
     const rejected = response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429
@@ -165,6 +168,7 @@ export async function writeOperation(
   input: { action: OperationAction; targetId: string | null; proposed: Item | null; assignments: Item[] | null; current: Item | null },
   onCreated: (id: string) => void,
 ): Promise<WriteOutcome> {
+  const blocked = (sent: Extract<Sent, { ok: false }>, objectId: string | null, partial = false): WriteOutcome => ({ state: "approval", objectId, partial, message: approvalMessage(sent.approval!, type.label, partial ? "The configuration was written, but assignments or a follow-up step need approval." : undefined) })
   const assign = async (id: string): Promise<Sent> => {
     if (!input.assignments) return { ok: true, body: {} }
     if (!type.assign || type.assign === "post") return { ok: false, rejected: true, message: `Assignments cannot be set for ${type.label} by a change set.` }
@@ -172,6 +176,7 @@ export async function writeOperation(
   }
   if (input.action === "delete") {
     const sent = await send(graph, "DELETE", `${type.path}/${encodeURIComponent(input.targetId!)}`)
+    if (!sent.ok && sent.approval) return blocked(sent, input.targetId)
     if (!sent.ok) return sent.rejected ? { state: "rejected", objectId: input.targetId, message: sent.message } : { state: "unknown", objectId: input.targetId, message: sent.message }
     return { state: "written", objectId: input.targetId! }
   }
@@ -179,15 +184,18 @@ export async function writeOperation(
   if (input.action === "create") {
     const plan = buildRestorePlan(type, proposed as Item, { includeAssignments: false })
     const created = await send(graph, "POST", plan.create.path, plan.create.body)
+    if (!created.ok && created.approval) return blocked(created, null)
     if (!created.ok) return created.rejected ? { state: "rejected", objectId: null, message: created.message } : { state: "unknown", objectId: null, message: created.message }
     const id = created.body.id
     if (!isGraphId(id)) return { state: "unknown", objectId: null, message: "Microsoft Graph did not return a valid ID for the created object. Check Intune before retrying." }
     onCreated(id)
     for (const step of plan.steps.map((entry) => resolveStep(entry, id))) {
       const sent = await send(graph, step.method, step.path, step.body)
+      if (!sent.ok && sent.approval) return blocked(sent, id, true)
       if (!sent.ok) return { state: "unknown", objectId: id, message: `The object was created but a follow-up step failed: ${sent.message}` }
     }
     const assigned = await assign(id)
+    if (!assigned.ok && assigned.approval) return blocked(assigned, id, true)
     if (!assigned.ok) return { state: "unknown", objectId: id, message: `The object was created but its reviewed assignments failed: ${assigned.message}` }
     return { state: "written", objectId: id }
   }
@@ -195,11 +203,13 @@ export async function writeOperation(
   for (const [index, step] of steps.entries()) {
     const sent = await send(graph, step.method, step.path, step.body)
     if (!sent.ok) {
+      if (sent.approval) return blocked(sent, input.targetId, index > 0)
       if (index === 0 && sent.rejected) return { state: "rejected", objectId: input.targetId, message: sent.message }
       return { state: "unknown", objectId: input.targetId, message: index === 0 ? sent.message : `Part of the update was written before a step failed: ${sent.message}` }
     }
   }
   const assigned = await assign(input.targetId!)
+  if (!assigned.ok && assigned.approval) return blocked(assigned, input.targetId, true)
   if (!assigned.ok) return { state: "unknown", objectId: input.targetId, message: `The configuration was written but the reviewed assignments failed: ${assigned.message}` }
   return { state: "written", objectId: input.targetId! }
 }

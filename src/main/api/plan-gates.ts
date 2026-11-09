@@ -1,3 +1,4 @@
+import { restoreApprovals } from "../storage/restore-approvals"
 import { isLocalAccount } from "../storage/blob-emulator"
 import { allows, CIS_FRAMEWORKS, upgradeMessage, type Feature, type Plan } from "../../shared/plans"
 import { featureRouteFeatures, isFeatureRoute } from "../../shared/feature-routes"
@@ -26,6 +27,11 @@ export function requiredFeatures(pathname: string, body: Record<string, unknown>
     case "/api/detect-drifts":
       return isBulk(body) ? ["bulkActions"] : []
     case "/api/restore-backup": {
+      if (body.approvalAction) {
+        if (!["submit", "complete"].includes(String(body.approvalAction))) return []
+        const record = typeof body.tenantId === "string" ? restoreApprovals(body.tenantId).find(entry => entry.id === body.approvalId) : undefined
+        return record ? [...(record.mode === "replace" ? ["replaceRestore" as const] : []), ...(record.assignments ? ["restoreAssignments" as const] : [])] : []
+      }
       const features: Feature[] = []
       const selected = Array.isArray(body.selectedPolicies) ? body.selectedPolicies.length : 0
       if (body.targetTenants !== undefined) features.push("bulkActions")

@@ -655,7 +655,8 @@ export function syncUpgrade(deps: FeatureDeps, tenantId: string, id: string): St
       const result = changeSet.results[opKey]
       // A policy belongs to one batch at a time: an earlier rejected or stale batch no longer owns it.
       if (!policy || !result || policy.batch !== batch.changeSetId || policy.outcome === "verified" || policy.outcome === "rolled-back") continue
-      const outcome = changeSet.status === "rejected" || changeSet.status === "stale" ? "failed" : result.status === "writing" ? "uncertain" : result.status === "pending" ? "pending" : result.status
+      const outcome = changeSet.status === "rejected" || changeSet.status === "stale" ? "failed" : result.status === "writing" ? "uncertain" : result.status === "approval" ? "failed" : result.status === "pending" ? "pending" : result.status
+      if (result.status === "approval" && !policy.blockers.includes("Multi Admin Approval blocked this upgrade.")) { policy.blockers.push("Multi Admin Approval blocked this upgrade."); changed = true }
       if (outcome !== policy.outcome) {
         changed = true
         policy.outcome = outcome

@@ -95,3 +95,23 @@ describe("audit callbacks cannot replace a completed route response", () => {
     expect(entries[0]).toMatchObject({ tenantId: TENANT, user: { name: "Fixture admin" }, logEntry: { eventType: "BACKUP_STARTED", result: "SUCCESS" } })
   })
 })
+
+it.each(["detect", "list", "dismiss"])("does not audit approval %s", async approvalAction => {
+  const dispatch = vi.fn(async () => Response.json({ success: true }))
+  const notice = vi.fn()
+  createAuditRecorder(dispatch, () => null, notice)(new Request("http://tenuvault.internal/api/restore-backup", { method: "POST" }), JSON.stringify({ ...credentials, approvalAction }), Response.json({ success: true }))
+  await new Promise(resolve => setTimeout(resolve, 0))
+  expect(dispatch).not.toHaveBeenCalled()
+  expect(notice).not.toHaveBeenCalled()
+})
+it.each(["submit", "complete", "withdraw"])("audits approval %s and notifies only completion", async approvalAction => {
+  const entries: { logEntry: { action: string; eventType: string } }[] = []
+  const dispatch = vi.fn(async (request: Request) => { entries.push(await request.json()); return Response.json({ success: true }) })
+  const notice = vi.fn()
+  const data = approvalAction === "withdraw" ? { success: true } : { outcome: { success: approvalAction === "complete", path: "backup/example.json", policyId: "item", ...(approvalAction === "submit" ? { approval: { kind: "pending" }, approvalId: "request", approvalState: "submitted" } : {}) } }
+  createAuditRecorder(dispatch, () => null, notice)(new Request("http://tenuvault.internal/api/restore-backup", { method: "POST" }), JSON.stringify({ ...credentials, approvalAction }), Response.json(data))
+  await vi.waitFor(() => expect(entries).toHaveLength(1))
+  expect(entries[0]!.logEntry.action).toBe(({ submit: "Restore submitted for approval", complete: "Complete approved restore item", withdraw: "Approval request withdrawn" })[approvalAction])
+  expect(notice).toHaveBeenCalledTimes(approvalAction === "complete" ? 1 : 0)
+  if (approvalAction === "complete") expect(notice).toHaveBeenCalledWith(expect.objectContaining({ restored: 1, failed: 0, status: "Completed" }))
+})
