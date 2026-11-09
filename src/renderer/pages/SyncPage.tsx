@@ -26,7 +26,7 @@ import {
   type SyncTarget,
   type SyncTargetOption,
 } from "../features/sync/api"
-import { backupOf, needsSecretAck, plural, policyKey, policyStatus, readiness, type ReviewState } from "../features/sync/model"
+import { needsSecretAck, plural, policyKey, policyStatus, readiness, type ReviewState } from "../features/sync/model"
 import { card, ChooseSettings, ChooseTargets, ReviewStep, Stepper, type SelectedPolicy } from "../features/sync/SyncSteps"
 import { resultEntries, SyncResult } from "../features/sync/SyncResult"
 
@@ -91,8 +91,6 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
   const [active, setActive] = useState<ReadonlySet<string>>(new Set())
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [notes, setNotes] = useState<Record<string, string>>({})
-  // The backup choice each run was approved with in this session; a draft never decides it.
-  const [runBackups, setRunBackups] = useState<Record<string, SyncBackup>>({})
   const shownRun = useRef(runId)
   shownRun.current = runId
   const source = tenantOf(sourceId) ?? selected
@@ -234,13 +232,12 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
       return state.state === "ready"
     })
     setNotes(left)
-    setRunBackups((current) => ({ ...current, [forRun]: backup }))
     setStep(4)
     // Every target is approved and applied on its own, at the same time; backups queue in the engine.
     for (const target of ready) {
       const preview = reviews[target.targetTenantId]!.preview!.changeSet
       void work(forRun, target, async (tenant, id) => {
-        await approveSyncTarget(tenant, id, preview)
+        await approveSyncTarget(tenant, id, preview, backup)
         await applySyncTarget(tenant, id, preview.contentHash, backup)
       })
     }
@@ -249,10 +246,8 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
   const retry = (target: SyncTarget) => {
     const changeSet = target.changeSet
     if (!changeSet || !runId) return
-    // Once an apply claimed the change set, the route applies its stored choice; only an unclaimed
-    // one names the choice this run was approved with. The page's current draft never decides it.
-    const claimed = backupOf(changeSet) !== null
-    void work(runId, target, (tenant, id) => retrySyncTarget(tenant, id, changeSet.contentHash, claimed ? undefined : runBackups[runId]))
+    // The route applies the choice the target was approved with; the page's draft never decides it.
+    void work(runId, target, (tenant, id) => retrySyncTarget(tenant, id, changeSet.contentHash))
   }
 
   const openRun = (entry: SyncRun) => {
@@ -346,7 +341,6 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
               source={{ name: runSource?.name ?? run.data.run.sourceTenantId, domain: runSource?.domain ?? "" }}
               policyCount={run.data.run.items.length}
               entries={resultEntries(runTargets, tenantOf, shownActive, shownErrors)}
-              backup={(runId && runBackups[runId]) || "new"}
               errors={shownErrors}
               notes={notes}
               platforms={platforms}

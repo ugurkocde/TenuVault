@@ -252,6 +252,7 @@ export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollb
         irreversible={preview?.irreversible ?? []}
         unsupported={preview?.unsupportedRecovery ?? []}
         confirmLabel={confirm === "retry" ? "Reconcile and retry" : backupSkipped ? "Apply without a backup" : "Back up and apply"}
+        backupSkipped={backupSkipped}
         busy={busy === "apply"}
         onConfirm={() => {
           const hash = changeSet.contentHash

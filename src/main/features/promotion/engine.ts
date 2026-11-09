@@ -71,6 +71,12 @@ export interface SyncPlanState {
   links?: Record<string, string | null>
   /** Fingerprint of the request options that shape what this plan writes (see sync/links.ts). */
   optionsHash?: string
+  /**
+   * The backup choice the admin approved this Sync target with; its apply and every retry use
+   * it. Absent on targets approved before it was stored, where the change set's first claimed
+   * apply decides it.
+   */
+  backup?: "new" | "none"
 }
 
 /** Reasons the calling workflow's own planning inputs changed; empty when unchanged. */

@@ -44,6 +44,25 @@ function syncTarget(deps: FeatureDeps, tenantId: string, body: Body): Stored<Pro
   return record
 }
 
+/** The backup choice a Sync approval must name; the target's apply and retries are bound to it. */
+const approvedBackup = (body: Body): "new" | "none" => {
+  const value = body.backup
+  if (value !== "new" && value !== "none") throw new FeatureError("Choose whether to back up before this sync: backup must be \"new\" or \"none\".")
+  return value
+}
+
+/**
+ * The backup choice of an apply or retry: the one the target was approved with, which a request
+ * naming the other one cannot change (409). A target approved before choices were stored keeps
+ * the request's choice, and the change set's first claimed apply binds it.
+ */
+function boundBackup(target: Stored<PromotionRecord>, body: Body): "new" | "none" | undefined {
+  const requested = backupOf(body)
+  const stored = target.sync?.backup
+  if (stored && requested && requested !== stored) throw new FeatureError(`This sync was approved ${stored === "none" ? "without a backup" : "with a backup"}. Apply it with the same choice.`, 409)
+  return stored ?? requested
+}
+
 function syncRun(deps: FeatureDeps, tenantId: string, body: Body): Stored<SyncRunRecord> {
   const run = deps.records.get<SyncRunRecord>(DOMAINS.syncRuns, tenantId, recordId(body, "Sync run"))
   if (!run) throw new FeatureError("This Sync run does not exist for this source tenant.", 404)
@@ -167,7 +186,10 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
     approve: async ({ tenantId, body, actor }) => {
       const target = syncTarget(deps, tenantId, body)
       await requireRunTenants(deps, tenantId, target)
+      const backup = approvedBackup(body)
       const changeSet = await approvePromotion(deps, tenantId, target.id, { contentHash: hashField(body, "contentHash"), targetFingerprint: hashField(body, "targetFingerprint"), reviewer: null, note: null, check: syncCheck(deps, tenantId, target.id) }, actor)
+      // Stored with the approval, so the apply and every retry use it whoever sends them later.
+      deps.records.update<PromotionRecord>(DOMAINS.promotions, tenantId, target.id, (current) => ({ ...current, sync: { ...current.sync!, backup } }), { actor, reason: backup === "none" ? "Approved to apply without a pre-change backup" : "Approved to apply after a pre-change backup" })
       return { promotion: syncPromotion(deps, tenantId, target.id), changeSet }
     },
     reject: async ({ tenantId, body, actor }) => {
@@ -178,13 +200,13 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
     },
     apply: async ({ tenantId, body, actor }) => {
       const target = syncTarget(deps, tenantId, body)
-      const backup = backupOf(body)
+      const backup = boundBackup(target, body)
       await requireRunTenants(deps, tenantId, target)
       return applySync(deps, tenantId, target.id, { contentHash: hashField(body, "contentHash"), confirmed: body.confirm === true, backup }, actor)
     },
     retry: async ({ tenantId, body, actor }) => {
       const target = syncTarget(deps, tenantId, body)
-      const backup = backupOf(body)
+      const backup = boundBackup(target, body)
       await requireRunTenants(deps, tenantId, target)
       return applySync(deps, tenantId, target.id, { contentHash: hashField(body, "contentHash"), confirmed: body.confirm === true, backup }, actor)
     },

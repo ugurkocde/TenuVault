@@ -56,16 +56,17 @@ async function planned(context: Context, targets: string[] = [TENANT_B]) {
   return response.body as { run: SyncRunRecord & { id: string }; targets: Array<{ targetTenantId: string; promotion: (PromotionRecord & { id: string }) | null; error: string | null; skipped: SyncSkip[] }> }
 }
 
-async function approved(context: Context, target: string, id: string) {
+/** Previews and approves a Sync target; Sync approvals name the backup choice the apply will use. */
+async function approved(context: Context, target: string, id: string, backup: "new" | "none" = "new") {
   const preview = await context.post({ tenantId: target, action: "preview", id })
   expect(preview.status).toBe(200)
-  const approval = await context.post({ tenantId: target, action: "approve", id, contentHash: preview.body.changeSet.contentHash, targetFingerprint: preview.body.changeSet.targetFingerprint })
+  const approval = await context.post({ tenantId: target, action: "approve", id, contentHash: preview.body.changeSet.contentHash, targetFingerprint: preview.body.changeSet.targetFingerprint, backup })
   expect(approval.status).toBe(200)
   return preview.body.changeSet.contentHash as string
 }
 
 async function applied(context: Context, target: string, id: string, extra: Record<string, unknown> = {}) {
-  const contentHash = await approved(context, target, id)
+  const contentHash = await approved(context, target, id, extra.backup === "none" ? "none" : "new")
   return context.post({ tenantId: target, action: "apply", id, contentHash, confirm: true, ...extra })
 }
 
@@ -336,7 +337,7 @@ describe("Sync links", () => {
     expect((await applied(context, TENANT_B, first)).body.changeSet.status).toBe("applied")
     const preview = await context.post({ tenantId: TENANT_B, action: "preview", id: second })
     expect(preview.body.changeSet.blockers.join(" ")).toContain("would create a second policy")
-    const approval = await context.post({ tenantId: TENANT_B, action: "approve", id: second, contentHash: preview.body.changeSet.contentHash, targetFingerprint: preview.body.changeSet.targetFingerprint })
+    const approval = await context.post({ tenantId: TENANT_B, action: "approve", id: second, contentHash: preview.body.changeSet.contentHash, targetFingerprint: preview.body.changeSet.targetFingerprint, backup: "new" })
     expect(approval.status).toBe(409)
     expect(context.targets[TENANT_B]!.policies.size).toBe(1)
 
@@ -384,7 +385,7 @@ describe("Sync links", () => {
       context.deps.records.update<PromotionRecord>(DOMAINS.promotions, TENANT_B, id, (current) => ({ ...current, sync: { runId: current.sync!.runId, ...(links ? { links } : {}) } }), { actor: null, reason: "Test" })
       const preview = await context.post({ tenantId: TENANT_B, action: "preview", id })
       expect(preview.body.changeSet.blockers.join(" ")).toContain("were not recorded. Plan again.")
-      const approval = await context.post({ tenantId: TENANT_B, action: "approve", id, contentHash: preview.body.changeSet.contentHash, targetFingerprint: preview.body.changeSet.targetFingerprint })
+      const approval = await context.post({ tenantId: TENANT_B, action: "approve", id, contentHash: preview.body.changeSet.contentHash, targetFingerprint: preview.body.changeSet.targetFingerprint, backup: "new" })
       expect(approval.status).toBe(409)
     }
     expect(context.targets[TENANT_B]!.writeCount()).toBe(0)
@@ -772,7 +773,7 @@ describe("Sync keeps the backup choice of the first apply", () => {
     expect(failed).toMatchObject({ status: "approved", preChange: null, backupChoice: "new", attempts: 1 })
     const refused = await context.post({ tenantId: TENANT_B, action: "retry", id, contentHash, confirm: true, backup: "none" })
     expect(refused.status).toBe(409)
-    expect(refused.body.error).toBe("This sync was first applied with a backup. Retry it with the same choice.")
+    expect(refused.body.error).toBe("This sync was approved with a backup. Apply it with the same choice.")
     expect(context.targets[TENANT_B]!.writeCount()).toBe(0)
     const retried = await context.post({ tenantId: TENANT_B, action: "retry", id, contentHash, confirm: true })
     expect(retried.body.changeSet).toMatchObject({ status: "applied", backupChoice: "new", preChange: { backupFolder: "backup-2026-09-30-120000" } })
@@ -782,18 +783,18 @@ describe("Sync keeps the backup choice of the first apply", () => {
   it("never takes a backup on the retry of a sync first applied without one", async () => {
     const context = setup()
     const id = (await planned(context)).targets[0]!.promotion!.id
-    const contentHash = await approved(context, TENANT_B, id)
+    const contentHash = await approved(context, TENANT_B, id, "none")
     context.targets[TENANT_B]!.failWrite = (method) => (method === "POST" ? 400 : undefined)
     expect((await context.post({ tenantId: TENANT_B, action: "apply", id, contentHash, confirm: true, backup: "none" })).body.changeSet).toMatchObject({ status: "failed", backupChoice: "none" })
     context.targets[TENANT_B]!.failWrite = undefined
     const refused = await context.post({ tenantId: TENANT_B, action: "retry", id, contentHash, confirm: true, backup: "new" })
     expect(refused.status).toBe(409)
-    expect(refused.body.error).toBe("This sync was first applied without a backup. Retry it with the same choice.")
+    expect(refused.body.error).toBe("This sync was approved without a backup. Apply it with the same choice.")
     expect((await context.post({ tenantId: TENANT_B, action: "retry", id, contentHash, confirm: true })).body.changeSet.status).toBe("applied")
     expect(context.backups).toEqual([])
   })
 
-  it("treats an attempted change set stored without a choice as backed up", async () => {
+  it("treats an attempted change set approved before choices were stored as backed up", async () => {
     const context = setup()
     const id = (await planned(context)).targets[0]!.promotion!.id
     const contentHash = await approved(context, TENANT_B, id)
@@ -801,7 +802,54 @@ describe("Sync keeps the backup choice of the first apply", () => {
     await context.post({ tenantId: TENANT_B, action: "apply", id, contentHash, confirm: true, backup: "new" })
     const stored = changeSets(context, TENANT_B)[0]!
     context.deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, TENANT_B, stored.id, ({ backupChoice: _choice, ...current }) => current as ChangeSetRecord, { actor: null, reason: "Test" })
+    context.deps.records.update<PromotionRecord>(DOMAINS.promotions, TENANT_B, id, (current) => ({ ...current, sync: { runId: current.sync!.runId, links: current.sync!.links } }), { actor: null, reason: "Test" })
     expect((await context.post({ tenantId: TENANT_B, action: "retry", id, contentHash, confirm: true, backup: "none" })).status).toBe(409)
+  })
+})
+
+describe("Sync stores the backup choice at approval", () => {
+  it("refuses a Sync approval without a backup choice; Dev to Prod approvals are unchanged", async () => {
+    const context = setup()
+    const id = (await planned(context)).targets[0]!.promotion!.id
+    const preview = await context.post({ tenantId: TENANT_B, action: "preview", id })
+    const body = { tenantId: TENANT_B, action: "approve", id, contentHash: preview.body.changeSet.contentHash, targetFingerprint: preview.body.changeSet.targetFingerprint }
+    for (const backup of [undefined, "later"]) {
+      const refused = await context.post({ ...body, ...(backup ? { backup } : {}) })
+      expect(refused.status).toBe(400)
+      expect(refused.body.error).toBe("Choose whether to back up before this sync: backup must be \"new\" or \"none\".")
+    }
+    expect(changeSets(context, TENANT_B)[0]!.status).toBe("in-review")
+    expect((await context.post({ ...body, backup: "none" })).body.promotion.sync.backup).toBe("none")
+    const promotionId = (await context.promote({ tenantId: TENANT_B, targetTenants: named([TENANT_A]), sourceTenantId: TENANT_A, action: "plan", title: "Promote Defender", items: [{ sourceId: context.policy.id, destinationId: null }] })).body.promotion.id
+    const promotionPreview = await context.promote({ tenantId: TENANT_B, targetTenants: named([TENANT_A]), sourceTenantId: TENANT_A, action: "preview", id: promotionId })
+    expect((await context.promote({ tenantId: TENANT_B, targetTenants: named([TENANT_A]), sourceTenantId: TENANT_A, action: "approve", id: promotionId, contentHash: promotionPreview.body.changeSet.contentHash, targetFingerprint: promotionPreview.body.changeSet.targetFingerprint })).status).toBe(200)
+  })
+
+  it("applies the approved choice after an apply refused before it claimed the change set", async () => {
+    const context = setup()
+    const id = (await planned(context)).targets[0]!.promotion!.id
+    const contentHash = await approved(context, TENANT_B, id, "none")
+    // Refused before the claim: nothing is attempted and the change set stores no choice.
+    expect((await context.post({ tenantId: TENANT_B, action: "apply", id, contentHash, confirm: false })).status).toBe(400)
+    expect(changeSets(context, TENANT_B)[0]).toMatchObject({ status: "approved", attempts: 0 })
+    expect(changeSets(context, TENANT_B)[0]!.backupChoice).toBeUndefined()
+    const refused = await context.post({ tenantId: TENANT_B, action: "retry", id, contentHash, confirm: true, backup: "new" })
+    expect(refused.status).toBe(409)
+    expect(refused.body.error).toBe("This sync was approved without a backup. Apply it with the same choice.")
+    const retried = await context.post({ tenantId: TENANT_B, action: "retry", id, contentHash, confirm: true })
+    expect(retried.body.changeSet).toMatchObject({ status: "applied", backupChoice: "none", preChange: { backupFolder: null } })
+    expect(context.backups).toEqual([])
+  })
+
+  it("still always backs up a Sync rollback", async () => {
+    const context = setup()
+    const id = (await planned(context)).targets[0]!.promotion!.id
+    expect((await applied(context, TENANT_B, id, { backup: "none" })).body.changeSet.status).toBe("applied")
+    expect((await context.post({ tenantId: TENANT_B, action: "rollback-create", id })).status).toBe(200)
+    const review = await context.post({ tenantId: TENANT_B, action: "rollback-review", id })
+    await context.post({ tenantId: TENANT_B, action: "rollback-approve", id, contentHash: review.body.contentHash, targetFingerprint: review.body.targetFingerprint })
+    expect((await context.post({ tenantId: TENANT_B, action: "rollback-apply", id, contentHash: review.body.contentHash, confirm: true })).body.changeSet.status).toBe("applied")
+    expect(context.backups).toEqual([TENANT_B])
   })
 })
 

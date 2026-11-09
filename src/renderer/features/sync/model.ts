@@ -148,11 +148,13 @@ export function progress(target: SyncTarget): { done: number; total: number } {
 }
 
 /**
- * The backup choice a target's change set is bound to: the one stored by its first claimed
- * apply, else what its pre-change capture shows, else "new" once an apply was claimed (as the
- * engine decides), or null before any apply.
+ * The backup choice a target is bound to: the one it was approved with, else (for targets
+ * approved before that was stored) the one its change set's first claimed apply stored, else what
+ * its pre-change capture shows, else "new" once an apply was claimed, or null before approval.
  */
-export function backupOf(changeSet: ChangeSet | null): SyncBackup | null {
+export function backupOf(target: SyncTarget): SyncBackup | null {
+  if (target.promotion?.sync?.backup) return target.promotion.sync.backup
+  const changeSet = target.changeSet
   if (!changeSet) return null
   if (changeSet.backupChoice) return changeSet.backupChoice
   if (changeSet.preChange) return changeSet.preChange.backupFolder === null ? "none" : "new"

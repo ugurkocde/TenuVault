@@ -5,7 +5,7 @@ import { Button } from "~/components/ui/button"
 import { Chip } from "~/components/dashboard/tiles"
 import { cn } from "~/lib/utils"
 import { ChangeSetFlow } from "../shared/ChangeSetFlow"
-import { syncRollbackActions, syncTargetActions, type SyncBackup, type SyncTarget } from "./api"
+import { syncRollbackActions, syncTargetActions, type SyncTarget } from "./api"
 import { backupOf, excludedReason, failedItems, initials, intuneLink, linkPath, plural, progress, targetPhase, type TargetPhase } from "./model"
 
 export interface ResultTarget {
@@ -61,15 +61,16 @@ function StateIcon({ phase }: { phase: TargetPhase }) {
 }
 
 /** What a target node says, from its stored change set and this screen's requests. */
-function nodeText(entry: ResultTarget, backup: SyncBackup, error: string | null, note: string | null): { text: string; problems: string[] } {
+function nodeText(entry: ResultTarget, error: string | null, note: string | null): { text: string; problems: string[] } {
   const { target, phase } = entry
   const { done, total } = progress(target)
-  const taken = backupOf(target.changeSet) ?? backup
+  // The choice stored with the approval; before the approval is stored it is not known yet.
+  const taken = backupOf(target)
   const problems = [...failedItems(target.changeSet).map((item) => `${item.name}: ${item.message}`), ...(error ? [error] : [])]
   if (!problems.length && phase !== "verified" && target.changeSet?.lastError) problems.push(target.changeSet.lastError)
   switch (phase) {
     case "waiting": return { text: "Waiting", problems: [] }
-    case "writing": return { text: target.changeSet?.preChange ? `Writing, ${done} of ${total} verified` : taken === "none" ? "Saving current versions, then writing" : "Backing up, then writing", problems: [] }
+    case "writing": return { text: target.changeSet?.preChange ? `Writing, ${done} of ${total} verified` : taken === null ? "Approving, then writing" : taken === "none" ? "Saving current versions, then writing" : "Backing up, then writing", problems: [] }
     case "verified": return { text: `${plural(total, "change", "changes")} verified${target.skipped?.length ? `, ${target.skipped.length} already in sync` : ""}. ${backedUp(target) ? "Backup taken first." : "No backup taken."}`, problems: [] }
     case "in-sync": return { text: "Already in sync, nothing written. No backup taken.", problems: [] }
     case "partial": return { text: `${done} of ${total} synced. ${failedItems(target.changeSet).length || 1} failed:`, problems }
@@ -86,11 +87,10 @@ interface Geometry { x2: number; y2: number; d: string; mid: { x: number; y: num
  * while a target writes: the link draws out and a dot travels along it while writing, then the
  * link, arrowhead and node turn green (verified), amber (partly applied) or red (nothing applied).
  */
-export function SyncFlowchart({ source, policyCount, targets, backup, errors, notes, platforms, onRetry, retrying, detailsOpen, onDetails }: {
+export function SyncFlowchart({ source, policyCount, targets, errors, notes, platforms, onRetry, retrying, detailsOpen, onDetails }: {
   source: { name: string; domain: string }
   policyCount: number
   targets: ResultTarget[]
-  backup: SyncBackup
   errors: Record<string, string>
   notes: Record<string, string>
   platforms: Record<string, string | null>
@@ -167,7 +167,7 @@ export function SyncFlowchart({ source, policyCount, targets, backup, errors, no
         const { target, phase, name, domain } = entry
         const id = target.targetTenantId
         const { done, total } = progress(target)
-        const { text, problems } = nodeText(entry, backup, errors[id] ?? null, notes[id] ?? null)
+        const { text, problems } = nodeText(entry, errors[id] ?? null, notes[id] ?? null)
         const finished = FINISHED.includes(phase)
         const intune = finished ? intuneLink(target, platforms) : null
         const width = phase === "verified" || phase === "in-sync" ? 100 : phase === "excluded" || phase === "waiting" ? 0 : total ? Math.max(phase === "writing" ? 8 : 0, (done / total) * 100) : 8
@@ -219,7 +219,7 @@ export function SyncFlowchart({ source, policyCount, targets, backup, errors, no
               </div>
             )}
             {finished && (phase === "partial" || phase === "failed") && retryable(target) && (
-              <p id={`retry-${id}`} className="mt-2 text-xs text-gray-500">{(backupOf(target.changeSet) ?? backup) === "none" ? "Retry applies without a backup, as this sync started." : "Retry backs up first."}</p>
+              <p id={`retry-${id}`} className="mt-2 text-xs text-gray-500">{backupOf(target) === "none" ? "Retry applies without a backup, as this sync started." : "Retry backs up first."}</p>
             )}
           </div>
         )
@@ -232,11 +232,10 @@ export function SyncFlowchart({ source, policyCount, targets, backup, errors, no
  * The result view of a Sync run: its status line, the flowchart, the summary chips once every
  * target finished, and the details (change set, results and rollback) of one target.
  */
-export function SyncResult({ source, policyCount, entries, backup, errors, notes, platforms, onRetry, retrying, tenantOf, onChanged }: {
+export function SyncResult({ source, policyCount, entries, errors, notes, platforms, onRetry, retrying, tenantOf, onChanged }: {
   source: { name: string; domain: string }
   policyCount: number
   entries: ResultTarget[]
-  backup: SyncBackup
   errors: Record<string, string>
   notes: Record<string, string>
   platforms: Record<string, string | null>
@@ -257,9 +256,9 @@ export function SyncResult({ source, policyCount, entries, backup, errors, notes
   // Targets already in sync wrote nothing, so they took no backup and decide nothing here. The
   // backup chip counts completed backups from the stored evidence, never the requested choice.
   const written = involved.filter((entry) => entry.target.changeSet)
-  const attempted = written.filter((entry) => backupOf(entry.target.changeSet) !== null)
+  const attempted = written.filter((entry) => (entry.target.changeSet?.attempts ?? 0) > 0)
   const backups = attempted.filter((entry) => backedUp(entry.target)).length
-  const skipped = attempted.some((entry) => backupOf(entry.target.changeSet) === "none")
+  const skipped = attempted.some((entry) => backupOf(entry.target) === "none")
   const backupChip = skipped ? <Chip tone="warning">Backup skipped</Chip>
     : !backups ? null
     : backups === attempted.length ? <Chip>Backup taken in each tenant</Chip>
@@ -287,7 +286,7 @@ export function SyncResult({ source, policyCount, entries, backup, errors, notes
           <span className="text-amber-700">Synced to {verified} of {plural(involved.length, "tenant", "tenants")}. {attention} {attention === 1 ? "needs" : "need"} attention.</span>
         )}
       </p>
-      <SyncFlowchart source={source} policyCount={policyCount} targets={entries} backup={backup} errors={errors} notes={notes} platforms={platforms} onRetry={onRetry} retrying={retrying} detailsOpen={detailsOpen} onDetails={setDetailsOpen} />
+      <SyncFlowchart source={source} policyCount={policyCount} targets={entries} errors={errors} notes={notes} platforms={platforms} onRetry={onRetry} retrying={retrying} detailsOpen={detailsOpen} onDetails={setDetailsOpen} />
       {!running && written.length > 0 && (
         <div className="flex flex-wrap gap-2" aria-label="Summary">
           {anyWritten && <Chip tone="success">Links saved for the next sync</Chip>}
@@ -305,12 +304,12 @@ export function SyncResult({ source, policyCount, entries, backup, errors, notes
           <ChangeSetFlow
             key={open.target.changeSet.id}
             changeSet={open.target.changeSet}
-            actions={syncTargetActions(openTenant, open.target.promotionId)}
+            actions={syncTargetActions(openTenant, open.target.promotionId, backupOf(open.target) ?? "new")}
             tenantName={open.name}
             onChanged={onChanged}
             decisionFields={false}
-            backupSkipped={(backupOf(open.target.changeSet) ?? backup) === "none"}
-            intro={<p className="text-sm text-gray-600">Backup choice of this sync: {(backupOf(open.target.changeSet) ?? backup) === "none" ? "applied without a backup. Rollback uses the saved current versions." : "back up the affected policy types first."}</p>}
+            backupSkipped={backupOf(open.target) === "none"}
+            intro={<p className="text-sm text-gray-600">Backup choice of this sync: {backupOf(open.target) === "none" ? "applied without a backup. Rollback uses the saved current versions." : "back up the affected policy types first."}</p>}
             rollbackHint="Rollback created. Review, approve and apply it below."
           />
           {open.target.rollbackChangeSet && (

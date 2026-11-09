@@ -52,22 +52,26 @@ export const planSync = (source: Tenant, input: { title: string; targets: string
   })
 
 export const previewSyncTarget = (target: Tenant, id: string) => featureCall<SyncPreview>(PATH, target, "preview", { id })
-/** Sync records no reviewer or note; the route stores null for both. */
-export const approveSyncTarget = (target: Tenant, id: string, preview: Pick<ChangeSetPreview, "contentHash" | "targetFingerprint">) =>
-  featureCall(PATH, target, "approve", { id, contentHash: preview.contentHash, targetFingerprint: preview.targetFingerprint })
-export const applySyncTarget = (target: Tenant, id: string, contentHash: string, backup: SyncBackup) => featureCall(PATH, target, "apply", { id, contentHash, confirm: true, backup })
 /**
- * A retry names a backup choice only for a change set no apply has claimed yet; once claimed, the
- * route uses the choice stored on the change set and refuses another one.
+ * Sync records no reviewer or note; the route stores null for both. The approval names the backup
+ * choice, which the route stores on the target, so its apply and every retry use it.
  */
-export const retrySyncTarget = (target: Tenant, id: string, contentHash: string, backup?: SyncBackup) => featureCall(PATH, target, "retry", { id, contentHash, confirm: true, ...(backup ? { backup } : {}) })
+export const approveSyncTarget = (target: Tenant, id: string, preview: Pick<ChangeSetPreview, "contentHash" | "targetFingerprint">, backup: SyncBackup) =>
+  featureCall(PATH, target, "approve", { id, contentHash: preview.contentHash, targetFingerprint: preview.targetFingerprint, backup })
+export const applySyncTarget = (target: Tenant, id: string, contentHash: string, backup: SyncBackup) => featureCall(PATH, target, "apply", { id, contentHash, confirm: true, backup })
+/** A retry names no backup choice: the route applies the one the target was approved with. */
+export const retrySyncTarget = (target: Tenant, id: string, contentHash: string) => featureCall(PATH, target, "retry", { id, contentHash, confirm: true })
 
-/** Change-set calls of one applied Sync target, for its details: results and rollback. Apply and retry use the stored backup choice. */
-export function syncTargetActions(target: Tenant, id: string): ChangeSetActions {
+/**
+ * Change-set calls of one Sync target, for its details: results, apply and rollback. Apply and
+ * retry name no backup choice, so the route applies the approved one; an approval from here names
+ * `backup`, the target's stored choice.
+ */
+export function syncTargetActions(target: Tenant, id: string, backup: SyncBackup): ChangeSetActions {
   const base = { id }
   return {
     preview: async () => (await featureCall<SyncPreview>(PATH, target, "preview", base)).changeSet,
-    approve: (input) => featureCall(PATH, target, "approve", { ...base, contentHash: input.contentHash, targetFingerprint: input.targetFingerprint }),
+    approve: (input) => featureCall(PATH, target, "approve", { ...base, contentHash: input.contentHash, targetFingerprint: input.targetFingerprint, backup }),
     reject: () => featureCall(PATH, target, "reject", base),
     apply: (contentHash) => featureCall(PATH, target, "apply", { ...base, contentHash, confirm: true }),
     retry: (contentHash) => featureCall(PATH, target, "retry", { ...base, contentHash, confirm: true }),

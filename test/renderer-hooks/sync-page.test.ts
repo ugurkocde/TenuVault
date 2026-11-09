@@ -49,6 +49,8 @@ interface Scenario {
   failBackup?: string[]
   /** Targets whose status read fails, with the message the route answers with. */
   statusError?: Record<string, string>
+  /** Targets whose first apply is refused before it claims the change set (a tenant write conflict). */
+  conflictApply?: string[]
   /** Holds the first apply of a target until the test releases it. */
   hold?: { tenantId: string; released: Promise<void> }
 }
@@ -107,6 +109,9 @@ function server(tenantId: string, action: string, body: Record<string, unknown>)
     case "approve": {
       const target = findTarget()
       if (scenario.failApprove?.includes(tenantId)) return { status: 409, body: { error: "The target changed since the review. Plan again." } }
+      // As the route: a Sync approval names the backup choice, stored on the target record.
+      if (body.backup !== "new" && body.backup !== "none") return { status: 400, body: { error: "Choose whether to back up before this sync: backup must be \"new\" or \"none\"." } }
+      ;(target.promotion as Record<string, unknown>).sync = { runId: "r", backup: body.backup }
       ;(target.changeSet as Record<string, unknown>).status = "approved"
       return { status: 200, body: { promotion: target.promotion, changeSet: target.changeSet } }
     }
@@ -114,8 +119,16 @@ function server(tenantId: string, action: string, body: Record<string, unknown>)
     case "retry": {
       const target = findTarget()
       const changeSet = target.changeSet as Record<string, unknown>
+      // As the route: the approved choice binds the apply; another one is refused before the claim.
+      const approvedChoice = ((target.promotion as { sync?: { backup?: string } }).sync?.backup)
+      if (approvedChoice && body.backup !== undefined && body.backup !== approvedChoice) return { status: 409, body: { error: `This sync was approved ${approvedChoice === "none" ? "without a backup" : "with a backup"}. Apply it with the same choice.` } }
+      if (scenario.conflictApply?.includes(tenantId) && !failed.has(tenantId)) {
+        failed.add(tenantId)
+        Object.assign(changeSet, { lastError: "Another change to this tenant is running. Try again when it finishes." })
+        return { status: 409, body: { error: "Another change to this tenant is running. Try again when it finishes." } }
+      }
       // As the engine: the first claimed apply fixes the backup choice; another one is refused.
-      const stored = changeSet.backupChoice as string | undefined
+      const stored = (changeSet.backupChoice as string | undefined) ?? approvedChoice
       if (stored && body.backup !== undefined && body.backup !== stored) return { status: 409, body: { error: `This sync was first applied ${stored === "none" ? "without a backup" : "with a backup"}. Retry it with the same choice.` } }
       const choice = stored ?? (body.backup as string | undefined) ?? "new"
       Object.assign(changeSet, { backupChoice: choice, attempts: (changeSet.attempts as number) + 1 })
@@ -161,7 +174,8 @@ beforeEach(() => {
       await hold.released
     }
     const answer = server(tenantId as string, action as string, body)
-    return { ok: answer.status < 400, status: answer.status, json: async () => answer.body }
+    // A response is fresh JSON, never the server's own objects.
+    return { ok: answer.status < 400, status: answer.status, json: async () => JSON.parse(JSON.stringify(answer.body)) as unknown }
   }))
 })
 
@@ -341,7 +355,7 @@ describe("Sync apply and result", () => {
     await click(button(container, "Approve and sync to 2 tenants"))
     await until(() => !!button(container, "Retry failed"), "result")
     const byTarget = (action: string) => calls.filter((call) => call.action === action).map((call) => ({ tenantId: call.tenantId, ...call.body }))
-    expect(byTarget("approve")).toEqual([{ tenantId: B, id: `pr-${B}`, contentHash: HASH, targetFingerprint: FINGERPRINT }, { tenantId: C, id: `pr-${C}`, contentHash: HASH, targetFingerprint: FINGERPRINT }])
+    expect(byTarget("approve")).toEqual([{ tenantId: B, id: `pr-${B}`, contentHash: HASH, targetFingerprint: FINGERPRINT, backup: "new" }, { tenantId: C, id: `pr-${C}`, contentHash: HASH, targetFingerprint: FINGERPRINT, backup: "new" }])
     expect(byTarget("apply")).toEqual([{ tenantId: B, id: `pr-${B}`, contentHash: HASH, confirm: true, backup: "new" }, { tenantId: C, id: `pr-${C}`, contentHash: HASH, confirm: true, backup: "new" }])
     for (const call of calls.filter((entry) => entry.action === "approve")) expect(call.body).not.toHaveProperty("reviewer")
 
@@ -511,6 +525,49 @@ describe("Sync review round 1", () => {
     await until(() => node(container, "Contoso Germany")?.className.includes("border-green-600") === true, "applied")
     await until(() => !rows()[0]!.textContent?.includes("Not applied"), "applied run")
     expect(rows()[1]!.textContent).toContain("Not applied")
+  })
+})
+
+describe("Sync review round 3", () => {
+  /** Approves without a backup, has the apply refused before it claims the change set, then opens the run again in a fresh page. */
+  async function refusedThenReopened() {
+    scenario.conflictApply = [B]
+    let container = await render()
+    await toReview(container, ["Contoso Germany"])
+    await click(container.querySelector<HTMLInputElement>('section[aria-label="Review"] input[value="none"]')!)
+    await click(button(container, "Approve and sync to 1 tenant"))
+    await until(() => !!button(container, "Retry failed"), "refused apply")
+    for (const root of roots.splice(0)) act(() => root.unmount())
+    document.body.replaceChildren()
+    container = await render()
+    await until(() => !!container.querySelector('section[aria-label="Recent syncs"] button'), "recent syncs")
+    await click(container.querySelector<HTMLButtonElement>('section[aria-label="Recent syncs"] button')!)
+    await until(() => !!button(container, "Retry failed"), "reopened run")
+    return container
+  }
+
+  it("retries with the choice approved, after a refused apply and a fresh page", async () => {
+    const container = await refusedThenReopened()
+    expect(node(container, "Contoso Germany").textContent).toContain("Retry applies without a backup")
+    await click(button(container, "Retry failed"))
+    await until(() => node(container, "Contoso Germany")?.className.includes("border-green-600") === true, "retried")
+    expect(calls.find((call) => call.action === "retry")!.body).not.toHaveProperty("backup")
+    expect(node(container, "Contoso Germany").getAttribute("aria-label")).toBe("Contoso Germany: 1 change verified. No backup taken.")
+  })
+
+  it("applies from Details with the choice approved", async () => {
+    const container = await refusedThenReopened()
+    await click(button(node(container, "Contoso Germany"), "Details"))
+    expect(container.textContent).toContain("Backup choice of this sync: applied without a backup.")
+    await click(button(container, "Apply to tenant"))
+    await until(() => !!button(document.body, "Apply without a backup"), "confirmation")
+    expect(document.body.textContent).toContain("No backup runs: the current state of every affected object is captured first")
+    await click(document.body.querySelector<HTMLInputElement>('[role="dialog"] input[type="checkbox"]')!)
+    await click(button(document.body, "Apply without a backup"))
+    await until(() => node(container, "Contoso Germany")?.className.includes("border-green-600") === true, "applied from details")
+    const applies = calls.filter((call) => call.action === "apply")
+    expect(applies.at(-1)!.body).not.toHaveProperty("backup")
+    expect(node(container, "Contoso Germany").getAttribute("aria-label")).toBe("Contoso Germany: 1 change verified. No backup taken.")
   })
 })
 
