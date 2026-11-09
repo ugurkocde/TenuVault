@@ -305,6 +305,33 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
     expect(setupRun("remove-complete").output.join(" ")).not.toContain("could not be verified")
   }, 60_000)
 
+  it.runIf(Boolean(pwsh))("decides variable absence from one complete list, not from a by-name read the client reports as not found", () => {
+    // Az.Automation turns a 403 or 500 on one variable into ResourceNotFoundException. The list still shows the variable.
+    const declined = setupRun("remove-scope-read-403-declined")
+    expect(declined.variables).toEqual(["TenuVaultScope-11111111"])
+    expect(declined.output.join(" ")).toContain("were not fully removed. Still in place: variable 'TenuVaultScope-11111111'.")
+    expect(declined.output.join(" ")).toContain("Keep Key Vault kv-tenuvault-abc123: this tenant's cloud backup setup was not fully removed")
+    expect(declined.output.join(" ")).not.toContain(DELETE_ADVICE)
+    expect(declined.output).not.toContain("Cloud backup schedule and variables for tenant 11111111-2222-3333-4444-555555555555 removed.")
+    // The same misreport during removal does not skip the variable: the list says it exists, so it is removed and verified gone.
+    const served = setupRun("remove-scope-read-500")
+    expect(served.actions).toContain("remove TenuVaultScope-11111111")
+    expect(served.variables).toEqual([])
+    expect(served.output).toContain("Cloud backup schedule and variables for tenant 11111111-2222-3333-4444-555555555555 removed.")
+    // The upgrade finds the vault variable through the list too, so it is removed rather than left behind unnoticed.
+    const upgrade = setupRun("upgrade-vault-read-translated")
+    expect(upgrade).toMatchObject({ plain: true, legacyVariableKept: false })
+    expect(upgrade.actions).toContain("remove TenuVaultKeyVault-11111111")
+    // A failing list leaves every variable unknown: never removed, never advice.
+    const listFails = setupRun("remove-list-fails")
+    const text = listFails.output.join(" ")
+    expect(text).toContain("The removal could not be verified. Could not check: variable 'TenuVaultTenantId-11111111' (The SSL connection could not be established.)")
+    expect(text).toContain("variable 'TenuVaultKeyVault-11111111' (The SSL connection could not be established.)")
+    expect(text).toContain("Keep Key Vault kv-tenuvault-abc123: the removal of this tenant's cloud backup setup could not be verified")
+    expect(text).not.toContain(DELETE_ADVICE)
+    expect(listFails.output).not.toContain("Cloud backup schedule and variables for tenant 11111111-2222-3333-4444-555555555555 removed.")
+  }, 60_000)
+
   it.runIf(Boolean(pwsh))("keeps the vault while another tenant in the Automation account still has its variable, or when that cannot be checked", () => {
     for (const name of ["upgrade-tenant-b-remains", "remove-tenant-b-remains"]) {
       const run = setupRun(name)
@@ -315,11 +342,12 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
       expect(text, name).not.toContain(DELETE_ADVICE)
     }
     expect(setupRun("upgrade-tenant-b-remains").plain).toBe(true)
-    for (const name of ["upgrade-list-fails", "remove-list-fails"]) {
-      const text = setupRun(name).output.join(" ")
-      expect(text, name).toContain("Keep Key Vault kv-tenuvault-abc123: the variables of Automation account 'aa-tenuvault' could not be read to check which setups still use it")
-      expect(text, name).not.toContain(DELETE_ADVICE)
-    }
+    // A failing variable list: the upgrade keeps the vault variable, and the vault, because nothing can be called absent.
+    const upgradeListFails = setupRun("upgrade-list-fails")
+    expect(upgradeListFails.legacyVariableKept).toBe(true)
+    expect(upgradeListFails.output.join(" ")).toContain("Kept 'TenuVaultKeyVault-11111111' if it exists: the Automation account's variables could not be listed (The SSL connection could not be established.)")
+    expect(upgradeListFails.output.join(" ")).toContain("Keep Key Vault kv-tenuvault-abc123: the variables of Automation account 'aa-tenuvault' could not be read to check which setups still use it")
+    expect(upgradeListFails.output.join(" ")).not.toContain(DELETE_ADVICE)
     // With no TenuVaultKeyVault variable left, the advice stays neutral: it never claims the vault is unused elsewhere.
     const advice = setupRun("approved").output.join(" ")
     expect(advice).toContain("no tenant in Automation account 'aa-tenuvault' still has a TenuVaultKeyVault variable")

@@ -69,6 +69,7 @@ $script:publishBehavior = "publish"
 $script:declineVariable = $null
 $script:failLookups = $false
 $script:failList = $false
+$script:translatedVariable = $null
 
 function Import-AzAutomationRunbook {
     [CmdletBinding(SupportsShouldProcess)]
@@ -101,6 +102,8 @@ function Get-AzAutomationVariable {
         return @($script:variables.Keys | Sort-Object | ForEach-Object { [pscustomobject]@{ Name = $_; Value = $script:variables[$_] } })
     }
     if ($script:failLookups) { Write-MockError $PSCmdlet (New-OutageException); return }
+    # AutomationPSClient.GetVariable turns every ErrorResponseException (403, 500) into "not found".
+    if ($Name -eq $script:translatedVariable) { Write-MockError $PSCmdlet ([ResourceNotFoundException]::new("Variable $Name not found.")); return }
     if ($script:variables.ContainsKey($Name)) { return [pscustomobject]@{ Name = $Name; Value = $script:variables[$Name] } }
     Write-MockError $PSCmdlet ([ResourceNotFoundException]::new("Variable $Name not found."))
 }
@@ -161,6 +164,7 @@ function Reset-OldSetup {
     $script:declineVariable = $null
     $script:failLookups = $false
     $script:failList = $false
+    $script:translatedVariable = $null
 }
 # Tenant B (22222222) shares the Automation account and still has its vault variable.
 function Add-TenantB { $script:variables["TenuVaultKeyVault-22222222"] = "kv-tenuvault-abc123" }
@@ -183,8 +187,10 @@ function Write-Scenario {
 
 # Upgrade runs: approved, the outer step declined, the import's own prompt declined with an old
 # draft present, the publish throwing, and a publish that leaves the older version published.
-foreach ($scenario in "approved", "outer-declined", "import-declined", "publish-throws", "published-older", "upgrade-tenant-b-remains", "upgrade-list-fails") {
+foreach ($scenario in "approved", "outer-declined", "import-declined", "publish-throws", "published-older", "upgrade-tenant-b-remains", "upgrade-list-fails", "upgrade-vault-read-translated") {
     Reset-OldSetup
+    # The by-name read of the vault variable comes back as "not found" although the variable exists.
+    if ($scenario -eq "upgrade-vault-read-translated") { $script:translatedVariable = $legacyKeyVaultVariable }
     if ($scenario -eq "upgrade-tenant-b-remains") { Add-TenantB }
     if ($scenario -eq "upgrade-list-fails") { $script:failList = $true }
     $PSDefaultParameterValues = @{}
@@ -205,12 +211,15 @@ foreach ($scenario in "approved", "outer-declined", "import-declined", "publish-
 
 # -Remove runs: complete, -WhatIf, one variable's own confirmation declined, -WhatIf while every
 # lookup fails, a complete removal whose variable list fails, and tenant B still on the vault.
-foreach ($scenario in "remove-complete", "remove-whatif", "remove-variable-declined", "remove-whatif-lookups-fail", "remove-list-fails", "remove-tenant-b-remains") {
+foreach ($scenario in "remove-complete", "remove-whatif", "remove-variable-declined", "remove-whatif-lookups-fail", "remove-list-fails", "remove-tenant-b-remains", "remove-scope-read-403-declined", "remove-scope-read-500") {
     Reset-OldSetup
     if ($scenario -eq "remove-variable-declined") { $script:declineVariable = "TenuVaultScope-$tenantKey" }
     if ($scenario -eq "remove-whatif-lookups-fail") { $script:failLookups = $true }
     if ($scenario -eq "remove-list-fails") { $script:failList = $true }
     if ($scenario -eq "remove-tenant-b-remains") { Add-TenantB }
+    # The by-name read of TenuVaultScope fails with 403 or 500 and comes back as "not found", while the list still shows it.
+    if ($scenario -like "remove-scope-read-*") { $script:translatedVariable = "TenuVaultScope-$tenantKey" }
+    if ($scenario -eq "remove-scope-read-403-declined") { $script:declineVariable = "TenuVaultScope-$tenantKey" }
     $output = if ($scenario -like "remove-whatif*") { @(Remove-TenuVaultCloudBackupSetup -WhatIf 6>&1) } else { @(Remove-TenuVaultCloudBackupSetup 6>&1) }
     Write-Scenario -Name $scenario -Output $output
 }

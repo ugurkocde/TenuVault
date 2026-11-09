@@ -263,13 +263,29 @@ function Add-TenuVaultRoleAssignment {
     }
 }
 
+# Every variable of the Automation account, name to value, from one complete list (the cmdlet
+# follows every page). Error is set when the list failed, and then no variable may be called
+# absent. A lookup by name cannot decide that: Az.Automation reports any failed read of one
+# variable (403, 500, not only 404) as ResourceNotFoundException.
+function Get-TenuVaultAutomationVariables {
+    try {
+        $all = @(Get-AzAutomationVariable -ResourceGroupName $ResourceGroupName `
+            -AutomationAccountName $AutomationAccountName -ErrorAction Stop)
+    } catch {
+        return @{ Variables = @{}; Error = $_.Exception.Message }
+    }
+    $variables = @{}
+    foreach ($variable in $all) { if ($variable -and $variable.Name) { $variables[[string]$variable.Name] = $variable.Value } }
+    return @{ Variables = $variables; Error = $null }
+}
+
 # The Key Vault of a setup before runbook 1.2.0: the one this tenant's old variable names, and
 # any kv-tenuvault-* vault in the Automation resource group, where those setups created it.
 function Get-TenuVaultLegacyKeyVaults {
     $names = [System.Collections.Generic.List[string]]::new()
-    $variable = Get-AzAutomationVariable -ResourceGroupName $ResourceGroupName `
-        -AutomationAccountName $AutomationAccountName -Name $legacyKeyVaultVariable -ErrorAction SilentlyContinue
-    if ($variable -and "$($variable.Value)".Trim('"')) { $names.Add("$($variable.Value)".Trim('"')) }
+    $listed = Get-TenuVaultAutomationVariables
+    $value = "$($listed.Variables[$legacyKeyVaultVariable])".Trim('"')
+    if ($value) { $names.Add($value) }
     $vaults = Get-AzResource -ResourceGroupName $ResourceGroupName -ResourceType "Microsoft.KeyVault/vaults" -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -like "kv-tenuvault-*" }
     foreach ($vault in @($vaults)) { if ($vault -and -not $names.Contains($vault.Name)) { $names.Add($vault.Name) } }
@@ -277,7 +293,8 @@ function Get-TenuVaultLegacyKeyVaults {
 }
 
 # Whether a failed Az lookup means the resource does not exist. Only that counts as absent; an
-# auth, transport or service error leaves the state unknown.
+# auth, transport or service error leaves the state unknown. Az.Automation keeps the status for
+# schedules and job schedules, but not for variables, so variables are never decided by this.
 function Test-TenuVaultNotFound {
     param([Parameter(Mandatory)][System.Management.Automation.ErrorRecord]$ErrorRecord)
     for ($exception = $ErrorRecord.Exception; $exception; $exception = $exception.InnerException) {
@@ -291,14 +308,9 @@ function Test-TenuVaultNotFound {
 # The tenant keys whose TenuVaultKeyVault variable is still in this Automation account, or
 # Error when the variables could not be listed.
 function Get-TenuVaultKeyVaultUsers {
-    try {
-        $variables = @(Get-AzAutomationVariable -ResourceGroupName $ResourceGroupName `
-            -AutomationAccountName $AutomationAccountName -ErrorAction Stop)
-    } catch {
-        if (Test-TenuVaultNotFound $_) { return @{ Keys = @(); Error = $null } }
-        return @{ Keys = @(); Error = $_.Exception.Message }
-    }
-    $keys = @($variables | Where-Object { $_ -and $_.Name -like "TenuVaultKeyVault-*" } | ForEach-Object { $_.Name.Substring("TenuVaultKeyVault-".Length) } | Sort-Object -Unique)
+    $listed = Get-TenuVaultAutomationVariables
+    if ($listed.Error) { return @{ Keys = @(); Error = $listed.Error } }
+    $keys = @($listed.Variables.Keys | Where-Object { $_ -like "TenuVaultKeyVault-*" } | ForEach-Object { $_.Substring("TenuVaultKeyVault-".Length) } | Sort-Object -Unique)
     return @{ Keys = $keys; Error = $null }
 }
 
@@ -377,9 +389,12 @@ function Publish-TenuVaultRunbook {
 function Remove-TenuVaultLegacyKeyVaultVariable {
     [CmdletBinding(SupportsShouldProcess)]
     param([Parameter(Mandatory)][hashtable]$Runbook)
-    $variable = Get-AzAutomationVariable -ResourceGroupName $ResourceGroupName `
-        -AutomationAccountName $AutomationAccountName -Name $legacyKeyVaultVariable -ErrorAction SilentlyContinue
-    if (-not $variable) { return }
+    $listed = Get-TenuVaultAutomationVariables
+    if ($listed.Error) {
+        Write-Host "Kept '$legacyKeyVaultVariable' if it exists: the Automation account's variables could not be listed ($($listed.Error)). Run this script again to finish the upgrade."
+        return
+    }
+    if (-not $listed.Variables.ContainsKey($legacyKeyVaultVariable)) { return }
     if (-not $Runbook.Plain) {
         Write-Host "Kept '$legacyKeyVaultVariable': $($Runbook.Reason). Run this script again to finish the upgrade."
         return
@@ -410,10 +425,11 @@ function Get-TenuVaultTenantSetupLeft {
     & $probe "schedule '$scheduleName'" {
         Get-AzAutomationSchedule -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName -Name $scheduleName -ErrorAction Stop
     }
+    # A variable is gone only when one complete list succeeded without it.
+    $listed = Get-TenuVaultAutomationVariables
     foreach ($name in @($variableNames) + $legacyKeyVaultVariable) {
-        & $probe "variable '$name'" {
-            Get-AzAutomationVariable -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName -Name $name -ErrorAction Stop
-        }
+        if ($listed.Error) { $unknown.Add("variable '$name' ($($listed.Error))") }
+        elseif ($listed.Variables.ContainsKey($name)) { $left.Add("variable '$name'") }
     }
     return @{ Left = @($left); Unknown = @($unknown) }
 }
@@ -442,12 +458,17 @@ function Remove-TenuVaultCloudBackupSetup {
         Remove-AzAutomationSchedule -ResourceGroupName $ResourceGroupName `
             -AutomationAccountName $AutomationAccountName -Name $scheduleName -Force -Confirm:$false | Out-Null
     }
+    # Which variables exist comes from the list; when it fails, every one is attempted.
+    $listed = Get-TenuVaultAutomationVariables
     foreach ($name in @($variableNames) + $legacyKeyVaultVariable) {
-        $variable = Get-AzAutomationVariable -ResourceGroupName $ResourceGroupName `
-            -AutomationAccountName $AutomationAccountName -Name $name -ErrorAction SilentlyContinue
-        if ($variable -and $PSCmdlet.ShouldProcess($name, "Remove Automation variable")) {
-            Remove-AzAutomationVariable -ResourceGroupName $ResourceGroupName `
-                -AutomationAccountName $AutomationAccountName -Name $name -Confirm:$false | Out-Null
+        if (-not $listed.Error -and -not $listed.Variables.ContainsKey($name)) { continue }
+        if ($PSCmdlet.ShouldProcess($name, "Remove Automation variable")) {
+            try {
+                Remove-AzAutomationVariable -ResourceGroupName $ResourceGroupName `
+                    -AutomationAccountName $AutomationAccountName -Name $name -Confirm:$false -ErrorAction Stop | Out-Null
+            } catch {
+                Write-Host "Could not remove variable '$name': $($_.Exception.Message)"
+            }
         }
     }
     # Read back instead of trusting the prompts: a declined or failed step leaves the setup running.
