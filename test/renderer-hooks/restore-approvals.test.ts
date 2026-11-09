@@ -68,3 +68,19 @@ it("renders no approval section for a tenant without MAA or saved records", asyn
   expect(fetcher).toHaveBeenCalledTimes(1)
   expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body)).refresh).toBe(false)
 })
+
+it.each(["completed", "rejected", "cancelled", "expired", "stale", "justification-required", "needsApproval", "approved"])("shows time left only for actionable status %s", async (status) => {
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ records: [{ ...record, status }] })))
+  root = createRoot(document.body.appendChild(document.createElement("div")))
+  await act(async () => root.render(createElement(RestoreApprovals, { tenant, openRevision: 1 })))
+  expect(document.body.textContent?.includes("hours left")).toBe(["needsApproval", "approved"].includes(status))
+})
+
+it("reloads locally when the revision changes while open", async () => {
+  const fetcher = await render()
+  await act(async () => button("Waiting for approval").click())
+  fetcher.mockClear()
+  await act(async () => root.render(createElement(RestoreApprovals, { tenant, revision: 1 })))
+  expect(fetcher).toHaveBeenCalledTimes(1)
+  expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toMatchObject({ approvalAction: "list", refresh: false })
+})

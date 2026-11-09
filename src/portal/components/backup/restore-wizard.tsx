@@ -255,6 +255,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   const [review, setReview] = useState<Record<string, LiveState> | null>(null)
   const [reviewError, setReviewError] = useState("")
   const [confirmed, setConfirmed] = useState(false)
+  const [approvalRevision, setApprovalRevision] = useState(0)
   const [approvalOpenRevision, setApprovalOpenRevision] = useState(0)
   const [usesApproval, setUsesApproval] = useState(false)
   const [justification, setJustification] = useState("")
@@ -560,6 +561,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
       clearInterval(poll)
       progressId.current = ""
       setRunning(false)
+      setApprovalRevision(value => value + 1)
     }
   }
 
@@ -585,10 +587,13 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
 
   return (
     <div className="space-y-6">
-      <RestoreApprovals key={tenant.credentials.tenantId} tenant={tenant} enabled={usesApproval || !!result?.results.some(outcome => outcome.approval)} revision={result?.results.length ?? 0} openRevision={approvalOpenRevision} onOutcome={outcome => setResult(current => {
-        const results = mergeOutcomes(current?.results ?? [], [outcome])
-        return { results, outcome: results.every(item => item.success) ? "success" : "partial", message: outcome.error ?? "Approval completed. Check the result of every item." }
-      })} />
+      <RestoreApprovals key={tenant.credentials.tenantId} tenant={tenant} enabled={usesApproval || !!result?.results.some(outcome => outcome.approval)} revision={approvalRevision} openRevision={approvalOpenRevision} onOutcome={outcome => {
+        setApprovalRevision(value => value + 1)
+        setResult(current => {
+          const results = mergeOutcomes(current?.results ?? [], [outcome])
+          return { results, outcome: results.every(item => item.success) ? "success" : "partial", message: outcome.error ?? "Approval completed. Check the result of every item." }
+        })
+      }} />
       <ol className="flex flex-wrap items-center gap-2" aria-label="Restore steps">
         {STEPS.map((entry, index) => (
           <li key={entry.id} className="flex items-center gap-2">
