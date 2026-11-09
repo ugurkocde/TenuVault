@@ -153,5 +153,10 @@ describe("cloudSetupCommand", () => {
     // The tenant name goes with a report, quoted so PowerShell expands nothing in it.
     expect(cloudSetupCommand({ ...base, changeReport: "full", tenantName: "O'Brien $(Get-Secret) & Co" })).toContain("-ChangeReport Full -ChangeReportWithoutActors:$false -TenantName 'O''Brien $(Get-Secret) & Co' -GrantGraphRoles")
     expect(cloudSetupCommand({ ...base, changeReport: "off", tenantName: "Contoso" })).not.toContain("-TenantName")
+    // Clipped to 200 units without splitting an emoji that starts at the 200th.
+    const long = cloudSetupCommand({ ...base, changeReport: "names", tenantName: "a".repeat(199) + "\u{1F600}" + "b".repeat(20) })
+    expect(long).toContain(`-TenantName '${"a".repeat(199)}' -GrantGraphRoles`)
+    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(long)).toBe(false)
+    expect(cloudSetupCommand({ ...base, changeReport: "names", tenantName: "c".repeat(250) })).toContain(`-TenantName '${"c".repeat(200)}' -GrantGraphRoles`)
   })
 })

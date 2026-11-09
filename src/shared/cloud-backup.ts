@@ -193,7 +193,10 @@ export function cloudSetupCommand(options: {
   if (reportOn) parts.push(options.withoutActors ? "-ChangeReportWithoutActors" : "-ChangeReportWithoutActors:$false")
   // Single quoted for PowerShell: nothing in it is expanded, a quote is doubled, control characters go.
   // oxlint-disable-next-line no-control-regex
-  const name = options.tenantName?.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 200)
+  const cleaned = options.tenantName?.replace(/[\u0000-\u001f\u007f]/g, " ").trim()
+  // At most 200 UTF-16 units, never cut between the two halves of a surrogate pair.
+  const cut = cleaned && cleaned.length > 200 && /[\uD800-\uDBFF]/.test(cleaned[199]!) ? 199 : 200
+  const name = cleaned?.slice(0, cut).trim()
   if (name && reportOn) parts.push(`-TenantName '${name.replace(/'/g, "''")}'`)
   parts.push("-GrantGraphRoles")
   return parts.join(" ")
