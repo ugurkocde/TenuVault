@@ -429,6 +429,27 @@ describe("Sync review round 1", () => {
     expect(node(container, "Contoso Germany").getAttribute("aria-label")).toBe("Contoso Germany: 1 change verified. Backup taken first.")
   })
 
+  it("counts only backups that completed, from the stored pre-change evidence", async () => {
+    scenario.failBackup = [C]
+    const container = await render()
+    await toReview(container, ["Contoso Germany", "Contoso France"])
+    await click(button(container, "Approve and sync to 2 tenants"))
+    await until(() => !!button(container, "Retry failed") && node(container, "Contoso Germany")?.className.includes("border-green-600") === true, "result")
+    const summary = container.querySelector('[aria-label="Summary"]')!.textContent
+    expect(summary).toContain("Backup taken in 1 of 2 tenants")
+    expect(summary).not.toContain("Backup taken in each tenant")
+    expect(node(container, "Contoso Germany").getAttribute("aria-label")).toBe("Contoso Germany: 1 change verified. Backup taken first.")
+  })
+
+  it("shows no backup chip when the only requested backup never completed", async () => {
+    scenario.failBackup = [B]
+    const container = await render()
+    await toReview(container, ["Contoso Germany"])
+    await click(button(container, "Approve and sync to 1 tenant"))
+    await until(() => !!button(container, "Retry failed"), "result")
+    expect(container.textContent).not.toMatch(/Backup taken in|Backup skipped/)
+  })
+
   it("keeps a pending apply and its late error in its own run", async () => {
     let release!: () => void
     scenario.hold = { tenantId: B, released: new Promise<void>((resolve) => { release = resolve }) }
@@ -475,7 +496,7 @@ describe("Sync review round 1", () => {
     }
   })
 
-  it("marks runs never applied, and lists only the latest draft of a re-plan", async () => {
+  it("lists every run and marks the runs never applied", async () => {
     const container = await render()
     await toReview(container, ["Contoso Germany"])
     await click(button(container, "Back"))
@@ -483,11 +504,13 @@ describe("Sync review round 1", () => {
     await until(() => calls.filter((call) => call.action === "plan").length === 2 && !!button(container, /^Approve and sync/) && !container.textContent?.includes("Checking"), "second review")
     await until(() => container.querySelectorAll('section[aria-label="Recent syncs"] li').length > 0, "recent syncs")
     const rows = () => [...container.querySelectorAll('section[aria-label="Recent syncs"] li')]
-    expect(rows()).toHaveLength(1)
-    expect(rows()[0]!.textContent).toContain("Not applied")
+    // The draft the second review replaced stays listed; both were never applied.
+    await until(() => rows().length === 2, "both runs")
+    expect(rows().map((row) => row.textContent?.includes("Not applied"))).toEqual([true, true])
     await click(button(container, "Approve and sync to 1 tenant"))
     await until(() => node(container, "Contoso Germany")?.className.includes("border-green-600") === true, "applied")
     await until(() => !rows()[0]!.textContent?.includes("Not applied"), "applied run")
+    expect(rows()[1]!.textContent).toContain("Not applied")
   })
 })
 

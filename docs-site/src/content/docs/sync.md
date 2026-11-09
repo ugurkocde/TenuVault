@@ -109,7 +109,7 @@ Each finished target offers:
 * **Retry failed**: applies the target again with the backup choice its first apply used, shown under the button. A retry never switches between backing up and skipping the backup, also when you open the sync again later. Policies already verified are not written again.
 * **Details**: shows the target's change set with the result of every policy, the pre-change evidence and **Preview rollback**.
 
-When every target finished and at least one target was written, the summary shows **Links saved for the next sync**, **Rollback available per tenant**, **Backup taken in each tenant** or **Backup skipped**, and **Recorded in the audit log**. Click **Start a new sync** to begin again.
+When every target finished and at least one target was written, the summary shows **Links saved for the next sync**, **Rollback available per tenant**, **Backup taken in each tenant** (or **Backup taken in N of M tenants** when a backup did not complete) or **Backup skipped**, and **Recorded in the audit log**. Click **Start a new sync** to begin again.
 
 ## Roll back a target
 
@@ -121,7 +121,7 @@ A rollback writes only to its target. It keeps working after the source tenant's
 
 ## Recent syncs
 
-**Recent syncs** lists the syncs started from the source tenant, newest first, with their targets. A sync that was planned but never applied shows **Not applied**. A plan you replaced before approving it, for example by going back and reviewing again, is not listed. Click a sync to open its result view, read from the stored records.
+**Recent syncs** lists the syncs started from the source tenant, newest first, with their targets. A sync that was planned but never applied shows **Not applied**, including a plan you replaced by going back and reviewing again. Click a sync to open its result view, read from the stored records.
 
 ## Links and status
 

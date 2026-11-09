@@ -93,8 +93,6 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
   const [notes, setNotes] = useState<Record<string, string>>({})
   // The backup choice each run was approved with in this session; a draft never decides it.
   const [runBackups, setRunBackups] = useState<Record<string, SyncBackup>>({})
-  // Drafts replaced by a newer plan before they were approved.
-  const [superseded, setSuperseded] = useState<ReadonlySet<string>>(new Set())
   const shownRun = useRef(runId)
   shownRun.current = runId
   const source = tenantOf(sourceId) ?? selected
@@ -171,7 +169,6 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
 
   /** Plans the run, then reads every planned target live. Nothing is written. */
   const review = async (acknowledgeRedacted: boolean) => {
-    const previous = runId
     setPlanning(true)
     setPlanError(null)
     setReviews({})
@@ -180,8 +177,6 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
       const items = Object.values(chosen)
       const planned = await planSync(source, { title: `Sync ${plural(items.length, "policy", "policies")} from ${source.name}`.slice(0, 200), targets, items: items.map(({ folder: type, sourceId: id }) => ({ folder: type, sourceId: id })), acknowledgeRedacted })
       setRunId(planned.run.id)
-      // The draft this plan replaces was never approved, so it no longer needs listing.
-      if (previous && !runBackups[previous]) setSuperseded((current) => new Set([...current, previous]))
       void runs.refetch()
       const detail = await fetchRun(planned.run.id)
       await Promise.all(detail.targets.map(async (target) => {
@@ -374,7 +369,7 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
         {runs.data && !runs.data.runs.length && <p className="text-sm text-gray-600">No syncs from {source.name} yet.</p>}
         {!!runs.data?.runs.length && (
           <ul className="max-h-80 divide-y divide-gray-100 overflow-y-auto">
-            {runs.data.runs.filter((entry) => !superseded.has(entry.id)).map((entry) => (
+            {runs.data.runs.map((entry) => (
               <li key={entry.id}>
                 <button type="button" aria-pressed={runId === entry.id && step === 4} onClick={() => openRun(entry)} className="flex w-full flex-wrap items-center gap-3 rounded-2xl px-2 py-3 text-left hover:bg-gray-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
                   <span className="min-w-0 flex-1">

@@ -17,6 +17,9 @@ export interface ResultTarget {
 
 const FINISHED: TargetPhase[] = ["verified", "partial", "failed", "in-sync"]
 
+/** A backup completed before the target was written: its pre-change evidence names a backup folder. */
+const backedUp = (target: SyncTarget) => !!target.changeSet?.preChange?.backupFolder
+
 /** Only an approved change set can be applied again; one that was never approved needs a new sync. */
 const retryable = (target: SyncTarget) => ["approved", "partial", "failed", "uncertain"].includes(target.changeSet?.status ?? "")
 
@@ -67,7 +70,7 @@ function nodeText(entry: ResultTarget, backup: SyncBackup, error: string | null,
   switch (phase) {
     case "waiting": return { text: "Waiting", problems: [] }
     case "writing": return { text: target.changeSet?.preChange ? `Writing, ${done} of ${total} verified` : taken === "none" ? "Saving current versions, then writing" : "Backing up, then writing", problems: [] }
-    case "verified": return { text: `${plural(total, "change", "changes")} verified${target.skipped?.length ? `, ${target.skipped.length} already in sync` : ""}. ${taken === "none" ? "No backup taken." : "Backup taken first."}`, problems: [] }
+    case "verified": return { text: `${plural(total, "change", "changes")} verified${target.skipped?.length ? `, ${target.skipped.length} already in sync` : ""}. ${backedUp(target) ? "Backup taken first." : "No backup taken."}`, problems: [] }
     case "in-sync": return { text: "Already in sync, nothing written. No backup taken.", problems: [] }
     case "partial": return { text: `${done} of ${total} synced. ${failedItems(target.changeSet).length || 1} failed:`, problems }
     case "failed": return { text: target.changeSet && !retryable(target) ? "Nothing was synced. Start a new sync to review it again." : "Nothing was synced.", problems }
@@ -251,9 +254,16 @@ export function SyncResult({ source, policyCount, entries, backup, errors, notes
   const verified = involved.filter((entry) => entry.phase === "verified" || entry.phase === "in-sync").length
   const attention = involved.length - verified
   const anyWritten = involved.some((entry) => progress(entry.target).done > 0)
-  // Targets already in sync wrote nothing, so they took no backup and decide nothing here.
+  // Targets already in sync wrote nothing, so they took no backup and decide nothing here. The
+  // backup chip counts completed backups from the stored evidence, never the requested choice.
   const written = involved.filter((entry) => entry.target.changeSet)
-  const skipped = written.some((entry) => (backupOf(entry.target.changeSet) ?? backup) === "none")
+  const attempted = written.filter((entry) => backupOf(entry.target.changeSet) !== null)
+  const backups = attempted.filter((entry) => backedUp(entry.target)).length
+  const skipped = attempted.some((entry) => backupOf(entry.target.changeSet) === "none")
+  const backupChip = skipped ? <Chip tone="warning">Backup skipped</Chip>
+    : !backups ? null
+    : backups === attempted.length ? <Chip>Backup taken in each tenant</Chip>
+    : <Chip>Backup taken in {backups} of {attempted.length} tenants</Chip>
   const open = entries.find((entry) => entry.target.targetTenantId === detailsOpen)
   const openTenant = open ? tenantOf(open.target.targetTenantId) : undefined
 
@@ -282,7 +292,7 @@ export function SyncResult({ source, policyCount, entries, backup, errors, notes
         <div className="flex flex-wrap gap-2" aria-label="Summary">
           {anyWritten && <Chip tone="success">Links saved for the next sync</Chip>}
           {anyWritten && <Chip>Rollback available per tenant</Chip>}
-          {written.length > 0 && (skipped ? <Chip tone="warning">Backup skipped</Chip> : <Chip>Backup taken in each tenant</Chip>)}
+          {backupChip}
           {written.length > 0 && <Chip>Recorded in the audit log</Chip>}
         </div>
       )}
