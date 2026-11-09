@@ -1,7 +1,8 @@
 import { expect, it, vi } from 'vitest'
 import { isLegacySealed, legacyAzureReader, openLegacySealed, registerStorageToken } from '../src/main/storage/azure-seal'
 import { createBridgedFetch } from '../src/main/api/fetch-bridge'
-import { FetchApplicationError, FetchPreconditionError, LegacySealedError, withNetworkErrors } from '../src/main/api/network-error'
+import { FetchApplicationError, FetchPreconditionError, LegacySealedError, OversizedSealedError, withNetworkErrors } from '../src/main/api/network-error'
+import { endlessBody } from './helpers'
 import { isLegacyOtherTenantError, isLegacySealedError, LEGACY_OTHER_TENANT_MESSAGE, LEGACY_SEALED_MESSAGE } from '../src/shared/legacy-sealed'
 import { sealLegacyAzure } from './legacy-seal'
 const tenant = '11111111-1111-1111-1111-111111111111', master = Buffer.alloc(32, 4)
@@ -151,4 +152,51 @@ it('tells a legacy blob of another tenant signed in on this device apart from a 
   expect(failure).toMatchObject({ name: 'FetchApplicationError', message: LEGACY_OTHER_TENANT_MESSAGE })
   expect(isLegacyOtherTenantError(failure)).toBe(true)
   expect(isLegacySealedError(failure)).toBe(false)
+})
+
+it('streams a plain blob through without reading it whole', async () => {
+  const big = endlessBody(40)
+  const reader = legacyAzureReader(async () => new Response(big.body), () => [master])
+  const response = await reader(url, { headers: { Authorization: 'Bearer stream-token' } })
+  // Only the format check has been read so far.
+  expect(big.pulled()).toBeLessThanOrEqual(2)
+  const stream = response.body!.getReader()
+  await stream.read()
+  await stream.cancel()
+  expect(big.pulled()).toBeLessThan(40)
+})
+
+it('returns plain and sealed blobs delivered in small chunks intact through the streaming path', async () => {
+  registerStorageToken('chunk-token', tenant)
+  const chunked = (bytes: Uint8Array) => new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (let at = 0; at < bytes.byteLength; at += 2) controller.enqueue(bytes.subarray(at, at + 2))
+      controller.close()
+    },
+  })
+  const plain = new TextEncoder().encode('{"id":"plain","value":"readable"}')
+  const sealed = new Uint8Array(sealLegacyAzure(Buffer.from('{"id":"sealed"}'), master, tenant, url))
+  for (const [bytes, expected] of [[plain, { id: 'plain', value: 'readable' }], [sealed, { id: 'sealed' }]] as const) {
+    const reader = legacyAzureReader(async () => new Response(chunked(bytes), { status: 200, headers: { 'x-ms-meta-kept': 'yes' } }), () => [master])
+    const response = await reader(url, { headers: { Authorization: 'Bearer chunk-token' } })
+    expect(response.status).toBe(200)
+    expect(response.headers.get('x-ms-meta-kept')).toBe('yes')
+    expect(await response.json()).toEqual(expected)
+  }
+  // A body shorter than the format check, and an empty one, pass through as they are.
+  for (const text of ['{}', '']) {
+    const reader = legacyAzureReader(async () => new Response(text), () => [master])
+    expect(await (await reader(url, { headers: { Authorization: 'Bearer chunk-token' } })).text()).toBe(text)
+  }
+})
+
+it('refuses a sealed envelope over the backup size limit at the cap, as an application error', async () => {
+  registerStorageToken('big-token', tenant)
+  const big = endlessBody(40, new TextEncoder().encode('TVAZ1\n'))
+  const reader = legacyAzureReader(async () => new Response(big.body), () => [master])
+  const failure = await reader(url, { headers: { Authorization: 'Bearer big-token' } }).catch((error: unknown) => error)
+  expect(failure).toBeInstanceOf(OversizedSealedError)
+  expect(failure).toBeInstanceOf(FetchApplicationError)
+  expect(isLegacySealedError(failure)).toBe(false)
+  expect(big.pulled()).toBeLessThan(40)
 })

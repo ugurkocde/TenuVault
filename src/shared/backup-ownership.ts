@@ -28,6 +28,8 @@ export interface BackupOwnership {
 }
 
 export const DAMAGED_OWNER_MARKER = "This backup's ownership record is damaged, so TenuVault cannot tell which tenant it belongs to."
+/** Why an ownership file over the backup size limit is unreadable; it is never read whole. */
+export const oversizedOwnershipFile = (file: string) => `${file} is larger than the 32 MiB TenuVault reads, so the backup's tenant cannot be checked.`
 export const INVALID_MANIFEST_TENANT = "This backup's metadata records a tenant that is not valid, so TenuVault cannot tell which tenant it belongs to."
 
 const isRecord = (value: unknown): value is Record<string, any> => !!value && typeof value === "object" && !Array.isArray(value)

@@ -15,6 +15,7 @@ import type { DriftScanProgress } from '../src/shared/intune/drift'
 import { listBlobPages } from '../src/portal/lib/storage/list'
 import { LegacySealedError } from '../src/main/api/network-error'
 import { LEGACY_SEALED_MESSAGE } from '../src/shared/legacy-sealed'
+import { endlessBody } from './helpers'
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -100,7 +101,7 @@ describe('Backup pair selection', () => {
 
 /** A storage account with backups, served the way the blob endpoints answer the route. */
 interface FakeBackup { metadata: Record<string, unknown> | null; files: Record<string, unknown> }
-function fakeStorage(backups: Record<string, FakeBackup>, options: { unreadable?: string[]; sealed?: string[]; otherTenant?: string[]; beforeRead?: (path: string) => Promise<void> | void } = {}) {
+function fakeStorage(backups: Record<string, FakeBackup>, options: { unreadable?: string[]; sealed?: string[]; otherTenant?: string[]; oversized?: Array<{ path: string; body: ReturnType<typeof endlessBody> }>; beforeRead?: (path: string) => Promise<void> | void } = {}) {
   const reads: string[] = []
   const stub = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input))
@@ -127,6 +128,8 @@ function fakeStorage(backups: Record<string, FakeBackup>, options: { unreadable?
     const path = rest.join('/')
     // A manifest an earlier version encrypted with a key this device lacks fails as the legacy reader does.
     if (path === 'metadata.json' && options.sealed?.includes(backup!)) throw new LegacySealedError()
+    const oversized = options.oversized?.find((entry) => entry.path === `${backup}/${path}`)
+    if (oversized) return new Response(oversized.body.body)
     if (path === 'metadata.json' && options.otherTenant?.includes(backup!)) throw new LegacySealedError(undefined, true)
     if (path === 'metadata.json') return backups[backup!]?.metadata ? Response.json(backups[backup!]!.metadata) : new Response('', { status: 404 })
     reads.push(`${backup}/${path}`)
@@ -251,6 +254,21 @@ describe('Drift scan', () => {
     expect(picked.status).toBe(200)
     const result = await picked.json()
     expect([result.baseline.id, result.comparison.id]).toEqual([OLD, NEW])
+  })
+
+  it('skips a backup whose marker is oversized when it picks the pair, and refuses it when chosen, reading it only to the cap', async () => {
+    const BIG = 'backup-2026-09-24-120000'
+    const bodies = [endlessBody(40, new TextEncoder().encode('{"TenantId":"')), endlessBody(40, new TextEncoder().encode('{"TenantId":"'))]
+    const backups = { ...twoBackups(true), [BIG]: { metadata: { Status: 'Success' }, files: {} } }
+    fakeStorage(backups, { oversized: [{ path: `${BIG}/.tenuvault-owner.json`, body: bodies[0]! }] })
+    const picked = await drift(request())
+    expect(picked.status).toBe(200)
+    expect((await picked.json()).comparison.id).toBe(NEW)
+    fakeStorage(backups, { oversized: [{ path: `${BIG}/.tenuvault-owner.json`, body: bodies[1]! }] })
+    const chosen = await drift(request({ baseline: NEW, comparison: BIG }))
+    expect(chosen.status).toBe(409)
+    expect(await chosen.json()).toMatchObject({ code: 'BACKUP_UNREADABLE', error: expect.stringContaining('32 MiB') })
+    for (const body of bodies) expect(body.pulled()).toBeLessThan(40)
   })
 
   it('reports an unreadable file as a warning instead of failing the scan', async () => {

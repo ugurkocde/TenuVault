@@ -1,4 +1,4 @@
-import { LEGACY_OTHER_TENANT_CODE, LEGACY_OTHER_TENANT_MESSAGE, LEGACY_SEALED_CODE, LEGACY_SEALED_MESSAGE } from "../../shared/legacy-sealed"
+import { LEGACY_OTHER_TENANT_CODE, LEGACY_OTHER_TENANT_MESSAGE, LEGACY_SEALED_CODE, LEGACY_SEALED_MESSAGE, OVERSIZED_SEALED_CODE, OVERSIZED_SEALED_MESSAGE } from "../../shared/legacy-sealed"
 
 /** An application failure that retries cannot repair, separate from request transport failures. */
 export class FetchApplicationError extends Error {
@@ -27,6 +27,14 @@ export class LegacySealedError extends FetchApplicationError {
   constructor(cause?: unknown, otherTenant = false) {
     super(new Error(otherTenant ? LEGACY_OTHER_TENANT_MESSAGE : LEGACY_SEALED_MESSAGE, { cause }))
     this.code = otherTenant ? LEGACY_OTHER_TENANT_CODE : LEGACY_SEALED_CODE
+  }
+}
+
+/** A legacy sealed blob over the backup size limit: refused at the cap, never buffered whole. */
+export class OversizedSealedError extends FetchApplicationError {
+  readonly code = OVERSIZED_SEALED_CODE
+  constructor() {
+    super(new Error(OVERSIZED_SEALED_MESSAGE))
   }
 }
 

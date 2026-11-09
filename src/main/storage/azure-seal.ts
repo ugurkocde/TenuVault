@@ -1,5 +1,6 @@
 import { createDecipheriv, createHash, hkdfSync } from 'node:crypto'
-import { FetchApplicationError, FetchPreconditionError, LegacySealedError } from '../api/network-error'
+import { FetchApplicationError, FetchPreconditionError, LegacySealedError, OversizedSealedError } from '../api/network-error'
+import { MAX_BACKUP_ARCHIVE_BYTES } from '../../shared/constants'
 
 /**
  * Reads backups in Azure storage. New Azure backups are plain JSON: Azure encrypts them at rest and
@@ -46,10 +47,64 @@ function isBackupBlobRead(url: URL, method: string): boolean {
     && url.pathname.startsWith('/intune-backups/')
 }
 
+/** Reads at least `size` bytes from the start of a stream, or all of it when it is shorter. */
+async function peek(stream: ReadableStreamDefaultReader<Uint8Array>, size: number): Promise<{ bytes: Uint8Array; done: boolean }> {
+  const chunks: Uint8Array[] = []
+  let total = 0
+  while (total < size) {
+    const { done, value } = await stream.read()
+    if (done) return { bytes: concat(chunks, total), done: true }
+    if (value?.byteLength) { chunks.push(value); total += value.byteLength }
+  }
+  return { bytes: concat(chunks, total), done: false }
+}
+
+function concat(chunks: Uint8Array[], total: number): Uint8Array {
+  const merged = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) { merged.set(chunk, offset); offset += chunk.byteLength }
+  return merged
+}
+
+/** The original body: the peeked bytes, then the rest of the stream as the caller reads it. */
+function replay(prefix: Uint8Array, done: boolean, stream: ReadableStreamDefaultReader<Uint8Array>): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      if (prefix.byteLength) controller.enqueue(prefix)
+      if (done) controller.close()
+    },
+    async pull(controller) {
+      const { done: ended, value } = await stream.read()
+      if (ended) controller.close()
+      else if (value) controller.enqueue(value)
+    },
+    cancel(reason) { return stream.cancel(reason) },
+  })
+}
+
+/** A legacy sealed envelope, read whole up to the backup size limit and refused beyond it. */
+async function readSealed(prefix: Uint8Array, done: boolean, stream: ReadableStreamDefaultReader<Uint8Array>): Promise<Buffer> {
+  const chunks = [prefix]
+  let total = prefix.byteLength
+  for (let ended = done; !ended;) {
+    const { done: last, value } = await stream.read()
+    ended = last
+    if (!value?.byteLength) continue
+    total += value.byteLength
+    if (total > MAX_BACKUP_ARCHIVE_BYTES) {
+      try { await stream.cancel() } catch { /* The refusal is the result. */ }
+      throw new OversizedSealedError()
+    }
+    chunks.push(value)
+  }
+  return Buffer.from(concat(chunks, total))
+}
+
 /**
  * Main-process boundary for Azure backup storage. Writes and every other request pass through
- * unchanged. A blob read is returned as stored, unless it is a legacy sealed blob: that one is
- * opened with the device keyring, or fails with a LegacySealedError that names the missing key.
+ * unchanged. A blob read streams through as stored, unless it is a legacy sealed blob: that one is
+ * read up to the backup size limit and opened with the device keyring, or fails with a
+ * LegacySealedError that names the missing key (an OversizedSealedError beyond the limit).
  */
 export function legacyAzureReader(fetchImpl: typeof fetch, keys: () => Buffer[]): typeof fetch {
   return async (input, init) => {
@@ -59,11 +114,15 @@ export function legacyAzureReader(fetchImpl: typeof fetch, keys: () => Buffer[])
     const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase()
     if (!isBackupBlobRead(url, method)) return fetchImpl(input, init)
     const response = await fetchImpl(input, init)
-    if (!response.ok) return response
-    // Body reads can fail in transit. Only failures after the complete read are application errors.
-    const raw = Buffer.from(await response.arrayBuffer())
+    if (!response.ok || !response.body) return response
+    // Only the first bytes are read to tell the formats apart, so a plain blob streams through to the
+    // caller's own size cap instead of being buffered here. Body reads can fail in transit; only
+    // failures after a complete read are application errors.
+    const stream = response.body.getReader()
+    const prefix = await peek(stream, MAGIC.length)
     const headers = new Headers(response.headers); headers.delete('content-length'); headers.delete('content-encoding')
-    if (!isLegacySealed(raw)) return new Response(new Uint8Array(raw), { status: response.status, statusText: response.statusText, headers })
+    if (!isLegacySealed(Buffer.from(prefix.bytes))) return new Response(replay(prefix.bytes, prefix.done, stream), { status: response.status, statusText: response.statusText, headers })
+    const raw = await readSealed(prefix.bytes, prefix.done, stream)
     const bearer = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).get('authorization')?.replace(/^Bearer /i, '') ?? ''
     const context = tokens.get(digest(bearer))
     if (!context || context.expires < Date.now()) throw new FetchPreconditionError(new Error('Backup tenant context is unavailable. Sign in again.'))

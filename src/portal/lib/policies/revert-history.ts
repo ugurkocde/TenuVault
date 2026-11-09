@@ -1,5 +1,7 @@
 import { isGuid } from "../../../shared/security"
-import { resolveBackupOwnership } from "../../../shared/backup-ownership"
+import { oversizedOwnershipFile, resolveBackupOwnership } from "../../../shared/backup-ownership"
+import { readJsonCapped } from "../../../shared/capped-body"
+import { MAX_BACKUP_ARCHIVE_BYTES } from "../../../shared/constants"
 
 /**
  * The revert history that older versions kept for the whole container, keyed by policy ID only.
@@ -69,8 +71,9 @@ async function backupOwnedBy(read: BlobRead, backup: string, tenantId: string): 
     }
     if (response.status === 404) return { kind: "missing" }
     if (!response.ok) throw new Error(`Failed to read ${backup}/${file} (${response.status})`)
-    try { return { kind: "found", value: await response.json() } }
-    catch (error) { return { kind: "unreadable", error } }
+    const body = await readJsonCapped(response, MAX_BACKUP_ARCHIVE_BYTES)
+    if (body.kind === "oversized") return { kind: "unreadable", error: new Error(oversizedOwnershipFile(file)) }
+    return body.kind === "json" ? { kind: "found", value: body.value } : { kind: "unreadable", error: new Error(`${file} is not valid JSON`) }
   }, tenantId)
   return owner.kind === "owned"
 }

@@ -3,13 +3,14 @@ import { typeForFolder } from "../../../../shared/intune/registry"
 import { describeScope } from "../../../../shared/intune/scope"
 import { comparable, compareBackups, summarize, type BackupFingerprint, type ChangeSummary } from "../../../../shared/intune/backup-changes"
 import { blobPath } from "../../../../shared/security"
-import { BACKUP_OWNER_FILE, LOCAL_STORAGE_PREFIX } from "../../../../shared/constants"
+import { BACKUP_OWNER_FILE, LOCAL_STORAGE_PREFIX, MAX_BACKUP_ARCHIVE_BYTES } from "../../../../shared/constants"
 import { mapLimit } from "../../../../shared/map-limit"
 import { MetadataCache } from "~/lib/storage/metadata-cache"
 import { manifestStatus } from "../../../../shared/intune/backup-status"
 import { backupFoldersIn, parseBackupName } from "../../../../shared/intune/backup-names"
 import { isLegacyOtherTenantError, isLegacySealedError } from "../../../../shared/legacy-sealed"
-import { resolveBackupOwnership, type OwnershipFile } from "../../../../shared/backup-ownership"
+import { oversizedOwnershipFile, resolveBackupOwnership, type OwnershipFile } from "../../../../shared/backup-ownership"
+import { readJsonCapped } from "../../../../shared/capped-body"
 import { type NextRequest, NextResponse } from "next/server"
 
 // Helper function to format bytes to human readable format
@@ -50,7 +51,10 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
     try {
       const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(name)}/metadata.json`, { headers: storageHeaders(accessToken) })
       if (response.ok) {
-        const metadata = await response.json()
+        const body = await readJsonCapped(response, MAX_BACKUP_ARCHIVE_BYTES)
+        if (body.kind === 'oversized') return { metadata: null, metadataError: oversizedOwnershipFile('metadata.json') }
+        if (body.kind === 'invalid') throw new Error('Invalid metadata')
+        const metadata = body.value as any
         if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) throw new Error('Invalid metadata')
         return { metadata }
       }
@@ -96,7 +100,10 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
       const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(name)}/${BACKUP_OWNER_FILE}`, { headers: storageHeaders(accessToken) })
       if (response.status === 404) return { kind: 'missing' }
       if (!response.ok) return { kind: 'unreadable', error: new Error(`The ownership record is unavailable (${response.status}).`) }
-      return { kind: 'found', value: await response.json() }
+      const body = await readJsonCapped(response, MAX_BACKUP_ARCHIVE_BYTES)
+      if (body.kind === 'oversized') return { kind: 'unreadable', error: new Error(oversizedOwnershipFile(BACKUP_OWNER_FILE)) }
+      if (body.kind === 'invalid') return { kind: 'unreadable', error: new Error('The ownership record is not valid JSON.') }
+      return { kind: 'found', value: body.value }
     } catch (error) {
       return { kind: 'unreadable', error }
     }

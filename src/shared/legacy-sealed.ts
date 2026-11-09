@@ -22,3 +22,11 @@ export function isLegacySealedError(error: unknown): boolean {
 export function isLegacyOtherTenantError(error: unknown): boolean {
   return error instanceof Error && (error as { code?: unknown }).code === LEGACY_OTHER_TENANT_CODE
 }
+
+/** A legacy sealed blob larger than the backup size limit, which the reader refuses instead of buffering. */
+export const OVERSIZED_SEALED_MESSAGE = "This backup file is larger than the 32 MiB TenuVault reads, so it was not opened."
+export const OVERSIZED_SEALED_CODE = "OversizedSealedBackup"
+
+export function isOversizedSealedError(error: unknown): boolean {
+  return error instanceof Error && (error as { code?: unknown }).code === OVERSIZED_SEALED_CODE
+}

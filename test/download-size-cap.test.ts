@@ -1,6 +1,11 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { NextRequest } from '../src/main/api/next-server-shim'
 import { POST as download } from '../src/portal/app/api/download-backup/route'
+import { createBridgedFetch } from '../src/main/api/fetch-bridge'
+import { withNetworkErrors } from '../src/main/api/network-error'
+import { legacyAzureReader } from '../src/main/storage/azure-seal'
+import { DELEGATED_CLIENT_SECRET } from '../src/shared/constants'
+import { endlessBody } from './helpers'
 
 const args = { tenantId: 'tenant', appId: 'app', clientSecret: 'test', storageAccountName: 'store', backupId: 'backup-2026-09-25-120000' }
 const request = () => new NextRequest('http://tenuvault.internal/api/download-backup', { method: 'POST', body: JSON.stringify(args) })
@@ -106,4 +111,27 @@ it('refuses oversized metadata during the ownership check without reading it who
   expect((await response.json()).error).toContain('32 MiB')
   expect(pulled).toBeLessThan(40)
   expect(policyReads).toEqual([])
+})
+
+it('stops an oversized metadata stream at the cap through the production fetch bridge and legacy reader', async () => {
+  const big = endlessBody(40, new TextEncoder().encode('{"TenantId":"'))
+  const policyReads: string[] = []
+  const network = vi.fn(async (input: RequestInfo | URL) => {
+    const url = new URL(String(input))
+    if (url.searchParams.get('comp') === 'list') return new Response(`<Blobs>${blob(`${args.backupId}/metadata.json`)}${blob(`${args.backupId}/DeviceConfigurations/A.json`, 10)}</Blobs>`)
+    if (url.pathname.endsWith('/metadata.json')) return new Response(big.body)
+    // The ownership check also asks for the marker; this backup has none.
+    if (url.pathname.endsWith('/.tenuvault-owner.json')) return new Response('', { status: 404 })
+    policyReads.push(url.pathname)
+    return Response.json({ policy: 'x' })
+  })
+  const bridge = createBridgedFetch({
+    dispatch: async () => new Response(),
+    getDelegatedToken: async () => ({ accessToken: 'storage-token', expiresOn: null }),
+    fetch: legacyAzureReader(withNetworkErrors(network), () => [Buffer.alloc(32, 4)]),
+  })
+  vi.stubGlobal('fetch', bridge)
+  const response = await download(new NextRequest('http://tenuvault.internal/api/download-backup', { method: 'POST', body: JSON.stringify({ ...args, tenantId: '11111111-1111-1111-1111-111111111111', storageAccountName: 'contoso', clientSecret: DELEGATED_CLIENT_SECRET }) }))
+  expect({ status: response.status, policyReads }).toEqual({ status: 413, policyReads: [] })
+  expect(big.pulled()).toBeLessThan(40)
 })

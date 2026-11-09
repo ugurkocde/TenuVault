@@ -1,5 +1,7 @@
 import { assertStorageAccountName } from "../../shared/storage-account"
-import { BACKUP_CONTAINER } from "../../shared/constants"
+import { BACKUP_CONTAINER, MAX_BACKUP_ARCHIVE_BYTES } from "../../shared/constants"
+import { readJsonCapped } from "../../shared/capped-body"
+import { oversizedOwnershipFile } from "../../shared/backup-ownership"
 import { retryDelay, retryableStatus, sleep } from "../graph-retry"
 import { FetchApplicationError } from "../api/network-error"
 import type { NetworkCircuit } from "./engine"
@@ -97,13 +99,11 @@ export class BlobWriter {
     return this.request(`${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`, { method: "GET" }, async (response) => {
       if (response.status === 404) return null
       if (!response.ok) throw await storageFailure(response, this.account)
-      let value: unknown
-      try {
-        value = await response.json()
-      } catch (error) {
-        if (error instanceof SyntaxError) throw new FetchApplicationError(new Error(`${name.split("/").pop()} is not valid JSON`))
-        throw error
-      }
+      // Capped like every other backup read; an oversized file is unreadable, never buffered whole.
+      const body = await readJsonCapped(response, MAX_BACKUP_ARCHIVE_BYTES)
+      if (body.kind === "oversized") throw new FetchApplicationError(new Error(oversizedOwnershipFile(name.split("/").pop() ?? name)))
+      if (body.kind === "invalid") throw new FetchApplicationError(new Error(`${name.split("/").pop()} is not valid JSON`))
+      const value = body.value
       if (!value || typeof value !== "object" || Array.isArray(value)) throw new FetchApplicationError(new Error(`${name.split("/").pop()} is not a JSON object`))
       return value as Record<string, unknown>
     })

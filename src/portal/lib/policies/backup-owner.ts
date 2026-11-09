@@ -1,7 +1,7 @@
 import { localStorageAccountName, MAX_BACKUP_ARCHIVE_BYTES } from "../../../shared/constants"
-import { readBytesCapped } from "../../../shared/capped-body"
+import { readJsonCapped } from "../../../shared/capped-body"
 import { DAMAGED_OWNER_MARKER, INVALID_MANIFEST_TENANT, resolveBackupOwnership, type OwnershipFile } from "../../../shared/backup-ownership"
-import { isLegacyOtherTenantError } from "../../../shared/legacy-sealed"
+import { isLegacyOtherTenantError, isOversizedSealedError } from "../../../shared/legacy-sealed"
 
 export const OTHER_TENANT_BACKUP = "This backup belongs to another tenant."
 export const OVERSIZED_OWNERSHIP_FILE = "This backup's metadata is larger than the 32 MiB TenuVault reads, so its tenant cannot be checked."
@@ -31,6 +31,7 @@ const sealedError = (error: unknown) => isLegacyOtherTenantError(error) ? OTHER_
 
 /** Why a backup whose metadata or marker could not be read is refused. */
 function refusal(error: unknown, fallback: string): { ok: false; status: number; error: string } {
+  if (isOversizedSealedError(error)) return { ok: false, status: 413, error: OVERSIZED_OWNERSHIP_FILE }
   if (sealedElsewhere(error)) return { ok: false, status: 403, error: sealedError(error) }
   if (error instanceof RefusedRead) return { ok: false, status: error.status, error: error.message }
   if (error instanceof Error && (error.message === DAMAGED_OWNER_MARKER || error.message === INVALID_MANIFEST_TENANT)) return { ok: false, status: 403, error: error.message }
@@ -58,10 +59,10 @@ export async function readOwnedBackup(read: (name: string) => Promise<Response>,
     const manifest = file === "metadata.json"
     if (!response.ok) return { kind: "unreadable", error: new RefusedRead(500, manifest ? "Failed to read backup metadata" : "The backup's ownership record could not be read.") }
     // Capped like every other backup read: an oversized or replaced body is never buffered whole.
-    const bytes = await readBytesCapped(response, MAX_BACKUP_ARCHIVE_BYTES)
-    if (bytes === null) return { kind: "unreadable", error: new RefusedRead(413, OVERSIZED_OWNERSHIP_FILE) }
-    try { return { kind: "found", value: JSON.parse(new TextDecoder().decode(bytes)) } }
-    catch { return { kind: "unreadable", error: manifest ? new RefusedRead(500, "The backup metadata could not be read.") : new Error(DAMAGED_OWNER_MARKER) } }
+    const body = await readJsonCapped(response, MAX_BACKUP_ARCHIVE_BYTES)
+    if (body.kind === "oversized") return { kind: "unreadable", error: new RefusedRead(413, OVERSIZED_OWNERSHIP_FILE) }
+    if (body.kind === "invalid") return { kind: "unreadable", error: manifest ? new RefusedRead(500, "The backup metadata could not be read.") : new Error(DAMAGED_OWNER_MARKER) }
+    return { kind: "found", value: body.value }
   }
   const { manifest, owner } = await resolveBackupOwnership(readFile, tenantId)
   if (manifest.kind === "unreadable") return refusal(manifest.error, "The backup metadata could not be read.")

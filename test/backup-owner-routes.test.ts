@@ -8,6 +8,7 @@ import { POST as downloadBackup } from "../src/portal/app/api/download-backup/ro
 import { POST as backupChanges } from "../src/portal/app/api/backup-changes/route"
 import { UNTAGGED_BACKUP } from "../src/portal/lib/policies/backup-owner"
 import { INVALID_MANIFEST_TENANT } from "../src/shared/backup-ownership"
+import { endlessBody } from "./helpers"
 
 const OWN = "11111111-1111-1111-1111-111111111111"
 const OTHER = "22222222-2222-2222-2222-222222222222"
@@ -112,6 +113,17 @@ describe("backups without metadata and unreadable metadata", () => {
 })
 
 describe("positive ownership for changes to live policies", () => {
+  it("refuses a restore whose ownership marker is oversized with 413, before any Graph call, reading it only to the cap", async () => {
+    const graph = stubStorage({ [policyPath]: snapshot })
+    const served = globalThis.fetch as unknown as (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+    const big = endlessBody(40, new TextEncoder().encode('{"TenantId":"'))
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => String(input).endsWith("/.tenuvault-owner.json") ? new Response(big.body) : served(input, init)))
+    const response = await restoreBackup(request("/api/restore-backup", { ...base, restoreType: "selective", selectedPolicies: [{ path: policyPath }] }))
+    expect(response.status).toBe(413)
+    expect(graph).toEqual([])
+    expect(big.pulled()).toBeLessThan(40)
+  })
+
   it("previews a backup that records no tenant as copy only, with the reason", async () => {
     stubStorage({ [policyPath]: snapshot })
     const { items } = await (await restorePreview(request("/api/restore-preview", { ...base, paths: [policyPath] }))).json()

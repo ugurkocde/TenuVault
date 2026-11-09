@@ -5,6 +5,7 @@ import { BackupEngine } from "../src/main/backup/engine"
 import { legacyAzureReader, registerStorageToken } from "../src/main/storage/azure-seal"
 import { LEGACY_SEALED_MESSAGE } from "../src/shared/legacy-sealed"
 import { sealLegacyAzure } from "./legacy-seal"
+import { endlessBody } from "./helpers"
 import { POST as downloadBackup } from "../src/portal/app/api/download-backup/route"
 import { reviewArchive } from "../src/main/backup/archive"
 import { BACKUP_OWNER_FILE } from "../src/shared/constants"
@@ -260,6 +261,21 @@ describe("backup folder ownership", () => {
     await complete(engine)
     expect([...saved.keys()].some((name) => name.startsWith(legacy))).toBe(false)
     expect(saved.has(`${abandoned}${BACKUP_OWNER_FILE}`)).toBe(true)
+  })
+
+  it("keeps an untagged backup whose marker is oversized, reads it only to the cap, and continues", async () => {
+    const big = endlessBody(40, new TextEncoder().encode('{"TenantId":"'))
+    const oversized = "backup-2026-08-01-020000/", ours = "backup-2026-08-02-020000/"
+    const { engine, saved, seed, folder } = setup({ override: (url, sent) => sent.method === "GET" && url.pathname.endsWith(`${oversized}${BACKUP_OWNER_FILE}`) ? new Response(big.body) : undefined })
+    seed(`${oversized}metadata.json`, { Status: "Success", Scope: { Excluded: request.scope.excluded } })
+    folder(oversized)
+    seed(`${ours}metadata.json`, { TenantId: TENANT, Status: "Success", Scope: { Excluded: request.scope.excluded } })
+    folder(ours)
+    const job = await complete(engine)
+    expect(saved.has(`${oversized}metadata.json`)).toBe(true)
+    expect([...saved.keys()].some((name) => name.startsWith(ours))).toBe(false)
+    expect(job.log.join("\n")).toContain("is larger than the 32 MiB TenuVault reads")
+    expect(big.pulled()).toBeLessThan(40)
   })
 
   it("keeps ownership when a protected policy interrupts normal retention", async () => {

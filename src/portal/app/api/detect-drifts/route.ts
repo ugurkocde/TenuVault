@@ -6,7 +6,9 @@ import { withoutUnreadAssignments } from "../../../../shared/intune/read"
 import { coveredFolders, type ScopeMetadata } from "../../../../shared/intune/scope"
 import { itemsOf, sameItem, type BackupFingerprint, type BackupItems } from "../../../../shared/intune/backup-changes"
 import { isLegacyOtherTenantError, isLegacySealedError } from "../../../../shared/legacy-sealed"
-import { resolveBackupOwnership, type OwnershipFile } from "../../../../shared/backup-ownership"
+import { oversizedOwnershipFile, resolveBackupOwnership, type OwnershipFile } from "../../../../shared/backup-ownership"
+import { readJsonCapped } from "../../../../shared/capped-body"
+import { MAX_BACKUP_ARCHIVE_BYTES } from "../../../../shared/constants"
 import { backupRef, DriftPairError, selectBackupPair, summarizeDrifts, type BackupMetadata, type Drift, type DriftChange, type DriftResult, type DriftScanProgress, type DriftWarning, type SelectedBackup } from "../../../../shared/intune/drift"
 import { CANCELLED_HEADER, driftScanHooks, type DriftScanHooks } from "~/lib/drift/scan-hooks"
 import { mapLimit } from "../../../../shared/map-limit"
@@ -113,8 +115,9 @@ export async function POST(request: NextRequest) {
       // A backup on this device that damaged files made unavailable is skipped like one without a manifest.
       if (file === 'metadata.json' && response.status === 409 && ['BackupUnavailable', 'InventoryIncomplete'].includes(response.headers.get('x-ms-error-code') ?? '')) return { kind: 'missing' }
       if (!response.ok) throw new Error(`Cannot verify that the backups are complete (${response.status}). Check storage access and retry.`)
-      try { return { kind: 'found', value: await response.json() } }
-      catch (error) { return { kind: 'unreadable', error } }
+      const body = await readJsonCapped(response, MAX_BACKUP_ARCHIVE_BYTES)
+      if (body.kind === 'oversized') return { kind: 'unreadable', error: new Error(oversizedOwnershipFile(file)) }
+      return body.kind === 'json' ? { kind: 'found', value: body.value } : { kind: 'unreadable', error: new Error(`${file} is not valid JSON`) }
     }
     const unreadableBackup = (name: string, error: unknown) => new DriftPairError(
       isLegacySealedError(error) ? (error as Error).message : `Backup ${name} cannot be read: ${error instanceof Error ? error.message : String(error)}`,
