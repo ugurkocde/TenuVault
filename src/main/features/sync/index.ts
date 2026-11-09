@@ -8,7 +8,7 @@ import { policies } from "../promotion"
 import { approvePromotion, previewPromotion, promotionChangeSet, promotionRollback, PROMOTION_FOLDER, syncPromotion, type PromotionRecord } from "../promotion/engine"
 import { parseMappings, type Mapping } from "../promotion/mapping"
 import { mappableObjects } from "../promotion/targets"
-import { applySync, planSync, type SyncRunRecord } from "./engine"
+import { applySync, planSync, syncCheck, type SyncRunRecord } from "./engine"
 import { syncStatus } from "./status"
 import { requireSyncTenants, targetIds } from "./tenants"
 
@@ -120,16 +120,17 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
     preview: async ({ tenantId, body }) => {
       const target = syncTarget(deps, tenantId, body)
       await requireSyncTenants(deps, target.sourceTenantId, [tenantId])
-      return previewPromotion(deps, tenantId, target.id)
+      return previewPromotion(deps, tenantId, target.id, syncCheck(deps, tenantId, target.id))
     },
     approve: async ({ tenantId, body, actor }) => {
       const target = syncTarget(deps, tenantId, body)
       await requireSyncTenants(deps, target.sourceTenantId, [tenantId])
-      const changeSet = await approvePromotion(deps, tenantId, target.id, { contentHash: hashField(body, "contentHash"), targetFingerprint: hashField(body, "targetFingerprint"), reviewer: null, note: null }, actor)
+      const changeSet = await approvePromotion(deps, tenantId, target.id, { contentHash: hashField(body, "contentHash"), targetFingerprint: hashField(body, "targetFingerprint"), reviewer: null, note: null, check: syncCheck(deps, tenantId, target.id) }, actor)
       return { promotion: syncPromotion(deps, tenantId, target.id), changeSet }
     },
     reject: async ({ tenantId, body, actor }) => {
       const target = syncTarget(deps, tenantId, body)
+      await requireSyncTenants(deps, target.sourceTenantId, [tenantId])
       await rejectChangeSet(deps, tenantId, promotionChangeSet(deps, tenantId, target.id).id, { reviewer: null, note: null }, actor)
       return { promotion: syncPromotion(deps, tenantId, target.id) }
     },
@@ -145,8 +146,8 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
       await requireSyncTenants(deps, target.sourceTenantId, [tenantId])
       return applySync(deps, tenantId, target.id, { contentHash: hashField(body, "contentHash"), confirmed: body.confirm === true, backup }, actor)
     },
-    // The rollback writes only to this target, so the source is not re-checked: a lapsed
-    // source never blocks undoing a Sync in a target, as for Dev to Prod.
+    // The rollback steps write only to this target, so the source is not re-checked: an undo
+    // must keep working after the source license lapses, as for Dev to Prod.
     "rollback-preview": ({ tenantId, body }) => previewRollback(deps, tenantId, promotionChangeSet(deps, tenantId, syncTarget(deps, tenantId, body).id).id),
     "rollback-create": async ({ tenantId, body, actor }) => {
       const target = syncTarget(deps, tenantId, body)

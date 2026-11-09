@@ -6,7 +6,7 @@ import type { FeatureDeps } from "../deps"
 import { DOMAINS } from "../domains"
 import type { Stored } from "../records"
 import { FeatureError } from "../route"
-import { applyChangeSet, approveChangeSet, createChangeSet, getChangeSet, previewChangeSet, type ChangeSetPreview, type OperationInput } from "../change-sets/engine"
+import { applyChangeSet, approveChangeSet, createChangeSet, getChangeSet, previewChangeSet, type ApplyInput, type ChangeSetPreview, type OperationInput } from "../change-sets/engine"
 import { createListingMemo, readCurrent } from "../change-sets/graph"
 import { hashOf, sanitizeSnapshot, type ChangeSetRecord } from "../change-sets/model"
 import type { DependencyFinding, Mapping, ReferenceResolution, TargetReads } from "./mapping"
@@ -61,8 +61,18 @@ export interface PromotionRecord extends ListedRecord {
   changeSetId: string | null
   rollbackChangeSetId: string | null
   /** Set when a Sync run planned this record; the promotion route never lists or acts on it. */
-  sync?: { runId: string }
+  sync?: SyncPlanState
 }
+
+/** The Sync run of a target and the link state its plan was built from (see features/sync/links.ts). */
+export interface SyncPlanState {
+  runId: string
+  /** Per `${folder}:${sourceId}`: the linked target policy the plan relied on, or null for none. */
+  links?: Record<string, string | null>
+}
+
+/** Reasons the calling workflow's own planning inputs changed; empty when unchanged. */
+export type PlanCheck = () => string[] | Promise<string[]>
 
 export interface PlanInput {
   sourceTenantId: string
@@ -76,7 +86,7 @@ export interface PlanInput {
   mappings: Mapping[]
   /** The workflow its change set belongs to; Sync passes "sync" and its run. */
   workflow?: "promotion" | "sync"
-  sync?: { runId: string }
+  sync?: SyncPlanState
 }
 
 export const PROMOTION_NOT_FOUND = "This promotion does not exist for this destination tenant."
@@ -165,7 +175,7 @@ export async function planPromotion(deps: FeatureDeps, destinationTenantId: stri
     items,
     changeSetId: null,
     rollbackChangeSetId: null,
-    ...(input.sync ? { sync: { runId: input.sync.runId } } : {}),
+    ...(input.sync ? { sync: input.sync } : {}),
   }, { actor, reason: input.workflow === "sync" ? "Planned a Sync target" : "Planned a promotion" })
   if (blockedCount) return promotion
   let changeSet: Stored<ChangeSetRecord>
@@ -196,20 +206,20 @@ export interface PromotionPreview {
   sourceChanges: string[]
 }
 
-/** Reasons the destination objects a promotion's plan relied on changed; empty when unchanged. */
-function staleDependencies(deps: FeatureDeps, tenantId: string, promotion: PromotionRecord): Promise<string[]> {
-  return staleTargets(deps, tenantId, promotion.items.filter((item) => !item.blocked))
+/** Reasons the destination objects a promotion's plan relied on, or the caller's check, changed; empty when unchanged. */
+async function staleDependencies(deps: FeatureDeps, tenantId: string, promotion: PromotionRecord, check?: PlanCheck): Promise<string[]> {
+  return [...(await staleTargets(deps, tenantId, promotion.items.filter((item) => !item.blocked))), ...(check ? await check() : [])]
 }
 
 /**
  * The change-set preview plus a note on source edits made after planning. Changed destination
  * dependencies are listed as blockers, so the plan cannot be approved against them. Never writes.
  */
-export async function previewPromotion(deps: FeatureDeps, tenantId: string, id: string): Promise<PromotionPreview> {
+export async function previewPromotion(deps: FeatureDeps, tenantId: string, id: string, check?: PlanCheck): Promise<PromotionPreview> {
   const promotion = syncPromotion(deps, tenantId, id)
   if (!promotion.changeSetId) throw new FeatureError("This promotion is blocked. Resolve its findings and plan again.", 409)
   const preview = await previewChangeSet(deps, tenantId, promotion.changeSetId)
-  const changeSet = { ...preview, blockers: [...(await staleDependencies(deps, tenantId, promotion)), ...preview.blockers] }
+  const changeSet = { ...preview, blockers: [...(await staleDependencies(deps, tenantId, promotion, check)), ...preview.blockers] }
   const sourceChanges: string[] = []
   try {
     const graph = await deps.graph(promotion.sourceTenantId)
@@ -226,12 +236,13 @@ export async function previewPromotion(deps: FeatureDeps, tenantId: string, id: 
 }
 
 /** Approves the promotion's change set after re-checking the destination dependencies it relies on. */
-export async function approvePromotion(deps: FeatureDeps, tenantId: string, id: string, input: { contentHash: string; targetFingerprint: string; reviewer?: string | null; note?: string | null }, actor: string | null): Promise<Stored<ChangeSetRecord>> {
+export async function approvePromotion(deps: FeatureDeps, tenantId: string, id: string, input: { contentHash: string; targetFingerprint: string; reviewer?: string | null; note?: string | null; check?: PlanCheck }, actor: string | null): Promise<Stored<ChangeSetRecord>> {
   const promotion = getPromotion(deps, tenantId, id)
   if (!promotion.changeSetId) throw new FeatureError("This promotion is blocked. Resolve its findings and plan again.", 409)
-  const stale = await staleDependencies(deps, tenantId, promotion)
+  const { check, ...approval } = input
+  const stale = await staleDependencies(deps, tenantId, promotion, check)
   if (stale.length) throw new FeatureError(`This promotion cannot be approved: ${stale.join(" ")}`, 409)
-  return approveChangeSet(deps, tenantId, promotion.changeSetId, input, actor)
+  return approveChangeSet(deps, tenantId, promotion.changeSetId, approval, actor)
 }
 
 /**
@@ -239,11 +250,12 @@ export async function approvePromotion(deps: FeatureDeps, tenantId: string, id: 
  * target and of the mapped dependencies, production pre-change backup (fail closed), a second
  * dependency re-check, capture, journaled writes with read-back.
  */
-export async function applyPromotion(deps: FeatureDeps, tenantId: string, id: string, input: { contentHash: string; confirmed: boolean; backup?: "new" | "none" }, actor: string | null): Promise<{ promotion: Stored<PromotionRecord>; changeSet: Stored<ChangeSetRecord> }> {
+export async function applyPromotion(deps: FeatureDeps, tenantId: string, id: string, input: { contentHash: string; confirmed: boolean; backup?: "new" | "none"; check?: PlanCheck; onSettled?: ApplyInput["onSettled"] }, actor: string | null): Promise<{ promotion: Stored<PromotionRecord>; changeSet: Stored<ChangeSetRecord> }> {
   const promotion = getPromotion(deps, tenantId, id)
   if (!promotion.changeSetId) throw new FeatureError("This promotion is blocked. Resolve its findings and plan again.", 409)
+  const { check, ...apply } = input
   try {
-    const changeSet = await applyChangeSet(deps, tenantId, promotion.changeSetId, { ...input, dependencyCheck: () => staleDependencies(deps, tenantId, promotion) }, actor)
+    const changeSet = await applyChangeSet(deps, tenantId, promotion.changeSetId, { ...apply, dependencyCheck: () => staleDependencies(deps, tenantId, promotion, check) }, actor)
     return { promotion: syncPromotion(deps, tenantId, id), changeSet }
   } catch (error) {
     syncPromotion(deps, tenantId, id)

@@ -7,7 +7,7 @@ import { DOMAINS } from "../src/main/features/domains"
 import { FeatureError } from "../src/main/features/route"
 import { PROMOTION_NOT_FOUND, type PromotionRecord } from "../src/main/features/promotion/engine"
 import type { SyncRunRecord } from "../src/main/features/sync/engine"
-import { recordSyncLinks, syncLinks } from "../src/main/features/sync/links"
+import { recordSyncLinks, syncLinks, type SyncLink, type SyncLinksRecord } from "../src/main/features/sync/links"
 import { planGuard, requiredFeatures } from "../src/main/api/plan-gates"
 import { upgradeMessage, type Plan } from "../src/shared/plans"
 import { call, fakeDeps, TENANT_A, TENANT_B, TENANT_C } from "./feature-helpers"
@@ -79,6 +79,14 @@ async function synced(context: Context, targets: string[] = [TENANT_B], extra: R
   return ids
 }
 
+const keyOf = (policy: { id?: unknown }) => `ConfigurationPolicies:${(policy.id as string).toLowerCase()}`
+
+/** Changes one stored link in TENANT_B, as another Sync or a delayed write would have left it. */
+function relink(context: Context, key: string, change: Partial<SyncLink>) {
+  const record = context.deps.records.list<SyncLinksRecord>(DOMAINS.syncLinks, TENANT_B)[0]!
+  context.deps.records.update<SyncLinksRecord>(DOMAINS.syncLinks, TENANT_B, record.id, (current) => ({ ...current, links: { ...current.links, [key]: { ...(current.links[key] ?? { sourceName: "x", targetName: "x", sourceHash: "0".repeat(64), targetHash: null, verifiedAt: "2026-09-30T12:00:00.000Z", linkedAt: "2026-09-30T12:00:00.000Z", promotionId: "other", changeSetId: "other" }), ...change } as SyncLink } }), { actor: null, reason: "Test" })
+}
+
 const changeSets = (context: Context, tenantId: string) => context.deps.records.list<ChangeSetRecord>(DOMAINS.changeSets, tenantId)
 const status = (context: Context, targets: string[] = [TENANT_B]) => context.post({ tenantId: TENANT_A, action: "status", targetTenants: named(targets) })
 const guardRequest = (body: Record<string, unknown>) => new Request(`http://tenuvault.internal${PATH}`, { method: "POST", body: JSON.stringify(body) })
@@ -115,7 +123,7 @@ describe("/api/sync plans", () => {
     expect(run.items).toEqual([{ folder: "ConfigurationPolicies", sourceId: context.policy.id, sourceName: "OIB Defender" }])
     expect(targets).toHaveLength(1)
     const promotion = targets[0]!.promotion!
-    expect(promotion.sync).toEqual({ runId: run.id })
+    expect(promotion.sync).toEqual({ runId: run.id, links: { [`ConfigurationPolicies:${(context.policy.id as string).toLowerCase()}`]: null } })
     expect(promotion.status).toBe("in-review")
     const response = await applied(context, TENANT_B, promotion.id)
     expect(response.status).toBe(200)
@@ -282,6 +290,79 @@ describe("Sync links", () => {
     expect(syncLinks(context.deps, TENANT_B, TENANT_A)[key]).toEqual(latest)
   })
 
+  it("never creates a second policy when another Sync linked it after this plan", async () => {
+    const context = setup()
+    const first = (await planned(context)).targets[0]!.promotion!.id
+    const second = (await planned(context)).targets[0]!.promotion!.id
+    expect((await applied(context, TENANT_B, first)).body.changeSet.status).toBe("applied")
+    const preview = await context.post({ tenantId: TENANT_B, action: "preview", id: second })
+    expect(preview.body.changeSet.blockers.join(" ")).toContain("would create a second policy")
+    const approval = await context.post({ tenantId: TENANT_B, action: "approve", id: second, contentHash: preview.body.changeSet.contentHash, targetFingerprint: preview.body.changeSet.targetFingerprint })
+    expect(approval.status).toBe(409)
+    expect(context.targets[TENANT_B]!.policies.size).toBe(1)
+
+    // The check runs again under the apply serialization, before anything is written.
+    const other = context.source.addPolicy({ name: "OIB Firewall" })
+    const late = (await plan(context, [TENANT_B], { items: [{ sourceId: other.id }] })).body.targets[0].promotion.id
+    const lateHash = await approved(context, TENANT_B, late)
+    relink(context, keyOf(other), { targetPolicyId: "77777777-7777-7777-7777-777777777777" })
+    const refused = await context.post({ tenantId: TENANT_B, action: "apply", id: late, contentHash: lateHash, confirm: true })
+    expect(refused.status).toBe(409)
+    expect(refused.body.error).toContain("would create a second policy")
+    expect(changeSets(context, TENANT_B).find((changeSet) => changeSet.origin.recordId === late)!.status).toBe("stale")
+    expect(context.targets[TENANT_B]!.policies.size).toBe(1)
+    expect(context.backups).toEqual([TENANT_B])
+  })
+
+  it("never updates a policy when the link now points to a different one", async () => {
+    const context = setup()
+    await synced(context)
+    const id = (await planned(context)).targets[0]!.promotion!.id
+    const contentHash = await approved(context, TENANT_B, id)
+    const writes = context.targets[TENANT_B]!.writeCount()
+    relink(context, keyOf(context.policy), { targetPolicyId: "77777777-7777-7777-7777-777777777777", promotionId: "other" })
+    const refused = await context.post({ tenantId: TENANT_B, action: "apply", id, contentHash, confirm: true })
+    expect(refused.status).toBe(409)
+    expect(refused.body.error).toContain("to a different policy")
+    expect(context.targets[TENANT_B]!.writeCount()).toBe(writes)
+  })
+
+  it("orders links by verification time, not by when they were stored", async () => {
+    const context = setup()
+    await synced(context)
+    const older = (await planned(context)).targets[0]!.promotion!.id
+    const newer = (await planned(context)).targets[0]!.promotion!.id
+    context.deps.now = () => new Date("2026-09-30T13:00:00Z")
+    expect((await applied(context, TENANT_B, newer)).body.changeSet.status).toBe("applied")
+    // The link of that write was stored late, after the next write was verified.
+    relink(context, keyOf(context.policy), { linkedAt: "2026-09-30T15:00:00.000Z" })
+    context.deps.now = () => new Date("2026-09-30T14:00:00Z")
+    expect((await applied(context, TENANT_B, older)).body.changeSet.status).toBe("applied")
+    expect(syncLinks(context.deps, TENANT_B, TENANT_A)[keyOf(context.policy)]).toMatchObject({ promotionId: older, verifiedAt: "2026-09-30T14:00:00.000Z" })
+  })
+
+  it("takes the target hash from the verifying read-back, so a later edit shows as changed in the target", async () => {
+    const context = setup()
+    const graph = context.deps.graph
+    let edited = false
+    context.deps.graph = async (tenantId, options) => {
+      const reader = await graph(tenantId, options)
+      return async (method, path, body, callOptions) => {
+        // An admin edits the policy right after the apply finished.
+        if (tenantId === TENANT_B && method === "GET" && !edited && changeSets(context, TENANT_B)[0]?.status === "applied") {
+          edited = true
+          for (const policy of context.targets[TENANT_B]!.policies.values()) policy.description = "Edited in the target"
+        }
+        return reader(method, path, body, callOptions)
+      }
+    }
+    await synced(context)
+    const link = syncLinks(context.deps, TENANT_B, TENANT_A)[keyOf(context.policy)]!
+    expect(link.targetHash).toBe(changeSets(context, TENANT_B)[0]!.results["op-1"]!.readBackHash)
+    expect((await status(context)).body.targets[0].links[0]).toMatchObject({ state: "changed", changedIn: "target" })
+    expect(edited).toBe(true)
+  })
+
   it("A6: creates the policy again with a warning when the linked object was deleted", async () => {
     const context = setup()
     await synced(context)
@@ -358,6 +439,30 @@ describe("Sync links", () => {
     context.targets[TENANT_B]!.policies.delete(created!)
     expect((await status(context)).body.targets[0].links[0]).toMatchObject({ state: "missing-in-target", changedIn: null, identical: null })
     expect(context.targets[TENANT_B]!.writeCount() + context.source.writeCount()).toBe(1)
+  })
+})
+
+describe("Sync status", () => {
+  it("reports a target edit alone as changed in the target", async () => {
+    const context = setup()
+    await synced(context)
+    const [created] = [...context.targets[TENANT_B]!.policies.values()]
+    created!.description = "Edited in the target"
+    expect((await status(context)).body.targets[0].links[0]).toMatchObject({ state: "changed", changedIn: "target", identical: false, error: null })
+  })
+
+  it("reports a target that answers 400 ResourceNotFound as missing in the target", async () => {
+    const context = setup()
+    await synced(context)
+    const [created] = [...context.targets[TENANT_B]!.policies.keys()]
+    const graph = context.deps.graph
+    context.deps.graph = async (tenantId, options) => {
+      const reader = await graph(tenantId, options)
+      return async (method, path, body, callOptions) => tenantId === TENANT_B && method === "GET" && path.startsWith(`deviceManagement/configurationPolicies/${created}`)
+        ? { status: 400, body: { error: { code: "BadRequest", message: "{\"ErrorCode\":\"ResourceNotFound\"}" } } }
+        : reader(method, path, body, callOptions)
+    }
+    expect((await status(context)).body.targets[0].links[0]).toMatchObject({ state: "missing-in-target", changedIn: null, identical: null, error: null })
   })
 })
 
@@ -448,9 +553,14 @@ describe("Sync and Dev to Prod stay apart", () => {
     expect(changeSets(context, TENANT_B).find((changeSet) => changeSet.id === targets[0]!.promotion!.changeSetId)!.status).toBe("in-review")
   })
 
-  it("rejects a Sync target with no reviewer or note", async () => {
+  it("rejects a Sync target with no reviewer or note, inside the license rule", async () => {
     const context = setup()
     const { targets } = await planned(context)
+    context.setSameLicense(false)
+    const refused = await context.post({ tenantId: TENANT_B, action: "reject", id: targets[0]!.promotion!.id })
+    expect(refused.status).toBe(402)
+    expect(refused.body.upgrade).toBe("bulkActions")
+    context.setSameLicense(true)
     const rejected = await context.post({ tenantId: TENANT_B, action: "reject", id: targets[0]!.promotion!.id })
     expect(rejected.status).toBe(200)
     expect(rejected.body.promotion.status).toBe("rejected")

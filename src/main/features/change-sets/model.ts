@@ -109,6 +109,8 @@ export interface OperationResult {
   objectId: string | null
   message: string | null
   readBack: "match" | "differs" | "denied" | "missing" | null
+  /** For a verified create or update: snapshotHash of the object the verifying read saw. */
+  readBackHash?: string
   attempts: number
   at: string | null
 }
@@ -218,6 +220,11 @@ export function contentHashOf(record: Pick<ChangeSetRecord, "kind" | "targetTena
     dependencies: record.dependencies,
     rollbackOf: record.rollbackOf,
   })
+}
+
+/** sha256 of a live object as stored and compared: sanitized, without volatile properties. */
+export function snapshotHash(type: IntuneType, live: Item): string {
+  return hashOf(comparableSnapshot(sanitizeSnapshot(type, live).snapshot))
 }
 
 /** The combined target fingerprint of per-operation fingerprints. */
