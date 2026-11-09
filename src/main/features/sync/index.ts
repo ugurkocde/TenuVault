@@ -1,4 +1,5 @@
 import type { RouteModule } from "../../api/host"
+import { allows, type Plan } from "../../../shared/plans"
 import type { FeatureDeps } from "../deps"
 import { DOMAINS } from "../domains"
 import type { Stored } from "../records"
@@ -108,6 +109,25 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
     "get-target": ({ tenantId, body }) => targetRecords(deps, tenantId, syncTarget(deps, tenantId, body).id),
     /** Source policies to select; the selected tenant is the source. */
     policies: async ({ tenantId, body }) => ({ source: await policies(deps, tenantId, typeof body.folder === "string" && body.folder ? body.folder : PROMOTION_FOLDER) }),
+    /**
+     * Every other connected tenant and whether it can be a target of a Sync from the selected
+     * tenant, by the rule requireSyncTenants applies: both plans need Sync; one target outside
+     * MSP must share the source's license. `multiple` is false when a run may name only one
+     * target. Reads plans only; a tenant whose plan cannot be read is not eligible.
+     */
+    targets: async ({ tenantId, plan }) => {
+      const multiple = allows(plan, "bulkActions")
+      const others = [...new Set(deps.tenants().map((id) => id.toLowerCase()))].filter((id) => id !== tenantId)
+      const targets = await Promise.all(others.map(async (id) => {
+        const targetPlan: Plan | null = await deps.plan(id).catch(() => null)
+        if (!targetPlan) return { tenantId: id, eligible: false, multiple: false, reason: "unavailable" as const }
+        if (!allows(targetPlan, "sync")) return { tenantId: id, eligible: false, multiple: false, reason: "plan" as const }
+        if (multiple && allows(targetPlan, "bulkActions")) return { tenantId: id, eligible: true, multiple: true, reason: null }
+        if (deps.sameLicense(tenantId, id)) return { tenantId: id, eligible: true, multiple: false, reason: null }
+        return { tenantId: id, eligible: false, multiple: false, reason: "msp" as const }
+      }))
+      return { multiple, targets }
+    },
     /** Objects of one target a dependency mapping can point to. */
     "target-objects": async ({ tenantId, body }) => {
       const { targets } = await requireSyncTenants(deps, tenantId, [body.targetTenantId])

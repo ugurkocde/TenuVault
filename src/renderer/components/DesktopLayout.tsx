@@ -19,6 +19,7 @@ import {
   Layers,
   LifeBuoy,
   MessageSquareHeart,
+  RefreshCw,
   Settings,
   Shield,
   Siren,
@@ -69,6 +70,7 @@ const allNavigation: NavItem[] = [
   { name: "Tenants", href: "/portal/tenants", icon: Building2 },
   { name: "Backup & Restore", href: "/portal/backup", icon: Database },
   { name: "Drift Detection", href: "/portal/drift", icon: GitCompare },
+  { name: "Sync", href: "/portal/sync", icon: RefreshCw, hint: "Copy settings from one tenant to others" },
   { name: "Alerts", href: "/portal/alerts", icon: Siren, hint: "Teams, email and webhook alerts for backups and policy changes" },
   { name: "OpenIntuneBaseline", href: "/portal/oib", icon: Layers },
   { name: "Reports", href: "/portal/reports", icon: FileText, hint: "What changed, setting by setting, and who changed it" },
@@ -474,7 +476,7 @@ export function DesktopLayout() {
       <div className={focus ? undefined : "pl-64"}>
         {!focus && <LicenseBanner />}
         {!focus && <SignInBanner />}
-        {[/portal\/backup/, /portal\/drift/, /portal\/audit/, /portal\/(governance|changes|operations|reports|alerts)/].some(pattern => pattern.test(pathname)) && <TenantAccessNotice />}
+        {[/portal\/backup/, /portal\/drift/, /portal\/audit/, /portal\/(governance|changes|operations|reports|alerts|sync)/].some(pattern => pattern.test(pathname)) && <TenantAccessNotice />}
         {/* Room to scroll the end of a page clear of the floating backup and activity panels while they show. */}
         <main className="pb-[calc(var(--floating-progress-offset,0px)+var(--background-tasks-offset,0px))]">
           <ErrorBoundary key={pathname}>

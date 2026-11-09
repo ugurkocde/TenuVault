@@ -32,6 +32,8 @@ Promotions, baseline upgrades and standard adoptions all end in a change set. Th
 
 Dev to Prod promotes selected policies from a development tenant to the production tenant you selected, one way and on demand. The selected tenant is always the destination. Promotion copies the reviewed version once; later edits in the source are never synchronized.
 
+To copy policies to several tenants, or to keep updating the same policies in a target with later syncs, use [Sync](/sync/). Sync remembers which target policy each source policy was written to, so the next sync updates it instead of creating another one.
+
 ### Before you start
 
 * Connect both tenants and make sure your license covers both. On Pro the source must be the other tenant of the same license; the app enforces this. If no other tenant is connected, the screen says "Connect the development tenant covered by the same license to promote from it."

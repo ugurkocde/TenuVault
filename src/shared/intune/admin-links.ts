@@ -118,6 +118,17 @@ export function adminCenterLink(folder: string, id: string, item: Item = {}): Ad
   }
 }
 
+/** The list page of a policy type Sync and Dev to Prod write, for a link to several policies at once. */
+export function adminCenterListLink(folder: string): AdminLink | undefined {
+  switch (folder) {
+    case "ConfigurationPolicies":
+    case "DeviceConfigurations": return DEVICES("configuration")
+    case "CompliancePolicies": return DEVICES("compliance")
+    case "EndpointSecurityIntents": return SECURITY("overview")
+    default: return undefined
+  }
+}
+
 /** The same link opened in a given tenant, so an admin of several tenants lands in the right one. */
 export function inTenant(url: string, tenantId: string | undefined): string {
   return tenantId ? url.replace("/#view/", `/#@${enc(tenantId)}/view/`) : url

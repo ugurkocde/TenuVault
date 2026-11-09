@@ -171,6 +171,7 @@ export default defineConfig({
 						{ label: 'Audit log', slug: 'audit-log' },
 						{ label: 'Governance', slug: 'governance' },
 						{ label: 'Changes', slug: 'changes' },
+						{ label: 'Sync', slug: 'sync' },
 						{ label: 'Operations', slug: 'operations' },
 						{ label: 'Alerts', slug: 'notifications' },
 						{ label: 'OpenIntuneBaseline', slug: 'baselines/quick-start' },

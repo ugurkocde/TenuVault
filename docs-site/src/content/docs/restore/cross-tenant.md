@@ -114,6 +114,7 @@ For Dev to Prod promotion, select the production tenant and open **Changes** > *
 * [Intune tenant-to-tenant migration](https://www.tenuvault.com/guides/intune-tenant-to-tenant-migration): the migration guide, on the product site
 * [TenuVault for MSPs](https://www.tenuvault.com/solutions/msps)
 * [Restore Intune policies](/restore/)
+* [Sync](/sync/): copy live policies from one tenant to others, reviewed per target
 * [Disaster recovery](/restore/disaster-recovery/)
 * [What cannot be restored](/restore/limitations/)
 * [Plans and features](/licensing/)

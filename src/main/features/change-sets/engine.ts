@@ -573,7 +573,7 @@ function markStale(deps: FeatureDeps, tenantId: string, id: string, reason: stri
 export function decidingLink(workflow: string): string {
   switch (workflow) {
     case "promotion": return "/portal/changes/promotion"
-    case "sync": return "/portal/changes/sync"
+    case "sync": return "/portal/sync"
     case "baseline-upgrade": return "/portal/changes/baseline-upgrades"
     case "standard-adoption": return "/portal/governance/standards"
     case "custom-baseline": return "/portal/baselines"

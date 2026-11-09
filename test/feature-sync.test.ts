@@ -692,7 +692,7 @@ describe("Sync backups", () => {
     expect(rollback.status).toBe(200)
     expect(rollback.body.operations).toEqual([expect.objectContaining({ action: "delete", blocked: null })])
     const entry = context.audit.find((logged) => logged.logEntry.details.source === "desktop-change-sets")!
-    expect(entry.logEntry.details).toMatchObject({ workflow: "sync", backupSkipped: true, link: "/portal/changes/sync" })
+    expect(entry.logEntry.details).toMatchObject({ workflow: "sync", backupSkipped: true, link: "/portal/sync" })
     expect(entry.logEntry.details.backupFolder).toBeUndefined()
   })
 
@@ -785,5 +785,45 @@ describe("Sync and Dev to Prod stay apart", () => {
     expect(objects.body).toEqual({ objects: [{ id: "f1", name: "Corporate devices" }], readable: true })
     context.setSameLicense(false)
     expect((await context.post({ tenantId: TENANT_A, action: "target-objects", targetTenantId: TENANT_B, kind: "filter" })).status).toBe(402)
+  })
+})
+
+describe("Sync targets", () => {
+  const TENANT_E = "55555555-5555-5555-5555-555555555555"
+
+  it("lists every other connected tenant with whether it can be a target, by the rule plan and status apply", async () => {
+    const context = setup({ plans: { [TENANT_A]: "pro", [TENANT_B]: "pro", [TENANT_C]: "pro", [TENANT_D]: "community" } })
+    // Only A and B share the Pro license; E is connected but its plan cannot be read.
+    context.deps.sameLicense = (a, b) => [a, b].sort().join() === [TENANT_A, TENANT_B].join()
+    context.deps.tenants = () => [TENANT_A, TENANT_B, TENANT_C, TENANT_D, TENANT_E]
+    const response = await context.post({ tenantId: TENANT_A, action: "targets" })
+    expect(response.status).toBe(200)
+    expect(response.body).toEqual({
+      multiple: false,
+      targets: [
+        { tenantId: TENANT_B, eligible: true, multiple: false, reason: null },
+        { tenantId: TENANT_C, eligible: false, multiple: false, reason: "msp" },
+        { tenantId: TENANT_D, eligible: false, multiple: false, reason: "plan" },
+        { tenantId: TENANT_E, eligible: false, multiple: false, reason: "unavailable" },
+      ],
+    })
+    // The same tenants pass or fail requireSyncTenants on a gated action.
+    expect((await status(context, [TENANT_B])).status).toBe(200)
+    expect((await status(context, [TENANT_C])).status).toBe(402)
+    expect((await status(context, [TENANT_D])).status).toBe(402)
+    expect(context.source.writeCount()).toBe(0)
+  })
+
+  it("lets an MSP source name several MSP targets, and keeps the action behind the Sync plan", async () => {
+    const msp = setup({ plans: MSP })
+    const response = await msp.post({ tenantId: TENANT_A, action: "targets" })
+    expect(response.body.multiple).toBe(true)
+    expect(response.body.targets).toEqual([TENANT_B, TENANT_C, TENANT_D].map((tenantId) => ({ tenantId, eligible: true, multiple: true, reason: null })))
+    expect((await status(msp, [TENANT_B, TENANT_C, TENANT_D])).status).toBe(200)
+    expect(requiredFeatures(PATH, { action: "targets" })).toEqual(["sync"])
+    msp.deps.plan = async () => "community"
+    const community = await msp.post({ tenantId: TENANT_A, action: "targets" })
+    expect(community.status).toBe(402)
+    expect(community.body.upgrade).toBe("sync")
   })
 })
