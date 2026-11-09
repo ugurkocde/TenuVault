@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
+import { NextRequest } from "../src/main/api/next-server-shim"
+import { POST as restorePreview } from "../src/portal/app/api/restore-preview/route"
 import { AUTOPILOT_DEVICE_REIMPORT, autopilotDeviceChanges, autopilotDevicesCsv, autopilotDeviceUpdate } from "../src/shared/intune/autopilot-devices"
 import { INTUNE_TYPES, typeForFolder, type Item } from "../src/shared/intune/registry"
 import { listSnapshot, locateObject, readObject, type GraphReader } from "../src/shared/intune/read"
@@ -179,6 +181,31 @@ describe("Finding a device imported again", () => {
     const paths: string[] = []
     await locateObject(type, listSnapshot(type, listed({ serialNumber: "O'Brien" })), reader(() => ({}), (path) => (paths.push(path), [])))
     expect(decodeURIComponent(paths[0]!)).toContain("contains(serialNumber,'O''Brien')")
+  })
+
+  it("reviews a device imported again under a new ID as matching when its properties match", async () => {
+    const backupId = "backup-2026-11-09-020000"
+    const path = `${backupId}/AutopilotDevices/1215-1407-0240.json`
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input))
+      if (url.hostname === "login.microsoftonline.com") return Response.json({ access_token: "token" })
+      if (url.hostname === "graph.microsoft.com") {
+        if (url.pathname.endsWith(ID)) return Response.json({ error: { code: "ResourceNotFound" } }, { status: 404 })
+        return Response.json({ value: [listed({ id: NEW_ID })] })
+      }
+      if (decodeURIComponent(url.pathname) === `/intune-backups/${path}`) return Response.json(listSnapshot(type, listed()))
+      if (decodeURIComponent(url.pathname) === `/intune-backups/${backupId}/metadata.json`) return Response.json({ TenantId: "tenant", Status: "Success" })
+      return new Response("", { status: 404 })
+    }))
+    try {
+      const body = { tenantId: "tenant", appId: "app", clientSecret: "test", storageAccountName: "store", backupId, paths: [path], live: true }
+      const response = await restorePreview(new NextRequest("http://tenuvault.internal/api/restore-preview", { method: "POST", body: JSON.stringify(body) }))
+      expect(response.status).toBe(200)
+      const { items } = await response.json()
+      expect(items[0]).toMatchObject({ live: "same" })
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it("restores the group tag on the device under its new ID, in place", async () => {

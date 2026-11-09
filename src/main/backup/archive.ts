@@ -10,6 +10,10 @@ import { MAX_BACKUP_ARCHIVE_FILES, MAX_BACKUP_ARCHIVE_TOTAL_BYTES } from '../../
 const MAX = MAX_BACKUP_ARCHIVE_TOTAL_BYTES
 const guid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i
 const object = (v: unknown): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v)
+/** Refuses a chosen archive file before it is read, at the same total size a backup download allows. */
+export function assertArchiveFileSize(bytes: number): void {
+  if (bytes > MAX) throw new Error(`Choose an archive smaller than ${MAX / 1024 / 1024} MiB`)
+}
 export interface ReviewedArchive { tenantId: string; backupId: string; digest: string; files: Map<string, Buffer>; count: number }
 /** Validate the central directory before JSZip can normalize names or replace duplicates. */
 function inspectDirectory(raw: Buffer): void {

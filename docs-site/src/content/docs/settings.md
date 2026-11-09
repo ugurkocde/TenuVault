@@ -66,7 +66,7 @@ This card applies to tenants that keep backups on this device. Every backup file
 | **Change folder** | Chooses another folder, including a network share. Changing the folder does not move existing backups; move the folder's contents yourself to keep them visible. |
 | **Open folder** | Opens the backup folder in Explorer or Finder, creating it if needed. |
 
-After an import, TenuVault shows **Imported &lt;backup&gt;. Select this device as storage for tenant &lt;tenant id&gt; to preview and restore it.** The archive must be smaller than 32 MiB, and your license must cover the source tenant.
+After an import, TenuVault shows **Imported &lt;backup&gt;. Select this device as storage for tenant &lt;tenant id&gt; to preview and restore it.** The archive must be smaller than 128 MiB, and your license must cover the source tenant.
 
 ### Encryption key
 

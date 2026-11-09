@@ -101,7 +101,8 @@ export async function POST(request: NextRequest) {
         Object.assign(item, restoreCapabilities(type, snapshot, current))
         if (ownership) item.replaceBlocker = ownership
         const name = current[type.nameKey] ?? current.displayName ?? current.name
-        const { assignments: _a, ...wanted } = snapshot
+        // A device found again under a new ID compares by its properties, as the restore does.
+        const { assignments: _a, ...wanted } = typeof current.id === "string" ? { ...snapshot, id: current.id } : snapshot
         const { assignments: _b, ...now } = current
         const settingsSame = sameSnapshot(wanted, now)
         // A snapshot without assignments and an item with none mean the same. A backup that could not read

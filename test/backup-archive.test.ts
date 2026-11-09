@@ -5,8 +5,9 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { comparableSnapshot } from '../src/shared/intune/compare'
-import { importArchive, importConfirmedArchive, reviewArchive } from '../src/main/backup/archive'
+import { assertArchiveFileSize, importArchive, importConfirmedArchive, reviewArchive } from '../src/main/backup/archive'
 import { LocalBlobStore } from '../src/main/storage/local-blob-store'
+import { MAX_BACKUP_ARCHIVE_TOTAL_BYTES } from '../src/shared/constants'
 const tenant = '11111111-1111-1111-1111-111111111111'
 const id = 'backup-2026-09-26-120000'
 async function archive(change?: (zip: JSZip) => void) {
@@ -82,4 +83,10 @@ it('reviews an archive with Autopilot devices, which TotalPolicies leaves out', 
     zip.file('metadata.json', JSON.stringify({ BackupFolder: id, Status: 'Success', Failures: 0, ItemCounts: { DeviceConfigurations: 1, AutopilotDevices: 1, TotalPolicies: 1 }, Items: { 'DeviceConfigurations/policy': { file: 'policy.json', hash: hash(policy) }, 'AutopilotDevices/ap-1': { file: 'SN-0001.json', hash: hash(device) } } }))
   })
   expect(await reviewArchive(raw)).toMatchObject({ count: 2 })
+})
+
+it('admits an archive file up to the backup download total and refuses a larger one before reading it', () => {
+  expect(() => assertArchiveFileSize(MAX_BACKUP_ARCHIVE_TOTAL_BYTES)).not.toThrow()
+  expect(() => assertArchiveFileSize(64 * 1024 * 1024)).not.toThrow()
+  expect(() => assertArchiveFileSize(MAX_BACKUP_ARCHIVE_TOTAL_BYTES + 1)).toThrow('Choose an archive smaller than 128 MiB')
 })

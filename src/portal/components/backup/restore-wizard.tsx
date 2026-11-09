@@ -403,7 +403,10 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     const areas = new Map<string, Map<string, BackupItem[]>>()
     for (const item of visible) {
       const types = areas.get(item.area) ?? new Map<string, BackupItem[]>()
-      types.set(item.folder, [...(types.get(item.folder) ?? []), item])
+      // Appended in place: copying the folder's list for every item is quadratic with thousands of devices.
+      const entries = types.get(item.folder)
+      if (entries) entries.push(item)
+      else types.set(item.folder, [item])
       areas.set(item.area, types)
     }
     return areas
@@ -994,6 +997,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
               <ul className="mt-4 max-h-[26rem] divide-y divide-gray-100 overflow-y-auto rounded-2xl border border-gray-200">
                 {[...plans]
                   .sort((a, b) => PLAN_ORDER.indexOf(a.plan) - PLAN_ORDER.indexOf(b.plan))
+                  .slice(0, shown[REVIEW] ?? LIST_PAGE)
                   .map(({ path, plan }) => {
                     const item = itemByPath.get(path)
                     const state = review[path]
@@ -1010,7 +1014,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                             {item ? capitalize(item.label) : ""}
                             {state?.liveName && state.liveName !== item?.name && `, now named "${state.liveName}"`}
                           </span>
-                          {state?.snapshot !== undefined && <details className="mt-2"><summary className="cursor-pointer text-xs text-blue-700">Review snapshot content (may contain secrets)</summary><pre className="max-h-64 max-w-xl overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify(state.snapshot, null, 2)}</pre></details>}
+                          {state?.snapshot !== undefined && <SnapshotDetails snapshot={state.snapshot} />}
                           {reason && <span className="block text-xs text-gray-500"><LinkedMessage text={reason} /></span>}
                           {deprecatedByPath.get(path) && <span className="block text-xs text-amber-800">{deprecatedLabel(deprecatedByPath.get(path)!)}</span>}
                           {assignmentWarning && <span className="block text-xs text-amber-800">{assignmentWarning}</span>}
@@ -1034,6 +1038,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                     )
                   })}
               </ul>
+              <ShowMore total={plans.length} shown={shown[REVIEW] ?? LIST_PAGE} onMore={() => setShown((current) => ({ ...current, [REVIEW]: (current[REVIEW] ?? LIST_PAGE) + LIST_PAGE * 5 }))} />
 
               {changesTenant && (
                 <label className="mt-5 flex cursor-pointer items-start gap-3 rounded-2xl bg-amber-50 p-4 text-sm text-amber-900">
@@ -1150,7 +1155,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
           )}
 
           <ul className="mt-4 max-h-[26rem] divide-y divide-gray-100 overflow-y-auto">
-            {(result?.results ?? progress?.results ?? []).map((outcome, index) => {
+            {(result?.results ?? progress?.results ?? []).slice(0, shown[RESULTS] ?? LIST_PAGE).map((outcome, index) => {
               const Icon = outcome.approval ? ShieldCheck : outcome.success ? (outcome.action === "unchanged" ? SkipForward : CheckCircle) : outcome.action === "skipped" ? Ban : XCircle
               const text = outcome.success
                 ? outcome.action === "unchanged"
@@ -1199,6 +1204,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
               )
             })}
           </ul>
+          <ShowMore total={(result?.results ?? progress?.results ?? []).length} shown={shown[RESULTS] ?? LIST_PAGE} onMore={() => setShown((current) => ({ ...current, [RESULTS]: (current[RESULTS] ?? LIST_PAGE) + LIST_PAGE * 5 }))} />
 
           {!running && result && (
             <div className="mt-6 flex flex-wrap justify-end gap-3">
@@ -1221,8 +1227,21 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   )
 }
 
-/** The key under which the readiness list's page size is kept, next to the type folders. */
+/** The keys under which the readiness, review and result lists keep their page size, next to the type folders. */
 const READINESS = "#readiness"
+const REVIEW = "#review"
+const RESULTS = "#results"
+
+/** A snapshot's content, serialized only once it is opened, so reviewing thousands of items stays fast. */
+function SnapshotDetails({ snapshot }: { snapshot: unknown }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <details className="mt-2" onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary className="cursor-pointer text-xs text-blue-700">Review snapshot content (may contain secrets)</summary>
+      {open && <pre className="max-h-64 max-w-xl overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify(snapshot, null, 2)}</pre>}
+    </details>
+  )
+}
 
 /** Shows how many items a long list leaves out, with a button that shows more of them. */
 function ShowMore({ total, shown, onMore }: { total: number; shown: number; onMore: () => void }) {

@@ -76,7 +76,7 @@ After you import a key, click **Save recovery key** again. The saved bundle incl
 If you only have a ZIP export of a backup (from **Download** in **Backup Details**), you can import it on any device:
 
 1. Go to **Settings** > **Storage and recovery** > **Backups on this device** and click **Import backup ZIP**.
-2. Choose the ZIP file. It must be smaller than 32 MiB, contain a complete backup and include its `tenuvault-manifest.json`.
+2. Choose the ZIP file. It must be smaller than 128 MiB, contain a complete backup and include its `tenuvault-manifest.json`.
 3. Review the dialog. It shows the source tenant, the backup ID and a SHA-256 digest of the archive, then asks "Import *N* policy snapshots?" Click **Import locally**.
 4. Choose **This device** as backup storage for the source tenant. The import message tells you which tenant: "Select this device as storage for tenant *ID* to preview and restore it."
 5. Restore from the imported backup as usual.
