@@ -591,6 +591,21 @@ describe("CodeRabbit comments", () => {
     expect(container.textContent).toContain("A rollback always backs up first, so it needs backup storage in the target tenant.")
   })
 
+  it("counts rollback only where the target has backup storage", async () => {
+    const container = await render()
+    await toReview(container, ["Contoso Germany", "Contoso Japan"])
+    await click(container.querySelector<HTMLInputElement>('section[aria-label="Review"] input[value="none"]')!)
+    await click(button(container, "Approve and sync to 2 tenants"))
+    await until(() => ["Contoso Germany", "Contoso Japan"].every((name) => node(container, name)?.className.includes("border-green-600")), "result")
+    const summary = container.querySelector('[aria-label="Summary"]')!.textContent
+    expect(summary).toContain("Rollback available in 1 of 2 tenants")
+    expect(summary).not.toContain("Rollback available per tenant")
+    expect(node(container, "Contoso Japan").textContent).toContain("Rollback needs backup storage in this tenant.")
+    expect(node(container, "Contoso Germany").textContent).not.toContain("Rollback needs backup storage")
+    await click(button(node(container, "Contoso Japan"), "Details"))
+    expect(container.querySelector('section[aria-label="Details for Contoso Japan"]')!.textContent).toContain("Rollback needs backup storage in this tenant.")
+  })
+
   it("keeps an opened recent sync when an abandoned plan finishes later", async () => {
     const container = await render()
     await toReview(container, ["Contoso Germany"])

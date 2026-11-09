@@ -224,7 +224,7 @@ export function syncCheck(deps: FeatureDeps, targetTenantId: string, promotionId
  * set stale. Once an attempt is claimed, a link is recorded for every operation whose write was
  * verified, also when the apply failed part way, while the tenant write is still held.
  */
-export async function applySync(deps: FeatureDeps, targetTenantId: string, promotionId: string, input: { contentHash: string; confirmed: boolean; backup?: "new" | "none" }, actor: string | null): Promise<{ promotion: Stored<PromotionRecord>; changeSet: Stored<ChangeSetRecord> }> {
+export async function applySync(deps: FeatureDeps, targetTenantId: string, promotionId: string, input: { contentHash: string; confirmed: boolean; backup?: "new" | "none"; resolveBackup?: () => "new" | "none" | undefined }, actor: string | null): Promise<{ promotion: Stored<PromotionRecord>; changeSet: Stored<ChangeSetRecord> }> {
   const source = deps.records.get<PromotionRecord>(DOMAINS.promotions, targetTenantId, promotionId)?.sourceTenantId
   return applyPromotion(deps, targetTenantId, promotionId, { ...input, check: syncCheck(deps, targetTenantId, promotionId), onSettled: () => { if (source) recordSyncLinks(deps, targetTenantId, source) } }, actor)
 }

@@ -89,7 +89,7 @@ Choose what happens before anything is written:
 * **Back up the affected policy types now** (the default): each target backs up only the policy types this sync changes before anything else happens. If the backup fails, nothing is changed in that tenant. A target without backup storage cannot be backed up, so it is left out unless you choose **Skip the backup**.
 * **Skip the backup**: no backup is taken. Rollback still works from the saved versions in a target tenant that has backup storage: TenuVault saves the current version of every policy it changes before writing, and a rollback always takes a backup first. Those saved versions are kept on this device only; without a backup they are the only copy. In a target tenant without backup storage a rollback cannot run, so the review says on that target: "Rollback needs backup storage in this tenant. Without it, this sync cannot be rolled back from TenuVault."
 
-Click **Approve and sync to N tenants**. Every ready target is approved and applied on its own, with the backup you chose. The backup choice is stored with each target's approval, so its apply, any retry and an apply from **Details** use the same choice, also when you open the sync again later. Sync records no reviewer name or decision note; the approval is recorded with the signed-in admin in the [audit log](/audit-log/).
+Click **Approve and sync to N tenants**. Every ready target is approved and applied on its own, with the backup you chose. The backup choice is stored with each target's approval, so its apply, any retry and an apply from **Details** use the same choice, also when you open the sync again later. While another change is being applied to the same tenant, an approval is refused; approve again when that change finishes. Sync records no reviewer name or decision note; the approval is recorded with the signed-in admin in the [audit log](/audit-log/).
 
 ### 4. Sync
 
@@ -98,6 +98,7 @@ The result view shows the source tenant on the left and one node per target on t
 * While a target is written, its line draws out and its node shows **Approving, then writing** until the approval is stored, then **Backing up, then writing**, or **Saving current versions, then writing** when you skipped the backup, followed by how many changes are verified.
 * When every change was verified, the line and node turn green and show **N changes verified**, with **Backup taken first** or **No backup taken**.
 * A target where every policy was already in sync turns green and shows **Already in sync, nothing written. No backup taken.**
+* A written target without backup storage also shows **Rollback needs backup storage in this tenant.**, in its node and in **Details**.
 * When some changes failed, the line and node turn amber and list the failed policies with the error. When nothing was written, they turn red.
 * A target that was left out shows **Not synced** with the reason.
 
@@ -109,7 +110,7 @@ Each finished target offers:
 * **Retry failed**: applies the target again with the backup choice it was approved with, shown under the button. A retry never switches between backing up and skipping the backup, also when you open the sync again later. Policies already verified are not written again.
 * **Details**: shows the target's change set with the result of every policy, the pre-change evidence and **Preview rollback**.
 
-When every target finished and at least one target was written, the summary shows **Links saved for the next sync**, **Rollback available per tenant**, **Backup taken in each tenant** (or **Backup taken in N of M tenants** when a backup did not complete) or **Backup skipped**, and **Recorded in the audit log**. Click **Start a new sync** to begin again.
+When every target finished and at least one target was written, the summary shows **Links saved for the next sync**, **Rollback available per tenant** (or **Rollback available in N of M tenants** when some written tenants have no backup storage), **Backup taken in each tenant** (or **Backup taken in N of M tenants** when a backup did not complete) or **Backup skipped**, and **Recorded in the audit log**. Click **Start a new sync** to begin again.
 
 ## Roll back a target
 

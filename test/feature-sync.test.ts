@@ -797,6 +797,38 @@ describe("Sync keeps the backup choice of the first apply", () => {
     expect(context.backups).toEqual([TENANT_B])
   })
 
+  it("keeps the approved and claimed choices equal when an apply overlaps a new approval", async () => {
+    const context = setup()
+    const id = (await planned(context)).targets[0]!.promotion!.id
+    await approved(context, TENANT_B, id, "new")
+    const preview = await context.post({ tenantId: TENANT_B, action: "preview", id })
+    const contentHash = preview.body.changeSet.contentHash as string
+    // The next approval waits on its audit write, so an apply can start in between.
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let waiting = false
+    const api = context.deps.api
+    context.deps.api = async (path, tenantId, body, options) => {
+      if (path === "/api/audit/log" && !waiting) {
+        waiting = true
+        await gate
+      }
+      return api(path, tenantId, body, options)
+    }
+    const reapproval = context.post({ tenantId: TENANT_B, action: "approve", id, contentHash, targetFingerprint: preview.body.changeSet.targetFingerprint, backup: "none" })
+    while (!waiting) await new Promise((resolve) => setTimeout(resolve, 1))
+    const overlapping = await context.post({ tenantId: TENANT_B, action: "apply", id, contentHash, confirm: true })
+    release()
+    expect((await reapproval).status).toBe(200)
+    expect(overlapping.status).toBe(409)
+    expect(overlapping.body.error).toContain("Another change is being applied to this tenant")
+    expect((await context.post({ tenantId: TENANT_B, action: "apply", id, contentHash, confirm: true })).body.changeSet.status).toBe("applied")
+    const changeSet = changeSets(context, TENANT_B)[0]!
+    expect(changeSet.backupChoice).toBe("none")
+    expect(context.deps.records.get<PromotionRecord>(DOMAINS.promotions, TENANT_B, id)!.sync!.backup).toBe(changeSet.backupChoice)
+    expect(context.backups).toEqual([])
+  })
+
   it("lets an approval change the choice before any apply claimed the change set", async () => {
     const context = setup()
     const id = (await planned(context)).targets[0]!.promotion!.id

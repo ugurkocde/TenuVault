@@ -4,6 +4,7 @@ import type { FeatureDeps } from "../deps"
 import { DOMAINS } from "../domains"
 import type { Stored } from "../records"
 import { featureRoute, FeatureError, optionalText, text, type Body } from "../route"
+import { withTenantWrite } from "../write-lock"
 import type { ChangeSetRecord } from "../change-sets/model"
 import { applyChangeSet, approveChangeSet, createRollbackChangeSet, previewChangeSet, previewRollback, rejectChangeSet } from "../change-sets/engine"
 import { policies } from "../promotion"
@@ -66,7 +67,8 @@ function claimedBackup(deps: FeatureDeps, tenantId: string, target: Stored<Promo
 
 /**
  * The backup choice of an apply or retry: the one the target was approved with, which a request
- * naming the other one cannot change (409). A target approved before choices were stored keeps
+ * naming the other one cannot change (409). Checked when the request arrives, and again inside
+ * the tenant write right before the claim, where the approved choice cannot change any more. A target approved before choices were stored keeps
  * the request's choice, and the change set's first claimed apply binds it.
  */
 function boundBackup(target: Stored<PromotionRecord>, body: Body): "new" | "none" | undefined {
@@ -200,13 +202,17 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
       const target = syncTarget(deps, tenantId, body)
       await requireRunTenants(deps, tenantId, target)
       const backup = approvedBackup(body)
-      // Once an apply started, the approval keeps the choice it bound, so the target stays retryable.
-      const claimed = claimedBackup(deps, tenantId, target)
-      if (claimed && claimed !== backup) throw new FeatureError(`This sync was already started ${claimed === "none" ? "without a backup" : "with a backup"}. Approve it with the same choice.`, 409)
-      const changeSet = await approvePromotion(deps, tenantId, target.id, { contentHash: hashField(body, "contentHash"), targetFingerprint: hashField(body, "targetFingerprint"), reviewer: null, note: null, check: syncCheck(deps, tenantId, target.id) }, actor)
-      // Stored with the approval, so the apply and every retry use it whoever sends them later.
-      deps.records.update<PromotionRecord>(DOMAINS.promotions, tenantId, target.id, (current) => ({ ...current, sync: { ...current.sync!, backup } }), { actor, reason: backup === "none" ? "Approved to apply without a pre-change backup" : "Approved to apply after a pre-change backup" })
-      return { promotion: syncPromotion(deps, tenantId, target.id), changeSet }
+      // Under the tenant write that an apply claims under, so an apply never claims a choice in
+      // between this check and the store below: an overlapping apply is refused instead.
+      return withTenantWrite(tenantId, "Sync approval", async () => {
+        // Once an apply started, the approval keeps the choice it bound, so the target stays retryable.
+        const claimed = claimedBackup(deps, tenantId, syncTarget(deps, tenantId, body))
+        if (claimed && claimed !== backup) throw new FeatureError(`This sync was already started ${claimed === "none" ? "without a backup" : "with a backup"}. Approve it with the same choice.`, 409)
+        const changeSet = await approvePromotion(deps, tenantId, target.id, { contentHash: hashField(body, "contentHash"), targetFingerprint: hashField(body, "targetFingerprint"), reviewer: null, note: null, check: syncCheck(deps, tenantId, target.id) }, actor)
+        // Stored with the approval, so the apply and every retry use it whoever sends them later.
+        deps.records.update<PromotionRecord>(DOMAINS.promotions, tenantId, target.id, (current) => ({ ...current, sync: { ...current.sync!, backup } }), { actor, reason: backup === "none" ? "Approved to apply without a pre-change backup" : "Approved to apply after a pre-change backup" })
+        return { promotion: syncPromotion(deps, tenantId, target.id), changeSet }
+      })
     },
     reject: async ({ tenantId, body, actor }) => {
       const target = syncTarget(deps, tenantId, body)
@@ -216,15 +222,15 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
     },
     apply: async ({ tenantId, body, actor }) => {
       const target = syncTarget(deps, tenantId, body)
-      const backup = boundBackup(target, body)
+      boundBackup(target, body)
       await requireRunTenants(deps, tenantId, target)
-      return applySync(deps, tenantId, target.id, { contentHash: hashField(body, "contentHash"), confirmed: body.confirm === true, backup }, actor)
+      return applySync(deps, tenantId, target.id, { contentHash: hashField(body, "contentHash"), confirmed: body.confirm === true, resolveBackup: () => boundBackup(syncTarget(deps, tenantId, body), body) }, actor)
     },
     retry: async ({ tenantId, body, actor }) => {
       const target = syncTarget(deps, tenantId, body)
-      const backup = boundBackup(target, body)
+      boundBackup(target, body)
       await requireRunTenants(deps, tenantId, target)
-      return applySync(deps, tenantId, target.id, { contentHash: hashField(body, "contentHash"), confirmed: body.confirm === true, backup }, actor)
+      return applySync(deps, tenantId, target.id, { contentHash: hashField(body, "contentHash"), confirmed: body.confirm === true, resolveBackup: () => boundBackup(syncTarget(deps, tenantId, body), body) }, actor)
     },
     // The rollback steps write only to this target, so the source is not re-checked: an undo
     // must keep working after the source license lapses, as for Dev to Prod.

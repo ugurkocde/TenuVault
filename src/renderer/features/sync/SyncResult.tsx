@@ -13,7 +13,11 @@ export interface ResultTarget {
   name: string
   domain: string
   phase: TargetPhase
+  /** The target tenant has backup storage; a rollback always backs up first, so it needs it. */
+  storage: boolean
 }
+
+const NO_ROLLBACK = "Rollback needs backup storage in this tenant."
 
 const FINISHED: TargetPhase[] = ["verified", "partial", "failed", "in-sync"]
 
@@ -221,6 +225,7 @@ export function SyncFlowchart({ source, policyCount, targets, errors, notes, pla
             {finished && (phase === "partial" || phase === "failed") && retryable(target) && (
               <p id={`retry-${id}`} className="mt-2 text-xs text-gray-500">{backupOf(target) === "none" ? "Retry applies without a backup, as this sync started." : "Retry backs up first."}</p>
             )}
+            {done > 0 && !entry.storage && <p className="mt-2 text-xs text-amber-800">{NO_ROLLBACK}</p>}
           </div>
         )
       })}
@@ -252,7 +257,10 @@ export function SyncResult({ source, policyCount, entries, errors, notes, platfo
   const running = involved.some((entry) => entry.phase === "writing" || entry.phase === "waiting")
   const verified = involved.filter((entry) => entry.phase === "verified" || entry.phase === "in-sync").length
   const attention = involved.length - verified
-  const anyWritten = involved.some((entry) => progress(entry.target).done > 0)
+  // Targets something was written to; a rollback can run only where the tenant has backup storage.
+  const wrote = involved.filter((entry) => progress(entry.target).done > 0)
+  const anyWritten = wrote.length > 0
+  const rollbacks = wrote.filter((entry) => entry.storage).length
   // Targets already in sync wrote nothing, so they took no backup and decide nothing here. The
   // backup chip counts completed backups from the stored evidence, never the requested choice.
   const written = involved.filter((entry) => entry.target.changeSet)
@@ -290,7 +298,7 @@ export function SyncResult({ source, policyCount, entries, errors, notes, platfo
       {!running && written.length > 0 && (
         <div className="flex flex-wrap gap-2" aria-label="Summary">
           {anyWritten && <Chip tone="success">Links saved for the next sync</Chip>}
-          {anyWritten && <Chip>Rollback available per tenant</Chip>}
+          {rollbacks > 0 && <Chip>{rollbacks === wrote.length ? "Rollback available per tenant" : `Rollback available in ${rollbacks} of ${wrote.length} tenants`}</Chip>}
           {backupChip}
           {written.length > 0 && <Chip>Recorded in the audit log</Chip>}
         </div>
@@ -309,7 +317,10 @@ export function SyncResult({ source, policyCount, entries, errors, notes, platfo
             onChanged={onChanged}
             decisionFields={false}
             backupSkipped={backupOf(open.target) === "none"}
-            intro={<p className="text-sm text-gray-600">Backup choice of this sync: {backupOf(open.target) === "none" ? "applied without a backup. Rollback uses the saved current versions." : "back up the affected policy types first."}</p>}
+            intro={<>
+              <p className="text-sm text-gray-600">Backup choice of this sync: {backupOf(open.target) === "none" ? "applied without a backup. Rollback uses the saved current versions." : "back up the affected policy types first."}</p>
+              {!open.storage && <p className="text-sm text-amber-800">{NO_ROLLBACK} A rollback always backs up first, so it cannot run from TenuVault until this tenant has backup storage.</p>}
+            </>}
             rollbackHint="Rollback created. Review, approve and apply it below."
           />
           {open.target.rollbackChangeSet && (
@@ -328,6 +339,6 @@ export function SyncResult({ source, policyCount, entries, errors, notes, platfo
 export function resultEntries(targets: SyncTarget[], tenantOf: (tenantId: string) => Tenant | undefined, active: ReadonlySet<string>, errors: Record<string, string>): ResultTarget[] {
   return targets.map((target) => {
     const tenant = tenantOf(target.targetTenantId)
-    return { target, name: tenant?.name ?? target.targetTenantId, domain: tenant?.domain ?? "", phase: targetPhase(target, active.has(target.targetTenantId), errors[target.targetTenantId] ?? null) }
+    return { target, name: tenant?.name ?? target.targetTenantId, domain: tenant?.domain ?? "", phase: targetPhase(target, active.has(target.targetTenantId), errors[target.targetTenantId] ?? null), storage: !!tenant?.resources?.storageAccountName }
   })
 }
