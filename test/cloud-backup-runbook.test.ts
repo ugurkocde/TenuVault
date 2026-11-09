@@ -218,38 +218,77 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
   it("upgrades an older setup in place and names its Key Vault for deletion", () => {
     expect(setup).toContain('$legacyKeyVaultVariable = "TenuVaultKeyVault-$tenantKey"')
     // A rerun drops the variable the runbook no longer reads, after the current variables are written.
-    const removal = setup.indexOf("Remove-TenuVaultLegacyKeyVaultVariable -RunbookPublished $runbookPublished")
+    const removal = setup.indexOf("Remove-TenuVaultLegacyKeyVaultVariable -Runbook $runbook")
     expect(removal).toBeGreaterThan(setup.indexOf('Set-TenuVaultAutomationVariable -Name "TenuVaultAppOnlyExcluded-$tenantKey"'))
-    expect(removal).toBeGreaterThan(setup.indexOf("$runbookPublished = Publish-TenuVaultRunbook"))
+    expect(removal).toBeGreaterThan(setup.indexOf("$runbook = Publish-TenuVaultRunbook"))
     expect(setup).toContain("Publish-AzAutomationRunbook")
     // -Remove deletes it too and, like a rerun, names the old vault before it is gone.
     expect(setup).toContain("foreach ($name in @($variableNames) + $legacyKeyVaultVariable)")
-    const removeMode = setup.slice(setup.indexOf("if ($Remove) {\n    $account"), setup.indexOf("# Resource group and Automation account"))
+    expect(setup).toContain("if ($Remove) {\n    Remove-TenuVaultCloudBackupSetup\n    return\n}")
+    const removeMode = setup.slice(setup.indexOf("function Remove-TenuVaultCloudBackupSetup"), setup.indexOf("function Assert-TenuVaultAuthorizationActions"))
     expect(removeMode.indexOf("$legacyKeyVaults = Get-TenuVaultLegacyKeyVaults")).toBeLessThan(removeMode.indexOf("Remove-AzAutomationVariable"))
     expect(removeMode).toContain("Write-TenuVaultLegacyKeyVaultNote $legacyKeyVaults")
     expect(setup).toContain('-ResourceType "Microsoft.KeyVault/vaults"')
     expect(setup).toContain('$_.Name -like "kv-tenuvault-*"')
     expect(setup).toContain("Delete it once no setup uses it")
     expect(setup).toContain("open in TenuVault with it")
-    // The variable goes only when this run published the runbook that no longer reads it.
-    expect(setup).toContain("$runbookPublished = Publish-TenuVaultRunbook")
-    expect(setup).toContain("Remove-TenuVaultLegacyKeyVaultVariable -RunbookPublished $runbookPublished")
+    // The variable goes only when the published runbook, read back from Azure, no longer reads it.
+    expect(setup).toContain("-Slot Published -OutputFolder $folder")
+    expect(setup).toContain('$plainRunbookVersion = "1.2.0"')
+    expect(setup).toContain('-Force -Confirm:$false | Out-Null\n    Publish-AzAutomationRunbook')
   })
 
-  it.runIf(Boolean(pwsh))("keeps the Key Vault variable an older runbook still reads when the publish is declined", () => {
-    const script = fileURLToPath(new URL("./fixtures/cloud-backup/setup-upgrade.ps1", import.meta.url))
-    const lines = execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }).split(/\r?\n/).filter((line) => line.startsWith("{"))
-    const [approved, declined] = lines.map((line) => JSON.parse(line) as { scenario: string; published: boolean; actions: string[]; legacyVariableKept: boolean; variables: string[]; output: string[] })
-    expect(approved).toMatchObject({ scenario: "approved", published: true, legacyVariableKept: false })
-    expect(approved!.actions).toEqual(["import", "publish", "remove TenuVaultKeyVault-11111111"])
-    expect(approved!.output.join(" ")).toContain("Key Vault kv-tenuvault-abc123 from an earlier setup is no")
-    // Declining only the import and publish leaves the older runbook in charge: its variable stays and the output says so.
-    expect(declined).toMatchObject({ scenario: "declined", published: false, legacyVariableKept: true })
-    expect(declined!.actions).toEqual([])
-    expect(declined!.variables).toEqual(expect.arrayContaining(["TenuVaultTenantId-11111111", "TenuVaultStorageAccount-11111111", "TenuVaultKeyVault-11111111"]))
-    expect(declined!.output).toContain("Kept 'TenuVaultKeyVault-11111111': the runbook was not published in this run, and the published one still reads it.")
-    expect(declined!.output.join(" ")).toContain("it still reads Key Vault kv-tenuvault-abc123")
-    expect(declined!.output.join(" ")).not.toContain("Delete it once no setup uses it")
+  type SetupScenario = { scenario: string; plain: boolean; reason: string | null; error: string | null; actions: string[]; legacyVariableKept: boolean; variables: string[]; schedule: boolean; link: boolean; output: string[] }
+  let setupScenarios: Map<string, SetupScenario> | undefined
+  const setupRun = (name: string) => {
+    if (!setupScenarios) {
+      const script = fileURLToPath(new URL("./fixtures/cloud-backup/setup-upgrade.ps1", import.meta.url))
+      const lines = execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }).split(/\r?\n/).filter((line) => line.startsWith("{"))
+      setupScenarios = new Map(lines.map((line) => JSON.parse(line) as SetupScenario).map((run) => [run.scenario, run]))
+    }
+    return setupScenarios.get(name)!
+  }
+  const DELETE_ADVICE = "Delete it once no setup uses it"
+
+  it.runIf(Boolean(pwsh))("removes the Key Vault variable only when the published runbook reads back as plain", () => {
+    const approved = setupRun("approved")
+    expect(approved).toMatchObject({ plain: true, legacyVariableKept: false, error: null })
+    // The import is told not to prompt again after the one approval, and the result is read back from the Published slot.
+    expect(approved.actions).toEqual(["import confirm=False", "publish", "export Published", "remove TenuVaultKeyVault-11111111"])
+    expect(approved.output.join(" ")).toContain(DELETE_ADVICE)
+    for (const [name, reason] of [
+      ["outer-declined", "the runbook import and publish was not approved"],
+      // The import's own prompt declined with an older draft present: that draft is what got published.
+      ["import-declined", "the published runbook is still version 1.1.0, older than 1.2.0"],
+      ["published-older", "the published runbook is still version 1.1.0, older than 1.2.0"],
+    ] as const) {
+      const run = setupRun(name)
+      expect(run, name).toMatchObject({ plain: false, reason, legacyVariableKept: true })
+      expect(run.output, name).toContain(`Kept 'TenuVaultKeyVault-11111111': ${reason}. Run this script again to finish the upgrade.`)
+      expect(run.output.join(" "), name).toContain(`Keep Key Vault kv-tenuvault-abc123: ${reason}`)
+      expect(run.output.join(" "), name).not.toContain(DELETE_ADVICE)
+    }
+    expect(setupRun("outer-declined").actions).toEqual([])
+    // A publish that throws stops the run before any variable changes.
+    expect(setupRun("publish-throws")).toMatchObject({ error: "Publishing the runbook failed.", legacyVariableKept: true })
+    expect(setupRun("publish-throws").actions).toEqual(["import confirm=False", "publish"])
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("advises deleting the vault after -Remove only when the tenant's setup is gone", () => {
+    const complete = setupRun("remove-complete")
+    expect(complete).toMatchObject({ schedule: false, link: false, legacyVariableKept: false, variables: [] })
+    expect(complete.output).toContain("Cloud backup schedule and variables for tenant 11111111-2222-3333-4444-555555555555 removed.")
+    expect(complete.output.join(" ")).toContain(DELETE_ADVICE)
+    for (const name of ["remove-whatif", "remove-variable-declined"]) {
+      const run = setupRun(name)
+      expect(run.output.join(" "), name).toContain("were not fully removed. Still in place:")
+      expect(run.output.join(" "), name).toContain("Keep Key Vault kv-tenuvault-abc123: this tenant's cloud backup setup was not fully removed")
+      expect(run.output.join(" "), name).not.toContain(DELETE_ADVICE)
+      expect(run.output, name).not.toContain("Cloud backup schedule and variables for tenant 11111111-2222-3333-4444-555555555555 removed.")
+    }
+    // -WhatIf changes nothing; a declined variable is named as left in place.
+    expect(setupRun("remove-whatif")).toMatchObject({ actions: [], schedule: true, link: true, legacyVariableKept: true })
+    expect(setupRun("remove-variable-declined").output.join(" ")).toContain("Still in place: variable 'TenuVaultScope-11111111'.")
   }, 60_000)
 
   it("scopes the writer role to the container without delete and prints the paste block", () => {

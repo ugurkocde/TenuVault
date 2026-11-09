@@ -31,9 +31,10 @@
     Azure encrypts it at rest and your Azure role assignments decide who can read it, so setup needs
     no Key Vault and no recovery key. Setups made before runbook 1.2.0 created a Key Vault
     (kv-tenuvault-<suffix>) for the recovery key. Running this script again is the upgrade: it
-    republishes the runbook, rewrites the variables in place, removes the tenant's old
-    TenuVaultKeyVault variable and names the old vault, which you can delete once no setup uses
-    it. Backups made before the upgrade stay sealed and open in TenuVault with the recovery key.
+    republishes the runbook and rewrites the variables in place. Once the published runbook reads
+    back as 1.2.0 or later, it removes the tenant's old TenuVaultKeyVault variable and names the
+    old vault, which you can delete once no setup uses it. Backups made before the upgrade stay
+    sealed and open in TenuVault with the recovery key.
 
     Microsoft Graph application roles are the one part Azure RBAC cannot grant. With
     -GrantGraphRoles (Global Administrator) the script assigns the read-only DeviceManagement
@@ -49,8 +50,9 @@
 
     With -Remove, the script deletes this tenant's schedule link, schedule and Automation
     variables, and lists what stays behind on purpose (Automation account, roles, backups) and
-    what to revoke by hand. It also names the Key Vault of an earlier setup, which can be deleted
-    once no setup uses it.
+    what to revoke by hand. When the tenant's schedule link, schedule and variables read back as
+    gone, it also names the Key Vault of an earlier setup, which can be deleted once no setup
+    uses it; otherwise it lists what is left and says to keep the vault.
 
     Needs Az.Accounts, Az.Resources, Az.Automation and Az.Storage, plus an account
     that can create Automation accounts and role assignments (Owner, or Contributor
@@ -151,6 +153,8 @@ $variableNames = @(
 # Setups before runbook 1.2.0 also wrote the Key Vault that held the recovery key. The runbook
 # no longer reads it; a rerun or -Remove deletes that variable.
 $legacyKeyVaultVariable = "TenuVaultKeyVault-$tenantKey"
+# The first runbook that writes plain backups and reads no Key Vault.
+$plainRunbookVersion = "1.2.0"
 
 # Validate every input before the first Azure write.
 if ($TenantId -notmatch '^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$') {
@@ -269,14 +273,15 @@ function Get-TenuVaultLegacyKeyVaults {
     return @($names)
 }
 
+# $KeptBecause names why the vault may still be read (the runbook was not verified as plain, or
+# this tenant's setup was not fully removed); without it the vault is reported as unused.
 function Write-TenuVaultLegacyKeyVaultNote {
-    param([string[]]$Names, [bool]$RunbookPublished = $true)
+    param([string[]]$Names, [string]$KeptBecause)
     if (-not $Names) { return }
     Write-Host ""
-    if (-not $RunbookPublished) {
-        Write-Host "The runbook was not updated in this run, so it still reads Key Vault $($Names -join ', ')." -ForegroundColor Yellow
-        Write-Host "Keep the vault and the $legacyKeyVaultVariable variable. Run this script again and let it import and" -ForegroundColor Yellow
-        Write-Host "publish the runbook to finish the upgrade to plain backups." -ForegroundColor Yellow
+    if ($KeptBecause) {
+        Write-Host "Keep Key Vault $($Names -join ', '): $KeptBecause, so this setup may still read it." -ForegroundColor Yellow
+        Write-Host "Run this script again to finish; it reports when the vault is no longer used." -ForegroundColor Yellow
         return
     }
     Write-Host "Cloud backups no longer use Key Vault. Key Vault $($Names -join ', ') from an earlier setup is no"
@@ -286,36 +291,136 @@ function Write-TenuVaultLegacyKeyVaultNote {
     Write-Host "stay sealed with it and open in TenuVault with it."
 }
 
-# Imports and publishes the sibling runbook. True only when both happened in this run.
+# The version the published runbook carries, read back from Azure, or $null when it cannot be read.
+function Get-TenuVaultPublishedRunbookVersion {
+    $folder = Join-Path ([IO.Path]::GetTempPath()) "tenuvault-runbook-$([guid]::NewGuid().ToString('N'))"
+    New-Item -ItemType Directory -Path $folder -Force | Out-Null
+    try {
+        Export-AzAutomationRunbook -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName `
+            -Name $runbookName -Slot Published -OutputFolder $folder -Force -Confirm:$false -ErrorAction Stop | Out-Null
+        $file = Get-ChildItem -Path $folder -Filter "*.ps1" -File | Select-Object -First 1
+        if (-not $file) { return $null }
+        $match = [regex]::Match((Get-Content -Raw -Path $file.FullName), '\$script:RunbookVersion = "(\d+\.\d+\.\d+)"')
+        if ($match.Success) { return $match.Groups[1].Value }
+        return $null
+    } catch {
+        Write-Host "Could not read back the published runbook: $($_.Exception.Message)"
+        return $null
+    } finally {
+        Remove-Item -Path $folder -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# Imports and publishes the sibling runbook, then reads the published runbook back. Plain is true
+# only when Azure now runs a runbook of $plainRunbookVersion or later, whatever was confirmed.
 function Publish-TenuVaultRunbook {
     [CmdletBinding(SupportsShouldProcess)]
     param()
-    if (-not $PSCmdlet.ShouldProcess($runbookName, "Import and publish runbook")) { return $false }
+    if (-not $PSCmdlet.ShouldProcess($runbookName, "Import and publish runbook")) {
+        return @{ Plain = $false; Version = $null; Reason = "the runbook import and publish was not approved" }
+    }
     Write-Host "Importing runbook '$runbookName'..."
+    # Approved once above: the import's own confirmation must not decide differently.
     Import-AzAutomationRunbook -ResourceGroupName $ResourceGroupName `
         -AutomationAccountName $AutomationAccountName -Name $runbookName `
-        -Path $runbookPath -Type PowerShell72 -Description "TenuVault scheduled Intune backup in Azure" -Force | Out-Null
+        -Path $runbookPath -Type PowerShell72 -Description "TenuVault scheduled Intune backup in Azure" -Force -Confirm:$false | Out-Null
     Publish-AzAutomationRunbook -ResourceGroupName $ResourceGroupName `
         -AutomationAccountName $AutomationAccountName -Name $runbookName | Out-Null
-    return $true
+    $version = Get-TenuVaultPublishedRunbookVersion
+    if (-not $version) { return @{ Plain = $false; Version = $null; Reason = "the published runbook could not be read back or carries no TenuVault version" } }
+    if ([version]$version -lt [version]$plainRunbookVersion) {
+        return @{ Plain = $false; Version = $version; Reason = "the published runbook is still version $version, older than $plainRunbookVersion" }
+    }
+    return @{ Plain = $true; Version = $version; Reason = $null }
 }
 
-# Drops the Key Vault variable of a setup before runbook 1.2.0, but only once this run published
-# the runbook that no longer reads it: an older published runbook still needs the variable.
+# Drops the Key Vault variable of a setup before runbook 1.2.0, but only once the published runbook
+# was read back as one that no longer reads it: an older published runbook still needs the variable.
 function Remove-TenuVaultLegacyKeyVaultVariable {
     [CmdletBinding(SupportsShouldProcess)]
-    param([Parameter(Mandatory)][bool]$RunbookPublished)
+    param([Parameter(Mandatory)][hashtable]$Runbook)
     $variable = Get-AzAutomationVariable -ResourceGroupName $ResourceGroupName `
         -AutomationAccountName $AutomationAccountName -Name $legacyKeyVaultVariable -ErrorAction SilentlyContinue
     if (-not $variable) { return }
-    if (-not $RunbookPublished) {
-        Write-Host "Kept '$legacyKeyVaultVariable': the runbook was not published in this run, and the published one still reads it."
+    if (-not $Runbook.Plain) {
+        Write-Host "Kept '$legacyKeyVaultVariable': $($Runbook.Reason). Run this script again to finish the upgrade."
         return
     }
     if ($PSCmdlet.ShouldProcess($legacyKeyVaultVariable, "Remove Automation variable (no longer read)")) {
         Remove-AzAutomationVariable -ResourceGroupName $ResourceGroupName `
-            -AutomationAccountName $AutomationAccountName -Name $legacyKeyVaultVariable | Out-Null
+            -AutomationAccountName $AutomationAccountName -Name $legacyKeyVaultVariable -Confirm:$false | Out-Null
     }
+}
+
+# What of this tenant's setup is still in Azure: the schedule link, the schedule and the variables.
+function Get-TenuVaultTenantSetupLeft {
+    $left = [System.Collections.Generic.List[string]]::new()
+    $link = $null
+    try {
+        $link = Get-AzAutomationScheduledRunbook -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName `
+            -RunbookName $runbookName -ScheduleName $scheduleName -ErrorAction Stop
+    } catch { }
+    if ($link) { $left.Add("the link of '$runbookName' to '$scheduleName'") }
+    $schedule = Get-AzAutomationSchedule -ResourceGroupName $ResourceGroupName `
+        -AutomationAccountName $AutomationAccountName -Name $scheduleName -ErrorAction SilentlyContinue
+    if ($schedule) { $left.Add("schedule '$scheduleName'") }
+    foreach ($name in @($variableNames) + $legacyKeyVaultVariable) {
+        $variable = Get-AzAutomationVariable -ResourceGroupName $ResourceGroupName `
+            -AutomationAccountName $AutomationAccountName -Name $name -ErrorAction SilentlyContinue
+        if ($variable) { $left.Add("variable '$name'") }
+    }
+    return @($left)
+}
+
+# -Remove: this tenant's schedule link, schedule and variables go away, then what is left is read back.
+function Remove-TenuVaultCloudBackupSetup {
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
+    $account = Get-AzAutomationAccount -ResourceGroupName $ResourceGroupName -Name $AutomationAccountName -ErrorAction SilentlyContinue
+    if (-not $account) {
+        Write-Host "Automation account '$AutomationAccountName' was not found in '$ResourceGroupName'. Nothing to remove."
+        return
+    }
+    $principalId = Get-TenuVaultAutomationPrincipalId
+    $legacyKeyVaults = Get-TenuVaultLegacyKeyVaults
+    if ($PSCmdlet.ShouldProcess("$runbookName on $scheduleName", "Unlink runbook from schedule")) {
+        try {
+            Unregister-AzAutomationScheduledRunbook -ResourceGroupName $ResourceGroupName `
+                -AutomationAccountName $AutomationAccountName -RunbookName $runbookName `
+                -ScheduleName $scheduleName -Force -Confirm:$false -ErrorAction Stop | Out-Null
+        } catch { }
+    }
+    $schedule = Get-AzAutomationSchedule -ResourceGroupName $ResourceGroupName `
+        -AutomationAccountName $AutomationAccountName -Name $scheduleName -ErrorAction SilentlyContinue
+    if ($schedule -and $PSCmdlet.ShouldProcess($scheduleName, "Remove schedule")) {
+        Remove-AzAutomationSchedule -ResourceGroupName $ResourceGroupName `
+            -AutomationAccountName $AutomationAccountName -Name $scheduleName -Force -Confirm:$false | Out-Null
+    }
+    foreach ($name in @($variableNames) + $legacyKeyVaultVariable) {
+        $variable = Get-AzAutomationVariable -ResourceGroupName $ResourceGroupName `
+            -AutomationAccountName $AutomationAccountName -Name $name -ErrorAction SilentlyContinue
+        if ($variable -and $PSCmdlet.ShouldProcess($name, "Remove Automation variable")) {
+            Remove-AzAutomationVariable -ResourceGroupName $ResourceGroupName `
+                -AutomationAccountName $AutomationAccountName -Name $name -Confirm:$false | Out-Null
+        }
+    }
+    # Read back instead of trusting the prompts: a declined or failed step leaves the setup running.
+    $left = Get-TenuVaultTenantSetupLeft
+    Write-Host ""
+    if ($left.Count) {
+        Write-Host "Cloud backups for tenant $TenantId were not fully removed. Still in place: $($left -join ', ')." -ForegroundColor Yellow
+        Write-Host "Run this script with -Remove again to finish."
+    } else {
+        Write-Host "Cloud backup schedule and variables for tenant $TenantId removed." -ForegroundColor Green
+    }
+    Write-Host "Left in place on purpose: Automation account '$AutomationAccountName' and runbook '$runbookName'"
+    Write-Host "(other tenants may use them), storage account '$StorageAccountName' with every backup,"
+    Write-Host "and the role assignments."
+    Write-Host "When the Automation account is no longer used by any tenant, revoke these Graph roles"
+    Write-Host "from its managed identity (Entra ID > Enterprise applications > Permissions):"
+    foreach ($role in $graphRoleNames) { Write-Host "  * $role" }
+    if ($principalId) { Write-Host "Managed identity object (principal) id: $principalId" }
+    Write-TenuVaultLegacyKeyVaultNote $legacyKeyVaults -KeptBecause $(if ($left.Count) { "this tenant's cloud backup setup was not fully removed" } else { $null })
 }
 
 function Assert-TenuVaultAuthorizationActions {
@@ -369,42 +474,7 @@ if (-not $Remove) {
 # ---------------------------------------------------------------------------
 
 if ($Remove) {
-    $account = Get-AzAutomationAccount -ResourceGroupName $ResourceGroupName -Name $AutomationAccountName -ErrorAction SilentlyContinue
-    if (-not $account) {
-        Write-Host "Automation account '$AutomationAccountName' was not found in '$ResourceGroupName'. Nothing to remove."
-        return
-    }
-    $principalId = Get-TenuVaultAutomationPrincipalId
-    $legacyKeyVaults = Get-TenuVaultLegacyKeyVaults
-    try {
-        Unregister-AzAutomationScheduledRunbook -ResourceGroupName $ResourceGroupName `
-            -AutomationAccountName $AutomationAccountName -RunbookName $runbookName `
-            -ScheduleName $scheduleName -Force -ErrorAction Stop | Out-Null
-    } catch { }
-    $schedule = Get-AzAutomationSchedule -ResourceGroupName $ResourceGroupName `
-        -AutomationAccountName $AutomationAccountName -Name $scheduleName -ErrorAction SilentlyContinue
-    if ($schedule -and $PSCmdlet.ShouldProcess($scheduleName, "Remove schedule")) {
-        Remove-AzAutomationSchedule -ResourceGroupName $ResourceGroupName `
-            -AutomationAccountName $AutomationAccountName -Name $scheduleName -Force | Out-Null
-    }
-    foreach ($name in @($variableNames) + $legacyKeyVaultVariable) {
-        $variable = Get-AzAutomationVariable -ResourceGroupName $ResourceGroupName `
-            -AutomationAccountName $AutomationAccountName -Name $name -ErrorAction SilentlyContinue
-        if ($variable -and $PSCmdlet.ShouldProcess($name, "Remove Automation variable")) {
-            Remove-AzAutomationVariable -ResourceGroupName $ResourceGroupName `
-                -AutomationAccountName $AutomationAccountName -Name $name | Out-Null
-        }
-    }
-    Write-Host ""
-    Write-Host "Cloud backup schedule and variables for tenant $TenantId removed." -ForegroundColor Green
-    Write-Host "Left in place on purpose: Automation account '$AutomationAccountName' and runbook '$runbookName'"
-    Write-Host "(other tenants may use them), storage account '$StorageAccountName' with every backup,"
-    Write-Host "and the role assignments."
-    Write-Host "When the Automation account is no longer used by any tenant, revoke these Graph roles"
-    Write-Host "from its managed identity (Entra ID > Enterprise applications > Permissions):"
-    foreach ($role in $graphRoleNames) { Write-Host "  * $role" }
-    if ($principalId) { Write-Host "Managed identity object (principal) id: $principalId" }
-    Write-TenuVaultLegacyKeyVaultNote $legacyKeyVaults
+    Remove-TenuVaultCloudBackupSetup
     return
 }
 
@@ -554,7 +624,7 @@ if ($principalId) {
 # Runbook import and publish. A rerun is the upgrade path.
 # ---------------------------------------------------------------------------
 
-$runbookPublished = Publish-TenuVaultRunbook
+$runbook = Publish-TenuVaultRunbook
 
 Write-Host "Writing Automation variables for this tenant (suffix -$tenantKey)..."
 Set-TenuVaultAutomationVariable -Name "TenuVaultTenantId-$tenantKey" -Value $TenantId
@@ -564,9 +634,9 @@ Set-TenuVaultAutomationVariable -Name "TenuVaultExcludedFolders-$tenantKey" -Val
 Set-TenuVaultAutomationVariable -Name "TenuVaultAppOnlyExcluded-$tenantKey" -Value $appOnlyExcluded
 
 # Upgrade from a setup before runbook 1.2.0: name the old Key Vault, then drop its variable once
-# the runbook that no longer reads it is published.
+# the published runbook was read back as one that no longer reads it.
 $legacyKeyVaults = Get-TenuVaultLegacyKeyVaults
-Remove-TenuVaultLegacyKeyVaultVariable -RunbookPublished $runbookPublished
+Remove-TenuVaultLegacyKeyVaultVariable -Runbook $runbook
 
 # ---------------------------------------------------------------------------
 # Failure alert, before the schedule is linked (same rule as the watcher).
@@ -728,7 +798,7 @@ if ($WhatIfPreference) {
     Write-Host "Done. TenuVault cloud backups for this tenant:" -ForegroundColor Green
 }
 Write-Host "  Automation account:  $AutomationAccountName (resource group $ResourceGroupName, $Location)"
-Write-Host "  Runbook:             $runbookName ($(if ($runbookPublished) { 'published' } else { 'not updated in this run' }))"
+Write-Host "  Runbook:             $runbookName ($(if ($runbook.Plain) { "published, version $($runbook.Version)" } else { $runbook.Reason }))"
 Write-Host "  Storage account:     $StorageAccountName (container '$backupContainer', writer role has no delete)"
 Write-Host "  Backup results:      '$outcomeContainer' (result notes for the notification watcher, same writer role)"
 Write-Host "  Encryption:          Azure encryption at rest; backups are plain JSON, readable by whoever your role assignments allow"
@@ -761,7 +831,7 @@ if (-not $linked) {
     Write-Host "watch the job output. The backup then appears in TenuVault under Backup History."
 }
 
-Write-TenuVaultLegacyKeyVaultNote $legacyKeyVaults -RunbookPublished $runbookPublished
+Write-TenuVaultLegacyKeyVaultNote $legacyKeyVaults -KeptBecause $runbook.Reason
 
 Write-Host ""
 Write-Host "--- TenuVault cloud backup setup (paste into TenuVault) ---"
