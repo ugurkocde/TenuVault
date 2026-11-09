@@ -17,7 +17,6 @@ vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { backups, app: { open
 vi.mock("../../src/renderer/lib/license", () => ({ useTenantPlan: () => "pro" }))
 
 import { azureStorageBlocker, StorageChooser, type StorageChooserDraft } from "../../src/renderer/components/StorageChooser"
-import { announceBackupSettings, useBackupSettings } from "../../src/renderer/lib/local-inventory"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
 const ACCOUNT = { name: "tvbkpabc123", subscriptionId: "sub-1", resourceGroup: "rg-tenuvault-backups", location: "westeurope" }
@@ -77,7 +76,7 @@ async function clickText(container: HTMLElement, text: string) {
 }
 
 async function chooseAzure(container: HTMLElement) {
-  await clickText(container, "Your Azure storage account, encrypted")
+  await clickText(container, "Your Azure storage account")
 }
 
 async function selectAccount(container: HTMLElement, name: string) {
@@ -91,26 +90,23 @@ async function selectAccount(container: HTMLElement, name: string) {
 }
 
 describe("storage chooser Azure path", () => {
-  it("holds back the Azure choice until the recovery key is saved in the step", async () => {
-    backups.settings.mockResolvedValueOnce(unsaved)
-    backups.settings.mockResolvedValue(saved)
+  it("completes the Azure choice once access is confirmed, without a recovery key", async () => {
+    backups.settings.mockResolvedValue(unsaved)
     backups.inventoryProblem.mockResolvedValue(null)
     backups.verifyAzureStorage.mockResolvedValue(undefined)
-    backups.exportRecoveryKey.mockResolvedValue({ saved: true, path: "/tmp/key.txt" })
     fetchMock.mockResolvedValue(accountResponse([ACCOUNT]))
 
     const { container, last } = await renderChooser()
     await chooseAzure(container)
-    expect(container.textContent).toContain("Save your recovery key before you continue")
+    expect(container.textContent).not.toContain("recovery key")
+    expect(container.textContent).toContain("Azure encrypts the data at rest")
+    expect(container.textContent).toContain("every admin with access to the account sees the same backups")
 
     await selectAccount(container, ACCOUNT.name)
+    expect(last()).toBeNull()
     await clickText(container, "Check access")
     expect(container.textContent).toContain("Access confirmed")
-    expect(last()).toBeNull()
-
-    await clickText(container, "Save recovery key")
-    expect(backups.exportRecoveryKey).toHaveBeenCalledOnce()
-    expect(container.textContent).not.toContain("Save your recovery key before you continue")
+    expect(backups.exportRecoveryKey).not.toHaveBeenCalled()
     expect(last()).toEqual({
       kind: "azure",
       storageAccountName: ACCOUNT.name,
@@ -118,6 +114,19 @@ describe("storage chooser Azure path", () => {
       resourceGroupName: ACCOUNT.resourceGroup,
       location: ACCOUNT.location,
     })
+  })
+
+  it("does not depend on the backup settings read for the Azure choice", async () => {
+    backups.settings.mockRejectedValue(new Error("settings unavailable"))
+    backups.inventoryProblem.mockResolvedValue(null)
+    backups.verifyAzureStorage.mockResolvedValue(undefined)
+    fetchMock.mockResolvedValue(accountResponse([ACCOUNT]))
+
+    const { container, last } = await renderChooser()
+    await chooseAzure(container)
+    await selectAccount(container, ACCOUNT.name)
+    await clickText(container, "Check access")
+    expect(last()).toMatchObject({ kind: "azure", storageAccountName: ACCOUNT.name })
   })
 
   it("offers the setup script when no account is visible and refresh finds a new one", async () => {
@@ -183,118 +192,6 @@ describe("storage chooser Azure path", () => {
     expect(last()).toMatchObject({ kind: "azure", storageAccountName: ACCOUNT.name })
   })
 
-  it("retries the recovery key check after the settings read fails", async () => {
-    backups.settings.mockRejectedValueOnce(new Error("settings unavailable"))
-    backups.settings.mockResolvedValue(saved)
-    backups.inventoryProblem.mockResolvedValue(null)
-    fetchMock.mockResolvedValue(accountResponse([ACCOUNT]))
-
-    const { container } = await renderChooser()
-    await chooseAzure(container)
-    expect(container.textContent).toContain("Could not check whether your recovery key is saved")
-
-    await clickText(container, "Try again")
-    expect(container.textContent).not.toContain("Could not check whether your recovery key is saved")
-    expect(container.textContent).toContain(ACCOUNT.name)
-  })
-
-  it("discards a settings read that finishes after the chooser closed", async () => {
-    const savedKeyA: BackupSettings = { ...unsaved, keyFingerprint: "AAAA", recoveryExported: true }
-    const unsavedKeyB: BackupSettings = { ...unsaved, keyFingerprint: "BBBB", recoveryExported: false }
-    let resolveStaleRead!: (value: BackupSettings) => void
-    const staleRead = new Promise<BackupSettings>((resolve) => { resolveStaleRead = resolve })
-    backups.settings
-      .mockResolvedValueOnce({ ...unsaved, keyFingerprint: "AAAA" })
-      .mockReturnValueOnce(staleRead)
-      .mockResolvedValue(unsavedKeyB)
-    backups.inventoryProblem.mockResolvedValue(null)
-    backups.verifyAzureStorage.mockResolvedValue(undefined)
-    backups.exportRecoveryKey.mockResolvedValue({ saved: true, path: "/tmp/key.txt" })
-    fetchMock.mockResolvedValue(accountResponse([ACCOUNT]))
-
-    const first = await renderChooser()
-    await chooseAzure(first.container)
-    await clickText(first.container, "Save recovery key")
-    first.unmount()
-
-    const second = await renderChooser()
-    await chooseAzure(second.container)
-    await selectAccount(second.container, ACCOUNT.name)
-    await clickText(second.container, "Check access")
-    expect(second.container.textContent).toContain("Save your recovery key before you continue")
-    expect(second.last()).toBeNull()
-
-    await act(async () => resolveStaleRead(savedKeyA))
-    await flush()
-    expect(second.container.textContent).toContain("Save your recovery key before you continue")
-    expect(second.last()).toBeNull()
-  })
-
-  it("discards a settings read superseded by an announcement in the same batch", async () => {
-    const savedKeyA: BackupSettings = { ...unsaved, keyFingerprint: "AAAA", recoveryExported: true }
-    const unsavedKeyB: BackupSettings = { ...unsaved, keyFingerprint: "BBBB", recoveryExported: false }
-    let resolveStaleRead!: (value: BackupSettings) => void
-    const staleRead = new Promise<BackupSettings>((resolve) => { resolveStaleRead = resolve })
-    backups.settings
-      .mockResolvedValueOnce({ ...unsaved, keyFingerprint: "AAAA" })
-      .mockReturnValueOnce(staleRead)
-    backups.inventoryProblem.mockResolvedValue(null)
-    backups.verifyAzureStorage.mockResolvedValue(undefined)
-    backups.exportRecoveryKey.mockResolvedValue({ saved: true, path: "/tmp/key.txt" })
-    fetchMock.mockResolvedValue(accountResponse([ACCOUNT]))
-
-    const { container, last } = await renderChooser()
-    await chooseAzure(container)
-    await clickText(container, "Save recovery key")
-
-    await act(async () => {
-      announceBackupSettings(unsavedKeyB)
-      resolveStaleRead(savedKeyA)
-    })
-    await flush()
-    expect(container.textContent).toContain("Save your recovery key before you continue")
-
-    await selectAccount(container, ACCOUNT.name)
-    await clickText(container, "Check access")
-    expect(last()).toBeNull()
-  })
-
-  it("keeps a successful key save when another view hydrates its settings meanwhile", async () => {
-    let resolveSavedRead!: (value: BackupSettings) => void
-    const savedRead = new Promise<BackupSettings>((resolve) => { resolveSavedRead = resolve })
-    backups.settings
-      .mockResolvedValueOnce(unsaved)
-      .mockReturnValueOnce(savedRead)
-      .mockResolvedValue(unsaved)
-    backups.inventoryProblem.mockResolvedValue(null)
-    backups.verifyAzureStorage.mockResolvedValue(undefined)
-    backups.exportRecoveryKey.mockResolvedValue({ saved: true, path: "/tmp/key.txt" })
-    fetchMock.mockResolvedValue(accountResponse([ACCOUNT]))
-
-    const { container, last } = await renderChooser()
-    await chooseAzure(container)
-    await selectAccount(container, ACCOUNT.name)
-    await clickText(container, "Check access")
-    await clickText(container, "Save recovery key")
-
-    const probeContainer = document.createElement("div")
-    document.body.appendChild(probeContainer)
-    containers.push(probeContainer)
-    const probeRoot = createRoot(probeContainer)
-    roots.push(probeRoot)
-    const Probe = () => {
-      useBackupSettings()
-      return createElement("div", null, "probe")
-    }
-    act(() => probeRoot.render(createElement(Probe)))
-    await flush()
-
-    await act(async () => resolveSavedRead(saved))
-    await flush()
-    expect(container.textContent).not.toContain("Save your recovery key before you continue")
-    expect(last()).toMatchObject({ kind: "azure", storageAccountName: ACCOUNT.name })
-  })
-
   it("restores a verified Azure draft after a remount without checking access again", async () => {
     backups.settings.mockResolvedValue(saved)
     backups.inventoryProblem.mockResolvedValue(null)
@@ -345,13 +242,13 @@ describe("storage chooser Azure path", () => {
 })
 
 describe("azureStorageBlocker", () => {
-  const ready = { community: false, settingsLoaded: true, recoveryReady: true, accountsLoaded: true, accountCount: 1, selected: true, verified: true }
+  const ready = { community: false, accountsLoaded: true, accountCount: 1, selected: true, verified: true }
   it("names the next thing that keeps Continue disabled, in order", () => {
     expect(azureStorageBlocker(ready)).toBeNull()
     expect(azureStorageBlocker({ ...ready, verified: false })).toBe("To continue, select Check access.")
     expect(azureStorageBlocker({ ...ready, selected: false, verified: false })).toBe("To continue, choose a storage account.")
     expect(azureStorageBlocker({ ...ready, accountCount: 0 })).toContain("ask an Azure administrator")
-    expect(azureStorageBlocker({ ...ready, recoveryReady: false, selected: false })).toBe("To continue, save your recovery key.")
+    expect(azureStorageBlocker({ ...ready, accountsLoaded: false, accountCount: 0, selected: false, verified: false })).toBe("Loading your storage accounts...")
     expect(azureStorageBlocker({ ...ready, community: true })).toContain("needs Pro or MSP")
   })
 })

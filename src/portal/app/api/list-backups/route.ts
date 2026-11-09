@@ -8,6 +8,7 @@ import { mapLimit } from "../../../../shared/map-limit"
 import { MetadataCache } from "~/lib/storage/metadata-cache"
 import { manifestStatus } from "../../../../shared/intune/backup-status"
 import { backupFoldersIn, parseBackupName } from "../../../../shared/intune/backup-names"
+import { isLegacyOtherTenantError, isLegacySealedError } from "../../../../shared/legacy-sealed"
 import { type NextRequest, NextResponse } from "next/server"
 
 // Helper function to format bytes to human readable format
@@ -21,7 +22,7 @@ function formatBytes(bytes: number): string {
 
 const storageHeaders = (token: string) => ({ 'x-ms-version': '2021-12-02', 'x-ms-date': new Date().toUTCString(), Authorization: `Bearer ${token}` })
 
-interface MetadataRead { metadata: any; metadataError?: string; unavailable?: boolean }
+interface MetadataRead { metadata: any; metadataError?: string; unavailable?: boolean; sealed?: boolean; foreign?: boolean }
 
 /**
  * Why a backup on this device is unavailable, from the local store's refusal: damaged or
@@ -34,12 +35,13 @@ function unavailableReason(status: number, body: string): string | null {
 }
 const metadataCache = new MetadataCache<MetadataRead>(result => !!result.metadata && !result.metadataError)
 /**
- * What a folder's ownership marker says. `foreign` is a marker that cannot be opened or
- * authenticated for this tenant; `unreadable` is a marker that exists but could not be read (any
- * status but 404, a network error or a body that cannot be parsed). Only a marker that was read
- * is cached: importing the recovery key, or storage answering again, brings the folder back.
+ * What a folder's ownership marker says. `foreign` is a marker sealed by an earlier version that
+ * cannot be opened for this tenant (another tenant's, or a key this device lacks); `unreadable` is
+ * a marker that exists but could not be read (any status but 404, a network error or a body that
+ * cannot be parsed). Only a marker that was read is cached: importing the recovery key, or storage
+ * answering again, brings the folder back.
  */
-type OwnerRead = { kind: 'owner'; tenantId: string | null; runId: string | null } | { kind: 'missing' } | { kind: 'foreign' } | { kind: 'unreadable' }
+type OwnerRead = { kind: 'owner'; tenantId: string | null; runId: string | null; sealed?: never } | { kind: 'missing'; sealed?: never } | { kind: 'foreign'; sealed: boolean } | { kind: 'unreadable'; sealed?: never }
 const ownerCache = new MetadataCache<OwnerRead>(result => result.kind === 'owner')
 
 /** One backup folder, described from metadata and either a folder listing or the summary inventory. */
@@ -63,8 +65,10 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
       if (response.status === 409 && body.includes('<Code>InventoryIncomplete</Code>')) return { metadata: null }
       return { metadata: null, metadataError: response.status !== 404 ? `Backup metadata is unavailable (${response.status}).` : undefined }
     } catch (error) {
-      // An encrypted backup that cannot be opened (another recovery key, damaged data, no key on this device) says why.
-      if (error instanceof Error && (error.name === 'FetchApplicationError' || error.name === 'FetchPreconditionError')) return { metadata: null, metadataError: error.message }
+      // A backup sealed by an earlier version for another tenant signed in here is that tenant's.
+      if (isLegacyOtherTenantError(error)) return { metadata: null, foreign: true }
+      // A backup sealed by an earlier version that no key on this device opens, or one that cannot be read for another reason, says why.
+      if (error instanceof Error && (error.name === 'FetchApplicationError' || error.name === 'FetchPreconditionError')) return { metadata: null, metadataError: error.message, sealed: isLegacySealedError(error) }
       return { metadata: null, metadataError: 'Backup metadata could not be read or parsed.' }
     }
   }
@@ -95,12 +99,11 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
       const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(name)}/${BACKUP_OWNER_FILE}`, { headers: storageHeaders(accessToken) })
       if (response.status === 404) return { kind: 'missing' }
       if (!response.ok) return { kind: 'unreadable' }
-      if (response.headers.get('x-tenuvault-authenticated') === 'false') return { kind: 'foreign' }
       const owner = await response.json()
       return { kind: 'owner', tenantId: typeof owner?.TenantId === 'string' ? owner.TenantId : null, runId: typeof owner?.RunId === 'string' ? owner.RunId : null }
     } catch (error) {
-      // Sealed for another tenant or key, or damaged. A missing key or sign-in on this device leaves the marker unreadable until it is fixed.
-      if (error instanceof Error && error.name === 'FetchApplicationError') return { kind: 'foreign' }
+      // Sealed by an earlier version for another tenant or with a key this device lacks. A missing sign-in on this device leaves the marker unreadable until it is fixed.
+      if (error instanceof Error && error.name === 'FetchApplicationError') return { kind: 'foreign', sealed: isLegacySealedError(error) }
       return { kind: 'unreadable' }
     }
   }
@@ -174,8 +177,10 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
     runbookVersion: metadata?.RunbookVersion ?? metadata?.runbookVersion ?? null,
     runId,
     ownerTenantId: owner.kind === 'owner' ? owner.tenantId : null,
-    foreign: owner.kind === 'foreign',
+    foreign: owner.kind === 'foreign' || Boolean(metadataResult.foreign),
     unresolved: owner.kind === 'unreadable',
+    // Sealed by an earlier version and not opened on this device: its manifest, or its ownership marker.
+    sealed: Boolean(metadataResult.sealed) || owner.sealed === true,
   }
 }
 
@@ -307,6 +312,10 @@ export async function POST(request: NextRequest) {
     // counted as unresolved; its run, if it failed, counts once through its attempt record.
     const described = await mapLimit(backupFolders, 6, (name) => describeBackup(storageAccountName, name, accessToken, inventories.get(name)))
     const unresolved = described.filter((backup) => backup.unresolved).length
+    // Folders sealed by an earlier version that this device cannot open, unless a readable record
+    // names another tenant. They may be another tenant's in a shared container, or need the
+    // recovery key of the device that made them; the backups page offers to import it.
+    const sealed = described.filter((backup) => backup.sealed && (backup.ownerTenantId === null || backup.ownerTenantId.toLowerCase() === String(tenantId).toLowerCase())).length
     backups.push(...described.filter((backup) => {
       const owner = (backup.fingerprint as { TenantId?: unknown } | null | undefined)?.TenantId ?? backup.ownerTenantId
       return !backup.foreign && !backup.unresolved && (typeof owner !== 'string' || owner.toLowerCase() === String(tenantId).toLowerCase())
@@ -329,9 +338,10 @@ export async function POST(request: NextRequest) {
       delete backup.ownerTenantId
       delete backup.foreign
       delete backup.unresolved
+      delete backup.sealed
     }
 
-    return NextResponse.json({ backups, unresolved, ...(damagedFiles ? { damagedFiles, damagedFileNames } : {}) })
+    return NextResponse.json({ backups, unresolved, sealed, ...(damagedFiles ? { damagedFiles, damagedFileNames } : {}) })
   } catch (error) {
     console.error("List backups error:", error)
     return NextResponse.json(

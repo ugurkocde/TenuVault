@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest"
 import { createBridgedFetch } from "../src/main/api/fetch-bridge"
 import { DELEGATED_CLIENT_SECRET, INTERNAL_API_ORIGIN, localStorageAccountName } from "../src/shared/constants"
 import { withRouteTenant } from "../src/main/storage/blob-emulator"
-import { encryptedAzureFetch } from "../src/main/storage/azure-seal"
+import { legacyAzureReader } from "../src/main/storage/azure-seal"
+import { sealLegacyAzure } from "./legacy-seal"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
 const CLIENT = "22222222-2222-2222-2222-222222222222"
@@ -145,14 +146,14 @@ describe("createBridgedFetch", () => {
     const response = await routeTokenRequest(bridged, "secret", "https://storage.azure.com/.default")
     expect(response.status).toBe(200)
     expect(await response.text()).toBe(await answer.clone().text())
-    // A registered token binds Azure Storage uploads to the tenant, so the sealed upload is sent.
-    const storage = vi.fn(async () => new Response(null, { status: 201 }))
-    const upload = encryptedAzureFetch(storage, () => [Buffer.alloc(32, 1)], () => undefined)("https://contoso.blob.core.windows.net/intune-backups/backup-1/policy.json", {
-      method: "PUT", headers: { Authorization: `Bearer ${token}` }, body: "{}",
-    })
-    if (registered) await expect(upload).resolves.toMatchObject({ status: 201 })
-    else await expect(upload).rejects.toThrow("Backup tenant context is unavailable")
-    expect(storage).toHaveBeenCalledTimes(registered ? 1 : 0)
+    // A registered token names the tenant a backup sealed by an earlier version is opened for.
+    const blob = "https://contoso.blob.core.windows.net/intune-backups/backup-1/policy.json"
+    const sealed = sealLegacyAzure(Buffer.from('{"id":"legacy"}'), Buffer.alloc(32, 1), TENANT, new URL(blob))
+    const storage = vi.fn(async () => new Response(new Uint8Array(sealed)))
+    const read = legacyAzureReader(storage, () => [Buffer.alloc(32, 1)])(blob, { headers: { Authorization: `Bearer ${token}` } })
+    if (registered) await expect(read.then((response) => response.json())).resolves.toEqual({ id: "legacy" })
+    else await expect(read).rejects.toThrow("Backup tenant context is unavailable")
+    expect(storage).toHaveBeenCalledTimes(1)
   })
 })
 

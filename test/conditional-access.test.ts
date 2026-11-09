@@ -419,7 +419,7 @@ describe("Conditional Access in the restore review", () => {
       const url = new URL(String(input))
       if (url.hostname === "login.microsoftonline.com") return Response.json({ access_token: jwt(scopes) })
       if (url.hostname === "graph.microsoft.com") graph.push(url.pathname)
-      if (decodeURIComponent(url.pathname) === `/intune-backups/${path}`) return Response.json(policy(), { headers: { "x-tenuvault-authenticated": "true" } })
+      if (decodeURIComponent(url.pathname) === `/intune-backups/${path}`) return Response.json(policy())
       return new Response("", { status: 404 })
     }))
     const body = { tenantId: "tenant", appId: "app", clientSecret: "test", storageAccountName: "store", backupId, paths: [path] }

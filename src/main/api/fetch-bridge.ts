@@ -69,9 +69,7 @@ export function createBridgedFetch(options: FetchBridgeOptions): typeof fetch {
             { status: 403, headers: { "content-type": "application/xml", "x-ms-error-code": "AuthorizationFailure" } },
           )
         }
-        const response = await options.handleLocalBlob(new Request(input, init))
-        if (response.ok) response.headers.set("x-tenuvault-authenticated", "true")
-        return response
+        return await options.handleLocalBlob(new Request(input, init))
       }
 
       const tokenPath = url.hostname === "login.microsoftonline.com" ? TOKEN_PATH.exec(url.pathname) : null
@@ -102,6 +100,7 @@ export function createBridgedFetch(options: FetchBridgeOptions): typeof fetch {
         if (request.method === "POST" && response.ok) {
           const form = new URLSearchParams(requestForm)
           if (form.get("scope")?.includes("storage.azure.com")) {
+            // Registered so backups sealed by earlier versions open for this tenant (storage/azure-seal.ts).
             // A body that is not a token (for example a captive portal page) still goes to MSAL, which
             // reports it as a response it could not parse. Rejecting here would look like no response at all.
             const token = await response.clone().json().catch(() => null) as { access_token?: unknown } | null

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Creates the Azure storage account the TenuVault desktop app stores encrypted backups in.
+    Creates the Azure storage account the TenuVault desktop app stores backups in.
 
 .DESCRIPTION
     Run this script as an Azure administrator, for example when an Intune administrator
@@ -384,6 +384,7 @@ Write-Host ""
 Write-Host "New role assignments can take a few minutes to apply. The assignments must stay permanently"
 Write-Host "active: a PIM eligible assignment that nobody activated makes scheduled backups fail."
 Write-Host "Members of the group then select 'Check access' in TenuVault to confirm. If the storage"
-Write-Host "firewall is restricted, the check must run from an allowed network. Each admin also saves"
-Write-Host "the TenuVault recovery key in Settings before the first Azure backup; without it the"
-Write-Host "encrypted backups cannot be read."
+Write-Host "firewall is restricted, the check must run from an allowed network. Azure encrypts the"
+Write-Host "backups at rest, and these role assignments decide who can read them: every admin in the"
+Write-Host "group sees and restores the same backups. Grant blob data roles on this account only to"
+Write-Host "the Intune admin group."

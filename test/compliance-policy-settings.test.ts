@@ -174,7 +174,7 @@ describe("Compliance policy settings restore review", () => {
         methods.push(`${init?.method ?? "GET"} ${url.pathname}`)
         return Response.json(live())
       }
-      if (decodeURIComponent(url.pathname) === `/intune-backups/${path}`) return Response.json(snapshot(), { headers: { "x-tenuvault-authenticated": "true" } })
+      if (decodeURIComponent(url.pathname) === `/intune-backups/${path}`) return Response.json(snapshot())
       return new Response("", { status: 404 })
     }))
     const body = { tenantId: "tenant", appId: "app", clientSecret: "test", storageAccountName: "store", backupId, paths: [path], live: true }

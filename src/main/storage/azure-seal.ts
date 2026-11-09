@@ -1,79 +1,87 @@
-import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes } from 'node:crypto'
-import { FetchApplicationError, FetchPreconditionError } from '../api/network-error'
+import { createDecipheriv, createHash, hkdfSync } from 'node:crypto'
+import { FetchApplicationError, FetchPreconditionError, LegacySealedError } from '../api/network-error'
+
+/**
+ * Reads backups in Azure storage. New Azure backups are plain JSON: Azure encrypts them at rest and
+ * the customer's role assignments decide who reads them, so every admin with access sees the same
+ * backups. Versions before that encrypted each Azure blob with the device key in a `TVAZ1`
+ * envelope bound to the tenant, account and path. Those legacy blobs are opened here with the
+ * device keyring, so older backups keep working on a device that has their key; nothing is sealed.
+ */
 const MAGIC = Buffer.from('TVAZ1\n')
+// Legacy blobs are bound to the tenant of the storage token that reads them.
 const tokens = new Map<string, { tenant: string; expires: number }>()
+// Every tenant that used Azure storage on this device, so a legacy blob of another one is named as such.
+const knownTenants = new Set<string>()
 const digest = (token: string) => createHash('sha256').update(token).digest('hex')
 export function registerStorageToken(token: string, tenant: string): void {
   if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(tenant)) throw new Error('Invalid backup tenant')
   for (const [key, value] of tokens) if (value.expires < Date.now()) tokens.delete(key)
   tokens.set(digest(token), { tenant: tenant.toLowerCase(), expires: Date.now() + 3600_000 })
+  knownTenants.add(tenant.toLowerCase())
 }
 const key = (master: Buffer) => Buffer.from(hkdfSync('sha256', master, Buffer.alloc(0), 'tenuvault-azure-backup-v1', 32))
 function aad(tenant: string, url: URL) { return Buffer.from(JSON.stringify([tenant.toLowerCase(), url.hostname, decodeURIComponent(url.pathname)])) }
-export function sealAzure(plain: Buffer, master: Buffer, tenant: string, url: URL): Buffer {
-  const iv = randomBytes(12), cipher = createCipheriv('aes-256-gcm', key(master), iv)
-  cipher.setAAD(aad(tenant, url))
-  const body = Buffer.concat([cipher.update(plain), cipher.final()])
-  return Buffer.concat([MAGIC, iv, cipher.getAuthTag(), body])
+
+/** Whether a blob is in the legacy `TVAZ1` envelope. */
+export function isLegacySealed(raw: Buffer): boolean {
+  return raw.subarray(0, MAGIC.length).equals(MAGIC)
 }
-export function openAzure(raw: Buffer, masters: Buffer[], tenant: string, url: URL): { data: Buffer; authenticated: boolean } {
-  if (!raw.subarray(0, MAGIC.length).equals(MAGIC)) {
-    // Unknown envelope/corrupt ciphertext must not masquerade as legacy JSON.
-    try { const value = JSON.parse(raw.toString()); if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error() }
-    catch { throw new Error('Backup authentication failed or the legacy snapshot is invalid') }
-    return { data: raw, authenticated: false }
-  }
+
+/** Opens a legacy sealed blob with the first key that authenticates it; throws when none does. */
+export function openLegacySealed(raw: Buffer, masters: Buffer[], tenant: string, url: URL): Buffer {
   for (const master of masters) {
     try {
       const start = MAGIC.length, decipher = createDecipheriv('aes-256-gcm', key(master), raw.subarray(start, start + 12))
       decipher.setAAD(aad(tenant, url)); decipher.setAuthTag(raw.subarray(start + 12, start + 28))
-      return { data: Buffer.concat([decipher.update(raw.subarray(start + 28)), decipher.final()]), authenticated: true }
+      return Buffer.concat([decipher.update(raw.subarray(start + 28)), decipher.final()])
     } catch { /* Try older recovery keys. */ }
   }
-  throw new Error('Backup authentication failed. Import the correct recovery key or recover an undamaged snapshot.')
+  throw new Error('No recovery key on this device opens this backup for this tenant.')
 }
-/** Main-process boundary: ciphertext is the only backup payload sent to Azure. */
-export function encryptedAzureFetch(fetchImpl: typeof fetch, keys: () => Buffer[], requireRecovery: () => void): typeof fetch {
+
+/** A blob read in the backup container: a GET without a query (listings and versions pass through). */
+function isBackupBlobRead(url: URL, method: string): boolean {
+  return method === 'GET' && !url.search && /^[a-z0-9]{3,24}\.blob\.core\.windows\.net$/.test(url.hostname)
+    && url.pathname.startsWith('/intune-backups/')
+}
+
+/**
+ * Main-process boundary for Azure backup storage. Writes and every other request pass through
+ * unchanged. A blob read is returned as stored, unless it is a legacy sealed blob: that one is
+ * opened with the device keyring, or fails with a LegacySealedError that names the missing key.
+ */
+export function legacyAzureReader(fetchImpl: typeof fetch, keys: () => Buffer[]): typeof fetch {
   return async (input, init) => {
-    let networkAttempted = false
-    const send: typeof fetch = (input, init) => {
-      networkAttempted = true
-      return fetchImpl(input, init)
+    let url: URL
+    try { url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url) }
+    catch { return fetchImpl(input, init) }
+    const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase()
+    if (!isBackupBlobRead(url, method)) return fetchImpl(input, init)
+    const response = await fetchImpl(input, init)
+    if (!response.ok) return response
+    // Body reads can fail in transit. Only failures after the complete read are application errors.
+    const raw = Buffer.from(await response.arrayBuffer())
+    const headers = new Headers(response.headers); headers.delete('content-length'); headers.delete('content-encoding')
+    if (!isLegacySealed(raw)) return new Response(new Uint8Array(raw), { status: response.status, statusText: response.statusText, headers })
+    const bearer = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).get('authorization')?.replace(/^Bearer /i, '') ?? ''
+    const context = tokens.get(digest(bearer))
+    if (!context || context.expires < Date.now()) throw new FetchPreconditionError(new Error('Backup tenant context is unavailable. Sign in again.'))
+    let keyring: Buffer[]
+    try { keyring = keys() }
+    catch (error) { throw new FetchApplicationError(error) }
+    let data: Buffer
+    try { data = openLegacySealed(raw, keyring, context.tenant, url) }
+    catch (error) {
+      // In a container several tenants share, a key here may open it for another tenant: that is
+      // not a missing key, and that tenant's content is never returned.
+      const otherTenant = [...knownTenants].some((tenant) => {
+        if (tenant === context.tenant) return false
+        try { openLegacySealed(raw, keyring, tenant, url); return true } catch { return false }
+      })
+      throw new LegacySealedError(error, otherTenant)
     }
-    try {
-      const request = new Request(input, init), url = new URL(request.url)
-      const isBackupContainer = /^[a-z0-9]{3,24}\.blob\.core\.windows\.net$/.test(url.hostname) && (url.pathname === '/intune-backups' || url.pathname.startsWith('/intune-backups/'))
-      if (!isBackupContainer) return send(request)
-      const isHandled = !url.search && ['GET', 'PUT'].includes(request.method)
-      if (!isHandled) {
-        // Fail closed: a body-bearing request the seal cannot encrypt (another method, or a
-        // query string such as a block upload) must never reach Azure in plaintext. Reads,
-        // listings, container creation and deletes carry no body and keep passing through.
-        const hasBody = request.body !== null || Number(request.headers.get('content-length') ?? 0) > 0
-        if (hasBody) throw new Error('Refused to send an unsealed request to backup storage. Reload the backup and try again.')
-        return send(request)
-      }
-      const bearer = request.headers.get('authorization')?.replace(/^Bearer /i, '') ?? ''
-      const context = tokens.get(digest(bearer))
-      if (!context || context.expires < Date.now()) throw new Error('Backup tenant context is unavailable. Sign in again.')
-      if (request.method === 'PUT') {
-        requireRecovery()
-        const body = sealAzure(Buffer.from(await request.arrayBuffer()), keys()[0]!, context.tenant, url)
-        const headers = new Headers(request.headers); headers.set('content-type', 'application/octet-stream'); headers.delete('content-length')
-        return send(new Request(url, { method: 'PUT', headers, body: new Uint8Array(body), signal: request.signal }))
-      }
-      const response = await send(request)
-      if (!response.ok) return response
-      // Body reads can fail in transit. Only failures after the complete read are application errors.
-      const raw = Buffer.from(await response.arrayBuffer())
-      let opened: ReturnType<typeof openAzure>
-      try { opened = openAzure(raw, keys(), context.tenant, url) }
-      catch (error) { throw new FetchApplicationError(error) }
-      const headers = new Headers(response.headers); headers.set('content-type', 'application/json'); headers.set('x-tenuvault-authenticated', String(opened.authenticated)); headers.delete('content-length'); headers.delete('content-encoding')
-      return new Response(new Uint8Array(opened.data), { status: response.status, headers })
-    } catch (error) {
-      if (networkAttempted || error instanceof FetchPreconditionError) throw error
-      throw new FetchPreconditionError(error)
-    }
+    headers.set('content-type', 'application/json')
+    return new Response(new Uint8Array(data), { status: response.status, headers })
   }
 }

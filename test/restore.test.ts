@@ -9,6 +9,8 @@ const copyOf = (folder: string, policy: object) => buildRestorePlan(typeForFolde
 import { POST } from '../src/portal/app/api/restore-backup/route'
 import { POST as restorePrevious } from '../src/portal/app/api/revert-policy/route'
 import { NextRequest } from '../src/main/api/next-server-shim'
+import { LegacySealedError } from '../src/main/api/network-error'
+import { LEGACY_SEALED_MESSAGE } from '../src/shared/legacy-sealed'
 
 const backupId = 'backup-2026-09-25-120000'
 const path = `${backupId}/DeviceConfigurations/Example.json`
@@ -90,7 +92,7 @@ describe('Restore results', () => {
       if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
       if (url.hostname.endsWith('.blob.core.windows.net')) {
         if (init?.method === 'PUT' || url.pathname.includes('/metadata/')) return new Response('', { status: 404 })
-        return Response.json({ id: 'original', displayName: 'Example', '@odata.type': '#microsoft.graph.windows10CustomConfiguration', omaSettings: [], assignments: [{ id: 'a', target: { '@odata.type': '#microsoft.graph.allDevicesAssignmentTarget' } }] }, { headers: { 'x-tenuvault-authenticated': 'true' } })
+        return Response.json({ id: 'original', displayName: 'Example', '@odata.type': '#microsoft.graph.windows10CustomConfiguration', omaSettings: [], assignments: [{ id: 'a', target: { '@odata.type': '#microsoft.graph.allDevicesAssignmentTarget' } }] })
       }
       if (url.hostname === 'graph.microsoft.com') {
         graph.push({ method: init?.method ?? 'GET', path: url.pathname, body: init?.body ? JSON.parse(String(init.body)) : undefined })
@@ -171,7 +173,7 @@ describe('Replace in place with progress', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input))
       if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
-      if (url.hostname.endsWith('.blob.core.windows.net')) return Response.json(snapshot, { headers: { 'x-tenuvault-authenticated': 'true' } })
+      if (url.hostname.endsWith('.blob.core.windows.net')) return Response.json(snapshot)
       if (url.hostname === 'graph.microsoft.com') {
         graph.push(`${init?.method ?? 'GET'} ${url.pathname}`)
         return Response.json(live)
@@ -208,17 +210,37 @@ describe('Replace in place with progress', () => {
   })
 })
 
-it('blocks replacement of unauthenticated snapshots before reading or writing Graph', async () => {
+it('replaces a policy in place from a plain Azure backup, the same trust as any backup', async () => {
+  const graph: string[] = []
+  const snapshot = { id: 'original', displayName: 'Example', '@odata.type': '#microsoft.graph.windows10CustomConfiguration', omaSettings: [] }
+  vi.stubGlobal('fetch', vi.fn(async (input, init) => {
+    const url = new URL(String(input))
+    if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
+    // Plain JSON as stored in Azure, with no TenuVault header of any kind.
+    if (url.hostname.endsWith('.blob.core.windows.net')) return new Response(JSON.stringify(snapshot), { headers: { 'content-type': 'application/json' } })
+    graph.push(`${init?.method ?? 'GET'} ${url.pathname}`)
+    return Response.json({ ...snapshot, displayName: 'Renamed' })
+  }))
+  const response = await POST(request({ ...body, restoreType: 'selective', selectedPolicies: [{ path }], mode: 'replace' }))
+  const result = await response.json()
+  expect(result.details.results[0]).toMatchObject({ success: true, action: 'updated' })
+  expect(graph).toContain('PATCH /beta/deviceManagement/deviceConfigurations/original')
+})
+
+it('names the missing key for a legacy sealed snapshot and writes nothing to Graph', async () => {
   const graph = vi.fn()
   vi.stubGlobal('fetch', vi.fn(async (input) => {
     const url = new URL(String(input))
     if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
-    if (url.hostname.endsWith('.blob.core.windows.net')) return Response.json({ id: 'original', displayName: 'Legacy' })
+    if (url.hostname.endsWith('.blob.core.windows.net')) {
+      if (url.pathname.endsWith('/metadata.json') || url.pathname.endsWith('/.tenuvault-owner.json')) return new Response('', { status: 404 })
+      throw new LegacySealedError()
+    }
     graph(); return Response.json({})
   }))
   const response = await POST(request({ ...body, restoreType: 'selective', selectedPolicies: [{ path }], mode: 'replace' }))
   const result = await response.json()
-  expect(result.details.results[0]).toMatchObject({ success: false, error: expect.stringContaining('Unverified') })
+  expect(result.details.results[0]).toMatchObject({ success: false, error: LEGACY_SEALED_MESSAGE })
   expect(graph).not.toHaveBeenCalled()
 })
 

@@ -29,10 +29,11 @@ function NextStep({ icon, title, done, children }: { icon: React.ReactNode; titl
 }
 
 /**
- * After the first successful backup: turn on automatic backups, and save the recovery key so
- * the backups stay readable after a reinstall or on another computer.
+ * After the first successful backup: turn on automatic backups and, for backups on this device,
+ * save the recovery key so they stay readable after a reinstall or on another computer. Azure
+ * backups do not depend on the key, so that step is left out for them.
  */
-export function FirstBackupNextSteps({ tenantId, plan }: { tenantId: string; plan: Plan | null }) {
+export function FirstBackupNextSteps({ tenantId, plan, local }: { tenantId: string; plan: Plan | null; local: boolean }) {
   const [schedule, setSchedule] = useState<string | null>(null)
   const [scheduling, setScheduling] = useState(false)
   const [scheduleError, setScheduleError] = useState("")
@@ -47,11 +48,13 @@ export function FirstBackupNextSteps({ tenantId, plan }: { tenantId: string; pla
       const current = list.find((item) => item.tenantId === tenantId.toLowerCase())
       if (active && current?.enabled) setSchedule(describeSchedule(current))
     }).catch(() => undefined)
-    void bridge.backups.settings().then((settings) => {
-      if (active) setRecoverySaved(settings.recoveryExported)
-    }).catch(() => { if (active) setRecoverySaved(false) })
+    if (local) {
+      void bridge.backups.settings().then((settings) => {
+        if (active) setRecoverySaved(settings.recoveryExported)
+      }).catch(() => { if (active) setRecoverySaved(false) })
+    }
     return () => { active = false }
-  }, [tenantId])
+  }, [tenantId, local])
 
   const turnOn = async () => {
     setScheduling(true)
@@ -105,14 +108,14 @@ export function FirstBackupNextSteps({ tenantId, plan }: { tenantId: string; pla
           )}
           {scheduleError && <p role="alert" className="text-red-700">{scheduleError}</p>}
         </NextStep>
-        {recoverySaved !== null && (
+        {local && recoverySaved !== null && (
           <NextStep icon={<KeyRound className="h-4 w-4" />} title="Save your recovery key" done={recoverySaved}>
             {recoverySaved ? (
               <p role="status">Your recovery key is saved. Keep it somewhere safe, such as your password manager.</p>
             ) : (
               <>
                 <p>
-                  Backups are encrypted with a key protected by your Windows or macOS account. Without the recovery key, they
+                  Backups on this device are encrypted with a key protected by your Windows or macOS account. Without the recovery key, they
                   cannot be read after a reinstall or on another computer.
                 </p>
                 <Button type="button" size="sm" variant="outline" onClick={() => void saveKey()} disabled={savingKey}>

@@ -140,9 +140,8 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    if (action === "revert" && backupResponse.headers.get("x-tenuvault-authenticated") !== "true") throw new Error("Unverified legacy snapshots cannot revert live policies. Review and restore a copy instead.")
     const policyContent = await backupResponse.json()
-    if (action === "revert" && policyContent.id !== policyId) throw new Error("The authenticated snapshot does not belong to the selected policy")
+    if (action === "revert" && policyContent.id !== policyId) throw new Error("The backup snapshot does not belong to the selected policy")
     
     // Restore creates an unassigned copy; revert puts the existing policy back to the backed-up version.
     const outcome = await new Restorer(graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) }), { mode: action === 'revert' ? 'replace' : 'copy', assignments: false, granted: grantedPermissions(graphToken) })

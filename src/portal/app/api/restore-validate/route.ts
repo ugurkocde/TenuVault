@@ -53,15 +53,15 @@ export async function POST(request: NextRequest) {
       try {
         response = await fetch(blobUrl(storageAccountName, path), { headers: storageHeaders(token) })
       } catch (error) {
-        return { ok: false, error: `The backup file could not be read or decrypted: ${error instanceof Error ? error.message : String(error)}` }
+        return { ok: false, error: `The backup file could not be read: ${error instanceof Error ? error.message : String(error)}` }
       }
-      if (!response.ok) return { ok: false, error: "The backup file could not be read or decrypted." }
+      if (!response.ok) return { ok: false, error: "The backup file could not be read." }
       try {
         const snapshot = (await response.json()) as Item
         if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) return { ok: false, error: "The backup file is not a policy object." }
         return { ok: true, snapshot }
       } catch {
-        return { ok: false, error: "The backup file could not be parsed. It may be corrupt or encrypted with a key this device does not have." }
+        return { ok: false, error: "The backup file could not be parsed. It may be damaged." }
       }
     }
 

@@ -16,7 +16,8 @@ const xor = (key: number): Cipher => ({
 describe("SecureStore", () => {
   it("warns that starting over deletes the backup key and explains recovery", () => {
     expect(APP_STATE_START_OVER_DETAIL).toContain("deletes the backup encryption key")
-    expect(APP_STATE_START_OVER_DETAIL).toContain("Existing local and Azure backups become unreadable unless you exported their recovery key")
+    expect(APP_STATE_START_OVER_DETAIL).toContain("Backups on this device become unreadable unless you exported their recovery key")
+    expect(APP_STATE_START_OVER_DETAIL).toContain("Azure backups made by this version stay readable")
     expect(APP_STATE_START_OVER_DETAIL).toContain("choose Quit, restore access to the saved data")
     expect(APP_STATE_START_OVER_DETAIL).toContain("Settings > Storage and recovery > Save recovery key")
     expect(APP_STATE_START_OVER_DETAIL).toContain("Import a recovery key")

@@ -123,7 +123,7 @@ function stubFetch(blobs: Record<string, Item>, options: { list?: string[] } = {
       const name = url.pathname.split('/').slice(2).map(decodeURIComponent).join('/')
       const blob = blobs[name]
       if (!blob) return new Response('', { status: 404 })
-      return Response.json(blob, { headers: { 'x-tenuvault-authenticated': 'true' } })
+      return Response.json(blob)
     }
     throw new Error(`Unexpected request ${url}`)
   }))

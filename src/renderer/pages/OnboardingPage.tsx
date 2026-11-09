@@ -8,6 +8,7 @@ import { Button } from "~/components/ui/button"
 import { Progress } from "~/components/ui/progress"
 import { cn } from "~/lib/utils"
 import type { SignedInAccount } from "../../shared/ipc"
+import { LOCAL_STORAGE_PREFIX } from "../../shared/constants"
 import { StorageChooser } from "../components/StorageChooser"
 import { FirstBackupNote } from "../components/FirstBackupNote"
 import { FirstBackupNextSteps } from "../components/FirstBackupNextSteps"
@@ -423,7 +424,7 @@ export default function OnboardingPage() {
                 )}
               </div>
             )}
-            {succeeded && credentials && <FirstBackupNextSteps tenantId={credentials.tenantId} plan={plan} />}
+            {succeeded && credentials && <FirstBackupNextSteps tenantId={credentials.tenantId} plan={plan} local={!credentials.storageAccountName || credentials.storageAccountName.startsWith(LOCAL_STORAGE_PREFIX)} />}
             <div className="flex flex-wrap justify-end gap-2">
               {succeeded ? (
                 <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => void navigate("/portal/dashboard")}>

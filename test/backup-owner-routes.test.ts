@@ -34,7 +34,7 @@ function stubStorage(blobs: Record<string, unknown>) {
       }
       const name = url.pathname.split("/").slice(2).map(decodeURIComponent).join("/")
       if (!(name in blobs)) return new Response("", { status: 404 })
-      return Response.json(blobs[name], { headers: { "x-tenuvault-authenticated": "true" } })
+      return Response.json(blobs[name])
     }
     graph.push(`${init?.method ?? "GET"} ${url.pathname}`)
     return Response.json({ id: "created" }, { status: 201 })

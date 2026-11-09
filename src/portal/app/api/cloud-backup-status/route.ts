@@ -10,7 +10,8 @@ const storageHeaders = (token: string) => ({ 'x-ms-version': '2021-12-02', 'x-ms
  * The last cloud backup run for a tenant, read from the status blob the Azure Automation
  * runbook writes after every run (Invoke-TenuVaultBackup.ps1). Nothing is written here and no
  * Azure resource is touched: the app only reports what the runbook already recorded in the
- * tenant's own backup container, through the same sealed storage reads as the backup list.
+ * tenant's own backup container, through the same storage reads as the backup list (a status blob
+ * sealed by an earlier runbook version opens with the device keyring, a plain one is read as is).
  */
 export async function POST(request: NextRequest) {
   try {

@@ -9,6 +9,7 @@ import { planGuard } from "../src/main/api/plan-gates"
 import { handleLocalBlobRequest, localAccountFromUrl } from "../src/main/storage/blob-emulator"
 import { LocalBlobStore } from "../src/main/storage/local-blob-store"
 import { BACKUP_OWNER_FILE, localStorageAccountName } from "../src/shared/constants"
+import { LEGACY_SEALED_CODE, LEGACY_SEALED_MESSAGE } from "../src/shared/legacy-sealed"
 import { POST as listBackups } from "../src/portal/app/api/list-backups/route"
 import { NextRequest } from "../src/main/api/next-server-shim"
 import { backupSummary, normalizeBackupStatus } from "../src/portal/lib/backup-health"
@@ -356,7 +357,7 @@ describe("BackupEngine end of job", () => {
     for (const failure of [
       () => new Response("<Error><Code>ServerBusy</Code></Error>", { status: 503 }),
       () => Promise.reject(new TypeError("fetch failed")),
-      () => new Response("not json", { status: 200, headers: { "x-tenuvault-authenticated": "true" } }),
+      () => new Response("not json", { status: 200 }),
     ]) {
       const { backups, unresolved, summary } = await dashboardCounts(unanswered.store, unanswered.account, log, async (request, forward) => isMarkerRead(request) ? failure() : forward())
       expect(backups).toEqual([])
@@ -437,16 +438,12 @@ describe("BackupEngine end of job", () => {
       expect(backups.map((backup) => backup.runId)).toEqual(["desktop-own"])
     })
 
-    it("leaves out a marker that cannot be opened or authenticated for this tenant", async () => {
+    it("leaves out a marker sealed by an earlier version that cannot be opened for this tenant", async () => {
       const { store, account } = await shared()
-      const sealedForOther = Object.assign(new Error("Backup authentication failed"), { name: "FetchApplicationError" })
+      const sealedForOther = Object.assign(new Error(LEGACY_SEALED_MESSAGE), { name: "FetchApplicationError", code: LEGACY_SEALED_CODE })
       const { backups } = await dashboardCounts(store, account, new FailedAttemptLog(memoryStore()), async (request, forward) => {
-        if (!isMarkerRead(request)) return forward()
-        if (request.url.includes("030000")) throw sealedForOther
-        const response = await forward()
-        const headers = new Headers(response.headers)
-        headers.set("x-tenuvault-authenticated", "false")
-        return new Response(await response.text(), { status: response.status, headers })
+        if (isMarkerRead(request)) throw sealedForOther
+        return forward()
       })
       expect(backups).toEqual([])
     })

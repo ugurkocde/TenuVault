@@ -15,7 +15,7 @@ afterEach(() => vi.unstubAllGlobals())
 const snapshotHash = (snapshot: Item) => createHash('sha256').update(JSON.stringify(comparableSnapshot(snapshot))).digest('base64').slice(0, 22)
 
 /** Stubs token, blob and Graph fetches. `blobs` maps blob names to JSON bodies. */
-function stubFetch(blobs: Record<string, Item>, options: { authenticated?: boolean; list?: string[] } = {}) {
+function stubFetch(blobs: Record<string, Item>, options: { list?: string[] } = {}) {
   const graphWrites: string[] = []
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input))
@@ -28,7 +28,7 @@ function stubFetch(blobs: Record<string, Item>, options: { authenticated?: boole
       const name = url.pathname.split('/').slice(2).map(decodeURIComponent).join('/')
       const blob = blobs[name]
       if (!blob) return new Response('', { status: 404 })
-      return Response.json(blob, options.authenticated === false ? {} : { headers: { 'x-tenuvault-authenticated': 'true' } })
+      return Response.json(blob)
     }
     if (url.hostname === 'graph.microsoft.com') {
       graphWrites.push(`${init?.method ?? 'GET'} ${url.pathname}`)
@@ -40,13 +40,23 @@ function stubFetch(blobs: Record<string, Item>, options: { authenticated?: boole
 }
 
 describe('Restore manifest checks', () => {
-  it('refuses an unauthenticated legacy snapshot when a copy restores assignments, before any Graph call', async () => {
-    const snapshot: Item = { id: 'original', displayName: 'Legacy', '@odata.type': '#microsoft.graph.windows10CustomConfiguration', omaSettings: [], assignments: [{ target: { '@odata.type': '#microsoft.graph.allDevicesAssignmentTarget' } }] }
-    const graphWrites = stubFetch({ [policyPath]: snapshot }, { authenticated: false })
+  it('restores a copy with its assignments from a plain backup', async () => {
+    const snapshot: Item = { id: 'original', displayName: 'Plain', '@odata.type': '#microsoft.graph.windows10CustomConfiguration', omaSettings: [], assignments: [{ target: { '@odata.type': '#microsoft.graph.allDevicesAssignmentTarget' } }] }
+    const graphWrites = stubFetch({ [policyPath]: snapshot })
     const response = await POST(request({ ...baseBody, restoreType: 'selective', selectedPolicies: [{ path: policyPath }], mode: 'copy', assignments: true }))
     const result = await response.json()
-    expect(result.details.results[0]).toMatchObject({ success: false, error: expect.stringContaining('Unverified') })
-    expect(result.details.restoredCount).toBe(0)
+    expect(result.details.results[0]).toMatchObject({ success: true })
+    expect(result.details.restoredCount).toBe(1)
+    expect(graphWrites.some((call) => call.startsWith('POST ') && call.endsWith('/assign'))).toBe(true)
+  })
+
+  it('checks a replace restore from a plain backup against the fingerprints in its manifest', async () => {
+    const snapshot: Item = { id: 'original', displayName: 'Example', '@odata.type': '#microsoft.graph.windows10CustomConfiguration', omaSettings: [] }
+    const metadata: Item = { Status: 'Success', Failures: 0, FailedTypes: [], Items: { 'DeviceConfigurations/original': { file: 'Example.json', hash: snapshotHash({ ...snapshot, displayName: 'Changed after the backup' }) } } }
+    const graphWrites = stubFetch({ [`${backupId}/metadata.json`]: metadata, [policyPath]: snapshot }, { list: [policyPath] })
+    const response = await POST(request({ ...baseBody, restoreType: 'selective', selectedPolicies: [{ path: policyPath }], mode: 'replace', assignments: false }))
+    const result = await response.json()
+    expect(result.details.results[0]).toMatchObject({ success: false, error: expect.stringContaining('does not match its recorded fingerprint') })
     expect(graphWrites).toEqual([])
   })
 

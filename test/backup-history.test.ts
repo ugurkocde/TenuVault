@@ -182,9 +182,11 @@ describe("restore preview", () => {
     const response = await restorePreview(request({ backupId: newer, paths: Object.keys(preview), live: true }))
     expect(response.status).toBe(200)
     const { items } = await response.json()
-    expect(items[0]).toMatchObject({ name: "[Unverified legacy] A", live: "same", replaceBlocker: expect.stringContaining("not authenticated") })
-    expect(items[1]).toMatchObject({ name: "[Unverified legacy] Gone", live: "missing" })
-    expect(items[2]).toMatchObject({ name: "[Unverified legacy] Adobe Reader", live: "same", blocker: expect.stringContaining("Upload the installer again") })
+    // Plain backups are trusted like any backup: no name prefix and no replace blocker of their own.
+    expect(items[0]).toMatchObject({ name: "A", live: "same" })
+    expect(items[0].replaceBlocker).toBeUndefined()
+    expect(items[1]).toMatchObject({ name: "Gone", live: "missing" })
+    expect(items[2]).toMatchObject({ name: "Adobe Reader", live: "same", blocker: expect.stringContaining("Upload the installer again") })
     expect(methods.every((path) => path.startsWith("/beta/"))).toBe(true)
   })
 

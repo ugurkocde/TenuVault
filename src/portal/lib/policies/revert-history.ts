@@ -63,14 +63,12 @@ async function backupOwnedBy(read: BlobRead, backup: string, tenantId: string): 
     try {
       response = await read(`${backup}/${file}`)
     } catch (error) {
-      // Sealed for another tenant or key: not this tenant's to claim.
+      // Sealed by an earlier version for another tenant or with a key this device lacks: not this tenant's to claim.
       if (error instanceof Error && error.name === "FetchApplicationError") return false
       throw error
     }
     if (response.status === 404) continue
     if (!response.ok) throw new Error(`Failed to read ${backup}/${file} (${response.status})`)
-    // As in readOwnedBackup, a marker that failed authentication places nothing.
-    if (file === BACKUP_OWNER_FILE && response.headers.get("x-tenuvault-authenticated") === "false") return false
     const record = await response.json().catch(() => null)
     if (typeof record?.TenantId === "string") return record.TenantId.toLowerCase() === tenantId.toLowerCase()
   }

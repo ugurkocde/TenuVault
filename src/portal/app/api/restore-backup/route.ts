@@ -37,19 +37,18 @@ async function getAccessToken(tenantId: string, appId: string, clientSecret: str
 const blobUrl = (storageAccountName: string, name: string) => `https://${storageAccountName}.blob.core.windows.net/intune-backups/${name.split("/").map(encodeURIComponent).join("/")}`
 const storageHeaders = (storageToken: string) => ({ 'x-ms-version': '2021-12-02', Authorization: `Bearer ${storageToken}` })
 
-async function readSnapshot(policyPath: string, storageAccountName: string, storageToken: string, requireAuthenticated: boolean, expected?: ManifestEntry): Promise<Item> {
+async function readSnapshot(policyPath: string, storageAccountName: string, storageToken: string, expected?: ManifestEntry): Promise<Item> {
   const response = await fetch(blobUrl(storageAccountName, policyPath), { headers: storageHeaders(storageToken) })
   if (!response.ok) throw new Error("Failed to fetch from backup")
-  if (requireAuthenticated && response.headers.get("x-tenuvault-authenticated") !== "true") throw new Error("Unverified legacy backups cannot replace live policies or restore assignments. Review the content and restore an unassigned copy instead.")
   const snapshot = await response.json() as Item
   if (expected && (snapshot.id !== expected.id || snapshotHash(snapshot) !== expected.hash)) throw new Error("This backup file does not match its recorded fingerprint. It was not restored.")
   return snapshot
 }
 
-async function restoreSinglePolicy(restorer: Restorer, policyPath: string, storageAccountName: string, storageToken: string, requireAuthenticated: boolean, expected?: ManifestEntry, repairToken?: string): Promise<RestoreOutcome> {
+async function restoreSinglePolicy(restorer: Restorer, policyPath: string, storageAccountName: string, storageToken: string, expected?: ManifestEntry, repairToken?: string): Promise<RestoreOutcome> {
   try {
     if (repairToken) return await restorer.repair(policyPath, repairToken)
-    return await restorer.restore(policyPath, await readSnapshot(policyPath, storageAccountName, storageToken, requireAuthenticated, expected))
+    return await restorer.restore(policyPath, await readSnapshot(policyPath, storageAccountName, storageToken, expected))
   } catch (error) {
     return { success: false, path: policyPath, error: error instanceof Error ? error.message : "Unknown error" }
   }
@@ -115,10 +114,12 @@ export async function POST(request: NextRequest) {
       getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default")
     ])
 
-    // A shared container can hold other tenants' backups; never restore one of those.
+    // A shared container can hold other tenants' backups; never restore one of those. Everyone who
+    // can write to the backup container is trusted like an Intune admin, so every backup this tenant
+    // owns supports each restore mode, and its manifest vouches for completeness and fingerprints.
     const owned = await readOwnedBackup((name) => fetch(blobUrl(storageAccountName, name), { headers: storageHeaders(storageToken) }), backupId, tenantId)
     if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
-    const readMetadata = owned.metadata ? { data: owned.metadata, authenticated: owned.authenticated } : null
+    const metadata = owned.metadata
 
     // Correlate the completed operation with its desktop audit event.
     const jobId = randomUUID()
@@ -175,10 +176,6 @@ export async function POST(request: NextRequest) {
       throw error
     }
 
-    const requireAuthenticated = mode === "replace" || assignments
-    // An unauthenticated metadata record cannot vouch for completeness or fingerprints in a
-    // restore that requires authenticated snapshots.
-    const metadata = readMetadata && (!requireAuthenticated || readMetadata.authenticated) ? readMetadata.data : null
     let manifest: Map<string, ManifestEntry> | null
     try { manifest = backupManifest(metadata, backupId) }
     catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "Invalid backup inventory manifest" }, { status: 400 }) }
@@ -190,7 +187,7 @@ export async function POST(request: NextRequest) {
       for (const { restorer, targetTenantId } of targets) {
         for (const path of restoreOrder(paths)) {
           if (progress) progress.current = path
-          const result = await restoreSinglePolicy(restorer, path, storageAccountName, storageToken, requireAuthenticated, manifest?.get(path), repairSelections.find((p: any) => p.path === path)?.repairToken)
+          const result = await restoreSinglePolicy(restorer, path, storageAccountName, storageToken, manifest?.get(path), repairSelections.find((p: any) => p.path === path)?.repairToken)
           const entry = targetTenantId ? { ...result, targetTenantId } : result
           results.push(entry)
           if (result.partial) partialCount++

@@ -15,7 +15,7 @@ it('keeps healthy preview items available when another snapshot is malformed', a
   vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
     const url = String(input)
     if (url.includes('login.microsoftonline.com')) return Response.json({ access_token: 'token' })
-    return Response.json(url.endsWith('bad.json') ? null : { id: 'category', displayName: 'Healthy' }, { headers: { 'x-tenuvault-authenticated': 'true' } })
+    return Response.json(url.endsWith('bad.json') ? null : { id: 'category', displayName: 'Healthy' })
   }))
   const response = await preview(new NextRequest('https://tenuvault.internal/api/restore-preview', { method: 'POST', body: JSON.stringify({ ...credentials, paths: ['backup-1/DeviceCategories/bad.json', 'backup-1/DeviceCategories/good.json'] }) }))
   expect(response.status).toBe(200)

@@ -750,9 +750,9 @@ export class BackupEngine {
       try {
         metadata = await storage.readJson(`${backup.prefix}metadata.json`)
       } catch (error) {
-        // Metadata that cannot be decrypted (a wrong or rotated key, damaged ciphertext) or a local
-        // backup made unavailable by damaged files is unreadable: never ours, and it must not stop
-        // the review of the other backups.
+        // Metadata that cannot be opened (an Azure backup sealed by an earlier version with a key this
+        // device lacks, a local file with a wrong key or damage) or a local backup made unavailable by
+        // damaged files is unreadable: never ours, and it must not stop the review of the other backups.
         if (!(error instanceof FetchApplicationError) && !(error instanceof InventoryDamagedError)) throw error
         unreadable.add(index)
         unreadableReason ||= error.message
