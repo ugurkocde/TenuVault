@@ -810,7 +810,7 @@ async function bootstrap(): Promise<void> {
   const scheduler = new BackupScheduler(appStore, (tenantId, afterFailure, slot) => runScheduledBackup(tenantId, "scheduled", afterFailure, slot), () => {
     mainWindow?.webContents.send("schedules:changed", scheduler.list())
     tray.refresh()
-  }, () => new Date(), (tenantId) => ({ plan: license.plan(tenantId), azure: !isLocalAccount(tenantProfile(tenantId)?.storageAccountName ?? ""), endedAt: license.coverageEndedAt(tenantId) }), async () => {
+  }, () => new Date(), (tenantId) => ({ plan: license.plan(tenantId), azure: !isLocalAccount(tenantProfile(tenantId)?.storageAccountName ?? ""), endedAt: license.coverageEndedAt(tenantId), pendingChoice: license.communityChoices().includes(tenantId.toLowerCase()) }), async () => {
     if (license.communityChoices().length > 1) return
     for (const schedule of scheduler.list()) {
       if (!license.plan(schedule.tenantId) && scheduler.isDue({ ...schedule, pausedReason: undefined })) {

@@ -54,13 +54,15 @@ describe("schedule downgrade", () => {
     const store = memoryStore()
     let azure = true
     const run = vi.fn(async () => ({ status: "Completed" as const, message: "Done" }))
-    const scheduler = new BackupScheduler(store, run, undefined, undefined, () => ({ plan: "community", azure }))
+    const notice = vi.fn()
+    const scheduler = new BackupScheduler(store, run, undefined, undefined, () => ({ plan: "community", azure }), undefined, notice)
     scheduler.set({ tenantId: "fabrikam", enabled: true, frequency: "daily", time: "02:00" })
     for (let day = 9; day < 20; day++) {
       vi.setSystemTime(new Date(2026, 10, day, 3))
       await scheduler.tick()
     }
     expect(run).not.toHaveBeenCalled()
+    expect(notice).not.toHaveBeenCalled()
     expect(scheduler.list()[0]).toMatchObject({ pausedReason: "Paused: Azure storage needs Pro", attempts: 0, nextRunAt: null })
     expect(scheduler.list()[0]?.lastStatus).toBeUndefined()
     azure = false

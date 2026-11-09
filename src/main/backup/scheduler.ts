@@ -84,7 +84,7 @@ export class BackupScheduler {
     private readonly run: (tenantId: string, afterFailure: boolean, slot: string) => Promise<ScheduledRunResult>,
     private readonly onChange: () => void = () => undefined,
     private readonly now: () => Date = () => new Date(),
-    private readonly coverage?: (tenantId: string) => { plan: Plan | null; azure: boolean; endedAt?: number },
+    private readonly coverage?: (tenantId: string) => { plan: Plan | null; azure: boolean; endedAt?: number; pendingChoice?: boolean },
     private readonly prepare: (() => Promise<void>) | undefined = undefined,
     private readonly onFallback: (tenantId: string) => void = () => undefined,
   ) {}
@@ -295,11 +295,11 @@ export class BackupScheduler {
       const coverage = this.coverage?.(schedule.tenantId)
       if (!coverage) continue
       const pausedReason = coverage.plan === "community" && coverage.azure ? "Paused: Azure storage needs Pro"
-        : coverage.plan === null ? "Paused: choose a Community tenant or add a license" : undefined
+        : coverage.plan === null && coverage.pendingChoice ? "Paused: choose a Community tenant or add a license" : undefined
       const fallback = coverage.plan === "community" && schedule.frequency === "daily"
         ? schedule.fallbackWeekday ?? this.firstFallbackSlot(schedule, coverage.endedAt).getDay() : undefined
       if (schedule.pausedReason !== pausedReason || schedule.fallbackWeekday !== fallback) {
-        const starting = fallback !== undefined && schedule.fallbackWeekday === undefined
+        const starting = fallback !== undefined && !pausedReason && (schedule.fallbackWeekday === undefined || Boolean(schedule.pausedReason))
         schedule.pausedReason = pausedReason
         schedule.fallbackStartsAt = fallback === undefined ? undefined : schedule.fallbackStartsAt ?? this.firstFallbackSlot(schedule, coverage.endedAt).toISOString()
         schedule.fallbackWeekday = fallback
