@@ -337,7 +337,7 @@ export function ReviewStep({ targets, reviews, planning, planError, reading, ten
         {writes && <fieldset className="pt-2">
           <legend className="text-sm font-medium text-gray-800">Backup before changes</legend>
           <div className="mt-2 grid gap-2 md:grid-cols-2">
-            {option("new", "Back up first", "Each target runs a backup with its backup settings before anything else happens. It must include every policy type this sync changes. If the backup fails, nothing is changed.")}
+            {option("new", "Back up first", "Each target is backed up first, using that tenant's backup settings. If the backup does not cover every policy type this sync changes, or fails, nothing is changed in that tenant.")}
             {option("none", "Skip the backup", "Rollback still works from the saved versions: TenuVault saves the current version of every policy it changes before writing. A rollback always backs up first, so it needs backup storage in the target tenant. Those saved versions are kept on this device only; without a backup they are the only copy.")}
           </div>
           {backup === "new" && targets.some((target) => !tenantOf(target.targetTenantId)?.resources?.storageAccountName) && (
@@ -350,7 +350,8 @@ export function ReviewStep({ targets, reviews, planning, planError, reading, ten
         <span className="text-sm text-gray-500">{!writes ? "Nothing is written." : backup === "new" ? "Each target is backed up before anything is written." : "No backup is taken. Rollback uses the saved current versions."}</span>
         <Button type="button" disabled={busy || checking || gated || !(ready || inSync)} onClick={onApprove}>
           <ShieldCheck className="h-4 w-4" aria-hidden="true" />
-          {ready || !inSync ? `Approve and sync to ${plural(ready, "tenant", "tenants")}` : "Continue: nothing to write"}
+          {/* No count until a target is ready: while planning or checking there is nothing to approve yet. */}
+          {ready ? `Approve and sync to ${plural(ready, "tenant", "tenants")}` : inSync && !checking ? "Continue: nothing to write" : "Approve and sync"}
         </Button>
       </Footer>
     </section>

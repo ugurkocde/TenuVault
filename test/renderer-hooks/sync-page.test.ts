@@ -305,7 +305,7 @@ describe("Sync review", () => {
     expect(review.querySelectorAll("input:not([type])")).toHaveLength(0)
     expect(review.querySelector("legend")?.textContent).toBe("Backup before changes")
     expect(review.textContent).toContain("Back up first")
-    expect(review.textContent).toContain("It must include every policy type this sync changes.")
+    expect(review.textContent).toContain("Each target is backed up first, using that tenant's backup settings. If the backup does not cover every policy type this sync changes, or fails, nothing is changed in that tenant.")
     expect(review.textContent).toContain("Skip the backup")
     expect(review.querySelector<HTMLInputElement>('input[value="new"]')!.checked).toBe(true)
     expect(button(container, "Approve and sync to 2 tenants")?.disabled).toBe(false)
@@ -699,6 +699,9 @@ describe("Sync loading progression", () => {
     expect(review().querySelector('[role="status"]')?.textContent).toContain("Reading Contoso Lab and 2 target tenants")
     expect(review().querySelector(".run-indeterminate")).not.toBeNull()
     expect(review().textContent).not.toContain("Contoso Germany")
+    // Nothing is ready yet, so the button names no count and stays disabled.
+    expect(button(container, /^Approve and sync/)!.textContent).toBe("Approve and sync")
+    expect(button(container, /^Approve and sync/)!.disabled).toBe(true)
     releasePlan()
     // Germany's preview arrives; France's is still being read.
     await until(() => review().textContent?.includes("Ready: 0 changes") === true, "Germany checked")
