@@ -85,7 +85,7 @@ admin centers.
 
 ### What does TenuVault back up?
 
-40 Intune object types in nine areas, from device configuration, compliance (including the tenant-wide
+41 Intune object types in nine areas, from device configuration, compliance (including the tenant-wide
 compliance policy settings) and endpoint security to scripts, Windows updates, apps, app protection,
 enrollment and tenant administration, with their assignments where Intune has them. App installer
 files, Apple tokens and private keys cannot be exported by Microsoft Graph. See [What gets backed up](https://docs.tenuvault.com/backups/coverage/).

@@ -2,7 +2,7 @@ import { recoveryReadiness, type RecoveryReadiness } from "../../../../shared/in
 import { type NextRequest, NextResponse } from "next/server"
 import { validPolicyPath } from "~/lib/policies/restore"
 import { readOwnedBackup, UNTAGGED_BACKUP } from "~/lib/policies/backup-owner"
-import { graphCaller, readLive } from "~/lib/policies/graph-restore"
+import { graphCaller, locateLive, readLive } from "~/lib/policies/graph-restore"
 import { itemName, typeForFolder, type Item, type ReviewChange } from "../../../../shared/intune/registry"
 import { restoreCapabilities } from "../../../../shared/intune/restore-plan"
 import { sameSnapshot } from "../../../../shared/intune/compare"
@@ -95,12 +95,14 @@ export async function POST(request: NextRequest) {
       if (ownership) item.replaceBlocker = ownership
       if (live !== true || typeof snapshot.id !== "string") return item
       try {
-        const current = await readLive(graph, type, snapshot.id)
+        // An object added again under a new ID (such as an Autopilot device imported again) is found by the type's locateBy property.
+        const current = (await readLive(graph, type, snapshot.id)) ?? (ownership ? undefined : await locateLive(graph, type, snapshot))
         if (!current) return { ...item, live: "missing" }
         Object.assign(item, restoreCapabilities(type, snapshot, current))
         if (ownership) item.replaceBlocker = ownership
         const name = current[type.nameKey] ?? current.displayName ?? current.name
-        const { assignments: _a, ...wanted } = snapshot
+        // A device found again under a new ID compares by its properties, as the restore does.
+        const { assignments: _a, ...wanted } = typeof current.id === "string" ? { ...snapshot, id: current.id } : snapshot
         const { assignments: _b, ...now } = current
         const settingsSame = sameSnapshot(wanted, now)
         // A snapshot without assignments and an item with none mean the same. A backup that could not read

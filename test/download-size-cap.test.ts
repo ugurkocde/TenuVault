@@ -4,12 +4,13 @@ import { POST as download } from '../src/portal/app/api/download-backup/route'
 import { createBridgedFetch } from '../src/main/api/fetch-bridge'
 import { withNetworkErrors } from '../src/main/api/network-error'
 import { legacyAzureReader } from '../src/main/storage/azure-seal'
-import { DELEGATED_CLIENT_SECRET } from '../src/shared/constants'
+import { DELEGATED_CLIENT_SECRET, MAX_BACKUP_ARCHIVE_BYTES, MAX_BACKUP_ARCHIVE_FILES, MAX_BACKUP_ARCHIVE_TOTAL_BYTES } from '../src/shared/constants'
 import { endlessBody } from './helpers'
 
 const args = { tenantId: 'tenant', appId: 'app', clientSecret: 'test', storageAccountName: 'store', backupId: 'backup-2026-09-25-120000' }
 const request = () => new NextRequest('http://tenuvault.internal/api/download-backup', { method: 'POST', body: JSON.stringify(args) })
-const MAX = 32 * 1024 * 1024
+/** The total a download may hold; one file, such as metadata.json, may hold at most MAX_BACKUP_ARCHIVE_BYTES. */
+const MAX = MAX_BACKUP_ARCHIVE_TOTAL_BYTES
 
 const blob = (name: string, size?: number) => `<Blob><Name>${name}</Name>${size === undefined ? '' : `<Properties><Content-Length>${size}</Content-Length></Properties>`}</Blob>`
 
@@ -33,16 +34,16 @@ it('refuses an over-limit listing before fetching any file body', async () => {
   const bodyFetches = stubListing(blob(`${args.backupId}/DeviceConfigurations/A.json`, MAX + 1))
   const response = await download(request())
   expect(response.status).toBe(413)
-  expect((await response.json()).error).toContain('32 MiB')
+  expect((await response.json()).error).toContain('128 MiB')
   expect(bodyFetches).toEqual([])
 })
 
 it('refuses a listing over the file count cap when lengths are unavailable', async () => {
-  const names = Array.from({ length: 5001 }, (_, i) => blob(`${args.backupId}/DeviceConfigurations/P${i}.json`)).join('')
+  const names = Array.from({ length: MAX_BACKUP_ARCHIVE_FILES + 1 }, (_, i) => blob(`${args.backupId}/DeviceConfigurations/P${i}.json`)).join('')
   const bodyFetches = stubListing(names)
   const response = await download(request())
   expect(response.status).toBe(413)
-  expect((await response.json()).error).toContain('5000')
+  expect((await response.json()).error).toContain(String(MAX_BACKUP_ARCHIVE_FILES))
   expect(bodyFetches).toEqual([])
 })
 
@@ -53,12 +54,12 @@ it('refuses when a fetched body exceeds the limit its listing size understated',
     if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
     if (url.searchParams.get('comp') === 'list') return new Response(`<Blobs>${listing}</Blobs>`)
     if (url.pathname.endsWith('/metadata.json')) return Response.json({ TenantId: args.tenantId })
-    // No content length in the listing, and the body itself is over the cap.
-    return new Response(new Uint8Array(MAX + 1))
+    // No content length in the listing, and the body itself is over the cap for one file.
+    return new Response(new Uint8Array(MAX_BACKUP_ARCHIVE_BYTES + 1))
   }))
   const response = await download(request())
   expect(response.status).toBe(413)
-  expect((await response.json()).error).toContain('32 MiB')
+  expect((await response.json()).error).toContain('32 MiB per file')
 })
 
 it('downloads a listing that is exactly at the limit', async () => {

@@ -215,10 +215,15 @@ function backupApi(options: { listStatus?: number; policies?: Item[]; metadata?:
       return Response.json({ backups: options.backups ?? [{ id: "backup-2026-09-29-020000", timestamp: "2026-09-29T02:00:00Z", status: "Success" }] })
     }
     if (path === "/api/list-backup-contents") {
-      return Response.json({ content: { groups: [{ folder: "ConfigurationPolicies", policies: policies.map((p) => ({ path: `${body.backupId}/ConfigurationPolicies/${p.id}.json` })) }], metadata: options.metadata ?? { Status: "Success", Scope: { Excluded: ["Apps"] }, SkippedTypes: [], FailedTypes: [] } } })
+      return Response.json({ content: { groups: [
+        { folder: "ConfigurationPolicies", policies: policies.map((p) => ({ path: `${body.backupId}/ConfigurationPolicies/${p.id}.json` })) },
+        // Inventory is never read for hygiene.
+        { folder: "AutopilotDevices", policies: [{ path: `${body.backupId}/AutopilotDevices/SN-0001.json` }] },
+      ], metadata: options.metadata ?? { Status: "Success", Scope: { Excluded: ["Apps"] }, SkippedTypes: [], FailedTypes: [] } } })
     }
     if (path === "/api/restore-preview") {
       const paths = body.paths as string[]
+      if (paths.some((entry) => entry.includes("/AutopilotDevices/"))) return Response.json({ error: "devices read" }, { status: 500 })
       return Response.json({ items: paths.map((path) => ({ path, folder: "ConfigurationPolicies", snapshot: policies.find((p) => path.endsWith(`/${p.id}.json`)) })) })
     }
     return Response.json({ error: "unexpected" }, { status: 500 })
@@ -249,6 +254,8 @@ describe("/api/hygiene", () => {
     expect(scan.collectedAt).toBe("2026-09-29T02:00:00Z")
     expect(scan.notCollected.find((n: { folder: string }) => n.folder === "Apps")?.reason).toBe("excluded")
     expect(scan.covered).toContain("ConfigurationPolicies")
+    expect(scan.covered).not.toContain("AutopilotDevices")
+    expect(scan.notCollected.some((n: { folder: string }) => n.folder === "AutopilotDevices")).toBe(false)
     // Filters were collected (empty) so the filter reference is definitely broken.
     expect(res.body.findings.some((f: { ruleId: string }) => f.ruleId === "missing-filter")).toBe(true)
     // The filtered target makes the conflict only possible.

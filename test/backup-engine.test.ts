@@ -86,6 +86,40 @@ describe("BackupEngine", () => {
     expect(metadata.ItemCounts.EnrollmentConfigurations).toBe(defaults.length)
   })
 
+  it("saves Autopilot devices from their list entries, named by serial number and counted apart from policies", async () => {
+    const { engine, store, account } = setup(fakeGraph({
+      "/beta/deviceManagement/windowsAutopilotDeviceIdentities": Response.json({
+        value: [
+          { id: "ap-1", serialNumber: "SN-0001", model: "Laptop 7", groupTag: "Sales", displayName: "", productKey: "PK", deviceAccountPassword: "secret", lastContactedDateTime: "2026-11-01T10:00:00Z" },
+          { id: "ap-2", serialNumber: "SN-0002", model: "Laptop 7", groupTag: "", displayName: null },
+        ],
+      }),
+    }))
+    const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)
+    expect(job.status).toBe("Completed")
+    const devices = (await store.list(account, "intune-backups")).filter((b) => b.name.includes("/AutopilotDevices/")).map((b) => b.name.split("/").pop())
+    expect(devices.sort()).toEqual(["SN-0001.json", "SN-0002.json"])
+    const saved = JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/AutopilotDevices/SN-0001.json`)).data.toString())
+    expect(saved).toMatchObject({ id: "ap-1", serialNumber: "SN-0001", groupTag: "Sales", displayName: "", userPrincipalName: "" })
+    for (const left of ["productKey", "deviceAccountPassword", "lastContactedDateTime"]) expect(saved).not.toHaveProperty(left)
+    const metadata = JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/metadata.json`)).data.toString())
+    expect(metadata.ItemCounts).toMatchObject({ AutopilotDevices: 2, TotalPolicies: 5 })
+    expect(job.totalPolicies).toBe(5)
+  })
+
+  it("reads no Autopilot device by ID", async () => {
+    const graph = fakeGraph({
+      "/beta/deviceManagement/windowsAutopilotDeviceIdentities": Response.json({ value: [{ id: "ap-1", serialNumber: "SN-0001" }] }),
+    })
+    const paths: string[] = []
+    const { engine, account } = setup((url) => {
+      paths.push(url.pathname)
+      return graph(url)
+    })
+    await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)
+    expect(paths.filter((path) => path.startsWith("/beta/deviceManagement/windowsAutopilotDeviceIdentities/"))).toEqual([])
+  })
+
   it("fails a backup when none of its policy reads succeeded", async () => {
     const denied = () => Response.json({ error: { message: "Forbidden" } }, { status: 403 })
     const { engine, store, account } = setup(fakeGraph({

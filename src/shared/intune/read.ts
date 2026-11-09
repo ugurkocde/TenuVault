@@ -33,6 +33,7 @@ export function detailPath(type: IntuneType, id: string): string {
 export async function readObject(type: IntuneType, id: string, graph: GraphReader, options: ReadOptions = {}): Promise<Item> {
   const detail = await graph.get(detailPath(type, id))
   if (type.singleton) return singletonSnapshot(type.singleton, detail)
+  if (type.keep) return keptSnapshot(type.keep, detail)
   // Large expanded collections (such as Settings Catalog settings) page like lists.
   for (const [key, value] of Object.entries(detail)) {
     if (key.endsWith("@odata.nextLink") && typeof value === "string") {
@@ -76,6 +77,40 @@ export async function readObject(type: IntuneType, id: string, graph: GraphReade
   }
   delete detail["@odata.context"]
   return detail
+}
+
+/**
+ * The snapshot a backup stores for a list entry of a `listOnly` type, the same as readObject would
+ * return for the object (see IntuneType.keep).
+ */
+export function listSnapshot(type: IntuneType, item: Item): Item {
+  if (type.keep) return keptSnapshot(type.keep, item)
+  const copy = { ...item }
+  delete copy["@odata.context"]
+  return copy
+}
+
+/**
+ * The live object that has the snapshot's `locateBy` value, read like a backup, when exactly one does.
+ * Used when the backed-up ID no longer exists, for objects Intune gives a new ID when they are added again.
+ */
+export async function locateObject(type: IntuneType, snapshot: Item, graph: GraphReader): Promise<Item | undefined> {
+  const key = type.locateBy
+  const value = key ? snapshot[key] : undefined
+  if (!key || typeof value !== "string" || !value.trim()) return undefined
+  // contains() is the filter Graph supports on these properties; it also matches longer values, so the match is exact here.
+  const filter = `contains(${key},'${value.replace(/'/g, "''")}')`
+  const found = (await graph.list(`${type.path}?$filter=${encodeURIComponent(filter)}`))
+    .filter((item) => typeof item[key] === "string" && (item[key] as string).toLowerCase() === value.toLowerCase())
+  if (found.length !== 1 || typeof found[0]!.id !== "string") return undefined
+  return type.listOnly ? listSnapshot(type, found[0]!) : readObject(type, found[0]!.id, graph)
+}
+
+/** The object's ID and the properties its type keeps, with values Graph leaves out or returns as null stored as "". */
+function keptSnapshot(keep: string[], detail: Item): Item {
+  const snapshot: Item = { id: detail.id ?? null }
+  for (const key of keep) snapshot[key] = detail[key] ?? ""
+  return snapshot
 }
 
 /** How Microsoft Graph shows an encrypted value it does not return in plain text. */

@@ -120,7 +120,7 @@ More on licenses: [Activate and manage your license](/licensing/manage/).
 
 | Message | Fix |
 | --- | --- |
-| Choose an archive smaller than 32 MiB | Only archives up to 32 MiB can be imported. |
+| Choose an archive smaller than 128 MiB | Only archives up to 128 MiB can be imported. |
 | A TenuVault export manifest with source tenant identity is required | The ZIP is not a TenuVault export or its manifest was removed. Use the original **Download** from **Backup Details**. |
 | Only complete backups with item metadata can be imported | Export a backup whose status is **Complete**. |
 | Backup contents do not match the export inventory / Backup archive is incomplete or contains extra files / Archive contains an unsupported file | The ZIP was changed after export. Use an unmodified export. |

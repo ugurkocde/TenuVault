@@ -137,6 +137,18 @@ On the **Review** step, an item labelled **Overwrite the current version** lists
 
 Check which devices have no compliance policy assigned before you restore a change to these settings.
 
+## Windows Autopilot devices
+
+A backup records the Autopilot devices registered in the tenant, without their hardware hashes, which Microsoft Graph does not return. Restore therefore updates devices that are still registered and never registers one:
+
+* Only **Replace in place** restores them, which needs Pro or MSP, like any other replace. They are never created as a copy and never copied to another tenant.
+* Restore sets the **group tag**, the **assigned user** with its friendly name, and the **device name**. A device with no user in the backup has its user unassigned. Other properties, such as the model or the purchase order, are kept for reference only.
+* A device that was deleted and imported again with its hardware hash has a new ID. TenuVault finds it by its serial number and restores it in place.
+* A device that is not registered shows as **Cannot be restored**. Import it again with its hardware hash, then restore.
+* Intune applies the changes within a few minutes, so a device can show its old values right after the restore.
+
+On the **Review** step, **Overwrite the current version** lists each property that changes, for example **Group tag: Not set now, Sales after the restore**.
+
 ## Where restored items go
 
 By default, items are restored to the tenant selected at the top of **Backup & Restore**. On MSP, **Copy to other tenants instead** sends copies to other connected tenants. Copies to other tenants always use **Create copies**, keep their original names, get the Default scope tag and are never assigned. See [Restore to another tenant](/restore/cross-tenant/).

@@ -34,7 +34,7 @@ Microsoft Graph application permissions, read-only:
 | --- | --- |
 | `DeviceManagementConfiguration.Read.All` | Configuration profiles, Settings Catalog, endpoint security, compliance and update policies, assignment filters. |
 | `DeviceManagementApps.Read.All` | Apps, app configuration and app protection policies, policy sets. |
-| `DeviceManagementServiceConfig.Read.All` | Enrollment configurations, Autopilot and Apple enrollment profiles, terms and conditions, branding. |
+| `DeviceManagementServiceConfig.Read.All` | Enrollment configurations, Autopilot and Apple enrollment profiles, Autopilot devices (serial numbers, group tags and assigned users), terms and conditions, branding. |
 | `DeviceManagementScripts.Read.All` | PowerShell and shell scripts, custom attributes, remediations, compliance scripts. |
 | `DeviceManagementRBAC.Read.All` | Intune roles, role assignments, scope tags, multi admin approval policies. |
 | `DeviceManagementManagedDevices.Read.All` (optional) | Device categories and device clean-up rules. Off by default, because it also exposes the managed device inventory (device names, serial numbers, primary users). Add it with `-IncludeDeviceCategories`. |

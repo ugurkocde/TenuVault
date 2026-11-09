@@ -200,6 +200,11 @@ function deprecatedLabel(hits: DeprecatedSettingHit[]): string {
 
 const capitalize = (text: string) => text.charAt(0).toUpperCase() + text.slice(1)
 
+/** The preview route reads at most this many items per request. */
+const PREVIEW_CHUNK = 2000
+/** Items shown at once in a list, so a type with thousands of items (such as Autopilot devices) stays responsive. */
+const LIST_PAGE = 200
+
 const items = (count: number) => `${count} item${count === 1 ? "" : "s"}`
 
 /** What replacing in place will do to the tenant, in one sentence. */
@@ -244,6 +249,8 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [query, setQuery] = useState("")
   const [openTypes, setOpenTypes] = useState<Set<string>>(new Set())
+  /** How many items each type's list and the readiness list show, beyond LIST_PAGE. */
+  const [shown, setShown] = useState<Record<string, number>>({})
 
   const [mode, setMode] = useState<"copy" | "replace">("copy")
   const [assignments, setAssignments] = useState(false)
@@ -253,6 +260,16 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   const [mappingsConfirmed, setMappingsConfirmed] = useState(false)
 
   const [review, setReview] = useState<Record<string, LiveState> | null>(null)
+  /** Counts review loads, so a load that a newer one or a reset replaced never writes its result. */
+  const reviewLoad = useRef(0)
+  const clearReview = () => {
+    reviewLoad.current++
+    setReview(null)
+  }
+  // A load still reading for the previous restore mode or copy targets stops writing once either changes.
+  useEffect(() => {
+    reviewLoad.current++
+  }, [mode, copyTargets])
   const [reviewError, setReviewError] = useState("")
   const [confirmed, setConfirmed] = useState(false)
   const [approvalRevision, setApprovalRevision] = useState(0)
@@ -309,7 +326,8 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     setItemsError("")
     setCatalogCheck(null)
     setSelected(new Set())
-    setReview(null)
+    setShown({})
+    clearReview()
     setValidation(null)
     setValidationError("")
     const controller = new AbortController()
@@ -324,10 +342,10 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
         group.policies.map((policy) => ({ path: policy.path, folder: group.folder, label: group.label, area: group.area, name: policy.displayName ?? policy.path, blocker: group.limitation })),
       )
       const details: Record<string, { name: string; blocker?: string; replaceBlocker?: string; snapshot?: unknown; readiness?: RecoveryReadiness }> = {}
-      for (let start = 0; start < listed.length; start += 2000) {
+      for (let start = 0; start < listed.length; start += PREVIEW_CHUNK) {
         const preview = await post<{ items: Array<{ path: string; name: string; blocker?: string; replaceBlocker?: string; snapshot?: unknown; readiness?: RecoveryReadiness }> }>(
           "/api/restore-preview",
-          { ...credentials, paths: listed.slice(start, start + 2000).map((item) => item.path) },
+          { ...credentials, paths: listed.slice(start, start + PREVIEW_CHUNK).map((item) => item.path) },
           controller.signal,
         )
         for (const item of preview.items) details[item.path] = item
@@ -343,14 +361,14 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
 
   const selectionBlocker = (item: BackupItem) => mode === "replace" && !community && !copying ? item.replaceBlocker : item.blocker
 
+  const itemByPath = useMemo(() => new Map((items ?? []).map((item) => [item.path, item])), [items])
+
   useEffect(() => {
     setSelected((current) => new Set([...current].filter((path) => {
-      const item = items?.find((entry) => entry.path === path)
+      const item = itemByPath.get(path)
       return item && !(mode === "replace" && !community && !copying ? item.replaceBlocker : item.blocker)
     })))
-  }, [items, mode, community, copying])
-
-  const itemByPath = useMemo(() => new Map((items ?? []).map((item) => [item.path, item])), [items])
+  }, [itemByPath, mode, community, copying])
 
   // Deprecated settings in this backup, checked once against the Settings Catalog as it is now.
   // The IDs come from the snapshots already loaded above; a failed check never blocks a restore.
@@ -395,7 +413,10 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     const areas = new Map<string, Map<string, BackupItem[]>>()
     for (const item of visible) {
       const types = areas.get(item.area) ?? new Map<string, BackupItem[]>()
-      types.set(item.folder, [...(types.get(item.folder) ?? []), item])
+      // Appended in place: copying the folder's list for every item is quadratic with thousands of devices.
+      const entries = types.get(item.folder)
+      if (entries) entries.push(item)
+      else types.set(item.folder, [item])
       areas.set(item.area, types)
     }
     return areas
@@ -430,7 +451,9 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   const changesTenant = plans.some((entry) => entry.plan === "overwrite" || entry.plan === "recreate" || entry.plan === "unchecked")
 
   const loadReview = async () => {
-    setReview(null)
+    clearReview()
+    const load = reviewLoad.current
+    const current = () => load === reviewLoad.current
     setReviewError("")
     setConfirmed(false)
     // Copies never touch the existing items, so the tenant is only read when replacing in place.
@@ -439,15 +462,22 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
       return
     }
     try {
-      const preview = await post<{ items: Array<{ path: string } & LiveState> }>("/api/restore-preview", {
-        ...tenant.credentials,
-        storageAccountName: tenant.storageAccountName,
-        backupId,
-        paths: selectedPaths,
-        live: true,
-      })
-      setReview(Object.fromEntries(preview.items.map((item) => [item.path, item])))
+      // The route reads at most PREVIEW_CHUNK items per request, so a large selection is read in parts.
+      const live: Array<{ path: string } & LiveState> = []
+      for (let start = 0; start < selectedPaths.length; start += PREVIEW_CHUNK) {
+        const preview = await post<{ items: Array<{ path: string } & LiveState> }>("/api/restore-preview", {
+          ...tenant.credentials,
+          storageAccountName: tenant.storageAccountName,
+          backupId,
+          paths: selectedPaths.slice(start, start + PREVIEW_CHUNK),
+          live: true,
+        })
+        if (!current()) return
+        live.push(...preview.items)
+      }
+      setReview(Object.fromEntries(live.map((item) => [item.path, item])))
     } catch (error) {
+      if (!current()) return
       showPlanError(error)
       setReviewError(error instanceof Error ? error.message : String(error))
     }
@@ -478,6 +508,8 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   const goTo = (next: Step) => {
     setStep(next)
     if (next === "review") void loadReview()
+    // Leaving the review (for example to change the selection) stops a load that is still running.
+    else reviewLoad.current++
   }
 
   const progressId = useRef("")
@@ -569,7 +601,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     setResult(null)
     setProgress(null)
     setSelected(new Set())
-    setReview(null)
+    clearReview()
     setStep("items")
   }
 
@@ -731,9 +763,10 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
             <>
               <details className="mt-4 rounded-xl border p-4 text-sm"><summary className="cursor-pointer font-medium">Recovery readiness for {items.length} objects</summary>
                 <p className="my-2 text-gray-600">Readiness is conservative for cross-tenant recovery. Supply installers and Apple tokens through Intune, then map supported resulting objects below. No tenant changes occur during this review.</p>
-                <ul className="max-h-64 overflow-auto">{items.map(item => <li key={item.path} className="border-t py-2"><strong>{item.name}</strong>{item.readiness ? <><p>{item.readiness.automatic ? "Automatic configuration restore available" : "Review required"}</p><p>External artifacts: {item.readiness.externalArtifacts.join(" ") || "None identified"}</p><p>Missing mappings: {item.readiness.missingMappings.join(", ") || "None identified"}</p><p>Manual actions: {item.readiness.manualActions.join(" ") || "None identified"}</p></> : <p>Readiness unavailable. Retry loading the backup.</p>}</li>)}</ul>
+                <ul className="max-h-64 overflow-auto">{items.slice(0, shown[READINESS] ?? LIST_PAGE).map(item => <li key={item.path} className="border-t py-2"><strong>{item.name}</strong>{item.readiness ? <><p>{item.readiness.automatic ? "Automatic configuration restore available" : "Review required"}</p><p>External artifacts: {item.readiness.externalArtifacts.join(" ") || "None identified"}</p><p>Missing mappings: {item.readiness.missingMappings.join(", ") || "None identified"}</p><p>Manual actions: {item.readiness.manualActions.join(" ") || "None identified"}</p></> : <p>Readiness unavailable. Retry loading the backup.</p>}</li>)}</ul>
+                <ShowMore total={items.length} shown={shown[READINESS] ?? LIST_PAGE} onMore={() => setShown((current) => ({ ...current, [READINESS]: (current[READINESS] ?? LIST_PAGE) + LIST_PAGE * 5 }))} />
               </details>
-              {copying && <div className="mt-4 space-y-2 rounded-xl border p-4 text-sm"><label>Reviewed target dependencies (one target tenant)<textarea className="block w-full rounded border p-2 font-mono text-xs" value={mappingJson} onChange={event => { setMappingJson(event.target.value); setMappingsConfirmed(false); setReview(null) }} /></label><p>Use an array of {`{ "folder": "Apps" or "AppCategories", "sourceId": "source GUID", "targetId": "target GUID" }`}. Upload missing installers in Intune first. Other dependency families require manual recovery.</p><label><input type="checkbox" checked={mappingsConfirmed} onChange={event => setMappingsConfirmed(event.target.checked)} /> I reviewed these IDs in the selected target tenant. Target objects will be checked before any restore writes.</label></div>}
+              {copying && <div className="mt-4 space-y-2 rounded-xl border p-4 text-sm"><label>Reviewed target dependencies (one target tenant)<textarea className="block w-full rounded border p-2 font-mono text-xs" value={mappingJson} onChange={event => { setMappingJson(event.target.value); setMappingsConfirmed(false); clearReview() }} /></label><p>Use an array of {`{ "folder": "Apps" or "AppCategories", "sourceId": "source GUID", "targetId": "target GUID" }`}. Upload missing installers in Intune first. Other dependency families require manual recovery.</p><label><input type="checkbox" checked={mappingsConfirmed} onChange={event => setMappingsConfirmed(event.target.checked)} /> I reviewed these IDs in the selected target tenant. Target objects will be checked before any restore writes.</label></div>}
               <div className="mt-5 flex flex-wrap items-center justify-between gap-3 text-sm">
                 <span className="text-gray-600">
                   {selected.size} of {items.length} selected
@@ -798,7 +831,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                           </div>
                           {expanded && (
                             <ul className="pb-2">
-                              {entries.map((item) => (
+                              {entries.slice(0, shown[folder] ?? LIST_PAGE).map((item) => (
                                 <li key={item.path}>
                                   <label className={cn("flex items-start gap-3 px-4 py-1.5 pl-11 text-sm", selectionBlocker(item) ? "cursor-not-allowed" : "cursor-pointer hover:bg-gray-50")}>
                                     <Checkbox
@@ -820,6 +853,9 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                                   </label>
                                 </li>
                               ))}
+                              <li className="pl-11">
+                                <ShowMore total={entries.length} shown={shown[folder] ?? LIST_PAGE} onMore={() => setShown((current) => ({ ...current, [folder]: (current[folder] ?? LIST_PAGE) + LIST_PAGE * 5 }))} />
+                              </li>
                             </ul>
                           )}
                         </div>
@@ -977,6 +1013,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
               <ul className="mt-4 max-h-[26rem] divide-y divide-gray-100 overflow-y-auto rounded-2xl border border-gray-200">
                 {[...plans]
                   .sort((a, b) => PLAN_ORDER.indexOf(a.plan) - PLAN_ORDER.indexOf(b.plan))
+                  .slice(0, shown[REVIEW] ?? LIST_PAGE)
                   .map(({ path, plan }) => {
                     const item = itemByPath.get(path)
                     const state = review[path]
@@ -993,7 +1030,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                             {item ? capitalize(item.label) : ""}
                             {state?.liveName && state.liveName !== item?.name && `, now named "${state.liveName}"`}
                           </span>
-                          {state?.snapshot !== undefined && <details className="mt-2"><summary className="cursor-pointer text-xs text-blue-700">Review snapshot content (may contain secrets)</summary><pre className="max-h-64 max-w-xl overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify(state.snapshot, null, 2)}</pre></details>}
+                          {state?.snapshot !== undefined && <SnapshotDetails snapshot={state.snapshot} />}
                           {reason && <span className="block text-xs text-gray-500"><LinkedMessage text={reason} /></span>}
                           {deprecatedByPath.get(path) && <span className="block text-xs text-amber-800">{deprecatedLabel(deprecatedByPath.get(path)!)}</span>}
                           {assignmentWarning && <span className="block text-xs text-amber-800">{assignmentWarning}</span>}
@@ -1017,6 +1054,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                     )
                   })}
               </ul>
+              <ShowMore total={plans.length} shown={shown[REVIEW] ?? LIST_PAGE} onMore={() => setShown((current) => ({ ...current, [REVIEW]: (current[REVIEW] ?? LIST_PAGE) + LIST_PAGE * 5 }))} />
 
               {changesTenant && (
                 <label className="mt-5 flex cursor-pointer items-start gap-3 rounded-2xl bg-amber-50 p-4 text-sm text-amber-900">
@@ -1133,7 +1171,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
           )}
 
           <ul className="mt-4 max-h-[26rem] divide-y divide-gray-100 overflow-y-auto">
-            {(result?.results ?? progress?.results ?? []).map((outcome, index) => {
+            {(result?.results ?? progress?.results ?? []).slice(0, shown[RESULTS] ?? LIST_PAGE).map((outcome, index) => {
               const Icon = outcome.approval ? ShieldCheck : outcome.success ? (outcome.action === "unchanged" ? SkipForward : CheckCircle) : outcome.action === "skipped" ? Ban : XCircle
               const text = outcome.success
                 ? outcome.action === "unchanged"
@@ -1182,6 +1220,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
               )
             })}
           </ul>
+          <ShowMore total={(result?.results ?? progress?.results ?? []).length} shown={shown[RESULTS] ?? LIST_PAGE} onMore={() => setShown((current) => ({ ...current, [RESULTS]: (current[RESULTS] ?? LIST_PAGE) + LIST_PAGE * 5 }))} />
 
           {!running && result && (
             <div className="mt-6 flex flex-wrap justify-end gap-3">
@@ -1201,5 +1240,32 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
         </div>
       )}
     </div>
+  )
+}
+
+/** The keys under which the readiness, review and result lists keep their page size, next to the type folders. */
+const READINESS = "#readiness"
+const REVIEW = "#review"
+const RESULTS = "#results"
+
+/** A snapshot's content, serialized only once it is opened, so reviewing thousands of items stays fast. */
+function SnapshotDetails({ snapshot }: { snapshot: unknown }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <details className="mt-2" onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary className="cursor-pointer text-xs text-blue-700">Review snapshot content (may contain secrets)</summary>
+      {open && <pre className="max-h-64 max-w-xl overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify(snapshot, null, 2)}</pre>}
+    </details>
+  )
+}
+
+/** Shows how many items a long list leaves out, with a button that shows more of them. */
+function ShowMore({ total, shown, onMore }: { total: number; shown: number; onMore: () => void }) {
+  if (total <= shown) return null
+  return (
+    <p className="flex items-center gap-3 py-2 text-xs text-gray-500">
+      Showing {shown} of {total}. Search to find an item, or
+      <Button variant="outline" size="sm" onClick={onMore}>Show more</Button>
+    </p>
   )
 }

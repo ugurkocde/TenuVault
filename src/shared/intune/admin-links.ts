@@ -81,6 +81,8 @@ export function adminCenterLink(folder: string, id: string, item: Item = {}): Ad
       return intune(`Microsoft_Intune/PolicyInstanceMenuBlade/~/0/policyId/${enc(id)}/policyOdataType/${enc(type)}/policyName/${enc(name)}`, true)
     }
     case "AutopilotProfiles": return intune(`Microsoft_Intune_Enrollment/AutopilotMenuBlade/~/properties/apProfileId/${enc(id)}`, true)
+    // The device list; Intune opens a single device only from the list.
+    case "AutopilotDevices": return intune("Microsoft_Intune_Enrollment/AutopilotDevices.ReactView/filterOnManualRemediationRequired~/false", false)
     case "FeatureUpdateProfiles": return intune(`Microsoft_Intune_DeviceConfiguration/FeatureUpdateProfile.ReactView/profileId/${enc(id)}`, true)
     case "ConditionalAccessPolicies": return entra(`Microsoft_AAD_ConditionalAccess/PolicyBlade/policyId/${enc(id)}`, true)
     case "CompliancePolicySettings": return intune("Microsoft_Intune_DeviceSettings/DevicesComplianceMenu/~/policySettings", true)

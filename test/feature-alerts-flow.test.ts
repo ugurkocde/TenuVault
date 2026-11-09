@@ -92,6 +92,8 @@ describe("suggestions for the alert dialog", () => {
         if (path === "/api/list-backup-contents" && body?.backupId === "b-ok") return Response.json({ content: { groups: [
           { folder: "DeviceCompliancePolicies", label: "Compliance policies", policies: [{ displayName: "Windows 11 - Compliance" }, { displayName: "Windows 11 - Compliance" }] },
           { folder: "ConditionalAccessPolicies", label: "Conditional Access policies", policies: [{ displayName: "Block legacy authentication" }] },
+          // Devices are not policies, so serial numbers never show up as suggestions.
+          { folder: "AutopilotDevices", label: "Windows Autopilot devices", policies: [{ displayName: "SN-0001" }] },
         ] } })
         return Response.json({}, { status: 404 })
       },

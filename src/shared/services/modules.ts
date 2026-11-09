@@ -86,7 +86,7 @@ export const MODULES: readonly ServiceModule[] = [
       },
       {
         label: "Enrollment and branding",
-        folders: ["EnrollmentConfigurations", "AutopilotProfiles", "AppleEnrollmentProfiles", "AppleAutomatedEnrollment", "AndroidEnrollmentProfiles", "TermsAndConditions", "Branding"],
+        folders: ["EnrollmentConfigurations", "AutopilotProfiles", "AutopilotDevices", "AppleEnrollmentProfiles", "AppleAutomatedEnrollment", "AndroidEnrollmentProfiles", "TermsAndConditions", "Branding"],
         backup: readOrWrite("DeviceManagementServiceConfig"),
         restore: rw("DeviceManagementServiceConfig"),
       },

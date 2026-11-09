@@ -5,11 +5,15 @@ import { typeForFolder } from '../../shared/intune/registry'
 import { comparableSnapshot } from '../../shared/intune/compare'
 const snapshotHash = (value: Record<string, any>) => createHash('sha256').update(JSON.stringify(comparableSnapshot(value))).digest('base64').slice(0, 22)
 import { LocalBlobStore } from '../storage/local-blob-store'
-import { MAX_BACKUP_ARCHIVE_BYTES, MAX_BACKUP_ARCHIVE_FILES } from '../../shared/constants'
+import { MAX_BACKUP_ARCHIVE_FILES, MAX_BACKUP_ARCHIVE_TOTAL_BYTES } from '../../shared/constants'
 
-const MAX = MAX_BACKUP_ARCHIVE_BYTES
+const MAX = MAX_BACKUP_ARCHIVE_TOTAL_BYTES
 const guid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i
 const object = (v: unknown): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v)
+/** Refuses a chosen archive file before it is read, at the same total size a backup download allows. */
+export function assertArchiveFileSize(bytes: number): void {
+  if (bytes > MAX) throw new Error(`Choose an archive smaller than ${MAX / 1024 / 1024} MiB`)
+}
 export interface ReviewedArchive { tenantId: string; backupId: string; digest: string; files: Map<string, Buffer>; count: number }
 /** Validate the central directory before JSZip can normalize names or replace duplicates. */
 function inspectDirectory(raw: Buffer): void {
@@ -46,7 +50,7 @@ async function bounded(entry: JSZip.JSZipObject, remaining: number): Promise<Buf
   })
 }
 export async function reviewArchive(raw: Buffer): Promise<ReviewedArchive> {
-  if (raw.length < 22 || raw.length > MAX) throw new Error('Choose a ZIP archive smaller than 32 MiB')
+  if (raw.length < 22 || raw.length > MAX) throw new Error('Choose a ZIP archive smaller than 128 MiB')
   inspectDirectory(raw)
   const zip = await JSZip.loadAsync(raw)
   const files = new Map<string, Buffer>(); let total = 0
@@ -67,7 +71,7 @@ export async function reviewArchive(raw: Buffer): Promise<ReviewedArchive> {
     if (expected.has(path) || !object(snapshot) || snapshot.id !== id || snapshotHash(snapshot) !== item.hash) throw new Error('Backup contents do not match the export inventory')
     expected.add(path); counts[folder] = (counts[folder] ?? 0) + 1
   }
-  if (files.size !== expected.size + 2 || metadata.ItemCounts.TotalPolicies !== expected.size || Object.entries(metadata.ItemCounts).some(([folder, count]) => folder !== 'TotalPolicies' && count !== (counts[folder] ?? 0))) throw new Error('Backup archive is incomplete or contains extra files')
+  if (files.size !== expected.size + 2 || metadata.ItemCounts.TotalPolicies !== policyTotal(counts) || Object.entries(metadata.ItemCounts).some(([folder, count]) => folder !== 'TotalPolicies' && count !== (counts[folder] ?? 0))) throw new Error('Backup archive is incomplete or contains extra files')
   files.delete('tenuvault-manifest.json')
   return { tenantId: manifest.sourceTenantId.toLowerCase(), backupId: manifest.backupId, digest: createHash('sha256').update(raw).digest('hex'), files, count: expected.size }
 }
@@ -93,4 +97,9 @@ export async function importConfirmedArchive(store: LocalBlobStore, archive: Rev
   await license(archive.tenantId)
   await importArchive(store, archive)
   return true
+}
+
+/** Items that are configuration, as backups count TotalPolicies: inventory such as Autopilot devices is left out. */
+function policyTotal(counts: Record<string, number>): number {
+  return Object.entries(counts).reduce((sum, [folder, count]) => (typeForFolder(folder)?.inventory ? sum : sum + count), 0)
 }
