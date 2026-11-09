@@ -159,8 +159,8 @@ export interface ChangeSetRecord extends ListedRecord {
   review: ChangeSetReview | null
   preChange: {
     capturedAt: string
-    /** Backup folder of the successful pre-change backup. */
-    backupFolder: string
+    /** Backup folder of the successful pre-change backup; null when a Sync apply skipped the backup. */
+    backupFolder: string | null
     captureId: string
     /** Per operation: whether the object existed and whether values were redacted. */
     objects: Array<{ key: string; objectId: string | null; name: string; state: "present" | "absent"; redacted: boolean; sameNameIds: string[] }>

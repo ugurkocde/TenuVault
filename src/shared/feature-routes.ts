@@ -32,6 +32,7 @@ export const FEATURE_ROUTES = {
   "/api/hygiene": { feature: "hygieneExplorer" },
   "/api/baseline-upgrades": { feature: "baselineUpgrades" },
   "/api/promotion": { feature: "promotion" },
+  "/api/sync": { feature: "sync" },
   "/api/health-review": { feature: "healthReview" },
   "/api/notifications": { feature: "notifications" },
   "/api/standards": { feature: "customizations", prefixes: { "standard-": "goldenStandards" } },

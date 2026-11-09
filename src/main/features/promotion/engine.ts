@@ -60,6 +60,8 @@ export interface PromotionRecord extends ListedRecord {
   items: PromotionItem[]
   changeSetId: string | null
   rollbackChangeSetId: string | null
+  /** Set when a Sync run planned this record; the promotion route never lists or acts on it. */
+  sync?: { runId: string }
 }
 
 export interface PlanInput {
@@ -69,13 +71,19 @@ export interface PlanInput {
   includeAssignments: boolean
   dropUnsupportedExclusions: boolean
   acknowledgeRedacted?: boolean
-  items: Array<{ sourceId: string; destinationId: string | null; folder?: string }>
+  /** Warning findings added to an item by the calling workflow; they never block it. */
+  items: Array<{ sourceId: string; destinationId: string | null; folder?: string; notes?: DependencyFinding[] }>
   mappings: Mapping[]
+  /** The workflow its change set belongs to; Sync passes "sync" and its run. */
+  workflow?: "promotion" | "sync"
+  sync?: { runId: string }
 }
+
+export const PROMOTION_NOT_FOUND = "This promotion does not exist for this destination tenant."
 
 export function getPromotion(deps: FeatureDeps, tenantId: string, id: string): Stored<PromotionRecord> {
   const record = deps.records.get<PromotionRecord>(DOMAINS.promotions, tenantId, id)
-  if (!record) throw new FeatureError("This promotion does not exist for this destination tenant.", 404)
+  if (!record) throw new FeatureError(PROMOTION_NOT_FOUND, 404)
   return record
 }
 
@@ -137,9 +145,11 @@ export async function planPromotion(deps: FeatureDeps, destinationTenantId: stri
     }, listings)
     const promotable = (PROMOTION_FOLDERS as readonly string[]).includes(type.folder)
     const findings = promotable ? resolved.findings : [...resolved.findings, { code: "unsupported-type" as const, severity: "blocking" as const, message: `Promotion does not support ${type.label} yet. Supported: Settings Catalog policies, compliance policies, endpoint security policies and device configuration profiles.` }]
+    // Notes of the calling workflow are warnings: they never decide whether the item is blocked.
+    const notes = (item.notes ?? []).map((note) => ({ ...note, severity: note.severity === "blocking" ? "warning" as const : note.severity }))
     const blocked = resolved.blocked || !promotable
     const proposed = blocked ? { body: null, assignments: null } : resolved.proposed
-    items.push({ folder: type.folder, sourceId: item.sourceId, sourceName: resolved.sourceName, sourceVersion, sourceHash: hashOf(comparableSnapshot(snapshot)), destinationId: item.destinationId, action: item.destinationId ? "update" : "create", blocked, findings, references: resolved.references, targetReads: resolved.targetReads, targetStateHash: resolved.targetStateHash })
+    items.push({ folder: type.folder, sourceId: item.sourceId, sourceName: resolved.sourceName, sourceVersion, sourceHash: hashOf(comparableSnapshot(snapshot)), destinationId: item.destinationId, action: item.destinationId ? "update" : "create", blocked, findings: [...findings, ...notes], references: resolved.references, targetReads: resolved.targetReads, targetStateHash: resolved.targetStateHash })
     if (!blocked) operations.push({ folder: type.folder, action: item.destinationId ? "update" : "create", targetId: item.destinationId, proposed: proposed.body, assignments: input.includeAssignments ? proposed.assignments : null, source: { tenantId: source, objectId: item.sourceId, version: sourceVersion, label: resolved.sourceName } })
   }
   const blockedCount = items.filter((item) => item.blocked).length
@@ -155,14 +165,15 @@ export async function planPromotion(deps: FeatureDeps, destinationTenantId: stri
     items,
     changeSetId: null,
     rollbackChangeSetId: null,
-  }, { actor, reason: "Planned a promotion" })
+    ...(input.sync ? { sync: { runId: input.sync.runId } } : {}),
+  }, { actor, reason: input.workflow === "sync" ? "Planned a Sync target" : "Planned a promotion" })
   if (blockedCount) return promotion
   let changeSet: Stored<ChangeSetRecord>
   try {
     changeSet = await createChangeSet(deps, destination, {
     title: input.title,
     ticket: input.ticket,
-    origin: { workflow: "promotion", recordId: promotion.id },
+    origin: { workflow: input.workflow ?? "promotion", recordId: promotion.id },
     sourceTenantId: source,
     sourceVersion: items.map((item) => `${item.sourceId}@${item.sourceVersion ?? "unknown"}`).join(",").slice(0, 2000),
     operations,
@@ -228,7 +239,7 @@ export async function approvePromotion(deps: FeatureDeps, tenantId: string, id: 
  * target and of the mapped dependencies, production pre-change backup (fail closed), a second
  * dependency re-check, capture, journaled writes with read-back.
  */
-export async function applyPromotion(deps: FeatureDeps, tenantId: string, id: string, input: { contentHash: string; confirmed: boolean }, actor: string | null): Promise<{ promotion: Stored<PromotionRecord>; changeSet: Stored<ChangeSetRecord> }> {
+export async function applyPromotion(deps: FeatureDeps, tenantId: string, id: string, input: { contentHash: string; confirmed: boolean; backup?: "new" | "none" }, actor: string | null): Promise<{ promotion: Stored<PromotionRecord>; changeSet: Stored<ChangeSetRecord> }> {
   const promotion = getPromotion(deps, tenantId, id)
   if (!promotion.changeSetId) throw new FeatureError("This promotion is blocked. Resolve its findings and plan again.", 409)
   try {
