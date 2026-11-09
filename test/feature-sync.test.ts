@@ -172,6 +172,25 @@ describe("/api/sync plans", () => {
     expect(two.targets[TENANT_B]!.writeCount() + outside.targets[TENANT_B]!.writeCount() + later.targets[TENANT_B]!.writeCount()).toBe(0)
   })
 
+  it("keeps acting on one target of a multi-target run an MSP action", async () => {
+    const context = setup({ plans: MSP })
+    const { targets } = await planned(context, [TENANT_B, TENANT_C])
+    const id = targets.find((target) => target.targetTenantId === TENANT_B)!.promotion!.id
+    let plans: Record<string, Plan> = { [TENANT_A]: "pro", [TENANT_B]: "pro", [TENANT_C]: "community" }
+    context.deps.plan = async (tenantId) => plans[tenantId.toLowerCase()] ?? "community"
+    const hashes = { contentHash: "0".repeat(64), targetFingerprint: "0".repeat(64), confirm: true }
+    for (const action of ["preview", "approve", "reject", "apply", "retry"]) expect((await context.post({ tenantId: TENANT_B, action, id, ...hashes })).status, action).toBe(402)
+    plans = { [TENANT_A]: "pro", [TENANT_B]: "pro", [TENANT_C]: "pro" }
+    const refused = await context.post({ tenantId: TENANT_B, action: "preview", id })
+    expect(refused.status).toBe(402)
+    expect(refused.body.upgrade).toBe("bulkActions")
+    expect(context.targets[TENANT_B]!.writeCount()).toBe(0)
+    // A run to the one other tenant of a Pro license still passes on Pro.
+    const single = setup()
+    const one = (await planned(single)).targets[0]!.promotion!.id
+    expect((await single.post({ tenantId: TENANT_B, action: "preview", id: one })).status).toBe(200)
+  })
+
   it("validates targets: distinct, not the source, connected and at most 25", async () => {
     const context = setup({ plans: MSP })
     expect((await plan(context, [TENANT_B, TENANT_B])).status).toBe(400)
@@ -289,7 +308,7 @@ describe("Sync links", () => {
     expect((await context.post({ tenantId: TENANT_B, action: "apply", id: first, contentHash: hash, confirm: true })).status).toBe(409)
     expect(syncLinks(context.deps, TENANT_B, TENANT_A)[key]).toEqual(latest)
     // Re-recording the first target's verified results never replaces the later link.
-    expect(recordSyncLinks(context.deps, TENANT_B, TENANT_A)).toBe(0)
+    expect(recordSyncLinks(context.deps, TENANT_B, TENANT_A).written).toBe(0)
     expect(first).not.toBe(second)
     expect(syncLinks(context.deps, TENANT_B, TENANT_A)[key]).toEqual(latest)
   })
@@ -412,8 +431,57 @@ describe("Sync links", () => {
     expect(syncLinks(context.deps, TENANT_B, TENANT_A)[keyOf(context.policy)]).toEqual(linked)
     // Replaying the verified results again writes nothing.
     const revisions = context.deps.records.list<SyncLinksRecord>(DOMAINS.syncLinks, TENANT_B)[0]!.history.length
-    expect(recordSyncLinks(context.deps, TENANT_B, TENANT_A)).toBe(0)
+    expect(recordSyncLinks(context.deps, TENANT_B, TENANT_A).written).toBe(0)
     expect(context.deps.records.list<SyncLinksRecord>(DOMAINS.syncLinks, TENANT_B)[0]!.history).toHaveLength(revisions)
+  })
+
+  it("blocks a new create while an earlier Sync's create of the policy is unconfirmed", async () => {
+    const context = setup()
+    const first = (await planned(context)).targets[0]!.promotion!.id
+    const second = (await planned(context)).targets[0]!.promotion!.id
+    // Graph creates the policy but the response is lost.
+    context.targets[TENANT_B]!.failWrite = (method) => (method === "POST" ? "lost" : undefined)
+    const contentHash = await approved(context, TENANT_B, first)
+    expect((await context.post({ tenantId: TENANT_B, action: "apply", id: first, contentHash, confirm: true })).body.changeSet.status).toBe("uncertain")
+    context.targets[TENANT_B]!.failWrite = undefined
+    expect(syncLinks(context.deps, TENANT_B, TENANT_A)).toEqual({})
+    const blocked = (await planned(context)).targets[0]!.promotion!
+    expect(blocked).toMatchObject({ status: "blocked", changeSetId: null })
+    expect(blocked.items[0]!.findings).toContainEqual({ code: "sync-unconfirmed", severity: "blocking", message: 'An earlier sync of "OIB Defender" to this tenant has an unconfirmed result. Retry that sync first so TenuVault can check whether the policy was created.' })
+    // A plan made before the lost write is refused by the stale check.
+    const preview = await context.post({ tenantId: TENANT_B, action: "preview", id: second })
+    expect(preview.body.changeSet.blockers.join(" ")).toContain("has an unconfirmed result")
+    expect((await context.post({ tenantId: TENANT_B, action: "approve", id: second, contentHash: preview.body.changeSet.contentHash, targetFingerprint: preview.body.changeSet.targetFingerprint })).status).toBe(409)
+    // The earlier run's own retry stays allowed and reconciles the create.
+    expect((await context.post({ tenantId: TENANT_B, action: "retry", id: first, contentHash, confirm: true })).body.changeSet.status).toBe("applied")
+    const [created] = [...context.targets[TENANT_B]!.policies.keys()]
+    expect(context.targets[TENANT_B]!.policies.size).toBe(1)
+    expect((await planned(context)).targets[0]!.promotion!.items[0]).toMatchObject({ action: "update", destinationId: created })
+  })
+
+  it("replays links from the current values of the pair's Sync records only", async () => {
+    const context = setup()
+    await synced(context)
+    const syncSets = changeSets(context, TENANT_B).map((changeSet) => changeSet.id)
+    const unrelated = await context.promote({ tenantId: TENANT_B, targetTenants: named([TENANT_A]), sourceTenantId: TENANT_A, action: "plan", title: "Promote", items: [{ sourceId: context.policy.id }] })
+    const unrelatedSet = unrelated.body.promotion.changeSetId as string
+    expect(unrelatedSet).toBeTruthy()
+    const records = context.deps.records
+    const { list, get, current } = { list: records.list.bind(records), get: records.get.bind(records), current: records.current.bind(records) }
+    const calls: string[] = []
+    const read: Array<{ domain: string; ids: string[]; history: boolean }> = []
+    records.list = ((domain, tenantId) => { calls.push(`list ${domain}`); return list(domain, tenantId) }) as typeof records.list
+    records.get = ((domain, tenantId, id) => { calls.push(`get ${domain}`); return get(domain, tenantId, id) }) as typeof records.get
+    records.current = ((domain, tenantId, keep) => {
+      const found = current(domain, tenantId, keep)
+      read.push({ domain, ids: found.map((record) => record.id), history: found.some((record) => "history" in record) })
+      return found
+    }) as typeof records.current
+    expect(recordSyncLinks(context.deps, TENANT_B, TENANT_A).written).toBe(0)
+    expect(calls).toEqual([])
+    expect(read.filter((entry) => entry.domain === DOMAINS.changeSets).map((entry) => entry.ids)).toEqual([syncSets])
+    expect(read.flatMap((entry) => entry.ids)).not.toContain(unrelatedSet)
+    expect(read.some((entry) => entry.history)).toBe(false)
   })
 
   it("orders links by verification time, not by when they were stored", async () => {

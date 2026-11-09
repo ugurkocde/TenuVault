@@ -90,6 +90,14 @@ export class TenantRecords {
     return structuredClone(this.readRecords<T>(domain, tenantId))
   }
 
+  /**
+   * Current values without their history, for scans over many records: only the records `keep`
+   * accepts are copied. `keep` sees the stored record and must not change it.
+   */
+  current<T>(domain: string, tenantId: string, keep: (record: T & StoredRecord) => boolean = () => true): Array<T & StoredRecord> {
+    return this.readRecords<T>(domain, tenantId).filter((record) => keep(record)).map(({ history: _history, ...plain }) => structuredClone(plain) as T & StoredRecord)
+  }
+
   private readRecords<T>(domain: string, tenantId: string): Stored<T>[] {
     const key = this.key(domain, tenantId)
     const staged = this.staged?.get(key)

@@ -45,6 +45,17 @@ function syncRun(deps: FeatureDeps, tenantId: string, body: Body): Stored<SyncRu
   return run
 }
 
+/**
+ * Re-checks the plan rule for one target of a run against every target of that run, so acting
+ * on the targets of a run to several tenants one by one stays an MSP action on all of them.
+ */
+async function requireRunTenants(deps: FeatureDeps, tenantId: string, target: Stored<PromotionRecord>): Promise<void> {
+  const run = deps.records.current<SyncRunRecord>(DOMAINS.syncRuns, target.sourceTenantId, (record) => record.id === target.sync!.runId)[0]
+  const targets = run?.targets.map((entry) => entry.targetTenantId) ?? []
+  if (!targets.includes(tenantId)) throw new FeatureError("The Sync run of this target no longer exists. Plan again.", 409)
+  await requireSyncTenants(deps, target.sourceTenantId, targets)
+}
+
 /** The stored promotion, change set and rollback of a target; reads only. */
 function targetRecords(deps: FeatureDeps, tenantId: string, promotionId: string | null) {
   const promotion = promotionId ? deps.records.get<PromotionRecord>(DOMAINS.promotions, tenantId, promotionId) : null
@@ -119,31 +130,31 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
     },
     preview: async ({ tenantId, body }) => {
       const target = syncTarget(deps, tenantId, body)
-      await requireSyncTenants(deps, target.sourceTenantId, [tenantId])
+      await requireRunTenants(deps, tenantId, target)
       return previewPromotion(deps, tenantId, target.id, syncCheck(deps, tenantId, target.id))
     },
     approve: async ({ tenantId, body, actor }) => {
       const target = syncTarget(deps, tenantId, body)
-      await requireSyncTenants(deps, target.sourceTenantId, [tenantId])
+      await requireRunTenants(deps, tenantId, target)
       const changeSet = await approvePromotion(deps, tenantId, target.id, { contentHash: hashField(body, "contentHash"), targetFingerprint: hashField(body, "targetFingerprint"), reviewer: null, note: null, check: syncCheck(deps, tenantId, target.id) }, actor)
       return { promotion: syncPromotion(deps, tenantId, target.id), changeSet }
     },
     reject: async ({ tenantId, body, actor }) => {
       const target = syncTarget(deps, tenantId, body)
-      await requireSyncTenants(deps, target.sourceTenantId, [tenantId])
+      await requireRunTenants(deps, tenantId, target)
       await rejectChangeSet(deps, tenantId, promotionChangeSet(deps, tenantId, target.id).id, { reviewer: null, note: null }, actor)
       return { promotion: syncPromotion(deps, tenantId, target.id) }
     },
     apply: async ({ tenantId, body, actor }) => {
       const target = syncTarget(deps, tenantId, body)
       const backup = backupOf(body)
-      await requireSyncTenants(deps, target.sourceTenantId, [tenantId])
+      await requireRunTenants(deps, tenantId, target)
       return applySync(deps, tenantId, target.id, { contentHash: hashField(body, "contentHash"), confirmed: body.confirm === true, backup }, actor)
     },
     retry: async ({ tenantId, body, actor }) => {
       const target = syncTarget(deps, tenantId, body)
       const backup = backupOf(body)
-      await requireSyncTenants(deps, target.sourceTenantId, [tenantId])
+      await requireRunTenants(deps, tenantId, target)
       return applySync(deps, tenantId, target.id, { contentHash: hashField(body, "contentHash"), confirmed: body.confirm === true, backup }, actor)
     },
     // The rollback steps write only to this target, so the source is not re-checked: an undo

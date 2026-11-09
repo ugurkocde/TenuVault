@@ -10,7 +10,7 @@ import { readCurrent } from "../change-sets/graph"
 import type { ChangeSetRecord } from "../change-sets/model"
 import { applyPromotion, MAX_PROMOTION_ITEMS, planPromotion, PROMOTION_FOLDERS, type PlanCheck, type PlanInput, type PromotionRecord } from "../promotion/engine"
 import type { DependencyFinding, Mapping } from "../promotion/mapping"
-import { linkKey, recordSyncLinks, staleSyncLinks, syncLinks } from "./links"
+import { linkKey, recordSyncLinks, staleSyncLinks, syncLinks, unconfirmedCreate, type SyncReplay } from "./links"
 
 /**
  * Sync: a one-way, administrator-started copy of selected policies from one source tenant to
@@ -73,15 +73,20 @@ function selectedItems(items: SyncPlanInput["items"]): SyncPlanInput["items"] {
  * this target's plan, so a target that cannot be read never silently gets a duplicate. Also
  * returns the link state the plan relies on, which approval and apply re-check.
  */
-async function linkedItems(deps: FeatureDeps, sourceTenantId: string, targetTenantId: string, items: SyncPlanInput["items"]): Promise<{ items: PlanInput["items"]; links: Record<string, string | null> }> {
+async function linkedItems(deps: FeatureDeps, sourceTenantId: string, targetTenantId: string, items: SyncPlanInput["items"], unresolved: SyncReplay["unresolved"]): Promise<{ items: PlanInput["items"]; links: Record<string, string | null> }> {
   const links = syncLinks(deps, targetTenantId, sourceTenantId)
   const relied = Object.fromEntries(items.map((item) => [linkKey(item.folder, item.sourceId), links[linkKey(item.folder, item.sourceId)]?.targetPolicyId ?? null]))
   let graph: GraphCall | null = null
   const planned: PlanInput["items"] = []
   for (const item of items) {
-    const link = links[linkKey(item.folder, item.sourceId)]
+    const key = linkKey(item.folder, item.sourceId)
+    const link = links[key]
+    // A create whose earlier outcome is unconfirmed may have made the policy without a link,
+    // so no new create of that policy is planned until it is retried.
+    const unconfirmed = unresolved[key]
+    const blocked: DependencyFinding[] = unconfirmed ? [{ code: "sync-unconfirmed", severity: "blocking", message: unconfirmedCreate(unconfirmed.name) }] : []
     if (!link) {
-      planned.push({ ...item, destinationId: null })
+      planned.push({ ...item, destinationId: null, ...(blocked.length ? { notes: blocked } : {}) })
       continue
     }
     graph ??= await deps.graph(targetTenantId)
@@ -91,7 +96,7 @@ async function linkedItems(deps: FeatureDeps, sourceTenantId: string, targetTena
       continue
     }
     const note: DependencyFinding = { code: "sync-link-missing", severity: "warning", message: `"${link.targetName}", which an earlier Sync wrote "${link.sourceName}" to, no longer exists in this tenant. This Sync creates a new policy.` }
-    planned.push({ ...item, destinationId: null, notes: [note] })
+    planned.push({ ...item, destinationId: null, notes: [note, ...blocked] })
   }
   return { items: planned, links: relied }
 }
@@ -122,8 +127,8 @@ export async function planSync(deps: FeatureDeps, sourceTenantId: string, input:
     let error: string | null = null
     try {
       // Repairs links whose write was lost before the plan relies on them.
-      recordSyncLinks(deps, target, source)
-      const linked = await linkedItems(deps, source, target, items)
+      const replay = recordSyncLinks(deps, target, source)
+      const linked = await linkedItems(deps, source, target, items, replay.unresolved)
       promotion = await planPromotion(deps, target, {
         sourceTenantId: source,
         title,
@@ -167,8 +172,9 @@ export async function planSync(deps: FeatureDeps, sourceTenantId: string, input:
 export function syncCheck(deps: FeatureDeps, targetTenantId: string, promotionId: string): PlanCheck {
   return () => {
     const promotion = deps.records.get<PromotionRecord>(DOMAINS.promotions, targetTenantId, promotionId)
-    if (promotion) recordSyncLinks(deps, targetTenantId, promotion.sourceTenantId)
-    return staleSyncLinks(deps, targetTenantId, promotionId)
+    if (!promotion) return []
+    const replay = recordSyncLinks(deps, targetTenantId, promotion.sourceTenantId)
+    return staleSyncLinks(deps, targetTenantId, promotionId, replay.unresolved)
   }
 }
 
