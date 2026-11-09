@@ -356,6 +356,45 @@ describe.runIf(Boolean(pwsh))("cloud change reports match the desktop app", () =
     }
   }, 60_000)
 
+  it("counts a note that is valid JSON but not a report as refused by the report checks", () => {
+    const folder = mkdtempSync(join(tmpdir(), "tenuvault-report-null-"))
+    try {
+      const notesPath = join(folder, "notes.json")
+      writeFileSync(notesPath, JSON.stringify({ "backup-2026-11-06-020000.json": "null" }))
+      const out = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", deliverScript, "-NotesPath", notesPath, "-TenantId", fixture.tenantId], { encoding: "utf8", maxBuffer: 20_000_000 })) as { result: { Ignored: number; Messages: string[]; Error: string | null }; mails: unknown[]; deleted: string[] }
+      expect(out.result.Ignored).toBe(1)
+      expect(out.mails).toHaveLength(0)
+      expect(out.deleted).toEqual(["cloud-change-reports/backup-2026-11-06-020000.json"])
+      const message = out.result.Messages.find((line) => line.includes("refused by the report checks"))
+      expect(message).toBeDefined()
+      expect(message).not.toContain("()")
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  }, 60_000)
+
+  it("never cuts an email field or the saved tenant name between the halves of an emoji", () => {
+    const runbook = fileURLToPath(new URL("../resources/runbooks/Invoke-TenuVaultBackup.ps1", import.meta.url))
+    const setupScript = readFileSync(fileURLToPath(new URL("../resources/New-TenuVaultCloudBackup.ps1", import.meta.url)), "utf8")
+    // The setup's tenant name clipping, run on its own with a name whose 200th character starts an emoji.
+    const clip = /    if \(\$savedName\.Length -gt 200\) \{[\s\S]*?\n    \}\n/.exec(setupScript)![0]
+    const command = [
+      `. '${runbook.replace(/'/g, "''")}' -LibraryOnly`,
+      `$emoji = [char]::ConvertFromUtf32(0x1F600)`,
+      // 596 ASCII characters, then an emoji across the 597th and 598th units: a cut at 597 would split it.
+      `$email = Get-TvEmailText -Text (('a' * 596) + $emoji + ('b' * 50)) -Max 600`,
+      `$savedName = ('c' * 199) + $emoji + ('d' * 50)`,
+      clip,
+      `[Console]::Out.Write((ConvertTo-Json -Compress @{ email = $email; name = $savedName }))`,
+    ].join("\n")
+    const out = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-Command", command], { encoding: "utf8" })) as { email: string; name: string }
+    const whole = (text: string) => !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(text)
+    expect(out.email).toBe("a".repeat(596) + "...")
+    expect(whole(out.email)).toBe(true)
+    expect(out.name).toBe("c".repeat(199))
+    expect(whole(out.name)).toBe(true)
+  }, 60_000)
+
   it("covers the cases that matter in the fixture", async () => {
     const { report, html } = await desktopReport({ values: true, actors: true })
     const json = JSON.stringify(report)

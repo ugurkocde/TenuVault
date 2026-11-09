@@ -2108,7 +2108,11 @@ function Get-TvEmailText {
     if ($null -eq $Text) { return $null }
     $value = [string]$Text
     if ($value.Length -le $Max) { return $value }
-    return $value.Substring(0, $Max - 3) + "..."
+    # Never cut between the two halves of a surrogate pair, which UTF-8 would turn into a
+    # replacement character in the email.
+    $cut = $Max - 3
+    if ([char]::IsHighSurrogate($value[$cut - 1])) { $cut-- }
+    return $value.Substring(0, $cut) + "..."
 }
 
 # The email fields of a report, within the limits ConvertFrom-TenuVaultChangeReport in the watcher

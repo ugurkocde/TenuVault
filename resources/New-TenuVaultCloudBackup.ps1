@@ -739,7 +739,11 @@ if ($tenantNamePassed) {
     # Cleared to the tenant id, never to an empty value, which the runbook would skip for an
     # unscoped TenuVaultTenantName variable. At most 200 characters, like the app passes it.
     $savedName = if ("$TenantName".Trim()) { "$TenantName".Trim() } else { $TenantId }
-    if ($savedName.Length -gt 200) { $savedName = $savedName.Substring(0, 200).TrimEnd() }
+    if ($savedName.Length -gt 200) {
+        # Never cut between the two halves of a surrogate pair.
+        $cut = if ([char]::IsHighSurrogate($savedName[199])) { 199 } else { 200 }
+        $savedName = $savedName.Substring(0, $cut).TrimEnd()
+    }
     Set-TenuVaultAutomationVariable -Name "TenuVaultTenantName-$tenantKey" -Value $savedName
 }
 if ($changeReportActorsPassed) { Set-TenuVaultAutomationVariable -Name "TenuVaultChangeReportActors-$tenantKey" -Value $(if ($ChangeReportWithoutActors) { "false" } else { "true" }) }

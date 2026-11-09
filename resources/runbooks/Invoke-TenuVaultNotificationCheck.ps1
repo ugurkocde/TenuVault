@@ -2546,9 +2546,13 @@ function Send-TvChangeReports {
                 $text = Get-TvBlobUtf8 -Uri $uri -Token $Token
                 if ($null -eq $text) { continue }
                 $parsed = $null
-                try { $parsed = ConvertFrom-TvReportJson $text } catch { $ignoredWhy["not valid JSON"]++ }
-                if ($null -ne $parsed) {
-                    try { $report = ConvertFrom-TenuVaultChangeReport $parsed $TenantId } catch { $report = $null }
+                $parsedOk = $false
+                try { $parsed = ConvertFrom-TvReportJson $text; $parsedOk = $true } catch { $ignoredWhy["not valid JSON"]++ }
+                if ($parsedOk) {
+                    # Valid JSON that is not a report (null, a number, an array) is refused by the checks.
+                    if ($null -ne $parsed) {
+                        try { $report = ConvertFrom-TenuVaultChangeReport $parsed $TenantId } catch { $report = $null }
+                    }
                     if ($null -eq $report) { $ignoredWhy["refused by the report checks"]++ }
                 }
             } else {
