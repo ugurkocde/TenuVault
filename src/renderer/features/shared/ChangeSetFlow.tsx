@@ -72,7 +72,7 @@ export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollb
   // A stale change set is finished; only a new preview of the change creates a reviewable one.
   const canReview = !!actions && ["in-review", "approved"].includes(changeSet.status)
   const canApply = !!actions && changeSet.status === "approved"
-  const canRetry = !!actions && Object.values(changeSet.results).some(result => result.status !== "approval" && result.status !== "verified") && ["partial", "failed", "uncertain", "applying"].includes(changeSet.status)
+  const canRetry = !!actions && Object.values(changeSet.results).some(result => !(result.status === "approval" && result.partial) && result.status !== "verified") && ["partial", "failed", "uncertain", "applying"].includes(changeSet.status)
   const canRollback = !!actions && changeSet.kind === "change" && !!changeSet.preChange
 
   return (

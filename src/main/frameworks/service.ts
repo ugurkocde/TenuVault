@@ -1,3 +1,4 @@
+import { approvalSignal, approvalMessage } from "../../shared/intune/approval"
 import { assignmentEvidence, type AssignmentEvidence } from "../../shared/frameworks/evidence"
 import { loadWorkspace, saveWorkspace, deleteWorkspace, keepReadLists, pruneHistory, recordAssessment, recordCreation, workspaceCapacity, workspaceView, type FrameworkWorkspace } from "./workspaces"
 import { HISTORY_FULL_MESSAGE, KEEP_NEWEST_ASSESSMENTS, MAX_WORKSPACE_HISTORY } from "../../shared/frameworks/workspace-history"
@@ -155,6 +156,11 @@ async function jsonFetch(url: string, init: RequestInit = {}, beforeRetry?: () =
     await response.body?.cancel().catch(() => undefined)
     await sleep(delay)
     beforeRetry?.()
+  }
+  if (init.method && init.method.toUpperCase() !== "GET" && url.startsWith("https://graph.microsoft.com/")) {
+    const body = await response.clone().json().catch(() => ({}))
+    const signal = approvalSignal(response.status, body, response.headers)
+    if (signal) throw new FrameworkError(approvalMessage(signal, "Settings Catalog policies"), 409)
   }
   if (!response.ok) throw new FrameworkError(`Request failed (${response.status}) at ${new URL(url).pathname}. ${response.status === 403 ? "Check Intune permissions for this tenant." : "No complete assessment was produced. Retry after resolving the request error."}`, response.status === 403 ? 403 : 502)
   const json: unknown = await response.json()

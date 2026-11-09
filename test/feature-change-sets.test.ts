@@ -498,3 +498,20 @@ describe("change-set Graph writes against recorded lab responses", () => {
     expect(context.tenant.writeCount()).toBe(0)
   })
 })
+
+it("retries approval blocks that wrote nothing", async () => {
+  const context = setup()
+  const { record } = await threeOperations(context)
+  const preview = await approve(context, record.id)
+  const original = context.deps.graph
+  let blocked = true
+  context.deps.graph = async (...args) => {
+    const graph = await original(...args)
+    return async (method, path, body, options) => blocked && method !== "GET" ? { status: 400, body: {}, approval: { kind: "justification-required" } } : graph(method, path, body, options)
+  }
+  const first = await context.post({ action: "apply", id: record.id, contentHash: preview.contentHash, confirm: true })
+  expect(Object.values(first.body.changeSet.results).every((result: any) => result.status === "approval" && !result.partial)).toBe(true)
+  blocked = false
+  const retried = await context.post({ action: "retry", id: record.id, contentHash: preview.contentHash, confirm: true })
+  expect(retried.body.changeSet.status).toBe("applied")
+})

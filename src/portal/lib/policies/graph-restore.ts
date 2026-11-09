@@ -1,5 +1,5 @@
 import { approvalSignal, approvalMessage, type ApprovalSignal } from "../../../shared/intune/approval"
-import { restoreApprovals, saveRestoreApproval, type RestoreApproval, type ApprovalStep } from "../../../main/storage/restore-approvals"
+import { restoreApprovals, saveRestoreApproval, removeRestoreApproval, type RestoreApproval, type ApprovalStep } from "../../../main/storage/restore-approvals"
 import { parseDependencyMappings } from "../../../shared/intune/recovery"
 import { dependencyReferences, type DependencyReference } from "../../../shared/intune/dependencies"
 import { createHash, randomUUID } from "node:crypto"
@@ -8,7 +8,7 @@ import { typeForFolder, type IntuneType, type Item, type Json, type Step } from 
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 import { buildRestorePlan, buildUpdatePlan, NotRestorableError, resolveStep, restoreBlocker } from "../../../shared/intune/restore-plan"
 import { assignmentsUnread, readObject, type GraphReader } from "../../../shared/intune/read"
-import { sameSnapshot } from "../../../shared/intune/compare"
+import { comparableSnapshot, sameSnapshot } from "../../../shared/intune/compare"
 import { saveWrite, removeWrite, writeKey, writeRecords } from "../../../main/storage/restore-journal"
 import { moduleForFolder, restorePermissionBlocker, SERVICES_PAGE, type GrantedPermissions } from "../../../shared/services/modules"
 import { TENANT_ADMIN, adminCenterLink, type AdminLink } from "../../../shared/intune/admin-links"
@@ -28,7 +28,7 @@ class Gone extends Error {}
 export type RestoreMode = "copy" | "replace"
 
 export interface RestoreOptions {
-  approvalContext?: { tenantId: string; requesterId: string; justification?: string }
+  approvalContext?: { tenantId: string; requesterId: string; requesterName?: string; justification?: string }
   mode: RestoreMode
   /** Stable tenant/source binding for repair requests across API calls. */
   repairScope?: string
@@ -515,7 +515,7 @@ export class Restorer {
     } else if (await this.parentGone(entry.type, entry.id)) {
       return gone
     }
-    return this.complete(entry.type, path, entry.id, entry.body, entry.action, entry.steps)
+    return this.complete(entry.type, path, entry.id, entry.body, entry.action, entry.steps, entry.expectedCurrent)
   }
 
   /**
@@ -540,17 +540,23 @@ export class Restorer {
     for (const [index, step] of resolved.entries()) {
       let message: string | undefined
       let safeToRetry = false
+      let response: Awaited<ReturnType<GraphCall>> | undefined
       try {
-        const response = await this.graph(step.method, step.path, step.body)
-        if (response.approval) {
-          const live = action === "updated" && this.options.approvalContext && response.approval.kind !== "locked-by-other" ? (index === 0 ? baseline : await this.current(type, id)) : undefined
-          return this.pauseApproval(type, path, step, resolved.slice(index + 1), body, action, response.approval, id, live, undefined, priorSteps > 0 || index > 0, priorSteps + index + 1, priorSteps + resolved.length)
+        response = await this.graph(step.method, step.path, step.body)
+        if (!response.approval) {
+          if (response.status < 300) continue
+          message = `${step.kind === "assignments" ? "Assignments" : "Settings"} could not be restored: ${writeError(type, response.body, response.status)}`
+          safeToRetry = response.status < 500 && response.status !== 408
         }
-        if (response.status < 300) continue
-        message = `${step.kind === "assignments" ? "Assignments" : "Settings"} could not be restored: ${writeError(type, response.body, response.status)}`
-        safeToRetry = response.status < 500 && response.status !== 408
       } catch (error) {
         message = `Write outcome unknown: ${error instanceof Error ? error.message : String(error)}. Check Intune before retrying.`
+      }
+      if (response?.approval) {
+        let live = index === 0 ? baseline : undefined
+        if (action === "updated" && !live && this.options.approvalContext && response.approval.kind !== "locked-by-other") {
+          try { live = await this.current(type, id) } catch { /* Retain the pending code even if the read fails. */ }
+        }
+        return this.pauseApproval(type, path, step, resolved.slice(index + 1), body, action, response.approval, id, live, undefined, priorSteps > 0 || index > 0, priorSteps + index + 1, priorSteps + resolved.length)
       }
       let repairToken: string | undefined
       let expectedCurrent: Item | undefined
@@ -572,29 +578,30 @@ export class Restorer {
 
   private async pauseApproval(type: IntuneType, path: string, step: Step, remaining: Step[], source: Item, action: "created" | "updated", signal: ApprovalSignal, objectId?: string, baseline?: Item, snapshotId?: string, partial = false, stepNumber = partial ? 2 : 1, totalSteps = stepNumber + remaining.length): Promise<RestoreOutcome> {
     const context = this.options.approvalContext
-    const base: RestoreOutcome = { success: false, path, policyId: objectId, partial, retryable: false, approval: signal, error: approvalMessage(signal, type.label, partial ? `The ${action === "created" ? "object was created" : "earlier update steps were written"}.` : undefined) }
+    const base: RestoreOutcome = { success: false, path, policyId: objectId, partial, retryable: false, approval: signal, error: approvalMessage(signal, type.label, partial ? `The ${action === "created" ? `object was created (${objectId})` : "earlier update steps were written"}.` : undefined) }
     if (!context || this.options.crossTenant || signal.kind === "locked-by-other") return base
-    if (action === "updated" && !baseline) return { ...base, error: `${base.error} The live object could not be fingerprinted. Review it before submitting.` }
+    if (action === "updated" && !baseline && signal.kind !== "pending") return { ...base, error: `${base.error} The live object could not be fingerprinted. Review it before submitting.` }
     const exact = (entry: Step): ApprovalStep => ({ method: entry.method, path: entry.path, kind: entry.kind, body: entry.body ? JSON.stringify(entry.body) : undefined })
     const name = source[type.nameKey] ?? source.displayName ?? source.name
-    const record: RestoreApproval = { id: signal.kind === "pending" ? signal.code : randomUUID(), tenantId: context.tenantId, requesterId: context.requesterId, origin: "restore", backupPath: path, snapshotId, repairScope: this.options.repairScope,
+    const record: RestoreApproval = { id: signal.kind === "pending" ? signal.code : randomUUID(), tenantId: context.tenantId, requesterId: context.requesterId, requesterName: context.requesterName, origin: "restore", backupPath: path, snapshotId, repairScope: this.options.repairScope,
       label: typeof name === "string" ? name : type.label, folder: type.folder, operation: step.kind === "assignments" ? "assign" : action === "created" && !objectId ? "create" : "update",
-      step: exact(step), remaining: remaining.map(exact), objectId, fingerprint: baseline ? approvalFingerprint(baseline) : undefined, submittedAt: new Date().toISOString(), status: signal.kind === "pending" ? "needsApproval" : "justification-required", justification: context.justification ?? "", stepNumber, totalSteps, action, source, assignments: this.options.assignments, mode: this.options.mode }
+      step: exact(step), remaining: remaining.map(exact), objectId, fingerprint: baseline ? approvalFingerprint(baseline, this.options.assignments) : undefined, submittedAt: new Date().toISOString(), status: signal.kind === "pending" ? "needsApproval" : "justification-required", justification: context.justification ?? "", stepNumber, totalSteps, action, source, assignments: this.options.assignments, mode: this.options.mode }
     if (signal.kind === "pending" && restoreApprovals(context.tenantId).some(entry => entry.id === signal.code)) return { ...base, approvalId: signal.code, approvalState: "submitted", error: "Already submitted for approval" }
     saveRestoreApproval(record)
     if (signal.kind === "justification-required" && record.justification.trim()) return this.submitApproval(record)
-    if (signal.kind === "pending") await this.refreshApproval(record)
+    if (signal.kind === "pending") { try { await this.refreshApproval(record) } catch { /* The pending record is already durable. */ } }
     return { ...base, approvalId: record.id, approvalState: signal.kind === "pending" ? "submitted" : "required", error: signal.kind === "pending" ? "Submitted for approval" : base.error }
   }
 
   async refreshApproval(record: RestoreApproval): Promise<RestoreApproval> {
     this.checkApprovalOwner(record, false)
-    if (record.status === "justification-required" || record.status === "stale") return record
+    if (record.continuationPending || ["justification-required", "completed", "rejected", "cancelled", "expired"].includes(record.status)) return record
     const response = await this.graph("GET", `deviceManagement/operationApprovalRequests/${encodeURIComponent(record.id)}`)
+    if (response.status === 404) { record = { ...record, status: "expired" }; saveRestoreApproval(record); return record }
     if (response.status !== 200) throw new Error(errorMessage(response.body, response.status))
     const latest = restoreApprovals(record.tenantId).find(entry => entry.id === record.id) ?? record
-    if (["stale", "completed"].includes(latest.status)) return latest
-    record = { ...latest, status: typeof response.body.status === "string" ? response.body.status : record.status, expiresAt: typeof response.body.expirationDateTime === "string" ? response.body.expirationDateTime : record.expiresAt, approverNote: typeof response.body.approvalJustification === "string" ? response.body.approvalJustification : undefined }
+    if (["completed"].includes(latest.status)) return latest
+    record = { ...latest, status: latest.status === "stale" && response.body.status === "approved" ? "stale" : typeof response.body.status === "string" ? response.body.status : record.status, expiresAt: typeof response.body.expirationDateTime === "string" ? response.body.expirationDateTime : record.expiresAt, approverNote: typeof response.body.approvalJustification === "string" ? response.body.approvalJustification : undefined }
     saveRestoreApproval(record)
     return record
   }
@@ -614,11 +621,12 @@ export class Restorer {
       const draftId = record.id
       const code = response.approval.code
       const existing = restoreApprovals(record.tenantId).find(entry => entry.id === code)
-      record = existing ?? { ...record, id: response.approval.code, status: "needsApproval", justification }
+      if (existing && existing.step.body !== record.step.body) return { success: false, path: record.backupPath, partial: record.stepNumber > 1, policyId: record.objectId, approvalId: record.id, approval: response.approval, retryable: false, error: "A different change to this object is already waiting for approval in Intune. Complete or withdraw it first." }
+      record = existing ?? { ...record, id: response.approval.code, status: "needsApproval", requesterName: this.options.approvalContext?.requesterName ?? record.requesterName, justification }
       saveRestoreApproval(record)
       // The local draft is terminal once Intune has issued a code.
       const draft = restoreApprovals(record.tenantId).find(entry => entry.id === draftId && entry.status === "justification-required")
-      if (draft) saveRestoreApproval({ ...draft, status: "completed", stepNumber: 0 })
+      if (draft && draft.id !== record.id) removeRestoreApproval(record.tenantId, draft.id)
       try { await this.refreshApproval(record) } catch { /* Keep the durable request when status is unavailable. */ }
       return { success: false, path: record.backupPath, policyId: record.objectId, partial: record.stepNumber > 1, retryable: false, approval: response.approval, approvalId: record.id, approvalState: "submitted", error: `${record.stepNumber > 1 ? "Earlier restore steps were written. " : ""}${existing ? "Already submitted for approval" : "Submitted for approval"}`, adminLink: TENANT_ADMIN("multiAdminApproval") }
     }
@@ -628,12 +636,19 @@ export class Restorer {
 
   async completeApproval(record: RestoreApproval): Promise<RestoreOutcome> {
     this.checkApprovalOwner(record)
+    if (record.continuationPending && record.objectId) return this.resumeApproval(record, { id: record.objectId })
     record = await this.refreshApproval(record)
     if (record.status !== "approved") throw new Error("This request is not approved")
     const type = typeForFolder(record.folder)!
+    if (record.action === "updated" && record.objectId && !record.fingerprint) {
+      const live = await this.current(type, record.objectId)
+      if (!live) throw new Error("The live object could not be fingerprinted. Retry when it can be read.")
+      record = { ...record, fingerprint: approvalFingerprint(live, record.assignments) }
+      saveRestoreApproval(record)
+    }
     if (record.fingerprint && record.objectId) {
       const live = await this.current(type, record.objectId)
-      if (!live || approvalFingerprint(live) !== record.fingerprint) {
+      if (!live || approvalFingerprint(live, record.assignments) !== record.fingerprint) {
         saveRestoreApproval({ ...record, status: "stale" })
         throw new Error("The live object changed after submission. Review it and start a fresh restore.")
       }
@@ -649,18 +664,21 @@ export class Restorer {
       throw new Error("Intune refused to complete this request. It may have expired, been changed, or been completed already. Check it in the Intune admin center.")
     }
     if (response.status >= 300) throw new Error(errorMessage(response.body, response.status))
-    return this.resumeApproval(record, response.body)
+    return this.resumeApproval(record, response.body, references.warnings)
   }
 
-  private async resumeApproval(record: RestoreApproval, response: Item): Promise<RestoreOutcome> {
+  private async resumeApproval(record: RestoreApproval, response: Item, warnings: string[] = []): Promise<RestoreOutcome> {
     const type = typeForFolder(record.folder)!
     const id = record.objectId ?? (typeof response.id === "string" ? response.id : undefined)
     if (!id) throw new Error("Microsoft Graph did not return an object ID. Check Intune before continuing.")
-    saveRestoreApproval({ ...record, objectId: id, status: "completed" })
+    saveRestoreApproval({ ...record, objectId: id, status: "approved", continuationPending: true })
     const next = new Restorer(this.graph, { ...this.options, mode: record.mode, assignments: record.assignments, repairScope: record.repairScope, approvalContext: { ...this.options.approvalContext!, justification: `${record.justification.slice(0, 686)} (${record.remaining[0]?.kind ?? "content"})` } })
     const steps = record.remaining.map(step => ({ ...step, body: step.body ? JSON.parse(step.body) as Item : {} }))
     const baseline = record.action === "updated" ? await this.current(type, id) : undefined
-    return withAdminLink(record.backupPath, await next.complete(type, record.backupPath, id, record.source, record.action, steps, baseline, record.stepNumber), record.source)
+    const outcome = await next.complete(type, record.backupPath, id, record.source, record.action, steps, baseline, record.stepNumber)
+    saveRestoreApproval({ ...record, objectId: id, status: "completed", continuationPending: false })
+    if (record.assignments && type.assignmentWarning) outcome.warnings = [...(outcome.warnings ?? []), type.assignmentWarning]
+    return withAdminLink(record.backupPath, next.withWarnings(outcome, type, record.source, record.step.body ? JSON.parse(record.step.body) as Item : {}, warnings), record.source)
   }
 
   /** The live object read like a backup, or undefined when it was deleted. */
@@ -733,7 +751,11 @@ export async function readLive(graph: GraphCall, type: IntuneType, id: string): 
 
 export { NotRestorableError }
 
-export function approvalFingerprint(value: Item): string { return createHash("sha256").update(stableJson(value)).digest("hex") }
+export function approvalFingerprint(value: Item, assignments = true): string {
+  const snapshot = comparableSnapshot(value) as Item
+  if (!assignments) delete snapshot.assignments
+  return createHash("sha256").update(stableJson(snapshot)).digest("hex")
+}
 
 function stableJson(value: Json): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`

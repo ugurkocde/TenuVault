@@ -6,6 +6,8 @@ export interface RestoreApproval {
   id: string
   tenantId: string
   requesterId: string
+  requesterName?: string
+  continuationPending?: boolean
   origin: "restore"
   backupPath: string
   snapshotId?: string
@@ -38,17 +40,34 @@ export function restoreApprovals(tenantId: string): RestoreApproval[] {
 }
 function all(): RestoreApproval[] {
   if (!store) throw new Error("Approval storage is unavailable")
-  return JSON.parse(store.get(KEY) ?? "[]") as RestoreApproval[]
+  const raw = store.get(KEY)
+  if (!raw) return []
+  let parsed: unknown
+  try { parsed = JSON.parse(raw) } catch { parsed = null }
+  if (Array.isArray(parsed)) return parsed as RestoreApproval[]
+  store.set(`${KEY}.unreadable.${Date.now()}`, raw)
+  store.delete(KEY)
+  return []
 }
 export function saveRestoreApproval(record: RestoreApproval): void {
-  const entries = all()
-  const index = entries.findIndex(entry => entry.id === record.id && entry.tenantId.toLowerCase() === record.tenantId.toLowerCase())
+  const original = all()
+  let entries = original.filter(entry => !terminal(entry) || Date.parse(entry.submittedAt) >= Date.now() - 30 * 86400000)
+  const index = entries.findIndex(entry => entry.tenantId.toLowerCase() === record.tenantId.toLowerCase() && (entry.id === record.id || (entry.status === "justification-required" && record.status === "justification-required" && entry.step.method === record.step.method && entry.step.path === record.step.path && entry.step.body === record.step.body)))
   if (index < 0) entries.push(record)
   else entries[index] = record
-  store!.set(KEY, JSON.stringify(entries))
+  while (entries.length > 200) {
+    const oldest = entries.filter(terminal).sort((a, b) => Date.parse(a.submittedAt) - Date.parse(b.submittedAt))[0]
+    if (!oldest) throw new Error("Approval storage is full. Dismiss finished requests before submitting more.")
+    entries = entries.filter(entry => entry !== oldest)
+  }
+  if (JSON.stringify(original) !== JSON.stringify(entries)) store!.set(KEY, JSON.stringify(entries))
+}
+function terminal(record: RestoreApproval): boolean { return !record.continuationPending && ["completed", "rejected", "cancelled", "expired"].includes(record.status) }
+export function removeRestoreApproval(tenantId: string, id: string): void {
+  store!.set(KEY, JSON.stringify(all().filter(entry => !(entry.id === id && entry.tenantId.toLowerCase() === tenantId.toLowerCase()))))
 }
 export function dismissRestoreApproval(tenantId: string, id: string): void {
   const record = restoreApprovals(tenantId).find(entry => entry.id === id)
-  if (!record || !["rejected", "cancelled", "expired", "completed"].includes(record.status)) throw new Error("Only finished requests can be dismissed")
+  if (!record || !["justification-required", "stale", "rejected", "cancelled", "expired", "completed"].includes(record.status)) throw new Error("Only finished requests can be dismissed")
   store!.set(KEY, JSON.stringify(all().filter(entry => entry !== record && !(entry.id === id && entry.tenantId.toLowerCase() === tenantId.toLowerCase()))))
 }

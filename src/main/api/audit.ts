@@ -117,16 +117,26 @@ export function createAuditRecorder(
 
 /** Restore runs synchronously and can partially fail despite returning HTTP 200. */
 async function recordRestore(bodyText: string, response: Response, dispatch: (request: Request) => Promise<Response>, accountFor: (id: string) => SignedInAccount | null, policyCopy = false, onRestore?: (notice: RestoreNotice) => void) {
-  const body = JSON.parse(bodyText) as AuditBody & { backupId?: string; originalName?: string; action?: string; mode?: string }
+  const body = JSON.parse(bodyText) as AuditBody & { backupId?: string; originalName?: string; action?: string; mode?: string; approvalAction?: string; approvalId?: string }
   if (typeof body?.tenantId !== "string" || !body.tenantId || !body.appId || !body.clientSecret || !body.storageAccountName) return
+  if (["detect", "list", "dismiss"].includes(body.approvalAction ?? "")) return
   const data = await response.json().catch(() => ({})) as {
+    outcome?: { success: boolean; partial?: boolean; approval?: unknown; approvalState?: string; policyId?: string; path: string; error?: string }
     success?: boolean; jobId?: string; policyId?: string; status?: string; error?: string; partial?: boolean
     details?: { restoredCount: number; partialCount?: number; failedCount: number; approvalCount?: number; duration: number; results: { path: string; success: boolean; policyId?: string; error?: string }[] }
+  }
+  const approvalAction = body.approvalAction
+  if (approvalAction && data.outcome) {
+    data.success = data.outcome.success || (approvalAction === "submit" && data.outcome.approvalState === "submitted")
+    data.partial = data.outcome.partial
+    data.policyId = data.outcome.policyId
+    data.error = data.success ? undefined : data.outcome.error
+    data.details = { restoredCount: data.outcome.success ? 1 : 0, failedCount: !data.outcome.success && !data.outcome.approval ? 1 : 0, partialCount: data.outcome.partial ? 1 : 0, approvalCount: data.outcome.approval ? 1 : 0, duration: 0, results: [{ path: data.outcome.path, success: data.outcome.success, policyId: data.outcome.policyId, error: data.outcome.error }] }
   }
   const ok = response.ok && data.success === true
   // Some copies were created, so the restore completed with failures rather than failing outright.
   const partial = !ok && ((data.details?.approvalCount ?? 0) > 0 || data.partial === true || (response.ok && ((data.details?.restoredCount ?? 0) > 0 || (data.details?.partialCount ?? 0) > 0)))
-  if (!policyCopy && ![400, 402, 403].includes(response.status)) {
+  if (!policyCopy && (!approvalAction || approvalAction === "complete") && ![400, 402, 403].includes(response.status)) {
     try {
       const partialRestore = data.status === "PartiallyCompleted" || (data.details?.partialCount ?? 0) > 0 || partial
       onRestore?.({
@@ -134,7 +144,7 @@ async function recordRestore(bodyText: string, response: Response, dispatch: (re
         jobId: data.jobId ?? randomUUID(),
         status: ok && !partialRestore ? "Completed" : partialRestore ? "PartiallyCompleted" : "Failed",
         restored: data.details?.restoredCount ?? 0,
-        failed: data.details?.failedCount ?? 0,
+        failed: data.details?.failedCount ?? (approvalAction === "complete" && !ok ? 1 : 0),
         partial: data.details?.partialCount ?? 0,
         message: null,
       })
@@ -142,11 +152,11 @@ async function recordRestore(bodyText: string, response: Response, dispatch: (re
   }
   const account = accountFor(body.tenantId)
   const logEntry: CreateAuditLogInput = {
-    eventType: policyCopy ? (body.action === "revert" ? AuditEventType.POLICY_REVERTED : AuditEventType.POLICY_RESTORED) : ok || partial ? AuditEventType.RESTORE_COMPLETED : AuditEventType.RESTORE_FAILED,
-    action: policyCopy
+    eventType: approvalAction === "submit" || approvalAction === "withdraw" ? AuditEventType.CONFIG_UPDATED : policyCopy ? (body.action === "revert" ? AuditEventType.POLICY_REVERTED : AuditEventType.POLICY_RESTORED) : ok || partial ? AuditEventType.RESTORE_COMPLETED : AuditEventType.RESTORE_FAILED,
+    action: approvalAction === "submit" ? "Restore submitted for approval" : approvalAction === "withdraw" ? "Approval request withdrawn" : approvalAction === "complete" ? "Complete approved restore item" : policyCopy
       ? body.action === "revert" ? "Revert policy to the backed-up version in place" : "Restore policy as an unassigned copy"
       : body.mode === "replace" ? "Restore backup in place" : "Restore backup as policy copies",
-    resource: { type: policyCopy ? "policy" : "backup", id: data.policyId ?? data.jobId ?? body.policyId ?? body.backupId ?? body.tenantId, name: body.originalName ?? body.backupId ?? "Restore backup" },
+    resource: { type: policyCopy ? "policy" : "backup", id: data.policyId ?? body.approvalId ?? data.jobId ?? body.policyId ?? body.backupId ?? body.tenantId, name: body.originalName ?? body.backupId ?? "Restore backup" },
     result: ok ? AuditResult.SUCCESS : partial ? AuditResult.PARTIAL : AuditResult.FAILURE,
     severity: ok ? AuditSeverity.INFO : partial ? AuditSeverity.WARNING : AuditSeverity.ERROR,
     details: { source: "desktop", statusCode: response.status, status: data.status, backupId: body.backupId, ...data.details,

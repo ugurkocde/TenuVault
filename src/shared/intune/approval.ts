@@ -5,6 +5,7 @@ const CODE = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 
 /** Intune embeds its headers in JSON strings as well as HTTP response headers. */
 export function approvalSignal(status: number, body: Item, headers?: Headers): ApprovalSignal | undefined {
+  if (status < 400 || status >= 500) return undefined
   const header = headers?.get("x-msft-approval-code")
   if (header && new RegExp(`^${CODE}$`, "i").test(header)) return { kind: "pending", code: header.toLowerCase() }
   if (status < 300) return undefined

@@ -45,7 +45,7 @@ const selectedCount = (container: HTMLElement) => container.textContent?.match(/
 
 it("reads access policies only at the review step", async () => {
   const container = await renderItems(false)
-  const requests = () => vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "/api/restore-backup")
+  const requests = () => vi.mocked(fetch).mock.calls.filter(([url, init]) => String(url) === "/api/restore-backup" && JSON.parse(String(init?.body)).approvalAction === "detect")
   expect(requests()).toHaveLength(0)
   await act(async () => buttonNamed(container, "Select all")!.click())
   await act(async () => buttonNamed(container, "Next")!.click())

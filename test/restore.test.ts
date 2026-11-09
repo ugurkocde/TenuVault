@@ -62,6 +62,11 @@ describe('Restore results', () => {
     }))
     return payloads
   }
+  it('preserves the original non-MAA result message byte for byte', async () => {
+    mock(false)
+    const data = await (await POST(request(body))).json()
+    expect(data.message).toBe('Created 2 unassigned [Restored] copies; 0 failed')
+  })
   it.each([false, true])('counts approval blocks without reporting a failed write, mixed=%s', async mixed => {
     mock(false)
     const original = fetch

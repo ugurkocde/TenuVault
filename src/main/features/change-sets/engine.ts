@@ -776,7 +776,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
     operations: for (const operation of record.operations) {
       const type = typeOf(operation.folder)
       const current = getChangeSet(deps, tenant, id).results[operation.key] ?? emptyResult()
-      if (current.status === "verified" || current.status === "approval") continue
+      if (current.status === "verified" || (current.status === "approval" && current.partial)) continue
       const stopIfCisRevoked = (): boolean => {
         if (record.origin.workflow !== "cis-remediation" || recovery || cisBenchmarksAllowed(tenantId)) return false
         saveResult(deps, tenant, id, operation.key, {

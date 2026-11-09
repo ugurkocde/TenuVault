@@ -231,7 +231,7 @@ export async function POST(request: NextRequest) {
       success: failedCount === 0 && approvalCount === 0 && handled > 0,
       jobId: jobId,
       status: handled === 0 && approvalCount > 0 && failedCount === 0 && partialCount === 0 ? "AwaitingApproval" : partialCount > 0 || approvalCount > 0 ? "PartiallyCompleted" : handled === 0 ? "Failed" : failedCount > 0 ? "PartiallyCompleted" : "Completed",
-      message: `${done}; ${approvalCount} awaiting approval; ${failedCount} failed${unchangedCount ? `; ${unchangedCount} already matched the backup` : ''}${skippedCount ? `; ${skippedCount} kept as reference only` : ''}`,
+      message: `${done}${approvalCount ? `; ${approvalCount} awaiting approval` : ""}; ${failedCount} failed${unchangedCount ? `; ${unchangedCount} already matched the backup` : ''}${skippedCount ? `; ${skippedCount} kept as reference only` : ''}`,
       details: {
         approvalCount,
         restoredCount,
@@ -257,7 +257,7 @@ const approvalLocks = new Set<string>()
 export function requesterContext(token: string, tenantId: string, justification?: string) {
   try {
     const claims = JSON.parse(Buffer.from(token.split(".")[1]!, "base64url").toString("utf8"))
-    if (typeof claims.oid === "string" && claims.scp && typeof claims.tid === "string" && claims.tid.toLowerCase() === tenantId.toLowerCase()) return { tenantId, requesterId: claims.oid as string, justification }
+    if (typeof claims.oid === "string" && claims.scp && typeof claims.tid === "string" && claims.tid.toLowerCase() === tenantId.toLowerCase()) return { tenantId, requesterId: claims.oid as string, requesterName: typeof claims.name === "string" ? claims.name : typeof claims.preferred_username === "string" ? claims.preferred_username : typeof claims.upn === "string" ? claims.upn : undefined, justification }
   } catch { /* No approval flow without a delegated requester identity. */ }
   return undefined
 }
@@ -265,6 +265,7 @@ export function requesterContext(token: string, tenantId: string, justification?
 async function approvalAction(body: any): Promise<Response> {
   const { tenantId, appId, clientSecret, approvalAction: action, approvalId } = body
   if (typeof tenantId !== "string" || !/^[0-9a-f-]{36}$/i.test(tenantId) || !appId || !clientSecret) return NextResponse.json({ error: "Tenant credentials are required" }, { status: 400 })
+  if (action === "list" && !body.refresh) return NextResponse.json({ records: restoreApprovals(tenantId).map(record => approvalRow(record, false)) })
   const token = await getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default")
   const context = requesterContext(token, tenantId)
   const graph = graphCaller(token, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) })
@@ -281,7 +282,7 @@ async function approvalAction(body: any): Promise<Response> {
     const refreshed = await Promise.all(records.map(async record => {
       try { return body.refresh ? await restorer.refreshApproval(record) : record } catch { return record }
     }))
-    return NextResponse.json({ records: refreshed.map(record => ({ id: record.id, label: record.label, operation: record.operation, status: record.status, approverNote: record.approverNote, expiresAt: record.expiresAt, stepNumber: record.stepNumber, totalSteps: record.totalSteps, canComplete: record.requesterId.toLowerCase() === context.requesterId.toLowerCase(), requesterId: record.requesterId })) })
+    return NextResponse.json({ records: refreshed.map(record => approvalRow(record, record.requesterId.toLowerCase() === context.requesterId.toLowerCase())) })
   }
   const record = restoreApprovals(tenantId).find(entry => entry.id === approvalId)
   if (!record) return NextResponse.json({ error: "Request not found" }, { status: 404 })
@@ -289,16 +290,28 @@ async function approvalAction(body: any): Promise<Response> {
   if (approvalLocks.has(key)) return NextResponse.json({ error: "This request is already being processed" }, { status: 409 })
   approvalLocks.add(key)
   try {
-    if (action === "dismiss") dismissRestoreApproval(tenantId, record.id)
+    if (action === "dismiss") {
+      if (record.status !== "justification-required" && record.requesterId.toLowerCase() !== context.requesterId.toLowerCase()) throw new Error("Only the original requester can dismiss this request")
+      dismissRestoreApproval(tenantId, record.id)
+    }
     else if (action === "submit") return NextResponse.json({ outcome: await restorer.submitApproval(record, body.justification) })
     else if (action === "complete") return NextResponse.json({ outcome: await restorer.completeApproval(record) })
     else if (action === "withdraw") {
       if (record.requesterId.toLowerCase() !== context.requesterId.toLowerCase()) throw new Error("Only the original requester can withdraw this request")
-      const response = await graph("POST", "deviceManagement/operationApprovalRequests/cancelMyRequest", { id: record.id })
-      if (response.status !== 204) throw new Error("Intune refused to withdraw this request")
+      try {
+        const response = await graph("POST", "deviceManagement/operationApprovalRequests/cancelMyRequest", { id: record.id })
+        if (response.status !== 204) throw new Error("Withdraw refused")
+      } catch {
+        const latest = await restorer.refreshApproval(record)
+        throw new Error(`Intune refused to withdraw this request. Current status: ${latest.status}`)
+      }
       saveRestoreApproval({ ...record, status: "cancelled" })
     } else return NextResponse.json({ error: "Unknown approval action" }, { status: 400 })
     return NextResponse.json({ success: true })
   } catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 409 }) }
   finally { approvalLocks.delete(key) }
+}
+
+function approvalRow(record: import("../../../../main/storage/restore-approvals").RestoreApproval, canComplete: boolean) {
+  return { id: record.id, label: record.label, operation: record.operation, status: record.status, approverNote: record.approverNote, expiresAt: record.expiresAt, stepNumber: record.stepNumber, totalSteps: record.totalSteps, canComplete, requesterName: record.requesterName }
 }

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { POST } from "../src/portal/app/api/restore-backup/route"
 import { NextRequest } from "../src/main/api/next-server-shim"
 import { Restorer, type GraphCall } from "../src/portal/lib/policies/graph-restore"
-import { restoreApprovals, setRestoreApprovalStore, dismissRestoreApproval } from "../src/main/storage/restore-approvals"
+import { restoreApprovals, saveRestoreApproval, setRestoreApprovalStore, dismissRestoreApproval } from "../src/main/storage/restore-approvals"
 import { requiredFeatures } from "../src/main/api/plan-gates"
 import { resultSummary, statusFromResults, emptyResult } from "../src/main/features/change-sets/model"
 
@@ -46,11 +46,12 @@ it("withdraws with id and dismisses only terminal records", async () => {
 })
 it("does not send stored bodies to the renderer", async () => {
   await seed()
-  network()
+  const fetcher = network()
   const data = await (await POST(request({ approvalAction: "list" }))).json()
-  expect(data.records[0]).toMatchObject({ id: code, canComplete: true })
+  expect(data.records[0]).toMatchObject({ id: code, canComplete: false })
   expect(data.records[0]).not.toHaveProperty("step")
   expect(data.records[0]).not.toHaveProperty("source")
+  expect(fetcher).not.toHaveBeenCalled()
 })
 it("uses stored restore plan requirements for approval actions", async () => {
   await seed()
@@ -61,4 +62,27 @@ it("counts blocked operations and reports written configurations as partial", ()
   const result = { ...emptyResult(), status: "approval" as const, partial: true }
   expect(resultSummary([result])).toContain("1 approval blocked")
   expect(statusFromResults([result])).toBe("partial")
+})
+
+it("requires the requester to dismiss stale requests but allows local drafts", async () => {
+  await seed()
+  const record = restoreApprovals(tenantId)[0]!
+  saveRestoreApproval({ ...record, status: "stale", requesterId: "other" })
+  network()
+  expect((await POST(request({ approvalAction: "dismiss", approvalId: code }))).status).toBe(409)
+  saveRestoreApproval({ ...record, status: "justification-required", requesterId: "other" })
+  expect((await POST(request({ approvalAction: "dismiss", approvalId: code }))).status).toBe(200)
+})
+it("refreshes and reports status after withdrawal is refused", async () => {
+  await seed()
+  const original = network()
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).endsWith("cancelMyRequest")) return Response.json({}, { status: 403 })
+    if (String(input).includes("operationApprovalRequests/")) return Response.json({ status: "rejected" })
+    return original(input, init)
+  }))
+  const response = await POST(request({ approvalAction: "withdraw", approvalId: code }))
+  expect(response.status).toBe(409)
+  expect((await response.json()).error).toContain("Current status: rejected")
+  expect(restoreApprovals(tenantId)[0]?.status).toBe("rejected")
 })

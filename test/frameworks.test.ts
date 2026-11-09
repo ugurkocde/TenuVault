@@ -229,4 +229,16 @@ describe("Graph reads and tenant-bound remediation", () => {
     expect(await handleFramework(create)).toMatchObject({ success: false, results: [{ error: expect.stringContaining("400") }] })
     await expect(handleFramework(create)).rejects.toThrow("already used")
   })
+  it("explains MAA on direct Settings Catalog creation without submitting", async () => {
+    const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.includes("oauth2")) return Response.json({ access_token: "test" })
+      if (init?.method === "POST") return Response.json({ error: { code: "ApprovalRequired" } }, { status: 400 })
+      return Response.json({ value: [] })
+    })
+    vi.stubGlobal("fetch", fetcher)
+    const run = await handleFramework({ action: "assess", tenantId, appId, frameworkId: "custom", reference: "r1", policies: [policy()] }) as { runId: string }
+    expect(await handleFramework({ action: "create", tenantId, appId, runId: run.runId, keys: ["0:0"], confirmUnassigned: true })).toMatchObject({ success: false, results: [{ error: expect.stringContaining("Multi Admin Approval protects Settings Catalog policies") }] })
+    expect(fetcher.mock.calls.filter(([url, init]) => !url.includes("oauth2") && init?.method === "POST")).toHaveLength(1)
+  })
+
 })
