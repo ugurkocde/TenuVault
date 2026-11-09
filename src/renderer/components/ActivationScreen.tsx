@@ -1,3 +1,4 @@
+import { useLicense } from "../lib/license"
 import { ArrowRight, DatabaseBackup, GitCompare, RotateCcw } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import { BrandMark } from "./BrandMark"
@@ -18,6 +19,7 @@ const POINTS = [
  * tenant runs on Community, and a license shared by the tenant's organization is picked up then.
  */
 export function ActivationScreen({ onSignIn }: { onSignIn: () => void }) {
+  const { status } = useLicense()
   return (
     <div className="flex min-h-screen items-center justify-center bg-background p-6">
       <div className="w-full max-w-lg space-y-6 rounded-3xl bg-card p-9 shadow-[0_24px_60px_-30px_rgba(22,21,20,0.25)]">
@@ -43,9 +45,9 @@ export function ActivationScreen({ onSignIn }: { onSignIn: () => void }) {
             Connect your tenant <ArrowRight className="ml-2 h-4 w-4" aria-hidden="true" />
           </Button>
           <p className="text-xs text-gray-600">
-            Setup takes about 10 minutes: create an app registration in your tenant, sign in and take a first backup. It is
-            free on Community for one tenant, and a TenuVault license your organization shares with the tenant is picked up
-            when you sign in.
+            {status?.tenantTrialsEnabled
+              ? "New tenants start with a Pro trial, no card and no email needed. Setup takes about 10 minutes: create an app registration, sign in and take a first backup. Afterwards, one tenant continues on Community Free."
+              : "Setup takes about 10 minutes: create an app registration in your tenant, sign in and take a first backup. It is free on Community for one tenant, and a TenuVault license your organization shares with the tenant is picked up when you sign in."}
           </p>
         </div>
 
@@ -55,7 +57,7 @@ export function ActivationScreen({ onSignIn }: { onSignIn: () => void }) {
 
         <p className="text-center text-xs text-gray-500">
           License checks go to tenuvault.com and send the license key or your Microsoft sign-in token, the tenant ID and a
-          random installation ID. Tenant configuration and backups are never sent.
+          random installation ID. Tenant configuration and backups are never sent. Trials store a keyed hash of the tenant ID. An optional email is sent only when you submit it.
         </p>
       </div>
     </div>

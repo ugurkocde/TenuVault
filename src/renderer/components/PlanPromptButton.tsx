@@ -1,3 +1,4 @@
+import { TenantTrialOptions } from "./TenantTrial"
 import { ExternalLink, Sparkles } from "lucide-react"
 import { Link, useInRouterContext } from "react-router-dom"
 import { Button } from "~/components/ui/button"
@@ -37,13 +38,14 @@ export function PlanPromptButton({
   const status = useStatusIfProvided()
   const inRouter = useInRouterContext()
   const action = planPromptAction(status, plan)
-  if (action === "trial" && inRouter) {
+  if (status?.tenantTrialsEnabled && !status.hasKey && !status.trial && status.tenants.some(t => t.signedIn && !t.entitled)) return <TenantTrialOptions onStarted={onLeave} />
+  if ((action === "trial" || status?.tenantTrialsEnabled && !status.hasKey && !status.trial) && inRouter) {
     // A link: the trial form is on the License page.
     return (
       <Button asChild variant={variant} size={size}>
         <Link to="/license" state={{ startTrial: true }} onClick={() => onLeave?.()}>
           <Sparkles className="h-4 w-4" aria-hidden="true" />
-          Start 30 day free trial
+          {status?.tenantTrialsEnabled ? "Try Pro free" : "Start 30 day free trial"}
         </Link>
       </Button>
     )

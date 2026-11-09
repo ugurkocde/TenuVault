@@ -12,6 +12,7 @@ interface Fields {
   optional: string[]
 }
 const contract = JSON.parse(readFileSync(join(__dirname, "fixtures/license-contract.json"), "utf8")) as {
+  tenantTrial: { responses: { trialEntitlement: Record<string, unknown>; unavailable: { reason: string[] } }; actions: Record<string, unknown> }
   installId: string
   tenantId: string
   publicKey: string
@@ -41,6 +42,7 @@ function service() {
     idToken: async () => "header.payload.signature",
     clientId: () => "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
     fetch: (async (url: string | URL | Request, init?: RequestInit) => {
+      if (!init?.body) return Response.json({ tenantTrials: { enabled: true } })
       const call = { action: String(url).split("/").pop() ?? "", body: JSON.parse(String(init?.body)) as Record<string, unknown> }
       calls.push(call)
       return answer(call)
@@ -96,7 +98,7 @@ describe("licensing contract, client side", () => {
     const status = license.status([TENANT])
     expect(status.tenants[0]!.entitled).toBe(true)
     expect(contract.tokenVersions).toContain(token(name).payload.v)
-    expect(status.trial).toBe(name === "v2 trial")
+    expect(status.trial).toBe(["v2 trial", "v2 tenant trial"].includes(name))
     expect(status.validUntil !== null).toBe(name === "v2 expiring paid key")
     expect(license.cisInternal()).toBe(name === "v1 internal cis")
     expect(calls).toHaveLength(0)
@@ -141,6 +143,36 @@ describe("licensing contract, client side", () => {
         expect(license.status([TENANT]).tenants[0]!.entitled, `${status} ${reason}`).toBe(true)
       }
     }
+  })
+
+  it("loads the tenant trial persisted-state fixture offline", () => {
+    const fixture = JSON.parse(readFileSync(join(__dirname, "fixtures/license/app-state-tenant-trial.json"), "utf8")) as Record<string, string>
+    for (const [key, value] of Object.entries(fixture)) store.set(key, value)
+    expect(service().status([TENANT]).tenants[0]).toMatchObject({ source: "trial", trial: true, canEnd: true })
+    expect(calls).toHaveLength(0)
+  })
+
+  it("uses every tenant trial action with the contract fields", async () => {
+    const fixture = token("v2 tenant trial")
+    const payload = fixture.payload as typeof fixture.payload & { keyExp: number }
+    answer = ({ body }) => {
+      if (body.action === "activate") return Response.json({ reason: "tenant_not_licensed" }, { status: 403 })
+      if (["end_trial", "trial_contact"].includes(String(body.action))) return Response.json({ success: true })
+      return entitlement("v2 tenant trial", { source: "trial", trial: true, keyExp: payload.keyExp, canEnd: true })
+    }
+    const license = service()
+    await license.startTenantTrial(TENANT)
+    expect(license.status([TENANT]).tenants[0]).toMatchObject({ source: "trial", trial: true, canEnd: true })
+    await license.refreshAll()
+    vi.setSystemTime((payload.keyExp - 4 * 86400) * 1000)
+    await license.tenantTrialAction(TENANT, "extend_trial")
+    await license.tenantTrialAction(TENANT, "trial_contact", "admin@contoso.example")
+    await license.tenantTrialAction(TENANT, "trial_contact")
+    await license.tenantTrialAction(TENANT, "end_trial")
+    for (const { body } of calls) expectFields(body, contract.requests.tenant)
+    for (const action of Object.keys(contract.tenantTrial.actions)) expect(calls.some(call => call.body.action === action)).toBe(true)
+    expect(contract.tenantTrial.responses.unavailable.reason).toEqual(["used", "licensed", "install_limit", "disabled", "app_update_required", "not_starter"])
+    expect(Object.keys(contract.tenantTrial.responses.trialEntitlement)).toEqual(expect.arrayContaining(["token", "activationId", "trial", "keyExp", "source", "canEnd"]))
   })
 
   it("relies only on answer fields the service promises", () => {

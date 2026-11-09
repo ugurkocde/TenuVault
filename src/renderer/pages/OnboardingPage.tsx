@@ -13,7 +13,7 @@ import { StorageChooser } from "../components/StorageChooser"
 import { FirstBackupNote } from "../components/FirstBackupNote"
 import { FirstBackupNextSteps } from "../components/FirstBackupNextSteps"
 import { PlanContext, TrialOrKey } from "../components/PlanChoice"
-import { tenantLicense, tenantPlan, useTenantPlan } from "../lib/license"
+import { tenantLicense, tenantPlan, useLicense, useTenantPlan } from "../lib/license"
 import { SetupScriptCard, TenantSignInForm, type SignInFields } from "../components/TenantSignInForm"
 import { bridge } from "../lib/bridge"
 import { buildTenantProfile } from "../lib/desktop-tenant"
@@ -50,6 +50,7 @@ function StepHeading({ id, children }: { id: string; children: React.ReactNode }
  */
 export default function OnboardingPage() {
   const navigate = useNavigate()
+  const { status } = useLicense()
   const tenants = useTenants()
   const { addTenant, updateTenant } = useTenantOperations()
   const { setSelectedTenantId } = useSelectedTenant()
@@ -328,6 +329,7 @@ export default function OnboardingPage() {
         {step === 1 && (
           <div className="space-y-4">
             <StepHeading id="setup-step-1">Sign in to your tenant</StepHeading>
+            {status?.tenantTrialsEnabled && <p className="text-sm text-gray-600">New tenants start with a Pro trial. No card and no email needed.</p>}
             {addError && (
               <div role="alert" className="space-y-3 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700">
                 <p className="flex items-start gap-2"><XCircle className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" /> {addError.message}</p>

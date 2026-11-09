@@ -89,6 +89,12 @@ export interface SignedInAccount {
 
 /** License state of one tenant on this machine. */
 export interface TenantLicenseStatus {
+  trialEndsAt?: string | null
+  canEnd?: boolean
+  trialRefusal?: string
+  trialAcknowledged?: boolean
+  trialEmail?: string
+  trialCanExtend?: boolean
   coverageEnded?: boolean
   tenantId: string
   /** An admin is signed in to the tenant in this app. */
@@ -98,7 +104,7 @@ export interface TenantLicenseStatus {
   /** The tenant may be used: a verified, unexpired entitlement token is bound to it and to this installation. */
   entitled: boolean
   /** Where the entitlement comes from: this machine's key, or the organization license shared with the tenant. */
-  source: "key" | "tenant" | null
+  source: "key" | "tenant" | "trial" | null
   /** Community when the tenant uses the free plan (it then has no entitlement token). */
   plan: "community" | "pro" | "msp" | null
   /** Tenants the license covers in total. */
@@ -120,6 +126,7 @@ export interface TenantLicenseStatus {
 }
 
 export interface LicenseStatus {
+  tenantTrialsEnabled?: boolean
   hasKey: boolean
   /** Saved key outcome, separate from tenant coverage and sign-in guidance. */
   keyState: "none" | "pending" | "active" | "failed"
@@ -432,6 +439,8 @@ export interface TenuVaultBridge {
     setEnabled: (tenantId: string, clientId: string, id: ModuleId, enabled: boolean) => Promise<ServicesStatus>
   }
   license: {
+    startTenantTrial: (tenantId: string) => Promise<LicenseStatus>
+    tenantTrialAction: (tenantId: string, action: "extend_trial" | "end_trial" | "trial_contact" | "acknowledge", email?: string) => Promise<LicenseStatus>
     chooseCommunity: (tenantId: string) => Promise<LicenseStatus>
     status: () => Promise<LicenseStatus>
     /** Refreshes every cached activation with the licensing service, so a plan or tenant quantity change shows without waiting for the next periodic check. */

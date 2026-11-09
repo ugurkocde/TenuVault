@@ -2,7 +2,7 @@
   "description": "Licensing contract between the TenuVault desktop app and the licensing service at /api/desktop-license. Keep byte-identical in both repositories. Add-only: never remove or rename a reason, field or token version.",
   "installId": "0f9e8d7c-6b5a-4c3d-8e2f-1a0b9c8d7e6f",
   "tenantId": "11111111-2222-4333-8444-555555555555",
-  "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAiE6x17AvwSlY6K2hdd3Wb4c+H0pHyXG7P3K04LLVwIQ=\n-----END PUBLIC KEY-----\n",
+  "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAnsL+bTafLcaBMIuaruTqSyf6ebwFZK08cMVcWtbYyeo=\n-----END PUBLIC KEY-----\n",
   "refusalReasons": [
     "invalid_key",
     "not_found",
@@ -34,6 +34,105 @@
       "storage_unavailable"
     ]
   },
+  "tenantTrial": {
+    "endpoint": "POST /api/desktop-license/tenant",
+    "commonRequest": {
+      "idToken": "verified Microsoft ID token, tenant from tid",
+      "installId": "UUID",
+      "os": "win32 | darwin | linux",
+      "appVersion": "semver"
+    },
+    "actions": {
+      "start_trial": {
+        "optional": {
+          "source": "auto | opt-in (default auto)"
+        },
+        "response": "trialEntitlement"
+      },
+      "refresh": {
+        "required": {
+          "activationId": "trial- followed by 32 lowercase hex characters"
+        },
+        "response": "trialEntitlement"
+      },
+      "extend_trial": {
+        "required": {
+          "activationId": "trial activation ID"
+        },
+        "response": "trialEntitlement",
+        "window": "inclusive: ends_at minus 5 days through ends_at plus 14 days; once only; new end is greatest(ends_at, request time) plus 14 days"
+      },
+      "end_trial": {
+        "required": {
+          "activationId": "trial activation ID"
+        },
+        "response": {
+          "success": true
+        },
+        "authorization": "Only the starting install; another install receives 403 trial_unavailable with reason not_starter",
+        "missingTrial": "Returns success true when the tenant has no trial row; activationId must still match the tenant and install."
+      },
+      "trial_contact": {
+        "required": {
+          "activationId": "trial activation ID"
+        },
+        "optional": {
+          "email": "trimmed valid email, maximum 254 characters"
+        },
+        "response": {
+          "success": true
+        },
+        "contact": "One contact per tenant in desktop_tenant_trial_contacts. Email upserts and replaces the address. Reminder timestamps and unsubscribed_at are cleared only when the address changes. Omitted email deletes the contact."
+      }
+    },
+    "responses": {
+      "trialEntitlement": {
+        "token": "signed v2 entitlement",
+        "activationId": "trial-<first 32 hex chars HMAC(lowercase tenantId + lowercase installId)>",
+        "plan": "pro",
+        "tenants": 2,
+        "expiresAt": "ISO 8601 token expiry",
+        "source": "trial",
+        "trial": true,
+        "keyExp": "Unix seconds, trial end",
+        "canEnd": "boolean, true only for the install that started the trial"
+      },
+      "unavailable": {
+        "status": 403,
+        "error": "trial_unavailable",
+        "reason": [
+          "used",
+          "licensed",
+          "install_limit",
+          "disabled",
+          "app_update_required",
+          "not_starter"
+        ]
+      },
+      "expired": {
+        "status": 403,
+        "error": "The license was not accepted.",
+        "reason": "expired"
+      }
+    },
+    "otherErrors": "Existing key and organization actions keep their responses. Trial actions: failed reads and mutations return 503 storage_unavailable. Missing store or invalid/missing pepper: start_trial returns 403 trial_unavailable with reason disabled; other trial actions return 503 storage_unavailable. Incorrect activation returns 403 activation_mismatch.",
+    "extensionAtUpperBoundary": "At exactly ends_at + 14 days an eligible extension succeeds, with a new end 14 days after the request time.",
+    "payload": {
+      "v": 2,
+      "sub": "trial:<first 16 hex chars tenant hash>",
+      "act": "trial activation ID",
+      "plan": "pro",
+      "tenants": 2,
+      "trial": true,
+      "keyExp": "trial end in Unix seconds",
+      "tenantId": "verified tid lowercase",
+      "installId": "request installId lowercase",
+      "iat": "Unix seconds",
+      "exp": "min(iat + 14 days, keyExp)",
+      "status": "granted"
+    },
+    "conversion": "converted_at is reporting only; running trials remain joinable and refreshable. Converted trials cannot extend. An organization mapping, including a stale mapping, refuses start_trial with licensed but does not stop an existing trial refresh."
+  },
   "tokenVersions": [
     1,
     2
@@ -53,7 +152,7 @@
         "iat": 1793000000,
         "exp": 1794209600
       },
-      "token": "eyJ2IjoxLCJzdWIiOiI1YTBlMmY2Yy04YTQxLTRhOGUtOWIzMy0wYzZlMmQxZjdhMTAiLCJhY3QiOiI3YzFkOWUyYS00YjVmLTRjNmQtOGU3Zi05YTBiMWMyZDNlNGYiLCJwbGFuIjoicHJvIiwidGVuYW50SWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJpbnN0YWxsSWQiOiIwZjllOGQ3Yy02YjVhLTRjM2QtOGUyZi0xYTBiOWM4ZDdlNmYiLCJ0ZW5hbnRzIjoyLCJzdGF0dXMiOiJncmFudGVkIiwiaWF0IjoxNzkzMDAwMDAwLCJleHAiOjE3OTQyMDk2MDB9.0Tm3tflWVLqLAXmqDuF_G1Csv_u9YlqaXoU2dyKF8xMorl5Qx2MEQYY8XoB2u6u3CJeExS4iLmb8NHg0mhHzDQ"
+      "token": "eyJ2IjoxLCJzdWIiOiI1YTBlMmY2Yy04YTQxLTRhOGUtOWIzMy0wYzZlMmQxZjdhMTAiLCJhY3QiOiI3YzFkOWUyYS00YjVmLTRjNmQtOGU3Zi05YTBiMWMyZDNlNGYiLCJwbGFuIjoicHJvIiwidGVuYW50SWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJpbnN0YWxsSWQiOiIwZjllOGQ3Yy02YjVhLTRjM2QtOGUyZi0xYTBiOWM4ZDdlNmYiLCJ0ZW5hbnRzIjoyLCJzdGF0dXMiOiJncmFudGVkIiwiaWF0IjoxNzkzMDAwMDAwLCJleHAiOjE3OTQyMDk2MDB9.4SykSuehcJG0qzRzvXLNm_UNBWKtIOC3HKrjciSNJ1bozvX38hn5F9cEDY-ZKwIZr65eMq1ddypDp5C2OKlUAg"
     },
     {
       "name": "v1 msp",
@@ -69,7 +168,7 @@
         "iat": 1793000000,
         "exp": 1794209600
       },
-      "token": "eyJ2IjoxLCJzdWIiOiI1YTBlMmY2Yy04YTQxLTRhOGUtOWIzMy0wYzZlMmQxZjdhMTAiLCJhY3QiOiI3YzFkOWUyYS00YjVmLTRjNmQtOGU3Zi05YTBiMWMyZDNlNGYiLCJwbGFuIjoibXNwIiwidGVuYW50SWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJpbnN0YWxsSWQiOiIwZjllOGQ3Yy02YjVhLTRjM2QtOGUyZi0xYTBiOWM4ZDdlNmYiLCJ0ZW5hbnRzIjoyNSwic3RhdHVzIjoiZ3JhbnRlZCIsImlhdCI6MTc5MzAwMDAwMCwiZXhwIjoxNzk0MjA5NjAwfQ.juXm90GbnmL_sa3QxbC8uf1YsZOpT7Wjh0TPQJf9ykP9AoDsb9L48geeEYMslI7bS5kHxX8OnVnhm_jhXOFkCQ"
+      "token": "eyJ2IjoxLCJzdWIiOiI1YTBlMmY2Yy04YTQxLTRhOGUtOWIzMy0wYzZlMmQxZjdhMTAiLCJhY3QiOiI3YzFkOWUyYS00YjVmLTRjNmQtOGU3Zi05YTBiMWMyZDNlNGYiLCJwbGFuIjoibXNwIiwidGVuYW50SWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJpbnN0YWxsSWQiOiIwZjllOGQ3Yy02YjVhLTRjM2QtOGUyZi0xYTBiOWM4ZDdlNmYiLCJ0ZW5hbnRzIjoyNSwic3RhdHVzIjoiZ3JhbnRlZCIsImlhdCI6MTc5MzAwMDAwMCwiZXhwIjoxNzk0MjA5NjAwfQ.nS_aEqcQuzDQSTrY2-dnDYAKlYvH30CrpdGCs6o0gzOP9TAxe6MLGtwLmDfTlH3yWvqywZtIvK8gNIm8TFggDg"
     },
     {
       "name": "v2 expiring paid key",
@@ -86,7 +185,7 @@
         "exp": 1794209600,
         "keyExp": 1810280000
       },
-      "token": "eyJ2IjoyLCJzdWIiOiI1YTBlMmY2Yy04YTQxLTRhOGUtOWIzMy0wYzZlMmQxZjdhMTAiLCJhY3QiOiI3YzFkOWUyYS00YjVmLTRjNmQtOGU3Zi05YTBiMWMyZDNlNGYiLCJwbGFuIjoicHJvIiwidGVuYW50SWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJpbnN0YWxsSWQiOiIwZjllOGQ3Yy02YjVhLTRjM2QtOGUyZi0xYTBiOWM4ZDdlNmYiLCJ0ZW5hbnRzIjoyLCJzdGF0dXMiOiJncmFudGVkIiwiaWF0IjoxNzkzMDAwMDAwLCJleHAiOjE3OTQyMDk2MDAsImtleUV4cCI6MTgxMDI4MDAwMH0.x5i4g9GAx1c0qvL0FwwXs64gTqaYhdNyqYnS_SB-Ih_eUidEFfq58HBV-xShvBVGjZu5IBoYxM7IfcI_rrdyBQ"
+      "token": "eyJ2IjoyLCJzdWIiOiI1YTBlMmY2Yy04YTQxLTRhOGUtOWIzMy0wYzZlMmQxZjdhMTAiLCJhY3QiOiI3YzFkOWUyYS00YjVmLTRjNmQtOGU3Zi05YTBiMWMyZDNlNGYiLCJwbGFuIjoicHJvIiwidGVuYW50SWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJpbnN0YWxsSWQiOiIwZjllOGQ3Yy02YjVhLTRjM2QtOGUyZi0xYTBiOWM4ZDdlNmYiLCJ0ZW5hbnRzIjoyLCJzdGF0dXMiOiJncmFudGVkIiwiaWF0IjoxNzkzMDAwMDAwLCJleHAiOjE3OTQyMDk2MDAsImtleUV4cCI6MTgxMDI4MDAwMH0.hX_kG9EPx1-HLZcYvlNafEdlqVBXaQ9qyxpjKqwTjs7Ex50J_hwJJ_L89BadiouChNxBtMe7zfjvjzdPwV5DCw"
     },
     {
       "name": "v2 trial",
@@ -104,7 +203,25 @@
         "keyExp": 1794728000,
         "trial": true
       },
-      "token": "eyJ2IjoyLCJzdWIiOiI1YTBlMmY2Yy04YTQxLTRhOGUtOWIzMy0wYzZlMmQxZjdhMTAiLCJhY3QiOiI3YzFkOWUyYS00YjVmLTRjNmQtOGU3Zi05YTBiMWMyZDNlNGYiLCJwbGFuIjoicHJvIiwidGVuYW50SWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJpbnN0YWxsSWQiOiIwZjllOGQ3Yy02YjVhLTRjM2QtOGUyZi0xYTBiOWM4ZDdlNmYiLCJ0ZW5hbnRzIjoyLCJzdGF0dXMiOiJncmFudGVkIiwiaWF0IjoxNzkzMDAwMDAwLCJleHAiOjE3OTQyMDk2MDAsImtleUV4cCI6MTc5NDcyODAwMCwidHJpYWwiOnRydWV9.oRo0gxKrF9UO6MuvhzM3H6eg62JIpHo-AbgpWmeF-Du9hx814ZNhUMlzE4jPuyVDgNy3kT5-f-iPCLtCnT3ACQ"
+      "token": "eyJ2IjoyLCJzdWIiOiI1YTBlMmY2Yy04YTQxLTRhOGUtOWIzMy0wYzZlMmQxZjdhMTAiLCJhY3QiOiI3YzFkOWUyYS00YjVmLTRjNmQtOGU3Zi05YTBiMWMyZDNlNGYiLCJwbGFuIjoicHJvIiwidGVuYW50SWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJpbnN0YWxsSWQiOiIwZjllOGQ3Yy02YjVhLTRjM2QtOGUyZi0xYTBiOWM4ZDdlNmYiLCJ0ZW5hbnRzIjoyLCJzdGF0dXMiOiJncmFudGVkIiwiaWF0IjoxNzkzMDAwMDAwLCJleHAiOjE3OTQyMDk2MDAsImtleUV4cCI6MTc5NDcyODAwMCwidHJpYWwiOnRydWV9.3Ismd01pzPZWJOOBIU1sd5oOCEmInd8qrRXHK3BDZnw8ck8v1DyhEgwHaay5GIZY5w6mNOiY4NsReQXOxtzPCg"
+    },
+    {
+      "name": "v2 tenant trial",
+      "payload": {
+        "v": 2,
+        "sub": "trial:0123456789abcdef",
+        "act": "trial-0123456789abcdef0123456789abcdef",
+        "plan": "pro",
+        "tenantId": "11111111-2222-4333-8444-555555555555",
+        "installId": "0f9e8d7c-6b5a-4c3d-8e2f-1a0b9c8d7e6f",
+        "tenants": 2,
+        "status": "granted",
+        "iat": 1793000000,
+        "exp": 1794209600,
+        "trial": true,
+        "keyExp": 1794209600
+      },
+      "token": "eyJ2IjoyLCJzdWIiOiJ0cmlhbDowMTIzNDU2Nzg5YWJjZGVmIiwiYWN0IjoidHJpYWwtMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYiLCJwbGFuIjoicHJvIiwidGVuYW50SWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJpbnN0YWxsSWQiOiIwZjllOGQ3Yy02YjVhLTRjM2QtOGUyZi0xYTBiOWM4ZDdlNmYiLCJ0ZW5hbnRzIjoyLCJzdGF0dXMiOiJncmFudGVkIiwiaWF0IjoxNzkzMDAwMDAwLCJleHAiOjE3OTQyMDk2MDAsInRyaWFsIjp0cnVlLCJrZXlFeHAiOjE3OTQyMDk2MDB9.A8bSm_X1_2rkLhzCL726CEhlT445U4axUaVgysrvY_WOztopAYmYd5fybRUFxe-gJPIH6KlO3j_MIC18UY2yDw"
     },
     {
       "name": "v1 internal cis",
@@ -121,7 +238,7 @@
         "exp": 1794209600,
         "cis": "internal"
       },
-      "token": "eyJ2IjoxLCJzdWIiOiI1YTBlMmY2Yy04YTQxLTRhOGUtOWIzMy0wYzZlMmQxZjdhMTAiLCJhY3QiOiI3YzFkOWUyYS00YjVmLTRjNmQtOGU3Zi05YTBiMWMyZDNlNGYiLCJwbGFuIjoicHJvIiwidGVuYW50SWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJpbnN0YWxsSWQiOiIwZjllOGQ3Yy02YjVhLTRjM2QtOGUyZi0xYTBiOWM4ZDdlNmYiLCJ0ZW5hbnRzIjoyLCJzdGF0dXMiOiJncmFudGVkIiwiaWF0IjoxNzkzMDAwMDAwLCJleHAiOjE3OTQyMDk2MDAsImNpcyI6ImludGVybmFsIn0.L4u4DVVNK0JsWnCj_i1Q-Yerw-1wg_BnbavAU0_gx6G6cg_BwLEveKN51WzvULikPgW1pZze-EulE5Z4ZqjFDA"
+      "token": "eyJ2IjoxLCJzdWIiOiI1YTBlMmY2Yy04YTQxLTRhOGUtOWIzMy0wYzZlMmQxZjdhMTAiLCJhY3QiOiI3YzFkOWUyYS00YjVmLTRjNmQtOGU3Zi05YTBiMWMyZDNlNGYiLCJwbGFuIjoicHJvIiwidGVuYW50SWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJpbnN0YWxsSWQiOiIwZjllOGQ3Yy02YjVhLTRjM2QtOGUyZi0xYTBiOWM4ZDdlNmYiLCJ0ZW5hbnRzIjoyLCJzdGF0dXMiOiJncmFudGVkIiwiaWF0IjoxNzkzMDAwMDAwLCJleHAiOjE3OTQyMDk2MDAsImNpcyI6ImludGVybmFsIn0.QJ_AlzrTMHjaj2tKi2Zlwg6mMpEz5JokgGAOsO5Jc3jDIBgqQ45_fGECNcYAXeiI9FFGJiiYZVbh_WnAVWCBDQ"
     },
     {
       "name": "v2 renewing, keyExp null",
@@ -138,7 +255,7 @@
         "exp": 1794209600,
         "keyExp": null
       },
-      "token": "eyJ2IjoyLCJzdWIiOiI1YTBlMmY2Yy04YTQxLTRhOGUtOWIzMy0wYzZlMmQxZjdhMTAiLCJhY3QiOiI3YzFkOWUyYS00YjVmLTRjNmQtOGU3Zi05YTBiMWMyZDNlNGYiLCJwbGFuIjoicHJvIiwidGVuYW50SWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJpbnN0YWxsSWQiOiIwZjllOGQ3Yy02YjVhLTRjM2QtOGUyZi0xYTBiOWM4ZDdlNmYiLCJ0ZW5hbnRzIjoyLCJzdGF0dXMiOiJncmFudGVkIiwiaWF0IjoxNzkzMDAwMDAwLCJleHAiOjE3OTQyMDk2MDAsImtleUV4cCI6bnVsbH0.qdGPkIPcc2sXbURj6_STzy8Xy4VM1Ppipmg7qWLQgIxWecUEYFpbdJ1bFbflEurx_sQ3pme59-CosTwQYJoNAQ"
+      "token": "eyJ2IjoyLCJzdWIiOiI1YTBlMmY2Yy04YTQxLTRhOGUtOWIzMy0wYzZlMmQxZjdhMTAiLCJhY3QiOiI3YzFkOWUyYS00YjVmLTRjNmQtOGU3Zi05YTBiMWMyZDNlNGYiLCJwbGFuIjoicHJvIiwidGVuYW50SWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJpbnN0YWxsSWQiOiIwZjllOGQ3Yy02YjVhLTRjM2QtOGUyZi0xYTBiOWM4ZDdlNmYiLCJ0ZW5hbnRzIjoyLCJzdGF0dXMiOiJncmFudGVkIiwiaWF0IjoxNzkzMDAwMDAwLCJleHAiOjE3OTQyMDk2MDAsImtleUV4cCI6bnVsbH0.coWECX2oCO20lWjvmwqCMvWb0Ztg6FFEjmV2Z8cC2IO-C6PBGV5qGvwm5B4rtOdh7cTEoyhI-f6rrIRRYyDICw"
     }
   ],
   "requests": {
@@ -187,7 +304,9 @@
       ],
       "optional": [
         "activationId",
-        "licenseKeyId"
+        "licenseKeyId",
+        "source",
+        "email"
       ]
     }
   },

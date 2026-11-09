@@ -1,3 +1,4 @@
+import { TenantTrialCard, TenantTrialOptions } from "../components/TenantTrial"
 import { CommunityTenantChoiceButton } from "../components/CommunityTenantPicker"
 import { useEffect, useRef, useState, type MouseEvent, type Ref } from "react"
 import { Link, useLocation } from "react-router-dom"
@@ -485,8 +486,10 @@ export default function LicensePage() {
             </Alert>
           )}
 
-          {isUnlicensed(status) && <TrialCallToAction emailRef={trialEmail} onSent={() => setTrialKeyHint(true)} />}
-          {status.trial && <TrialStatus status={status} busy={busy} onReplace={replaceKey} />}
+          {isUnlicensed(status) && !status.tenantTrialsEnabled && <TrialCallToAction emailRef={trialEmail} onSent={() => setTrialKeyHint(true)} />}
+          {<TenantTrialOptions />}
+          {status.tenants.filter(t => t.source === "trial" || t.trialCanExtend).map(t => <TenantTrialCard key={t.tenantId} tenant={t} />)}
+          {status.trial && !status.tenants.some(t => t.source === "trial") && <TrialStatus status={status} busy={busy} onReplace={replaceKey} />}
           {status.hasKey && !status.trial && status.keyState !== "active" && <InactiveKeyReplacement status={status} busy={busy} onReplace={replaceKey} />}
 
           {status.hasKey ? (
@@ -599,8 +602,8 @@ export default function LicensePage() {
       )}
 
       <p className="text-xs text-gray-500">
-        License checks send the license key, your Microsoft sign-in (ID) token or both: the token proves the tenant for an
-        organization license or for sharing the license with it, is verified and only its tenant ID used, never stored. They also send a random installation ID, the tenant ID, the app
+        Tenant trials store a keyed hash of the tenant ID. An optional trial email is sent only when you submit it. License checks send the license key, your Microsoft sign-in (ID) token or both: the token proves the tenant for an
+        organization license, a tenant trial or for sharing the license with it, is verified and only its tenant ID used, never stored. They also send a random installation ID, the tenant ID, the app
         registration client ID and the app version. Tenant configuration and backups are never sent.
         {!status.persisted &&
           " Secure storage is not available on this system, so the license is kept in memory only and must be entered again after a restart."}

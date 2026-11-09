@@ -1,3 +1,4 @@
+import { TenantTrialNotices, TrialChanges } from "./TenantTrial"
 import { CommunityChoiceBanner } from "./CommunityTenantPicker"
 import { useEffect, useRef, useState, type ComponentType, type ReactNode, type RefObject } from "react"
 import { Link, Outlet, useLocation } from "react-router-dom"
@@ -151,12 +152,13 @@ function TrialReminderBanner({ reminder, onDismiss, dismissing }: {
   onDismiss: () => void
   dismissing: boolean
 }) {
+  const { status } = useLicense()
   const final = reminder.stage === "day-27"
   const when = reminder.daysLeft === 1 ? "tomorrow" : `in ${reminder.daysLeft} days`
   return (
     <TrialBanner urgent={final} source={`trial-${reminder.stage}`} onDismiss={onDismiss} dismissing={dismissing}>
       Your Pro trial ends {when}, on {formatDate(reminder.endsAt)}.{" "}
-      {final
+      {status?.tenants.some(t => t.source === "trial") ? <TrialChanges /> : final
         ? "Buy Pro now to keep daily backups, full restore and drift revert for both tenants."
         : "Buy Pro to keep daily backups, full restore and drift revert after the trial."}
     </TrialBanner>
@@ -220,13 +222,14 @@ function LicenseBanner() {
     }
   }
   if (!status || (status.communityChoicePendingTenantIds?.length ?? 0) > 1) return null
+  if (!status.hasKey && !status.trial && status.tenants.some(t => t.trialEndsAt)) return null
   if (isUnlicensed(status) && unlicensedTenants(status).length === 0) {
     // The start pages only: the all-tenants overview, or the dashboard for a single tenant.
     const startPage = pathname === "/portal/overview" || pathname === "/portal/dashboard"
     if (!startPage || !preferencesLoaded || !communityBannerVisible(dismissedAt)) return null
     return (
       <BannerLink tone="neutral" icon={<Sparkles className="h-4 w-4" />} onDismiss={() => void dismiss()} dismissing={dismissing}>
-        You are on Community, the free plan. Try Pro free for 30 days with no card, or add your license key.
+        You are on Community, the free plan. {status.tenantTrialsEnabled ? "Try Pro free with no card or email" : "Try Pro free for 30 days with no card"}, or add your license key.
       </BannerLink>
     )
   }
@@ -475,6 +478,7 @@ export function DesktopLayout() {
       )}
 
       <div className={focus ? undefined : "pl-64"}>
+        <TenantTrialNotices />
         <CommunityChoiceBanner />
         {!focus && <LicenseBanner />}
         {!focus && <SignInBanner />}

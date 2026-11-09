@@ -119,6 +119,7 @@ export function unlicensedTenants(status: LicenseStatus): TenantLicenseStatus[] 
 
 /** Community is a plan state; only a failed key or uncovered signed-in tenant is inactive. */
 export function licenseChipState(status: LicenseStatus): { label: string; tone: "neutral" | "inactive" } {
+  if (status.tenants.some(t => t.source === "trial")) return { label: `Pro trial · ${trialDaysLeft(status) ?? 0} days`, tone: "neutral" }
   if (status.plan) return { label: planName(status.plan), tone: "neutral" }
   if (status.tenants.some((tenant) => tenant.entitled && tenant.plan !== "community")) {
     return { label: "Organization", tone: "neutral" }
@@ -217,19 +218,19 @@ export function trialDaysLeft(status: Pick<LicenseStatus, "trial" | "trialEndsAt
  * the admin dismisses it; a dismissal before the day-27 reminder does not hide that one.
  */
 export function trialReminder(
-  status: Pick<LicenseStatus, "trial" | "trialEndsAt">,
+  status: Pick<LicenseStatus, "trial" | "trialEndsAt"> & Partial<Pick<LicenseStatus, "tenants">>,
   dismissedAt: string | undefined,
   now = Date.now(),
 ): { stage: "day-20" | "day-27"; daysLeft: number; endsAt: string } | null {
   const daysLeft = trialDaysLeft(status, now)
   if (daysLeft === null || !status.trialEndsAt) return null
   const end = Date.parse(status.trialEndsAt)
-  const started = TRIAL_REMINDER_DAYS_LEFT.filter((days) => end - days * DAY_MS <= now)
+  const started = (status.tenants?.some(t => t.source === "trial") ? [5, 1] : TRIAL_REMINDER_DAYS_LEFT).filter((days) => end - days * DAY_MS <= now)
   const days = started[started.length - 1]
   if (days === undefined) return null
   const dismissed = dismissedAt ? Date.parse(dismissedAt) : NaN
   if (Number.isFinite(dismissed) && dismissed >= end - days * DAY_MS && dismissed <= now) return null
-  return { stage: days === 3 ? "day-27" : "day-20", daysLeft, endsAt: status.trialEndsAt }
+  return { stage: days === 3 || days === 1 ? "day-27" : "day-20", daysLeft, endsAt: status.trialEndsAt }
 }
 
 /**
