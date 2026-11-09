@@ -186,9 +186,9 @@ export async function checkSchedulePanel({ check, evaluate, waitForCondition, sc
       assert(await waitForCondition(`${body}.innerText.includes('Automatic backups paused')`), "pause success message missing")
       const saved = await evaluate(`window.tenuvault.schedules.list()`)
       assert(saved.some(schedule => schedule.tenantId === tenantId && !schedule.enabled && schedule.frequency === 'daily' && schedule.time === '07:45'), "pausing changed the stored daily schedule")
-      const refusal = await evaluate(`window.tenuvault.schedules.set({ tenantId: ${JSON.stringify(tenantId)}, enabled: true, frequency: 'daily', time: '07:45' })`)
-      assert(refusal.planError?.code === "plan_required" && refusal.planError.upgrade === "dailySchedule" && refusal.planError.message === "Daily scheduled backups: included in TenuVault Pro and MSP. Upgrade on the License page.", `Community daily re-enable did not return its typed plan error: ${JSON.stringify(refusal)}`)
-      assert((await evaluate(`window.tenuvault.schedules.list()`)).some(schedule => schedule.tenantId === tenantId && !schedule.enabled), "refused daily re-enable changed the paused schedule")
+      const resumed = await evaluate(`window.tenuvault.schedules.set({ tenantId: ${JSON.stringify(tenantId)}, enabled: true, frequency: 'daily', time: '07:45' })`)
+      assert(!resumed.planError && resumed.some(schedule => schedule.tenantId === tenantId && schedule.enabled && schedule.frequency === 'daily'), "Community could not resume its saved daily schedule")
+      await evaluate(`window.tenuvault.schedules.set({ tenantId: ${JSON.stringify(tenantId)}, enabled: false, frequency: 'daily', time: '07:45' })`)
       assert(await evaluate(`${body}.innerText.includes('at 07:45 on Community')`), "paused recurrence summary missing")
       assert(await evaluate(`${body}.innerText.includes('Daily scheduled backups: included in TenuVault Pro and MSP.') && !${body}.innerText.includes(${JSON.stringify(weeklyNote)})`), "paused daily schedule changed its plan notes")
       assert(await evaluate(`!${body}.innerText.includes('Background restart is not installed.')`), "installed runner shows the missing runner note")
@@ -200,6 +200,7 @@ export async function checkSchedulePanel({ check, evaluate, waitForCondition, sc
       assert(await evaluate(`!${body}.querySelector('[role="dialog"]')`), "inline plan note opened a second dialog")
       await evaluate(`window.__scheduleFixture.planChanged({ ...window.__scheduleFixture.status, tenants: [{ tenantId: ${JSON.stringify(tenantId)}, plan: 'pro', entitled: true }] })`)
       assert(await waitForCondition(`!${doc}.querySelector('#schedule-frequency option[value="daily"]').disabled`), "Pro fixture was not applied")
+      await setValue("schedule-time", "09:00")
       await evaluate(`${save}.click()`)
       assert(await waitForCondition(`${body}.querySelector('[role="dialog"]')?.innerText.includes('Included in TenuVault Pro and MSP')`), "schedule refusal did not open the plan dialog")
       // Without a license on this machine, the plan dialog offers the no-card trial on the License page.
@@ -234,9 +235,14 @@ export async function checkSchedulePanel({ check, evaluate, waitForCondition, sc
       if (originalCommunityTenant) {
         let restored = await evaluate(`window.tenuvault.license.retry(${JSON.stringify(originalCommunityTenant)})`)
         const choices = restored.communityChoiceTenantIds ?? []
-        const selected = choices.includes(originalCommunityTenant) ? originalCommunityTenant : choices[0] ?? originalCommunityTenant
-        if (choices.length > 1) restored = await evaluate(`window.tenuvault.license.chooseCommunity(${JSON.stringify(selected)})`)
+        const selected = originalCommunityTenant
+        if (restored.communityTenantId !== selected) {
+          assert(choices.includes(selected), "Original Community tenant is not eligible. Refusing to move the Community seat.")
+          restored = await evaluate(`window.tenuvault.license.chooseCommunity(${JSON.stringify(selected)})`)
+        }
         assert(restored.communityTenantId === selected, "Community coverage was not restored after the fixture")
+      } else {
+        assert((await evaluate(`window.tenuvault.license.status()`)).communityTenantId === null, "The fixture left a Community seat claimed on an originally unclaimed install")
       }
     }
   })

@@ -31,7 +31,7 @@ const MAIN_OVERRIDES = `(() => {
   const M = globalThis.__marketingMock = ${JSON.stringify(MOCK)}
   const handle = (channel, fn) => { ipcMain.removeHandler(channel); ipcMain.handle(channel, (_event, ...args) => fn(...args)) }
   const json = value => ({ status: 200, statusText: "OK", headers: { "content-type": "application/json" }, body: new TextEncoder().encode(JSON.stringify(value)) })
-  handle("api", request => request.path === "/api/reports" ? json({ licensed: false, runtimeNote: "Runs while TenuVault is running.", reports: [], settings: { afterScheduledBackup: true, recipients: [], includeValues: true } }) : json({ backups: [], data: [], entries: [], records: [], tenants: [], jobs: [], exists: true }))
+  handle("api", request => request.path === "/api/notifications" ? json({ licensed: false, runtimeNote: "Runs while TenuVault is running.", channels: [{ id: "local", kind: "local", title: "This computer", enabled: true, recipients: [], lastDelivery: null }], rules: [], auditWatch: { enabled: true, intervalMinutes: 15, categories: [], ignoreOwnChanges: true, includeActor: false, externalWatcher: false, lastPollAt: null, lastError: null, watermark: null, conditionalAccess: { enabled: false, watermark: null, lastPollAt: null, lastError: null } }, deliveries: [] }) : request.path === "/api/reports" ? json({ licensed: false, runtimeNote: "Runs while TenuVault is running.", reports: [], settings: { afterScheduledBackup: true, recipients: [], includeValues: true } }) : json({ backups: [], data: [], entries: [], records: [], tenants: [], jobs: [], exists: true }))
   handle("auth:accounts", () => M.accounts)
   handle("license:status", () => M.license)
   handle("schedules:list", () => M.schedules)
@@ -169,7 +169,7 @@ try {
     await evaluate(`document.activeElement?.blur?.()`)
     await sleep(400)
     const toast = await evaluate(`[...document.querySelectorAll('[role="status"], [role="alert"]')].map(e => e.innerText).join(" | ")`)
-    if (/fail|error|could not|unavailable/i.test(toast)) throw new Error(`Error visible before ${name}: ${toast}`)
+    if (/fail|error|unavailable/i.test(toast)) throw new Error(`Error visible before ${name}: ${toast}`)
     const { data } = await send("Page.captureScreenshot", { format: "png" })
     const file = join(shotsDir, `${name}.png`)
     writeFileSync(file, Buffer.from(data, "base64"))
@@ -189,10 +189,11 @@ try {
   await disableAnimations()
 
   await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1120, deviceScaleFactor: 1, mobile: false })
-  const community = async (id, pending = false) => {
+  const community = async (id, pending = false, unchecked = false) => {
     await main.evaluate(`(() => {
       const M = globalThis.__marketingMock
-      M.license = { ...M.license, hasKey: true, keyState: "failed", keyMessage: null, plan: null, trial: false, tenantLimit: null, communityTenantId: ${pending ? "null" : JSON.stringify(id)}, communityChoiceTenantIds: ${pending ? JSON.stringify(TENANTS.map(t => t.guid)) : "[]"}, tenants: M.license.tenants.map(t => ({ ...t, entitled: false, plan: t.tenantId === ${JSON.stringify(id)} && !${pending} ? "community" : null, message: null })) }
+      M.license = { ...M.license, hasKey: true, keyState: "failed", keyMessage: null, plan: null, trial: false, tenantLimit: null, communityTenantId: ${pending ? "null" : JSON.stringify(id)}, communityChoiceTenantIds: ${pending ? JSON.stringify(TENANTS.map(t => t.guid)) : "[]"}, communityChoicePendingTenantIds: ${pending ? JSON.stringify(TENANTS.map(t => t.guid)) : "[]"}, tenants: M.license.tenants.map(t => ({ ...t, entitled: false, plan: t.tenantId === ${JSON.stringify(id)} && !${pending} ? "community" : null, message: null, coverageEnded: true })) }
+      if (${unchecked}) { M.license.communityChoiceTenantIds = [${JSON.stringify(TENANTS[0].guid)}]; M.license.tenants[1].coverageEnded = false }
       M.schedules.forEach(s => { s.fallbackWeekday = 1; s.pausedReason = s.tenantId === ${JSON.stringify(TENANTS[1].guid)} ? "Paused: Azure storage needs Pro" : undefined; s.nextRunAt = s.pausedReason ? null : (() => { const next = new Date(); next.setDate(next.getDate() + ((1 - next.getDay() + 6) % 7) + 1); next.setHours(2, 0, 0, 0); return next.toISOString() })() })
     })()`)
     await evaluate(`location.reload()`)
@@ -202,10 +203,22 @@ try {
   await community(TENANTS[0].guid, true)
   await assertText("Choose your Community tenant")
   await screenshot("community-tenant-picker")
+  await community(TENANTS[0].guid, true, true)
+  await assertText("Coverage could not be checked")
+  await screenshot("community-tenant-unchecked")
   await community(TENANTS[0].guid)
   await go("#/portal/backup?tab=schedule", "Runs weekly on Community (daily needs Pro)")
   await scrollAll(280)
   await screenshot("weekly-fallback")
+  await go("#/portal/alerts", "Paused on Community")
+  await evaluate(`[...document.querySelectorAll('button, a')].find(item => item.textContent.trim() === 'ChannelsPro' || item.textContent.trim() === 'Channels').click()`)
+  await sleep(600)
+  await scrollAll(0)
+  await screenshot("alerts-channels-paused")
+  await evaluate(`[...document.querySelectorAll('button, a')].find(item => item.textContent.trim() === 'Change watchingPro' || item.textContent.trim() === 'Change watching').click()`)
+  await sleep(600)
+  await scrollAll(0)
+  await screenshot("alerts-watching-paused")
   await go("#/portal/reports", "Paused on Community")
   await scrollAll(0)
   await screenshot("reports-paused")
@@ -215,8 +228,50 @@ try {
   await evaluate(`window.tenuvault.storage.setItem("tenuvault_selected_tenant", "2")`)
   await community(TENANTS[1].guid)
   await go("#/portal/backup?tab=schedule", "Paused: Azure storage needs Pro")
-  await scrollAll(280)
+  await scrollAll(160)
   await screenshot("azure-paused")
+  await evaluate(`[...document.querySelectorAll('button')].find(button => button.textContent === 'Switch to weekly local backups').click()`)
+  await assertText("Save new backups on this computer?")
+  await screenshot("local-switch-confirmation")
+  await main.evaluate(`globalThis.__marketingMock.schedules.forEach(schedule => { schedule.pausedReason = undefined; schedule.nextRunAt = new Date().toISOString() })`)
+  await evaluate(`[...document.querySelectorAll('button')].find(button => button.textContent === 'Switch to local backups').click()`)
+  await assertText("Switch back to saved Azure storage")
+  await sleep(4500)
+  await scrollAll(0)
+  await screenshot("saved-azure-return")
+  await evaluate(`[...document.querySelectorAll('button')].find(button => button.textContent === 'Change storage').click()`)
+  await assertText("Backup storage for Fabrikam")
+  await evaluate(`[...document.querySelectorAll('[role="dialog"] button')].find(button => button.textContent.includes('Your Azure storage account')).click()`)
+  await assertText("Using saved Azure storage")
+  await screenshot("saved-azure-chooser")
+  await evaluate(`[...document.querySelectorAll('[role="dialog"] button')].find(button => button.textContent === 'Cancel').click()`)
+  await go("#/portal/settings?section=signin", "Tenants")
+  if (!await waitFor(`document.querySelector('h1')?.textContent === 'Settings' && !document.querySelector('[role="dialog"]')`)) throw new Error("Settings did not settle")
+  await evaluate(`[...document.querySelectorAll('button')].filter(button => button.textContent === 'Change storage').at(-1).click()`)
+  await assertText("Backup storage for Fabrikam")
+  await evaluate(`[...document.querySelectorAll('[role="dialog"] button')].find(button => button.textContent.includes('Your Azure storage account')).click()`)
+  await assertText("Using saved Azure storage")
+  await screenshot("settings-saved-azure")
+  await evaluate(`[...document.querySelectorAll('[role="dialog"] button')].find(button => button.textContent === 'Cancel').click()`)
+  await main.evaluate(`(() => {
+    const M = globalThis.__marketingMock
+    const { ipcMain } = process.getBuiltinModule('module').createRequire(process.cwd() + '/x.cjs')('electron')
+    ipcMain.removeHandler('auth:signIn')
+    ipcMain.handle('auth:signIn', () => ({ planError: { code: 'community_tenant_limit', tenantId: ${JSON.stringify(TENANTS[1].guid)}, message: 'The tenant was not added.', existingTenant: false } }))
+  })()`)
+  await go("#/portal/onboarding", "Set up TenuVault")
+  await evaluate(`[...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Next: sign in')?.click()`)
+  await assertText("Sign in with Microsoft")
+  await evaluate(`(() => {
+    for (const [id, value] of [['tenant', ${JSON.stringify(TENANTS[0].guid)}], ['clientId', ${JSON.stringify(CLIENT_ID)}]]) {
+      const input = document.getElementById(id)
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, value)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    }
+  })()`)
+  await evaluate(`[...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Sign in with Microsoft').click()`)
+  await assertText("The tenant was not added.")
+  await screenshot("second-tenant-not-added")
   console.log(`\n${shots.length} screenshots in ${shotsDir}`)
 } catch (error) {
   exitCode = 1

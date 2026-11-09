@@ -1,3 +1,4 @@
+import { prepareScheduledCoverage } from "../src/main/backup/schedule-prepare"
 import { BackupScheduler } from "../src/main/backup/scheduler"
 import { generateKeyPairSync, sign } from "node:crypto"
 import { createElement } from "react"
@@ -2016,8 +2017,9 @@ describe("Community choice after coverage ends", () => {
       [TENANT_B]: { activationId: "act-2", token: token({ tenantId: TENANT_B, act: "act-2", v: 2, ...(trial ? { trial: true } : {}), keyExp: end, exp: trial ? end : end + 86400 }) },
     } }))
     const license = service({ connectedTenantIds: () => [TENANT, TENANT_B] })
-    const run = vi.fn(async () => ({ status: "Failed" as const, message: "Community covers one tenant" }))
-    const scheduler = new BackupScheduler(store, run, undefined, undefined, (id) => ({ plan: license.plan(id), azure: id === TENANT_B, endedAt: license.coverageEndedAt(id), pendingChoice: license.communityChoices().includes(id) }))
+    const backup = vi.fn()
+    const run = vi.fn(async (id: string) => { await license.requireEntitlement(id); backup(id); return { status: "Completed" as const, message: "Done" } })
+    const scheduler = new BackupScheduler(store, run, undefined, undefined, (id) => ({ plan: license.plan(id), azure: false, endedAt: license.coverageEndedAt(id), pendingChoice: license.communityPendingTenants().includes(id) }))
     for (const tenantId of [TENANT, TENANT_B]) scheduler.set({ tenantId, enabled: true, frequency: "daily", time: "02:00" })
     expect(license.communityChoices()).toEqual([])
     expect(license.coverageEndedAt(TENANT)).toBe(end * 1000)
@@ -2025,7 +2027,7 @@ describe("Community choice after coverage ends", () => {
     expect(license.status([TENANT, TENANT_B]).communityChoiceTenantIds).toEqual(trial ? [TENANT, TENANT_B] : [])
     answer = () => denied("expired")
     await Promise.all([TENANT, TENANT_B].map(async (id) => {
-      await expect(license.requireEntitlement(id)).rejects.toThrow(/Choose which tenant|Coverage is still being checked/)
+      await expect(license.requireEntitlement(id)).rejects.toThrow(/choose which tenant/)
     }))
     expect(store.get("license.communityTenant")).toBeNull()
     await scheduler.tick()
@@ -2035,8 +2037,10 @@ describe("Community choice after coverage ends", () => {
     license.chooseCommunity(TENANT_B)
     expect(license.plan(TENANT_B)).toBe("community")
     await scheduler.tick()
-    expect(run).toHaveBeenCalledExactlyOnceWith(TENANT, false, expect.any(String))
-    expect(scheduler.list().find((schedule) => schedule.tenantId === TENANT_B)).toMatchObject({ frequency: "daily", pausedReason: "Paused: Azure storage needs Pro", attempts: 0 })
+    expect(run).toHaveBeenCalledWith(TENANT_B, false, expect.any(String))
+    expect(backup).toHaveBeenCalledExactlyOnceWith(TENANT_B)
+    expect(scheduler.list().find((schedule) => schedule.tenantId === TENANT_B)?.lastStatus).toBe("Completed")
+    expect(scheduler.list().find((schedule) => schedule.tenantId === TENANT_B)).toMatchObject({ frequency: "daily", attempts: 0 })
     await expect(license.requireEntitlement(TENANT)).rejects.toThrow("Backups of this tenant are kept")
     expect(service({ connectedTenantIds: () => [TENANT, TENANT_B] }).plan(TENANT_B)).toBe("community")
     expect(license.coverageEndedAt(TENANT)).toBe(end * 1000)
@@ -2068,15 +2072,21 @@ describe("Community eligibility verification", () => {
     vi.setSystemTime(T0 + 2 * DAY)
   }
 
-  it.each([false, true])("does not offer or grant Community offline (saved key expired: %s)", async (keyExpired) => {
+  it.each([false, true].flatMap((keyExpired) => ["network", "server"].map((failure) => ({ keyExpired, failure }))))("keeps paid coverage guards for $failure (saved key expired: $keyExpired)", async ({ keyExpired, failure }) => {
     expiredVerification(keyExpired)
     const license = service({ connectedTenantIds: () => [TENANT, TENANT_B] })
-    answer = async () => { throw new TypeError("fetch failed") }
+    answer = async () => { if (failure === "network") throw new TypeError("fetch failed"); return new Response("Unavailable", { status: 503 }) }
     expect(license.communityChoices()).toEqual([])
     await expect(license.requireEntitlement(TENANT)).rejects.toThrow()
     expect(license.status([TENANT, TENANT_B]).communityChoiceTenantIds).toEqual([])
     expect(() => license.chooseCommunity(TENANT)).toThrow("Choose a connected tenant")
     expect(store.get("license.communityTenant")).toBeNull()
+    const scheduler = new BackupScheduler(store, async () => ({ status: "Failed", message: "Unavailable" }), undefined, undefined, (id) => ({ plan: license.plan(id), azure: true, pendingChoice: license.communityPendingTenants().includes(id) }), () => prepareScheduledCoverage(() => scheduler.list(), license))
+    scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00" })
+    await scheduler.tick()
+    expect(scheduler.list()[0]).toMatchObject({ frequency: "daily" })
+    expect(scheduler.list()[0]?.fallbackWeekday).toBeUndefined()
+    expect(scheduler.list()[0]?.pausedReason).toBeUndefined()
   })
 
   it("assesses both tenants before claiming Community and persists confirmed refusals", async () => {
@@ -2084,11 +2094,12 @@ describe("Community eligibility verification", () => {
     const connectedTenantIds = () => [TENANT, TENANT_B]
     let license = service({ connectedTenantIds })
     answer = () => denied("revoked")
-    await expect(license.requireEntitlement(TENANT)).rejects.toThrow("Coverage is still being checked")
+    await expect(license.requireEntitlement(TENANT)).rejects.toThrow("choose which tenant")
     expect(store.get("license.communityTenant")).toBeNull()
-    expect(license.communityChoices()).toEqual([])
+    expect(license.communityChoices()).toEqual([TENANT])
+    expect(license.communityPendingTenants()).toEqual([TENANT, TENANT_B])
     license = service({ connectedTenantIds })
-    await expect(license.requireEntitlement(TENANT_B)).rejects.toThrow("Choose which tenant")
+    await expect(license.requireEntitlement(TENANT_B)).rejects.toThrow("choose which tenant")
     expect(license.communityChoices()).toEqual([TENANT, TENANT_B])
     expect(store.get("license.communityTenant")).toBeNull()
     const confirmedMarkers = store.get("license.communityEligibility")!
@@ -2100,6 +2111,21 @@ describe("Community eligibility verification", () => {
     expect(license.communityChoices()).toEqual([])
     store.set("license.communityEligibility", confirmedMarkers)
     expect(service({ connectedTenantIds }).communityChoices()).toEqual([])
+  })
+
+  it("offers a confirmed lapse while another check is unavailable, then honors later paid coverage", async () => {
+    expiredVerification()
+    const license = service({ connectedTenantIds: () => [TENANT, TENANT_B] })
+    answer = (call) => { if (call.body.tenantId === TENANT_B) throw new TypeError("fetch failed"); return denied("revoked") }
+    await license.retry([TENANT, TENANT_B])
+    expect(license.communityPendingTenants()).toEqual([TENANT, TENANT_B])
+    expect(license.communityChoices()).toEqual([TENANT])
+    license.chooseCommunity(TENANT)
+    expect(license.plan(TENANT)).toBe("community")
+    expect(license.communityPendingTenants()).toEqual([])
+    answer = (call) => granted(`renewed-${call.body.tenantId}`, {}, { tenantId: call.body.tenantId, v: 2, keyExp: Math.floor(Date.now() / 1000) + 30 * 86400, exp: Math.floor(Date.now() / 1000) + 86400 })
+    await expect(license.requireEntitlement(TENANT_B, { retry: true })).resolves.toBe("pro")
+    expect(store.get("license.communityTenant")).toBe(TENANT)
   })
 
   it("does not reuse a confirmed refusal after the saved key changes", async () => {
@@ -2155,4 +2181,61 @@ describe("Community eligibility verification", () => {
     store.set(`license.coverageEnd.${TENANT}`, "Infinity")
     expect(service().coverageEndedAt(TENANT)).toBeUndefined()
   })
+})
+
+
+it("keeps first-use claiming for imported tenants with no coverage history", async () => {
+  const license = service({ connectedTenantIds: () => [TENANT, TENANT_B] })
+  expect(license.communityPendingTenants()).toEqual([])
+  await expect(license.requireEntitlement(TENANT_B)).resolves.toBe("community")
+  expect(store.get("license.communityTenant")).toBe(TENANT_B)
+})
+
+it("checks pending tenants before slots without background claiming and updates after removal", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] })
+  try {
+    vi.setSystemTime(T0)
+    let connected = [TENANT, TENANT_B]
+    store.set(`license.coverageEnd.${TENANT}`, String(T0 - DAY))
+    const license = service({ connectedTenantIds: () => connected })
+    const run = vi.fn(async (id: string) => { await license.requireEntitlement(id); return { status: "Completed" as const, message: "Done" } })
+    const scheduler = new BackupScheduler(store, run, undefined, undefined, (id) => ({ plan: license.plan(id), azure: false, pendingChoice: license.communityPendingTenants().includes(id) }), () => prepareScheduledCoverage(() => scheduler.list(), license))
+    for (const tenantId of connected) scheduler.set({ tenantId, enabled: true, frequency: "weekly", weekday: new Date(T0).getDay(), time: "00:00" })
+    vi.setSystemTime(T0 + 7 * DAY)
+    await scheduler.tick()
+    expect(run).not.toHaveBeenCalled()
+    expect(store.get("license.communityTenant")).toBeNull()
+    expect(scheduler.list().every((schedule) => schedule.attempts === 0 && !schedule.lastStatus)).toBe(true)
+    connected = [TENANT]
+    scheduler.remove(TENANT_B)
+    expect(license.status(connected).communityChoicePendingTenantIds).toEqual([])
+    await scheduler.tick()
+    expect(run).toHaveBeenCalledExactlyOnceWith(TENANT, false, expect.any(String))
+  } finally { vi.useRealTimers() }
+})
+
+
+it("discovers renewed organization coverage before the next weekly slot through scheduler preparation", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] })
+  try {
+    vi.setSystemTime(T0)
+    answer = () => denied("tenant_not_licensed")
+    const license = service({ connectedTenantIds: () => [TENANT] })
+    await license.requireEntitlement(TENANT)
+    const run = vi.fn(async () => ({ status: "Completed" as const, message: "Done" }))
+    const scheduler = new BackupScheduler(store, run, undefined, undefined, (id) => ({ plan: license.plan(id), azure: false }), () => prepareScheduledCoverage(() => scheduler.list(), license))
+    scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00" })
+    expect(scheduler.list()[0]?.fallbackWeekday).not.toBeUndefined()
+    const checks = calls.length
+    await scheduler.tick()
+    expect(calls).toHaveLength(checks)
+    vi.setSystemTime(T0 + 6 * 60 * 60_000 + 1)
+    answer = () => granted("renewed-org", { source: "tenant" })
+    await scheduler.tick()
+    expect(license.plan(TENANT)).toBe("pro")
+    expect(scheduler.list()[0]?.fallbackWeekday).toBeUndefined()
+    vi.setSystemTime(T0 + DAY)
+    await scheduler.tick()
+    expect(run).toHaveBeenCalledTimes(1)
+  } finally { vi.useRealTimers() }
 })

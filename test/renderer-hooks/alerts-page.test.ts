@@ -465,3 +465,17 @@ it("keeps the preview for Community without configured alerts", async () => {
   state.status = empty
   expect((await render(AlertsTab, false)).textContent).not.toContain("Paused on Community")
 })
+
+
+it.each([AlertsTab, ChannelsTab, WatchingTab, DeliveriesTab])("announces stopped configuration on every alerts tab", async (tab) => {
+  state.status = { ...empty, licensed: false, channels: [teams] }
+  const container = await render(tab, false)
+  expect(container.textContent).toContain("Paused on Community")
+  expect(container.querySelector('a[href="/license"]')).not.toBeNull()
+})
+
+it.each([AlertsTab, ChannelsTab, WatchingTab, DeliveriesTab])("keeps the existing preview when alerts were never configured", async (tab) => {
+  state.status = { ...empty, licensed: false }
+  const container = await render(tab, false)
+  expect(container.textContent).not.toContain("Paused on Community")
+})

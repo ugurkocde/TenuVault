@@ -62,7 +62,7 @@ function useNotificationsStatus(tenant: Tenant) {
 }
 
 /** Loading and error states of a tab; renders the tab once the status is there. */
-function WithStatus({ tenant, children }: { tenant: Tenant; children: (data: NotificationsStatus, refresh: () => void) => ReactNode }) {
+function WithStatus({ tenant, plan, children }: { tenant: Tenant; plan: FeatureTabProps["plan"]; children: (data: NotificationsStatus, refresh: () => void) => ReactNode }) {
   const { status, refresh } = useNotificationsStatus(tenant)
   if (status.isLoading) return <p className="text-sm text-gray-600" role="status">Loading alert settings...</p>
   if (status.error) {
@@ -74,7 +74,7 @@ function WithStatus({ tenant, children }: { tenant: Tenant; children: (data: Not
     )
   }
   if (!status.data) return null
-  return <>{children(status.data, refresh)}</>
+  return <div className="space-y-4">{plan === "community" && (status.data.channels.some((channel) => channel.enabled) || status.data.rules.some((rule) => rule.enabled) || status.data.auditWatch?.enabled || status.data.auditWatch?.conditionalAccess?.enabled) && <PausedOnCommunity />}{children(status.data, refresh)}</div>
 }
 
 /** Whether a tenant ever set anything up, so a tab below a locked preview can show it or stay empty. */
@@ -124,10 +124,9 @@ export function AlertsTab({ tenant, plan, allowed }: FeatureTabProps) {
       }
     : null
   return (
-    <WithStatus tenant={tenant}>
+    <WithStatus tenant={tenant} plan={plan}>
       {(data, refresh) => !allowed && !hasStored(data) ? null : (
         <div className="space-y-4">
-          {plan === "community" && (data.rules.some((rule) => rule.enabled) || data.auditWatch?.enabled || data.auditWatch?.conditionalAccess?.enabled) && <PausedOnCommunity />}
           <SetupStatusCard tenant={tenant} data={data} onChanged={refresh} />
           <p className="text-sm text-gray-700" role="note">{data.runtimeNote} <DocsLink section="alerts-while-this-computer-is-off-the-azure-watcher">Set up the Azure watcher</DocsLink></p>
           <WatcherSyncCard tenant={tenant} data={data} onChanged={refresh} />
@@ -138,9 +137,9 @@ export function AlertsTab({ tenant, plan, allowed }: FeatureTabProps) {
   )
 }
 
-export function ChannelsTab({ tenant, allowed }: FeatureTabProps) {
+export function ChannelsTab({ tenant, plan, allowed }: FeatureTabProps) {
   return (
-    <WithStatus tenant={tenant}>
+    <WithStatus tenant={tenant} plan={plan}>
       {(data, refresh) => !allowed && !hasStored(data) ? null : (
         <div className="space-y-4">
           <ChannelsTile tenant={tenant} channels={data.channels} rules={data.rules} licensed={data.licensed} active onChanged={refresh} />
@@ -151,17 +150,17 @@ export function ChannelsTab({ tenant, allowed }: FeatureTabProps) {
   )
 }
 
-export function WatchingTab({ tenant, allowed }: FeatureTabProps) {
+export function WatchingTab({ tenant, plan, allowed }: FeatureTabProps) {
   return (
-    <WithStatus tenant={tenant}>
+    <WithStatus tenant={tenant} plan={plan}>
       {(data, refresh) => !allowed && !hasStored(data) ? null : <AuditWatchTile tenant={tenant} auditWatch={data.auditWatch} licensed={data.licensed} onChanged={refresh} />}
     </WithStatus>
   )
 }
 
-export function DeliveriesTab({ tenant, allowed }: FeatureTabProps) {
+export function DeliveriesTab({ tenant, plan, allowed }: FeatureTabProps) {
   return (
-    <WithStatus tenant={tenant}>
+    <WithStatus tenant={tenant} plan={plan}>
       {(data, refresh) => !allowed && data.deliveries.length === 0 ? null : <DeliveriesTile tenant={tenant} data={data} onChanged={refresh} />}
     </WithStatus>
   )

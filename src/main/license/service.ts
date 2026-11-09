@@ -1,4 +1,4 @@
-import { CommunityLimitError } from "../../shared/plan-errors"
+import { CommunityChoicePendingError, CommunityLimitError } from "../../shared/plan-errors"
 import { createHash, createPublicKey, randomUUID, verify, type KeyObject } from "node:crypto"
 import type { LicenseStatus, TenantLicenseStatus } from "../../shared/ipc"
 import type { Plan } from "../../shared/plans"
@@ -150,7 +150,7 @@ export const COMMUNITY_RECHECK_MS = 6 * 60 * 60_000
 const LAPSED = new Set(["not_found", "revoked", "disabled", "expired", "tenant_not_licensed", "activation_mismatch"])
 
 export const communityLimit = (tenantId: string) =>
-  `TenuVault Community covers one tenant, and it is used for tenant ${tenantId}. Add a Pro or MSP license on the License page to use more tenants. Backups of this tenant are kept. Add a license to use it again.`
+  `TenuVault Community covers one tenant, and it is used for tenant ${tenantId}. Add a Pro or MSP license on the License page to use more tenants.`
 
 export const LICENSE_REQUIRED =
   "A TenuVault license is required for this tenant. Add your license key on the License page, or start a 30 day free trial."
@@ -1258,6 +1258,7 @@ export class LicenseService {
     if (this.communityEligibility.get(tenant) === identity) return
     this.communityEligibility.set(tenant, identity)
     this.persistCommunityEligibility()
+    this.options.onChange?.()
   }
 
   private communityEligible(tenant: string): boolean {
@@ -1273,11 +1274,24 @@ export class LicenseService {
       .filter((id) => guidPattern.test(id) && this.tenantPresent(id) && !this.valid(id))
   }
 
-  communityChoices(): string[] {
+  private coverageEnded(tenant: string): boolean {
+    const entry = this.state?.activations[tenant]
+    if (entry) return this.communityEligible(tenant)
+    if (this.communityEligibility.get(tenant) === this.communityKeyIdentity()) return true
+    if (this.state?.key) return false
+    const end = this.coverageEndedAt(tenant)
+    return this.communityEligibility.has(tenant) || (end !== undefined && end <= Date.now())
+  }
+
+  communityPendingTenants(): string[] {
     this.load()
     if (this.options.store.get(COMMUNITY_KEY)) return []
-    const candidates = this.uncoveredTenants().filter((id) => this.communityEligible(id))
-    return candidates.length > 1 ? candidates : []
+    const uncovered = this.uncoveredTenants()
+    return uncovered.length > 1 && uncovered.some((id) => this.coverageEnded(id)) ? uncovered : []
+  }
+
+  communityChoices(): string[] {
+    return this.communityPendingTenants().filter((id) => this.communityEligible(id))
   }
 
   chooseCommunity(tenantId: string): void {
@@ -1291,11 +1305,11 @@ export class LicenseService {
   private useCommunity(tenant: string): Plan {
     this.assertCurrent(() => this.tenantPresent(tenant))
     const owner = this.options.store.get(COMMUNITY_KEY)
-    if (!owner && this.uncoveredTenants().length > 1) {
-      if (this.communityChoices().length < 2) throw new Error("Coverage is still being checked. Retry all tenants on the License page before choosing Community.")
-      throw new CommunityLimitError(tenant, "Choose which tenant continues on Community on the License page. Backups of this tenant are kept. Add a license to use it again.")
+    if (!owner && this.communityPendingTenants().length) throw new CommunityChoicePendingError()
+    if (owner && owner !== tenant) {
+      const existing = this.options.connectedTenantIds?.().some((id) => id.toLowerCase() === tenant) ?? false
+      throw new CommunityLimitError(owner, communityLimit(owner) + (existing ? " Backups of this tenant are kept. Add a license to use it again." : ""), existing)
     }
-    if (owner && owner !== tenant) throw new CommunityLimitError(owner, communityLimit(owner))
     if (owner !== tenant) this.options.store.set(COMMUNITY_KEY, tenant)
     const first = !this.community.has(tenant)
     this.community.set(tenant, Date.now() + COMMUNITY_RECHECK_MS)
@@ -1549,6 +1563,7 @@ export class LicenseService {
         tenantId,
         signedIn: signedIn.has(tenantId),
         activated: Boolean(entry),
+        coverageEnded: !payload && this.coverageEnded(tenantId),
         entitled: payload !== null,
         source,
         plan: payload?.plan ?? (communityTenant === tenantId ? "community" : null),
@@ -1592,6 +1607,7 @@ export class LicenseService {
       validUntil,
       communityTenantId: communityTenant ?? null,
       communityChoiceTenantIds: this.communityChoices(),
+      communityChoicePendingTenantIds: this.communityPendingTenants(),
       tenants,
     }
   }

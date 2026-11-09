@@ -160,10 +160,12 @@ To upgrade from Community, start the free trial or click **Buy now** on the **Li
 
 ## When paid coverage ends
 
-A saved daily schedule runs weekly on Community at its saved time. The weekday comes from the first slot after coverage ended. The daily schedule stays saved and resumes daily when Pro returns. New daily schedules need Pro.
+A saved daily schedule runs weekly on Community at its saved time. The weekday comes from the first slot after coverage ended. The daily schedule stays saved and resumes daily when Pro returns. You can pause and resume the saved schedule on Community. Creating a daily schedule or changing its time needs Pro. TenuVault checks for renewed coverage in the background, including while the app is in the tray.
 
-Azure storage schedules pause with **Paused: Azure storage needs Pro**. Choose **Switch to weekly local backups** to save future weekly backups on this computer. Existing Azure backups stay in Azure, where listing and single-item restore continue to work for the covered tenant.
+Azure storage schedules pause with **Paused: Azure storage needs Pro**. Choose **Switch to weekly local backups** and confirm to save future backups on this computer. Your schedule and any owed backup slots stay saved. The Azure account settings are kept on this computer across restarts. Choose **Switch back to saved Azure storage**, or select the saved account in **Change storage**, to list or restore existing Azure backups. On Community, new backups pause again while Azure is selected. With Pro, Azure backups resume. Community cannot set up a new Azure account.
+
+An operating system notification announces the weekly fallback or a paused Azure schedule once. A pending Community choice also sends a notification asking you to open TenuVault and choose a tenant to resume backups.
 
 Configured alerts, scheduled health reviews and automatic change reports pause on Community. Their pages say **Paused on Community** and link to License. Their configuration stays saved.
 
-If more than one connected tenant is without coverage and Community has no tenant yet, choose which tenant continues on Community. Other tenants stay locked: backups of those tenants are kept. Add a license to use them again.
+After coverage is known to have ended, if more than one connected tenant lacks coverage and Community has no tenant yet, choose which tenant continues on Community. Backups pause while the choice is pending. Tenants whose coverage cannot be checked are shown but cannot be chosen yet. Fresh installations without coverage history still assign Community to the first tenant used. Other tenants stay locked: backups of those tenants are kept. Add a license to use them again.

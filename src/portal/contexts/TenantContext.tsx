@@ -46,6 +46,7 @@ interface Tenant {
   }
   credentials?: TenantCredentials
   resources?: SelectedResources
+  previousAzureStorage?: SelectedResources
   organizationId?: string
   isLoading?: boolean
   preferredRunbook?: string

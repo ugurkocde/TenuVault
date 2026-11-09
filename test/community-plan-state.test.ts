@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 import type { LicenseStatus, TenantLicenseStatus } from "../src/shared/ipc"
-import { communityBannerVisible, licenseChipState, licensePageTitle } from "../src/renderer/lib/license"
+import { communityBannerVisible, inactiveTenantNotice, licenseChipState, licensePageTitle } from "../src/renderer/lib/license"
 
 vi.mock("../src/renderer/lib/bridge", () => ({ bridge: {} }))
 
@@ -78,4 +78,13 @@ describe("Community banner visibility", () => {
   it("does not hide the notice indefinitely when the clock moves backwards", () => {
     expect(communityBannerVisible(timestamp, dismissed - day)).toBe(true)
   })
+})
+
+
+it("keeps unverified coverage wording and uses singular or plural only for ended coverage", () => {
+  expect(inactiveTenantNotice([{ ...tenant, plan: null }])).toBe("Open License for details.")
+  const ended = { ...tenant, plan: null, coverageEnded: true }
+  expect(inactiveTenantNotice([ended])).toContain("Backups of this tenant are kept. Add a license to use it again.")
+  expect(inactiveTenantNotice([ended, { ...ended, tenantId: "fabrikam" }])).toContain("Backups of these tenants are kept. Add a license to use them again.")
+  expect(inactiveTenantNotice([ended, { ...tenant, plan: null }])).toBe("Open License for details.")
 })

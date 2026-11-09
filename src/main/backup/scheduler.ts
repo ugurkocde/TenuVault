@@ -1,3 +1,4 @@
+import { CommunityChoicePendingError } from "../../shared/plan-errors"
 import type { Plan } from "../../shared/plans"
 import type { BackupSchedule, ScheduleInput } from "../../shared/ipc"
 import type { KeyValueStore } from "../storage/secure-store"
@@ -87,6 +88,7 @@ export class BackupScheduler {
     private readonly coverage?: (tenantId: string) => { plan: Plan | null; azure: boolean; endedAt?: number; pendingChoice?: boolean },
     private readonly prepare: (() => Promise<void>) | undefined = undefined,
     private readonly onFallback: (tenantId: string) => void = () => undefined,
+    private readonly onPaused: (tenantId: string, reason: "azure" | "choice") => void = () => undefined,
   ) {}
 
   list(): BackupSchedule[] {
@@ -101,7 +103,13 @@ export class BackupScheduler {
     const all = this.read()
     const id = input.tenantId.toLowerCase()
     const previous = all[id]
+    if (previous && previous.enabled !== input.enabled && previous.frequency === input.frequency && previous.time === input.time && (input.frequency === "daily" || previous.weekday === input.weekday)) {
+      all[id] = { ...previous, enabled: input.enabled }
+      this.write(all)
+      return this.list().find((schedule) => schedule.tenantId === id)!
+    }
     all[id] = {
+      ...previous,
       tenantId: id,
       enabled: input.enabled,
       frequency: input.frequency,
@@ -185,12 +193,16 @@ export class BackupScheduler {
             lastMessage: keepStatus ? schedule.lastMessage : undefined,
           },
         })
-        const result: ScheduledRunResult = await this.run(schedule.tenantId, afterFailure, slot.toISOString()).catch((error: unknown) => ({
+        const result: ScheduledRunResult | null = await this.run(schedule.tenantId, afterFailure, slot.toISOString()).catch((error: unknown) => error instanceof CommunityChoicePendingError ? null : ({
           status: "Failed" as const,
           message: error instanceof Error ? error.message : String(error),
         }))
         const all = this.read()
         const current = all[schedule.tenantId]
+        if (!result) {
+          if (current) this.write({ ...all, [tenantId]: { ...current, lastAttemptAt: schedule.lastAttemptAt, attemptSlot: schedule.attemptSlot, attempts: schedule.attempts, lastStatus: schedule.lastStatus, lastMessage: schedule.lastMessage } })
+          continue
+        }
         if (current) {
           const at = this.now().toISOString()
           all[schedule.tenantId] = {
@@ -292,27 +304,45 @@ export class BackupScheduler {
   private reconcile(): Record<string, BackupSchedule> {
     const all = this.read()
     let changed = false
+    const notices: (() => void)[] = []
+    let choiceNotified = Object.values(all).some((schedule) => schedule.choicePauseNotified)
     for (const schedule of Object.values(all)) {
       const coverage = this.coverage?.(schedule.tenantId)
       if (!coverage) continue
+      const before = JSON.stringify(schedule)
       const pausedReason = coverage.plan === "community" && coverage.azure ? "Paused: Azure storage needs Pro"
         : coverage.plan === null && coverage.pendingChoice ? "Paused: choose a Community tenant or add a license" : undefined
       const fallback = coverage.plan === "community" && schedule.frequency === "daily"
         ? schedule.fallbackWeekday ?? this.firstFallbackSlot(schedule, coverage.endedAt).getDay() : undefined
-      if (schedule.pausedReason !== pausedReason || schedule.fallbackWeekday !== fallback) {
-        const starting = fallback !== undefined && !pausedReason && (schedule.fallbackWeekday === undefined || Boolean(schedule.pausedReason))
-        schedule.pausedReason = pausedReason
-        schedule.fallbackStartsAt = fallback === undefined ? undefined : schedule.fallbackStartsAt ?? this.firstFallbackSlot(schedule, coverage.endedAt).toISOString()
-        schedule.fallbackWeekday = fallback
-        changed = true
-        if (starting) this.onFallback(schedule.tenantId)
+      schedule.pausedReason = pausedReason
+      schedule.fallbackStartsAt = fallback === undefined ? undefined : schedule.fallbackStartsAt ?? this.firstFallbackSlot(schedule, coverage.endedAt).toISOString()
+      schedule.fallbackWeekday = fallback
+      const noticeFor = String(coverage.endedAt ?? schedule.fallbackStartsAt)
+      if (schedule.enabled && fallback !== undefined && !pausedReason && schedule.fallbackNoticeFor !== noticeFor) {
+        schedule.fallbackNoticeFor = noticeFor
+        notices.push(() => this.onFallback(schedule.tenantId))
       }
+      if (pausedReason && coverage.azure && coverage.plan === "community") {
+        if (schedule.enabled && !schedule.azurePauseNotified) {
+          schedule.azurePauseNotified = true
+          notices.push(() => this.onPaused(schedule.tenantId, "azure"))
+        }
+      } else schedule.azurePauseNotified = undefined
+      if (coverage.pendingChoice) {
+        if (schedule.enabled && !schedule.choicePauseNotified) {
+          schedule.choicePauseNotified = true
+          if (!choiceNotified) notices.push(() => this.onPaused(schedule.tenantId, "choice"))
+          choiceNotified = true
+        }
+      } else schedule.choicePauseNotified = undefined
+      changed ||= before !== JSON.stringify(schedule)
     }
-    // Persist before broadcasting: onChange may list schedules again.
+    // Persist before broadcasting or notifying: either callback may list schedules again.
     if (changed) {
       this.store.set(KEY, JSON.stringify(all))
       this.onChange()
     }
+    for (const notify of notices) notify()
     return all
   }
 
@@ -355,6 +385,9 @@ function parseSchedule(id: string, value: unknown): BackupSchedule | null {
     || (entry.frequency === "weekly" && !validWeekday(entry.weekday))
     || (entry.fallbackStartsAt !== undefined && !validDate(entry.fallbackStartsAt))
     || (entry.fallbackWeekday !== undefined && !validWeekday(entry.fallbackWeekday))
+    || (entry.fallbackNoticeFor !== undefined && typeof entry.fallbackNoticeFor !== "string")
+    || (entry.azurePauseNotified !== undefined && typeof entry.azurePauseNotified !== "boolean")
+    || (entry.choicePauseNotified !== undefined && typeof entry.choicePauseNotified !== "boolean")
     || (entry.pausedReason !== undefined && typeof entry.pausedReason !== "string")
     || (entry.weekday !== undefined && !validWeekday(entry.weekday))
     || (entry.lastRunAt !== undefined && !validDate(entry.lastRunAt))

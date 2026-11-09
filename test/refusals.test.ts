@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
+import { CommunityChoicePendingError } from "../src/shared/plan-errors"
 import { MAX_REFUSALS, RefusalLog, refuseUnlicensedBackup } from "../src/main/backup/refusals"
 import { memoryStore } from "./helpers"
 
@@ -83,4 +84,12 @@ describe("refuseUnlicensedBackup", () => {
       expect.objectContaining({ tenantId: TENANT, tenantName: "Contoso", trigger: "tray", reason: "A TenuVault license is required for this tenant." }),
     ])
   })
+})
+
+it("does not record or notify a background refusal while Community choice is pending", async () => {
+  const log = new RefusalLog(memoryStore())
+  const notify = vi.fn()
+  await expect(refuseUnlicensedBackup({ log, notify, requireEntitlement: async () => { throw new CommunityChoicePendingError() } }, { tenantId: "contoso", name: "Contoso" }, "scheduled")).rejects.toBeInstanceOf(CommunityChoicePendingError)
+  expect(log.list()).toEqual([])
+  expect(notify).not.toHaveBeenCalled()
 })

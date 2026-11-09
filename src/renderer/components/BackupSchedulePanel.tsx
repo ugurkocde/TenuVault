@@ -17,7 +17,8 @@ import { describeSchedule, formatWhen, useRefusals, useSchedules, WEEKDAYS } fro
 import { settingsHref } from "../lib/settings-section"
 import { scheduledIdentity } from "../lib/backup-reader-view"
 import { showFeaturePlanError } from "../lib/plan-dialog"
-import type { StorageChoice } from "../lib/storage"
+import { useConfirm } from "~/components/ConfirmDialog"
+import { savedAzureStorage, LOCAL_SWITCH_CONFIRMATION, type StorageChoice } from "../lib/storage"
 import { toast } from "../lib/toast"
 import { weeklyScheduleNote } from "../lib/plan-notes"
 import { PlanBadge, UpgradeNote } from "./UpgradeNote"
@@ -46,6 +47,7 @@ export function BackupSchedulePanel(props: BackupSchedulePanelProps) {
 }
 
 function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageChange }: BackupSchedulePanelProps) {
+  const { confirm, confirmDialog } = useConfirm()
   const tenant = tenantProp ?? null
   const cloud = useCloudBackup(tenant, tenantId)
   const [scopeVersion, setScopeVersion] = useState(0)
@@ -136,6 +138,7 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
 
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+      {confirmDialog}
       <div className="space-y-4 lg:col-span-2">
       <TenantStorageSettings tenant={tenant} tenantName={tenantName} prefs={prefs} community={community} onStorageChange={onStorageChange} cloudOnly={!!cloud.config?.linked && !current?.enabled} />
       <BackupScopeSettings tenantId={tenantId} tenantName={tenantName} hasCloud={!!cloud.config} onSaved={() => setScopeVersion((version) => version + 1)} />
@@ -203,9 +206,9 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
           <div role="status" className="space-y-3 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
             <p>Paused: Azure storage needs Pro</p>
             <Button disabled={saving || !onStorageChange} onClick={async () => {
+              if (!await confirm(LOCAL_SWITCH_CONFIRMATION)) return
               setSaving(true)
               try {
-                await bridge.schedules.set({ tenantId, enabled: true, frequency: "weekly", time: current.time, weekday: current.fallbackWeekday ?? current.weekday ?? new Date().getDay() })
                 onStorageChange?.(tenant, { kind: "local" })
                 drafts.delete(tenantId)
                 reloadSchedules()
@@ -578,6 +581,7 @@ function BackupScopeSettings({ tenantId, tenantName, hasCloud, onSaved }: Backup
 
 /** The tenant's storage choice, edited here and in Settings through the same chooser. */
 function TenantStorageSettings({ tenant, tenantName, prefs, community, onStorageChange, cloudOnly }: { tenant: Tenant | null; tenantName: string; prefs: AppPreferences | null; community: boolean; onStorageChange?: (tenant: Tenant, choice: StorageChoice) => void; cloudOnly?: boolean }) {
+  const { confirm, confirmDialog } = useConfirm()
   const [editing, setEditing] = useState(false)
   const [choice, setChoice] = useState<StorageChoice | null>(null)
   const [draft, setDraft] = useState<StorageChooserDraft | null>(null)
@@ -601,8 +605,9 @@ function TenantStorageSettings({ tenant, tenantName, prefs, community, onStorage
           location: tenant?.resources?.resourceGroupLocation ?? "",
         }
 
-  const save = () => {
+  const save = async () => {
     if (!tenant?.credentials || !choice || !onStorageChange) return
+    if (choice.kind === "local" && !local && !await confirm(LOCAL_SWITCH_CONFIRMATION)) return
     onStorageChange(tenant, choice)
     toast(`Backups for ${tenantName} now go to ${choice.kind === "local" ? "this device" : choice.storageAccountName}.`, "success")
     setDraft(null)
@@ -611,6 +616,7 @@ function TenantStorageSettings({ tenant, tenantName, prefs, community, onStorage
 
   return (
     <div className="rounded-3xl bg-white px-6 py-4 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
+      {confirmDialog}
       <div className="flex flex-wrap items-center gap-3">
         <span className="flex size-8 flex-shrink-0 items-center justify-center rounded-full bg-coral-500 text-white" aria-hidden="true">
           <Database className="h-4 w-4" />
@@ -631,7 +637,8 @@ function TenantStorageSettings({ tenant, tenantName, prefs, community, onStorage
             {" "}Backups never go to a TenuVault server.
           </p>
         </div>
-        <div className="flex shrink-0 flex-wrap items-center gap-2">
+        <div className="flex w-full shrink-0 flex-wrap items-center justify-end gap-2">
+          {local && tenant && savedAzureStorage(tenant) && <Button variant="outline" size="sm" disabled={!onStorageChange} onClick={() => onStorageChange?.(tenant, savedAzureStorage(tenant)!)}>Switch back to saved Azure storage</Button>}
           <Button variant="outline" size="sm" disabled={!tenant?.credentials || !onStorageChange} onClick={() => { setChoice(null); setEditing(true) }}>
             Change storage
           </Button>
@@ -656,6 +663,7 @@ function TenantStorageSettings({ tenant, tenantName, prefs, community, onStorage
               tenantId={tenant.credentials.tenantId}
               clientId={tenant.credentials.appId}
               initial={current}
+              savedAzure={savedAzureStorage(tenant)}
               initialDraft={draft ?? undefined}
               onChange={setChoice}
               onDraftChange={setDraft}

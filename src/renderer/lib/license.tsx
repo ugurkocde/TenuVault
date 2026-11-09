@@ -249,3 +249,9 @@ export function trialEndedNotice(
   if (Number.isFinite(dismissed) && dismissed >= end && dismissed <= now && now - dismissed < 30 * DAY_MS) return null
   return { endedAt }
 }
+
+
+export function inactiveTenantNotice(tenants: TenantLicenseStatus[]): string {
+  if (!tenants.every((tenant) => tenant.coverageEnded)) return "Open License for details."
+  return tenants.length === 1 ? "Backups of this tenant are kept. Add a license to use it again." : "Backups of these tenants are kept. Add a license to use them again."
+}

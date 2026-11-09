@@ -30,7 +30,7 @@ import { useTenants } from "~/contexts/TenantContext"
 import { cn } from "~/lib/utils"
 import { BrandMark } from "./BrandMark"
 import { ErrorBoundary } from "./ErrorBoundary"
-import { communityBannerVisible, earliestExpiringTenant, formatDate, formatDateTime, hasPaidLicense, isUnlicensed, licenseChipState, licenseExpiryWarning, offlineDeadline, trialEndedNotice, trialReminder, unlicensedTenants, useLicense } from "../lib/license"
+import { communityBannerVisible, earliestExpiringTenant, formatDate, formatDateTime, hasPaidLicense, inactiveTenantNotice, isUnlicensed, licenseChipState, licenseExpiryWarning, offlineDeadline, trialEndedNotice, trialReminder, unlicensedTenants, useLicense } from "../lib/license"
 import { openCheckout } from "../lib/purchase"
 import { PlanPromptButton } from "./PlanPromptButton"
 import { PurchaseKeyWatcher } from "./PurchaseKeyWatcher"
@@ -240,7 +240,7 @@ function LicenseBanner() {
     return (
       <BannerLink tone="amber" icon={<AlertTriangle className="h-4 w-4" />} action={buy}>
         {inactive.length === 1 ? "A signed-in tenant is" : `${inactive.length} signed-in tenants are`} not covered by your
-        license. Backups of this tenant are kept. Add a license to use it again.
+        license. {inactiveTenantNotice(inactive)}
       </BannerLink>
     )
   }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { CommunityLimitError } from "../src/shared/plan-errors"
+import { CommunityChoicePendingError, CommunityLimitError } from "../src/shared/plan-errors"
 import { FeatureApiError, featureCall } from "../src/renderer/lib/feature-api"
 import { closePlanDialog, planDialogError, showCommunityLimitError, showFeaturePlanError, subscribePlanDialog } from "../src/renderer/lib/plan-dialog"
 import { queryClient } from "../src/portal/lib/query-client"
@@ -64,4 +64,9 @@ describe("Community tenant dialog", () => {
     expect(showCommunityLimitError(new Error("Community covers one tenant"))).toBe(false)
     expect(planDialogError()).toBeNull()
   })
+})
+
+it("does not open a generic plan dialog while Community choice is pending", () => {
+  expect(showCommunityLimitError(new CommunityChoicePendingError())).toBe(false)
+  expect(planDialogError()).toBeNull()
 })

@@ -39,6 +39,7 @@ afterEach(() => {
   document.body.replaceChildren()
   licenseStatus.current = null
   scheduleState.current = []
+  scheduleState.set.mockClear()
   vi.useRealTimers()
 })
 
@@ -85,7 +86,7 @@ it("shows the saved daily schedule fallback on Community", async () => {
   expect(document.body.textContent).toContain("Runs weekly on Community (daily needs Pro)")
 })
 
-it.each(["daily", "weekly"] as const)("switches a paused %s Azure schedule to weekly local backups through the existing setters", async (frequency) => {
+it.each(["daily", "weekly"] as const)("confirms a paused %s Azure switch without editing the schedule", async (frequency) => {
   vi.useFakeTimers({ toFake: ["Date"] })
   vi.setSystemTime(new Date("2026-11-09T12:00:00Z"))
   licenseStatus.current = statusFor("community")
@@ -97,6 +98,10 @@ it.each(["daily", "weekly"] as const)("switches a paused %s Azure schedule to we
   expect(document.body.textContent).not.toContain("Upcoming backups on this computer")
   const button = [...document.querySelectorAll('button')].find(button => button.textContent === "Switch to weekly local backups")!
   await act(async () => button.click())
-  expect(scheduleState.set).toHaveBeenCalledWith({ tenantId: "tenant", enabled: true, frequency: "weekly", time: "02:00", weekday: frequency === "weekly" ? 4 : 1 })
+  expect(onStorageChange).not.toHaveBeenCalled()
+  expect(document.body.textContent).toContain("Your existing Azure backups are kept")
+  const confirm = [...document.querySelectorAll('button')].find(button => button.textContent === "Switch to local backups")!
+  await act(async () => confirm.click())
+  expect(scheduleState.set).not.toHaveBeenCalled()
   expect(onStorageChange).toHaveBeenCalledWith(tenant, { kind: "local" })
 })

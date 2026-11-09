@@ -25,6 +25,7 @@ interface StorageChooserProps {
   tenantId: string
   clientId: string
   initial?: StorageChoice
+  savedAzure?: Extract<StorageChoice, { kind: "azure" }>
   /** A draft captured from an earlier mount of this chooser; wins over initial. */
   initialDraft?: StorageChooserDraft
   /** Called with a verified choice, or null while the choice is incomplete or unverified. */
@@ -56,7 +57,7 @@ export function azureStorageBlocker(state: {
  * Azure choice is complete once access is confirmed: Azure encrypts the backups at rest and the
  * account's role assignments decide who reads them, so no recovery key is involved.
  */
-export function StorageChooser({ tenantId, clientId, initial, initialDraft, onChange, onDraftChange, onBlockerChange }: StorageChooserProps) {
+export function StorageChooser({ tenantId, clientId, initial, savedAzure, initialDraft, onChange, onDraftChange, onBlockerChange }: StorageChooserProps) {
   const [kind, setKind] = useState<StorageChoice["kind"]>(initialDraft?.kind ?? initial?.kind ?? "local")
   const [settings, setSettings] = useBackupSettings()
   const [accounts, setAccounts] = useState<AzureStorageAccount[] | null>(null)
@@ -68,7 +69,8 @@ export function StorageChooser({ tenantId, clientId, initial, initialDraft, onCh
   // The account name access was confirmed for, so a check that resolves after the
   // selection moved can never mark the newly selected account as confirmed.
   const [verifiedFor, setVerifiedFor] = useState(initialDraft?.verifiedAccount ?? "")
-  const verified = verifiedFor !== "" && verifiedFor === selected
+  const savedSelected = Boolean(savedAzure && selected === savedAzure.storageAccountName)
+  const verified = savedSelected || (verifiedFor !== "" && verifiedFor === selected)
   const [verifyError, setVerifyError] = useState("")
   const [loadAttempt, setLoadAttempt] = useState(0)
   const [copied, setCopied] = useState(false)
@@ -81,7 +83,7 @@ export function StorageChooser({ tenantId, clientId, initial, initialDraft, onCh
   const affected = inventory.affected.length > 0
 
   useEffect(() => {
-    if (kind !== "azure" || accounts || community) return
+    if (kind !== "azure" || accounts || community || savedSelected) return
     let active = true
     listStorageAccounts(tenantId, clientId)
       .then((list) => {
@@ -97,7 +99,7 @@ export function StorageChooser({ tenantId, clientId, initial, initialDraft, onCh
         if (active) setLoadError(error instanceof Error ? error.message : String(error))
       })
     return () => { active = false }
-  }, [kind, accounts, tenantId, clientId, community, loadAttempt])
+  }, [kind, accounts, tenantId, clientId, community, savedSelected, loadAttempt])
 
   useEffect(() => {
     onDraftChange?.({ kind, selectedAccount: selected, verifiedAccount: verifiedFor })
@@ -107,6 +109,7 @@ export function StorageChooser({ tenantId, clientId, initial, initialDraft, onCh
 
   useEffect(() => {
     if (kind === "local") return onChange({ kind: "local" })
+    if (savedSelected && savedAzure) return onChange(savedAzure)
     if (community) return onChange(null)
     const account = accounts?.find((a) => a.name === selected)
     onChange(
@@ -116,9 +119,9 @@ export function StorageChooser({ tenantId, clientId, initial, initialDraft, onCh
     )
     // onChange is a callback prop; re-running on its identity would loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kind, selected, verified, accounts, community])
+  }, [kind, selected, verified, accounts, community, savedSelected, savedAzure?.storageAccountName, savedAzure?.subscriptionId, savedAzure?.resourceGroupName, savedAzure?.location])
 
-  const blocker = kind === "local" ? null : azureStorageBlocker({
+  const blocker = kind === "local" || savedSelected ? null : azureStorageBlocker({
     community,
     accountsLoaded: Boolean(accounts),
     accountCount: accounts?.length ?? 0,
@@ -169,7 +172,7 @@ export function StorageChooser({ tenantId, clientId, initial, initialDraft, onCh
   const option = (value: StorageChoice["kind"], icon: React.ReactNode, title: string, description: string, locked = false) => (
     <button
       type="button"
-      onClick={() => setKind(value)}
+      onClick={() => { setKind(value); if (value === "azure" && savedAzure) setSelected(savedAzure.storageAccountName) }}
       disabled={locked}
       className={cn(
         "flex w-full items-start gap-4 rounded-3xl border-2 p-5 text-left transition-colors",
@@ -217,10 +220,13 @@ export function StorageChooser({ tenantId, clientId, initial, initialDraft, onCh
         <Cloud className="h-5 w-5" />,
         "Your Azure storage account",
         "Backups go to your own subscription. Azure encrypts the data at rest, and access follows your Azure role assignments: every admin with access to the account sees the same backups. You need the Storage Blob Data Contributor role on it.",
-        community,
+        community && !savedAzure,
       )}
+      {kind === "azure" && savedSelected && <p className="ml-14 text-sm text-gray-600">Using saved Azure storage: {savedAzure?.storageAccountName}. Existing backups can be listed and restored. {community && "New backups are paused until Pro is active."}</p>}
+      {kind === "azure" && !savedSelected && savedAzure && <Button variant="outline" onClick={() => setSelected(savedAzure.storageAccountName)}>Use saved Azure storage</Button>}
+      {kind === "azure" && savedSelected && !community && <Button variant="outline" onClick={() => setSelected("")}>Choose another Azure account</Button>}
       {community && <UpgradeNote feature="azureStorage" />}
-      {kind === "azure" && !community && (
+      {kind === "azure" && !community && !savedSelected && (
         <div className="ml-14 space-y-3">
           {!accounts && !loadError && (
             <p className="flex items-center gap-2 text-sm text-gray-600">

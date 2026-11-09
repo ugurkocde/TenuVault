@@ -89,6 +89,7 @@ export interface SignedInAccount {
 
 /** License state of one tenant on this machine. */
 export interface TenantLicenseStatus {
+  coverageEnded?: boolean
   tenantId: string
   /** An admin is signed in to the tenant in this app. */
   signedIn: boolean
@@ -144,6 +145,7 @@ export interface LicenseStatus {
   trialEndedAt?: string | null
   /** The one tenant the free Community plan covers, once a tenant has used it. */
   communityChoiceTenantIds?: string[]
+  communityChoicePendingTenantIds?: string[]
   communityTenantId: string | null
   /** Signed-in tenants and tenants with a stored activation. */
   tenants: TenantLicenseStatus[]
@@ -216,6 +218,9 @@ export interface ScheduleInput {
 export interface BackupSchedule extends ScheduleInput {
   fallbackWeekday?: number
   fallbackStartsAt?: string
+  fallbackNoticeFor?: string
+  azurePauseNotified?: boolean
+  choicePauseNotified?: boolean
   pausedReason?: string
   /** When the schedule was last changed; slots before it are not caught up. */
   since: string

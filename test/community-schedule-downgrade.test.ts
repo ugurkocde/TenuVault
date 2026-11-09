@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { prepareScheduleInput } from "../src/main/backup/schedule-input"
 import { BackupScheduler } from "../src/main/backup/scheduler"
 import type { Plan } from "../src/shared/plans"
 import { memoryStore } from "./helpers"
@@ -37,9 +38,9 @@ describe("schedule downgrade", () => {
     expect(run).toHaveBeenCalledTimes(2)
     expect(notice).toHaveBeenCalledTimes(1)
     const saved = restarted.list()[0]!
-    restarted.set({ ...saved, enabled: false })
+    restarted.set(prepareScheduleInput({ ...saved, enabled: false }, plan, saved))
     expect(notice).toHaveBeenCalledTimes(1)
-    restarted.set({ ...saved, enabled: true })
+    restarted.set(prepareScheduleInput({ ...saved, enabled: true }, plan, restarted.list()[0]))
     expect(notice).toHaveBeenCalledTimes(1)
     plan = "pro"
     expect(restarted.list()[0]?.fallbackWeekday).toBeUndefined()
@@ -48,15 +49,17 @@ describe("schedule downgrade", () => {
     expect(run).toHaveBeenCalledTimes(3)
   })
 
-  it("pauses Azure without attempts, failures or runs, and resumes after changing to local weekly", async () => {
+  it("pauses Azure without attempts, failures or runs, and catches up promptly after changing only storage to local", async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date(2026, 10, 8, 12))
     const store = memoryStore()
     let azure = true
+    let plan: Plan = "pro"
     const run = vi.fn(async () => ({ status: "Completed" as const, message: "Done" }))
     const notice = vi.fn()
-    const scheduler = new BackupScheduler(store, run, undefined, undefined, () => ({ plan: "community", azure }), undefined, notice)
-    scheduler.set({ tenantId: "fabrikam", enabled: true, frequency: "daily", time: "02:00" })
+    const scheduler = new BackupScheduler(store, run, undefined, undefined, () => ({ plan, azure }), undefined, notice)
+    scheduler.set(prepareScheduleInput({ tenantId: "fabrikam", enabled: true, frequency: "daily", time: "02:00" }, plan))
+    plan = "community"
     for (let day = 9; day < 20; day++) {
       vi.setSystemTime(new Date(2026, 10, day, 3))
       await scheduler.tick()
@@ -66,11 +69,15 @@ describe("schedule downgrade", () => {
     expect(scheduler.list()[0]).toMatchObject({ pausedReason: "Paused: Azure storage needs Pro", attempts: 0, nextRunAt: null })
     expect(scheduler.list()[0]?.lastStatus).toBeUndefined()
     azure = false
-    scheduler.set({ tenantId: "fabrikam", enabled: true, frequency: "weekly", weekday: 5, time: "02:00" })
+    expect(scheduler.list()[0]?.frequency).toBe("daily")
     expect(scheduler.list()[0]?.pausedReason).toBeUndefined()
-    vi.setSystemTime(new Date(2026, 10, 20, 3))
     await scheduler.tick()
     expect(run).toHaveBeenCalledTimes(1)
+    plan = "pro"
+    vi.setSystemTime(new Date(2026, 10, 20, 3))
+    await scheduler.tick()
+    expect(scheduler.list()[0]?.fallbackWeekday).toBeUndefined()
+    expect(run).toHaveBeenCalledTimes(2)
   })
 })
 
@@ -87,4 +94,100 @@ it("starts weekly fallback promptly when coverage is revoked before its saved ex
   vi.setSystemTime(new Date(2026, 10, 9, 2))
   await scheduler.tick()
   expect(run).toHaveBeenCalledTimes(1)
+})
+
+it("retries a failed weekly fallback slot on its day and catches up several missed weeks once", async () => {
+  vi.useFakeTimers()
+  vi.setSystemTime(new Date(2026, 10, 8, 12))
+  let plan: Plan = "pro"
+  const run = vi.fn().mockResolvedValueOnce({ status: "Failed", message: "Try again" }).mockResolvedValue({ status: "Completed", message: "Done" })
+  const scheduler = new BackupScheduler(memoryStore(), run, undefined, undefined, () => ({ plan, azure: false, endedAt: new Date(2026, 10, 9, 1).getTime() }))
+  scheduler.set({ tenantId: "contoso", enabled: true, frequency: "daily", time: "02:00" })
+  plan = "community"
+  vi.setSystemTime(new Date(2026, 10, 9, 2))
+  await scheduler.tick()
+  vi.setSystemTime(new Date(2026, 10, 9, 2, 14))
+  await scheduler.tick()
+  expect(run).toHaveBeenCalledTimes(1)
+  vi.setSystemTime(new Date(2026, 10, 9, 2, 15))
+  await scheduler.tick()
+  expect(run).toHaveBeenCalledTimes(2)
+  expect(run.mock.calls[1]?.[2]).toBe(run.mock.calls[0]?.[2])
+  vi.setSystemTime(new Date(2026, 10, 10, 3))
+  await scheduler.tick()
+  expect(run).toHaveBeenCalledTimes(2)
+  vi.setSystemTime(new Date(2026, 11, 3, 12))
+  await scheduler.tick()
+  await scheduler.tick()
+  expect(run).toHaveBeenCalledTimes(3)
+  expect(scheduler.list()[0]?.fallbackWeekday).toBe(1)
+})
+
+it("persists notices per coverage end and only notifies enabled schedules", () => {
+  vi.useFakeTimers()
+  vi.setSystemTime(new Date(2026, 10, 8, 12))
+  const store = memoryStore()
+  let plan: Plan = "pro"
+  let azure = false
+  let endedAt = new Date(2026, 10, 9, 1).getTime()
+  const notice = vi.fn()
+  const pause = vi.fn()
+  const create = () => new BackupScheduler(store, async () => ({ status: "Completed", message: "Done" }), undefined, undefined, () => ({ plan, azure, endedAt }), undefined, notice, pause)
+  let scheduler = create()
+  scheduler.set({ tenantId: "contoso", enabled: false, frequency: "daily", time: "02:00" })
+  plan = "community"
+  scheduler.list()
+  expect(notice).not.toHaveBeenCalled()
+  azure = true
+  scheduler.list()
+  expect(pause).not.toHaveBeenCalled()
+  azure = false
+  scheduler.set(prepareScheduleInput({ ...scheduler.list()[0]!, enabled: true }, plan, scheduler.list()[0]))
+  expect(notice).toHaveBeenCalledTimes(1)
+  scheduler = create()
+  azure = true
+  scheduler.list()
+  scheduler.list()
+  expect(pause).toHaveBeenCalledExactlyOnceWith("contoso", "azure")
+  scheduler = create()
+  scheduler.list()
+  expect(pause).toHaveBeenCalledTimes(1)
+  azure = false
+  scheduler.list()
+  const saved = scheduler.list()[0]!
+  scheduler.set(prepareScheduleInput({ ...saved, enabled: false }, plan, saved))
+  scheduler.set(prepareScheduleInput({ ...saved, enabled: true }, plan, scheduler.list()[0]))
+  expect(notice).toHaveBeenCalledTimes(1)
+  plan = "pro"
+  scheduler.list()
+  endedAt += 7 * 86400_000
+  plan = "community"
+  scheduler.list()
+  expect(notice).toHaveBeenCalledTimes(2)
+})
+
+it("keeps the fallback weekday and local time across daylight saving in Europe/Berlin", async () => {
+  const timezone = process.env.TZ
+  process.env.TZ = "Europe/Berlin"
+  try {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-10-22T12:00:00+02:00"))
+    let plan: Plan = "pro"
+    const run = vi.fn(async () => ({ status: "Completed" as const, message: "Done" }))
+    const scheduler = new BackupScheduler(memoryStore(), run, undefined, undefined, () => ({ plan, azure: false, endedAt: Date.parse("2026-10-23T01:00:00+02:00") }))
+    scheduler.set({ tenantId: "contoso", enabled: true, frequency: "daily", time: "09:00" })
+    plan = "community"
+    vi.setSystemTime(new Date("2026-10-23T09:00:00+02:00"))
+    await scheduler.tick()
+    expect(scheduler.list()[0]).toMatchObject({ fallbackWeekday: 5, nextRunAt: "2026-10-30T08:00:00.000Z" })
+    vi.setSystemTime(new Date("2026-10-30T08:59:00+01:00"))
+    await scheduler.tick()
+    expect(run).toHaveBeenCalledTimes(1)
+    vi.setSystemTime(new Date("2026-10-30T09:00:00+01:00"))
+    await scheduler.tick()
+    expect(run).toHaveBeenCalledTimes(2)
+  } finally {
+    if (timezone === undefined) delete process.env.TZ
+    else process.env.TZ = timezone
+  }
 })

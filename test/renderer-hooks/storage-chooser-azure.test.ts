@@ -11,10 +11,11 @@ const backups = vi.hoisted(() => ({
   verifyAzureStorage: vi.fn(),
   exportRecoveryKey: vi.fn(),
 }))
+const license = vi.hoisted(() => ({ plan: "pro" }))
 const clipboard = vi.hoisted(() => ({ writeText: vi.fn() }))
 
 vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { backups, app: { openExternal: async () => undefined } } }))
-vi.mock("../../src/renderer/lib/license", () => ({ useTenantPlan: () => "pro" }))
+vi.mock("../../src/renderer/lib/license", () => ({ useTenantPlan: () => license.plan }))
 
 import { azureStorageBlocker, StorageChooser, type StorageChooserDraft } from "../../src/renderer/components/StorageChooser"
 
@@ -34,6 +35,7 @@ function accountResponse(accounts: unknown[]) {
 afterEach(() => {
   for (const root of roots.splice(0)) act(() => root.unmount())
   for (const container of containers.splice(0)) container.remove()
+  license.plan = "pro"
   vi.resetAllMocks()
 })
 
@@ -251,4 +253,25 @@ describe("azureStorageBlocker", () => {
     expect(azureStorageBlocker({ ...ready, accountsLoaded: false, accountCount: 0, selected: false, verified: false })).toBe("Loading your storage accounts...")
     expect(azureStorageBlocker({ ...ready, community: true })).toContain("needs Pro or MSP")
   })
+})
+
+
+it.each(["community", "pro"])("returns to saved Azure storage on %s without setting up another account", async (plan) => {
+  license.plan = plan
+  backups.settings.mockResolvedValue(saved)
+  backups.inventoryProblem.mockResolvedValue(null)
+  const savedAzure = { kind: "azure" as const, storageAccountName: ACCOUNT.name, subscriptionId: ACCOUNT.subscriptionId, resourceGroupName: ACCOUNT.resourceGroup, location: ACCOUNT.location }
+  const container = document.body.appendChild(document.createElement("div"))
+  containers.push(container)
+  const root = createRoot(container)
+  roots.push(root)
+  const onChange = vi.fn()
+  act(() => root.render(createElement(StorageChooser, { tenantId: TENANT, clientId: "client", savedAzure, initial: { kind: "local" }, onChange })))
+  await flush()
+  await chooseAzure(container)
+  expect(onChange).toHaveBeenLastCalledWith(savedAzure)
+  expect(container.textContent).toContain("Using saved Azure storage")
+  expect(container.querySelector("select")).toBeNull()
+  expect(backups.verifyAzureStorage).not.toHaveBeenCalled()
+  if (plan === "community") expect(container.textContent).not.toContain("Choose another Azure account")
 })

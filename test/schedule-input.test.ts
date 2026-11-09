@@ -29,7 +29,7 @@ describe("schedule input plan checks", () => {
     expect(JSON.parse(store.get("backup.schedules")!)[TENANT]).toMatchObject({ enabled: false, frequency: "daily", time: "07:45", lastStatus: "Failed" })
     await scheduler.tick()
     expect(run).toHaveBeenCalledTimes(1)
-    expect(() => prepareScheduleInput(daily, "community", scheduler.list()[0])).toThrow(PlanRequired)
+    expect(scheduler.set(prepareScheduleInput(daily, "community", scheduler.list()[0]))).toMatchObject({ enabled: true, frequency: "daily", since: current.since, attempts: current.attempts })
   })
 
   it("keeps the saved weekday when pausing on any plan, including an unknown plan", () => {
