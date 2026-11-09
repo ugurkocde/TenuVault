@@ -36,8 +36,10 @@ Audit exports and statistics cover the full query range. Events use immutable bl
 Failed writes remain in the encrypted retry queue and are surfaced as pending; unreadable
 history or queue counts are unavailable, not empty. Retry batches preserve concurrent events.
 
-New Azure snapshots are encrypted and authenticated before upload. Export the recovery
-key first; other machines must import it. See [Azure encryption](azure-backup-encryption.md).
+New Azure snapshots are plain JSON, protected by Azure encryption at rest and the storage
+account's role assignments, so other machines read them without a recovery key. The recovery
+key is needed only for backups on a device and for older Azure backups made before this change.
+See [Encryption and recovery key](../docs-site/src/content/docs/security/encryption.md).
 ZIP import requires a complete manifest-bearing export and review before encrypted local
 storage. It preserves source identity, detects duplicates and makes no tenant changes.
 

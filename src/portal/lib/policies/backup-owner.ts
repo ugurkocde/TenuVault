@@ -1,19 +1,9 @@
-import { belongsTo, type BackupMetadata } from "../../../shared/intune/drift"
 import { localStorageAccountName } from "../../../shared/constants"
 import { DAMAGED_OWNER_MARKER, INVALID_MANIFEST_TENANT, resolveBackupOwnership, type OwnershipFile } from "../../../shared/backup-ownership"
 import { isLegacyOtherTenantError } from "../../../shared/legacy-sealed"
 
 export const OTHER_TENANT_BACKUP = "This backup belongs to another tenant."
 const SEALED_BACKUP = "This backup was encrypted by an earlier TenuVault version and could not be opened for this tenant. It belongs to another tenant, or it needs the recovery key of the device that made it."
-
-/**
- * Whether a backup's metadata allows `tenantId` to read it. Containers can be shared by several
- * tenants, so a backup recorded for another tenant is refused; older backups that record no
- * tenant, and backups without metadata, are allowed as before.
- */
-export function ownedBy(metadata: unknown, tenantId: string): boolean {
-  return !metadata || typeof metadata !== "object" || Array.isArray(metadata) || belongsTo(metadata as BackupMetadata, tenantId)
-}
 
 /** Why a backup without tenant evidence cannot change live policies; it can still be restored as an unassigned copy. */
 export const UNTAGGED_BACKUP = "This backup does not record its tenant. Restore it as a copy instead."

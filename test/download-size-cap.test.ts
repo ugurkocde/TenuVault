@@ -61,7 +61,9 @@ it('downloads a listing that is exactly at the limit', async () => {
   const response = await download(request())
   expect(response.status).toBe(200)
   expect(response.headers.get('Content-Type')).toBe('application/zip')
-  expect(bodyFetches).toHaveLength(2)
+  // metadata.json is read once for the ownership check, then both files for the archive.
+  expect(bodyFetches[0]).toBe(`/intune-backups/${args.backupId}/metadata.json`)
+  expect(bodyFetches).toHaveLength(3)
 })
 
 it('excludes directory and ownership marker blobs from the size cap and the archive', async () => {

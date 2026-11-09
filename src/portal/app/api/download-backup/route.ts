@@ -4,7 +4,7 @@ import { isBackupName } from "../../../../shared/intune/backup-names"
 import { BACKUP_OWNER_FILE, MAX_BACKUP_ARCHIVE_BYTES, MAX_BACKUP_ARCHIVE_FILES } from "../../../../shared/constants"
 import { readBytesCapped } from "../../../../shared/capped-body"
 import { type NextRequest, NextResponse } from "next/server"
-import { OTHER_TENANT_BACKUP, ownedBy, readOwnedBackup } from "~/lib/policies/backup-owner"
+import { readOwnedBackup } from "~/lib/policies/backup-owner"
 
 interface ListedFile {
   path: string
@@ -186,21 +186,15 @@ export async function POST(request: NextRequest) {
     const results: Array<{success: boolean, path: string}> = []
     let processedFiles = 0
 
-    // The backup's metadata is read first, on its own: a shared container can hold other
-    // tenants' backups, and those are refused before any other file is read. A backup without
-    // metadata is placed by its ownership marker.
-    const metadataPath = `${backupId}/metadata.json`
-    if (!filePaths.includes(metadataPath)) {
-      const owned = await readOwnedBackup((name) => fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(name)}`, {
-        headers: { 'x-ms-version': '2021-12-02', 'Authorization': `Bearer ${accessToken}` },
-      }), backupId, tenantId)
-      if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
-    }
-    const others = filePaths.filter((path) => path !== metadataPath)
-    const batches: string[][] = others.length === filePaths.length ? [] : [[metadataPath]]
-    for (let i = 0; i < others.length; i += batchSize) batches.push(others.slice(i, i + batchSize))
-    let ownership: string | null = null
-    let untagged = false
+    // Ownership is settled by the shared resolver before any file is read: a shared container can
+    // hold other tenants' backups, and those are refused, as are backups whose metadata or
+    // ownership marker cannot be read.
+    const owned = await readOwnedBackup((name) => fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(name)}`, {
+      headers: { 'x-ms-version': '2021-12-02', 'Authorization': `Bearer ${accessToken}` },
+    }), backupId, tenantId, storageAccountName)
+    if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
+    const batches: string[][] = []
+    for (let i = 0; i < filePaths.length; i += batchSize) batches.push(filePaths.slice(i, i + batchSize))
     // Actual fetched bytes, rechecked against the cap: listed lengths can be
     // missing or understated, and the archive is built in memory.
     let fetchedBytes = 0
@@ -226,12 +220,6 @@ export async function POST(request: NextRequest) {
             }
             fetchedBytes += content.byteLength
             if (fetchedBytes > MAX_BACKUP_ARCHIVE_BYTES) oversized = true
-            if (filePath === metadataPath) {
-              let metadata: unknown
-              try { metadata = JSON.parse(new TextDecoder().decode(content)) } catch { ownership = "The backup metadata could not be read." }
-              if (!ownership && !ownedBy(metadata, tenantId)) ownership = OTHER_TENANT_BACKUP
-              untagged = !ownership && typeof (metadata as { TenantId?: unknown } | null)?.TenantId !== "string"
-            }
             // Remove the backup folder prefix from the path in the zip
             const zipPath = filePath.replace(`${backupId}/`, '')
 
@@ -261,16 +249,6 @@ export async function POST(request: NextRequest) {
           { error: `Download refused: this backup's files total more than the 32 MiB limit for a backup download, although the listing reported less. Restore the backup from Backup Details instead of downloading it, or choose a smaller backup.` },
           { status: 413 }
         )
-      }
-      // Ownership is settled by the metadata batch before any other file is read.
-      if (batch[0] === metadataPath && !ownership && !batchResults[0]?.success) ownership = "The backup metadata could not be read."
-      if (ownership) return NextResponse.json({ error: ownership }, { status: ownership === OTHER_TENANT_BACKUP ? 403 : 502 })
-      // Metadata that records no tenant is placed by the ownership marker, as the backup list does.
-      if (batch[0] === metadataPath && untagged) {
-        const owned = await readOwnedBackup((name) => fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(name)}`, {
-          headers: { 'x-ms-version': '2021-12-02', 'Authorization': `Bearer ${accessToken}` },
-        }), backupId, tenantId)
-        if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
       }
     }
 
