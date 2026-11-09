@@ -1,6 +1,6 @@
 TENUVAULT DESKTOP END USER LICENSE AGREEMENT
 
-Version 1.1, 3 November 2026
+Version 1.2, 9 November 2026
 
 Ugurlabs UG (haftungsbeschraenkt), Duesseldorf, Germany ("Ugurlabs", "we", "us")
 
@@ -132,11 +132,14 @@ trademarks. All rights not expressly granted are reserved.
        tenant or with a pilot group before you apply them to production;
     c) the app registration, permissions and roles TenuVault uses;
     d) making regular backups of your tenant configuration, and keeping
-       your backup recovery key safe. Without it, backups cannot be
-       read on another computer or after a reinstall, and we cannot recover
-       it; and
-    e) storing backups and exports securely, as they can contain sensitive
-       configuration values.
+       your backup recovery key safe. Without it, backups stored on a
+       computer or network share, and older encrypted backups in Azure
+       storage, cannot be read on another computer or after a reinstall,
+       and we cannot recover it; and
+    e) storing backups and exports securely and controlling who can access
+       the storage that holds them, as they can contain sensitive
+       configuration values. Backups in your Azure storage are not
+       encrypted by TenuVault.
 
 6.3 Framework recommendations, including the OpenIntuneBaseline and the CIS
     Benchmarks, are generic starting points. They are not tailored to your
