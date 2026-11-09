@@ -88,20 +88,30 @@ function selectTenant() {
   selectedTenantState.current = { id: 1, name: "Contoso", credentials: { tenantId: "t-1", appId: "app-1", clientSecret: "" } }
 }
 
-const PAID_ENTRIES = [["Audit Log", "/portal/audit"], ["Governance", "/portal/governance"], ["Changes", "/portal/changes"], ["Operations", "/portal/operations"], ["Reports", "/portal/reports"], ["Alerts", "/portal/alerts"]] as const
+const PAID_ENTRIES = [["Audit Log", "/portal/audit"], ["Sync", "/portal/sync"], ["Governance", "/portal/governance"], ["Changes", "/portal/changes"], ["Operations", "/portal/operations"], ["Reports", "/portal/reports"], ["Alerts", "/portal/alerts"]] as const
 
 function sidebarLink(container: HTMLElement, href: string): HTMLAnchorElement {
   return container.querySelector<HTMLAnchorElement>(`nav[aria-label="Main navigation"] a[href="${href}"]`)!
 }
 
 describe("sidebar plan badges for paid screens", () => {
-  it("badges each hub by all of its tabs and the audit log by its feature", () => {
+  it("badges each hub by all of its tabs, and the audit log and Sync by their feature", () => {
     expect(NAV_PLAN_FEATURES["/portal/audit"]).toEqual(["auditLog"])
+    expect(NAV_PLAN_FEATURES["/portal/sync"]).toEqual(["sync"])
     for (const hub of HUBS) expect(NAV_PLAN_FEATURES[`/portal/${hub.id}`]).toEqual(hub.tabs.map((tab) => tab.feature))
-    expect(Object.keys(NAV_PLAN_FEATURES).sort()).toEqual(["/portal/alerts", "/portal/audit", "/portal/changes", "/portal/governance", "/portal/operations", "/portal/reports"])
+    expect(Object.keys(NAV_PLAN_FEATURES).sort()).toEqual(["/portal/alerts", "/portal/audit", "/portal/changes", "/portal/governance", "/portal/operations", "/portal/reports", "/portal/sync"])
   })
 
-  it("marks Audit Log, Governance, Changes, Operations, Reports and Alerts with Pro for Community and keeps them links", async () => {
+  it("lists Sync directly under Drift Detection, with its hint", async () => {
+    licenseStatus.current = statusFor("pro")
+    selectTenant()
+    const container = await render(createElement(DesktopLayout))
+    const hrefs = [...container.querySelectorAll<HTMLAnchorElement>('nav[aria-label="Main navigation"] a')].map((link) => link.getAttribute("href"))
+    expect(hrefs[hrefs.indexOf("/portal/drift") + 1]).toBe("/portal/sync")
+    expect(sidebarLink(container, "/portal/sync").title).toBe("Copy settings from one tenant to others")
+  })
+
+  it("marks Audit Log, Sync, Governance, Changes, Operations, Reports and Alerts with Pro for Community and keeps them links", async () => {
     licenseStatus.current = statusFor("community")
     selectTenant()
     const container = await render(createElement(DesktopLayout))

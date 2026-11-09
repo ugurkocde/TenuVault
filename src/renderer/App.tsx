@@ -26,6 +26,7 @@ const FrameworksPage = lazy(() => import("./pages/FrameworksPage"))
 const HubPage = lazy(() => import("./pages/HubPage"))
 const BaselinesPage = lazy(() => import("./pages/BaselinesPage"))
 const OibPage = lazy(() => import("./pages/OibPage"))
+const SyncPage = lazy(() => import("./pages/SyncPage"))
 
 // Portal pages (src/portal/app/portal).
 const DashboardPage = lazy(() => import("~/app/portal/dashboard/page"))
@@ -103,6 +104,7 @@ export function App() {
                       <Route path="tenants" element={<TenantsPage />} />
                       <Route path="backup" element={<BackupPage />} />
                       <Route path="drift" element={<DriftPage />} />
+                      <Route path="sync" element={<SyncPage />} />
                       <Route path="audit" element={<AuditPage />} />
                       <Route path="onboarding" element={<OnboardingPage />} />
                       <Route path="settings" element={<SettingsPage />} />

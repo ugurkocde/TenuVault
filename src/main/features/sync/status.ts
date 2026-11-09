@@ -1,10 +1,10 @@
 import type { GraphCall } from "../../../portal/lib/policies/graph-restore"
 import { comparableSnapshot, sameSnapshot } from "../../../shared/intune/compare"
-import { typeForFolder, type Item } from "../../../shared/intune/registry"
+import { typeForFolder, type IntuneType, type Item } from "../../../shared/intune/registry"
 import type { FeatureDeps } from "../deps"
 import { readCurrent } from "../change-sets/graph"
 import { hashOf, sanitizeSnapshot, writableBody } from "../change-sets/model"
-import { parseLinkKey, syncLinks } from "./links"
+import { parseLinkKey, syncLinks, type SyncLink } from "./links"
 
 /**
  * Whether each linked policy is still in sync, by comparing both sides with the hashes stored
@@ -31,6 +31,21 @@ export interface SyncStatusEntry {
 
 export interface SyncStatus {
   targets: Array<{ targetTenantId: string; links: SyncStatusEntry[]; error: string | null }>
+}
+
+/**
+ * Whether a link whose source and target both exist is still in sync, from the hashes stored when
+ * its write was verified. Shared by the status and by planning, which leaves in-sync policies out.
+ */
+export function linkState(type: IntuneType, link: SyncLink, sourceLive: Item, targetLive: Item): Pick<SyncStatusEntry, "state" | "changedIn" | "identical" | "error"> {
+  const sourceSnapshot = sanitizeSnapshot(type, sourceLive).snapshot
+  const targetSnapshot = sanitizeSnapshot(type, targetLive).snapshot
+  const sourceMoved = hashOf(comparableSnapshot(sourceSnapshot)) !== link.sourceHash
+  const targetMoved = link.targetHash === null ? null : hashOf(comparableSnapshot(targetSnapshot)) !== link.targetHash
+  const identical = sameSnapshot(writableBody(type, sourceSnapshot), writableBody(type, targetSnapshot))
+  if (targetMoved === null && !sourceMoved) return { state: "unknown", changedIn: null, identical, error: "The target was not read back when it was linked, so a change there cannot be told." }
+  const changedIn = sourceMoved && targetMoved ? "both" : sourceMoved ? "source" : targetMoved ? "target" : null
+  return { state: changedIn ? "changed" : "in-sync", changedIn, identical, error: null }
 }
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error))
@@ -83,17 +98,7 @@ export async function syncStatus(deps: FeatureDeps, sourceTenantId: string, targ
           entries.push({ ...base, state: "missing-in-source", changedIn: null, identical: null, error: null })
           continue
         }
-        const sourceSnapshot = sanitizeSnapshot(type, sourceLive).snapshot
-        const targetSnapshot = sanitizeSnapshot(type, targetLive).snapshot
-        const sourceMoved = hashOf(comparableSnapshot(sourceSnapshot)) !== link.sourceHash
-        const targetMoved = link.targetHash === null ? null : hashOf(comparableSnapshot(targetSnapshot)) !== link.targetHash
-        const identical = sameSnapshot(writableBody(type, sourceSnapshot), writableBody(type, targetSnapshot))
-        if (targetMoved === null && !sourceMoved) {
-          entries.push({ ...base, state: "unknown", changedIn: null, identical, error: "The target was not read back when it was linked, so a change there cannot be told." })
-          continue
-        }
-        const changedIn = sourceMoved && targetMoved ? "both" : sourceMoved ? "source" : targetMoved ? "target" : null
-        entries.push({ ...base, state: changedIn ? "changed" : "in-sync", changedIn, identical, error: null })
+        entries.push({ ...base, ...linkState(type, link, sourceLive, targetLive) })
       } catch (error) {
         entries.push({ ...base, state: "unknown", changedIn: null, identical: null, error: messageOf(error) })
       }

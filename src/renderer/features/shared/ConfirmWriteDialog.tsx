@@ -6,7 +6,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 /**
  * The explicit confirmation before a tenant write. It names the target tenant, lists what
  * cannot be undone and what no rollback covers, and stays disabled until the admin ticks that
- * they read it.
+ * they read it. `backupSkipped` says no backup runs, for a change set bound to skipping it.
  */
 export function ConfirmWriteDialog({
   open,
@@ -18,6 +18,7 @@ export function ConfirmWriteDialog({
   confirmLabel,
   busy,
   onConfirm,
+  backupSkipped = false,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -28,6 +29,7 @@ export function ConfirmWriteDialog({
   confirmLabel: string
   busy: boolean
   onConfirm: () => void
+  backupSkipped?: boolean
 }) {
   const [understood, setUnderstood] = useState(false)
   // Every opening asks again, also when the parent closed the dialog itself after a write.
@@ -45,7 +47,7 @@ export function ConfirmWriteDialog({
             {title}
           </DialogTitle>
           <DialogDescription>
-            This writes to the tenant <strong className="text-gray-900 dark:text-gray-100">{tenantName}</strong>. A full backup runs first and the current state of every affected object is captured; the write stops if either fails.
+            This writes to the tenant <strong className="text-gray-900 dark:text-gray-100">{tenantName}</strong>. {backupSkipped ? "No backup runs: the current state of every affected object is captured first, and the write stops if that fails." : "A full backup runs first and the current state of every affected object is captured; the write stops if either fails."}
           </DialogDescription>
         </DialogHeader>
         <div className="max-h-[50vh] space-y-4 overflow-y-auto text-sm">

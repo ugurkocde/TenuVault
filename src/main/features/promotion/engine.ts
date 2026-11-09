@@ -69,6 +69,14 @@ export interface SyncPlanState {
   runId: string
   /** Per `${folder}:${sourceId}`: the linked target policy the plan relied on, or null for none. */
   links?: Record<string, string | null>
+  /** Fingerprint of the request options that shape what this plan writes (see sync/links.ts). */
+  optionsHash?: string
+  /**
+   * The backup choice the admin approved this Sync target with; its apply and every retry use
+   * it. Absent on targets approved before it was stored, where the change set's first claimed
+   * apply decides it.
+   */
+  backup?: "new" | "none"
 }
 
 /** Reasons the calling workflow's own planning inputs changed; empty when unchanged. */
@@ -250,7 +258,7 @@ export async function approvePromotion(deps: FeatureDeps, tenantId: string, id: 
  * target and of the mapped dependencies, production pre-change backup (fail closed), a second
  * dependency re-check, capture, journaled writes with read-back.
  */
-export async function applyPromotion(deps: FeatureDeps, tenantId: string, id: string, input: { contentHash: string; confirmed: boolean; backup?: "new" | "none"; check?: PlanCheck; onSettled?: ApplyInput["onSettled"] }, actor: string | null): Promise<{ promotion: Stored<PromotionRecord>; changeSet: Stored<ChangeSetRecord> }> {
+export async function applyPromotion(deps: FeatureDeps, tenantId: string, id: string, input: { contentHash: string; confirmed: boolean; backup?: "new" | "none"; resolveBackup?: ApplyInput["resolveBackup"]; check?: PlanCheck; onSettled?: ApplyInput["onSettled"] }, actor: string | null): Promise<{ promotion: Stored<PromotionRecord>; changeSet: Stored<ChangeSetRecord> }> {
   const promotion = getPromotion(deps, tenantId, id)
   if (!promotion.changeSetId) throw new FeatureError("This promotion is blocked. Resolve its findings and plan again.", 409)
   const { check, ...apply } = input

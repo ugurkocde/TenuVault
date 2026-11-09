@@ -2,7 +2,8 @@ import type { ListedRecord } from "../contracts"
 import type { FeatureDeps } from "../deps"
 import { DOMAINS } from "../domains"
 import type { StoredRecord } from "../records"
-import type { ChangeSetRecord } from "../change-sets/model"
+import { canonicalJson, hashOf, type ChangeSetRecord } from "../change-sets/model"
+import type { Mapping } from "../promotion/mapping"
 import type { PromotionRecord } from "../promotion/engine"
 
 /**
@@ -22,6 +23,11 @@ export interface SyncLink {
   targetHash: string | null
   /** When the write was verified; links are ordered by it, never by when they were stored. Missing counts as oldest. */
   verifiedAt?: string
+  /**
+   * optionsFingerprint of the plan whose write was verified. A plan skips a policy as in sync
+   * only with the same options; a link without it never skips.
+   */
+  optionsHash?: string
   linkedAt: string
   promotionId: string
   changeSetId: string
@@ -52,6 +58,17 @@ export function syncLinks(deps: FeatureDeps, targetTenantId: string, sourceTenan
   return linksRecord(deps, targetTenantId, sourceTenantId)?.links ?? {}
 }
 
+/**
+ * What shapes the policy a Sync writes to one target besides its source: whether assignments are
+ * included, whether unsupported exclusions are dropped, and the target's confirmed mappings,
+ * normalized and sorted so the same choices always give the same fingerprint.
+ */
+export function optionsFingerprint(options: { includeAssignments: boolean; dropUnsupportedExclusions: boolean }, mappings: Mapping[]): string {
+  const normalized = mappings.map((mapping) => ({ kind: mapping.kind, sourceId: mapping.sourceId.toLowerCase(), targetId: mapping.targetId.toLowerCase(), confirmed: mapping.confirmed }))
+    .sort((a, b) => canonicalJson(a).localeCompare(canonicalJson(b)))
+  return hashOf({ includeAssignments: options.includeAssignments, dropUnsupportedExclusions: options.dropUnsupportedExclusions, mappings: normalized })
+}
+
 /** The links a target's verified operations make, from the change set alone; no Graph call. */
 function verifiedLinks(promotion: PromotionRecord & StoredRecord, changeSet: ChangeSetRecord & StoredRecord, linkedAt: string): Record<string, SyncLink> {
   const source = promotion.sourceTenantId.toLowerCase()
@@ -62,7 +79,7 @@ function verifiedLinks(promotion: PromotionRecord & StoredRecord, changeSet: Cha
     if (result?.status !== "verified" || !result.objectId || !result.at || !origin?.objectId || origin.tenantId?.toLowerCase() !== source) continue
     const item = promotion.items.find((entry) => entry.folder === operation.folder && entry.sourceId.toLowerCase() === origin.objectId!.toLowerCase())
     if (!item) continue
-    found[linkKey(operation.folder, origin.objectId)] = { targetPolicyId: result.objectId, sourceName: item.sourceName, targetName: operation.name, sourceHash: item.sourceHash, targetHash: result.readBackHash ?? null, verifiedAt: result.at, linkedAt, promotionId: promotion.id, changeSetId: changeSet.id }
+    found[linkKey(operation.folder, origin.objectId)] = { targetPolicyId: result.objectId, sourceName: item.sourceName, targetName: operation.name, sourceHash: item.sourceHash, targetHash: result.readBackHash ?? null, verifiedAt: result.at, linkedAt, promotionId: promotion.id, changeSetId: changeSet.id, ...(promotion.sync?.optionsHash ? { optionsHash: promotion.sync.optionsHash } : {}) }
   }
   return found
 }

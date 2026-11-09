@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { adminCenterLink, inTenant } from "../src/shared/intune/admin-links"
+import { adminCenterLink, adminCenterListLink, inTenant } from "../src/shared/intune/admin-links"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
 import type { GraphCall } from "../src/portal/lib/policies/graph-restore"
 
@@ -8,6 +8,15 @@ const ID = "0b699fa4-3779-4688-ba56-f9d2df52c25e"
 describe("Admin center links for restored objects", () => {
   it("links every type TenuVault restores", () => {
     for (const type of INTUNE_TYPES) expect(adminCenterLink(type.folder, ID), type.folder).toBeDefined()
+  })
+
+  it("opens the list page of each policy type Sync writes, the same lists the restore links use", () => {
+    expect(adminCenterListLink("ConfigurationPolicies")).toEqual({ url: "https://intune.microsoft.com/#view/Microsoft_Intune_DeviceSettings/DevicesMenu/~/configuration", center: "Intune", exact: false })
+    expect(adminCenterListLink("DeviceConfigurations")).toEqual(adminCenterLink("GroupPolicyConfigurations", ID))
+    expect(adminCenterListLink("CompliancePolicies")).toEqual(adminCenterLink("NotificationTemplates", ID))
+    expect(adminCenterListLink("EndpointSecurityIntents")).toEqual(adminCenterLink("EndpointSecurityIntents", ID))
+    expect(adminCenterListLink("Apps")).toBeUndefined()
+    expect(inTenant(adminCenterListLink("CompliancePolicies")!.url, "contoso.onmicrosoft.com")).toBe("https://intune.microsoft.com/#@contoso.onmicrosoft.com/view/Microsoft_Intune_DeviceSettings/DevicesMenu/~/compliance")
   })
 
   it("opens a settings catalog or endpoint security policy with its platform, technologies and template", () => {

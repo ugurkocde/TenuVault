@@ -94,9 +94,17 @@ export interface ApplyInput {
   /**
    * "new" (the default) runs the full pre-change backup and fails closed. "none" skips it and
    * is accepted only for Sync change sets of kind "change"; the pre-change capture still runs,
-   * so rollback works. Every other workflow and every rollback is refused with 400.
+   * so rollback works. Every other workflow and every rollback is refused with 400. The choice
+   * of the first claimed apply is stored; a later apply naming another one is refused with 409,
+   * and one naming none uses the stored choice.
    */
   backup?: "new" | "none"
+  /**
+   * Resolves the backup choice inside the tenant write, right before the claim, in place of
+   * `backup`. A workflow that stores its own choice (Sync, at approval) reads it here, under the
+   * same serialization as its approvals, so the two never disagree. May throw to refuse.
+   */
+  resolveBackup?: () => "new" | "none" | undefined
   /**
    * Called with the latest record while the tenant write is still held, once an attempt was
    * claimed, also when it failed after writing started. What the owning workflow records from
@@ -573,7 +581,7 @@ function markStale(deps: FeatureDeps, tenantId: string, id: string, reason: stri
 export function decidingLink(workflow: string): string {
   switch (workflow) {
     case "promotion": return "/portal/changes/promotion"
-    case "sync": return "/portal/changes/sync"
+    case "sync": return "/portal/sync"
     case "baseline-upgrade": return "/portal/changes/baseline-upgrades"
     case "standard-adoption": return "/portal/governance/standards"
     case "custom-baseline": return "/portal/baselines"
@@ -703,10 +711,16 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
   try {
     return await withTenantWrite(tenant, "Change set apply", () => settle(async () => {
     const record = getChangeSet(deps, tenant, id)
-    if (input.backup !== undefined && input.backup !== "new" && input.backup !== "none") throw new FeatureError("backup must be \"new\" or \"none\".")
-    if (input.backup === "none" && !(record.origin.workflow === "sync" && record.kind === "change")) throw new FeatureError("Only Sync changes may skip the pre-change backup.")
+    const requested = input.resolveBackup ? input.resolveBackup() : input.backup
+    if (requested !== undefined && requested !== "new" && requested !== "none") throw new FeatureError("backup must be \"new\" or \"none\".")
+    if (requested === "none" && !(record.origin.workflow === "sync" && record.kind === "change")) throw new FeatureError("Only Sync changes may skip the pre-change backup.")
+    // The first claimed apply fixes the backup choice. A change set attempted before the choice was
+    // stored counts as backed up, unless its capture shows the backup was skipped.
+    const stored = record.backupChoice ?? (record.preChange ? (record.preChange.backupFolder === null ? "none" : "new") : record.attempts > 0 ? "new" : null)
+    if (stored && requested !== undefined && requested !== stored) throw new FeatureError(`This sync was first applied ${stored === "none" ? "without a backup" : "with a backup"}. Retry it with the same choice.`, 409)
+    const backupChoice = stored ?? requested ?? "new"
     // A retry reuses the first attempt's capture; whether that attempt backed up decides the record.
-    backupSkipped = record.preChange ? record.preChange.backupFolder === null : input.backup === "none"
+    backupSkipped = record.preChange ? record.preChange.backupFolder === null : backupChoice === "none"
     const recovery = isRecovery(record)
     requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
     if (record.status === "stale") throw new FeatureError(STALE, 409)
@@ -726,7 +740,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
     const claimedFrom = record.status
     const claimedRecord = deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, tenant, id, (current) => {
       if (current.status !== claimedFrom || current.contentHash !== record.contentHash || current.review?.decidedAt !== review.decidedAt) throw new FeatureError("The change set changed while the apply started. Review it again.", 409)
-      return { ...current, status: "applying", attempts: current.attempts + 1, lastError: null, summary: record.preChange ? "Retrying." : backupSkipped ? "Capturing the pre-change state before applying." : "Backing up before applying." }
+      return { ...current, status: "applying", attempts: current.attempts + 1, backupChoice: current.backupChoice ?? backupChoice, lastError: null, summary: record.preChange ? "Retrying." : backupSkipped ? "Capturing the pre-change state before applying." : "Backing up before applying." }
     }, { actor, reason: record.preChange ? "Retry started" : backupSkipped ? "Apply started without a pre-change backup" : "Apply started; running the pre-change backup" })
     claimed = claimedRecord!
     claimedAttempt = claimedRecord!.attempts

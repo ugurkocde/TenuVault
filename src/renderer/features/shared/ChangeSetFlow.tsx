@@ -39,9 +39,11 @@ const inputClass = "h-9 w-full rounded-full border border-gray-200 bg-white px-3
  * `embedded` leaves out the title and status a surrounding list row already shows; `intro`
  * explains what the change does before the operations; `settingNames` shows Settings Catalog
  * differences by display name; `sourceLabel` names the source version for people; `onApplied`
- * runs after an apply or retry wrote to the tenant.
+ * runs after an apply or retry wrote to the tenant; `decisionFields` false leaves out the reviewer
+ * and decision note, for workflows that record neither; `backupSkipped` words the apply for a
+ * change set whose stored choice is to apply without a backup.
  */
-export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollbackHint, embedded = false, intro, settingNames, sourceLabel, onApplied }: { changeSet: ChangeSet; actions: ChangeSetActions | null; tenantName: string; onChanged: () => void; rollbackHint?: string; embedded?: boolean; intro?: ReactNode; settingNames?: SettingNames; sourceLabel?: string; onApplied?: () => void }) {
+export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollbackHint, embedded = false, intro, settingNames, sourceLabel, onApplied, decisionFields = true, backupSkipped = false }: { changeSet: ChangeSet; actions: ChangeSetActions | null; tenantName: string; onChanged: () => void; rollbackHint?: string; embedded?: boolean; intro?: ReactNode; settingNames?: SettingNames; sourceLabel?: string; onApplied?: () => void; decisionFields?: boolean; backupSkipped?: boolean }) {
   const [preview, setPreview] = useState<ChangeSetPreview | null>(null)
   const [rollback, setRollback] = useState<RollbackPreview | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
@@ -160,8 +162,8 @@ export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollb
           })()}
           {canReview && preview.blockers.length === 0 && (
             <div className="grid gap-2 sm:grid-cols-2">
-              <label className="flex flex-col gap-1 text-xs text-gray-500">Reviewer<input className={inputClass} value={reviewer} maxLength={200} onChange={(event) => setReviewer(event.target.value)} placeholder="Name of the reviewer" /></label>
-              <label className="flex flex-col gap-1 text-xs text-gray-500">Decision note<input className={inputClass} value={note} maxLength={2000} onChange={(event) => setNote(event.target.value)} placeholder="Why this change is approved or rejected" /></label>
+              {decisionFields && <label className="flex flex-col gap-1 text-xs text-gray-500">Reviewer<input className={inputClass} value={reviewer} maxLength={200} onChange={(event) => setReviewer(event.target.value)} placeholder="Name of the reviewer" /></label>}
+              {decisionFields && <label className="flex flex-col gap-1 text-xs text-gray-500">Decision note<input className={inputClass} value={note} maxLength={2000} onChange={(event) => setNote(event.target.value)} placeholder="Why this change is approved or rejected" /></label>}
               <div className="flex flex-wrap gap-2 sm:col-span-2">
                 <Button type="button" size="sm" disabled={!!busy} onClick={() => void run("approve", () => actions!.approve({ contentHash: preview.contentHash, targetFingerprint: preview.targetFingerprint, reviewer, note }), "Approved. The approval is bound to this content and target state.")}>
                   <ShieldCheck className="h-4 w-4" />
@@ -179,7 +181,7 @@ export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollb
 
       {changeSet.review && (
         <p className="text-sm text-gray-600 dark:text-gray-400">
-          {changeSet.review.decision === "approved" ? "Approved" : "Rejected"} by {changeSet.review.reviewer ?? "unknown"} on {formatDate(changeSet.review.decidedAt)}{changeSet.review.note ? `: ${changeSet.review.note}` : "."}{" "}
+          {changeSet.review.decision === "approved" ? "Approved" : "Rejected"} by {changeSet.review.reviewer ?? changeSet.review.actor ?? "unknown"} on {formatDate(changeSet.review.decidedAt)}{changeSet.review.note ? `: ${changeSet.review.note}` : "."}{" "}
           <Link to={`/portal/audit?q=${encodeURIComponent(changeSet.id)}`} className="font-medium text-gray-900 underline underline-offset-2 dark:text-gray-100">View in Audit Log</Link>
         </p>
       )}
@@ -249,7 +251,8 @@ export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollb
         tenantName={tenantName}
         irreversible={preview?.irreversible ?? []}
         unsupported={preview?.unsupportedRecovery ?? []}
-        confirmLabel={confirm === "retry" ? "Reconcile and retry" : "Back up and apply"}
+        confirmLabel={confirm === "retry" ? "Reconcile and retry" : backupSkipped ? "Apply without a backup" : "Back up and apply"}
+        backupSkipped={backupSkipped}
         busy={busy === "apply"}
         onConfirm={() => {
           const hash = changeSet.contentHash

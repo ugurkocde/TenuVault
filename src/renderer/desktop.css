@@ -199,3 +199,33 @@ html:has([data-flow-shell]) {
 @media (prefers-reduced-motion: reduce) {
   .run-overlay, .run-panel, .run-indeterminate, .run-results-reveal { animation: none; }
 }
+
+/* Sync result flowchart (features/sync/SyncFlowchart). The state of each target comes from its
+   change set; these only animate the change between states. Links use pathLength="1", so a dash
+   of 1 is the whole link. With reduced motion every element shows its end state. */
+@keyframes sync-draw {
+  from { stroke-dashoffset: 1; }
+  to { stroke-dashoffset: 0; }
+}
+@keyframes sync-travel {
+  0% { offset-distance: 0%; opacity: 0; }
+  15%, 85% { opacity: 1; }
+  100% { offset-distance: 100%; opacity: 0; }
+}
+@keyframes sync-ring {
+  from { opacity: 0.7; transform: scale(1); }
+  to { opacity: 0; transform: scale(3.2); }
+}
+@keyframes sync-pop {
+  from { transform: scale(0.4); }
+  to { transform: scale(1); }
+}
+.sync-link { stroke-dasharray: 1; stroke-dashoffset: 0; animation: sync-draw 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) backwards; transition: stroke 0.5s; }
+.sync-pulse { offset-rotate: 0deg; animation: sync-travel 1.1s ease-in-out infinite; }
+.sync-ring { transform-box: fill-box; transform-origin: center; opacity: 0; animation: sync-ring 1s ease-out; }
+.sync-pop { transform-box: fill-box; transform-origin: center; animation: sync-pop 0.45s cubic-bezier(0.3, 1.6, 0.5, 1); }
+.sync-node { transition: border-color 0.5s, box-shadow 0.5s; animation: run-rise 0.35s ease-out backwards; }
+@media (prefers-reduced-motion: reduce) {
+  .sync-link, .sync-ring, .sync-pop, .sync-node { animation: none; transition: none; }
+  .sync-pulse, .sync-ring { display: none; }
+}
