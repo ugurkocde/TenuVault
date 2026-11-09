@@ -69,6 +69,8 @@ export interface SyncPlanState {
   runId: string
   /** Per `${folder}:${sourceId}`: the linked target policy the plan relied on, or null for none. */
   links?: Record<string, string | null>
+  /** Fingerprint of the request options that shape what this plan writes (see sync/links.ts). */
+  optionsHash?: string
 }
 
 /** Reasons the calling workflow's own planning inputs changed; empty when unchanged. */

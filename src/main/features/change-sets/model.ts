@@ -169,6 +169,12 @@ export interface ChangeSetRecord extends ListedRecord {
     objects: Array<{ key: string; objectId: string | null; name: string; state: "present" | "absent"; redacted: boolean; sameNameIds: string[] }>
   } | null
   results: Record<string, OperationResult>
+  /**
+   * The backup choice of the first claimed apply. Every later apply or retry of this change set
+   * uses it; a request naming another choice is refused. Absent before the first apply, and on
+   * change sets stored before it was recorded.
+   */
+  backupChoice?: "new" | "none"
   rollbackOf: string | null
   attempts: number
   lastError: string | null

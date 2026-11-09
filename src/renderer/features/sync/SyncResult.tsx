@@ -203,7 +203,7 @@ export function SyncFlowchart({ source, policyCount, targets, backup, errors, no
                   </Button>
                 )}
                 {(phase === "partial" || phase === "failed") && retryable(target) && (
-                  <Button type="button" size="sm" variant="secondary" disabled={retrying} onClick={() => onRetry(target)}>
+                  <Button type="button" size="sm" variant="secondary" disabled={retrying} aria-describedby={`retry-${id}`} onClick={() => onRetry(target)}>
                     <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
                     Retry failed
                   </Button>
@@ -214,6 +214,9 @@ export function SyncFlowchart({ source, policyCount, targets, backup, errors, no
                   </Button>
                 )}
               </div>
+            )}
+            {finished && (phase === "partial" || phase === "failed") && retryable(target) && (
+              <p id={`retry-${id}`} className="mt-2 text-xs text-gray-500">{(backupOf(target.changeSet) ?? backup) === "none" ? "Retry applies without a backup, as this sync started." : "Retry backs up first."}</p>
             )}
           </div>
         )
@@ -292,10 +295,12 @@ export function SyncResult({ source, policyCount, entries, backup, errors, notes
           <ChangeSetFlow
             key={open.target.changeSet.id}
             changeSet={open.target.changeSet}
-            actions={syncTargetActions(openTenant, open.target.promotionId, backupOf(open.target.changeSet) ?? backup)}
+            actions={syncTargetActions(openTenant, open.target.promotionId)}
             tenantName={open.name}
             onChanged={onChanged}
             decisionFields={false}
+            backupSkipped={(backupOf(open.target.changeSet) ?? backup) === "none"}
+            intro={<p className="text-sm text-gray-600">Backup choice of this sync: {(backupOf(open.target.changeSet) ?? backup) === "none" ? "applied without a backup. Rollback uses the saved current versions." : "back up the affected policy types first."}</p>}
             rollbackHint="Rollback created. Review, approve and apply it below."
           />
           {open.target.rollbackChangeSet && (

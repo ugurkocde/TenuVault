@@ -4,6 +4,7 @@ import type { FeatureDeps } from "../deps"
 import { DOMAINS } from "../domains"
 import type { Stored } from "../records"
 import { featureRoute, FeatureError, optionalText, text, type Body } from "../route"
+import type { ChangeSetRecord } from "../change-sets/model"
 import { applyChangeSet, approveChangeSet, createRollbackChangeSet, previewChangeSet, previewRollback, rejectChangeSet } from "../change-sets/engine"
 import { policies } from "../promotion"
 import { approvePromotion, previewPromotion, promotionChangeSet, promotionRollback, PROMOTION_FOLDER, syncPromotion, type PromotionRecord } from "../promotion/engine"
@@ -25,10 +26,13 @@ const hashField = (body: Body, key: string): string => {
   return value
 }
 
-/** "new" (the default) backs up first; "none" skips the backup of a Sync change. */
-const backupOf = (body: Body): "new" | "none" => {
+/**
+ * "new" backs up first; "none" skips the backup of a Sync change. Left out, the change set's
+ * stored choice applies, or "new" on its first apply.
+ */
+const backupOf = (body: Body): "new" | "none" | undefined => {
   const value = body.backup
-  if (value === undefined || value === null) return "new"
+  if (value === undefined || value === null) return undefined
   if (value === "new" || value === "none") return value
   throw new FeatureError("backup must be \"new\" or \"none\".")
 }
@@ -63,6 +67,12 @@ function targetRecords(deps: FeatureDeps, tenantId: string, promotionId: string 
   const changeSet = promotion?.changeSetId ? deps.records.get(DOMAINS.changeSets, tenantId, promotion.changeSetId) : null
   const rollbackChangeSet = promotion?.rollbackChangeSetId ? deps.records.get(DOMAINS.changeSets, tenantId, promotion.rollbackChangeSetId) : null
   return { promotion, changeSet, rollbackChangeSet }
+}
+
+/** Whether the change set of a Sync target was ever applied; reads only. */
+function attempted(deps: FeatureDeps, tenantId: string, promotionId: string | null): boolean {
+  const promotion = promotionId ? deps.records.get<PromotionRecord>(DOMAINS.promotions, tenantId, promotionId) : null
+  return !!promotion?.changeSetId && (deps.records.get<ChangeSetRecord>(DOMAINS.changeSets, tenantId, promotion.changeSetId)?.attempts ?? 0) > 0
 }
 
 function parseItems(value: unknown): Array<{ folder: string; sourceId: string }> {
@@ -101,7 +111,8 @@ function parseTargetMappings(value: unknown, targets: string[]): Record<string, 
  */
 export function routes(deps: FeatureDeps): Record<string, RouteModule> {
   return featureRoute("/api/sync", deps, {
-    "list-runs": ({ tenantId }) => ({ runs: deps.records.list<SyncRunRecord>(DOMAINS.syncRuns, tenantId).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(({ history: _history, ...run }) => run) }),
+    // `applied`: whether any target's change set was ever applied, so a draft that was only planned can be told apart.
+    "list-runs": ({ tenantId }) => ({ runs: deps.records.list<SyncRunRecord>(DOMAINS.syncRuns, tenantId).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(({ history: _history, ...run }) => ({ ...run, applied: run.targets.some((target) => attempted(deps, target.targetTenantId, target.promotionId)) })) }),
     "get-run": ({ tenantId, body }) => {
       const run = syncRun(deps, tenantId, body)
       return { run, targets: run.targets.map((target) => ({ ...target, ...targetRecords(deps, target.targetTenantId, target.promotionId) })) }

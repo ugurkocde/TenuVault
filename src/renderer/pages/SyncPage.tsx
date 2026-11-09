@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react"
+import { useMemo, useRef, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useSelectedTenant, useTenants, type Tenant } from "~/contexts/TenantContext"
 import { Button } from "~/components/ui/button"
@@ -86,10 +86,19 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
   const [planError, setPlanError] = useState<string | null>(null)
   const [backup, setBackup] = useState<SyncBackup>("new")
   const [ack, setAck] = useState(false)
+  // Requests of this screen, keyed `${runId}:${promotionId}`, so a pending apply or a late error
+  // of one run never shows in another run.
   const [active, setActive] = useState<ReadonlySet<string>>(new Set())
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [notes, setNotes] = useState<Record<string, string>>({})
+  // The backup choice each run was approved with in this session; a draft never decides it.
+  const [runBackups, setRunBackups] = useState<Record<string, SyncBackup>>({})
+  // Drafts replaced by a newer plan before they were approved.
+  const [superseded, setSuperseded] = useState<ReadonlySet<string>>(new Set())
+  const shownRun = useRef(runId)
+  shownRun.current = runId
   const source = tenantOf(sourceId) ?? selected
+  const pending = (id: string | null) => !!id && [...active].some((key) => key.startsWith(`${id}:`))
 
   const policies = useQuery({ queryKey: ["sync", "policies", sourceId, folder], queryFn: () => syncPolicies(source, folder) })
   const options = useQuery({ queryKey: ["sync", "targets", sourceId], queryFn: () => syncTargets(source) })
@@ -101,29 +110,39 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
     queryFn: () => getSyncRun(source, runId!),
     enabled: !!runId,
     // Progress is read from the stored change sets while anything writes; nothing is timed.
-    refetchInterval: (query) => (active.size || query.state.data?.targets.some((target) => target.changeSet?.status === "applying") ? 1500 : false),
+    refetchInterval: (query) => (pending(runId) || query.state.data?.targets.some((target) => target.changeSet?.status === "applying") ? 1500 : false),
   })
   const runTargets = run.data?.targets ?? []
+  // This screen's requests and their errors for the run shown, by target tenant.
+  const requestOf = (target: SyncTarget) => (runId && target.promotionId ? `${runId}:${target.promotionId}` : "")
+  const shownActive = new Set(runTargets.filter((target) => active.has(requestOf(target))).map((target) => target.targetTenantId))
+  const shownErrors = Object.fromEntries(runTargets.flatMap((target) => (errors[requestOf(target)] ? [[target.targetTenantId, errors[requestOf(target)]!]] : [])))
 
   // Links per source policy, and linked policies per target, from /api/sync status.
   const statusByPolicy = useMemo(() => {
     const byPolicy = new Map<string, Array<{ tenantName: string; entry: SyncStatusEntry }>>()
     const linked: Record<string, number> = {}
+    // A target whose status could not be read leaves every policy's state there unknown.
+    const unread: Array<{ tenantName: string; error: string }> = []
     for (const target of status.data?.targets ?? []) {
+      if (target.error) {
+        unread.push({ tenantName: tenantOf(target.targetTenantId)?.name ?? target.targetTenantId, error: target.error })
+        continue
+      }
       linked[target.targetTenantId] = target.links.length
       for (const entry of target.links) {
         const key = policyKey(entry.folder, entry.sourceId)
         byPolicy.set(key, [...(byPolicy.get(key) ?? []), { tenantName: tenantOf(target.targetTenantId)?.name ?? target.targetTenantId, entry }])
       }
     }
-    return { byPolicy, linked }
+    return { byPolicy, linked, unread }
   }, [status.data, tenants.length])
 
   const policyChip = (policy: PolicyOption) => {
     if (!eligible.length) return options.isLoading ? null : { label: "Not synced yet", tone: "neutral" as const }
     if (status.isLoading) return null
     if (status.error) return { label: "Unknown", tone: "neutral" as const, title: message(status.error, "The sync status could not be read.") }
-    return policyStatus(statusByPolicy.byPolicy.get(policyKey(policy.folder, policy.id)) ?? [])
+    return policyStatus(statusByPolicy.byPolicy.get(policyKey(policy.folder, policy.id)) ?? [], statusByPolicy.unread)
   }
 
   const toggle = (policy: PolicyOption) => {
@@ -152,6 +171,7 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
 
   /** Plans the run, then reads every planned target live. Nothing is written. */
   const review = async (acknowledgeRedacted: boolean) => {
+    const previous = runId
     setPlanning(true)
     setPlanError(null)
     setReviews({})
@@ -160,6 +180,8 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
       const items = Object.values(chosen)
       const planned = await planSync(source, { title: `Sync ${plural(items.length, "policy", "policies")} from ${source.name}`.slice(0, 200), targets, items: items.map(({ folder: type, sourceId: id }) => ({ folder: type, sourceId: id })), acknowledgeRedacted })
       setRunId(planned.run.id)
+      // The draft this plan replaces was never approved, so it no longer needs listing.
+      if (previous && !runBackups[previous]) setSuperseded((current) => new Set([...current, previous]))
       void runs.refetch()
       const detail = await fetchRun(planned.run.id)
       await Promise.all(detail.targets.map(async (target) => {
@@ -182,28 +204,34 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
     }
   }
 
-  /** Runs one target's requests; a failure is kept on that target and never stops another. */
-  const work = async (target: SyncTarget, request: (tenant: Tenant, promotionId: string) => Promise<unknown>) => {
-    const id = target.targetTenantId
-    setActive((current) => new Set([...current, id]))
-    setErrors((current) => { const next = { ...current }; delete next[id]; return next })
+  /**
+   * Runs one target's requests in one run; a failure is kept on that target of that run and never
+   * stops another. An error that arrives after another run is shown is dropped; the stored change
+   * set keeps it.
+   */
+  const work = async (forRun: string, target: SyncTarget, request: (tenant: Tenant, promotionId: string) => Promise<unknown>) => {
+    const key = `${forRun}:${target.promotionId}`
+    setActive((current) => new Set([...current, key]))
+    setErrors((current) => { const next = { ...current }; delete next[key]; return next })
     try {
-      const tenant = tenantOf(id)
+      const tenant = tenantOf(target.targetTenantId)
       if (!tenant || !target.promotionId) throw new Error("This tenant is no longer connected to this app.")
       await request(tenant, target.promotionId)
     } catch (error) {
-      setErrors((current) => ({ ...current, [id]: message(error, "The request failed.") }))
+      if (shownRun.current === forRun) setErrors((current) => ({ ...current, [key]: message(error, "The request failed.") }))
     } finally {
       // The stored state is read again before the target stops counting as active, so the
       // result never shows the change set as it was before the request finished.
       await queryClient.refetchQueries({ queryKey: ["sync", "run", sourceId] }).catch(() => undefined)
-      setActive((current) => { const next = new Set(current); next.delete(id); return next })
+      setActive((current) => { const next = new Set(current); next.delete(key); return next })
       void queryClient.invalidateQueries({ queryKey: ["sync", "runs", sourceId] })
       void queryClient.invalidateQueries({ queryKey: ["sync", "status", sourceId] })
     }
   }
 
   const approveAndSync = () => {
+    if (!runId) return
+    const forRun = runId
     const left: Record<string, string> = {}
     const ready = runTargets.filter((target) => {
       const state = readiness(target, reviews[target.targetTenantId], backup, !!tenantOf(target.targetTenantId)?.resources?.storageAccountName)
@@ -211,11 +239,12 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
       return state.state === "ready"
     })
     setNotes(left)
+    setRunBackups((current) => ({ ...current, [forRun]: backup }))
     setStep(4)
     // Every target is approved and applied on its own, at the same time; backups queue in the engine.
     for (const target of ready) {
       const preview = reviews[target.targetTenantId]!.preview!.changeSet
-      void work(target, async (tenant, id) => {
+      void work(forRun, target, async (tenant, id) => {
         await approveSyncTarget(tenant, id, preview)
         await applySyncTarget(tenant, id, preview.contentHash, backup)
       })
@@ -224,8 +253,11 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
 
   const retry = (target: SyncTarget) => {
     const changeSet = target.changeSet
-    if (!changeSet) return
-    void work(target, (tenant, id) => retrySyncTarget(tenant, id, changeSet.contentHash, backupOf(changeSet) ?? backup))
+    if (!changeSet || !runId) return
+    // Once an apply claimed the change set, the route applies its stored choice; only an unclaimed
+    // one names the choice this run was approved with. The page's current draft never decides it.
+    const claimed = backupOf(changeSet) !== null
+    void work(runId, target, (tenant, id) => retrySyncTarget(tenant, id, changeSet.contentHash, claimed ? undefined : runBackups[runId]))
   }
 
   const openRun = (entry: SyncRun) => {
@@ -306,7 +338,7 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
           }}
           onBack={() => setStep(2)}
           onApprove={approveAndSync}
-          busy={active.size > 0}
+          busy={pending(runId)}
         />
       )}
 
@@ -318,13 +350,13 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
             <SyncResult
               source={{ name: runSource?.name ?? run.data.run.sourceTenantId, domain: runSource?.domain ?? "" }}
               policyCount={run.data.run.items.length}
-              entries={resultEntries(runTargets, tenantOf, active, errors)}
-              backup={backup}
-              errors={errors}
+              entries={resultEntries(runTargets, tenantOf, shownActive, shownErrors)}
+              backup={(runId && runBackups[runId]) || "new"}
+              errors={shownErrors}
               notes={notes}
               platforms={platforms}
               onRetry={retry}
-              retrying={active.size > 0}
+              retrying={shownActive.size > 0}
               tenantOf={tenantOf}
               onChanged={() => void run.refetch()}
             />
@@ -342,13 +374,14 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
         {runs.data && !runs.data.runs.length && <p className="text-sm text-gray-600">No syncs from {source.name} yet.</p>}
         {!!runs.data?.runs.length && (
           <ul className="max-h-80 divide-y divide-gray-100 overflow-y-auto">
-            {runs.data.runs.map((entry) => (
+            {runs.data.runs.filter((entry) => !superseded.has(entry.id)).map((entry) => (
               <li key={entry.id}>
                 <button type="button" aria-pressed={runId === entry.id && step === 4} onClick={() => openRun(entry)} className="flex w-full flex-wrap items-center gap-3 rounded-2xl px-2 py-3 text-left hover:bg-gray-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-medium text-gray-900">{entry.title}</span>
                     <span className="block text-xs text-gray-500">{formatDate(entry.createdAt)}. To {entry.targets.map((target) => tenantOf(target.targetTenantId)?.name ?? target.targetTenantId).join(", ")}. {entry.summary}</span>
                   </span>
+                  {!entry.applied && <Chip tone="warning">Not applied</Chip>}
                   <Chip>{plural(entry.targets.length, "target", "targets")}</Chip>
                 </button>
               </li>

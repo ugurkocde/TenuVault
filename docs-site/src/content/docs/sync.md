@@ -63,11 +63,11 @@ The review shows one block per target. Each selected policy shows what happens i
 
 * **Create**: the policy does not exist in the target yet, or was never synced to it, and is created unassigned.
 * **Update**: an earlier sync linked this policy, and the linked policy in the target is updated. Its assignments stay as they are.
-* **Skip: already in sync**: neither the source policy nor its synced copy in the target changed since the last sync. Nothing is written for it. If TenuVault cannot read the source to check, the policy is planned as an update instead.
+* **Skip: already in sync**: neither the source policy nor its synced copy in the target changed since the last sync, and this sync uses the same options for that target as the sync that wrote it (whether assignments are included and the confirmed mappings). Nothing is written for it. If TenuVault cannot read the source to check, or the options differ, the policy is planned as an update instead.
 * **No change**: the policy is updated, but no setting differs from the policy in the target, for example when the target was not read back after an earlier sync and a change there cannot be ruled out. It is written again unchanged.
+* **Blocked**: the policy cannot be synced to this target. The finding below it says why, and nothing is written to that target.
 
 When every selected policy is already in sync in a target, that target shows **Already in sync**. Nothing is planned or written there and no backup is taken. When every target is already in sync, the button reads **Continue: nothing to write**.
-* **Blocked**: the policy cannot be synced to this target. The finding below it says why, and nothing is written to that target.
 
 Warnings show under the policy they concern, for example:
 
@@ -106,7 +106,7 @@ With reduced motion turned on in your operating system, the view shows each stat
 Each finished target offers:
 
 * **Open Intune**: opens the Intune admin center in that target tenant. With one synced policy it opens that policy; with several it opens the list of the policy type.
-* **Retry failed**: applies the target again with the same backup choice. Policies already verified are not written again.
+* **Retry failed**: applies the target again with the backup choice its first apply used, shown under the button. A retry never switches between backing up and skipping the backup, also when you open the sync again later. Policies already verified are not written again.
 * **Details**: shows the target's change set with the result of every policy, the pre-change evidence and **Preview rollback**.
 
 When every target finished and at least one target was written, the summary shows **Links saved for the next sync**, **Rollback available per tenant**, **Backup taken in each tenant** or **Backup skipped**, and **Recorded in the audit log**. Click **Start a new sync** to begin again.
@@ -121,7 +121,7 @@ A rollback writes only to its target. It keeps working after the source tenant's
 
 ## Recent syncs
 
-**Recent syncs** lists the syncs started from the source tenant, newest first, with their targets. Click one to open its result view, read from the stored records.
+**Recent syncs** lists the syncs started from the source tenant, newest first, with their targets. A sync that was planned but never applied shows **Not applied**. A plan you replaced before approving it, for example by going back and reviewing again, is not listed. Click a sync to open its result view, read from the stored records.
 
 ## Links and status
 

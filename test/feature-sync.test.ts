@@ -115,6 +115,7 @@ describe("/api/sync plans", () => {
     expect(runs.status).toBe(200)
     expect(runs.body.runs.map((entry: { id: string }) => entry.id)).toEqual([run.id])
     expect(runs.body.runs[0]).not.toHaveProperty("history")
+    expect(runs.body.runs[0].applied).toBe(false)
     const detail = await context.post({ tenantId: TENANT_A, action: "get-run", id: run.id })
     expect(detail.status).toBe(200)
     expect(detail.body.targets[0]).toMatchObject({ targetTenantId: TENANT_B, promotionId: targets[0]!.promotion!.id, promotion: { id: targets[0]!.promotion!.id }, changeSet: { origin: { workflow: "sync" } }, rollbackChangeSet: null })
@@ -125,6 +126,15 @@ describe("/api/sync plans", () => {
     expect(await planGuard(async () => "community")(guardRequest({ tenantId: TENANT_A, action: "get-run", id: run.id }))).toBeNull()
   })
 
+  it("lists whether each run was applied in any target", async () => {
+    const context = setup()
+    const { run, targets } = await planned(context)
+    const listed = async () => (await context.post({ tenantId: TENANT_A, action: "list-runs" })).body.runs.find((entry: { id: string }) => entry.id === run.id)
+    expect((await listed()).applied).toBe(false)
+    await applied(context, TENANT_B, targets[0]!.promotion!.id)
+    expect((await listed()).applied).toBe(true)
+  })
+
   it("A2: syncs one policy to the other tenant of a Pro license", async () => {
     const context = setup()
     const { run, targets } = await planned(context)
@@ -132,7 +142,7 @@ describe("/api/sync plans", () => {
     expect(run.items).toEqual([{ folder: "ConfigurationPolicies", sourceId: context.policy.id, sourceName: "OIB Defender" }])
     expect(targets).toHaveLength(1)
     const promotion = targets[0]!.promotion!
-    expect(promotion.sync).toEqual({ runId: run.id, links: { [`ConfigurationPolicies:${(context.policy.id as string).toLowerCase()}`]: null } })
+    expect(promotion.sync).toEqual({ runId: run.id, links: { [`ConfigurationPolicies:${(context.policy.id as string).toLowerCase()}`]: null }, optionsHash: expect.stringMatching(/^[0-9a-f]{64}$/) })
     expect(promotion.status).toBe("in-review")
     const response = await applied(context, TENANT_B, promotion.id)
     expect(response.status).toBe(200)
@@ -733,6 +743,117 @@ describe("Sync skips policies already in sync", () => {
     const { targets } = await planned(context)
     expect(failed).toBe(true)
     expect(targets[0]!.skipped).toEqual([])
+    expect(targets[0]!.promotion!.items[0]).toMatchObject({ action: "update" })
+  })
+})
+
+describe("Sync keeps the backup choice of the first apply", () => {
+  /** Makes the next pre-change backup fail to start, before anything is captured or written. */
+  function failNextBackup(context: Context) {
+    const api = context.deps.api
+    let failed = false
+    context.deps.api = async (path, tenantId, body, options) => {
+      if (path === "/api/backup/start" && !failed) {
+        failed = true
+        return Response.json({ error: "Storage unavailable" }, { status: 500 })
+      }
+      return api(path, tenantId, body, options)
+    }
+  }
+
+  it("retries a sync whose backup failed with a backup, and refuses a retry that skips it", async () => {
+    const context = setup()
+    const id = (await planned(context)).targets[0]!.promotion!.id
+    const contentHash = await approved(context, TENANT_B, id)
+    failNextBackup(context)
+    expect((await context.post({ tenantId: TENANT_B, action: "apply", id, contentHash, confirm: true, backup: "new" })).status).toBe(502)
+    const failed = changeSets(context, TENANT_B)[0]!
+    // Nothing was written, so the change set is handed back as approved, with its choice kept.
+    expect(failed).toMatchObject({ status: "approved", preChange: null, backupChoice: "new", attempts: 1 })
+    const refused = await context.post({ tenantId: TENANT_B, action: "retry", id, contentHash, confirm: true, backup: "none" })
+    expect(refused.status).toBe(409)
+    expect(refused.body.error).toBe("This sync was first applied with a backup. Retry it with the same choice.")
+    expect(context.targets[TENANT_B]!.writeCount()).toBe(0)
+    const retried = await context.post({ tenantId: TENANT_B, action: "retry", id, contentHash, confirm: true })
+    expect(retried.body.changeSet).toMatchObject({ status: "applied", backupChoice: "new", preChange: { backupFolder: "backup-2026-09-30-120000" } })
+    expect(context.backups).toEqual([TENANT_B])
+  })
+
+  it("never takes a backup on the retry of a sync first applied without one", async () => {
+    const context = setup()
+    const id = (await planned(context)).targets[0]!.promotion!.id
+    const contentHash = await approved(context, TENANT_B, id)
+    context.targets[TENANT_B]!.failWrite = (method) => (method === "POST" ? 400 : undefined)
+    expect((await context.post({ tenantId: TENANT_B, action: "apply", id, contentHash, confirm: true, backup: "none" })).body.changeSet).toMatchObject({ status: "failed", backupChoice: "none" })
+    context.targets[TENANT_B]!.failWrite = undefined
+    const refused = await context.post({ tenantId: TENANT_B, action: "retry", id, contentHash, confirm: true, backup: "new" })
+    expect(refused.status).toBe(409)
+    expect(refused.body.error).toBe("This sync was first applied without a backup. Retry it with the same choice.")
+    expect((await context.post({ tenantId: TENANT_B, action: "retry", id, contentHash, confirm: true })).body.changeSet.status).toBe("applied")
+    expect(context.backups).toEqual([])
+  })
+
+  it("treats an attempted change set stored without a choice as backed up", async () => {
+    const context = setup()
+    const id = (await planned(context)).targets[0]!.promotion!.id
+    const contentHash = await approved(context, TENANT_B, id)
+    failNextBackup(context)
+    await context.post({ tenantId: TENANT_B, action: "apply", id, contentHash, confirm: true, backup: "new" })
+    const stored = changeSets(context, TENANT_B)[0]!
+    context.deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, TENANT_B, stored.id, ({ backupChoice: _choice, ...current }) => current as ChangeSetRecord, { actor: null, reason: "Test" })
+    expect((await context.post({ tenantId: TENANT_B, action: "retry", id, contentHash, confirm: true, backup: "none" })).status).toBe(409)
+  })
+})
+
+describe("Sync skips only with the options of the verified write", () => {
+  const mapping = (targetId: string) => ({ kind: "reusableSetting", sourceId: "88888888-8888-4888-8888-888888888888", targetId, confirmed: true })
+
+  async function syncedWith(context: Context, extra: Record<string, unknown>) {
+    const response = await plan(context, [TENANT_B], extra)
+    expect(response.status).toBe(200)
+    const id = response.body.targets[0].promotion.id as string
+    expect((await applied(context, TENANT_B, id)).body.changeSet.status).toBe("applied")
+  }
+
+  it("plans an update when assignments are now included", async () => {
+    const context = setup()
+    await synced(context)
+    const { targets } = (await plan(context, [TENANT_B], { includeAssignments: true })).body as Awaited<ReturnType<typeof planned>>
+    expect(targets[0]!.skipped).toEqual([])
+    expect(targets[0]!.promotion!.items[0]).toMatchObject({ action: "update" })
+  })
+
+  it("plans an update when the target's mappings differ, and skips with the same mappings", async () => {
+    const context = setup()
+    const first = mapping("99999999-9999-4999-8999-999999999991")
+    await syncedWith(context, { mappings: { [TENANT_B]: [first] } })
+    const other = (await plan(context, [TENANT_B], { mappings: { [TENANT_B]: [mapping("99999999-9999-4999-8999-999999999992")] } })).body as Awaited<ReturnType<typeof planned>>
+    expect(other.targets[0]!.skipped).toEqual([])
+    expect(other.targets[0]!.promotion!.items[0]).toMatchObject({ action: "update" })
+    const same = (await plan(context, [TENANT_B], { mappings: { [TENANT_B]: [{ ...first, sourceId: first.sourceId.toUpperCase() }] } })).body as Awaited<ReturnType<typeof planned>>
+    expect(same.targets[0]!.promotion).toBeNull()
+    expect(same.targets[0]!.skipped).toHaveLength(1)
+  })
+
+  it("never skips a link stored without the options of its write", async () => {
+    const context = setup()
+    await synced(context)
+    relink(context, keyOf(context.policy), { optionsHash: undefined })
+    const { targets } = await planned(context)
+    expect(targets[0]!.skipped).toEqual([])
+    expect(targets[0]!.promotion!.items[0]).toMatchObject({ action: "update" })
+  })
+
+  it("never skips a policy whose earlier create is unconfirmed, even when its link is in sync", async () => {
+    const context = setup()
+    await synced(context)
+    // The verified create of the first run is now unconfirmed; its stored link stays in place.
+    const stored = changeSets(context, TENANT_B)[0]!
+    context.deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, TENANT_B, stored.id, (current) => ({ ...current, status: "uncertain", results: { "op-1": { ...current.results["op-1"]!, status: "uncertain" } } }), { actor: null, reason: "Test" })
+    expect(syncLinks(context.deps, TENANT_B, TENANT_A)[keyOf(context.policy)]).toBeDefined()
+    const { targets } = await planned(context)
+    expect(targets[0]!.skipped).toEqual([])
+    // An update of the linked policy cannot make a second copy, so it carries no unconfirmed warning.
     expect(targets[0]!.promotion!.items[0]).toMatchObject({ action: "update" })
   })
 })

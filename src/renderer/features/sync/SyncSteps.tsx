@@ -78,7 +78,7 @@ export function ChooseSettings({ sources, sourceId, onSource, folder, onFolder, 
         <label className="flex min-w-64 flex-col gap-1.5 text-xs font-medium text-gray-500">
           Source tenant
           <select className={fieldClass} value={sourceId} onChange={(event) => onSource(event.target.value)}>
-            {sources.map((tenant) => <option key={tenant.credentials!.tenantId} value={tenant.credentials!.tenantId}>{tenant.name}{tenant.domain ? ` (${tenant.domain})` : ""}</option>)}
+            {sources.map((tenant) => <option key={tenant.credentials!.tenantId} value={tenant.credentials!.tenantId.toLowerCase()}>{tenant.name}{tenant.domain ? ` (${tenant.domain})` : ""}</option>)}
           </select>
         </label>
       </CardHead>

@@ -40,9 +40,10 @@ const inputClass = "h-9 w-full rounded-full border border-gray-200 bg-white px-3
  * explains what the change does before the operations; `settingNames` shows Settings Catalog
  * differences by display name; `sourceLabel` names the source version for people; `onApplied`
  * runs after an apply or retry wrote to the tenant; `decisionFields` false leaves out the reviewer
- * and decision note, for workflows that record neither.
+ * and decision note, for workflows that record neither; `backupSkipped` words the apply for a
+ * change set whose stored choice is to apply without a backup.
  */
-export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollbackHint, embedded = false, intro, settingNames, sourceLabel, onApplied, decisionFields = true }: { changeSet: ChangeSet; actions: ChangeSetActions | null; tenantName: string; onChanged: () => void; rollbackHint?: string; embedded?: boolean; intro?: ReactNode; settingNames?: SettingNames; sourceLabel?: string; onApplied?: () => void; decisionFields?: boolean }) {
+export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollbackHint, embedded = false, intro, settingNames, sourceLabel, onApplied, decisionFields = true, backupSkipped = false }: { changeSet: ChangeSet; actions: ChangeSetActions | null; tenantName: string; onChanged: () => void; rollbackHint?: string; embedded?: boolean; intro?: ReactNode; settingNames?: SettingNames; sourceLabel?: string; onApplied?: () => void; decisionFields?: boolean; backupSkipped?: boolean }) {
   const [preview, setPreview] = useState<ChangeSetPreview | null>(null)
   const [rollback, setRollback] = useState<RollbackPreview | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
@@ -250,7 +251,7 @@ export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollb
         tenantName={tenantName}
         irreversible={preview?.irreversible ?? []}
         unsupported={preview?.unsupportedRecovery ?? []}
-        confirmLabel={confirm === "retry" ? "Reconcile and retry" : "Back up and apply"}
+        confirmLabel={confirm === "retry" ? "Reconcile and retry" : backupSkipped ? "Apply without a backup" : "Back up and apply"}
         busy={busy === "apply"}
         onConfirm={() => {
           const hash = changeSet.contentHash

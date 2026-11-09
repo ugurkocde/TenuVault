@@ -45,6 +45,12 @@ interface Scenario {
   failFirstApply: string[]
   /** Targets whose approval is refused; their change set stays in review. */
   failApprove?: string[]
+  /** Targets whose first apply fails at the backup, before anything is captured or written. */
+  failBackup?: string[]
+  /** Targets whose status read fails, with the message the route answers with. */
+  statusError?: Record<string, string>
+  /** Holds the first apply of a target until the test releases it. */
+  hold?: { tenantId: string; released: Promise<void> }
 }
 
 let scenario: Scenario
@@ -64,11 +70,13 @@ function server(tenantId: string, action: string, body: Record<string, unknown>)
   switch (action) {
     case "policies": return { status: 200, body: { source: body.folder === "ConfigurationPolicies" ? [{ id: P1, name: "Windows Defender Antivirus", folder: "ConfigurationPolicies", platforms: "windows10", lastModifiedDateTime: null }] : [] } }
     case "targets": return { status: 200, body: { multiple: plan.current === "msp", targets: scenario.targets } }
-    case "status": return { status: 200, body: { targets: (body.targetTenants as Array<{ tenantId: string }>).map(({ tenantId: id }) => ({ targetTenantId: id, error: null, links: id === B ? [{ folder: "ConfigurationPolicies", sourceId: P1, sourceName: "Windows Defender Antivirus", targetPolicyId: "linked-1", targetName: "Windows Defender Antivirus", linkedAt: "2026-11-01T00:00:00Z", state: "in-sync", changedIn: null, identical: true, error: null }] : [] })) } }
-    case "list-runs": return { status: 200, body: { runs: [...runs.values()].map((entry) => entry.run) } }
+    case "status": return { status: 200, body: { targets: (body.targetTenants as Array<{ tenantId: string }>).map(({ tenantId: id }) => scenario.statusError?.[id] ? { targetTenantId: id, error: scenario.statusError[id], links: [] } : ({ targetTenantId: id, error: null, links: id === B ? [{ folder: "ConfigurationPolicies", sourceId: P1, sourceName: "Windows Defender Antivirus", targetPolicyId: "linked-1", targetName: "Windows Defender Antivirus", linkedAt: "2026-11-01T00:00:00Z", state: "in-sync", changedIn: null, identical: true, error: null }] : [] })) } }
+    case "list-runs": return { status: 200, body: { runs: [...runs.values()].reverse().map((entry) => ({ ...entry.run, applied: entry.targets.some((target) => ((target.changeSet as { attempts?: number } | null)?.attempts ?? 0) > 0) })) } }
     case "plan": {
       const id = `${runs.size + 1}`.padStart(8, "0") + "-0000-4000-8000-000000000000"
       const acknowledged = body.acknowledgeRedacted === true
+      // Promotion IDs are unique per run, as the engine's records are.
+      const pr = (target: string) => (runs.size ? `pr${runs.size + 1}-${target}` : `pr-${target}`)
       const targets = (body.targetTenants as Array<{ tenantId: string }>).map(({ tenantId: target }) => {
         const item = scenario.items[target]!
         // The engine leaves a policy out of a target where it is already in sync; with nothing left, no promotion.
@@ -76,8 +84,8 @@ function server(tenantId: string, action: string, body: Record<string, unknown>)
         const findings = item.findings?.(acknowledged) ?? []
         const blocked = findings.some((finding) => finding.severity === "blocking")
         return {
-          targetTenantId: target, promotionId: `pr-${target}`, error: null,
-          promotion: { id: `pr-${target}`, status: blocked ? "blocked" : "in-review", sourceTenantId: A, items: [{ folder: "ConfigurationPolicies", sourceId: P1, sourceName: "Windows Defender Antivirus", action: item.action, blocked, findings, destinationId: item.action === "update" ? "linked-1" : null }] },
+          targetTenantId: target, promotionId: pr(target), error: null,
+          promotion: { id: pr(target), status: blocked ? "blocked" : "in-review", sourceTenantId: A, items: [{ folder: "ConfigurationPolicies", sourceId: P1, sourceName: "Windows Defender Antivirus", action: item.action, blocked, findings, destinationId: item.action === "update" ? "linked-1" : null }] },
           changeSet: blocked ? null : changeSetOf(target, item.action, "in-review"),
           rollbackChangeSet: null,
           skipped: [],
@@ -106,7 +114,17 @@ function server(tenantId: string, action: string, body: Record<string, unknown>)
     case "retry": {
       const target = findTarget()
       const changeSet = target.changeSet as Record<string, unknown>
-      changeSet.preChange = { capturedAt: "2026-11-09T10:02:00Z", backupFolder: body.backup === "none" ? null : "backup-1", captureId: "c", objects: [] }
+      // As the engine: the first claimed apply fixes the backup choice; another one is refused.
+      const stored = changeSet.backupChoice as string | undefined
+      if (stored && body.backup !== undefined && body.backup !== stored) return { status: 409, body: { error: `This sync was first applied ${stored === "none" ? "without a backup" : "with a backup"}. Retry it with the same choice.` } }
+      const choice = stored ?? (body.backup as string | undefined) ?? "new"
+      Object.assign(changeSet, { backupChoice: choice, attempts: (changeSet.attempts as number) + 1 })
+      if (scenario.failBackup?.includes(tenantId) && !failed.has(tenantId)) {
+        failed.add(tenantId)
+        Object.assign(changeSet, { status: "approved", lastError: "The pre-change backup could not start, so nothing was written." })
+        return { status: 502, body: { error: "The pre-change backup could not start, so nothing was written." } }
+      }
+      changeSet.preChange = { capturedAt: "2026-11-09T10:02:00Z", backupFolder: choice === "none" ? null : "backup-1", captureId: "c", objects: [] }
       if (scenario.failFirstApply.includes(tenantId) && !failed.has(tenantId)) {
         failed.add(tenantId)
         Object.assign(changeSet, { status: "failed", lastError: "Intune answered 403: the account cannot create this policy type.", results: { "op-1": { status: "failed", objectId: null, message: "Intune answered 403: the account cannot create this policy type.", readBack: null, attempts: 1, at: "2026-11-09T10:03:00Z" } } })
@@ -137,6 +155,11 @@ beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn(async (path: string, init: { body: string }) => {
     expect(path).toBe("/api/sync")
     const { tenantId, action, ...body } = JSON.parse(init.body) as Record<string, unknown>
+    const hold = scenario.hold
+    if (hold && action === "apply" && tenantId === hold.tenantId) {
+      scenario.hold = undefined
+      await hold.released
+    }
     const answer = server(tenantId as string, action as string, body)
     return { ok: answer.status < 400, status: answer.status, json: async () => answer.body }
   }))
@@ -342,7 +365,8 @@ describe("Sync apply and result", () => {
 
     await click(button(france, "Retry failed"))
     await until(() => node(container, "Contoso France").className.includes("border-green-600"), "retried")
-    expect(byTarget("retry")).toEqual([{ tenantId: C, id: `pr-${C}`, contentHash: HASH, confirm: true, backup: "new" }])
+    // The change set's first apply stored the choice, so the retry names none and the route applies it.
+    expect(byTarget("retry")).toEqual([{ tenantId: C, id: `pr-${C}`, contentHash: HASH, confirm: true }])
     expect(byTarget("apply")).toHaveLength(2)
     expect(container.querySelector('[role="status"]')?.textContent).toBe("Synced to 2 tenants")
   })
@@ -380,6 +404,90 @@ describe("Sync apply and result", () => {
     await until(() => !!container.querySelector('section[aria-label="Recent syncs"] button'), "recent syncs")
     await click(container.querySelector<HTMLButtonElement>('section[aria-label="Recent syncs"] button')!)
     await until(() => node(container, "Contoso Germany")?.className.includes("border-green-600") === true, "reopened run")
+  })
+})
+
+describe("Sync review round 1", () => {
+  it("retries with the choice stored on the change set, never the backup choice of a newer draft", async () => {
+    scenario.failBackup = [B]
+    const container = await render()
+    await toReview(container, ["Contoso Germany"])
+    await click(button(container, "Approve and sync to 1 tenant"))
+    await until(() => !!button(container, "Retry failed"), "failed backup")
+    expect(node(container, "Contoso Germany").textContent).toContain("Retry backs up first.")
+    // A newer draft chooses to skip the backup, then the first run is opened again.
+    await click(button(container, "Start a new sync"))
+    await toReview(container, ["Contoso Germany"])
+    await click(container.querySelector<HTMLInputElement>('section[aria-label="Review"] input[value="none"]')!)
+    const first = [...container.querySelectorAll<HTMLButtonElement>('section[aria-label="Recent syncs"] button')].at(-1)!
+    await click(first)
+    await until(() => !!button(container, "Retry failed"), "reopened run")
+    await click(button(container, "Retry failed"))
+    await until(() => node(container, "Contoso Germany")?.className.includes("border-green-600") === true, "retried")
+    const retry = calls.find((call) => call.action === "retry")!
+    expect(retry.body).not.toHaveProperty("backup")
+    expect(node(container, "Contoso Germany").getAttribute("aria-label")).toBe("Contoso Germany: 1 change verified. Backup taken first.")
+  })
+
+  it("keeps a pending apply and its late error in its own run", async () => {
+    let release!: () => void
+    scenario.hold = { tenantId: B, released: new Promise<void>((resolve) => { release = resolve }) }
+    scenario.failFirstApply = [B]
+    const container = await render()
+    await toReview(container, ["Contoso Germany"])
+    await click(button(container, "Approve and sync to 1 tenant"))
+    await until(() => node(container, "Contoso Germany")?.className.includes("border-coral-500") === true, "first run writing")
+    await click(button(container, "Start a new sync"))
+    await toReview(container, ["Contoso Germany"])
+    // The pending apply of the first run does not hold up the second.
+    expect(button(container, "Approve and sync to 1 tenant")!.disabled).toBe(false)
+    scenario.failFirstApply = []
+    await click(button(container, "Approve and sync to 1 tenant"))
+    await until(() => node(container, "Contoso Germany")?.className.includes("border-green-600") === true, "second run verified while the first is pending")
+    release()
+    await until(() => calls.filter((call) => call.action === "apply").length === 2 && !container.querySelector('[role="status"] .motion-safe\\:animate-spin'), "first run settled")
+    await settle()
+    const germany = node(container, "Contoso Germany")
+    expect(germany.className).toContain("border-green-600")
+    expect(germany.textContent).not.toContain("Intune answered 403")
+  })
+
+  it("shows Unknown with the reason when a target's status could not be read", async () => {
+    scenario.statusError = { [C]: "The target tenant could not be read: Sign in again." }
+    const container = await render()
+    await until(() => !!container.querySelector('section[aria-label="Choose settings"] label span[title]'), "status chip")
+    const chip = container.querySelector<HTMLElement>('section[aria-label="Choose settings"] label span[title]')!
+    expect(chip.textContent).toBe("Unknown")
+    expect(chip.title).toContain("Contoso France: The target tenant could not be read: Sign in again.")
+  })
+
+  it("matches the source tenant whatever the casing of its stored ID", async () => {
+    const credentials = TENANTS[0]!.credentials
+    credentials.tenantId = A.toUpperCase()
+    try {
+      const container = await render()
+      const select = container.querySelector<HTMLSelectElement>('section[aria-label="Choose settings"] select')!
+      expect(select.selectedOptions[0]?.textContent).toContain("Contoso Lab")
+      // The option of the source itself is selected, not the first option React falls back to.
+      expect(select.value).toBe(A)
+    } finally {
+      credentials.tenantId = A
+    }
+  })
+
+  it("marks runs never applied, and lists only the latest draft of a re-plan", async () => {
+    const container = await render()
+    await toReview(container, ["Contoso Germany"])
+    await click(button(container, "Back"))
+    await click(button(container, "Review 1 tenant"))
+    await until(() => calls.filter((call) => call.action === "plan").length === 2 && !!button(container, /^Approve and sync/) && !container.textContent?.includes("Checking"), "second review")
+    await until(() => container.querySelectorAll('section[aria-label="Recent syncs"] li').length > 0, "recent syncs")
+    const rows = () => [...container.querySelectorAll('section[aria-label="Recent syncs"] li')]
+    expect(rows()).toHaveLength(1)
+    expect(rows()[0]!.textContent).toContain("Not applied")
+    await click(button(container, "Approve and sync to 1 tenant"))
+    await until(() => node(container, "Contoso Germany")?.className.includes("border-green-600") === true, "applied")
+    await until(() => !rows()[0]!.textContent?.includes("Not applied"), "applied run")
   })
 })
 

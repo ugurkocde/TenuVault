@@ -10,7 +10,7 @@ import { readCurrent } from "../change-sets/graph"
 import type { ChangeSetRecord } from "../change-sets/model"
 import { applyPromotion, MAX_PROMOTION_ITEMS, planPromotion, PROMOTION_FOLDERS, type PlanCheck, type PlanInput, type PromotionRecord } from "../promotion/engine"
 import type { DependencyFinding, Mapping } from "../promotion/mapping"
-import { linkKey, recordSyncLinks, staleSyncLinks, syncLinks, unconfirmedCreate, type SyncReplay } from "./links"
+import { linkKey, optionsFingerprint, recordSyncLinks, staleSyncLinks, syncLinks, unconfirmedCreate, type SyncReplay } from "./links"
 import { linkState } from "./status"
 
 /**
@@ -84,11 +84,12 @@ function selectedItems(items: SyncPlanInput["items"]): SyncPlanInput["items"] {
  * object that is gone is created again with a warning. Any other read error of the target fails
  * this target's plan, so a target that cannot be read never silently gets a duplicate. A linked
  * object that is in sync with its source (neither side moved since the verified write, by the
- * status rule) is left out and returned as skipped; when the source cannot be read it is planned
+ * status rule, and that write was planned with the same options) is left out and returned as
+ * skipped; when the source cannot be read it is planned
  * as an update instead. Also returns the link state the plan relies on, which approval and
  * apply re-check.
  */
-async function linkedItems(deps: FeatureDeps, sourceTenantId: string, targetTenantId: string, items: SyncPlanInput["items"], unresolved: SyncReplay["unresolved"], readSource: SourceReader): Promise<{ items: PlanInput["items"]; links: Record<string, string | null>; skipped: SyncSkip[] }> {
+async function linkedItems(deps: FeatureDeps, sourceTenantId: string, targetTenantId: string, items: SyncPlanInput["items"], unresolved: SyncReplay["unresolved"], readSource: SourceReader, optionsHash: string): Promise<{ items: PlanInput["items"]; links: Record<string, string | null>; skipped: SyncSkip[] }> {
   const links = syncLinks(deps, targetTenantId, sourceTenantId)
   const relied = Object.fromEntries(items.map((item) => [linkKey(item.folder, item.sourceId), links[linkKey(item.folder, item.sourceId)]?.targetPolicyId ?? null]))
   let graph: GraphCall | null = null
@@ -108,7 +109,8 @@ async function linkedItems(deps: FeatureDeps, sourceTenantId: string, targetTena
     graph ??= await deps.graph(targetTenantId)
     const live = await readCurrent(graph, typeForFolder(item.folder)!, link.targetPolicyId)
     if (live) {
-      if (!unconfirmed) {
+      // Only a write made with the same options can make this request's write unnecessary.
+      if (!unconfirmed && link.optionsHash === optionsHash) {
         const source = await readSource(item.folder, item.sourceId).catch(() => null)
         if (source && linkState(typeForFolder(item.folder)!, link, source, live).state === "in-sync") {
           skipped.push({ ...item, sourceName: link.sourceName, reason: "already in sync" })
@@ -162,7 +164,8 @@ export async function planSync(deps: FeatureDeps, sourceTenantId: string, input:
     try {
       // Repairs links whose write was lost before the plan relies on them.
       const replay = recordSyncLinks(deps, target, source)
-      const linked = await linkedItems(deps, source, target, items, replay.unresolved, readSource)
+      const optionsHash = optionsFingerprint(input.options, input.mappings[target] ?? [])
+      const linked = await linkedItems(deps, source, target, items, replay.unresolved, readSource, optionsHash)
       skipped = linked.skipped
       // Every selected policy is in sync here: nothing to plan, review or write.
       if (linked.items.length) promotion = await planPromotion(deps, target, {
@@ -175,7 +178,7 @@ export async function planSync(deps: FeatureDeps, sourceTenantId: string, input:
         items: linked.items,
         mappings: input.mappings[target] ?? [],
         workflow: "sync",
-        sync: { runId: run.id, links: linked.links },
+        sync: { runId: run.id, links: linked.links, optionsHash },
       }, actor)
     } catch (caught) {
       error = caught instanceof Error ? caught.message : String(caught)
@@ -221,7 +224,7 @@ export function syncCheck(deps: FeatureDeps, targetTenantId: string, promotionId
  * set stale. Once an attempt is claimed, a link is recorded for every operation whose write was
  * verified, also when the apply failed part way, while the tenant write is still held.
  */
-export async function applySync(deps: FeatureDeps, targetTenantId: string, promotionId: string, input: { contentHash: string; confirmed: boolean; backup: "new" | "none" }, actor: string | null): Promise<{ promotion: Stored<PromotionRecord>; changeSet: Stored<ChangeSetRecord> }> {
+export async function applySync(deps: FeatureDeps, targetTenantId: string, promotionId: string, input: { contentHash: string; confirmed: boolean; backup?: "new" | "none" }, actor: string | null): Promise<{ promotion: Stored<PromotionRecord>; changeSet: Stored<ChangeSetRecord> }> {
   const source = deps.records.get<PromotionRecord>(DOMAINS.promotions, targetTenantId, promotionId)?.sourceTenantId
   return applyPromotion(deps, targetTenantId, promotionId, { ...input, check: syncCheck(deps, targetTenantId, promotionId), onSettled: () => { if (source) recordSyncLinks(deps, targetTenantId, source) } }, actor)
 }

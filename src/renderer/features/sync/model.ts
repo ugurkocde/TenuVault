@@ -24,14 +24,15 @@ export function initials(name: string): string {
 
 /**
  * The status chip of one source policy from /api/sync status, over every target it is linked
- * in. Not linked anywhere: not synced yet. Otherwise the state that needs attention first.
+ * in. Not linked anywhere: not synced yet. Otherwise the state that needs attention first. A
+ * target whose status could not be read (`unread`) leaves the policy's state there unknown.
  */
-export function policyStatus(links: Array<{ tenantName: string; entry: SyncStatusEntry }>): { label: string; tone: Tone; title?: string } {
-  if (!links.length) return { label: "Not synced yet", tone: "neutral" }
-  const title = links.map(({ tenantName, entry }) => `${tenantName}: ${STATE_WORDS[entry.state]}${entry.error ? `. ${entry.error}` : ""}`).join("\n")
+export function policyStatus(links: Array<{ tenantName: string; entry: SyncStatusEntry }>, unread: Array<{ tenantName: string; error: string }> = []): { label: string; tone: Tone; title?: string } {
+  if (!links.length && !unread.length) return { label: "Not synced yet", tone: "neutral" }
+  const title = [...links.map(({ tenantName, entry }) => `${tenantName}: ${STATE_WORDS[entry.state]}${entry.error ? `. ${entry.error}` : ""}`), ...unread.map(({ tenantName, error }) => `${tenantName}: ${error}`)].join("\n")
   if (links.some(({ entry }) => entry.state === "missing-in-target")) return { label: "Missing in target", tone: "warning", title }
   if (links.some(({ entry }) => entry.state === "changed")) return { label: "Changed since last sync", tone: "warning", title }
-  if (links.some(({ entry }) => entry.state !== "in-sync")) return { label: "Unknown", tone: "neutral", title }
+  if (unread.length || links.some(({ entry }) => entry.state !== "in-sync")) return { label: "Unknown", tone: "neutral", title }
   return { label: links.length === 1 ? `In sync with ${links[0]!.tenantName}` : `In sync with ${links.length} tenants`, tone: "success", title }
 }
 
@@ -146,10 +147,16 @@ export function progress(target: SyncTarget): { done: number; total: number } {
   return changeSet ? { done: verifiedCount(changeSet), total: changeSet.operations.length } : { done: 0, total: 0 }
 }
 
-/** The backup of a target's apply: taken, skipped, or not known yet (before the pre-change capture). */
+/**
+ * The backup choice a target's change set is bound to: the one stored by its first claimed
+ * apply, else what its pre-change capture shows, else "new" once an apply was claimed (as the
+ * engine decides), or null before any apply.
+ */
 export function backupOf(changeSet: ChangeSet | null): SyncBackup | null {
-  if (!changeSet?.preChange) return null
-  return changeSet.preChange.backupFolder === null ? "none" : "new"
+  if (!changeSet) return null
+  if (changeSet.backupChoice) return changeSet.backupChoice
+  if (changeSet.preChange) return changeSet.preChange.backupFolder === null ? "none" : "new"
+  return changeSet.attempts > 0 ? "new" : null
 }
 
 /** Operations that failed or whose outcome is unconfirmed, with the engine's message. */
