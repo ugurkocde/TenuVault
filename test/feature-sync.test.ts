@@ -24,6 +24,9 @@ function setup(options: { plans?: Record<string, Plan>; sameLicense?: boolean } 
   const source = new FakeTenant(TENANT_A)
   const targets: Record<string, FakeTenant> = { [TENANT_B]: new FakeTenant(TENANT_B), [TENANT_C]: new FakeTenant(TENANT_C), [TENANT_D]: new FakeTenant(TENANT_D) }
   const wired = wire(deps, [source, ...Object.values(targets)])
+  // The clock moves one second per reading, so writes verified one after another never tie.
+  let tick = 0
+  deps.now = () => new Date(Date.parse("2026-09-30T12:00:00Z") + 1000 * tick++)
   const audit: Array<{ tenantId: string; logEntry: { eventType: string; details: Record<string, unknown> } }> = []
   const api = deps.api
   deps.api = async (path, tenantId, body, apiOptions) => {
@@ -286,7 +289,8 @@ describe("Sync links", () => {
     expect((await context.post({ tenantId: TENANT_B, action: "apply", id: first, contentHash: hash, confirm: true })).status).toBe(409)
     expect(syncLinks(context.deps, TENANT_B, TENANT_A)[key]).toEqual(latest)
     // Re-recording the first target's verified results never replaces the later link.
-    expect(await recordSyncLinks(context.deps, TENANT_B, first)).toBe(0)
+    expect(recordSyncLinks(context.deps, TENANT_B, TENANT_A)).toBe(0)
+    expect(first).not.toBe(second)
     expect(syncLinks(context.deps, TENANT_B, TENANT_A)[key]).toEqual(latest)
   })
 
@@ -325,6 +329,91 @@ describe("Sync links", () => {
     expect(refused.status).toBe(409)
     expect(refused.body.error).toContain("to a different policy")
     expect(context.targets[TENANT_B]!.writeCount()).toBe(writes)
+  })
+
+  it("lets a later write replace a link stored without a verification time", async () => {
+    const context = setup()
+    await synced(context)
+    relink(context, keyOf(context.policy), { verifiedAt: undefined })
+    expect(syncLinks(context.deps, TENANT_B, TENANT_A)[keyOf(context.policy)]).not.toHaveProperty("verifiedAt")
+    const later = (await synced(context))[TENANT_B]!
+    expect(syncLinks(context.deps, TENANT_B, TENANT_A)[keyOf(context.policy)]!.promotionId).toBe(later)
+  })
+
+  it("treats a plan without a complete link snapshot as stale", async () => {
+    const context = setup()
+    for (const links of [undefined, {}]) {
+      const id = (await planned(context)).targets[0]!.promotion!.id
+      context.deps.records.update<PromotionRecord>(DOMAINS.promotions, TENANT_B, id, (current) => ({ ...current, sync: { runId: current.sync!.runId, ...(links ? { links } : {}) } }), { actor: null, reason: "Test" })
+      const preview = await context.post({ tenantId: TENANT_B, action: "preview", id })
+      expect(preview.body.changeSet.blockers.join(" ")).toContain("were not recorded. Plan again.")
+      const approval = await context.post({ tenantId: TENANT_B, action: "approve", id, contentHash: preview.body.changeSet.contentHash, targetFingerprint: preview.body.changeSet.targetFingerprint })
+      expect(approval.status).toBe(409)
+    }
+    expect(context.targets[TENANT_B]!.writeCount()).toBe(0)
+  })
+
+  it("repairs a link whose write was lost, so the next plan updates instead of creating", async () => {
+    const context = setup()
+    const records = context.deps.records
+    const create = records.create.bind(records)
+    let failLinks = true
+    records.create = ((domain, tenantId, value, meta) => {
+      if (domain === DOMAINS.syncLinks && failLinks) {
+        failLinks = false
+        throw new Error("Record store unavailable")
+      }
+      return create(domain, tenantId, value, meta)
+    }) as typeof records.create
+    const first = (await synced(context))[TENANT_B]!
+    expect(changeSets(context, TENANT_B)[0]!.status).toBe("applied")
+    expect(failLinks).toBe(false)
+    expect(syncLinks(context.deps, TENANT_B, TENANT_A)).toEqual({})
+    const [created] = [...context.targets[TENANT_B]!.policies.keys()]
+    const { targets } = await planned(context)
+    expect(targets[0]!.promotion!.items[0]).toMatchObject({ action: "update", destinationId: created })
+    expect(syncLinks(context.deps, TENANT_B, TENANT_A)[keyOf(context.policy)]).toMatchObject({ targetPolicyId: created, promotionId: first })
+  })
+
+  it("retries a run whose verified create a later Sync updated since", async () => {
+    const context = setup()
+    const other = context.source.addPolicy({ name: "OIB Firewall" })
+    context.targets[TENANT_B]!.failWrite = () => (context.targets[TENANT_B]!.calls.at(-1)?.body?.name === "OIB Firewall" ? 400 : undefined)
+    const first = (await plan(context, [TENANT_B], { items: [{ sourceId: context.policy.id }, { sourceId: other.id }] })).body.targets[0].promotion.id
+    const contentHash = await approved(context, TENANT_B, first)
+    expect((await context.post({ tenantId: TENANT_B, action: "apply", id: first, contentHash, confirm: true })).body.changeSet.status).toBe("partial")
+    context.targets[TENANT_B]!.failWrite = undefined
+    const later = (await synced(context))[TENANT_B]!
+    expect(syncLinks(context.deps, TENANT_B, TENANT_A)[keyOf(context.policy)]!.promotionId).toBe(later)
+    const retried = await context.post({ tenantId: TENANT_B, action: "retry", id: first, contentHash, confirm: true })
+    expect(retried.status).toBe(200)
+    expect(retried.body.changeSet.status).toBe("applied")
+    expect([...context.targets[TENANT_B]!.policies.values()].map((policy) => policy.name).sort()).toEqual(["OIB Defender", "OIB Firewall"])
+  })
+
+  it("keeps the stored link on a tie, so a retry never restores an older baseline", async () => {
+    const context = setup()
+    const other = context.source.addPolicy({ name: "OIB Firewall" })
+    context.targets[TENANT_B]!.failWrite = () => (context.targets[TENANT_B]!.calls.at(-1)?.body?.name === "OIB Firewall" ? 400 : undefined)
+    const older = (await plan(context, [TENANT_B], { items: [{ sourceId: context.policy.id }, { sourceId: other.id }] })).body.targets[0].promotion.id
+    const contentHash = await approved(context, TENANT_B, older)
+    expect((await context.post({ tenantId: TENANT_B, action: "apply", id: older, contentHash, confirm: true })).body.changeSet.status).toBe("partial")
+    context.targets[TENANT_B]!.failWrite = undefined
+    context.source.policies.get(context.policy.id as string)!.description = "Edited in the source"
+    const later = (await synced(context))[TENANT_B]!
+    // The later Sync verified its write at the same instant as the older run's verified create.
+    const olderAt = changeSets(context, TENANT_B).find((changeSet) => changeSet.origin.recordId === older)!.results["op-1"]!.at!
+    const laterSet = changeSets(context, TENANT_B).find((changeSet) => changeSet.origin.recordId === later)!
+    context.deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, TENANT_B, laterSet.id, (current) => ({ ...current, results: { ...current.results, "op-1": { ...current.results["op-1"]!, at: olderAt } } }), { actor: null, reason: "Test" })
+    relink(context, keyOf(context.policy), { verifiedAt: olderAt })
+    const linked = syncLinks(context.deps, TENANT_B, TENANT_A)[keyOf(context.policy)]!
+    expect(linked.promotionId).toBe(later)
+    expect((await context.post({ tenantId: TENANT_B, action: "retry", id: older, contentHash, confirm: true })).body.changeSet.status).toBe("applied")
+    expect(syncLinks(context.deps, TENANT_B, TENANT_A)[keyOf(context.policy)]).toEqual(linked)
+    // Replaying the verified results again writes nothing.
+    const revisions = context.deps.records.list<SyncLinksRecord>(DOMAINS.syncLinks, TENANT_B)[0]!.history.length
+    expect(recordSyncLinks(context.deps, TENANT_B, TENANT_A)).toBe(0)
+    expect(context.deps.records.list<SyncLinksRecord>(DOMAINS.syncLinks, TENANT_B)[0]!.history).toHaveLength(revisions)
   })
 
   it("orders links by verification time, not by when they were stored", async () => {

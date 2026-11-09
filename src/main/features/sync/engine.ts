@@ -121,6 +121,8 @@ export async function planSync(deps: FeatureDeps, sourceTenantId: string, input:
     let promotion: Stored<PromotionRecord> | null = null
     let error: string | null = null
     try {
+      // Repairs links whose write was lost before the plan relies on them.
+      recordSyncLinks(deps, target, source)
       const linked = await linkedItems(deps, source, target, items)
       promotion = await planPromotion(deps, target, {
         sourceTenantId: source,
@@ -158,9 +160,16 @@ export async function planSync(deps: FeatureDeps, sourceTenantId: string, input:
   return { run, targets: results }
 }
 
-/** The re-check of the links a Sync target's plan relied on, for preview, approval and apply. */
+/**
+ * The re-check of the links a Sync target's plan relied on, for preview, approval and apply
+ * (where it runs under the tenant write). Lost link writes are repaired first.
+ */
 export function syncCheck(deps: FeatureDeps, targetTenantId: string, promotionId: string): PlanCheck {
-  return () => staleSyncLinks(deps, targetTenantId, promotionId)
+  return () => {
+    const promotion = deps.records.get<PromotionRecord>(DOMAINS.promotions, targetTenantId, promotionId)
+    if (promotion) recordSyncLinks(deps, targetTenantId, promotion.sourceTenantId)
+    return staleSyncLinks(deps, targetTenantId, promotionId)
+  }
 }
 
 /**
@@ -170,5 +179,6 @@ export function syncCheck(deps: FeatureDeps, targetTenantId: string, promotionId
  * verified, also when the apply failed part way, while the tenant write is still held.
  */
 export async function applySync(deps: FeatureDeps, targetTenantId: string, promotionId: string, input: { contentHash: string; confirmed: boolean; backup: "new" | "none" }, actor: string | null): Promise<{ promotion: Stored<PromotionRecord>; changeSet: Stored<ChangeSetRecord> }> {
-  return applyPromotion(deps, targetTenantId, promotionId, { ...input, check: syncCheck(deps, targetTenantId, promotionId), onSettled: (changeSet) => void recordSyncLinks(deps, targetTenantId, promotionId, changeSet) }, actor)
+  const source = deps.records.get<PromotionRecord>(DOMAINS.promotions, targetTenantId, promotionId)?.sourceTenantId
+  return applyPromotion(deps, targetTenantId, promotionId, { ...input, check: syncCheck(deps, targetTenantId, promotionId), onSettled: () => { if (source) recordSyncLinks(deps, targetTenantId, source) } }, actor)
 }
