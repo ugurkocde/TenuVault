@@ -3,11 +3,16 @@
 Date: 2026-11-07
 Graph version: beta (every MAA endpoint exists only in beta)
 Lab: Ugur Koc Lab, app-only Lokka connection plus one delegated admin sign-in for the E2E run, no access policies configured
-Status: research done, scope decided (2026-11-09). The responses TenuVault actually receives were verified live (see the E2E run). Approving and completing a request were not exercised, and do not need to be: TenuVault will not run the approval flow (see Decision).
+Status: implementation updated on 2026-11-09 after the two-admin lab run.
 
 ## Decision
 
-TenuVault recognises Multi Admin Approval and explains it, but does not run the approval flow. It sends no justification header, creates no approval requests, offers no approvals inbox and never completes a request. Approval stays in the Intune admin center. The scope is Phase 1 below. The Phase 2 notes are kept only as background in case this is revisited.
+Restore now supports submission and requester completion for same-tenant copies and replacements. Approval itself stays in the Intune admin center. Change sets and other writers detect approval blocks and report whether earlier steps were written, without submitting requests.
+
+Pending restore requests live in the encrypted desktop store. Each record freezes the exact serialized request and remaining plan steps. Completion uses the journaled Graph caller and checks the live fingerprint before updating an existing object. Assignments can require a separate approval round. The customer documentation is maintained separately.
+
+The research and initial phase decisions below describe the earlier investigation. The two-admin lab run supersedes the earlier unknowns about byte matching, per-step approval, requester completion, locks and cancellation bodies. Cancellation uses `{ "id": "<approval code>" }`.
+
 
 ## When MAA triggers, and why TenuVault cares
 

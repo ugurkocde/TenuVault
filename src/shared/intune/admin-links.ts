@@ -25,7 +25,7 @@ const entra = (hash: string, exact: boolean): AdminLink => ({ url: `${ENTRA}/#vi
 const DEVICES = (page: string) => intune(`Microsoft_Intune_DeviceSettings/DevicesMenu/~/${page}`, false)
 const APPS = (page: string) => intune(`Microsoft_Intune_DeviceSettings/AppsMenu/~/${page}`, false)
 const ENROLLMENT = (page: string) => intune(`Microsoft_Intune_DeviceSettings/DevicesEnrollmentMenu/~/${page}`, false)
-const TENANT_ADMIN = (page: string) => intune(`Microsoft_Intune_DeviceSettings/TenantAdminMenu/~/${page}`, false)
+export const TENANT_ADMIN = (page: string) => intune(`Microsoft_Intune_DeviceSettings/TenantAdminMenu/~/${page}`, false)
 const ROLES = (page: string) => intune(`Microsoft_Intune_DeviceSettings/RolesLandingMenuBlade/~/${page}`, false)
 const SECURITY = (page: string) => intune(`Microsoft_Intune_Workflows/SecurityManagementMenu/~/${page}`, false)
 const CONDITIONAL_ACCESS = (page: string) => entra(`Microsoft_AAD_ConditionalAccess/ConditionalAccessBlade/~/${page}`, false)

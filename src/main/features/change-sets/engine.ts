@@ -776,7 +776,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
     operations: for (const operation of record.operations) {
       const type = typeOf(operation.folder)
       const current = getChangeSet(deps, tenant, id).results[operation.key] ?? emptyResult()
-      if (current.status === "verified") continue
+      if (current.status === "verified" || current.status === "approval") continue
       const stopIfCisRevoked = (): boolean => {
         if (record.origin.workflow !== "cis-remediation" || recovery || cisBenchmarksAllowed(tenantId)) return false
         saveResult(deps, tenant, id, operation.key, {
@@ -822,6 +822,10 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
       const outcome = await writeOperation(writer, type, { action: operation.action, targetId: operation.targetId, proposed: entry.body, assignments: entry.assignments, current: captured[operation.key]?.body ?? null }, (createdId) => {
         saveResult(deps, tenant, id, operation.key, { ...attempt, objectId: createdId }, actor, `Created ${operation.name}`)
       })
+      if (outcome.state === "approval") {
+        saveResult(deps, tenant, id, operation.key, { ...attempt, status: "approval", partial: outcome.partial, objectId: outcome.objectId, message: outcome.message, at: at() }, actor, `${operation.name} needs Multi Admin Approval`)
+        continue
+      }
       if (outcome.state === "rejected") {
         saveResult(deps, tenant, id, operation.key, { ...attempt, status: "failed", objectId: outcome.objectId, message: `Microsoft Graph rejected the write; nothing was changed. ${outcome.message}`, at: at() }, actor, `${operation.name} was rejected`)
         continue

@@ -1,3 +1,4 @@
+import { approvalMessage } from "../../shared/intune/approval"
 import { randomUUID } from "node:crypto"
 import { graphCaller, readLive, Restorer, type GraphCall } from "../../portal/lib/policies/graph-restore"
 import { INTERNAL_API_ORIGIN } from "../../shared/constants"
@@ -523,7 +524,7 @@ async function undo(body: RecordJson): Promise<UndoResult> {
         if (gone) results.push({ name: item.name, id: item.id, action: "removed", done: true })
         else {
           const error = (response.body.error as Item | undefined)?.message
-          results.push({ name: item.name, id: item.id, action: "removed", done: false, error: typeof error === "string" && error ? error : `Microsoft Graph returned ${response.status}` })
+          results.push({ name: item.name, id: item.id, action: "removed", done: false, error: response.approval ? approvalMessage(response.approval, type.label) : typeof error === "string" && error ? error : `Microsoft Graph returned ${response.status}` })
           created.push(item)
         }
       }

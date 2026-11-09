@@ -101,9 +101,10 @@ export interface DependencyRef {
   state: "verified" | "unknown"
 }
 
-export type OperationStatus = "pending" | "writing" | "verified" | "failed" | "uncertain"
+export type OperationStatus = "approval" | "pending" | "writing" | "verified" | "failed" | "uncertain"
 
 export interface OperationResult {
+  partial?: boolean
   status: OperationStatus
   /** The object written (created ID, or the updated or deleted ID). */
   objectId: string | null
@@ -440,14 +441,14 @@ export const UNSUPPORTED_RECOVERY = [
 export function statusFromResults(results: OperationResult[]): ChangeSetStatus {
   if (results.length && results.every((result) => result.status === "verified")) return "applied"
   if (results.some((result) => result.status === "uncertain" || result.status === "writing")) return "uncertain"
-  if (results.some((result) => result.status === "verified")) return "partial"
+  if (results.some((result) => result.status === "verified" || result.partial)) return "partial"
   return "failed"
 }
 
 /** One plain sentence for the listed record. */
 export function resultSummary(results: OperationResult[]): string {
   const count = (status: OperationStatus) => results.filter((result) => result.status === status).length
-  const parts = [`${count("verified")} verified`, `${count("failed")} failed`, `${count("uncertain") + count("writing")} uncertain`, `${count("pending")} not attempted`]
+  const parts = [`${count("verified")} verified`, `${count("failed")} failed`, ...(count("approval") ? [`${count("approval")} approval blocked`] : []), `${count("uncertain") + count("writing")} uncertain`, `${count("pending")} not attempted`]
   return `${parts.join(", ")} of ${results.length} operation${results.length === 1 ? "" : "s"}.`
 }
 

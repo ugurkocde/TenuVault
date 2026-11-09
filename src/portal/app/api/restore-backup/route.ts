@@ -1,3 +1,4 @@
+import { restoreApprovals, dismissRestoreApproval, saveRestoreApproval } from "../../../../main/storage/restore-approvals"
 import { parseDependencyMappings } from "../../../../shared/intune/recovery"
 import { randomUUID } from "node:crypto"
 import { backupManifest, incompleteReason, snapshotHash, type ManifestEntry } from "~/lib/policies/backup-manifest"
@@ -8,7 +9,7 @@ import { PROGRESS_ID, startProgress } from "~/lib/policies/restore-progress"
 import { restoreOrder, type Item } from "../../../../shared/intune/registry"
 import { grantedPermissions } from "../../../../shared/services/token"
 import { type NextRequest, NextResponse } from "next/server"
-async function getAccessToken(tenantId: string, appId: string, clientSecret: string, scope: string, forceRefresh = false) {
+export async function getAccessToken(tenantId: string, appId: string, clientSecret: string, scope: string, forceRefresh = false) {
   const tokenResponse = await fetch(
     `https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`,
     {
@@ -59,6 +60,8 @@ export async function POST(request: NextRequest) {
   let body: any
   try {
     body = await request.json()
+    if (body.approvalAction) return await approvalAction(body)
+    if (body.justification !== undefined && (typeof body.justification !== "string" || body.justification.length > 700)) return NextResponse.json({ error: "Justification must be at most 700 characters" }, { status: 400 })
     const {
       tenantId,
       appId,
@@ -127,6 +130,7 @@ export async function POST(request: NextRequest) {
     const startTime = new Date()
     const results = []
     let restoredCount = 0
+    let approvalCount = 0
     let failedCount = 0
     let skippedCount = 0
     let unchangedCount = 0
@@ -167,7 +171,7 @@ export async function POST(request: NextRequest) {
               { mode: 'copy', assignments: false, prefix: '', crossTenant: true, repairScope: repairScope(target.tenantId), granted: grantedPermissions(targetToken) }),
           }
         }))
-      : [{ restorer: new Restorer(graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) }), { mode, assignments, repairScope: repairScope(tenantId), granted: grantedPermissions(graphToken) }) }]
+      : [{ restorer: new Restorer(graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) }), { mode, assignments, approvalContext: requesterContext(graphToken, tenantId, body.justification), repairScope: repairScope(tenantId), granted: grantedPermissions(graphToken) }) }]
     try {
       if (dependencyMappings.length) for (const { restorer } of targets) await restorer.mapDependencies(dependencyMappings)
     } catch (error) {
@@ -197,6 +201,7 @@ export async function POST(request: NextRequest) {
           if (result.action === 'unchanged') unchangedCount++
           else if (result.success) restoredCount++
           else if (result.action === 'skipped') skippedCount++
+          else if (result.approval) approvalCount++
           else failedCount++
           if (progress) {
             progress.done++
@@ -223,11 +228,12 @@ export async function POST(request: NextRequest) {
     // Replace in place leaves items that already match the backup alone; they count as done.
     const handled = restoredCount + unchangedCount
     return NextResponse.json({
-      success: failedCount === 0 && handled > 0,
+      success: failedCount === 0 && approvalCount === 0 && handled > 0,
       jobId: jobId,
-      status: partialCount > 0 ? "PartiallyCompleted" : handled === 0 ? "Failed" : failedCount > 0 ? "PartiallyCompleted" : "Completed",
-      message: `${done}; ${failedCount} failed${unchangedCount ? `; ${unchangedCount} already matched the backup` : ''}${skippedCount ? `; ${skippedCount} kept as reference only` : ''}`,
+      status: handled === 0 && approvalCount > 0 && failedCount === 0 && partialCount === 0 ? "AwaitingApproval" : partialCount > 0 || approvalCount > 0 ? "PartiallyCompleted" : handled === 0 ? "Failed" : failedCount > 0 ? "PartiallyCompleted" : "Completed",
+      message: `${done}; ${approvalCount} awaiting approval; ${failedCount} failed${unchangedCount ? `; ${unchangedCount} already matched the backup` : ''}${skippedCount ? `; ${skippedCount} kept as reference only` : ''}`,
       details: {
+        approvalCount,
         restoredCount,
         failedCount,
         partialCount,
@@ -245,4 +251,54 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     )
   }
+}
+
+const approvalLocks = new Set<string>()
+export function requesterContext(token: string, tenantId: string, justification?: string) {
+  try {
+    const claims = JSON.parse(Buffer.from(token.split(".")[1]!, "base64url").toString("utf8"))
+    if (typeof claims.oid === "string" && claims.scp && typeof claims.tid === "string" && claims.tid.toLowerCase() === tenantId.toLowerCase()) return { tenantId, requesterId: claims.oid as string, justification }
+  } catch { /* No approval flow without a delegated requester identity. */ }
+  return undefined
+}
+
+async function approvalAction(body: any): Promise<Response> {
+  const { tenantId, appId, clientSecret, approvalAction: action, approvalId } = body
+  if (typeof tenantId !== "string" || !/^[0-9a-f-]{36}$/i.test(tenantId) || !appId || !clientSecret) return NextResponse.json({ error: "Tenant credentials are required" }, { status: 400 })
+  const token = await getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default")
+  const context = requesterContext(token, tenantId)
+  const graph = graphCaller(token, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) })
+  if (action === "detect") {
+    try {
+      const result = await graph("GET", "deviceManagement/operationApprovalPolicies?$top=1")
+      return NextResponse.json({ enabled: result.status === 200 && Array.isArray(result.body.value) && result.body.value.length > 0 })
+    } catch { return NextResponse.json({ enabled: false }) }
+  }
+  if (!context) return NextResponse.json({ error: "Sign in with the requester account to manage restore approvals" }, { status: 403 })
+  const restorer = new Restorer(graph, { mode: "copy", assignments: false, approvalContext: context })
+  if (action === "list") {
+    const records = restoreApprovals(tenantId).filter(record => !(record.status === "completed" && record.stepNumber === 0))
+    const refreshed = await Promise.all(records.map(async record => {
+      try { return body.refresh ? await restorer.refreshApproval(record) : record } catch { return record }
+    }))
+    return NextResponse.json({ records: refreshed.map(record => ({ id: record.id, label: record.label, operation: record.operation, status: record.status, approverNote: record.approverNote, expiresAt: record.expiresAt, stepNumber: record.stepNumber, totalSteps: record.totalSteps, canComplete: record.requesterId.toLowerCase() === context.requesterId.toLowerCase(), requesterId: record.requesterId })) })
+  }
+  const record = restoreApprovals(tenantId).find(entry => entry.id === approvalId)
+  if (!record) return NextResponse.json({ error: "Request not found" }, { status: 404 })
+  const key = `${tenantId.toLowerCase()}:${record.id}`
+  if (approvalLocks.has(key)) return NextResponse.json({ error: "This request is already being processed" }, { status: 409 })
+  approvalLocks.add(key)
+  try {
+    if (action === "dismiss") dismissRestoreApproval(tenantId, record.id)
+    else if (action === "submit") return NextResponse.json({ outcome: await restorer.submitApproval(record, body.justification) })
+    else if (action === "complete") return NextResponse.json({ outcome: await restorer.completeApproval(record) })
+    else if (action === "withdraw") {
+      if (record.requesterId.toLowerCase() !== context.requesterId.toLowerCase()) throw new Error("Only the original requester can withdraw this request")
+      const response = await graph("POST", "deviceManagement/operationApprovalRequests/cancelMyRequest", { id: record.id })
+      if (response.status !== 204) throw new Error("Intune refused to withdraw this request")
+      saveRestoreApproval({ ...record, status: "cancelled" })
+    } else return NextResponse.json({ error: "Unknown approval action" }, { status: 400 })
+    return NextResponse.json({ success: true })
+  } catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 409 }) }
+  finally { approvalLocks.delete(key) }
 }

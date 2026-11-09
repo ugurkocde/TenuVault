@@ -121,11 +121,11 @@ async function recordRestore(bodyText: string, response: Response, dispatch: (re
   if (typeof body?.tenantId !== "string" || !body.tenantId || !body.appId || !body.clientSecret || !body.storageAccountName) return
   const data = await response.json().catch(() => ({})) as {
     success?: boolean; jobId?: string; policyId?: string; status?: string; error?: string; partial?: boolean
-    details?: { restoredCount: number; partialCount?: number; failedCount: number; duration: number; results: { path: string; success: boolean; policyId?: string; error?: string }[] }
+    details?: { restoredCount: number; partialCount?: number; failedCount: number; approvalCount?: number; duration: number; results: { path: string; success: boolean; policyId?: string; error?: string }[] }
   }
   const ok = response.ok && data.success === true
   // Some copies were created, so the restore completed with failures rather than failing outright.
-  const partial = !ok && (data.partial === true || (response.ok && ((data.details?.restoredCount ?? 0) > 0 || (data.details?.partialCount ?? 0) > 0)))
+  const partial = !ok && ((data.details?.approvalCount ?? 0) > 0 || data.partial === true || (response.ok && ((data.details?.restoredCount ?? 0) > 0 || (data.details?.partialCount ?? 0) > 0)))
   if (!policyCopy && ![400, 402, 403].includes(response.status)) {
     try {
       const partialRestore = data.status === "PartiallyCompleted" || (data.details?.partialCount ?? 0) > 0 || partial

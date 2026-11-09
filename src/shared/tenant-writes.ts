@@ -9,6 +9,7 @@ export function tenantWriteTargets(pathname: string, body: Record<string, unknow
   const action = typeof body.action === "string" ? body.action : ""
   switch (pathname) {
     case "/api/restore-backup": {
+      if (["detect", "list", "dismiss"].includes(String(body.approvalAction))) return []
       // A copy to other tenants writes only to them; tenantId then just names the backup's tenant.
       if (body.targetTenants === undefined) return tenant
       return Array.isArray(body.targetTenants)

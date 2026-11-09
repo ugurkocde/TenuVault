@@ -1,3 +1,4 @@
+import { TENANT_ADMIN, inTenant } from "../../../shared/intune/admin-links"
 import { showFeaturePlanError } from "../../lib/plan-dialog"
 import { useState, type ReactNode } from "react"
 import { Link } from "react-router-dom"
@@ -71,7 +72,7 @@ export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollb
   // A stale change set is finished; only a new preview of the change creates a reviewable one.
   const canReview = !!actions && ["in-review", "approved"].includes(changeSet.status)
   const canApply = !!actions && changeSet.status === "approved"
-  const canRetry = !!actions && ["partial", "failed", "uncertain", "applying"].includes(changeSet.status)
+  const canRetry = !!actions && Object.values(changeSet.results).some(result => result.status !== "approval" && result.status !== "verified") && ["partial", "failed", "uncertain", "applying"].includes(changeSet.status)
   const canRollback = !!actions && changeSet.kind === "change" && !!changeSet.preChange
 
   return (
@@ -127,6 +128,7 @@ export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollb
                 {expanded && (
                   <div className="mt-3 space-y-2 pl-6 text-sm">
                     <p className="text-gray-500">Target object: {(operation.targetId ?? result?.objectId) ? <>{operation.name} <span className="break-all text-xs text-gray-400">{operation.targetId ?? result?.objectId}</span></> : "new object"}. Source: {operation.source?.label ?? "not recorded"}.</p>
+                    {result?.status === "approval" && <a className="text-sm underline" href={inTenant(TENANT_ADMIN("multiAdminApproval").url, changeSet.tenantId)} target="_blank" rel="noreferrer">Open Multi Admin Approval in Intune</a>}
                     {result?.message && <p className="text-gray-700 dark:text-gray-300">{result.message}</p>}
                     {live?.blockers.map((line, index) => <p key={`b${index}`} className="text-red-700 dark:text-red-400">{line}</p>)}
                     {live?.warnings.map((line, index) => <p key={`w${index}`} className="text-amber-800 dark:text-amber-300">{line}</p>)}

@@ -43,6 +43,18 @@ const buttonNamed = (container: HTMLElement, text: string) => [...container.quer
 const itemBoxes = (container: HTMLElement) => [...container.querySelectorAll<HTMLButtonElement>('ul [role="checkbox"]')]
 const selectedCount = (container: HTMLElement) => container.textContent?.match(/(\d+) of 2 selected/)?.[1]
 
+it("reads access policies only at the review step", async () => {
+  const container = await renderItems(false)
+  const requests = () => vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "/api/restore-backup")
+  expect(requests()).toHaveLength(0)
+  await act(async () => buttonNamed(container, "Select all")!.click())
+  await act(async () => buttonNamed(container, "Next")!.click())
+  expect(requests()).toHaveLength(0)
+  await act(async () => buttonNamed(container, "Review")!.click())
+  expect(requests()).toHaveLength(1)
+  expect(JSON.parse(String(requests()[0]![1]?.body))).toMatchObject({ approvalAction: "detect" })
+})
+
 describe("restore wizard item selection", () => {
   it("shows Select all on Community as a marked plan option that explains the plan instead of selecting", async () => {
     const container = await renderItems(true)
