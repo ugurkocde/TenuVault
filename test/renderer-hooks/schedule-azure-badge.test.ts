@@ -39,6 +39,7 @@ afterEach(() => {
   document.body.replaceChildren()
   licenseStatus.current = null
   scheduleState.current = []
+  vi.useRealTimers()
 })
 
 function statusFor(plan: "community" | "pro" | "msp") {
@@ -84,9 +85,11 @@ it("shows the saved daily schedule fallback on Community", async () => {
   expect(document.body.textContent).toContain("Runs weekly on Community (daily needs Pro)")
 })
 
-it("switches a paused Azure schedule to weekly local backups through the existing setters", async () => {
+it.each(["daily", "weekly"] as const)("switches a paused %s Azure schedule to weekly local backups through the existing setters", async (frequency) => {
+  vi.useFakeTimers({ toFake: ["Date"] })
+  vi.setSystemTime(new Date("2026-11-09T12:00:00Z"))
   licenseStatus.current = statusFor("community")
-  scheduleState.current = [{ tenantId: "tenant", frequency: "daily", enabled: true, time: "02:00", fallbackWeekday: 1, since: "2026-11-01T00:00:00Z", attempts: 0, nextRunAt: null }]
+  scheduleState.current = [{ tenantId: "tenant", frequency, enabled: true, time: "02:00", fallbackWeekday: frequency === "daily" ? 1 : undefined, weekday: frequency === "weekly" ? 4 : undefined, since: "2026-11-01T00:00:00Z", attempts: 0, nextRunAt: null }]
   const tenant = { name: "Contoso", credentials: { tenantId: "tenant" }, resources: { storageAccountName: "stcontoso" } } as import("~/contexts/TenantContext").Tenant
   const onStorageChange = vi.fn()
   await azureRadio({ tenant, onStorageChange })
@@ -94,6 +97,6 @@ it("switches a paused Azure schedule to weekly local backups through the existin
   expect(document.body.textContent).not.toContain("Upcoming backups on this computer")
   const button = [...document.querySelectorAll('button')].find(button => button.textContent === "Switch to weekly local backups")!
   await act(async () => button.click())
-  expect(scheduleState.set).toHaveBeenCalledWith({ tenantId: "tenant", enabled: true, frequency: "weekly", time: "02:00", weekday: 1 })
+  expect(scheduleState.set).toHaveBeenCalledWith({ tenantId: "tenant", enabled: true, frequency: "weekly", time: "02:00", weekday: frequency === "weekly" ? 4 : 1 })
   expect(onStorageChange).toHaveBeenCalledWith(tenant, { kind: "local" })
 })

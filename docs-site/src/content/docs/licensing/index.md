@@ -18,6 +18,8 @@ TenuVault has three plans: Community, which is free, and the paid Pro and MSP pl
 
 Enter your email address on the **License** page or the welcome screen in TenuVault, or at [tenuvault.com/trial](https://tenuvault.com/trial). A Pro license key for 30 days arrives by email, usually within a minute. You need no payment card, and nothing is charged when the trial ends: the trial key stops working and TenuVault continues on Community. Each email address gets one trial; asking again sends the same key again.
 
+When the trial or paid coverage ends, saved daily schedules run weekly on Community and configured paid automation pauses. See [When paid coverage ends](#when-paid-coverage-ends) for the Azure storage choice and Community tenant picker.
+
 TenuVault reminds you in the app on day 20 and day 27 of the trial, with a **Buy Pro** button that opens the checkout. Unless you have bought a plan, you also get an email 5 days and 1 day before the trial ends, with a link to buy and a link to stop these emails. To keep Pro or move to MSP, buy a plan and enter the new key on the **License** page; see [Activate and manage your license](/licensing/manage/#after-your-trial).
 
 The trial covers two tenants, like Pro. To evaluate MSP with more tenants, the MSP checkout on [tenuvault.com/pricing](https://tenuvault.com/pricing) also offers a 30 day subscription trial that needs a card, or email [support@tenuvault.com](mailto:support@tenuvault.com).

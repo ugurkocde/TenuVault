@@ -221,6 +221,7 @@ describe("change report export access", () => {
    api.status.mockResolvedValue({ licensed: false, runtimeNote: "", settings: { ...settings, afterScheduledBackup: true }, reports: [] })
    const configured = await render(false)
    expect(configured.textContent).toContain("Paused on Community")
+   expect(configured.textContent).not.toContain("Generate one above")
    expect(configured.querySelector('a[href="/license"]')).not.toBeNull()
    api.status.mockResolvedValue({ licensed: false, runtimeNote: "", settings: { ...settings, afterScheduledBackup: false }, reports: [] })
    expect((await render(false)).textContent).not.toContain("Paused on Community")

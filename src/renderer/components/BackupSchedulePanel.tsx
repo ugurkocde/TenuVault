@@ -205,7 +205,7 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
             <Button disabled={saving || !onStorageChange} onClick={async () => {
               setSaving(true)
               try {
-                await bridge.schedules.set({ tenantId, enabled: true, frequency: "weekly", time: current.time, weekday: current.fallbackWeekday ?? new Date().getDay() })
+                await bridge.schedules.set({ tenantId, enabled: true, frequency: "weekly", time: current.time, weekday: current.fallbackWeekday ?? current.weekday ?? new Date().getDay() })
                 onStorageChange?.(tenant, { kind: "local" })
                 drafts.delete(tenantId)
                 reloadSchedules()

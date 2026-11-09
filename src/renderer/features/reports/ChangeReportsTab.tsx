@@ -51,7 +51,7 @@ export default function ChangeReportsTab({ tenant, plan, allowed }: FeatureTabPr
           </p>
         </div>
         {status.isLoading && <div className="h-16 animate-pulse rounded-2xl bg-gray-50" />}
-        {!status.isLoading && reports.length === 0 && <p className="text-sm text-gray-600">No reports yet. Generate one above.</p>}
+        {!status.isLoading && reports.length === 0 && <p className="text-sm text-gray-600">{allowed ? "No reports yet. Generate one above." : "No stored reports yet."}</p>}
         <ul className="divide-y divide-gray-100">
           {reports.map((report) => (
             <ReportRow
