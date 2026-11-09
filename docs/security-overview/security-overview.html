@@ -187,7 +187,7 @@
           <div class="sub">Security and architecture overview</div>
         </div>
       </div>
-      <div class="meta">Describes version 0.4.0<br>Revision 2, 3 November 2026</div>
+      <div class="meta">Describes version 0.4.3<br>Revision 3, 9 November 2026</div>
     </div>
     <h1>Runs locally. Your app registration. Your storage.</h1>
     <p>TenuVault Desktop backs up, compares and restores Intune configuration from the admin's computer. It signs in
@@ -306,7 +306,7 @@
         <tr>
           <td class="purpose">Azure backups</td>
           <td class="dest"><code>&lt;account&gt;.blob.core.windows.net</code></td>
-          <td>Optional. Your own storage account: backup content (plain JSON, Azure encryption at rest) and audit log entries.
+          <td>Optional. Your own storage account: backup content (plain JSON) and audit log entries.
             Not used when backups are stored locally</td>
         </tr>
         <tr>
@@ -346,7 +346,7 @@
 <section class="page page2">
   <header class="strip">
     <span><b>TenuVault Desktop</b> &nbsp;Security and architecture overview</span>
-    <span>Describes version 0.4.0 &nbsp;|&nbsp; Revision 2, 3 November 2026</span>
+    <span>Describes version 0.4.3 &nbsp;|&nbsp; Revision 3, 9 November 2026</span>
   </header>
 
   <div class="content">
@@ -383,13 +383,12 @@
             user. The app will not start without OS encryption.</li>
           <li><b>Local backups</b> use AES-256-GCM per file, with keyed-hash file names so policy names are not visible
             on disk. Default folder: Documents/TenuVault Backups.</li>
-          <li><b>Azure backups</b> are stored as plain JSON and rely on Azure's encryption at rest, like the audit log and
-            tenant metadata. Access follows your Azure role assignments, so every admin with access sees the same
-            backups. Anyone who can write to the backup container is trusted like an Intune admin; grant blob data
-            roles only to the admin group. Azure backups made by earlier versions stay encrypted with the device key.</li>
+          <li><b>Azure backups</b> are plain JSON, protected by Azure encryption at rest and your role assignments.
+            Treat blob writers like Intune admins and grant the role only to the admin group. Older Azure backups
+            stay encrypted with the device key.</li>
           <li><b>Recovery key.</b> Needed for local backups on another computer or after a reinstall, and for older
-            encrypted Azure backups. Keep it in a password manager.</li>
-          <li><b>Exports</b> (backup ZIP, reports) are unencrypted, saved where the admin chooses. Backups can hold secret
+            Azure backups. Keep it in a password manager.</li>
+          <li><b>Exports</b> (backup ZIP, reports) are unencrypted. Backups can hold secret
             values such as OMA-URI settings, so treat exports and the recovery key as sensitive.</li>
           <li><b>Retention.</b> Backups older than the retention setting (default 30 days) and audit entries older than
             90 days are deleted.</li>
