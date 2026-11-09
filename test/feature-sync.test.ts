@@ -12,6 +12,7 @@ import { planGuard, requiredFeatures } from "../src/main/api/plan-gates"
 import { upgradeMessage, type Plan } from "../src/shared/plans"
 import { call, fakeDeps, TENANT_A, TENANT_B, TENANT_C } from "./feature-helpers"
 import { FakeTenant, referenceSetting, setting, wire } from "./feature-change-sets-fakes"
+import { withTenantWrite } from "../src/main/features/write-lock"
 
 const PATH = "/api/sync"
 const TENANT_D = "44444444-4444-4444-4444-444444444444"
@@ -134,6 +135,22 @@ describe("/api/sync plans", () => {
     expect((await listed()).applied).toBe(false)
     await applied(context, TENANT_B, targets[0]!.promotion!.id)
     expect((await listed()).applied).toBe(true)
+  })
+
+  it("lists the outcome of each run from the change sets of its applied targets", async () => {
+    const context = setup({ plans: MSP })
+    const outcome = async (id: string) => (await context.post({ tenantId: TENANT_A, action: "list-runs" })).body.runs.find((entry: { id: string }) => entry.id === id).outcome
+    const first = await planned(context, [TENANT_B, TENANT_C])
+    expect(await outcome(first.run.id)).toBe("not-applied")
+    await applied(context, TENANT_B, first.targets[0]!.promotion!.id)
+    expect(await outcome(first.run.id)).toBe("applied")
+    context.targets[TENANT_C]!.failWrite = () => 400
+    await applied(context, TENANT_C, first.targets[1]!.promotion!.id)
+    expect(await outcome(first.run.id)).toBe("partial")
+    editSource(context)
+    const second = await planned(context, [TENANT_C])
+    await applied(context, TENANT_C, second.targets[0]!.promotion!.id)
+    expect(await outcome(second.run.id)).toBe("failed")
   })
 
   it("A2: syncs one policy to the other tenant of a Pro license", async () => {
@@ -683,7 +700,7 @@ describe("Sync skips policies already in sync", () => {
     const { run, targets } = await planned(context)
     expect(targets).toEqual([{ targetTenantId: TENANT_B, promotion: null, error: null, skipped: [{ folder: "ConfigurationPolicies", sourceId: context.policy.id, sourceName: "OIB Defender", reason: "already in sync" }] }])
     expect(run.status).toBe("planned")
-    expect(run.summary).toBe("1 of 1 target planned, 1 already in sync.")
+    expect(run.summary).toBe("Already in sync, nothing to write.")
     expect(run.targets).toEqual([{ targetTenantId: TENANT_B, promotionId: null, error: null, skipped: targets[0]!.skipped }])
     expect(run.items).toEqual([{ folder: "ConfigurationPolicies", sourceId: context.policy.id, sourceName: "OIB Defender" }])
     expect(context.deps.records.list(DOMAINS.promotions, TENANT_B)).toHaveLength(before.promotions)
@@ -1144,5 +1161,184 @@ describe("Sync targets", () => {
     const community = await msp.post({ tenantId: TENANT_A, action: "targets" })
     expect(community.status).toBe(402)
     expect(community.body.upgrade).toBe("sync")
+  })
+})
+
+describe("Sync rollback of a created policy", () => {
+  it("removes the link once a rollback verified the delete, so the policy reads as not synced, and lists the run as rolled back", async () => {
+    const context = setup()
+    const { [TENANT_B]: id } = await synced(context)
+    expect(Object.keys(syncLinks(context.deps, TENANT_B, TENANT_A))).toEqual([keyOf(context.policy)])
+    const runId = (await context.post({ tenantId: TENANT_A, action: "list-runs" })).body.runs[0].id as string
+    expect((await context.post({ tenantId: TENANT_B, action: "rollback-create", id })).status).toBe(200)
+    const review = await context.post({ tenantId: TENANT_B, action: "rollback-review", id })
+    expect(review.body.operations.map((operation: { action: string }) => operation.action)).toEqual(["delete"])
+    expect((await context.post({ tenantId: TENANT_B, action: "rollback-approve", id, contentHash: review.body.contentHash, targetFingerprint: review.body.targetFingerprint })).status).toBe(200)
+    expect((await context.post({ tenantId: TENANT_B, action: "rollback-apply", id, contentHash: review.body.contentHash, confirm: true })).body.changeSet.status).toBe("applied")
+    expect(context.targets[TENANT_B]!.policies.size).toBe(0)
+    expect(syncLinks(context.deps, TENANT_B, TENANT_A)).toEqual({})
+    expect((await status(context)).body.targets[0].links).toEqual([])
+    const listed = (await context.post({ tenantId: TENANT_A, action: "list-runs" })).body.runs.find((entry: { id: string }) => entry.id === runId)
+    expect(listed.outcome).toBe("rolled-back")
+    // The next plan creates the policy again instead of updating the deleted one.
+    expect((await planned(context)).targets[0]!.promotion!.items[0]).toMatchObject({ action: "create" })
+  })
+
+  it("keeps the link when the rollback only restored an update", async () => {
+    const context = setup()
+    await synced(context)
+    editSource(context)
+    const { [TENANT_B]: id } = await synced(context)
+    const before = syncLinks(context.deps, TENANT_B, TENANT_A)
+    expect((await context.post({ tenantId: TENANT_B, action: "rollback-create", id })).status).toBe(200)
+    const review = await context.post({ tenantId: TENANT_B, action: "rollback-review", id })
+    expect(review.body.operations.map((operation: { action: string }) => operation.action)).toEqual(["update"])
+    expect((await context.post({ tenantId: TENANT_B, action: "rollback-approve", id, contentHash: review.body.contentHash, targetFingerprint: review.body.targetFingerprint })).status).toBe(200)
+    expect((await context.post({ tenantId: TENANT_B, action: "rollback-apply", id, contentHash: review.body.contentHash, confirm: true })).body.changeSet.status).toBe("applied")
+    expect(Object.values(syncLinks(context.deps, TENANT_B, TENANT_A)).map((link) => link.targetPolicyId)).toEqual(Object.values(before).map((link) => link.targetPolicyId))
+  })
+})
+
+describe("Sync discard", () => {
+  const discard = (context: Context, id: string) => context.post({ tenantId: TENANT_A, action: "discard-run", id })
+  const listed = async (context: Context) => ((await context.post({ tenantId: TENANT_A, action: "list-runs" })).body.runs as Array<{ id: string }>).map((entry) => entry.id)
+
+  it("discards a run planned and never approved: kept as a record, gone from Recent syncs, its targets closed", async () => {
+    const context = setup()
+    const { run, targets } = await planned(context)
+    const id = targets[0]!.promotion!.id
+    const preview = await context.post({ tenantId: TENANT_B, action: "preview", id })
+    expect(preview.status).toBe(200)
+    const response = await discard(context, run.id)
+    expect(response.status).toBe(200)
+    expect(response.body.run).toMatchObject({ id: run.id, status: "discarded", summary: "Discarded before any target was approved." })
+    expect(await listed(context)).not.toContain(run.id)
+    const stored = await context.post({ tenantId: TENANT_A, action: "get-run", id: run.id })
+    expect(stored.status).toBe(200)
+    expect(stored.body.run.status).toBe("discarded")
+    // Nothing of a discarded run can be reviewed or approved any more.
+    expect((await context.post({ tenantId: TENANT_B, action: "preview", id })).status).toBe(409)
+    const approval = await context.post({ tenantId: TENANT_B, action: "approve", id, contentHash: preview.body.changeSet.contentHash, targetFingerprint: preview.body.changeSet.targetFingerprint, backup: "new" })
+    expect(approval.status).toBe(409)
+    expect(approval.body.error).toBe("This sync was discarded. Start a new sync.")
+    expect(context.targets[TENANT_B]!.writeCount()).toBe(0)
+    // Discarding again changes nothing.
+    expect((await discard(context, run.id)).status).toBe(200)
+  })
+
+  it("refuses to discard a run once any target was approved or applied", async () => {
+    const context = setup({ plans: MSP })
+    const approvedRun = await planned(context, [TENANT_B, TENANT_C])
+    await approved(context, TENANT_C, approvedRun.targets[1]!.promotion!.id)
+    const refused = await discard(context, approvedRun.run.id)
+    expect(refused.status).toBe(409)
+    expect(refused.body.error).toBe("A target of this sync was approved, so it cannot be discarded. Open it to see its result.")
+    expect(await listed(context)).toContain(approvedRun.run.id)
+
+    const appliedRun = await planned(context, [TENANT_D])
+    expect((await applied(context, TENANT_D, appliedRun.targets[0]!.promotion!.id)).status).toBe(200)
+    expect((await discard(context, appliedRun.run.id)).status).toBe(409)
+    expect((await context.post({ tenantId: TENANT_A, action: "get-run", id: appliedRun.run.id })).body.run.status).not.toBe("discarded")
+    expect((await discard(context, "00000000-0000-4000-8000-000000000000")).status).toBe(404)
+  })
+
+  it("refuses to discard while a target tenant is being changed", async () => {
+    const context = setup()
+    const { run } = await planned(context)
+    let release!: () => void
+    const held = withTenantWrite(TENANT_B, "Another change", () => new Promise<void>((resolve) => { release = resolve }))
+    const response = await discard(context, run.id)
+    expect(response.status).toBe(409)
+    expect(response.body.error).toBe("A target tenant of this sync is being changed. Try again when it finishes.")
+    release()
+    await held
+    expect((await discard(context, run.id)).status).toBe(200)
+  })
+})
+
+describe("Codex round 1", () => {
+  /** Holds every Graph read until the returned release is called, so a plan stays in "planning". */
+  function holdGraph(context: Context) {
+    const graph = context.deps.graph
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    context.deps.graph = async (tenantId, options) => {
+      await gate
+      return graph(tenantId, options)
+    }
+    return () => { context.deps.graph = graph; release() }
+  }
+  const planning = async (context: Context) => {
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const run = context.deps.records.list<SyncRunRecord>(DOMAINS.syncRuns, TENANT_A).find((record) => record.status === "planning")
+      if (run) return run
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+    throw new Error("No run is planning")
+  }
+
+  it("refuses to discard a run that is still being planned", async () => {
+    const context = setup()
+    const release = holdGraph(context)
+    const pending = plan(context)
+    const run = await planning(context)
+    const refused = await context.post({ tenantId: TENANT_A, action: "discard-run", id: run.id })
+    expect(refused.status).toBe(409)
+    expect(refused.body.error).toBe("This sync is still being planned. Discard it once planning finished.")
+    release()
+    expect((await pending).status).toBe(200)
+    expect((await context.post({ tenantId: TENANT_A, action: "get-run", id: run.id })).body.run.status).toBe("planned")
+  })
+
+  it("never clears a discarded run when its planner finishes", async () => {
+    const context = setup()
+    const release = holdGraph(context)
+    const pending = plan(context)
+    const run = await planning(context)
+    context.deps.records.update<SyncRunRecord>(DOMAINS.syncRuns, TENANT_A, run.id, (current) => ({ ...current, status: "discarded" }), { actor: null, reason: "Test" })
+    release()
+    const { targets } = (await pending).body as Awaited<ReturnType<typeof planned>>
+    expect((await context.post({ tenantId: TENANT_A, action: "get-run", id: run.id })).body.run.status).toBe("discarded")
+    expect((await context.post({ tenantId: TENANT_B, action: "preview", id: targets[0]!.promotion!.id })).status).toBe(409)
+  })
+
+  it("never restores an older link once the newest linked copy was rolled back", async () => {
+    const context = setup()
+    await synced(context)
+    const [first] = [...context.targets[TENANT_B]!.policies.keys()]
+    // The first copy is deleted outside TenuVault; a later sync creates a replacement.
+    const graph = context.deps.graph
+    context.deps.graph = async (tenantId, options) => {
+      const reader = await graph(tenantId, options)
+      return async (method, path, body, callOptions) => tenantId === TENANT_B && method === "GET" && path.startsWith(`deviceManagement/configurationPolicies/${first}`)
+        ? { status: 400, body: { error: { code: "BadRequest", message: "{\"ErrorCode\":\"ResourceNotFound\"}" } } }
+        : reader(method, path, body, callOptions)
+    }
+    context.targets[TENANT_B]!.policies.delete(first!)
+    const replacement = (await planned(context)).targets[0]!.promotion!
+    expect((await applied(context, TENANT_B, replacement.id)).body.changeSet.status).toBe("applied")
+    expect((await context.post({ tenantId: TENANT_B, action: "rollback-create", id: replacement.id })).status).toBe(200)
+    const review = await context.post({ tenantId: TENANT_B, action: "rollback-review", id: replacement.id })
+    expect((await context.post({ tenantId: TENANT_B, action: "rollback-approve", id: replacement.id, contentHash: review.body.contentHash, targetFingerprint: review.body.targetFingerprint })).status).toBe(200)
+    expect((await context.post({ tenantId: TENANT_B, action: "rollback-apply", id: replacement.id, contentHash: review.body.contentHash, confirm: true })).body.changeSet.status).toBe("applied")
+    expect(syncLinks(context.deps, TENANT_B, TENANT_A)).toEqual({})
+    // Every later replay keeps it that way: the superseded first link is never restored.
+    recordSyncLinks(context.deps, TENANT_B, TENANT_A)
+    recordSyncLinks(context.deps, TENANT_B, TENANT_A)
+    expect(syncLinks(context.deps, TENANT_B, TENANT_A)).toEqual({})
+    expect((await status(context)).body.targets[0].links).toEqual([])
+  })
+
+  it("lists a run whose only apply stopped at the backup as failed, not partly applied", async () => {
+    const context = setup()
+    const { run, targets } = await planned(context)
+    const id = targets[0]!.promotion!.id
+    const contentHash = await approved(context, TENANT_B, id)
+    const api = context.deps.api
+    context.deps.api = async (path, tenantId, body, options) => path === "/api/backup/start" ? Response.json({ error: "Storage unavailable" }, { status: 500 }) : api(path, tenantId, body, options)
+    expect((await context.post({ tenantId: TENANT_B, action: "apply", id, contentHash, confirm: true, backup: "new" })).status).toBe(502)
+    expect(changeSets(context, TENANT_B)[0]).toMatchObject({ status: "approved", preChange: null, attempts: 1 })
+    const listed = (await context.post({ tenantId: TENANT_A, action: "list-runs" })).body.runs.find((entry: { id: string }) => entry.id === run.id)
+    expect(listed.outcome).toBe("failed")
   })
 })

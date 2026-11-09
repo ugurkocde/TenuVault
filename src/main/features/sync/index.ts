@@ -4,7 +4,7 @@ import type { FeatureDeps } from "../deps"
 import { DOMAINS } from "../domains"
 import type { Stored } from "../records"
 import { featureRoute, FeatureError, optionalText, text, type Body } from "../route"
-import { withTenantWrite } from "../write-lock"
+import { tenantWriteLabel, withTenantWrite } from "../write-lock"
 import type { ChangeSetRecord } from "../change-sets/model"
 import { applyChangeSet, approveChangeSet, createRollbackChangeSet, previewChangeSet, previewRollback, rejectChangeSet } from "../change-sets/engine"
 import { policies } from "../promotion"
@@ -12,6 +12,7 @@ import { approvePromotion, previewPromotion, promotionChangeSet, promotionRollba
 import { parseMappings, type Mapping } from "../promotion/mapping"
 import { mappableObjects } from "../promotion/targets"
 import { applySync, planSync, syncCheck, type SyncRunRecord } from "./engine"
+import { recordSyncLinks } from "./links"
 import { syncStatus } from "./status"
 import { requireSyncTenants, targetIds } from "./tenants"
 
@@ -92,7 +93,64 @@ async function requireRunTenants(deps: FeatureDeps, tenantId: string, target: St
   const run = deps.records.current<SyncRunRecord>(DOMAINS.syncRuns, target.sourceTenantId, (record) => record.id === target.sync!.runId)[0]
   const targets = run?.targets.map((entry) => entry.targetTenantId) ?? []
   if (!targets.includes(tenantId)) throw new FeatureError("The Sync run of this target no longer exists. Plan again.", 409)
+  requireNotDiscarded(run!)
   await requireSyncTenants(deps, target.sourceTenantId, targets)
+}
+
+const DISCARDED = "discarded"
+
+/** A discarded run is kept as a record only: none of its targets can be reviewed, approved or applied. */
+function requireNotDiscarded(run: SyncRunRecord): void {
+  if (run.status === DISCARDED) throw new FeatureError("This sync was discarded. Start a new sync.", 409)
+}
+
+/** The Sync run of a target, read again; null when it no longer exists. */
+const runOf = (deps: FeatureDeps, target: Stored<PromotionRecord>) => deps.records.current<SyncRunRecord>(DOMAINS.syncRuns, target.sourceTenantId, (record) => record.id === target.sync!.runId)[0] ?? null
+
+/**
+ * Whether a target of a run was ever approved or applied: its approval stored a backup choice,
+ * its change set holds an approval, or an apply was claimed. Reads only.
+ */
+function everApproved(deps: FeatureDeps, target: SyncRunRecord["targets"][number]): boolean {
+  const promotion = target.promotionId ? deps.records.get<PromotionRecord>(DOMAINS.promotions, target.targetTenantId, target.promotionId) : null
+  if (!promotion) return false
+  if (promotion.sync?.backup) return true
+  const changeSet = promotion.changeSetId ? deps.records.get<ChangeSetRecord>(DOMAINS.changeSets, target.targetTenantId, promotion.changeSetId) : null
+  return !!changeSet && (changeSet.review?.decision === "approved" || changeSet.attempts > 0 || !["in-review", "rejected", "stale"].includes(changeSet.status))
+}
+
+type RunOutcome = "applied" | "partial" | "failed" | "applying" | "rolled-back" | "not-applied" | "in-sync"
+
+/**
+ * The outcome of a run for its row in Recent syncs, from the change sets of the targets an apply
+ * was claimed for: still applying, every one rolled back by an applied rollback, every one
+ * applied, every one failed with nothing verified, or partly applied. A run never applied is not
+ * applied, or already in sync when every target was.
+ */
+function runOutcome(deps: FeatureDeps, run: SyncRunRecord, inSync: boolean): RunOutcome {
+  const records = run.targets.flatMap((target) => {
+    const { changeSet, rollbackChangeSet } = targetRecords(deps, target.targetTenantId, target.promotionId)
+    const record = changeSet as Stored<ChangeSetRecord> | null
+    return record && record.attempts > 0 ? [{ record, rollback: rollbackChangeSet as Stored<ChangeSetRecord> | null }] : []
+  })
+  const tried = records.map((entry) => entry.record)
+  if (!tried.length) return inSync ? "in-sync" : "not-applied"
+  if (tried.some((changeSet) => changeSet.status === "applying")) return "applying"
+  if (records.every((entry) => entry.rollback?.status === "applied")) return "rolled-back"
+  if (tried.every((changeSet) => changeSet.status === "applied")) return "applied"
+  if (tried.every(nothingWritten)) return "failed"
+  return "partial"
+}
+
+/**
+ * An applied change set that wrote nothing: it failed with no verified write, or it stopped
+ * before writing (a pre-change backup or capture that failed leaves no capture and no written,
+ * verified or unconfirmed result).
+ */
+function nothingWritten(changeSet: ChangeSetRecord): boolean {
+  const results = Object.values(changeSet.results)
+  if (changeSet.status === "failed") return !results.some((result) => result.status === "verified")
+  return !changeSet.preChange && !results.some((result) => result.status === "verified" || result.status === "uncertain" || result.status === "writing")
 }
 
 /** The stored promotion, change set and rollback of a target; reads only. */
@@ -147,12 +205,34 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
   return featureRoute("/api/sync", deps, {
     // `applied`: whether any target's change set was ever applied, so a draft that was only planned can be told apart.
     // `inSync`: every target was already in sync, so nothing needed applying.
-    "list-runs": ({ tenantId }) => ({ runs: deps.records.list<SyncRunRecord>(DOMAINS.syncRuns, tenantId).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(({ history: _history, ...run }) => ({ ...run, applied: run.targets.some((target) => attempted(deps, target.targetTenantId, target.promotionId)), inSync: run.targets.length > 0 && run.targets.every((target) => !target.promotionId && !target.error && (target.skipped?.length ?? 0) > 0) })) }),
+    // `outcome`: the run's result for Recent syncs (runOutcome). Discarded runs are kept as records and not listed.
+    "list-runs": ({ tenantId }) => ({
+      runs: deps.records.list<SyncRunRecord>(DOMAINS.syncRuns, tenantId).filter((run) => run.status !== DISCARDED).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(({ history: _history, ...run }) => {
+        const inSync = run.targets.length > 0 && run.targets.every((target) => !target.promotionId && !target.error && (target.skipped?.length ?? 0) > 0)
+        return { ...run, applied: run.targets.some((target) => attempted(deps, target.targetTenantId, target.promotionId)), inSync, outcome: runOutcome(deps, run, inSync) }
+      }),
+    }),
     "get-run": ({ tenantId, body }) => {
       const run = syncRun(deps, tenantId, body)
       return { run, targets: run.targets.map((target) => ({ ...target, ...targetRecords(deps, target.targetTenantId, target.promotionId) })) }
     },
     "get-target": ({ tenantId, body }) => targetRecords(deps, tenantId, syncTarget(deps, tenantId, body).id),
+    /**
+     * Discards a run that was planned and never approved: the record is kept and marked discarded,
+     * it leaves Recent syncs, and none of its targets can be approved any more. Refused (409) once
+     * any target was approved or applied, and while a target tenant is being changed, so an
+     * approval running now cannot complete on a discarded run.
+     */
+    "discard-run": ({ tenantId, body, actor }) => {
+      const run = syncRun(deps, tenantId, body)
+      if (run.status === DISCARDED) return { run }
+      // The planner still writes the run's targets; a discard would race it.
+      if (run.status === "planning") throw new FeatureError("This sync is still being planned. Discard it once planning finished.", 409)
+      if (run.targets.some((target) => everApproved(deps, target))) throw new FeatureError("A target of this sync was approved, so it cannot be discarded. Open it to see its result.", 409)
+      const busy = run.targets.find((target) => tenantWriteLabel(target.targetTenantId) !== undefined)
+      if (busy) throw new FeatureError("A target tenant of this sync is being changed. Try again when it finishes.", 409)
+      return { run: deps.records.update<SyncRunRecord>(DOMAINS.syncRuns, tenantId, run.id, (current) => ({ ...current, status: DISCARDED, summary: "Discarded before any target was approved." }), { actor, reason: "Discarded before any target was approved" }) }
+    },
     /** Source policies to select; the selected tenant is the source. */
     policies: async ({ tenantId, body }) => ({ source: await policies(deps, tenantId, typeof body.folder === "string" && body.folder ? body.folder : PROMOTION_FOLDER) }),
     /**
@@ -207,7 +287,11 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
       // between this check and the store below: an overlapping apply is refused instead.
       return withTenantWrite(tenantId, "Sync approval", async () => {
         // Once an apply started, the approval keeps the choice it bound, so the target stays retryable.
-        const claimed = claimedBackup(deps, tenantId, syncTarget(deps, tenantId, body))
+        const latest = syncTarget(deps, tenantId, body)
+        // A discard that completed while this request waited for the tenant write is final.
+        const run = runOf(deps, latest)
+        if (run) requireNotDiscarded(run)
+        const claimed = claimedBackup(deps, tenantId, latest)
         if (claimed && claimed !== backup) throw new FeatureError(`This sync was already started ${claimed === "none" ? "without a backup" : "with a backup"}. Approve it with the same choice.`, 409)
         const changeSet = await approvePromotion(deps, tenantId, target.id, { contentHash: hashField(body, "contentHash"), targetFingerprint: hashField(body, "targetFingerprint"), reviewer: null, note: null, check: syncCheck(deps, tenantId, target.id) }, actor)
         // Stored with the approval, so the apply and every retry use it whoever sends them later.
@@ -246,7 +330,12 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
     "rollback-approve": async ({ tenantId, body, actor }) => ({ changeSet: await approveChangeSet(deps, tenantId, promotionRollback(deps, tenantId, syncTarget(deps, tenantId, body).id).id, { contentHash: hashField(body, "contentHash"), targetFingerprint: hashField(body, "targetFingerprint"), reviewer: null, note: null }, actor) }),
     "rollback-reject": async ({ tenantId, body, actor }) => ({ changeSet: await rejectChangeSet(deps, tenantId, promotionRollback(deps, tenantId, syncTarget(deps, tenantId, body).id).id, { reviewer: null, note: null }, actor) }),
     // A rollback always backs up first: the engine refuses backup "none" for it.
-    "rollback-apply": async ({ tenantId, body, actor }) => ({ changeSet: await applyChangeSet(deps, tenantId, promotionRollback(deps, tenantId, syncTarget(deps, tenantId, body).id).id, { contentHash: hashField(body, "contentHash"), confirmed: body.confirm === true, backup: backupOf(body) }, actor) }),
+    // Once it settles, the links are replayed under the tenant write, so a link to a policy the
+    // rollback deleted is removed and that policy reads as not synced again.
+    "rollback-apply": async ({ tenantId, body, actor }) => {
+      const target = syncTarget(deps, tenantId, body)
+      return { changeSet: await applyChangeSet(deps, tenantId, promotionRollback(deps, tenantId, target.id).id, { contentHash: hashField(body, "contentHash"), confirmed: body.confirm === true, backup: backupOf(body), onSettled: () => { recordSyncLinks(deps, tenantId, target.sourceTenantId) } }, actor) }
+    },
   })
 }
 

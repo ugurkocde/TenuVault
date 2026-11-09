@@ -200,9 +200,29 @@ html:has([data-flow-shell]) {
   .run-overlay, .run-panel, .run-indeterminate, .run-results-reveal { animation: none; }
 }
 
-/* Sync result flowchart (features/sync/SyncFlowchart). The state of each target comes from its
-   change set; these only animate the change between states. Links use pathLength="1", so a dash
-   of 1 is the whole link. With reduced motion every element shows its end state. */
+/* Sync (pages/SyncPage, features/sync). Every state comes from a request or a stored record;
+   these only animate the change between states. Links use pathLength="1", so a dash of 1 is the
+   whole link. Entrances move, never fade, content a writing target shows: a paused animation (a
+   hidden window) must still leave it fully readable. With reduced motion every element shows its
+   end state. */
+:root {
+  --sync-line: #e4e1dd;
+  --sync-from: #f1a792;
+  --sync-write: #e4674b;
+  --sync-ok: #16a34a;
+  --sync-warn: #f59e0b;
+  --sync-fail: #ef4444;
+  --sync-shimmer: rgb(255 255 255 / 0.7);
+}
+.dark {
+  --sync-line: #3a3734;
+  --sync-from: #8c3320;
+  --sync-write: #ea8467;
+  --sync-ok: #22c55e;
+  --sync-warn: #fbbf24;
+  --sync-fail: #f87171;
+  --sync-shimmer: rgb(255 255 255 / 0.07);
+}
 @keyframes sync-draw {
   from { stroke-dashoffset: 1; }
   to { stroke-dashoffset: 0; }
@@ -214,18 +234,52 @@ html:has([data-flow-shell]) {
 }
 @keyframes sync-ring {
   from { opacity: 0.7; transform: scale(1); }
-  to { opacity: 0; transform: scale(3.2); }
+  to { opacity: 0; transform: scale(2.4); }
 }
 @keyframes sync-pop {
   from { transform: scale(0.4); }
   to { transform: scale(1); }
 }
-.sync-link { stroke-dasharray: 1; stroke-dashoffset: 0; animation: sync-draw 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) backwards; transition: stroke 0.5s; }
-.sync-pulse { offset-rotate: 0deg; animation: sync-travel 1.1s ease-in-out infinite; }
+@keyframes sync-enter {
+  from { transform: translateY(8px); }
+  to { transform: translateY(0); }
+}
+@keyframes sync-step {
+  from { transform: translateX(16px); }
+  to { transform: translateX(0); }
+}
+@keyframes sync-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes sync-chip {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes sync-shimmer {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
+}
+@keyframes sync-beat {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.35); }
+}
+.sync-link { stroke-dasharray: 1; stroke-dashoffset: 0; animation: sync-draw 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) backwards; }
+.sync-link stop { transition: stop-color 0.5s; }
+.sync-pulse { offset-rotate: 0deg; animation: sync-travel 1.5s ease-in-out infinite; }
 .sync-ring { transform-box: fill-box; transform-origin: center; opacity: 0; animation: sync-ring 1s ease-out; }
 .sync-pop { transform-box: fill-box; transform-origin: center; animation: sync-pop 0.45s cubic-bezier(0.3, 1.6, 0.5, 1); }
-.sync-node { transition: border-color 0.5s, box-shadow 0.5s; animation: run-rise 0.35s ease-out backwards; }
+.sync-check { stroke-dasharray: 1; stroke-dashoffset: 0; animation: sync-draw 0.4s 0.15s ease-out backwards; }
+.sync-node { transition: border-color 0.5s, box-shadow 0.3s, translate 0.2s; animation: sync-enter 0.35s ease-out backwards; }
+.sync-step { animation: sync-step 0.32s cubic-bezier(0.2, 0.8, 0.2, 1) backwards; }
+.sync-fade { animation: sync-fade 0.3s ease-out backwards; }
+.sync-chip { display: inline-flex; animation: sync-chip 0.35s ease-out backwards; }
+.sync-beat { animation: sync-beat 1.2s ease-in-out infinite; }
+.sync-fill { transform-origin: left; transition: scale 0.5s cubic-bezier(0.2, 0.8, 0.2, 1), width 0.5s cubic-bezier(0.2, 0.8, 0.2, 1); }
+.sync-skeleton { position: relative; overflow: hidden; }
+.sync-skeleton::after { content: ""; position: absolute; inset: 0; transform: translateX(-100%); background: linear-gradient(90deg, transparent, var(--sync-shimmer), transparent); animation: sync-shimmer 1.4s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) {
-  .sync-link, .sync-ring, .sync-pop, .sync-node { animation: none; transition: none; }
-  .sync-pulse, .sync-ring { display: none; }
+  .sync-link, .sync-ring, .sync-pop, .sync-check, .sync-node, .sync-step, .sync-fade, .sync-chip, .sync-beat { animation: none; transition: none; }
+  .sync-link stop, .sync-fill { transition: none; }
+  .sync-pulse, .sync-ring, .sync-skeleton::after { display: none; }
 }

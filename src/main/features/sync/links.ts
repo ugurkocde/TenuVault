@@ -103,7 +103,9 @@ export interface SyncReplay {
  * write, and again before each plan and inside the apply's stale check, so a link whose write was
  * lost is repaired before anything acts on it. The same scan finds creates whose outcome is
  * unconfirmed (uncertain or writing), which may have created the policy without a link; a plan
- * warns about them, and an applied rollback of the run settles them.
+ * warns about them, and an applied rollback of the run settles them. A link to an object a
+ * verified rollback deleted is removed, so the policy reads as not synced again. It also runs
+ * when a Sync rollback settles.
  * Reads current values only, and only the change sets the pair's Sync targets name.
  */
 export function recordSyncLinks(deps: FeatureDeps, targetTenantId: string, sourceTenantId: string): SyncReplay {
@@ -115,6 +117,19 @@ export function recordSyncLinks(deps: FeatureDeps, targetTenantId: string, sourc
   const named = new Set(promotions.flatMap((promotion) => [promotion.changeSetId!, ...(promotion.rollbackChangeSetId ? [promotion.rollbackChangeSetId] : [])]))
   const changeSets = new Map(deps.records.current<ChangeSetRecord>(DOMAINS.changeSets, target, (record) => named.has(record.id)).map((record) => [record.id, record]))
   const linkedAt = deps.now().toISOString()
+  // Objects a verified rollback deleted: a link to one of them points at nothing, so it is
+  // removed and never replayed. Only that exact target object, and only a verified delete.
+  const deleted = new Set<string>()
+  for (const promotion of promotions) {
+    const rollback = promotion.rollbackChangeSetId ? changeSets.get(promotion.rollbackChangeSetId) : undefined
+    if (rollback?.kind !== "rollback") continue
+    for (const operation of rollback.operations) {
+      const result = rollback.results[operation.key]
+      const id = operation.action === "delete" && result?.status === "verified" ? (result.objectId ?? operation.targetId) : null
+      if (id) deleted.add(id.toLowerCase())
+    }
+  }
+  const gone = (link: SyncLink | undefined) => !!link && deleted.has(link.targetPolicyId.toLowerCase())
   const verified: Record<string, SyncLink> = {}
   for (const promotion of promotions) {
     const changeSet = changeSets.get(promotion.changeSetId!)
@@ -129,17 +144,25 @@ export function recordSyncLinks(deps: FeatureDeps, targetTenantId: string, sourc
       unresolved[key] = { name: operation.source.label || operation.name, promotionIds: [...(unresolved[key]?.promotionIds ?? []), promotion.id] }
     }
   }
+  // The newest verified link of each policy is chosen first; when a rollback deleted that object,
+  // the policy has no link at all. An older, superseded link is never brought back.
+  for (const [key, link] of Object.entries(verified)) if (gone(link)) delete verified[key]
   const stored = linksRecord(deps, target, source)
   const changed = Object.entries(verified).filter(([key, link]) => replaces(link, stored?.links[key]))
-  if (!changed.length) return { written: 0, unresolved }
+  const removed = Object.entries(stored?.links ?? {}).filter(([, link]) => gone(link)).length
+  if (!changed.length && !removed) return { written: 0, unresolved }
   const linked = (total: number) => `${total} linked polic${total === 1 ? "y" : "ies"}`
-  const reason = `Linked ${changed.length} synced polic${changed.length === 1 ? "y" : "ies"}`
+  const reason = [
+    ...(changed.length ? [`Linked ${changed.length} synced polic${changed.length === 1 ? "y" : "ies"}`] : []),
+    ...(removed ? [`Removed ${removed} link${removed === 1 ? "" : "s"} to policies a rollback deleted`] : []),
+  ].join("; ")
   if (!stored) {
     deps.records.create<SyncLinksRecord>(DOMAINS.syncLinks, target, { title: `Sync links from ${source}`, status: "active", summary: `${linked(changed.length)}.`, sourceTenantId: source, links: Object.fromEntries(changed) }, { actor: null, reason })
     return { written: changed.length, unresolved }
   }
   deps.records.update<SyncLinksRecord>(DOMAINS.syncLinks, target, stored.id, (latest) => {
     const links = { ...latest.links }
+    for (const [key, link] of Object.entries(links)) if (gone(link)) delete links[key]
     for (const [key, link] of changed) if (replaces(link, links[key])) links[key] = link
     return { ...latest, links, summary: `${linked(Object.keys(links).length)}.` }
   }, { actor: null, reason })

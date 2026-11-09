@@ -9,27 +9,38 @@ import { bridge } from "../../lib/bridge"
 import { settingsHref } from "../../lib/settings-section"
 import { MAX_SYNC_POLICIES, SYNC_TYPES, type PolicyOption, type SyncBackup, type SyncTarget, type SyncTargetOption } from "./api"
 import { initials, plural, readiness, reviewRows, ROW_LABEL, type ReviewState, type Tone } from "./model"
+import { Skeleton, Spinner, stillReading, useElapsed } from "./loading"
 
 export const card = "rounded-3xl bg-card shadow-[0_1px_2px_rgba(22,21,20,0.04)]"
 const fieldClass = "h-10 w-full rounded-full border border-gray-200 bg-white px-4 text-sm text-gray-800 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100"
 
 export const STEPS = ["Choose settings", "Choose targets", "Review", "Sync"] as const
 
-/** The four steps; finished steps show a check. */
+/**
+ * The four steps; finished steps show a check, and the connector before a step fills once the
+ * step before it is done.
+ */
 export function Stepper({ step }: { step: number }) {
   return (
-    <ol aria-label="Steps" className="flex flex-wrap gap-2">
+    <ol aria-label="Steps" className="flex flex-wrap items-center gap-y-2">
       {STEPS.map((label, index) => {
         const number = index + 1
         const current = number === step
         const done = number < step
         return (
-          <li key={label} aria-current={current ? "step" : undefined} className={cn("flex h-10 items-center gap-2 rounded-full pl-1.5 pr-4 text-sm font-medium transition-colors", current ? "bg-primary text-primary-foreground" : "bg-card text-gray-700")}>
-            <span className={cn("flex size-7 items-center justify-center rounded-full text-xs font-semibold", done ? "bg-green-600 text-white" : current ? "bg-white/15" : "bg-secondary")}>
-              {done ? <Check className="h-3.5 w-3.5" strokeWidth={3} aria-hidden="true" /> : number}
+          <li key={label} aria-current={current ? "step" : undefined} className="flex items-center">
+            {index > 0 && (
+              <span aria-hidden="true" className="mx-1 block h-0.5 w-3 overflow-hidden rounded-full bg-border lg:mx-1.5 lg:w-8">
+                <span className={cn("sync-fill block h-full rounded-full bg-green-600", number <= step ? "scale-x-100" : "scale-x-0")} />
+              </span>
+            )}
+            <span className={cn("flex h-10 items-center gap-2 rounded-full pl-1.5 pr-4 text-sm font-medium transition-colors duration-300", current ? "bg-primary text-primary-foreground" : "bg-card text-gray-700")}>
+              <span className={cn("flex size-7 items-center justify-center rounded-full text-xs font-semibold transition-colors duration-300", done ? "bg-green-600 text-white" : current ? "bg-white/15" : "bg-secondary")}>
+                {done ? <Check className="sync-pop h-3.5 w-3.5" strokeWidth={3} aria-hidden="true" /> : number}
+              </span>
+              {label}
+              {done && <span className="sr-only">(done)</span>}
             </span>
-            {label}
-            {done && <span className="sr-only">(done)</span>}
           </li>
         )
       })}
@@ -93,7 +104,20 @@ export function ChooseSettings({ sources, sourceId, onSource, folder, onFolder, 
         })}
       </div>
       <div className="px-4">
-        {loading && <div className="mx-2 h-24 animate-pulse rounded-2xl bg-gray-100" />}
+        {loading && (
+          <ul aria-busy="true" aria-label="Loading policies" className="space-y-1">
+            {["w-64", "w-52", "w-72", "w-56", "w-44"].map((width) => (
+              <li key={width} className="grid grid-cols-[1.25rem_minmax(0,1fr)_auto] items-center gap-3 rounded-2xl p-3">
+                <Skeleton className="size-4 rounded-md" />
+                <span className="space-y-2">
+                  <Skeleton className={cn("h-3.5 max-w-full", width)} />
+                  <Skeleton className="h-3 w-28" />
+                </span>
+                <Skeleton className="h-6 w-24" />
+              </li>
+            ))}
+          </ul>
+        )}
         {error && <p className="px-2 text-sm text-red-700">{error}</p>}
         {!loading && !error && !policies.length && <p className="px-2 py-3 text-sm text-gray-600">This tenant has no policies of this type.</p>}
         {policies.length > 0 && (
@@ -109,7 +133,7 @@ export function ChooseSettings({ sources, sourceId, onSource, folder, onFolder, 
                       <span className="block truncate text-sm font-medium text-gray-900">{policy.name}</span>
                       <span className="block truncate text-xs text-gray-500">{SYNC_TYPES.find((type) => type.folder === policy.folder)?.label ?? policy.folder}{policy.platforms ? `, ${policy.platforms}` : ""}</span>
                     </span>
-                    {chip ? <Chip tone={chip.tone} title={chip.title}>{chip.label}</Chip> : <span className="text-xs text-gray-400">Checking</span>}
+                    {chip ? <span key={chip.label} className="sync-fade inline-flex"><Chip tone={chip.tone} title={chip.title}>{chip.label}</Chip></span> : <span className="flex"><Skeleton className="h-6 w-24" /><span className="sr-only">Checking</span></span>}
                   </label>
                 </li>
               )
@@ -153,7 +177,17 @@ export function ChooseTargets({ sourceName, options, loading, error, tenantOf, l
     <section aria-label="Choose targets" className={card}>
       <CardHead title="Where should these settings go?" description={`Pick the tenants to sync to. ${sourceName} does not change.`} />
       <div className="px-6 pb-3">
-        {loading && <div className="h-28 animate-pulse rounded-2xl bg-gray-100" />}
+        {loading && (
+          <div aria-busy="true" aria-label="Checking the tenants" className="grid grid-cols-[repeat(auto-fill,minmax(13rem,1fr))] gap-3">
+            {[0, 1, 2].map((index) => (
+              <div key={index} className="space-y-3 rounded-2xl bg-gray-50 p-4">
+                <Skeleton className="size-9 bg-gray-200" />
+                <Skeleton className="h-3.5 w-32 bg-gray-200" />
+                <Skeleton className="h-3 w-24 bg-gray-200" />
+              </div>
+            ))}
+          </div>
+        )}
         {error && <p className="text-sm text-red-700">{error}</p>}
         {!loading && !error && !options.length && <p className="text-sm text-gray-600">Connect another tenant to sync to it.</p>}
         {options.length > 0 && (
@@ -213,8 +247,10 @@ export function ChooseTargets({ sourceName, options, loading, error, tenantOf, l
 const NOTE_TONE = { danger: "text-red-700", warning: "text-amber-800", neutral: "text-gray-500" } as const
 
 /** Step 3: what each target gets, why a target is left out, the secret acknowledgement and the backup choice. */
-export function ReviewStep({ targets, reviews, planning, planError, tenantOf, backup, onBackup, secrets, ack, onAck, onBack, onApprove, busy }: {
+export function ReviewStep({ targets, reviews, planning, planError, reading, tenantOf, backup, onBackup, secrets, ack, onAck, onBack, onApprove, busy }: {
   targets: SyncTarget[]
+  /** What the plan reads while it runs: the source tenant and how many targets. */
+  reading: { source: string; targets: number }
   reviews: Record<string, ReviewState>
   planning: boolean
   planError: string | null
@@ -233,6 +269,8 @@ export function ReviewStep({ targets, reviews, planning, planError, tenantOf, ba
   const inSync = states.filter((state) => state.state === "in-sync").length
   const checking = planning || states.some((state) => state.state === "checking")
   const gated = secrets.needed && !(ack && secrets.acknowledged)
+  // Nothing is written when no target has a change to review: the backup choice does not apply.
+  const writes = planning || targets.some((target) => !!target.changeSet && target.promotion?.status !== "blocked")
   const option = (value: SyncBackup, label: string, description: ReactNode) => (
     <label className={cn("flex cursor-pointer items-start gap-3 rounded-2xl border p-4 text-sm", backup === value ? "border-primary bg-blue-50/60" : "border-gray-200")}>
       <input type="radio" name="sync-backup" value={value} checked={backup === value} onChange={() => onBackup(value)} className="mt-1 h-4 min-h-0 w-4 shrink-0" />
@@ -244,24 +282,27 @@ export function ReviewStep({ targets, reviews, planning, planError, tenantOf, ba
       <CardHead title="Review against each target" description="TenuVault read every target tenant. Nothing is written until you approve." />
       <div className="space-y-3 px-6">
         {planError && <p role="alert" className="rounded-2xl bg-red-50 p-3 text-sm text-red-800">{planError}</p>}
-        {planning && !targets.length && <div className="h-28 animate-pulse rounded-2xl bg-gray-100" aria-label="Reading every target tenant" />}
+        {planning && !targets.length && <PlanningPanel source={reading.source} targets={reading.targets} />}
         {targets.map((target, index) => {
           const tenant = tenantOf(target.targetTenantId)
           const name = tenant?.name ?? target.targetTenantId
           const state = states[index]!
           const review = reviews[target.targetTenantId]
           const rows = reviewRows(target, review?.preview ?? null)
-          const writes = rows.filter((row) => row.kind === "create" || row.kind === "update").length
+          const changes = rows.filter((row) => row.kind === "create" || row.kind === "update").length
           return (
-            <div key={target.targetTenantId} className="overflow-hidden rounded-2xl bg-gray-50">
+            <div key={target.targetTenantId} className="sync-node overflow-hidden rounded-2xl bg-gray-50" style={{ animationDelay: `${index * 60}ms` }}>
               <header className="flex items-center gap-3 px-4 py-3">
                 <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-card text-[11px] font-bold text-gray-700">{initials(name)}</span>
                 <span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold text-gray-900">{name}</span><span className="block truncate text-xs text-gray-500">{tenant?.domain}</span></span>
-                {state.state === "ready" ? <Chip tone="success">Ready: {plural(writes, "change", "changes")}</Chip> : state.state === "in-sync" ? <Chip tone="success">Already in sync</Chip> : state.state === "checking" ? <Chip>Checking</Chip> : <Chip tone="danger">Left out</Chip>}
+                <span key={state.state} className="sync-fade inline-flex">
+                  {state.state === "ready" ? <Chip tone="success">Ready: {plural(changes, "change", "changes")}</Chip> : state.state === "in-sync" ? <Chip tone="success">Already in sync</Chip> : state.state === "checking" ? <Chip>Checking</Chip> : <Chip tone="danger">Left out</Chip>}
+                </span>
               </header>
               {state.reason && <p className="border-t border-gray-200 px-4 py-2.5 text-sm text-red-700">{state.reason}</p>}
               {backup === "none" && !tenant?.resources?.storageAccountName && state.state === "ready" && <p className="border-t border-gray-200 px-4 py-2.5 text-sm text-amber-800">Rollback needs backup storage in this tenant. Without it, this sync cannot be rolled back from TenuVault.</p>}
-              <ul>
+              {state.state === "checking" ? <CheckingRows count={Math.max(1, rows.length)} /> : (
+              <ul className="sync-fade">
                 {rows.map((row) => (
                   <li key={row.key} className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-2 border-t border-gray-200 px-4 py-2.5 text-sm">
                     <span className="min-w-0">
@@ -274,6 +315,7 @@ export function ReviewStep({ targets, reviews, planning, planError, tenantOf, ba
                   </li>
                 ))}
               </ul>
+              )}
               {(review?.preview?.sourceChanges.length ?? 0) > 0 && (
                 <ul className="list-disc border-t border-gray-200 py-2.5 pl-8 pr-4 text-xs text-amber-800">{review!.preview!.sourceChanges.map((line, lineIndex) => <li key={lineIndex}>{line}</li>)}</ul>
               )}
@@ -292,25 +334,63 @@ export function ReviewStep({ targets, reviews, planning, planError, tenantOf, ba
             <span>I understand that secrets in these policies are not synced and must be set again in each target.{ack && !secrets.acknowledged && planning ? " Planning again with this acknowledgement." : ""}</span>
           </label>
         )}
-        <fieldset className="pt-2">
+        {writes && <fieldset className="pt-2">
           <legend className="text-sm font-medium text-gray-800">Backup before changes</legend>
           <div className="mt-2 grid gap-2 md:grid-cols-2">
-            {option("new", "Back up the affected policy types now", "Backs up only the policy types this sync changes before anything else happens. If the backup fails, nothing is changed.")}
+            {option("new", "Back up first", "Each target is backed up first, using that tenant's backup settings. If the backup does not cover every policy type this sync changes, or fails, nothing is changed in that tenant.")}
             {option("none", "Skip the backup", "Rollback still works from the saved versions: TenuVault saves the current version of every policy it changes before writing. A rollback always backs up first, so it needs backup storage in the target tenant. Those saved versions are kept on this device only; without a backup they are the only copy.")}
           </div>
           {backup === "new" && targets.some((target) => !tenantOf(target.targetTenantId)?.resources?.storageAccountName) && (
             <p className="mt-2 text-xs text-gray-500">A tenant without backup storage cannot be backed up. <Link to={settingsHref("signin")} className="text-blue-700 underline">Choose backup storage in Settings</Link>.</p>
           )}
-        </fieldset>
+        </fieldset>}
       </div>
       <Footer>
         <Button type="button" variant="ghost" onClick={onBack}>Back</Button>
-        <span className="text-sm text-gray-500">{backup === "new" ? "Each target is backed up before anything is written." : "No backup is taken. Rollback uses the saved current versions."}</span>
+        <span className="text-sm text-gray-500">{!writes ? "Nothing is written." : backup === "new" ? "Each target is backed up before anything is written." : "No backup is taken. Rollback uses the saved current versions."}</span>
         <Button type="button" disabled={busy || checking || gated || !(ready || inSync)} onClick={onApprove}>
           <ShieldCheck className="h-4 w-4" aria-hidden="true" />
-          {ready || !inSync ? `Approve and sync to ${plural(ready, "tenant", "tenants")}` : "Continue: nothing to write"}
+          {/* No count until a target is ready: while planning or checking there is nothing to approve yet. */}
+          {ready ? `Approve and sync to ${plural(ready, "tenant", "tenants")}` : inSync && !checking ? "Continue: nothing to write" : "Approve and sync"}
         </Button>
       </Footer>
     </section>
+  )
+}
+
+/** The plan running: what is being read, an indeterminate bar, and the seconds once it is slow. */
+function PlanningPanel({ source, targets }: { source: string; targets: number }) {
+  const elapsed = stillReading(useElapsed(true))
+  return (
+    <div role="status" className="sync-node rounded-2xl bg-gray-50 p-5">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <Spinner />
+        <p className="text-sm font-medium text-gray-900">Reading {source} and {plural(targets, "target tenant", "target tenants")}</p>
+        {elapsed && <span className="ml-auto text-xs tabular-nums text-gray-500">{elapsed}</span>}
+      </div>
+      <p className="mt-1.5 pl-[1.625rem] text-xs text-gray-500">The sync is planned from the live source policies, then each target is checked. Nothing is written.</p>
+      <div className="mt-4 h-1 overflow-hidden rounded-full bg-gray-200">
+        <div className="run-indeterminate h-full w-1/3 rounded-full bg-coral-500" />
+      </div>
+    </div>
+  )
+}
+
+/** A planned target while its live preview is read: what happens, the seconds once slow, and placeholder rows. */
+function CheckingRows({ count }: { count: number }) {
+  const elapsed = stillReading(useElapsed(true))
+  return (
+    <div role="status" className="border-t border-gray-200">
+      <p className="flex items-center gap-2 px-4 py-2.5 text-xs text-gray-600">
+        <Spinner />
+        Checking against the live tenant{elapsed ? `. ${elapsed}` : ""}
+      </p>
+      {Array.from({ length: count }, (_, index) => (
+        <div key={index} className="flex items-center justify-between gap-4 border-t border-gray-200 px-4 py-3">
+          <Skeleton className={cn("h-3.5 bg-gray-200", index % 2 ? "w-40" : "w-56")} />
+          <Skeleton className="h-6 w-20 bg-gray-200" />
+        </div>
+      ))}
+    </div>
   )
 }

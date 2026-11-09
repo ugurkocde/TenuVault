@@ -53,6 +53,10 @@ interface Scenario {
   conflictApply?: string[]
   /** Holds the next plan until the test releases it. */
   holdPlan?: Promise<void>
+  /** Holds the policy list until the test releases it. */
+  holdPolicies?: Promise<void>
+  /** Holds every preview of these targets until the test releases it. */
+  holdPreview?: { tenantIds: string[]; released: Promise<void> }
   /** Holds the first apply of a target until the test releases it. */
   hold?: { tenantId: string; released: Promise<void> }
 }
@@ -75,7 +79,14 @@ function server(tenantId: string, action: string, body: Record<string, unknown>)
     case "policies": return { status: 200, body: { source: body.folder === "ConfigurationPolicies" ? [{ id: P1, name: "Windows Defender Antivirus", folder: "ConfigurationPolicies", platforms: "windows10", lastModifiedDateTime: null }] : [] } }
     case "targets": return { status: 200, body: { multiple: plan.current === "msp", targets: scenario.targets } }
     case "status": return { status: 200, body: { targets: (body.targetTenants as Array<{ tenantId: string }>).map(({ tenantId: id }) => scenario.statusError?.[id] ? { targetTenantId: id, error: scenario.statusError[id], links: [] } : ({ targetTenantId: id, error: null, links: id === B ? [{ folder: "ConfigurationPolicies", sourceId: P1, sourceName: "Windows Defender Antivirus", targetPolicyId: "linked-1", targetName: "Windows Defender Antivirus", linkedAt: "2026-11-01T00:00:00Z", state: "in-sync", changedIn: null, identical: true, error: null }] : [] })) } }
-    case "list-runs": return { status: 200, body: { runs: [...runs.values()].reverse().map((entry) => ({ ...entry.run, applied: entry.targets.some((target) => ((target.changeSet as { attempts?: number } | null)?.attempts ?? 0) > 0) })) } }
+    case "list-runs": return { status: 200, body: { runs: [...runs.values()].filter((entry) => entry.run.status !== "discarded").reverse().map((entry) => ({ ...entry.run, applied: entry.targets.some((target) => ((target.changeSet as { attempts?: number } | null)?.attempts ?? 0) > 0) })) } }
+    case "discard-run": {
+      const entry = runs.get(body.id as string)!
+      // As the route: refused once a target was approved or applied.
+      if (entry.targets.some((target) => (target.changeSet as { status?: string } | null)?.status !== undefined && (target.changeSet as { status: string }).status !== "in-review")) return { status: 409, body: { error: "A target of this sync was approved, so it cannot be discarded. Open it to see its result." } }
+      entry.run = { ...entry.run, status: "discarded" }
+      return { status: 200, body: { run: entry.run } }
+    }
     case "plan": {
       const id = `${runs.size + 1}`.padStart(8, "0") + "-0000-4000-8000-000000000000"
       const acknowledged = body.acknowledgeRedacted === true
@@ -175,6 +186,8 @@ beforeEach(() => {
       scenario.holdPlan = undefined
       await held
     }
+    if (action === "policies" && scenario.holdPolicies) await scenario.holdPolicies
+    if (action === "preview" && scenario.holdPreview?.tenantIds.includes(tenantId as string)) await scenario.holdPreview.released
     const hold = scenario.hold
     if (hold && action === "apply" && tenantId === hold.tenantId) {
       scenario.hold = undefined
@@ -291,7 +304,8 @@ describe("Sync review", () => {
     expect(review.textContent).not.toMatch(/Reviewer|Decision note/)
     expect(review.querySelectorAll("input:not([type])")).toHaveLength(0)
     expect(review.querySelector("legend")?.textContent).toBe("Backup before changes")
-    expect(review.textContent).toContain("Back up the affected policy types now")
+    expect(review.textContent).toContain("Back up first")
+    expect(review.textContent).toContain("Each target is backed up first, using that tenant's backup settings. If the backup does not cover every policy type this sync changes, or fails, nothing is changed in that tenant.")
     expect(review.textContent).toContain("Skip the backup")
     expect(review.querySelector<HTMLInputElement>('input[value="new"]')!.checked).toBe(true)
     expect(button(container, "Approve and sync to 2 tenants")?.disabled).toBe(false)
@@ -337,6 +351,11 @@ describe("Sync review", () => {
     scenario.items[B] = { action: "update", inSync: true }
     const container = await render()
     await toReview(container, ["Contoso Germany"])
+    // Nothing is written, so the backup choice and its hint are not shown.
+    const review = container.querySelector('section[aria-label="Review"]')!
+    expect(review.querySelector("legend")).toBeNull()
+    expect(review.textContent).not.toContain("Each target is backed up before anything is written.")
+    expect(review.textContent).toContain("Nothing is written.")
     await click(button(container, "Continue: nothing to write"))
     await until(() => !!node(container, "Contoso Germany"), "result")
     expect(container.querySelector('[role="status"]')?.textContent).toBe("Already in sync. Nothing was written.")
@@ -636,12 +655,155 @@ describe("CodeRabbit comments", () => {
 })
 
 describe("Sync flowchart motion", () => {
-  it("B6: turns every animation off under reduced motion, so only end states show", () => {
-    const css = readFileSync("src/renderer/desktop.css", "utf8")
-    const reduced = css.slice(css.lastIndexOf("@media (prefers-reduced-motion: reduce)"))
-    expect(reduced).toContain(".sync-link, .sync-ring, .sync-pop, .sync-node { animation: none; transition: none; }")
-    expect(reduced).toContain(".sync-pulse, .sync-ring { display: none; }")
-    // A link without its draw animation is drawn in full: its resting dash offset is 0.
+  const css = readFileSync("src/renderer/desktop.css", "utf8")
+  const reduced = css.slice(css.lastIndexOf("@media (prefers-reduced-motion: reduce)"))
+
+  it("B6: turns every Sync animation and transition off under reduced motion, so only end states show", () => {
+    // Every Sync class that animates or transitions is listed in the reduced-motion block.
+    const animated = new Set([...css.matchAll(/\.(sync-[a-z-]+)[^{]*\{[^}]*(animation|transition):/g)].map((match) => match[1]!))
+    expect(animated.size).toBeGreaterThan(8)
+    for (const name of animated) expect(reduced, name).toMatch(new RegExp(`\\.${name}\\b`))
+    expect(reduced).toContain(".sync-link, .sync-ring, .sync-pop, .sync-check, .sync-node, .sync-step, .sync-fade, .sync-chip, .sync-beat { animation: none; transition: none; }")
+    expect(reduced).toContain(".sync-pulse, .sync-ring, .sync-skeleton::after { display: none; }")
+    // A link or check without its draw animation is drawn in full: its resting dash offset is 0.
     expect(css).toContain(".sync-link { stroke-dasharray: 1; stroke-dashoffset: 0;")
+    expect(css).toContain(".sync-check { stroke-dasharray: 1; stroke-dashoffset: 0;")
+  })
+
+  it("keeps writing nodes and step content fully opaque: their entrances move and never fade", () => {
+    const keyframes = (name: string) => css.slice(css.indexOf(`@keyframes ${name} {`), css.indexOf("}\n}", css.indexOf(`@keyframes ${name} {`)))
+    for (const name of ["sync-enter", "sync-step"]) {
+      expect(keyframes(name)).toContain("transform")
+      expect(keyframes(name)).not.toContain("opacity")
+    }
+    expect(css).toMatch(/\.sync-node \{[^}]*animation: sync-enter/)
+    expect(css).toMatch(/\.sync-step \{[^}]*animation: sync-step/)
+  })
+})
+
+describe("Sync loading progression", () => {
+  it("names what the plan reads, then shows each target checking until its own preview arrives", async () => {
+    let releasePlan!: () => void
+    let releasePreview!: () => void
+    scenario.holdPlan = new Promise<void>((resolve) => { releasePlan = resolve })
+    scenario.holdPreview = { tenantIds: [C], released: new Promise<void>((resolve) => { releasePreview = resolve }) }
+    const container = await render()
+    await until(() => !!container.querySelector('input[type="checkbox"]'), "policies")
+    await click(container.querySelector<HTMLInputElement>('section[aria-label="Choose settings"] input[type="checkbox"]')!)
+    await click(button(container, "Sync 1 policy"))
+    await until(() => !!container.querySelector('section[aria-label="Choose targets"] button[aria-pressed]'), "target cards")
+    for (const name of ["Contoso Germany", "Contoso France"]) await click(card(container, name))
+    await click(button(container, "Review 2 tenants"))
+    const review = () => container.querySelector('section[aria-label="Review"]')!
+    // The plan request is running: the panel names the source and the number of targets.
+    expect(review().querySelector('[role="status"]')?.textContent).toContain("Reading Contoso Lab and 2 target tenants")
+    expect(review().querySelector(".run-indeterminate")).not.toBeNull()
+    expect(review().textContent).not.toContain("Contoso Germany")
+    // Nothing is ready yet, so the button names no count and stays disabled.
+    expect(button(container, /^Approve and sync/)!.textContent).toBe("Approve and sync")
+    expect(button(container, /^Approve and sync/)!.disabled).toBe(true)
+    releasePlan()
+    // Germany's preview arrives; France's is still being read.
+    await until(() => review().textContent?.includes("Ready: 0 changes") === true, "Germany checked")
+    const blocks = () => [...review().querySelectorAll(".rounded-2xl.bg-gray-50")]
+    const france = () => blocks().find((block) => block.textContent?.includes("Contoso France"))!
+    const germany = () => blocks().find((block) => block.textContent?.includes("Contoso Germany"))!
+    expect(france().textContent).toContain("Checking against the live tenant")
+    expect(germany().textContent).not.toContain("Checking against the live tenant")
+    expect(button(container, /^Approve and sync/)!.disabled).toBe(true)
+    releasePreview()
+    await until(() => !france().textContent?.includes("Checking against the live tenant"), "France checked")
+    expect(france().textContent).toContain("Ready: 1 change")
+    expect(button(container, /^Approve and sync/)!.disabled).toBe(false)
+  })
+
+  it("shows the policies loading as skeleton rows, then the rows and their status chips", async () => {
+    let release!: () => void
+    scenario.holdPolicies = new Promise<void>((resolve) => { release = resolve })
+    const container = await render()
+    // Before the policies answer, placeholder rows stand in for them.
+    expect(container.querySelector('section[aria-label="Choose settings"] [aria-label="Loading policies"]')).not.toBeNull()
+    release()
+    await until(() => !!container.querySelector('section[aria-label="Choose settings"] input[type="checkbox"]'), "policies")
+    expect(container.querySelector('[aria-label="Loading policies"]')).toBeNull()
+    await until(() => container.textContent?.includes("In sync with Contoso Germany") === true, "status chip")
+    expect(container.querySelector('section[aria-label="Choose settings"] .sync-fade')).not.toBeNull()
+  })
+
+  it("reads the sync status again on Start a new sync, so a chip never keeps a state from before", async () => {
+    const container = await render()
+    await toReview(container, ["Contoso Germany"])
+    await click(button(container, "Approve and sync to 1 tenant"))
+    await until(() => node(container, "Contoso Germany")?.className.includes("border-green-600") === true, "result")
+    const before = calls.filter((call) => call.action === "status").length
+    await click(button(container, "Start a new sync"))
+    await until(() => calls.filter((call) => call.action === "status").length > before, "status read again")
+  })
+})
+
+describe("Sync runs planned and never approved", () => {
+  /** Plans a run to Germany and France, then opens it again in a fresh page from Recent syncs. */
+  async function plannedThenReopened() {
+    let container = await render()
+    await toReview(container, ["Contoso Germany", "Contoso France"])
+    for (const root of roots.splice(0)) act(() => root.unmount())
+    document.body.replaceChildren()
+    container = await render()
+    await until(() => !!container.querySelector('section[aria-label="Recent syncs"] li button'), "recent syncs")
+    await click(container.querySelector<HTMLButtonElement>('section[aria-label="Recent syncs"] li button')!)
+    await until(() => !!button(container, /Continue to review/), "planned run")
+    return container
+  }
+
+  it("shows the run as planned, not approved yet, and continues it at Review with its stored plan", async () => {
+    const container = await plannedThenReopened()
+    const result = container.querySelector<HTMLElement>('section[aria-label="Sync result"]')!
+    expect(result.querySelector('[role="status"]')?.textContent).toBe("Planned, not approved yet")
+    expect(button(result, "Discard")).toBeDefined()
+    expect(result.textContent).not.toContain("Nothing was synced. No target was approved.")
+    const previews = calls.filter((call) => call.action === "preview").length
+    await click(button(container, /Continue to review/))
+    await until(() => !!button(container, /^Approve and sync/) && !container.textContent?.includes("Checking"), "review again")
+    // The same run, read against each live tenant again; nothing was planned anew.
+    expect(calls.filter((call) => call.action === "plan")).toHaveLength(1)
+    expect(calls.filter((call) => call.action === "preview").length).toBe(previews + 2)
+    expect(container.querySelector('ol[aria-label="Steps"] [aria-current="step"]')?.textContent).toContain("Review")
+    expect(button(container, "Approve and sync to 2 tenants")!.disabled).toBe(false)
+    await click(button(container, "Approve and sync to 2 tenants"))
+    await until(() => ["Contoso Germany", "Contoso France"].every((name) => node(container, name)?.className.includes("border-green-600")), "applied")
+    expect(calls.filter((call) => call.action === "approve").map((call) => call.body.id)).toEqual([`pr-${B}`, `pr-${C}`])
+  })
+
+  it("discards the run: it leaves Recent syncs and the page starts a new sync", async () => {
+    const container = await plannedThenReopened()
+    await click(button(container, "Discard"))
+    await until(() => !!container.querySelector('section[aria-label="Choose settings"]'), "new sync")
+    expect(calls.filter((call) => call.action === "discard-run").map((call) => call.body.id)).toEqual(["00000001-0000-4000-8000-000000000000"])
+    await until(() => container.querySelector('section[aria-label="Recent syncs"]')?.textContent?.includes("No syncs from Contoso Lab yet.") === true, "list without the run")
+  })
+
+  it("shows the refusal when the run can no longer be discarded", async () => {
+    const container = await plannedThenReopened()
+    // Another window approved a target in the meantime.
+    const entry = [...runs.values()][0]!
+    ;(entry.targets[0]!.changeSet as { status: string }).status = "approved"
+    await click(button(container, "Discard"))
+    await until(() => !!container.querySelector('section[aria-label="Sync result"] [role="alert"]'), "refusal")
+    expect(container.querySelector('section[aria-label="Sync result"] [role="alert"]')!.textContent).toBe("A target of this sync was approved, so it cannot be discarded. Open it to see its result.")
+  })
+
+  it("lists runs with an outcome chip, the source and targets, and a relative time with the full date", async () => {
+    const container = await render()
+    await toReview(container, ["Contoso Germany", "Contoso France"])
+    await until(() => container.querySelectorAll('section[aria-label="Recent syncs"] li').length === 1, "recent syncs")
+    const row = container.querySelector('section[aria-label="Recent syncs"] li')!
+    expect(row.textContent).toContain("Not applied")
+    expect(row.querySelector("svg")).not.toBeNull()
+    expect(row.textContent).toContain("Contoso Lab")
+    expect(row.textContent).toContain("2 targets")
+    expect(row.textContent).not.toContain("->")
+    const time = row.querySelector("time")!
+    expect(time.getAttribute("title")).toMatch(/2026/)
+    expect(time.textContent).toMatch(/ago|yesterday|just now|last|in /)
   })
 })
