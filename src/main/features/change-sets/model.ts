@@ -109,6 +109,8 @@ export interface OperationResult {
   objectId: string | null
   message: string | null
   readBack: "match" | "differs" | "denied" | "missing" | null
+  /** For a verified create or update: snapshotHash of the object the verifying read saw. */
+  readBackHash?: string
   attempts: number
   at: string | null
 }
@@ -159,8 +161,8 @@ export interface ChangeSetRecord extends ListedRecord {
   review: ChangeSetReview | null
   preChange: {
     capturedAt: string
-    /** Backup folder of the successful pre-change backup. */
-    backupFolder: string
+    /** Backup folder of the successful pre-change backup; null when a Sync apply skipped the backup. */
+    backupFolder: string | null
     captureId: string
     /** Per operation: whether the object existed and whether values were redacted. */
     objects: Array<{ key: string; objectId: string | null; name: string; state: "present" | "absent"; redacted: boolean; sameNameIds: string[] }>
@@ -218,6 +220,11 @@ export function contentHashOf(record: Pick<ChangeSetRecord, "kind" | "targetTena
     dependencies: record.dependencies,
     rollbackOf: record.rollbackOf,
   })
+}
+
+/** sha256 of a live object as stored and compared: sanitized, without volatile properties. */
+export function snapshotHash(type: IntuneType, live: Item): string {
+  return hashOf(comparableSnapshot(sanitizeSnapshot(type, live).snapshot))
 }
 
 /** The combined target fingerprint of per-operation fingerprints. */

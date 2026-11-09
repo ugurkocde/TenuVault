@@ -29,4 +29,6 @@ export const DOMAINS = {
   cisRemediations: "cis-remediations",
   changeReports: "change-reports",
   changeReportSettings: "change-report-settings",
+  syncRuns: "sync-runs",
+  syncLinks: "sync-links",
 } as const

@@ -195,7 +195,7 @@ export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollb
       {changeSet.preChange && (
         <section aria-label="Pre-change evidence" className="space-y-1 text-sm text-gray-600 dark:text-gray-400">
           <p className="font-medium text-gray-900 dark:text-gray-100">Pre-change evidence</p>
-          <p>Backup {changeSet.preChange.backupFolder}; live state of {changeSet.preChange.objects.length} object(s) captured {formatDate(changeSet.preChange.capturedAt)}.</p>
+          <p>{changeSet.preChange.backupFolder === null ? "Backup skipped" : `Backup ${changeSet.preChange.backupFolder}`}; live state of {changeSet.preChange.objects.length} object(s) captured {formatDate(changeSet.preChange.capturedAt)}.</p>
           {changeSet.preChange.objects.filter((object) => object.redacted).map((object) => <p key={object.key}>{object.name}: masked values were not stored; automatic rollback is not supported for it.</p>)}
         </section>
       )}

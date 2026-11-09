@@ -62,6 +62,13 @@ export function requiredFeatures(pathname: string, body: Record<string, unknown>
       if ((body.action === "oib-deploy" || body.action === "oib-fix") && body.bulk === true) features.push("bulkActions")
       return features
     }
+    case "/api/sync": {
+      // A Sync run to more than one target is an MSP action on every tenant it names. One
+      // target outside the Pro license pair is refused by the route, which knows the licenses.
+      const features = typeof body.action === "string" ? featureRouteFeatures(pathname, body.action) : []
+      if (features.length && Array.isArray(body.targetTenants) && body.targetTenants.length > 1) features.push("bulkActions")
+      return features
+    }
     default:
       return isFeatureRoute(pathname) && typeof body.action === "string" ? featureRouteFeatures(pathname, body.action) : []
   }

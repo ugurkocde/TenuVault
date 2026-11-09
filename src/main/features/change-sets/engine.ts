@@ -29,6 +29,7 @@ import {
   resultSummary,
   sameAssignments,
   sanitizeSnapshot,
+  snapshotHash,
   statusFromResults,
   UNSUPPORTED_RECOVERY,
   unsupportedReason,
@@ -90,6 +91,19 @@ export interface ApplyInput {
    * marks the change set stale and nothing is written.
    */
   dependencyCheck?: () => Promise<string[]>
+  /**
+   * "new" (the default) runs the full pre-change backup and fails closed. "none" skips it and
+   * is accepted only for Sync change sets of kind "change"; the pre-change capture still runs,
+   * so rollback works. Every other workflow and every rollback is refused with 400.
+   */
+  backup?: "new" | "none"
+  /**
+   * Called with the latest record while the tenant write is still held, once an attempt was
+   * claimed, also when it failed after writing started. What the owning workflow records from
+   * the results is so never interleaved with another apply to this tenant. A throw is logged
+   * and never changes the outcome.
+   */
+  onSettled?: (record: Stored<ChangeSetRecord>) => void
 }
 
 export interface CreateChangeSetInput {
@@ -559,6 +573,7 @@ function markStale(deps: FeatureDeps, tenantId: string, id: string, reason: stri
 export function decidingLink(workflow: string): string {
   switch (workflow) {
     case "promotion": return "/portal/changes/promotion"
+    case "sync": return "/portal/changes/sync"
     case "baseline-upgrade": return "/portal/changes/baseline-upgrades"
     case "standard-adoption": return "/portal/governance/standards"
     case "custom-baseline": return "/portal/baselines"
@@ -567,7 +582,7 @@ export function decidingLink(workflow: string): string {
   }
 }
 
-async function recordApplyAudit(deps: FeatureDeps, tenant: string, record: Stored_, status: ChangeSetStatus, actor: Actor, errorMessage?: string, attempt?: number): Promise<void> {
+async function recordApplyAudit(deps: FeatureDeps, tenant: string, record: Stored_, status: ChangeSetStatus, actor: Actor, errorMessage?: string, attempt?: number, backupSkipped = false): Promise<void> {
   try {
     const results = record.operations.map((operation) => ({ operation, result: record.results[operation.key] ?? emptyResult() }))
     const count = (statuses: OperationResult["status"][]) => results.filter((entry) => statuses.includes(entry.result.status)).length
@@ -598,7 +613,8 @@ async function recordApplyAudit(deps: FeatureDeps, tenant: string, record: Store
         created: verifiedBy("create"),
         updated: verifiedBy("update"),
         deleted: verifiedBy("delete"),
-        backupFolder: record.preChange?.backupFolder,
+        backupFolder: record.preChange?.backupFolder ?? undefined,
+        backupSkipped,
         error: errorMessage ? { code: "CHANGE_SET_APPLY_FAILED", message: errorMessage } : undefined,
       },
     }
@@ -616,7 +632,7 @@ function saveResult(deps: FeatureDeps, tenantId: string, id: string, key: string
   deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, tenantId, id, (current) => ({ ...current, results: { ...current.results, [key]: result } }), { actor, reason })
 }
 
-type Reconciled = { decision: "verified"; objectId: string; readBack: OperationResult["readBack"] } | { decision: "write" } | { decision: "stop"; status: "failed" | "uncertain"; message: string; objectId: string | null }
+type Reconciled = { decision: "verified"; objectId: string; readBack: OperationResult["readBack"]; readBackHash?: string } | { decision: "write" } | { decision: "stop"; status: "failed" | "uncertain"; message: string; objectId: string | null }
 
 /**
  * Settles an operation whose previous write may or may not have happened, by reading live
@@ -638,7 +654,7 @@ async function reconcile(graph: GraphCall, type: IntuneType, operation: ChangeOp
       }
       const live = await readCurrent(graph, type, id)
       if (!live) return { decision: "stop", status: "uncertain", message: "The created object no longer exists. Check Intune before retrying.", objectId: id }
-      if (matchesProposed(type, entry.body ?? {}, live) && (entry.assignments === null || sameAssignments(entry.assignments, live.assignments))) return { decision: "verified", objectId: id, readBack: "match" }
+      if (matchesProposed(type, entry.body ?? {}, live) && (entry.assignments === null || sameAssignments(entry.assignments, live.assignments))) return { decision: "verified", objectId: id, readBack: "match", readBackHash: snapshotHash(type, live) }
       return { decision: "stop", status: "uncertain", message: "An object was created but it does not match the proposed configuration. Review it in Intune.", objectId: id }
     }
     const live = await readCurrent(graph, type, operation.targetId!)
@@ -646,7 +662,7 @@ async function reconcile(graph: GraphCall, type: IntuneType, operation: ChangeOp
       if (!live) return { decision: "verified", objectId: operation.targetId!, readBack: "missing" }
     } else {
       if (!live) return { decision: "stop", status: "failed", message: "The object no longer exists in the tenant. An earlier attempt may have written to it before it was deleted; check Intune.", objectId: operation.targetId }
-      if (matchesProposed(type, entry.body ?? {}, live) && (entry.assignments === null || sameAssignments(entry.assignments, live.assignments))) return { decision: "verified", objectId: operation.targetId!, readBack: "match" }
+      if (matchesProposed(type, entry.body ?? {}, live) && (entry.assignments === null || sameAssignments(entry.assignments, live.assignments))) return { decision: "verified", objectId: operation.targetId!, readBack: "match", readBackHash: snapshotHash(type, live) }
     }
     const sanitized = sanitizeSnapshot(type, live!).snapshot
     const before = captured.body ? operationFingerprint(operation.action, { snapshot: captured.body, sameNameIds: [] }) : "missing"
@@ -674,9 +690,23 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
   let claimed: Stored_ | null = null
   let claimedAttempt: number | null = null
   let auditRecorded = false
+  let backupSkipped = false
+  const settle = async <T>(run: () => Promise<T>): Promise<T> => {
+    try {
+      return await run()
+    } finally {
+      if (claimed && input.onSettled) {
+        try { input.onSettled(getChangeSet(deps, tenant, id)) } catch (error) { console.error("[change-sets] Recording the settled apply failed:", error) }
+      }
+    }
+  }
   try {
-    return await withTenantWrite(tenant, "Change set apply", async () => {
+    return await withTenantWrite(tenant, "Change set apply", () => settle(async () => {
     const record = getChangeSet(deps, tenant, id)
+    if (input.backup !== undefined && input.backup !== "new" && input.backup !== "none") throw new FeatureError("backup must be \"new\" or \"none\".")
+    if (input.backup === "none" && !(record.origin.workflow === "sync" && record.kind === "change")) throw new FeatureError("Only Sync changes may skip the pre-change backup.")
+    // A retry reuses the first attempt's capture; whether that attempt backed up decides the record.
+    backupSkipped = record.preChange ? record.preChange.backupFolder === null : input.backup === "none"
     const recovery = isRecovery(record)
     requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
     if (record.status === "stale") throw new FeatureError(STALE, 409)
@@ -696,8 +726,8 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
     const claimedFrom = record.status
     const claimedRecord = deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, tenant, id, (current) => {
       if (current.status !== claimedFrom || current.contentHash !== record.contentHash || current.review?.decidedAt !== review.decidedAt) throw new FeatureError("The change set changed while the apply started. Review it again.", 409)
-      return { ...current, status: "applying", attempts: current.attempts + 1, lastError: null, summary: record.preChange ? "Retrying." : "Backing up before applying." }
-    }, { actor, reason: record.preChange ? "Retry started" : "Apply started; running the pre-change backup" })
+      return { ...current, status: "applying", attempts: current.attempts + 1, lastError: null, summary: record.preChange ? "Retrying." : backupSkipped ? "Capturing the pre-change state before applying." : "Backing up before applying." }
+    }, { actor, reason: record.preChange ? "Retry started" : backupSkipped ? "Apply started without a pre-change backup" : "Apply started; running the pre-change backup" })
     claimed = claimedRecord!
     claimedAttempt = claimedRecord!.attempts
 
@@ -731,7 +761,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
         }
         await check()
         requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
-        const backupFolder = await requirePreChangeBackup(deps, tenant, [...new Set(record.operations.map((operation) => operation.folder))], recoveryScope(record))
+        const backupFolder = backupSkipped ? null : await requirePreChangeBackup(deps, tenant, [...new Set(record.operations.map((operation) => operation.folder))], recoveryScope(record))
         // The backup takes time: confirm the claim still holds, then re-check dependencies and
         // the target and read the capture that rollback relies on right before writing.
         requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
@@ -765,13 +795,13 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
       const previous: ChangeSetRecord["status"] = claimedFrom === "applying" ? (record.preChange ? "uncertain" : "approved") : claimedFrom
       deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, tenant, id, (current) => ({ ...current, status: current.status === "applying" ? previous : current.status, lastError: message, summary: current.status === "applying" ? `Not applied: ${message}` : current.summary }), { actor, reason: `Apply stopped before writing: ${message}` })
       auditRecorded = true
-      await recordApplyAudit(deps, tenant, record, "failed", actor, message, claimedAttempt!)
+      await recordApplyAudit(deps, tenant, record, "failed", actor, message, claimedAttempt!, backupSkipped)
       throw error
     }
     for (const object of preChange.objects) capturedNames[object.key] = object.sameNameIds
     const firstAttempt = !record.preChange
     const change = preChange
-    deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, tenant, id, (current) => ({ ...current, status: "applying", preChange: change, lastError: null, summary: "Applying." }), { actor, reason: firstAttempt ? "Backup succeeded and pre-change state captured; applying" : "Retrying; reconciling earlier outcomes first" })
+    deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, tenant, id, (current) => ({ ...current, status: "applying", preChange: change, lastError: null, summary: "Applying." }), { actor, reason: firstAttempt ? (change.backupFolder === null ? "Backup skipped and pre-change state captured; applying" : "Backup succeeded and pre-change state captured; applying") : "Retrying; reconciling earlier outcomes first" })
 
     operations: for (const operation of record.operations) {
       const type = typeOf(operation.folder)
@@ -794,7 +824,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
         const settled = await reconcile(gated, type, operation, current, entry, { body: captured[operation.key]?.body ?? null, sameNameIds: capturedNames[operation.key] ?? [] })
         if (stopIfCisRevoked()) break operations
         if (settled.decision === "verified") {
-          saveResult(deps, tenant, id, operation.key, { ...current, status: "verified", objectId: settled.objectId, readBack: settled.readBack, message: "Reconciled from live state; not written again.", at: at() }, actor, `Reconciled ${operation.name}: verified without a repeat write`)
+          saveResult(deps, tenant, id, operation.key, { ...current, status: "verified", objectId: settled.objectId, readBack: settled.readBack, ...(settled.readBackHash ? { readBackHash: settled.readBackHash } : {}), message: "Reconciled from live state; not written again.", at: at() }, actor, `Reconciled ${operation.name}: verified without a repeat write`)
           continue
         }
         if (settled.decision === "stop") {
@@ -833,16 +863,17 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
       const check = await readBack(gated, type, { action: operation.action, objectId: outcome.objectId, proposed: entry.body, assignments: entry.assignments })
       const status: OperationResult["status"] = check.state === "match" ? "verified" : "uncertain"
       const message = check.state === "match" ? "Written and verified by read-back." : check.state === "denied" ? `Written, but the read-back was denied or failed (${check.message}). The outcome is unverified.` : check.state === "missing" ? "Written, but the object could not be found on read-back." : "Written, but the read-back differs from the proposed configuration."
-      saveResult(deps, tenant, id, operation.key, { ...attempt, status, objectId: outcome.objectId, readBack: check.state, message, at: at() }, actor, `${operation.name}: ${status}`)
+      const readBackHash = check.state === "match" && check.live ? snapshotHash(type, check.live) : undefined
+      saveResult(deps, tenant, id, operation.key, { ...attempt, status, objectId: outcome.objectId, readBack: check.state, readBackHash, message, at: at() }, actor, `${operation.name}: ${status}`)
     }
     const final = getChangeSet(deps, tenant, id)
     const results = final.operations.map((operation) => final.results[operation.key] ?? emptyResult())
     const status = statusFromResults(results)
     const updated = deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, tenant, id, (current) => ({ ...current, status, summary: resultSummary(results) }), { actor, reason: `Apply finished: ${status}` })!
     auditRecorded = true
-    await recordApplyAudit(deps, tenant, updated, status, actor, undefined, claimedAttempt!)
+    await recordApplyAudit(deps, tenant, updated, status, actor, undefined, claimedAttempt!, backupSkipped)
     return updated
-    })
+    }))
   } catch (error) {
     // A throw from the write loop or the final update: writes may have happened, so the
     // claimed attempt still gets its failure entry, with the results recorded so far. The
@@ -858,7 +889,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
         const settled = deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, tenant, id, (current) => current.status === "applying" ? { ...current, status, lastError: message, summary: `${resultSummary(results)} Apply failed: ${message}` } : current, { actor, reason: `Apply failed after writing started: ${message}` })
         if (settled) latest = settled
       } catch { /* The record store itself failed; the audit entry below still records the attempt. */ }
-      await recordApplyAudit(deps, tenant, latest, "failed", actor, message, claimedAttempt!)
+      await recordApplyAudit(deps, tenant, latest, "failed", actor, message, claimedAttempt!, backupSkipped)
     }
     throw error
   }

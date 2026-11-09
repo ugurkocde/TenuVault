@@ -4,6 +4,7 @@ import * as scores from "./scores"
 import * as hygiene from "./hygiene"
 import * as baselineUpgrades from "./baseline-upgrades"
 import * as promotion from "./promotion"
+import * as sync from "./sync"
 import * as healthReview from "./health-review"
 import * as notifications from "./notifications"
 import * as standards from "./standards"
@@ -11,7 +12,7 @@ import * as customBaselines from "./custom-baselines"
 import * as cisRemediation from "./cis-remediation"
 import * as reports from "./reports"
 
-const MODULES = [scores, hygiene, baselineUpgrades, promotion, healthReview, notifications, standards, customBaselines, cisRemediation, reports]
+const MODULES = [scores, hygiene, baselineUpgrades, promotion, sync, healthReview, notifications, standards, customBaselines, cisRemediation, reports]
 
 /** Every roadmap workflow route, merged into the API host next to the file routes. */
 export function featureRoutes(deps: FeatureDeps): Record<string, RouteModule> {
