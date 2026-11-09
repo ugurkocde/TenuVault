@@ -40,7 +40,7 @@ import SyncPage from "../../src/renderer/pages/SyncPage"
 interface Scenario {
   targets: Array<{ tenantId: string; eligible: boolean; multiple: boolean; reason: string | null }>
   /** Per target: the item action, and findings by acknowledgement. */
-  items: Record<string, { action: "create" | "update"; same?: boolean; findings?: (acknowledged: boolean) => Array<{ code: string; severity: string; message: string }>; warnings?: string[] }>
+  items: Record<string, { action: "create" | "update"; same?: boolean; inSync?: boolean; findings?: (acknowledged: boolean) => Array<{ code: string; severity: string; message: string }>; warnings?: string[] }>
   /** Targets whose first apply fails after writing nothing. */
   failFirstApply: string[]
   /** Targets whose approval is refused; their change set stays in review. */
@@ -71,6 +71,8 @@ function server(tenantId: string, action: string, body: Record<string, unknown>)
       const acknowledged = body.acknowledgeRedacted === true
       const targets = (body.targetTenants as Array<{ tenantId: string }>).map(({ tenantId: target }) => {
         const item = scenario.items[target]!
+        // The engine leaves a policy out of a target where it is already in sync; with nothing left, no promotion.
+        if (item.inSync) return { targetTenantId: target, promotionId: null, error: null, skipped: [{ folder: "ConfigurationPolicies", sourceId: P1, sourceName: "Windows Defender Antivirus", reason: "already in sync" }], promotion: null, changeSet: null, rollbackChangeSet: null }
         const findings = item.findings?.(acknowledged) ?? []
         const blocked = findings.some((finding) => finding.severity === "blocking")
         return {
@@ -78,9 +80,10 @@ function server(tenantId: string, action: string, body: Record<string, unknown>)
           promotion: { id: `pr-${target}`, status: blocked ? "blocked" : "in-review", sourceTenantId: A, items: [{ folder: "ConfigurationPolicies", sourceId: P1, sourceName: "Windows Defender Antivirus", action: item.action, blocked, findings, destinationId: item.action === "update" ? "linked-1" : null }] },
           changeSet: blocked ? null : changeSetOf(target, item.action, "in-review"),
           rollbackChangeSet: null,
+          skipped: [],
         }
       })
-      const run = { id, title: body.title, status: "planned", summary: "Planned.", createdAt: "2026-11-09T10:00:00Z", updatedAt: "2026-11-09T10:00:00Z", sourceTenantId: A, ticket: null, options: { includeAssignments: body.includeAssignments, dropUnsupportedExclusions: false, acknowledgeRedacted: acknowledged }, items: body.items, targets: targets.map(({ targetTenantId, promotionId, error }) => ({ targetTenantId, promotionId, error })) }
+      const run = { id, title: body.title, status: "planned", summary: "Planned.", createdAt: "2026-11-09T10:00:00Z", updatedAt: "2026-11-09T10:00:00Z", sourceTenantId: A, ticket: null, options: { includeAssignments: body.includeAssignments, dropUnsupportedExclusions: false, acknowledgeRedacted: acknowledged }, items: body.items, targets: targets.map(({ targetTenantId, promotionId, error, skipped }) => ({ targetTenantId, promotionId, error, skipped })) }
       runs.set(id, { run, targets })
       return { status: 200, body: { run, targets } }
     }
@@ -186,7 +189,7 @@ async function toReview(container: HTMLElement, names: string[]) {
   await until(() => !!container.querySelector('section[aria-label="Choose targets"] button[aria-pressed]'), "target cards")
   for (const name of names) await click(card(container, name))
   await click(button(container, /^Review \d tenants?$/))
-  await until(() => !!button(container, /^Approve and sync/) && !container.textContent?.includes("Checking"), "review")
+  await until(() => !!button(container, /^(Approve and sync|Continue: nothing to write)/) && !container.textContent?.includes("Checking"), "review")
 }
 
 describe("Sync page plans", () => {
@@ -236,7 +239,8 @@ describe("Sync review", () => {
     expect(plans).toHaveLength(1)
     expect(plans[0]!.body).toMatchObject({ targetTenants: [{ tenantId: B }, { tenantId: C }], includeAssignments: false, acknowledgeRedacted: false, items: [{ folder: "ConfigurationPolicies", sourceId: P1 }] })
     const review = container.querySelector('section[aria-label="Review"]')!
-    expect(review.textContent).toContain("Already in sync")
+    expect(review.textContent).toContain("No change")
+    expect(review.textContent).toContain("It is written again unchanged.")
     expect(review.textContent).toContain("Create")
     expect(review.textContent).toContain("no longer exists in this tenant. This Sync creates a new policy.")
     expect(review.textContent).toContain("already exist; this creates another one.")
@@ -264,6 +268,36 @@ describe("Sync review", () => {
     expect(calls.filter((call) => call.action === "plan")[1]!.body.acknowledgeRedacted).toBe(true)
     await click(ack)
     expect(approve().disabled).toBe(true)
+  })
+
+  it("shows a target already in sync as skipped, writes nothing there and shows it green in the result", async () => {
+    scenario.items[B] = { action: "update", inSync: true }
+    const container = await render()
+    await toReview(container, ["Contoso Germany", "Contoso France"])
+    const review = container.querySelector('section[aria-label="Review"]')!
+    expect(review.textContent).toContain("Skip: already in sync")
+    expect(review.textContent).toContain("Nothing is written.")
+    expect(review.textContent).toContain("Already in sync")
+    expect(calls.filter((call) => call.action === "preview").map((call) => call.tenantId)).toEqual([C])
+    await click(button(container, "Approve and sync to 1 tenant"))
+    await until(() => node(container, "Contoso France")?.className.includes("border-green-600") === true, "result")
+    const germany = node(container, "Contoso Germany")
+    expect(germany.getAttribute("aria-label")).toBe("Contoso Germany: Already in sync, nothing written. No backup taken.")
+    expect(germany.className).toContain("border-green-600")
+    expect(germany.querySelector("a")).toBeNull()
+    for (const action of ["approve", "apply", "retry"]) expect(calls.filter((call) => call.action === action).map((call) => call.tenantId)).not.toContain(B)
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("Synced to 2 tenants")
+  })
+
+  it("lets the admin finish when every target is already in sync, without writing", async () => {
+    scenario.items[B] = { action: "update", inSync: true }
+    const container = await render()
+    await toReview(container, ["Contoso Germany"])
+    await click(button(container, "Continue: nothing to write"))
+    await until(() => !!node(container, "Contoso Germany"), "result")
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("Already in sync. Nothing was written.")
+    expect(calls.map((call) => call.action)).not.toContain("approve")
+    expect(container.textContent).not.toContain("Backup taken in each tenant")
   })
 
   it("leaves out a target without backup storage unless the backup is skipped", async () => {

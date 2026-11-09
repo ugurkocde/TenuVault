@@ -49,26 +49,28 @@ const STATE_WORDS: Record<SyncStatusEntry["state"], string> = {
 export interface ReviewRow {
   key: string
   name: string
-  kind: "create" | "update" | "same" | "blocked"
+  kind: "create" | "update" | "same" | "skip" | "blocked"
   notes: Array<{ tone: "danger" | "warning" | "neutral"; message: string }>
 }
 
 export const ROW_LABEL: Record<ReviewRow["kind"], { label: string; tone: Tone }> = {
   create: { label: "Create", tone: "coral" },
   update: { label: "Update", tone: "warning" },
-  same: { label: "Already in sync", tone: "success" },
+  same: { label: "No change", tone: "neutral" },
+  skip: { label: "Skip: already in sync", tone: "success" },
   blocked: { label: "Blocked", tone: "danger" },
 }
 
 /**
  * Per selected policy of one target: create, update, no change (an update whose live difference
- * is empty) or blocked, with every finding of the plan and every blocker and warning of the
- * live preview under it.
+ * is empty), blocked, or skipped because the plan found it already in sync, with every finding
+ * of the plan and every blocker and warning of the live preview under it.
  */
 export function reviewRows(target: SyncTarget, preview: SyncPreview | null): ReviewRow[] {
+  const skipped: ReviewRow[] = (target.skipped ?? []).map((item) => ({ key: policyKey(item.folder, item.sourceId), name: item.sourceName, kind: "skip", notes: [] }))
   const promotion = target.promotion
-  if (!promotion) return []
-  return promotion.items.map((item) => {
+  if (!promotion) return skipped
+  return [...promotion.items.map((item): ReviewRow => {
     const operation = target.changeSet?.operations.find((entry) => entry.folder === item.folder && entry.source?.objectId?.toLowerCase() === item.sourceId.toLowerCase())
     const live = operation ? preview?.changeSet.operations.find((entry) => entry.key === operation.key) : undefined
     const kind: ReviewRow["kind"] = item.blocked ? "blocked" : item.action === "create" ? "create" : live && !live.diff.length && !live.diffTruncated ? "same" : "update"
@@ -78,8 +80,11 @@ export function reviewRows(target: SyncTarget, preview: SyncPreview | null): Rev
       ...(live?.warnings ?? []).map((message) => ({ tone: "warning" as const, message })),
     ]
     return { key: policyKey(item.folder, item.sourceId), name: item.sourceName, kind, notes }
-  })
+  }), ...skipped]
 }
+
+/** Every selected policy of the target is in sync there, so its plan has nothing to write. */
+export const allInSync = (target: SyncTarget) => !target.error && !target.promotion && !!target.skipped?.length
 
 /** Whether any selected policy of the run holds secrets the admin has to acknowledge. */
 export function needsSecretAck(targets: SyncTarget[]): boolean {
@@ -93,8 +98,9 @@ export interface ReviewState { preview: SyncPreview | null; error: string | null
  * without backup storage cannot back up, so with "back up now" it is left out, as an OIB
  * deployment to a further tenant without storage is.
  */
-export function readiness(target: SyncTarget, review: ReviewState | undefined, backup: SyncBackup, hasStorage: boolean): { state: "ready" | "checking" | "excluded"; reason: string | null } {
+export function readiness(target: SyncTarget, review: ReviewState | undefined, backup: SyncBackup, hasStorage: boolean): { state: "ready" | "checking" | "excluded" | "in-sync"; reason: string | null } {
   if (target.error) return { state: "excluded", reason: target.error }
+  if (allInSync(target)) return { state: "in-sync", reason: null }
   if (!target.promotion) return { state: "excluded", reason: "This tenant could not be planned." }
   if (target.promotion.status === "blocked" || !target.changeSet) return { state: "excluded", reason: "Blocked by the findings below. Nothing is written to this tenant." }
   if (!review) return { state: "checking", reason: null }
@@ -108,7 +114,7 @@ export function readiness(target: SyncTarget, review: ReviewState | undefined, b
 // ---------------------------------------------------------------------------------------------
 // Result
 
-export type TargetPhase = "excluded" | "waiting" | "writing" | "verified" | "partial" | "failed"
+export type TargetPhase = "excluded" | "waiting" | "writing" | "verified" | "partial" | "failed" | "in-sync"
 
 const verifiedCount = (changeSet: ChangeSet) => changeSet.operations.filter((operation) => changeSet.results[operation.key]?.status === "verified").length
 
@@ -120,6 +126,7 @@ const verifiedCount = (changeSet: ChangeSet) => changeSet.operations.filter((ope
 export function targetPhase(target: SyncTarget, active: boolean, error: string | null): TargetPhase {
   const changeSet = target.changeSet
   if (active) return "writing"
+  if (allInSync(target)) return "in-sync"
   if (!changeSet) return error ? "failed" : "excluded"
   switch (changeSet.status) {
     case "applying": return "writing"

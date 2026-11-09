@@ -43,6 +43,9 @@ describe("Sync result states", () => {
     expect(targetPhase(target("in-review"), false, null)).toBe("excluded")
     expect(targetPhase(target("stale"), false, "Plan again.")).toBe("failed")
     expect(targetPhase(target(null), false, null)).toBe("excluded")
+    const inSync = { ...target(null), promotion: null, skipped: [{ folder: "ConfigurationPolicies", sourceId: SOURCE_POLICY, sourceName: "Defender", reason: "already in sync" as const }] }
+    expect(targetPhase(inSync, false, null)).toBe("in-sync")
+    expect(readiness(inSync, undefined, "new", false)).toEqual({ state: "in-sync", reason: null })
     expect(progress(target("partial", { "op-1": { status: "verified" } }, [{ key: "op-1", folder: "ConfigurationPolicies", name: "A" }, { key: "op-2", folder: "ConfigurationPolicies", name: "B" }]))).toEqual({ done: 1, total: 2 })
     expect(failedItems(target("failed", { "op-1": { status: "failed", message: "Intune answered 403." } }).changeSet)).toEqual([{ name: "Defender", message: "Intune answered 403." }])
     expect(excludedReason(target("in-review"))).toBe("Reviewed but not approved.")

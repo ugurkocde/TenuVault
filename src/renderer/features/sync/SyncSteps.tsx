@@ -230,6 +230,7 @@ export function ReviewStep({ targets, reviews, planning, planError, tenantOf, ba
 }) {
   const states = targets.map((target) => readiness(target, reviews[target.targetTenantId], backup, !!tenantOf(target.targetTenantId)?.resources?.storageAccountName))
   const ready = states.filter((state) => state.state === "ready").length
+  const inSync = states.filter((state) => state.state === "in-sync").length
   const checking = planning || states.some((state) => state.state === "checking")
   const gated = secrets.needed && !(ack && secrets.acknowledged)
   const option = (value: SyncBackup, label: string, description: ReactNode) => (
@@ -256,7 +257,7 @@ export function ReviewStep({ targets, reviews, planning, planError, tenantOf, ba
               <header className="flex items-center gap-3 px-4 py-3">
                 <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-card text-[11px] font-bold text-gray-700">{initials(name)}</span>
                 <span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold text-gray-900">{name}</span><span className="block truncate text-xs text-gray-500">{tenant?.domain}</span></span>
-                {state.state === "ready" ? <Chip tone="success">Ready: {plural(writes, "change", "changes")}</Chip> : state.state === "checking" ? <Chip>Checking</Chip> : <Chip tone="danger">Left out</Chip>}
+                {state.state === "ready" ? <Chip tone="success">Ready: {plural(writes, "change", "changes")}</Chip> : state.state === "in-sync" ? <Chip tone="success">Already in sync</Chip> : state.state === "checking" ? <Chip>Checking</Chip> : <Chip tone="danger">Left out</Chip>}
               </header>
               {state.reason && <p className="border-t border-gray-200 px-4 py-2.5 text-sm text-red-700">{state.reason}</p>}
               <ul>
@@ -265,6 +266,7 @@ export function ReviewStep({ targets, reviews, planning, planError, tenantOf, ba
                     <span className="min-w-0">
                       <span className="block text-gray-900">{row.name}</span>
                       {row.kind === "same" && <span className="block text-xs text-gray-500">No setting differs from the policy in this tenant. It is written again unchanged.</span>}
+                      {row.kind === "skip" && <span className="block text-xs text-gray-500">Neither this policy nor its synced copy changed since the last sync. Nothing is written.</span>}
                       {row.notes.map((note, noteIndex) => <span key={noteIndex} className={cn("block text-xs", NOTE_TONE[note.tone])}>{note.message}</span>)}
                     </span>
                     <Chip tone={ROW_LABEL[row.kind].tone}>{ROW_LABEL[row.kind].label}</Chip>
@@ -303,9 +305,9 @@ export function ReviewStep({ targets, reviews, planning, planError, tenantOf, ba
       <Footer>
         <Button type="button" variant="ghost" onClick={onBack}>Back</Button>
         <span className="text-sm text-gray-500">{backup === "new" ? "Each target is backed up before anything is written." : "No backup is taken. Rollback uses the saved current versions."}</span>
-        <Button type="button" disabled={busy || checking || gated || !ready} onClick={onApprove}>
+        <Button type="button" disabled={busy || checking || gated || !(ready || inSync)} onClick={onApprove}>
           <ShieldCheck className="h-4 w-4" aria-hidden="true" />
-          {`Approve and sync to ${plural(ready, "tenant", "tenants")}`}
+          {ready || !inSync ? `Approve and sync to ${plural(ready, "tenant", "tenants")}` : "Continue: nothing to write"}
         </Button>
       </Footer>
     </section>

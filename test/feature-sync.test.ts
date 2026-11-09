@@ -6,7 +6,7 @@ import type { ChangeSetRecord } from "../src/main/features/change-sets/model"
 import { DOMAINS } from "../src/main/features/domains"
 import { FeatureError } from "../src/main/features/route"
 import { PROMOTION_NOT_FOUND, type PromotionRecord } from "../src/main/features/promotion/engine"
-import type { SyncRunRecord } from "../src/main/features/sync/engine"
+import type { SyncRunRecord, SyncSkip } from "../src/main/features/sync/engine"
 import { recordSyncLinks, syncLinks, type SyncLink, type SyncLinksRecord } from "../src/main/features/sync/links"
 import { planGuard, requiredFeatures } from "../src/main/api/plan-gates"
 import { upgradeMessage, type Plan } from "../src/shared/plans"
@@ -53,7 +53,7 @@ function plan(context: Context, targets: string[] = [TENANT_B], extra: Record<st
 async function planned(context: Context, targets: string[] = [TENANT_B]) {
   const response = await plan(context, targets)
   expect(response.status).toBe(200)
-  return response.body as { run: SyncRunRecord & { id: string }; targets: Array<{ targetTenantId: string; promotion: (PromotionRecord & { id: string }) | null; error: string | null }> }
+  return response.body as { run: SyncRunRecord & { id: string }; targets: Array<{ targetTenantId: string; promotion: (PromotionRecord & { id: string }) | null; error: string | null; skipped: SyncSkip[] }> }
 }
 
 async function approved(context: Context, target: string, id: string) {
@@ -83,6 +83,12 @@ async function synced(context: Context, targets: string[] = [TENANT_B], extra: R
 }
 
 const keyOf = (policy: { id?: unknown }) => `ConfigurationPolicies:${(policy.id as string).toLowerCase()}`
+
+/** Edits the source policy, so the next plan has something to update instead of skipping it as in sync. */
+let edits = 0
+function editSource(context: Context) {
+  context.source.policies.get(context.policy.id as string)!.description = `Edited in the source ${++edits}`
+}
 
 /** Changes one stored link in TENANT_B, as another Sync or a delayed write would have left it. */
 function relink(context: Context, key: string, change: Partial<SyncLink>) {
@@ -266,7 +272,7 @@ describe("/api/sync plans", () => {
     const failed = targets.find((target) => target.targetTenantId === TENANT_C)!
     expect(failed.promotion).toBeNull()
     expect(failed.error).toContain("Sign in again to use this tenant.")
-    expect(run.targets.find((target) => target.targetTenantId === TENANT_C)).toEqual({ targetTenantId: TENANT_C, promotionId: null, error: failed.error })
+    expect(run.targets.find((target) => target.targetTenantId === TENANT_C)).toEqual({ targetTenantId: TENANT_C, promotionId: null, error: failed.error, skipped: [] })
     expect(targets.filter((target) => target.promotion?.status === "in-review").map((target) => target.targetTenantId)).toEqual([TENANT_B, TENANT_D])
   })
 })
@@ -340,6 +346,7 @@ describe("Sync links", () => {
   it("never updates a policy when the link now points to a different one", async () => {
     const context = setup()
     await synced(context)
+    editSource(context)
     const id = (await planned(context)).targets[0]!.promotion!.id
     const contentHash = await approved(context, TENANT_B, id)
     const writes = context.targets[TENANT_B]!.writeCount()
@@ -355,6 +362,7 @@ describe("Sync links", () => {
     await synced(context)
     relink(context, keyOf(context.policy), { verifiedAt: undefined })
     expect(syncLinks(context.deps, TENANT_B, TENANT_A)[keyOf(context.policy)]).not.toHaveProperty("verifiedAt")
+    editSource(context)
     const later = (await synced(context))[TENANT_B]!
     expect(syncLinks(context.deps, TENANT_B, TENANT_A)[keyOf(context.policy)]!.promotionId).toBe(later)
   })
@@ -389,6 +397,7 @@ describe("Sync links", () => {
     expect(failLinks).toBe(false)
     expect(syncLinks(context.deps, TENANT_B, TENANT_A)).toEqual({})
     const [created] = [...context.targets[TENANT_B]!.policies.keys()]
+    editSource(context)
     const { targets } = await planned(context)
     expect(targets[0]!.promotion!.items[0]).toMatchObject({ action: "update", destinationId: created })
     expect(syncLinks(context.deps, TENANT_B, TENANT_A)[keyOf(context.policy)]).toMatchObject({ targetPolicyId: created, promotionId: first })
@@ -402,6 +411,7 @@ describe("Sync links", () => {
     const contentHash = await approved(context, TENANT_B, first)
     expect((await context.post({ tenantId: TENANT_B, action: "apply", id: first, contentHash, confirm: true })).body.changeSet.status).toBe("partial")
     context.targets[TENANT_B]!.failWrite = undefined
+    editSource(context)
     const later = (await synced(context))[TENANT_B]!
     expect(syncLinks(context.deps, TENANT_B, TENANT_A)[keyOf(context.policy)]!.promotionId).toBe(later)
     const retried = await context.post({ tenantId: TENANT_B, action: "retry", id: first, contentHash, confirm: true })
@@ -466,6 +476,7 @@ describe("Sync links", () => {
     const { first, contentHash } = await unconfirmedFirst(context)
     expect((await context.post({ tenantId: TENANT_B, action: "retry", id: first, contentHash, confirm: true })).body.changeSet.status).toBe("applied")
     const [created] = [...context.targets[TENANT_B]!.policies.keys()]
+    editSource(context)
     const next = (await planned(context)).targets[0]!.promotion!
     expect(next.items[0]).toMatchObject({ action: "update", destinationId: created })
     expect(unconfirmed(next)).toEqual([])
@@ -538,6 +549,7 @@ describe("Sync links", () => {
   it("orders links by verification time, not by when they were stored", async () => {
     const context = setup()
     await synced(context)
+    editSource(context)
     const older = (await planned(context)).targets[0]!.promotion!.id
     const newer = (await planned(context)).targets[0]!.promotion!.id
     context.deps.now = () => new Date("2026-09-30T13:00:00Z")
@@ -598,6 +610,7 @@ describe("Sync links", () => {
   it("fails only the target whose linked object cannot be read", async () => {
     const context = setup({ plans: MSP })
     await synced(context, [TENANT_B, TENANT_C, TENANT_D])
+    editSource(context)
     context.targets[TENANT_C]!.denyPolicyReads = true
     const { run, targets } = await planned(context, [TENANT_B, TENANT_C, TENANT_D])
     expect(run.status).toBe("partial")
@@ -647,6 +660,80 @@ describe("Sync links", () => {
     context.targets[TENANT_B]!.policies.delete(created!)
     expect((await status(context)).body.targets[0].links[0]).toMatchObject({ state: "missing-in-target", changedIn: null, identical: null })
     expect(context.targets[TENANT_B]!.writeCount() + context.source.writeCount()).toBe(1)
+  })
+})
+
+describe("Sync skips policies already in sync", () => {
+  it("writes nothing and creates no change set for a target where nothing changed", async () => {
+    const context = setup()
+    await synced(context)
+    const writes = context.targets[TENANT_B]!.writeCount()
+    const before = { promotions: context.deps.records.list(DOMAINS.promotions, TENANT_B).length, changeSets: changeSets(context, TENANT_B).length }
+    const { run, targets } = await planned(context)
+    expect(targets).toEqual([{ targetTenantId: TENANT_B, promotion: null, error: null, skipped: [{ folder: "ConfigurationPolicies", sourceId: context.policy.id, sourceName: "OIB Defender", reason: "already in sync" }] }])
+    expect(run.status).toBe("planned")
+    expect(run.summary).toBe("1 of 1 target planned, 1 already in sync.")
+    expect(run.targets).toEqual([{ targetTenantId: TENANT_B, promotionId: null, error: null, skipped: targets[0]!.skipped }])
+    expect(run.items).toEqual([{ folder: "ConfigurationPolicies", sourceId: context.policy.id, sourceName: "OIB Defender" }])
+    expect(context.deps.records.list(DOMAINS.promotions, TENANT_B)).toHaveLength(before.promotions)
+    expect(changeSets(context, TENANT_B)).toHaveLength(before.changeSets)
+    expect(context.targets[TENANT_B]!.writeCount()).toBe(writes)
+    expect(context.source.writeCount()).toBe(0)
+    // The stored run reads back the same, so a reopened run shows the target as already in sync.
+    expect((await context.post({ tenantId: TENANT_A, action: "get-run", id: run.id })).body.targets).toEqual([{ targetTenantId: TENANT_B, promotionId: null, error: null, skipped: targets[0]!.skipped, promotion: null, changeSet: null, rollbackChangeSet: null }])
+  })
+
+  it("plans an update once the source was edited afterwards", async () => {
+    const context = setup()
+    await synced(context)
+    expect((await planned(context)).targets[0]!.promotion).toBeNull()
+    editSource(context)
+    const [created] = [...context.targets[TENANT_B]!.policies.keys()]
+    const { targets } = await planned(context)
+    expect(targets[0]!.skipped).toEqual([])
+    expect(targets[0]!.promotion!.items).toEqual([expect.objectContaining({ action: "update", destinationId: created })])
+  })
+
+  it("plans only the changed policy of a target, and only the target where a policy changed", async () => {
+    const context = setup({ plans: MSP })
+    const other = context.source.addPolicy({ name: "OIB Firewall" })
+    const items = [{ sourceId: context.policy.id, folder: "ConfigurationPolicies" }, { sourceId: other.id, folder: "ConfigurationPolicies" }]
+    const first = (await plan(context, [TENANT_B, TENANT_C], { items })).body as Awaited<ReturnType<typeof planned>>
+    for (const target of first.targets) expect((await applied(context, target.targetTenantId, target.promotion!.id)).status).toBe(200)
+    // Firewall changes in the source; Defender is edited in TENANT_C only.
+    context.source.policies.get(other.id as string)!.description = "Edited in the source"
+    const defenderInC = [...context.targets[TENANT_C]!.policies.values()].find((policy) => policy.name === "OIB Defender")!
+    defenderInC.description = "Edited in the target"
+    const { targets } = (await plan(context, [TENANT_B, TENANT_C], { items })).body as Awaited<ReturnType<typeof planned>>
+    const inB = targets.find((target) => target.targetTenantId === TENANT_B)!
+    const inC = targets.find((target) => target.targetTenantId === TENANT_C)!
+    expect(inB.skipped.map((item) => item.sourceName)).toEqual(["OIB Defender"])
+    expect(inB.promotion!.items.map((item) => [item.sourceName, item.action])).toEqual([["OIB Firewall", "update"]])
+    expect(inC.skipped).toEqual([])
+    expect(inC.promotion!.items.map((item) => [item.sourceName, item.action])).toEqual([["OIB Defender", "update"], ["OIB Firewall", "update"]])
+    expect(changeSets(context, TENANT_B).find((changeSet) => changeSet.origin.recordId === inB.promotion!.id)!.operations.map((operation) => operation.name)).toEqual(["OIB Firewall"])
+  })
+
+  it("plans an update when the source cannot be read for the status check", async () => {
+    const context = setup()
+    await synced(context)
+    const graph = context.deps.graph
+    let failed = false
+    context.deps.graph = async (tenantId, options) => {
+      const call = await graph(tenantId, options)
+      if (tenantId !== TENANT_A) return call
+      return (async (method, path, body, callOptions) => {
+        if (!failed && method === "GET" && path.includes((context.policy.id as string))) {
+          failed = true
+          throw new Error("Graph is unavailable")
+        }
+        return call(method, path, body, callOptions)
+      }) as typeof call
+    }
+    const { targets } = await planned(context)
+    expect(failed).toBe(true)
+    expect(targets[0]!.skipped).toEqual([])
+    expect(targets[0]!.promotion!.items[0]).toMatchObject({ action: "update" })
   })
 })
 

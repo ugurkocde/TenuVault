@@ -15,7 +15,7 @@ export interface ResultTarget {
   phase: TargetPhase
 }
 
-const FINISHED: TargetPhase[] = ["verified", "partial", "failed"]
+const FINISHED: TargetPhase[] = ["verified", "partial", "failed", "in-sync"]
 
 /** Only an approved change set can be applied again; one that was never approved needs a new sync. */
 const retryable = (target: SyncTarget) => ["approved", "partial", "failed", "uncertain"].includes(target.changeSet?.status ?? "")
@@ -27,6 +27,7 @@ const STROKE: Record<TargetPhase, string> = {
   verified: "stroke-green-600",
   partial: "stroke-amber-500",
   failed: "stroke-red-500",
+  "in-sync": "stroke-green-600",
 }
 const FILL: Record<TargetPhase, string> = {
   excluded: "fill-border",
@@ -35,8 +36,9 @@ const FILL: Record<TargetPhase, string> = {
   verified: "fill-green-600",
   partial: "fill-amber-500",
   failed: "fill-red-500",
+  "in-sync": "fill-green-600",
 }
-const BAR: Record<TargetPhase, string> = { excluded: "bg-gray-300", waiting: "bg-gray-300", writing: "bg-coral-500", verified: "bg-green-600", partial: "bg-amber-500", failed: "bg-red-500" }
+const BAR: Record<TargetPhase, string> = { excluded: "bg-gray-300", waiting: "bg-gray-300", writing: "bg-coral-500", verified: "bg-green-600", partial: "bg-amber-500", failed: "bg-red-500", "in-sync": "bg-green-600" }
 const NODE: Record<TargetPhase, string> = {
   excluded: "border-dashed border-border opacity-80",
   waiting: "border-border",
@@ -44,11 +46,12 @@ const NODE: Record<TargetPhase, string> = {
   verified: "border-green-600 shadow-[0_0_0_4px_rgba(22,163,74,0.14),0_6px_20px_-8px_rgba(22,21,20,0.25)]",
   partial: "border-amber-500 shadow-[0_0_0_4px_rgba(245,158,11,0.16),0_6px_20px_-8px_rgba(22,21,20,0.25)]",
   failed: "border-red-500 shadow-[0_0_0_4px_rgba(239,68,68,0.14),0_6px_20px_-8px_rgba(22,21,20,0.25)]",
+  "in-sync": "border-green-600 shadow-[0_0_0_4px_rgba(22,163,74,0.14),0_6px_20px_-8px_rgba(22,21,20,0.25)]",
 }
 
 function StateIcon({ phase }: { phase: TargetPhase }) {
   if (phase === "writing") return <span aria-hidden="true" className="size-7 shrink-0 rounded-full border-2 border-border border-t-coral-500 motion-safe:animate-spin" />
-  if (phase === "verified") return <span aria-hidden="true" className="sync-pop flex size-7 shrink-0 items-center justify-center rounded-full bg-green-600 text-white"><Check className="h-4 w-4" strokeWidth={3} /></span>
+  if (phase === "verified" || phase === "in-sync") return <span aria-hidden="true" className="sync-pop flex size-7 shrink-0 items-center justify-center rounded-full bg-green-600 text-white"><Check className="h-4 w-4" strokeWidth={3} /></span>
   if (phase === "partial") return <span aria-hidden="true" className="sync-pop flex size-7 shrink-0 items-center justify-center rounded-full bg-amber-500 text-white"><AlertTriangle className="h-3.5 w-3.5" strokeWidth={3} /></span>
   if (phase === "failed") return <span aria-hidden="true" className="sync-pop flex size-7 shrink-0 items-center justify-center rounded-full bg-red-500 text-white"><X className="h-4 w-4" strokeWidth={3} /></span>
   return <span aria-hidden="true" className="size-7 shrink-0 rounded-full bg-secondary" />
@@ -64,7 +67,8 @@ function nodeText(entry: ResultTarget, backup: SyncBackup, error: string | null,
   switch (phase) {
     case "waiting": return { text: "Waiting", problems: [] }
     case "writing": return { text: target.changeSet?.preChange ? `Writing, ${done} of ${total} verified` : taken === "none" ? "Saving current versions, then writing" : "Backing up, then writing", problems: [] }
-    case "verified": return { text: `${plural(total, "change", "changes")} verified. ${taken === "none" ? "No backup taken." : "Backup taken first."}`, problems: [] }
+    case "verified": return { text: `${plural(total, "change", "changes")} verified${target.skipped?.length ? `, ${target.skipped.length} already in sync` : ""}. ${taken === "none" ? "No backup taken." : "Backup taken first."}`, problems: [] }
+    case "in-sync": return { text: "Already in sync, nothing written. No backup taken.", problems: [] }
     case "partial": return { text: `${done} of ${total} synced. ${failedItems(target.changeSet).length || 1} failed:`, problems }
     case "failed": return { text: target.changeSet && !retryable(target) ? "Nothing was synced. Start a new sync to review it again." : "Nothing was synced.", problems }
     default: return { text: `Not synced. ${note ?? excludedReason(target)}`, problems: [] }
@@ -163,7 +167,7 @@ export function SyncFlowchart({ source, policyCount, targets, backup, errors, no
         const { text, problems } = nodeText(entry, backup, errors[id] ?? null, notes[id] ?? null)
         const finished = FINISHED.includes(phase)
         const intune = finished ? intuneLink(target, platforms) : null
-        const width = phase === "verified" ? 100 : phase === "excluded" || phase === "waiting" ? 0 : total ? Math.max(phase === "writing" ? 8 : 0, (done / total) * 100) : 8
+        const width = phase === "verified" || phase === "in-sync" ? 100 : phase === "excluded" || phase === "waiting" ? 0 : total ? Math.max(phase === "writing" ? 8 : 0, (done / total) * 100) : 8
         return (
           <div
             key={id}
@@ -241,10 +245,12 @@ export function SyncResult({ source, policyCount, entries, backup, errors, notes
   useEffect(() => statusLine.current?.focus(), [])
   const involved = entries.filter((entry) => entry.phase !== "excluded")
   const running = involved.some((entry) => entry.phase === "writing" || entry.phase === "waiting")
-  const verified = involved.filter((entry) => entry.phase === "verified").length
+  const verified = involved.filter((entry) => entry.phase === "verified" || entry.phase === "in-sync").length
   const attention = involved.length - verified
   const anyWritten = involved.some((entry) => progress(entry.target).done > 0)
-  const skipped = involved.some((entry) => (backupOf(entry.target.changeSet) ?? backup) === "none")
+  // Targets already in sync wrote nothing, so they took no backup and decide nothing here.
+  const written = involved.filter((entry) => entry.target.changeSet)
+  const skipped = written.some((entry) => (backupOf(entry.target.changeSet) ?? backup) === "none")
   const open = entries.find((entry) => entry.target.targetTenantId === detailsOpen)
   const openTenant = open ? tenantOf(open.target.targetTenantId) : undefined
 
@@ -258,6 +264,8 @@ export function SyncResult({ source, policyCount, entries, backup, errors, notes
           </>
         ) : !involved.length ? (
           <span className="text-gray-900">Nothing was synced. No target was approved.</span>
+        ) : involved.every((entry) => entry.phase === "in-sync") ? (
+          <span className="text-green-700">Already in sync. Nothing was written.</span>
         ) : attention === 0 ? (
           <span className="text-green-700">Synced to {plural(verified, "tenant", "tenants")}</span>
         ) : verified === 0 && !anyWritten ? (
@@ -267,12 +275,12 @@ export function SyncResult({ source, policyCount, entries, backup, errors, notes
         )}
       </p>
       <SyncFlowchart source={source} policyCount={policyCount} targets={entries} backup={backup} errors={errors} notes={notes} platforms={platforms} onRetry={onRetry} retrying={retrying} detailsOpen={detailsOpen} onDetails={setDetailsOpen} />
-      {!running && involved.length > 0 && (
+      {!running && written.length > 0 && (
         <div className="flex flex-wrap gap-2" aria-label="Summary">
           {anyWritten && <Chip tone="success">Links saved for the next sync</Chip>}
           {anyWritten && <Chip>Rollback available per tenant</Chip>}
-          {skipped ? <Chip tone="warning">Backup skipped</Chip> : <Chip>Backup taken in each tenant</Chip>}
-          <Chip>Recorded in the audit log</Chip>
+          {written.length > 0 && (skipped ? <Chip tone="warning">Backup skipped</Chip> : <Chip>Backup taken in each tenant</Chip>)}
+          {written.length > 0 && <Chip>Recorded in the audit log</Chip>}
         </div>
       )}
       {open?.target.changeSet && open.target.promotionId && openTenant && (

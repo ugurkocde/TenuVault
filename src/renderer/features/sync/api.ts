@@ -1,6 +1,6 @@
 import type { Tenant } from "~/contexts/TenantContext"
 import { featureCall } from "../../lib/feature-api"
-import type { SyncRunRecord } from "../../../main/features/sync/engine"
+import type { SyncRunRecord, SyncSkip } from "../../../main/features/sync/engine"
 import type { SyncStatus, SyncStatusEntry } from "../../../main/features/sync/status"
 import type { PromotionPreview } from "../../../main/features/promotion/engine"
 import type { Promotion, PolicyOption } from "../promotion/api"
@@ -41,7 +41,7 @@ export const syncTargets = (source: Tenant) => featureCall<{ multiple: boolean; 
 export const syncStatus = (source: Tenant, targetTenantIds: string[]) => featureCall<SyncStatus>(PATH, source, "status", { targetTenants: named(targetTenantIds) })
 
 export const planSync = (source: Tenant, input: { title: string; targets: string[]; items: Array<{ folder: string; sourceId: string }>; acknowledgeRedacted: boolean }) =>
-  featureCall<{ run: SyncRun; targets: Array<{ targetTenantId: string; promotion: Promotion | null; error: string | null }> }>(PATH, source, "plan", {
+  featureCall<{ run: SyncRun; targets: Array<{ targetTenantId: string; promotion: Promotion | null; error: string | null; skipped: SyncSkip[] }> }>(PATH, source, "plan", {
     title: input.title,
     targetTenants: named(input.targets),
     items: input.items,

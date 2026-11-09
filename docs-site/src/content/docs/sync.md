@@ -12,6 +12,7 @@ Open **Sync** in the sidebar, directly under **Drift Detection**.
 * It copies the policies you select from the source to each target you choose. The source tenant is only read; it never changes.
 * It runs only when you start it. Sync never runs on its own, and later edits in the source reach a target only through a new sync that you review and approve.
 * It remembers which policy in a target each source policy was written to. The next sync of the same policy updates that policy instead of creating another one.
+* It writes nothing for a policy that is already in sync: when neither the source policy nor its synced copy changed since the last sync, that policy is skipped in that target.
 * It does not sync assignments. New policies are created unassigned, and the assignments of existing policies stay as they are.
 * It does not sync secret values. Values Intune masks must be set again in each target.
 * It does not delete anything in a target.
@@ -62,7 +63,10 @@ The review shows one block per target. Each selected policy shows what happens i
 
 * **Create**: the policy does not exist in the target yet, or was never synced to it, and is created unassigned.
 * **Update**: an earlier sync linked this policy, and the linked policy in the target is updated. Its assignments stay as they are.
-* **Already in sync**: the linked policy in the target has the same settings. It is written again unchanged.
+* **Skip: already in sync**: neither the source policy nor its synced copy in the target changed since the last sync. Nothing is written for it. If TenuVault cannot read the source to check, the policy is planned as an update instead.
+* **No change**: the policy is updated, but no setting differs from the policy in the target, for example when the target was not read back after an earlier sync and a change there cannot be ruled out. It is written again unchanged.
+
+When every selected policy is already in sync in a target, that target shows **Already in sync**. Nothing is planned or written there and no backup is taken. When every target is already in sync, the button reads **Continue: nothing to write**.
 * **Blocked**: the policy cannot be synced to this target. The finding below it says why, and nothing is written to that target.
 
 Warnings show under the policy they concern, for example:
@@ -93,6 +97,7 @@ The result view shows the source tenant on the left and one node per target on t
 
 * While a target is written, its line draws out and its node shows **Backing up, then writing**, or **Saving current versions, then writing** when you skipped the backup, followed by how many changes are verified.
 * When every change was verified, the line and node turn green and show **N changes verified**, with **Backup taken first** or **No backup taken**.
+* A target where every policy was already in sync turns green and shows **Already in sync, nothing written. No backup taken.**
 * When some changes failed, the line and node turn amber and list the failed policies with the error. When nothing was written, they turn red.
 * A target that was left out shows **Not synced** with the reason.
 
@@ -104,7 +109,7 @@ Each finished target offers:
 * **Retry failed**: applies the target again with the same backup choice. Policies already verified are not written again.
 * **Details**: shows the target's change set with the result of every policy, the pre-change evidence and **Preview rollback**.
 
-When every target finished, the summary shows **Links saved for the next sync**, **Rollback available per tenant**, **Backup taken in each tenant** or **Backup skipped**, and **Recorded in the audit log**. Click **Start a new sync** to begin again.
+When every target finished and at least one target was written, the summary shows **Links saved for the next sync**, **Rollback available per tenant**, **Backup taken in each tenant** or **Backup skipped**, and **Recorded in the audit log**. Click **Start a new sync** to begin again.
 
 ## Roll back a target
 
@@ -120,7 +125,7 @@ A rollback writes only to its target. It keeps working after the source tenant's
 
 ## Links and status
 
-When a sync verifies a write, TenuVault links the source policy to the policy it wrote in the target. Links are stored on this device, per source and target tenant. The next sync of a linked policy updates the linked policy, and the status in **Choose settings** compares both sides with the state at the last sync.
+When a sync verifies a write, TenuVault links the source policy to the policy it wrote in the target. Links are stored on this device, per source and target tenant. The next sync of a linked policy updates the linked policy, or skips it when neither side changed since. The status in **Choose settings** compares both sides with the state at the last sync, by the same rule.
 
 If the linked policy was deleted in the target, the next sync creates it again and says so in the review.
 
