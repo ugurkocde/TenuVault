@@ -395,6 +395,14 @@ export class LicenseService {
     if (this.trialsEnabled) {
       record.lastAttemptAt = Date.now()
       this.saveTrials()
+      try {
+        await this.activateTenant(tenant)
+        record.stopped = true
+        this.saveTrials()
+        return
+      } catch (error) {
+        if (!(error instanceof LicenseDenied) || error.reason !== "tenant_not_licensed") return
+      }
       await this.startTenantTrialCurrent(tenant, "auto")
     }
   }
@@ -1347,9 +1355,6 @@ export class LicenseService {
         this.saveTrials()
       }
       await this.checkTrialHealth()
-      if (this.trialsEnabled && !this.state?.key && !this.state?.activations[tenant]) {
-        try { await this.activateTenant(tenant) } catch { /* The existing entitlement check handles unavailable organization licenses. */ }
-      }
       await this.tryAutomaticTrial(tenant)
       return this.requireCurrent(tenant, options)
     })

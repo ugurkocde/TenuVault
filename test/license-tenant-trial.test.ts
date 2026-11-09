@@ -50,7 +50,7 @@ describe("tenant trials", () => {
     expect(license.status([]).tenantTrialsEnabled).toBe(!["disabled", "app_update_required"].includes(reason))
   })
   it("falls back on an old server", async () => {
-    response = () => Response.json({ reason: "bad_request" }, { status: 400 })
+    response = body => body.action === "activate" ? Response.json({ reason: "tenant_not_licensed" }, { status: 403 }) : Response.json({ reason: "bad_request" }, { status: 400 })
     const license = service()
     await license.checkNewTenant(tenant)
     expect(license.status([]).tenantTrialsEnabled).toBe(false)
@@ -74,7 +74,7 @@ describe("tenant trials", () => {
     expect(calls.some(c => c.action === "start_trial")).toBe(false)
   })
   it.each([71, 73])("retries a transient start only inside 72 hours (%s)", async hours => {
-    response = () => Response.json({ reason: "storage_unavailable" }, { status: 503 })
+    response = body => body.action === "activate" ? Response.json({ reason: "tenant_not_licensed" }, { status: 403 }) : Response.json({ reason: "storage_unavailable" }, { status: 503 })
     const license = service()
     await license.checkNewTenant(tenant)
     response = undefined
@@ -168,6 +168,28 @@ describe("tenant trials", () => {
     await license.checkNewTenant(tenant)
     expect(license.status([tenant]).tenantTrialsEnabled).toBe(false)
     expect(license.status([tenant]).tenants[0]?.plan).toBe("community")
+  })
+
+  it("checks organization coverage before any automatic start", async () => {
+    response = () => entitlement("tenant")
+    const license = service()
+    await license.checkNewTenant(tenant)
+    await license.refreshAll()
+    expect(license.status([tenant]).tenants[0]?.source).toBe("tenant")
+    expect(calls.some(body => body.action === "start_trial")).toBe(false)
+  })
+  it("retries a network failure starting a trial", async () => {
+    response = body => {
+      if (body.action === "activate") return Response.json({ reason: "tenant_not_licensed" }, { status: 403 })
+      throw new TypeError("fetch failed")
+    }
+    const license = service()
+    await license.checkNewTenant(tenant)
+    expect(license.status([tenant]).tenants[0]?.plan).toBe("community")
+    vi.setSystemTime(start + 3600_000)
+    response = undefined
+    await license.refreshAll()
+    expect(license.status([tenant]).trial).toBe(true)
   })
 
 })
