@@ -99,7 +99,7 @@ If you lower the number of tenants on an MSP subscription, the tenants that were
 
 ## If a license ends
 
-When a subscription ends or a license is revoked, the licensing service refuses the next check and the affected tenant falls back to Community, provided no other tenant on that machine already uses the free plan. Your backups remain available.
+When a subscription ends or a license is revoked, the licensing service refuses the next check. An affected tenant can continue on Community if the free plan is available on that machine. When several connected tenants lack coverage and no Community tenant has been chosen, backups pause until the admin chooses which tenant continues on the free plan. You can decide later or add a license instead. Your backups are kept.
 
 If the licensing service is only unreachable, nothing changes: active tenants keep their plan offline for up to 14 days after their last successful check.
 
@@ -119,7 +119,7 @@ See [Activate and manage your license](/licensing/manage/) for how to turn shari
 
 A saved daily schedule runs weekly on Community at its saved time. The weekday comes from the first slot after coverage ended. The daily schedule stays saved and resumes daily when Pro returns. You can pause and resume the saved schedule on Community. You can also change its saved time. Creating a daily schedule or changing a weekly schedule to daily needs Pro. TenuVault checks for renewed coverage in the background, including while the app is in the tray.
 
-Azure storage schedules pause with **Paused: Azure storage needs Pro**. Choose **Switch to weekly local backups** and confirm to save future backups on this computer. Your schedule and any owed backup slots stay saved. The Azure account settings are kept on this computer across restarts. Choose **Switch back to saved Azure storage**, or select the saved account in **Change storage**, to list or restore existing Azure backups. On Community, new backups pause again while Azure is selected. With Pro, Azure backups resume. Community cannot set up a new Azure account. Tenant profile edits stay on this computer while Azure storage needs Pro.
+Azure storage schedules pause with **Paused: Azure storage needs Pro**. Choose **Switch to weekly local backups** and confirm to save future backups on this computer. Your saved schedule stays unchanged. If backups were missed while paused, the most recent due slot is caught up under the normal retry rules. Missed weeks are not queued as separate backups. The Azure account settings are kept on this computer across restarts. Choose **Switch back to saved Azure storage**, or select the saved account in **Change storage**, to list or restore existing Azure backups. On Community, new backups pause again while Azure is selected. With Pro, Azure backups resume. Community cannot set up a new Azure account. Tenant profile edits stay on this computer while Azure storage needs Pro.
 
 An operating system notification announces the weekly fallback or a paused Azure schedule once. A pending Community choice also sends a notification asking you to open TenuVault and choose a tenant to resume backups.
 

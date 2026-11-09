@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { BackupScheduler, type ScheduledRunResult } from "../src/main/backup/scheduler"
 import { memoryStore } from "./helpers"
+import { CommunityChoicePendingError } from "../src/shared/plan-errors"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
 
@@ -21,6 +22,29 @@ afterEach(() => {
 const local = (y: number, m: number, d: number, h: number, min = 0) => new Date(y, m - 1, d, h, min).toISOString()
 
 describe("BackupScheduler", () => {
+  it.each([false, true])("restores a pending attempt only if its schedule is unchanged (edited: %s)", async (edited) => {
+    const { scheduler, store, run, setNow } = setup(local(2026, 9, 24, 10))
+    scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00" })
+    run.mockResolvedValueOnce({ status: "Failed", message: "Unavailable" })
+    setNow(local(2026, 9, 25, 2))
+    await scheduler.tick()
+    let stored = store.get("backup.schedules")
+    let reject!: (error: Error) => void
+    run.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail }))
+    setNow(local(2026, 9, 25, 2, 15))
+    const pending = scheduler.tick()
+    if (edited) {
+      setNow(local(2026, 9, 25, 2, 16))
+      scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "03:00" })
+      stored = store.get("backup.schedules")
+    }
+    reject(new CommunityChoicePendingError())
+    await pending
+    expect(store.get("backup.schedules")).toBe(stored)
+    expect(scheduler.list()[0]?.attempts).toBe(edited ? 0 : 1)
+    expect(run).toHaveBeenCalledTimes(2)
+  })
+
   it("catches up on the 60 second interval after sleep advances the wall clock", async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date(2026, 9, 10, 1))

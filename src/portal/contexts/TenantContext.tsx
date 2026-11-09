@@ -3,7 +3,7 @@
 import { tenantLicense, tenantPlan, useLicense } from "@desktop/lib/license"
 import { allows } from "../../shared/plans"
 import { LOCAL_STORAGE_PREFIX } from "../../shared/constants"
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from "react"
+import React, { createContext, useContext, useState, useEffect, useLayoutEffect, useCallback, useRef } from "react"
 import type { TenantCredentials } from "~/components/tenants/add-tenant-modal"
 import type { TenantMetadata } from "~/types/tenant-metadata"
 import { tenantStorage } from "~/lib/tenant-storage"
@@ -78,7 +78,7 @@ const SELECTED_TENANT_KEY = "tenuvault_selected_tenant"
 export function TenantProvider({ children }: { children: React.ReactNode }) {
   const { status: licenseStatus } = useLicense()
   const licenseRef = useRef(licenseStatus)
-  licenseRef.current = licenseStatus
+  useLayoutEffect(() => { licenseRef.current = licenseStatus }, [licenseStatus])
   const canSyncMetadata = useCallback((tenant: Tenant) => tenant.resources?.storageAccountName?.startsWith(LOCAL_STORAGE_PREFIX) || allows(tenantPlan(tenantLicense(licenseRef.current, tenant.credentials?.tenantId ?? "")) ?? "community", "azureStorage"), [])
   const [tenants, setTenants] = useState<Tenant[]>([])
   const [selectedTenantId, setSelectedTenantId] = useState<number | null>(null)

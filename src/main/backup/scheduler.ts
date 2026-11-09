@@ -203,7 +203,7 @@ export class BackupScheduler {
         const all = this.read()
         const current = all[schedule.tenantId]
         if (!result) {
-          if (current) this.write({ ...all, [tenantId]: { ...current, lastAttemptAt: schedule.lastAttemptAt, attemptSlot: schedule.attemptSlot, attempts: schedule.attempts, lastStatus: schedule.lastStatus, lastMessage: schedule.lastMessage } })
+          if (current && current.since === schedule.since) this.write({ ...all, [tenantId]: { ...current, lastAttemptAt: schedule.lastAttemptAt, attemptSlot: schedule.attemptSlot, attempts: schedule.attempts, lastStatus: schedule.lastStatus, lastMessage: schedule.lastMessage } })
           continue
         }
         if (current) {
