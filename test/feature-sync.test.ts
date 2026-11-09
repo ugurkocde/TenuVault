@@ -692,6 +692,10 @@ describe("Sync skips policies already in sync", () => {
     expect(context.source.writeCount()).toBe(0)
     // The stored run reads back the same, so a reopened run shows the target as already in sync.
     expect((await context.post({ tenantId: TENANT_A, action: "get-run", id: run.id })).body.targets).toEqual([{ targetTenantId: TENANT_B, promotionId: null, error: null, skipped: targets[0]!.skipped, promotion: null, changeSet: null, rollbackChangeSet: null }])
+    // Recent syncs reads it as already in sync, not as a plan that was never applied.
+    const runs = (await context.post({ tenantId: TENANT_A, action: "list-runs" })).body.runs as Array<{ id: string; applied: boolean; inSync: boolean }>
+    expect(runs.find((entry) => entry.id === run.id)).toMatchObject({ applied: false, inSync: true })
+    expect(runs.filter((entry) => entry.id !== run.id).every((entry) => !entry.inSync)).toBe(true)
   })
 
   it("plans an update once the source was edited afterwards", async () => {

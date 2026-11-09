@@ -260,6 +260,8 @@ export function SyncResult({ source, policyCount, entries, errors, notes, platfo
   // Targets something was written to; a rollback can run only where the tenant has backup storage.
   const wrote = involved.filter((entry) => mayHaveWritten(entry.target))
   const anyWritten = wrote.length > 0
+  // Links come only from verified writes, so the links chip follows verified operations alone.
+  const anyLinked = involved.some((entry) => progress(entry.target).done > 0)
   const rollbacks = wrote.filter((entry) => entry.storage).length
   // Targets already in sync wrote nothing, so they took no backup and decide nothing here. The
   // backup chip counts completed backups from the stored evidence, never the requested choice.
@@ -297,7 +299,7 @@ export function SyncResult({ source, policyCount, entries, errors, notes, platfo
       <SyncFlowchart source={source} policyCount={policyCount} targets={entries} errors={errors} notes={notes} platforms={platforms} onRetry={onRetry} retrying={retrying} detailsOpen={detailsOpen} onDetails={setDetailsOpen} />
       {!running && written.length > 0 && (
         <div className="flex flex-wrap gap-2" aria-label="Summary">
-          {anyWritten && <Chip tone="success">Links saved for the next sync</Chip>}
+          {anyLinked && <Chip tone="success">Links saved for the next sync</Chip>}
           {rollbacks > 0 && <Chip>{rollbacks === wrote.length ? "Rollback available per tenant" : `Rollback available in ${rollbacks} of ${wrote.length} tenants`}</Chip>}
           {backupChip}
           {written.length > 0 && <Chip>Recorded in the audit log</Chip>}

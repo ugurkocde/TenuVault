@@ -122,7 +122,7 @@ A rollback writes only to its target. It keeps working after the source tenant's
 
 ## Recent syncs
 
-**Recent syncs** lists the syncs started from the source tenant, newest first, with their targets. A sync that was planned but never applied shows **Not applied**, including a plan you replaced by going back and reviewing again. Click a sync to open its result view, read from the stored records.
+**Recent syncs** lists the syncs started from the source tenant, newest first, with their targets. A sync that was planned but never applied shows **Not applied**, including a plan you replaced by going back and reviewing again. A sync where every target was already in sync shows **Already in sync**. Click a sync to open its result view, read from the stored records.
 
 ## Links and status
 

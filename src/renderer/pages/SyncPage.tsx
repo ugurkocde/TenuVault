@@ -385,7 +385,7 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
                     <span className="block truncate text-sm font-medium text-gray-900">{entry.title}</span>
                     <span className="block text-xs text-gray-500">{formatDate(entry.createdAt)}. To {entry.targets.map((target) => tenantOf(target.targetTenantId)?.name ?? target.targetTenantId).join(", ")}. {entry.summary}</span>
                   </span>
-                  {!entry.applied && <Chip tone="warning">Not applied</Chip>}
+                  {entry.inSync ? <Chip tone="success">Already in sync</Chip> : !entry.applied && <Chip tone="warning">Not applied</Chip>}
                   <Chip>{plural(entry.targets.length, "target", "targets")}</Chip>
                 </button>
               </li>

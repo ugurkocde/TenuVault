@@ -146,7 +146,8 @@ function parseTargetMappings(value: unknown, targets: string[]): Record<string, 
 export function routes(deps: FeatureDeps): Record<string, RouteModule> {
   return featureRoute("/api/sync", deps, {
     // `applied`: whether any target's change set was ever applied, so a draft that was only planned can be told apart.
-    "list-runs": ({ tenantId }) => ({ runs: deps.records.list<SyncRunRecord>(DOMAINS.syncRuns, tenantId).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(({ history: _history, ...run }) => ({ ...run, applied: run.targets.some((target) => attempted(deps, target.targetTenantId, target.promotionId)) })) }),
+    // `inSync`: every target was already in sync, so nothing needed applying.
+    "list-runs": ({ tenantId }) => ({ runs: deps.records.list<SyncRunRecord>(DOMAINS.syncRuns, tenantId).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(({ history: _history, ...run }) => ({ ...run, applied: run.targets.some((target) => attempted(deps, target.targetTenantId, target.promotionId)), inSync: run.targets.length > 0 && run.targets.every((target) => !target.promotionId && !target.error && (target.skipped?.length ?? 0) > 0) })) }),
     "get-run": ({ tenantId, body }) => {
       const run = syncRun(deps, tenantId, body)
       return { run, targets: run.targets.map((target) => ({ ...target, ...targetRecords(deps, target.targetTenantId, target.promotionId) })) }

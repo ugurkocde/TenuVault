@@ -35,7 +35,7 @@ const PATH = "/api/sync"
 const named = (tenantIds: string[]) => tenantIds.map((tenantId) => ({ tenantId }))
 
 /** Runs from the source tenant, newest first; `applied` tells whether any target was ever applied. */
-export const listSyncRuns = (source: Tenant) => featureCall<{ runs: Array<SyncRun & { applied?: boolean }> }>(PATH, source, "list-runs")
+export const listSyncRuns = (source: Tenant) => featureCall<{ runs: Array<SyncRun & { applied?: boolean; inSync?: boolean }> }>(PATH, source, "list-runs")
 export const getSyncRun = (source: Tenant, id: string) => featureCall<{ run: SyncRun; targets: SyncTarget[] }>(PATH, source, "get-run", { id })
 export const syncPolicies = (source: Tenant, folder: string) => featureCall<{ source: PolicyOption[] }>(PATH, source, "policies", { folder })
 export const syncTargets = (source: Tenant) => featureCall<{ multiple: boolean; targets: SyncTargetOption[] }>(PATH, source, "targets")
