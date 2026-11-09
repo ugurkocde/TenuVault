@@ -1,12 +1,15 @@
-import { readFileSync } from "node:fs"
+import { execFileSync } from "node:child_process"
+import { existsSync, readFileSync } from "node:fs"
+import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
 import { COMPLIANCE_SETTING_KEYS, COMPLIANCE_SETTINGS_ID } from "../src/shared/intune/compliance-settings"
-import { cloudStatusBlobName } from "../src/shared/cloud-backup"
+import { PLAIN_CLOUD_RUNBOOK, cloudRunbookNeedsUpgrade, cloudStatusBlobName, parseCloudStatus } from "../src/shared/cloud-backup"
+
+const pwsh = ["/usr/local/bin/pwsh", "/opt/homebrew/bin/pwsh", "/usr/bin/pwsh", ...(process.env.HOME ? [`${process.env.HOME}/.local/bin/pwsh`] : [])].find((candidate) => existsSync(candidate))
 
 const runbook = readFileSync(new URL("../resources/runbooks/Invoke-TenuVaultBackup.ps1", import.meta.url), "utf8")
 const setup = readFileSync(new URL("../resources/New-TenuVaultCloudBackup.ps1", import.meta.url), "utf8")
-const azureSeal = readFileSync(new URL("../src/main/storage/azure-seal.ts", import.meta.url), "utf8")
 const template = JSON.parse(readFileSync(new URL("../resources/cloud-backup/azuredeploy.json", import.meta.url), "utf8")) as {
   parameters: Record<string, unknown>
   resources: Array<{ type: string }>
@@ -48,17 +51,70 @@ describe("Invoke-TenuVaultBackup.ps1 type table", () => {
 })
 
 describe("Invoke-TenuVaultBackup.ps1 format", () => {
-  it("seals with the same TVAZ1 envelope as the desktop app", () => {
-    expect(azureSeal).toContain("'tenuvault-azure-backup-v1'")
-    expect(runbook).toContain('"tenuvault-azure-backup-v1"')
-    expect(runbook).toContain('"TVAZ1`n"')
-    expect(runbook).toContain("HKDF")
-    expect(runbook).toContain("AesGcm")
-    expect(runbook).toContain("tenuvault-recovery-key")
-    // Every storage write goes through the sealed path; no plaintext PUT helper exists.
+  it("writes plain JSON and never reads Key Vault or the recovery key", () => {
+    for (const sealing of ['"TVAZ1`n"', "HKDF", "AesGcm", "tenuvault-azure-backup-v1", "tenuvault-recovery-key", "vault.azure.net", "application/octet-stream"]) {
+      expect(runbook, sealing).not.toContain(sealing)
+    }
+    expect(runbook).not.toMatch(/Get-TvRequiredVariable "TenuVaultKeyVault"/)
+    expect(runbook).not.toMatch(/Set-TvSealedBlob|Protect-TvAzureBlob|Get-TvRecoveryMasterKey/)
+    // Every backup container write goes through one helper, as JSON.
     expect(runbook.match(/Invoke-TvHttp -Uri \$target\.Uri -Token \$Token -Method "Put"/g)).toHaveLength(1)
+    expect(runbook).toContain('-BodyBytes ([Text.Encoding]::UTF8.GetBytes($Body)) -ContentType "application/json"')
     expect(runbook).toContain('headers["If-None-Match"] = "*"')
   })
+
+  it("carries the first plain runbook version, which the app does not flag for upgrade", () => {
+    const version = /\$script:RunbookVersion = "([^"]+)"/.exec(runbook)?.[1]
+    expect(version).toBe(PLAIN_CLOUD_RUNBOOK)
+    expect(cloudRunbookNeedsUpgrade(version!)).toBe(false)
+    expect(cloudRunbookNeedsUpgrade("1.1.0")).toBe(true)
+    expect(cloudRunbookNeedsUpgrade("1.0.0")).toBe(true)
+    expect(cloudRunbookNeedsUpgrade("0.9.9")).toBe(true)
+    expect(cloudRunbookNeedsUpgrade("1.10.0")).toBe(false)
+    expect(cloudRunbookNeedsUpgrade("2.0.0")).toBe(false)
+    expect(cloudRunbookNeedsUpgrade("")).toBe(false)
+    expect(cloudRunbookNeedsUpgrade("desktop")).toBe(false)
+  })
+
+  it.runIf(Boolean(pwsh))("puts only plain JSON blobs during a run, records early failures and never calls Key Vault", () => {
+    const script = fileURLToPath(new URL("./fixtures/cloud-backup/plain-run.ps1", import.meta.url))
+    const [run, failed] = execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }).trim().split(/\r?\n/).map((line) => JSON.parse(line) as { calls: Array<{ uri: string; method: string; contentType: string | null; ifNoneMatch: string | null; body: string | null }>; error?: string | null })
+    for (const scenario of [run!, failed!]) {
+      expect(scenario.calls.some((call) => call.uri.includes("vault.azure.net"))).toBe(false)
+      const puts = scenario.calls.filter((call) => call.method === "Put")
+      expect(puts.length).toBeGreaterThan(0)
+      for (const put of puts) {
+        expect(put.contentType, put.uri).toBe("application/json")
+        expect(put.body!.startsWith("TVAZ1")).toBe(false)
+        expect(() => JSON.parse(put.body!), put.uri).not.toThrow()
+      }
+    }
+    const puts = run!.calls.filter((call) => call.method === "Put")
+    const backup = "https://stcontoso.blob.core.windows.net/intune-backups/"
+    const names = puts.map((call) => call.uri.replace(/backup-\d{4}-\d{2}-\d{2}-\d{6}/, "backup-<time>"))
+    expect(names).toEqual(expect.arrayContaining([
+      `${backup}backup-<time>/.tenuvault-owner.json`,
+      `${backup}backup-<time>/DeviceConfigurations/Baseline%20Wi-Fi.json`,
+      `${backup}backup-<time>/metadata.json`,
+      `${backup}cloud-backup-status-11111111.json`,
+    ]))
+    // The claim comes first and is create-only; the policy file is the Graph object as read.
+    expect(names[0]).toBe(`${backup}backup-<time>/.tenuvault-owner.json`)
+    expect(puts[0]!.ifNoneMatch).toBe("*")
+    const policy = JSON.parse(puts.find((call) => call.uri.includes("/DeviceConfigurations/"))!.body!)
+    expect(policy).toMatchObject({ id: "cfg-1", displayName: "Baseline Wi-Fi" })
+    expect(policy["@odata.context"]).toBeUndefined()
+    const metadata = JSON.parse(puts.find((call) => call.uri.endsWith("/metadata.json"))!.body!)
+    expect(metadata).toMatchObject({ Status: "Success", RunbookVersion: PLAIN_CLOUD_RUNBOOK, Source: "TenuVault Cloud Backup", TenantId: "11111111-2222-3333-4444-555555555555" })
+    const status = JSON.parse(puts.find((call) => call.uri.endsWith("/cloud-backup-status-11111111.json"))!.body!)
+    expect(parseCloudStatus(status, "11111111-2222-3333-4444-555555555555")).toMatchObject({ lastStatus: "Success", runbookVersion: PLAIN_CLOUD_RUNBOOK })
+    // A run that fails before any backup write still records why, in the status blob and the note.
+    expect(failed!.error).toContain("managed identity token")
+    const failedStatus = failed!.calls.find((call) => call.method === "Put" && call.uri.endsWith("/cloud-backup-status-11111111.json"))
+    expect(parseCloudStatus(JSON.parse(failedStatus!.body!), "11111111-2222-3333-4444-555555555555")).toMatchObject({ lastStatus: "Failed" })
+    expect(failed!.calls.some((call) => call.method === "Put" && call.uri.includes("/tenuvault-backup-results/cloud-backup-outcomes/run-"))).toBe(true)
+    expect(failed!.calls.some((call) => call.uri.includes("/intune-backups/backup-"))).toBe(false)
+  }, 60_000)
 
   it("writes the desktop manifest shape and the per tenant status blob", () => {
     for (const field of ["BackupDate", "BackupFolder", "StartTime", "EndTime", "Duration", "DurationSeconds", "ItemCounts", "Status", "RunbookVersion", "BackupFormat", "Source", "TenantId", "Trigger", "RunId", "Scope", "Failures", "SkippedTypes", "FailedTypes", "AuthMode", "Items"]) {
@@ -73,9 +129,6 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
   it("hashes with the desktop parser and ordinal key order, not ConvertFrom-Json dates or culture sort", () => {
     expect(runbook).toContain("System.Text.Json.JsonDocument")
     expect(runbook).toContain("[StringComparer]::Ordinal")
-    // Single-argument AesGcm ctor: the Automation 7.2 runtime (.NET 6) lacks the tag size one.
-    expect(runbook).toContain("[Security.Cryptography.AesGcm]::new($key)")
-    expect(runbook).not.toContain("AesGcm]::new($key, 16)")
   })
 
   it("reads with a managed identity and deletes nothing", () => {
@@ -98,12 +151,31 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
     expect(setup).toContain("DeviceCategories,DeviceCleanupRules")
   })
 
-  it("keeps the recovery key off the command line and refuses to guess about alerting", () => {
-    expect(setup).toContain("Read-Host")
-    expect(setup).toContain("-AsSecureString")
+  it("creates no Key Vault, asks for no recovery key and refuses to guess about alerting", () => {
+    for (const keyVault of ["Read-Host", "-AsSecureString", "Az.KeyVault", "New-AzKeyVault", "Set-AzKeyVaultSecret", "Get-AzKeyVaultSecret", "Key Vault Secrets", "tenuvault-recovery-key", "$KeyVaultName", "keyVault="]) {
+      expect(setup, keyVault).not.toContain(keyVault)
+    }
     expect(setup).not.toMatch(/\[string\]\$RecoveryKey/)
+    expect(setup).not.toContain('Set-TenuVaultAutomationVariable -Name "TenuVaultKeyVault')
     expect(setup).toContain("-NoFailureAlert")
     expect(setup).toContain("Decide how failed cloud backups will be noticed")
+  })
+
+  it("upgrades an older setup in place and names its Key Vault for deletion", () => {
+    expect(setup).toContain('$legacyKeyVaultVariable = "TenuVaultKeyVault-$tenantKey"')
+    // A rerun drops the variable the runbook no longer reads, after the current variables are written.
+    const removal = setup.indexOf("-Name $legacyKeyVaultVariable | Out-Null")
+    expect(removal).toBeGreaterThan(setup.indexOf('Set-TenuVaultAutomationVariable -Name "TenuVaultAppOnlyExcluded-$tenantKey"'))
+    expect(setup).toContain("Publish-AzAutomationRunbook")
+    // -Remove deletes it too and, like a rerun, names the old vault before it is gone.
+    expect(setup).toContain("foreach ($name in @($variableNames) + $legacyKeyVaultVariable)")
+    const removeMode = setup.slice(setup.indexOf("if ($Remove) {\n    $account"), setup.indexOf("# Resource group and Automation account"))
+    expect(removeMode.indexOf("$legacyKeyVaults = Get-TenuVaultLegacyKeyVaults")).toBeLessThan(removeMode.indexOf("Remove-AzAutomationVariable"))
+    expect(removeMode).toContain("Write-TenuVaultLegacyKeyVaultNote $legacyKeyVaults")
+    expect(setup).toContain('-ResourceType "Microsoft.KeyVault/vaults"')
+    expect(setup).toContain('$_.Name -like "kv-tenuvault-*"')
+    expect(setup).toContain("Delete it once no setup uses it")
+    expect(setup).toContain("open in TenuVault with it")
   })
 
   it("scopes the writer role to the container without delete and prints the paste block", () => {
@@ -123,10 +195,8 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
     expect(setup).toContain("Microsoft.Authorization/roleDefinitions/write")
     expect(setup).not.toContain("blobs/delete")
     expect(setup).toContain("containers/$backupContainer")
-    // The runbook needs the .NET HKDF and AesGcm types, which the default 5.1 runtime lacks.
+    // The runbook parses with System.Text.Json, which the default 5.1 runtime lacks.
     expect(setup).toContain("-Type PowerShell72")
-    expect(setup).toContain("Parameters.ContainsKey('EnableRbacAuthorization')")
-    expect(setup).toContain("Key Vault Secrets User")
     expect(setup).toContain("--- TenuVault cloud backup setup (paste into TenuVault) ---")
     expect(setup).toContain("tenantKey=$tenantKey")
   })
@@ -140,18 +210,28 @@ describe("azuredeploy.json", () => {
       "Microsoft.Automation/automationAccounts/runbooks",
       "Microsoft.Automation/automationAccounts/schedules",
       "Microsoft.Automation/automationAccounts/jobSchedules",
-      "Microsoft.KeyVault/vaults",
-      "Microsoft.KeyVault/vaults/secrets",
       "Microsoft.Authorization/roleDefinitions",
     ]) expect(types, type).toContain(type)
     const runbookResource = template.resources.find((resource) => resource.type === "Microsoft.Automation/automationAccounts/runbooks") as unknown as { properties: { runbookType: string } }
     expect(runbookResource.properties.runbookType).toBe("PowerShell72")
-    expect((template.parameters.recoveryKey as { type: string }).type).toBe("securestring")
     expect(Object.keys(template.outputs)).toContain("pasteIntoTenuVault")
     const paste = (template.outputs.pasteIntoTenuVault as { value: string }).value
     expect(paste).toContain("time=")
     expect(paste).toContain("substring(parameters('scheduleStartTime'), 11, 5)")
     expect(Object.keys(template.outputs)).toContain("graphRolesToAssign")
+  })
+
+  it("creates no Key Vault, secret or vault role and takes no recovery key", () => {
+    expect(template.resources.filter((resource) => resource.type.startsWith("Microsoft.KeyVault/"))).toEqual([])
+    expect(Object.keys(template.parameters)).not.toContain("recoveryKey")
+    expect(Object.keys(template.parameters)).not.toContain("keyVaultName")
+    expect(Object.values(template.parameters).map((parameter) => (parameter as { type: string }).type)).not.toContain("securestring")
+    const text = JSON.stringify(template)
+    for (const keyVault of ["keyVault", "TenuVaultKeyVault", "tenuvault-recovery-key", "keyVaultSecretsUserRoleId", "4633458b-17de-408a-b874-0445c86b69e6"]) {
+      expect(text, keyVault).not.toContain(keyVault)
+    }
+    // The vault assignment is gone; the two writer assignments on the containers remain.
+    expect(template.resources.filter((resource) => resource.type === "Microsoft.Authorization/roleAssignments")).toHaveLength(2)
   })
 
   it("lets the identity leave result notes in the watcher's container with the same write-only role", () => {

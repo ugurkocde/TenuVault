@@ -42,7 +42,7 @@ describe("cloud backup result notes", () => {
     expect(events[21]).toBeNull()
   })
 
-  it("is the only unsealed write, to the watcher's container and with fixed fields", () => {
+  it("is the only write outside the backup container, to the watcher's container and with fixed fields", () => {
     expect(backupRunbook.match(/Invoke-TvHttp -Uri \$target\.Uri -Token \$Token -Method "Put"/g)).toHaveLength(1)
     const plain = backupRunbook.match(/Invoke-TvHttp -Uri \$uri -Token \$Token -Method "Put"/g)
     expect(plain).toHaveLength(1)
@@ -50,7 +50,7 @@ describe("cloud backup result notes", () => {
     expect(backupRunbook).toContain('$script:OutcomeContainer = "tenuvault-backup-results"')
     expect(backupRunbook).not.toMatch(/tenuvault-notification-state/)
     expect(backupRunbook).toContain('/$script:OutcomeContainer/cloud-backup-outcomes/')
-    // Every path that ends a run leaves a note: Key Vault, listing, write phase and the result.
+    // Every path that ends a run leaves a note: tokens and scope, listing, write phase and the result.
     expect(backupRunbook.match(/Send-TvBackupOutcome -Account/g)).toHaveLength(4)
   })
 

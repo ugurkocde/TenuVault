@@ -12,9 +12,6 @@
         publishes it (running the script again upgrades the published runbook)
       * writes the tenant's configuration as Automation variables with a per tenant suffix. One
         Automation account serves the one Entra tenant its managed identity belongs to
-      * creates an Azure Key Vault (RBAC), stores the TenuVault backup recovery key as the secret
-        "tenuvault-recovery-key" (you paste it at a hidden prompt; it is never printed or taken as
-        a parameter), and lets the managed identity read only that vault's secrets
       * creates the intune-backups container when missing and gives the identity the custom role
         "TenuVault Backup Writer" on that container only: read and write blobs, no delete. The
         runbook therefore cannot remove backups; retention runs on the next desktop backup made
@@ -29,6 +26,14 @@
         Automation jobs, before the schedule is linked. Without it, -NoFailureAlert is the
         explicit opt out. Setup refuses to guess: a backup that fails silently is worse than none.
 
+    Backups are written as plain JSON. TenuVault does not encrypt backups in your storage account:
+    Azure encrypts it at rest and your Azure role assignments decide who can read it, so setup needs
+    no Key Vault and no recovery key. Setups made before runbook 1.2.0 created a Key Vault
+    (kv-tenuvault-<suffix>) for the recovery key. Running this script again is the upgrade: it
+    republishes the runbook, rewrites the variables in place, removes the tenant's old
+    TenuVaultKeyVault variable and names the old vault, which you can delete once no setup uses
+    it. Backups made before the upgrade stay sealed and open in TenuVault with the recovery key.
+
     Microsoft Graph application roles are the one part Azure RBAC cannot grant. With
     -GrantGraphRoles (Global Administrator) the script assigns the read-only DeviceManagement
     roles to the managed identity, the same set as the desktop Backup Reader, and prints a consent
@@ -42,11 +47,12 @@
     -IncludeDeviceCategories after that decision has been made for the tenant.
 
     With -Remove, the script deletes this tenant's schedule link, schedule and Automation
-    variables, and lists what stays behind on purpose (Automation account, Key Vault, roles,
-    backups) and what to revoke by hand.
+    variables, and lists what stays behind on purpose (Automation account, roles, backups) and
+    what to revoke by hand. It also names the Key Vault of an earlier setup, which can be deleted
+    once no setup uses it.
 
-    Needs Az.Accounts, Az.Resources, Az.Automation, Az.Storage and Az.KeyVault, plus an account
-    that can create Automation accounts, Key Vaults and role assignments (Owner, or Contributor
+    Needs Az.Accounts, Az.Resources, Az.Automation and Az.Storage, plus an account
+    that can create Automation accounts and role assignments (Owner, or Contributor
     plus User Access Administrator, on the Automation resource group and, when it differs, on
     the storage account's resource group). The storage resource group access must include
     Microsoft.Authorization/roleAssignments/write and, when the writer role is created or its
@@ -101,7 +107,6 @@ param(
     [string]$ResourceGroupName = "rg-tenuvault-backups",
     [string]$Location,
     [string]$AutomationAccountName = "aa-tenuvault",
-    [string]$KeyVaultName,
     [ValidateSet("Daily", "Weekly")][string]$Frequency = "Daily",
     [string]$Time = "02:00",
     [DayOfWeek]$WeekDay = [DayOfWeek]::Sunday,
@@ -126,7 +131,6 @@ $outcomeContainer = "tenuvault-backup-results"
 $runbookPath = Join-Path $PSScriptRoot "runbooks/Invoke-TenuVaultBackup.ps1"
 $tenantKey = $TenantId.Substring(0, [Math]::Min(8, $TenantId.Length)).ToLowerInvariant()
 $scheduleName = "TenuVaultBackup-$tenantKey"
-$secretName = "tenuvault-recovery-key"
 $writerRoleName = "TenuVault Backup Writer"
 
 $graphRoleNames = @(
@@ -140,9 +144,12 @@ if ($IncludeDeviceCategories) { $graphRoleNames += "DeviceManagementManagedDevic
 $appOnlyExcluded = if ($IncludeDeviceCategories) { "" } else { "DeviceCategories,DeviceCleanupRules" }
 
 $variableNames = @(
-    "TenuVaultTenantId-$tenantKey", "TenuVaultStorageAccount-$tenantKey", "TenuVaultKeyVault-$tenantKey",
+    "TenuVaultTenantId-$tenantKey", "TenuVaultStorageAccount-$tenantKey",
     "TenuVaultScope-$tenantKey", "TenuVaultExcludedFolders-$tenantKey", "TenuVaultAppOnlyExcluded-$tenantKey"
 )
+# Setups before runbook 1.2.0 also wrote the Key Vault that held the recovery key. The runbook
+# no longer reads it; a rerun or -Remove deletes that variable.
+$legacyKeyVaultVariable = "TenuVaultKeyVault-$tenantKey"
 
 # Validate every input before the first Azure write.
 if ($TenantId -notmatch '^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$') {
@@ -170,7 +177,7 @@ if ((-not $Remove) -and -not (Test-Path $runbookPath)) {
     throw "Runbook file not found: $runbookPath. Keep this script next to the runbooks folder from the TenuVault release."
 }
 
-foreach ($module in "Az.Accounts", "Az.Resources", "Az.Automation", "Az.Storage", "Az.KeyVault") {
+foreach ($module in "Az.Accounts", "Az.Resources", "Az.Automation", "Az.Storage") {
     if (-not (Get-Module -ListAvailable -Name $module)) {
         Write-Host "Installing $module for the current user..."
         Install-Module $module -Scope CurrentUser -Force -AllowClobber
@@ -248,6 +255,30 @@ function Add-TenuVaultRoleAssignment {
     }
 }
 
+# The Key Vault of a setup before runbook 1.2.0: the one this tenant's old variable names, and
+# any kv-tenuvault-* vault in the Automation resource group, where those setups created it.
+function Get-TenuVaultLegacyKeyVaults {
+    $names = [System.Collections.Generic.List[string]]::new()
+    $variable = Get-AzAutomationVariable -ResourceGroupName $ResourceGroupName `
+        -AutomationAccountName $AutomationAccountName -Name $legacyKeyVaultVariable -ErrorAction SilentlyContinue
+    if ($variable -and "$($variable.Value)".Trim('"')) { $names.Add("$($variable.Value)".Trim('"')) }
+    $vaults = Get-AzResource -ResourceGroupName $ResourceGroupName -ResourceType "Microsoft.KeyVault/vaults" -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like "kv-tenuvault-*" }
+    foreach ($vault in @($vaults)) { if ($vault -and -not $names.Contains($vault.Name)) { $names.Add($vault.Name) } }
+    return @($names)
+}
+
+function Write-TenuVaultLegacyKeyVaultNote {
+    param([string[]]$Names)
+    if (-not $Names) { return }
+    Write-Host ""
+    Write-Host "Cloud backups no longer use Key Vault. Key Vault $($Names -join ', ') from an earlier setup is no"
+    Write-Host "longer read. Delete it once no setup uses it (no other Automation account still runs a TenuVault"
+    Write-Host "runbook older than 1.2.0 with it), in the portal or with Remove-AzKeyVault. Deleting it also"
+    Write-Host "removes its role assignments. Keep the recovery key saved: backups made before the upgrade"
+    Write-Host "stay sealed with it and open in TenuVault with it."
+}
+
 function Assert-TenuVaultAuthorizationActions {
     param(
         [Parameter(Mandatory)][string]$Scope,
@@ -295,7 +326,7 @@ if (-not $Remove) {
 
 # ---------------------------------------------------------------------------
 # Remove mode: this tenant's schedule link, schedule and variables go away. The
-# account, vault, roles and backups stay, because another tenant may use them.
+# account, roles and backups stay, because another tenant may use them.
 # ---------------------------------------------------------------------------
 
 if ($Remove) {
@@ -305,6 +336,7 @@ if ($Remove) {
         return
     }
     $principalId = Get-TenuVaultAutomationPrincipalId
+    $legacyKeyVaults = Get-TenuVaultLegacyKeyVaults
     try {
         Unregister-AzAutomationScheduledRunbook -ResourceGroupName $ResourceGroupName `
             -AutomationAccountName $AutomationAccountName -RunbookName $runbookName `
@@ -316,7 +348,7 @@ if ($Remove) {
         Remove-AzAutomationSchedule -ResourceGroupName $ResourceGroupName `
             -AutomationAccountName $AutomationAccountName -Name $scheduleName -Force | Out-Null
     }
-    foreach ($name in $variableNames) {
+    foreach ($name in @($variableNames) + $legacyKeyVaultVariable) {
         $variable = Get-AzAutomationVariable -ResourceGroupName $ResourceGroupName `
             -AutomationAccountName $AutomationAccountName -Name $name -ErrorAction SilentlyContinue
         if ($variable -and $PSCmdlet.ShouldProcess($name, "Remove Automation variable")) {
@@ -327,12 +359,13 @@ if ($Remove) {
     Write-Host ""
     Write-Host "Cloud backup schedule and variables for tenant $TenantId removed." -ForegroundColor Green
     Write-Host "Left in place on purpose: Automation account '$AutomationAccountName' and runbook '$runbookName'"
-    Write-Host "(other tenants may use them), the Key Vault and its '$secretName' secret, storage account"
-    Write-Host "'$StorageAccountName' with every backup, and the role assignments."
+    Write-Host "(other tenants may use them), storage account '$StorageAccountName' with every backup,"
+    Write-Host "and the role assignments."
     Write-Host "When the Automation account is no longer used by any tenant, revoke these Graph roles"
     Write-Host "from its managed identity (Entra ID > Enterprise applications > Permissions):"
     foreach ($role in $graphRoleNames) { Write-Host "  * $role" }
     if ($principalId) { Write-Host "Managed identity object (principal) id: $principalId" }
+    Write-TenuVaultLegacyKeyVaultNote $legacyKeyVaults
     return
 }
 
@@ -479,60 +512,6 @@ if ($principalId) {
 }
 
 # ---------------------------------------------------------------------------
-# Key Vault: the recovery key the runbook seals backups with
-# ---------------------------------------------------------------------------
-
-if (-not $KeyVaultName) {
-    $suffix = ([Guid]::NewGuid().ToString("N")).Substring(0, 6)
-    $existingVault = Get-AzKeyVault -ResourceGroupName $ResourceGroupName -ErrorAction SilentlyContinue |
-        Where-Object { $_.VaultName -like "kv-tenuvault-*" } | Select-Object -First 1
-    $KeyVaultName = if ($existingVault) { $existingVault.VaultName } else { "kv-tenuvault-$suffix" }
-}
-$vault = Get-AzKeyVault -VaultName $KeyVaultName -ResourceGroupName $ResourceGroupName -ErrorAction SilentlyContinue
-if (-not $vault) {
-    Write-Host "Creating Key Vault '$KeyVaultName' (RBAC authorization, soft delete)..."
-    if ($PSCmdlet.ShouldProcess($KeyVaultName, "Create Key Vault")) {
-        # Newer Az.KeyVault enables RBAC by default and exposes only -DisableRbacAuthorization.
-        $vaultParams = @{
-            VaultName = $KeyVaultName; ResourceGroupName = $ResourceGroupName
-            Location = $Location; SoftDeleteRetentionInDays = 30
-        }
-        if ((Get-Command New-AzKeyVault).Parameters.ContainsKey('EnableRbacAuthorization')) {
-            $vaultParams.EnableRbacAuthorization = $true
-        }
-        $vault = New-AzKeyVault @vaultParams
-    }
-}
-if ($vault) {
-    $currentUserId = (Get-AzADUser -SignedIn -ErrorAction SilentlyContinue).Id
-    if ($currentUserId) {
-        Add-TenuVaultRoleAssignment -ObjectId $currentUserId -RoleName "Key Vault Secrets Officer" -Scope $vault.ResourceId -Target "you"
-    }
-    if ($principalId) {
-        Add-TenuVaultRoleAssignment -ObjectId $principalId -RoleName "Key Vault Secrets User" -Scope $vault.ResourceId -Target "the cloud backup identity"
-    }
-    $existingSecret = Get-AzKeyVaultSecret -VaultName $KeyVaultName -Name $secretName -ErrorAction SilentlyContinue
-    if (-not $existingSecret -and -not $WhatIfPreference) {
-        Write-Host "Paste the tenant's TenuVault backup recovery key (Settings > Storage and recovery >"
-        Write-Host "Save recovery key in the desktop app). It is stored as the Key Vault secret"
-        Write-Host "'$secretName' and never printed. Anyone who can read this secret can read every"
-        Write-Host "backup in the storage account, so keep the vault's roles as set by this script."
-        $secure = Read-Host "Recovery key (TVK2...)" -AsSecureString
-        $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
-        if ($plain.Trim() -notmatch '^TVK[12]\.[A-Za-z0-9_.-]+$') {
-            throw "That is not a TenuVault recovery key (expected TVK2. or TVK1.). Nothing was stored. Run the script again."
-        }
-        if ($PSCmdlet.ShouldProcess($secretName, "Store the recovery key in Key Vault")) {
-            Set-AzKeyVaultSecret -VaultName $KeyVaultName -Name $secretName -SecretValue (ConvertTo-SecureString $plain.Trim() -AsPlainText -Force) | Out-Null
-            Write-Host "Recovery key stored. New role assignments can take a few minutes to apply."
-        }
-        $plain = $null
-    } else {
-        Write-Host "Key Vault secret '$secretName' already exists; keeping it."
-    }
-}
-
-# ---------------------------------------------------------------------------
 # Runbook import and publish. A rerun is the upgrade path.
 # ---------------------------------------------------------------------------
 
@@ -548,10 +527,18 @@ if ($PSCmdlet.ShouldProcess($runbookName, "Import and publish runbook")) {
 Write-Host "Writing Automation variables for this tenant (suffix -$tenantKey)..."
 Set-TenuVaultAutomationVariable -Name "TenuVaultTenantId-$tenantKey" -Value $TenantId
 Set-TenuVaultAutomationVariable -Name "TenuVaultStorageAccount-$tenantKey" -Value $StorageAccountName
-Set-TenuVaultAutomationVariable -Name "TenuVaultKeyVault-$tenantKey" -Value $KeyVaultName
 Set-TenuVaultAutomationVariable -Name "TenuVaultScope-$tenantKey" -Value $Scope
 Set-TenuVaultAutomationVariable -Name "TenuVaultExcludedFolders-$tenantKey" -Value $ExcludedFolders
 Set-TenuVaultAutomationVariable -Name "TenuVaultAppOnlyExcluded-$tenantKey" -Value $appOnlyExcluded
+
+# Upgrade from a setup before runbook 1.2.0: name the old Key Vault, then drop its variable.
+$legacyKeyVaults = Get-TenuVaultLegacyKeyVaults
+$legacyVariable = Get-AzAutomationVariable -ResourceGroupName $ResourceGroupName `
+    -AutomationAccountName $AutomationAccountName -Name $legacyKeyVaultVariable -ErrorAction SilentlyContinue
+if ($legacyVariable -and $PSCmdlet.ShouldProcess($legacyKeyVaultVariable, "Remove Automation variable (no longer read)")) {
+    Remove-AzAutomationVariable -ResourceGroupName $ResourceGroupName `
+        -AutomationAccountName $AutomationAccountName -Name $legacyKeyVaultVariable | Out-Null
+}
 
 # ---------------------------------------------------------------------------
 # Failure alert, before the schedule is linked (same rule as the watcher).
@@ -716,7 +703,7 @@ Write-Host "  Automation account:  $AutomationAccountName (resource group $Resou
 Write-Host "  Runbook:             $runbookName (published)"
 Write-Host "  Storage account:     $StorageAccountName (container '$backupContainer', writer role has no delete)"
 Write-Host "  Backup results:      '$outcomeContainer' (result notes for the notification watcher, same writer role)"
-Write-Host "  Key Vault:           $KeyVaultName (secret '$secretName')"
+Write-Host "  Encryption:          Azure encryption at rest; backups are plain JSON, readable by whoever your role assignments allow"
 if ($principalId) { Write-Host "  Managed identity:    $principalId" }
 if ($alertStatus) { Write-Host "  Failure alert:       $alertStatus" }
 Write-Host "  Schedule:            $(if ($linked) { "$Frequency at $Time $TimeZone ('$scheduleName')" } else { 'not linked yet' })"
@@ -746,6 +733,8 @@ if (-not $linked) {
     Write-Host "watch the job output. The backup then appears in TenuVault under Backup History."
 }
 
+Write-TenuVaultLegacyKeyVaultNote $legacyKeyVaults
+
 Write-Host ""
 Write-Host "--- TenuVault cloud backup setup (paste into TenuVault) ---"
 Write-Host "tenantId=$TenantId"
@@ -753,7 +742,6 @@ Write-Host "subscriptionId=$($context.Subscription.Id)"
 Write-Host "resourceGroup=$ResourceGroupName"
 Write-Host "automationAccount=$AutomationAccountName"
 Write-Host "storageAccount=$StorageAccountName"
-Write-Host "keyVault=$KeyVaultName"
 Write-Host "scheduleName=$scheduleName"
 Write-Host "frequency=$($Frequency.ToLowerInvariant())"
 Write-Host "time=$Time"

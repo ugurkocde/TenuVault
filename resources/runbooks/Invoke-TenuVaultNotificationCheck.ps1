@@ -1367,8 +1367,9 @@ function Get-TvMarkdownEscape {
 # ---------------------------------------------------------------------------
 # Library: cloud backup outcomes (mirror src/shared/notifications/cloud-outcome.ts)
 # ---------------------------------------------------------------------------
-# Backups and their status are sealed with the recovery key, which the watcher never
-# has. The cloud backup runbook therefore leaves one small unsealed note per run in the
+# The watcher never opens backups or their status: backups from cloud backup runbooks
+# before 1.2.0 are sealed with the recovery key, which the watcher never has, and policy
+# content stays out of its reach. The cloud backup runbook therefore leaves one small note per run in the
 # container tenuvault-backup-results (its own, so the backup identity can never touch this
 # watcher's state): status, folder name, counts, failed type names and time,
 # never policy content, names or messages. The watcher turns it into a backup alert.
