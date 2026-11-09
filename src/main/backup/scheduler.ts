@@ -75,6 +75,7 @@ export class BackupScheduler {
   private timer: NodeJS.Timeout | null = null
   private startupTimer: NodeJS.Timeout | null = null
   private running: Promise<void> | null = null
+  private reconciliationFailed = false
 
   constructor(
     private readonly store: KeyValueStore,
@@ -172,7 +173,9 @@ export class BackupScheduler {
     if (this.running) return this.running
     this.running = (async () => {
       if (this.prepare) await this.prepare()
-      for (const tenantId of Object.keys(this.reconcile())) {
+      const reconciled = this.reconcile()
+      if (this.reconciliationFailed) return
+      for (const tenantId of Object.keys(reconciled)) {
         const schedule = this.read()[tenantId]
         if (!schedule || !this.isDue(schedule)) continue
         const slot = this.lastSlot(schedule)
@@ -302,6 +305,7 @@ export class BackupScheduler {
   }
 
   private reconcile(): Record<string, BackupSchedule> {
+    this.reconciliationFailed = false
     const all = this.read()
     let changed = false
     const notices: (() => void)[] = []
@@ -339,7 +343,12 @@ export class BackupScheduler {
     }
     // Persist before broadcasting or notifying: either callback may list schedules again.
     if (changed) {
-      this.store.set(KEY, JSON.stringify(all))
+      try { this.store.set(KEY, JSON.stringify(all)) }
+      catch {
+        this.reconciliationFailed = true
+        console.warn("[backup-scheduler] Could not save reconciled schedules.")
+        return all
+      }
       this.onChange()
     }
     for (const notify of notices) notify()

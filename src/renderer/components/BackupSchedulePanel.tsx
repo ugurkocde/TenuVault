@@ -205,11 +205,11 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
         {current?.enabled && community && tenant?.resources?.storageAccountName && !tenant.resources.storageAccountName.startsWith(LOCAL_STORAGE_PREFIX) && (
           <div role="status" className="space-y-3 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
             <p>Paused: Azure storage needs Pro</p>
-            <Button disabled={saving || !onStorageChange} onClick={async () => {
-              if (!await confirm(LOCAL_SWITCH_CONFIRMATION)) return
+            <Button disabled={saving || !onStorageChange || !tenant?.credentials} onClick={async () => {
+              if (!tenant?.credentials || !onStorageChange || !await confirm(LOCAL_SWITCH_CONFIRMATION)) return
               setSaving(true)
               try {
-                onStorageChange?.(tenant, { kind: "local" })
+                onStorageChange(tenant, { kind: "local" })
                 drafts.delete(tenantId)
                 reloadSchedules()
                 toast("Weekly local backups enabled", "success")

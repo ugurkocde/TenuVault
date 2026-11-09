@@ -1,5 +1,7 @@
 import type { KeyValueStore } from "../storage/secure-store"
 import type { BackupSchedule } from "../../shared/ipc"
+import { isLocalAccount } from "../storage/blob-emulator"
+import type { LicenseService } from "../license/service"
 import type { Plan } from "../../shared/plans"
 
 export async function prepareScheduledCoverage(
@@ -15,7 +17,6 @@ export async function prepareScheduledCoverage(
   }
 }
 
-
 export function announceCommunityChoice(store: KeyValueStore, pending: boolean, notify: () => void): void {
   const key = "license.communityChoiceNotified"
   if (!pending) {
@@ -24,4 +25,9 @@ export function announceCommunityChoice(store: KeyValueStore, pending: boolean, 
     store.set(key, "true")
     notify()
   }
+}
+
+
+export function scheduledCoverage(license: Pick<LicenseService, "plan" | "coverageEndedAt" | "communityPendingTenants">, tenantId: string, profile: { storageAccountName: string } | null) {
+  return { plan: license.plan(tenantId), azure: Boolean(profile && !isLocalAccount(profile.storageAccountName)), endedAt: license.coverageEndedAt(tenantId), pendingChoice: license.communityPendingTenants().includes(tenantId.toLowerCase()) }
 }

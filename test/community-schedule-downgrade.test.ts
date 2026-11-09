@@ -191,3 +191,29 @@ it("keeps the fallback weekday and local time across daylight saving in Europe/B
     else process.env.TZ = timezone
   }
 })
+
+it("keeps reads usable when fallback metadata cannot be saved, and defers attempts and notices until it can", async () => {
+  vi.useFakeTimers()
+  vi.setSystemTime(new Date(2026, 10, 8, 12))
+  const store = memoryStore()
+  let plan: Plan = "pro"
+  const notice = vi.fn()
+  const run = vi.fn(async () => ({ status: "Completed" as const, message: "Done" }))
+  const scheduler = new BackupScheduler(store, run, undefined, undefined, () => ({ plan, azure: false, endedAt: new Date(2026, 10, 9, 1).getTime() }), undefined, notice)
+  scheduler.set({ tenantId: "contoso", enabled: true, frequency: "daily", time: "02:00" })
+  plan = "community"
+  vi.setSystemTime(new Date(2026, 10, 9, 3))
+  const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+  const write = vi.spyOn(store, "set").mockImplementation(() => { throw new Error("Disk unavailable") })
+  try {
+    expect(scheduler.list()[0]?.fallbackWeekday).toBe(1)
+    expect(scheduler.next()?.tenantId).toBe("contoso")
+    await expect(scheduler.tick()).resolves.toBeUndefined()
+    expect(run).not.toHaveBeenCalled()
+    expect(notice).not.toHaveBeenCalled()
+    write.mockRestore()
+    await scheduler.tick()
+    expect(notice).toHaveBeenCalledTimes(1)
+    expect(run).toHaveBeenCalledTimes(1)
+  } finally { write.mockRestore(); warning.mockRestore() }
+})

@@ -26,7 +26,7 @@ import { AuthManager, SignInRequiredError } from "./auth/msal"
 import { BackupEngine, verifyStorageAccess, type BackupJob } from "./backup/engine"
 import { BackupScheduler, reportsResult, runUnattended, scheduledResult } from "./backup/scheduler"
 import { runTrayBackups } from "./backup/tray-backup"
-import { announceCommunityChoice, prepareScheduledCoverage } from "./backup/schedule-prepare"
+import { announceCommunityChoice, prepareScheduledCoverage, scheduledCoverage } from "./backup/schedule-prepare"
 import { prepareScheduleInput } from "./backup/schedule-input"
 import { BackgroundLaunch } from "./backup/background-launch"
 import { BackupScopes } from "./backup/scopes"
@@ -821,7 +821,7 @@ async function bootstrap(): Promise<void> {
   const scheduler = new BackupScheduler(appStore, (tenantId, afterFailure, slot) => runScheduledBackup(tenantId, "scheduled", afterFailure, slot), () => {
     mainWindow?.webContents.send("schedules:changed", scheduler.list())
     tray.refresh()
-  }, () => new Date(), (tenantId) => ({ plan: license.plan(tenantId), azure: !isLocalAccount(tenantProfile(tenantId)?.storageAccountName ?? ""), endedAt: license.coverageEndedAt(tenantId), pendingChoice: license.communityPendingTenants().includes(tenantId.toLowerCase()) }), async () => { await prepareScheduledCoverage(() => scheduler.list(), license); pushLicense() }, (tenantId) => {
+  }, () => new Date(), (tenantId) => scheduledCoverage(license, tenantId, tenantProfile(tenantId)), async () => { await prepareScheduledCoverage(() => scheduler.list(), license); pushLicense() }, (tenantId) => {
     if (Notification.isSupported()) new Notification({ title: "Backup schedule now weekly", body: `${tenantProfile(tenantId)?.name ?? "This tenant"}: Runs weekly on Community (daily needs Pro).` }).show()
   }, (tenantId, reason) => {
     if (reason === "choice") { pushLicense(); return }

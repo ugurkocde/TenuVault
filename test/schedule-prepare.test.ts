@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { announceCommunityChoice, prepareScheduledCoverage } from "../src/main/backup/schedule-prepare"
+import { announceCommunityChoice, prepareScheduledCoverage, scheduledCoverage } from "../src/main/backup/schedule-prepare"
 import type { BackupSchedule } from "../src/shared/ipc"
 import { memoryStore } from "./helpers"
 
@@ -29,4 +29,11 @@ describe("scheduled coverage preparation", () => {
     announceCommunityChoice(store, true, notify)
     expect(notify).toHaveBeenCalledTimes(2)
   })
+})
+
+it("distinguishes missing profiles and local storage from an Azure pause in production coverage", () => {
+  const license = { plan: () => "community" as const, coverageEndedAt: () => undefined, communityPendingTenants: () => [] }
+  expect(scheduledCoverage(license, "contoso", null).azure).toBe(false)
+  expect(scheduledCoverage(license, "contoso", { storageAccountName: "tvlocal-contoso" }).azure).toBe(false)
+  expect(scheduledCoverage(license, "contoso", { storageAccountName: "stcontoso" }).azure).toBe(true)
 })
