@@ -6,7 +6,7 @@ import { POST as restorePreview } from "../src/portal/app/api/restore-preview/ro
 import { POST as listBackupContents } from "../src/portal/app/api/list-backup-contents/route"
 import { POST as downloadBackup } from "../src/portal/app/api/download-backup/route"
 import { POST as backupChanges } from "../src/portal/app/api/backup-changes/route"
-import { ownedBy } from "../src/portal/lib/policies/backup-owner"
+import { ownedBy, UNTAGGED_BACKUP } from "../src/portal/lib/policies/backup-owner"
 
 const OWN = "11111111-1111-1111-1111-111111111111"
 const OTHER = "22222222-2222-2222-2222-222222222222"
@@ -112,6 +112,30 @@ describe("backups without metadata and unreadable metadata", () => {
     const response = await revertPolicy(request("/api/revert-policy", { ...base, action: "restore", policyId: "original", policyType: "DeviceConfigurations", backupPath: policyPath }) as never)
     expect(response.status).toBe(403)
     expect(graph).toEqual([])
+  })
+})
+
+describe("positive ownership for changes to live policies", () => {
+  it("previews a backup that records no tenant as copy only, with the reason", async () => {
+    stubStorage({ [policyPath]: snapshot })
+    const { items } = await (await restorePreview(request("/api/restore-preview", { ...base, paths: [policyPath] }))).json()
+    expect(items[0].replaceBlocker).toBe(UNTAGGED_BACKUP)
+    expect(items[0].blocker).toBeUndefined()
+  })
+
+  it.each([
+    ["the manifest", { [`${backupId}/metadata.json`]: { TenantId: OWN, Status: "Success" } }],
+    ["the ownership marker", { [`${backupId}/.tenuvault-owner.json`]: { TenantId: OWN } }],
+  ])("offers replace for a backup whose %s names this tenant", async (_kind, evidence) => {
+    stubStorage({ ...evidence, [policyPath]: snapshot })
+    const { items } = await (await restorePreview(request("/api/restore-preview", { ...base, paths: [policyPath] }))).json()
+    expect(items[0].replaceBlocker).toBeUndefined()
+  })
+
+  it("treats this tenant's own store on this device as ownership evidence", async () => {
+    stubStorage({ [policyPath]: snapshot })
+    const { items } = await (await restorePreview(request("/api/restore-preview", { ...base, storageAccountName: `tvlocal-${OWN}`, paths: [policyPath] }))).json()
+    expect(items[0].replaceBlocker).toBeUndefined()
   })
 })
 

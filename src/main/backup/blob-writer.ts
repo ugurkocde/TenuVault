@@ -88,17 +88,24 @@ export class BlobWriter {
     return { blobs, prefixes }
   }
 
-  /** A JSON blob, or null when it does not exist or is not valid JSON. */
+  /**
+   * A JSON object blob, or null when it does not exist. A blob that exists but is not a JSON object
+   * (damaged, or written by something else) throws a FetchApplicationError: it is unreadable, never
+   * the same as a missing blob, so retention keeps it and counts the container as shared.
+   */
   async readJson(name: string): Promise<Record<string, unknown> | null> {
     return this.request(`${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`, { method: "GET" }, async (response) => {
       if (response.status === 404) return null
       if (!response.ok) throw await storageFailure(response, this.account)
+      let value: unknown
       try {
-        return (await response.json()) as Record<string, unknown>
+        value = await response.json()
       } catch (error) {
-        if (error instanceof SyntaxError) return null
+        if (error instanceof SyntaxError) throw new FetchApplicationError(new Error(`${name.split("/").pop()} is not valid JSON`))
         throw error
       }
+      if (!value || typeof value !== "object" || Array.isArray(value)) throw new FetchApplicationError(new Error(`${name.split("/").pop()} is not a JSON object`))
+      return value as Record<string, unknown>
     })
   }
 

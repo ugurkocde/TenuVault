@@ -313,7 +313,9 @@ describe("retention is scoped to the backup's tenant", () => {
       "backup-2026-09-24-120000",
     ])
     expect(log).toContain("Removed 1 backup older than 30 days.")
-    expect(log).toContain("Kept 5 older backups not recorded as this tenant's")
+    // Metadata that is not a JSON object is unreadable, never a missing manifest: kept and reported.
+    expect(log).toContain("Kept 4 older backups not recorded as this tenant's")
+    expect(log).toContain("Could not read the metadata of 1 older backup: metadata.json is not a JSON object. It was left in place.")
   })
 
   it("prunes backups from earlier versions when no other tenant uses the container", async () => {

@@ -175,6 +175,7 @@ describe("Compliance policy settings restore review", () => {
         return Response.json(live())
       }
       if (decodeURIComponent(url.pathname) === `/intune-backups/${path}`) return Response.json(snapshot())
+      if (decodeURIComponent(url.pathname) === `/intune-backups/${backupId}/metadata.json`) return Response.json({ TenantId: "tenant", Status: "Success" })
       return new Response("", { status: 404 })
     }))
     const body = { tenantId: "tenant", appId: "app", clientSecret: "test", storageAccountName: "store", backupId, paths: [path], live: true }

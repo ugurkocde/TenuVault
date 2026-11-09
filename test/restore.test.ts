@@ -51,7 +51,7 @@ describe('Restore results', () => {
         return new Response(`<EnumerationResults><Blobs><Blob><Name>${backupId}/DeviceConfigurations/${page}.json</Name></Blob></Blobs><NextMarker>${page === 1 ? 'next' : ''}</NextMarker></EnumerationResults>`)
       }
       if (url.hostname.endsWith('.blob.core.windows.net')) {
-        if (url.pathname.endsWith('/metadata.json')) return Response.json({ Status: 'Success', Failures: 0 })
+        if (url.pathname.endsWith('/metadata.json')) return Response.json({ Status: 'Success', Failures: 0, TenantId: 'tenant' })
         return Response.json({ id: 'original', displayName: url.pathname.endsWith('1.json') ? 'One' : 'Two', '@odata.type': '#microsoft.graph.windows10CustomConfiguration', omaSettings: [] })
       }
       if (url.hostname === 'graph.microsoft.com') {
@@ -92,6 +92,7 @@ describe('Restore results', () => {
       if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
       if (url.hostname.endsWith('.blob.core.windows.net')) {
         if (init?.method === 'PUT' || url.pathname.includes('/metadata/')) return new Response('', { status: 404 })
+        if (url.pathname.endsWith('/metadata.json')) return Response.json({ Status: 'Success', TenantId: '11111111-1111-1111-1111-111111111111' })
         return Response.json({ id: 'original', displayName: 'Example', '@odata.type': '#microsoft.graph.windows10CustomConfiguration', omaSettings: [], assignments: [{ id: 'a', target: { '@odata.type': '#microsoft.graph.allDevicesAssignmentTarget' } }] })
       }
       if (url.hostname === 'graph.microsoft.com') {
@@ -137,6 +138,7 @@ describe('Copy to other tenants', () => {
       const url = new URL(String(input))
       if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: `token-${url.pathname.split('/')[1]}` })
       if (url.hostname.endsWith('.blob.core.windows.net')) {
+        if (url.pathname.endsWith('/metadata.json')) return Response.json({ Status: 'Success', TenantId: 'tenant' })
         return Response.json({ id: 'p1', displayName: 'Firewall', '@odata.type': '#microsoft.graph.windows10CustomConfiguration', omaSettings: [], roleScopeTagIds: ['7'], assignments: [{ target: { '@odata.type': '#microsoft.graph.allDevicesAssignmentTarget' } }] })
       }
       if (url.hostname === 'graph.microsoft.com') {
@@ -173,7 +175,7 @@ describe('Replace in place with progress', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input))
       if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
-      if (url.hostname.endsWith('.blob.core.windows.net')) return Response.json(snapshot)
+      if (url.hostname.endsWith('.blob.core.windows.net')) return Response.json(url.pathname.endsWith('/metadata.json') ? { Status: 'Success', TenantId: 'tenant' } : snapshot)
       if (url.hostname === 'graph.microsoft.com') {
         graph.push(`${init?.method ?? 'GET'} ${url.pathname}`)
         return Response.json(live)
@@ -216,8 +218,8 @@ it('replaces a policy in place from a plain Azure backup, the same trust as any 
   vi.stubGlobal('fetch', vi.fn(async (input, init) => {
     const url = new URL(String(input))
     if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
-    // Plain JSON as stored in Azure, with no TenuVault header of any kind.
-    if (url.hostname.endsWith('.blob.core.windows.net')) return new Response(JSON.stringify(snapshot), { headers: { 'content-type': 'application/json' } })
+    // Plain JSON as stored in Azure; the manifest names the tenant.
+    if (url.hostname.endsWith('.blob.core.windows.net')) return new Response(JSON.stringify(url.pathname.endsWith('/metadata.json') ? { Status: 'Success', TenantId: 'tenant' } : snapshot), { headers: { 'content-type': 'application/json' } })
     graph.push(`${init?.method ?? 'GET'} ${url.pathname}`)
     return Response.json({ ...snapshot, displayName: 'Renamed' })
   }))
@@ -233,7 +235,8 @@ it('names the missing key for a legacy sealed snapshot and writes nothing to Gra
     const url = new URL(String(input))
     if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
     if (url.hostname.endsWith('.blob.core.windows.net')) {
-      if (url.pathname.endsWith('/metadata.json') || url.pathname.endsWith('/.tenuvault-owner.json')) return new Response('', { status: 404 })
+      if (url.pathname.endsWith('/metadata.json')) return new Response('', { status: 404 })
+      if (url.pathname.endsWith('/.tenuvault-owner.json')) return Response.json({ TenantId: 'tenant' })
       throw new LegacySealedError()
     }
     graph(); return Response.json({})
@@ -251,6 +254,7 @@ it('allows legacy snapshot copies through the drift restore action', async () =>
     if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
     if (url.hostname.endsWith('.blob.core.windows.net')) {
       if (init?.method === 'PUT') return new Response(null, { status: 201 })
+      if (url.pathname.endsWith('/metadata.json') || url.pathname.endsWith('/.tenuvault-owner.json')) return new Response('', { status: 404 })
       return Response.json({ id: 'original', displayName: 'Legacy', '@odata.type': '#microsoft.graph.windows10CustomConfiguration', omaSettings: [] })
     }
     writes.push(init?.method ?? 'GET'); return Response.json({ id: 'copy' }, { status: 201 })

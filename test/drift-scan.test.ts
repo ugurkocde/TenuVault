@@ -13,6 +13,8 @@ import { createAuditRecorder } from '../src/main/api/audit'
 import { CANCELLED_HEADER, registerDriftScan } from '../src/portal/lib/drift/scan-hooks'
 import type { DriftScanProgress } from '../src/shared/intune/drift'
 import { listBlobPages } from '../src/portal/lib/storage/list'
+import { LegacySealedError } from '../src/main/api/network-error'
+import { LEGACY_SEALED_MESSAGE } from '../src/shared/legacy-sealed'
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -98,7 +100,7 @@ describe('Backup pair selection', () => {
 
 /** A storage account with backups, served the way the blob endpoints answer the route. */
 interface FakeBackup { metadata: Record<string, unknown> | null; files: Record<string, unknown> }
-function fakeStorage(backups: Record<string, FakeBackup>, options: { unreadable?: string[]; beforeRead?: (path: string) => Promise<void> | void } = {}) {
+function fakeStorage(backups: Record<string, FakeBackup>, options: { unreadable?: string[]; sealed?: string[]; beforeRead?: (path: string) => Promise<void> | void } = {}) {
   const reads: string[] = []
   const stub = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input))
@@ -123,6 +125,8 @@ function fakeStorage(backups: Record<string, FakeBackup>, options: { unreadable?
     }
     const [, , backup, ...rest] = url.pathname.split('/').map(decodeURIComponent)
     const path = rest.join('/')
+    // A manifest an earlier version encrypted with a key this device lacks fails as the legacy reader does.
+    if (path === 'metadata.json' && options.sealed?.includes(backup!)) throw new LegacySealedError()
     if (path === 'metadata.json') return backups[backup!]?.metadata ? Response.json(backups[backup!]!.metadata) : new Response('', { status: 404 })
     reads.push(`${backup}/${path}`)
     await options.beforeRead?.(`${backup}/${path}`)
@@ -188,6 +192,19 @@ describe('Drift scan', () => {
     expect(skipResult.summary).toMatchObject({ total: 3, added: 1, modified: 1, deleted: 1 })
     expect(skipResult.baseline).toEqual({ id: OLD, timestamp: '2026-09-22T12:00:00.000Z', trigger: 'manual', status: 'Success' })
     expect(skipResult.comparison).toMatchObject({ id: NEW, trigger: 'scheduled' })
+  })
+
+  it('skips a newer backup it cannot open when it picks the pair, and names the key when that backup is chosen', async () => {
+    const SEALED = 'backup-2026-09-24-120000'
+    fakeStorage({ ...twoBackups(true), [SEALED]: { metadata: { Status: 'Success' }, files: {} } }, { sealed: [SEALED] })
+    const picked = await drift(request())
+    expect(picked.status).toBe(200)
+    const result = await picked.json()
+    expect([result.baseline.id, result.comparison.id]).toEqual([OLD, NEW])
+
+    const chosen = await drift(request({ baseline: NEW, comparison: SEALED }))
+    expect(chosen.status).toBe(409)
+    expect(await chosen.json()).toMatchObject({ error: LEGACY_SEALED_MESSAGE, code: 'BACKUP_UNREADABLE' })
   })
 
   it('reports an unreadable file as a warning instead of failing the scan', async () => {

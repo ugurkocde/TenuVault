@@ -5,6 +5,7 @@ import { complianceSettingLabel, complianceSettingValue } from "../../../../shar
 import { withoutUnreadAssignments } from "../../../../shared/intune/read"
 import { coveredFolders, type ScopeMetadata } from "../../../../shared/intune/scope"
 import { itemsOf, sameItem, type BackupFingerprint, type BackupItems } from "../../../../shared/intune/backup-changes"
+import { isLegacyOtherTenantError, isLegacySealedError } from "../../../../shared/legacy-sealed"
 import { backupRef, DriftPairError, selectBackupPair, summarizeDrifts, type BackupMetadata, type Drift, type DriftChange, type DriftResult, type DriftScanProgress, type DriftWarning, type SelectedBackup } from "../../../../shared/intune/drift"
 import { CANCELLED_HEADER, driftScanHooks, type DriftScanHooks } from "~/lib/drift/scan-hooks"
 import { mapLimit } from "../../../../shared/map-limit"
@@ -108,7 +109,10 @@ export async function POST(request: NextRequest) {
       if (!response.ok) throw new Error(`Cannot verify that the backups are complete (${response.status}). Check storage access and retry.`)
       return await response.json()
     }
-    const pair = await selectBackupPair({ folders: backupFolders, tenantId, baseline, comparison, limit: typeof backupLimit === "number" && backupLimit > 0 ? backupLimit : undefined, load: loadMetadata, signal })
+    // A manifest that cannot be opened here (an older encrypted backup without its key, another
+    // tenant's, or damaged JSON) is skipped when TenuVault picks the pair; a chosen one still fails.
+    const unopened = (error: unknown) => error instanceof SyntaxError || (error instanceof Error && error.name === 'FetchApplicationError')
+    const pair = await selectBackupPair({ folders: backupFolders, tenantId, baseline, comparison, limit: typeof backupLimit === "number" && backupLimit > 0 ? backupLimit : undefined, load: loadMetadata, unopened, signal })
     const newerBackup = pair.comparison
     const olderBackup = pair.baseline
 
@@ -232,6 +236,8 @@ export async function POST(request: NextRequest) {
     // The header tells the audit recorder that the admin stopped the scan; it did not fail.
     if (hooks?.signal.aborted) return NextResponse.json({ error: "The drift scan was cancelled.", code: "CANCELLED" }, { status: 409, headers: { [CANCELLED_HEADER]: "1" } })
     if (error instanceof DriftPairError) return NextResponse.json({ error: error.message, code: error.code }, { status: error.status })
+    // A chosen backup that cannot be opened here says why, for example which recovery key it needs.
+    if (isLegacySealedError(error) || isLegacyOtherTenantError(error)) return NextResponse.json({ error: (error as Error).message, code: "BACKUP_UNREADABLE" }, { status: 409 })
     console.error("Detect drifts error:", error)
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Internal server error while detecting drifts" },

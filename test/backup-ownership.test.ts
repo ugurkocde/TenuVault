@@ -201,6 +201,32 @@ describe("backup folder ownership", () => {
     expect(job.log.join("\n")).toContain(`Could not read the metadata of 1 older backup: ${LEGACY_SEALED_MESSAGE.replace(/\.$/, "")}. It was left in place.`)
   })
 
+  it("never deletes another tenant's untagged backup when a damaged manifest sits in the container", async () => {
+    const { engine, saved, seed, folder } = setup()
+    const damaged = "backup-2026-08-01-020000/", theirs = "backup-2026-08-02-020000/"
+    folder(damaged)
+    saved.set(`${damaged}metadata.json`, Buffer.from("{ not json"))
+    folder(theirs, { ...owner, TenantId: OTHER })
+    seed(`${theirs}metadata.json`, { Status: "Success", Scope: { Excluded: request.scope.excluded } })
+    const original = new Map(saved)
+    const job = await complete(engine)
+    for (const [name, body] of original) expect(saved.get(name)).toEqual(body)
+    expect(job.log.join("\n")).toContain("Could not read the metadata of 1 older backup: metadata.json is not valid JSON. It was left in place.")
+  })
+
+  it("places an expired untagged backup by its ownership marker", async () => {
+    const { engine, saved, seed, folder } = setup()
+    const ours = "backup-2026-08-01-020000/", theirs = "backup-2026-08-02-020000/", damagedMarker = "backup-2026-08-03-020000/"
+    for (const prefix of [ours, theirs, damagedMarker]) seed(`${prefix}metadata.json`, { Status: "Success", Scope: { Excluded: request.scope.excluded } })
+    folder(ours)
+    folder(theirs, { ...owner, TenantId: OTHER })
+    folder(damagedMarker, { Source: "TenuVault Desktop" })
+    const kept = [...saved.entries()].filter(([name]) => name.startsWith(theirs) || name.startsWith(damagedMarker))
+    await complete(engine)
+    expect([...saved.keys()].some((name) => name.startsWith(ours))).toBe(false)
+    for (const [name, body] of kept) expect(saved.get(name)).toEqual(body)
+  })
+
   it("keeps ownership when a protected policy interrupts normal retention", async () => {
     const { engine, saved, calls, seed, folder } = setup({ override: (url, sent) => {
       if (sent.method === "DELETE" && url.pathname.endsWith("/Old.json")) return new Response(null, { status: 409, headers: { "x-ms-error-code": "BlobImmutableDueToPolicy" } })

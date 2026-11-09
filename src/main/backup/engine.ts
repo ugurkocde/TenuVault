@@ -720,9 +720,10 @@ export class BackupEngine {
    * Deletes backup folders older than the retention period, never the one just written, and never the
    * newest backup that holds a type the current backup left out: a backup of fewer types must not
    * age out the only copy of the others. Only this tenant's backups are considered: another
-   * tenant's backups and backups without readable metadata are never deleted. Backups from
-   * versions that did not record the tenant count as this tenant's unless the container also
-   * holds a backup recorded as another tenant's.
+   * tenant's backups and backups without readable metadata are never deleted. A manifest that
+   * names no tenant is placed by the folder's ownership marker. Backups that record no tenant in
+   * either count as this tenant's unless the container also holds a backup recorded as another
+   * tenant's, or one whose metadata or marker cannot be read.
    */
   private async applyRetention(job: BackupJob, storage: BlobWriter, current: string, covered: Set<string>, signal: AbortSignal): Promise<number> {
     const days = this.deps.retentionDays?.(job.tenantId) ?? 0
@@ -758,8 +759,28 @@ export class BackupEngine {
         unreadableReason ||= error.message
         return
       }
-      if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return // Missing or unreadable: never ours.
-      const owner = typeof metadata.TenantId !== "string" ? "untagged" : metadata.TenantId.toLowerCase() === tenant ? "this" : "other"
+      if (!metadata) return // No manifest (running, stopped or older): never ours.
+      let recorded = metadata.TenantId
+      if (typeof recorded !== "string") {
+        // A manifest that names no tenant is placed by the folder's ownership marker, as the backup
+        // list does. A marker that cannot be read or names no tenant leaves the backup unreadable.
+        let marker: Record<string, unknown> | null
+        try {
+          marker = await storage.readJson(`${backup.prefix}${BACKUP_OWNER_FILE}`)
+        } catch (error) {
+          if (!(error instanceof FetchApplicationError) && !(error instanceof InventoryDamagedError)) throw error
+          unreadable.add(index)
+          unreadableReason ||= error.message
+          return
+        }
+        if (marker && typeof marker.TenantId !== "string") {
+          unreadable.add(index)
+          unreadableReason ||= "Its ownership record names no tenant"
+          return
+        }
+        recorded = marker?.TenantId
+      }
+      const owner = typeof recorded !== "string" ? "untagged" : recorded.toLowerCase() === tenant ? "this" : "other"
       owners[index] = { metadata, owner }
     }, signal)
     // An unreadable backup may be another tenant's, so while one exists the container counts as

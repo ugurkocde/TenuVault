@@ -65,7 +65,8 @@ export interface IntuneType {
   select?: string
   /**
    * Values Graph masks on read, with the request that returns each one in plain text.
-   * The backup stores the real value (inside the encrypted backup) so restore can send it again.
+   * The backup file stores the real value so restore can send it again. It is readable to everyone
+   * who can read the backup: in Azure, everyone with read access to the container.
    */
   secrets?: (item: Item) => Array<{ path: string; apply: (value: string) => void }>
   /** Extra query for the list GET, for example a $filter. */

@@ -38,6 +38,7 @@ it('reports a partial API operation and repairs across requests without another 
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input))
     if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
+    if (url.pathname.endsWith('/metadata.json') || url.pathname.endsWith('/.tenuvault-owner.json')) return new Response('', { status: 404 })
     if (url.hostname.endsWith('.blob.core.windows.net')) return Response.json(snapshot)
     if (url.pathname.endsWith('localizedNotificationMessages')) return reject ? Response.json({ error: { message: 'No' } }, { status: 400 }) : new Response(null, { status: 204 })
     // The repair reads the copy back first to confirm it still exists.

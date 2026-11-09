@@ -223,9 +223,23 @@ export async function selectBackupPair(options: {
   comparison?: unknown
   limit?: number
   load: (name: string) => Promise<BackupMetadata | null>
+  /**
+   * Whether a load failure means this backup cannot be opened here (for example one an earlier
+   * version encrypted with a key this device lacks). Automatic selection then skips the backup;
+   * a backup the admin chose still fails with that error.
+   */
+  unopened?: (error: unknown) => boolean
   signal?: AbortSignal
 }): Promise<{ baseline: SelectedBackup; comparison: SelectedBackup }> {
   const { folders, tenantId, load, signal } = options
+  const candidate = async (name: string): Promise<BackupMetadata | null> => {
+    try {
+      return await load(name)
+    } catch (error) {
+      if (options.unopened?.(error)) return null
+      throw error
+    }
+  }
   const explicit = options.baseline !== undefined && options.baseline !== null && options.baseline !== ""
   const explicitComparison = options.comparison !== undefined && options.comparison !== null && options.comparison !== ""
 
@@ -235,7 +249,7 @@ export async function selectBackupPair(options: {
     // With fewer than two backups there is nothing to compare, so no metadata is read.
     for (const folder of candidates.length < 2 ? [] : candidates) {
       signal?.throwIfAborted()
-      const metadata = await load(folder.name)
+      const metadata = await candidate(folder.name)
       if (metadata && backupCompleteness(statusOf(metadata)) === "complete" && belongsTo(metadata, tenantId)) complete.push({ ...folder, metadata })
       if (complete.length === 2) break
     }
@@ -264,7 +278,7 @@ export async function selectBackupPair(options: {
     for (const folder of folders.slice(index + 1)) {
       signal?.throwIfAborted()
       if (Date.parse(folder.timestamp) >= comparisonTime) continue
-      const previous = await load(folder.name)
+      const previous = await candidate(folder.name)
       if (previous && backupCompleteness(statusOf(previous)) === "complete" && belongsTo(previous, tenantId)) {
         return { baseline: { ...folder, metadata: previous }, comparison: { ...comparisonFolder, metadata } }
       }

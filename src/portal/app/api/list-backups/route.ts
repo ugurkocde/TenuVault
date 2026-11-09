@@ -312,10 +312,20 @@ export async function POST(request: NextRequest) {
     // counted as unresolved; its run, if it failed, counts once through its attempt record.
     const described = await mapLimit(backupFolders, 6, (name) => describeBackup(storageAccountName, name, accessToken, inventories.get(name)))
     const unresolved = described.filter((backup) => backup.unresolved).length
-    // Folders sealed by an earlier version that this device cannot open, unless a readable record
-    // names another tenant. They may be another tenant's in a shared container, or need the
-    // recovery key of the device that made them; the backups page offers to import it.
-    const sealed = described.filter((backup) => backup.sealed && (backup.ownerTenantId === null || backup.ownerTenantId.toLowerCase() === String(tenantId).toLowerCase())).length
+    // Folders sealed by an earlier version that this device cannot open, for the backups page's offer
+    // to import a recovery key. Without the key nobody can tell whose such a folder is, so it counts
+    // only when a readable record names this tenant, or when nothing in the container shows another
+    // tenant: in a container another tenant also uses it may be theirs, and a key would not help.
+    const tenantLower = String(tenantId).toLowerCase()
+    const recordedOwner = (backup: typeof described[number]): string | null => {
+      const owner = (backup.fingerprint as { TenantId?: unknown } | null | undefined)?.TenantId ?? backup.ownerTenantId
+      return typeof owner === 'string' ? owner.toLowerCase() : null
+    }
+    const otherTenantSeen = described.some((backup) => {
+      const owner = recordedOwner(backup)
+      return (owner !== null && owner !== tenantLower) || (backup.foreign && !backup.sealed)
+    })
+    const sealed = described.filter((backup) => backup.sealed && (recordedOwner(backup) === tenantLower || (recordedOwner(backup) === null && !otherTenantSeen))).length
     backups.push(...described.filter((backup) => {
       const owner = (backup.fingerprint as { TenantId?: unknown } | null | undefined)?.TenantId ?? backup.ownerTenantId
       return !backup.foreign && !backup.unresolved && (typeof owner !== 'string' || owner.toLowerCase() === String(tenantId).toLowerCase())

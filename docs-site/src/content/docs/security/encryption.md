@@ -62,6 +62,8 @@ Anyone who can write to the `intune-backups` container is trusted like an Intune
 * Keep blob soft delete on, so a deleted or overwritten backup can be recovered. The storage setup script turns on seven days of soft delete for blobs and containers, and blob versioning when you set up the [Backup Reader](/backups/backup-reader/).
 * Review the role assignments on the storage account with your other Azure access reviews.
 
+In a storage account several tenants share, each backup's `metadata.json` and ownership marker name its tenant. Each tenant lists, restores and downloads only its own backups. Only a backup that names this tenant can replace live policies, restore assignments, revert or recreate; one that records no tenant can still be restored as an unassigned copy. See [When replace in place is blocked](/restore/modes/#when-replace-in-place-is-blocked).
+
 ### Secret OMA-URI values
 
 A backup keeps the plain-text values of secret OMA-URI settings (for example Wi-Fi keys or certificate passwords) that Microsoft Graph returns, so a restore can put them back. In Azure these values are readable by everyone who can read the `intune-backups` container. Limit read access to the storage account accordingly. This keeps restores complete: a backup with masked values (`****`) cannot restore those settings.

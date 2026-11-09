@@ -26,11 +26,11 @@ const PLAIN_B = "backup-2026-11-09-110000"
 const LEGACY_A = "backup-2026-10-01-100000"
 const LEGACY_A_NO_MARKER = "backup-2026-09-01-100000"
 
-function container(): Map<string, Uint8Array> {
+function container(withB = true): Map<string, Uint8Array> {
   const blobs = new Map<string, Uint8Array>()
   const plain = (name: string, value: unknown) => blobs.set(name, new TextEncoder().encode(JSON.stringify(value)))
   const sealed = (name: string, value: unknown) => blobs.set(name, new Uint8Array(sealLegacyAzure(Buffer.from(JSON.stringify(value)), deviceKey, A, new URL(`${base}${name}`))))
-  for (const [folder, tenant] of [[PLAIN_A, A], [PLAIN_B, B]] as const) {
+  for (const [folder, tenant] of (withB ? [[PLAIN_A, A], [PLAIN_B, B]] : [[PLAIN_A, A]]) as Array<[string, string]>) {
     plain(`${folder}/${BACKUP_OWNER_FILE}`, { Source: "TenuVault Desktop", TenantId: tenant, RunId: folder })
     plain(`${folder}/DeviceConfigurations/Policy.json`, snapshot(`Policy ${tenant.slice(0, 1)}`))
     plain(`${folder}/metadata.json`, manifest(tenant))
@@ -44,8 +44,8 @@ function container(): Map<string, Uint8Array> {
 }
 
 /** Installs the app's fetch path: token answers per tenant, Graph, and storage through the legacy reader. */
-function install(keys: Buffer[]) {
-  const blobs = container()
+function install(keys: Buffer[], withB = true) {
+  const blobs = container(withB)
   const graph: string[] = []
   const tokenFor = (tenant: string) => `storage-${tenant}`
   registerStorageToken(tokenFor(A), A)
@@ -102,13 +102,29 @@ describe("plain Azure backups in a shared container", () => {
     expect(a.backups.map((backup: { id: string }) => backup.id)).toEqual([PLAIN_A, LEGACY_A_NO_MARKER])
     expect(a.backups[0]).toMatchObject({ status: "Success" })
     expect(a.backups[1]).toMatchObject({ status: "unknown", error: LEGACY_SEALED_MESSAGE })
-    expect(a.sealed).toBe(2)
+    // Without the key nobody can tell whose they are, and B's plain backup shows another tenant
+    // uses this container, so they are not counted for A's recovery key notice.
+    expect(a.sealed).toBe(0)
     // Tenant B never sees A's plain backup. Without a key nobody can tell whose A's legacy folders
     // are, so B sees the one from before ownership markers only as a row naming the missing key.
     const b = await listFor(B)
     expect(b.backups.map((backup: { id: string }) => backup.id)).toEqual([PLAIN_B, LEGACY_A_NO_MARKER])
     expect(b.backups[1]).toMatchObject({ status: "unknown", error: LEGACY_SEALED_MESSAGE })
-    expect(b.sealed).toBe(2)
+    expect(b.sealed).toBe(0)
+  })
+
+  it("counts the legacy backups for the recovery key notice when no other tenant uses the container", async () => {
+    install([], false)
+    const a = await listFor(A)
+    expect(a.backups.map((backup: { id: string }) => backup.id)).toEqual([PLAIN_A, LEGACY_A_NO_MARKER])
+    expect(a.sealed).toBe(2)
+  })
+
+  it("refuses a legacy backup whose manifest no key opens in the restore preview, never treating it as untagged", async () => {
+    install([])
+    const response = await restorePreview(post("/api/restore-preview", body(A, { backupId: LEGACY_A_NO_MARKER, paths: [`${LEGACY_A_NO_MARKER}/DeviceConfigurations/Policy.json`] })) as never)
+    // A sealed manifest no key opens is refused outright, never treated as untagged.
+    expect(response.status).toBe(403)
   })
 
   it("replaces a policy in place from a plain backup with no recovery key on this device", async () => {

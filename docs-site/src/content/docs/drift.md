@@ -134,7 +134,9 @@ TenuVault records every revert and restore in the tenant's backup storage, so th
 An action that Intune cannot run is greyed out and shows its reason under the buttons instead of failing halfway. The common case is a deleted app that uses an installer file, such as a Win32 or line-of-business app: a backup holds only the app details, never the installer, so neither **Recreate** nor **Restore as copy** is offered. Upload the installer again through Intune to bring such an app back. A changed installer app can still be **Reverted** in place; only restoring it as a copy is unavailable. Store, web and Microsoft 365 apps need no installer and keep both actions. See [What cannot be restored](/restore/limitations/).
 
 :::note
-**Revert** and **Recreate** work with every backup the tenant owns, on this device or in your Azure storage account. An Azure backup that an earlier TenuVault version encrypted needs the recovery key of the device that made it; see [Older encrypted Azure backups](/security/encryption/#older-encrypted-azure-backups).
+**Revert** and **Recreate** work with every backup that records this tenant, on this device or in your Azure storage account, after the same checks as a restore: the file must be listed in the backup's manifest and match its recorded fingerprint. A backup that does not record its tenant shows "This backup does not record its tenant. Restore it as a copy instead."; use **Restore previous version as copy** for it. An Azure backup that an earlier TenuVault version encrypted needs the recovery key of the device that made it; see [Older encrypted Azure backups](/security/encryption/#older-encrypted-azure-backups).
+
+When TenuVault picks the two backups to compare, it skips backups it cannot open, such as older encrypted ones without their key. A backup you choose yourself that cannot be opened says why.
 :::
 
 For restoring several items, choosing assignments or restoring into another tenant, use the restore wizard instead. See [Restore Intune policies](/restore/).

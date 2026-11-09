@@ -21,6 +21,7 @@ function stubStorage(options: { history?: History; readStatus?: number; beforeWr
     if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'token' })
     if (url.hostname === 'graph.microsoft.com') return Response.json({ id: 'copy' }, { status: 201 })
     if (url.pathname.endsWith('/metadata/revert-history.json')) return new Response('missing', { status: 404 })
+    if (url.pathname.endsWith('/metadata.json') || url.pathname.endsWith('/.tenuvault-owner.json')) return new Response('missing', { status: 404 })
     if (!url.pathname.endsWith(`/metadata/${TENANT}/revert-history.json`)) return Response.json(snapshot)
     if ((init?.method ?? 'GET') === 'GET') {
       if (options.readStatus) return new Response('busy', { status: options.readStatus })

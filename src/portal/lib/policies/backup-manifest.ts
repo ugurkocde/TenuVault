@@ -59,3 +59,21 @@ export function incompleteReason(metadata: Record<string, any> | null, manifest:
   }
   return undefined
 }
+
+/**
+ * The manifest checks every restore from a backup runs before it writes anything: the recorded
+ * inventory and whether the backup is complete for `paths`. The manifest is null for legacy
+ * backups that record no inventory.
+ */
+export function checkRestoreManifest(metadata: Record<string, any> | null, backupId: string, paths: string[], full: boolean): { ok: true; manifest: Map<string, ManifestEntry> | null } | { ok: false; error: string } {
+  let manifest: Map<string, ManifestEntry> | null
+  try { manifest = backupManifest(metadata, backupId) }
+  catch (error) { return { ok: false, error: error instanceof Error ? error.message : "Invalid backup inventory manifest" } }
+  const incomplete = incompleteReason(metadata, manifest, paths, full)
+  return incomplete ? { ok: false, error: incomplete } : { ok: true, manifest }
+}
+
+/** Throws when a snapshot is not the object, or not the content, its backup manifest records. */
+export function verifySnapshot(snapshot: Item, expected: ManifestEntry | undefined): void {
+  if (expected && (snapshot.id !== expected.id || snapshotHash(snapshot) !== expected.hash)) throw new Error("This backup file does not match its recorded fingerprint. It was not restored.")
+}

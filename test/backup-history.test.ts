@@ -172,7 +172,7 @@ describe("restore preview", () => {
       [`${newer}/Apps/Reader.json`]: { id: "9", displayName: "Adobe Reader", "@odata.type": "#microsoft.graph.win32LobApp", assignments: [], relationships: [] },
     }
     const methods: string[] = []
-    storage(preview, (url) => {
+    storage({ ...preview, [`${newer}/metadata.json`]: { TenantId: "tenant", Status: "Success" } }, (url) => {
       methods.push(url.pathname)
       if (url.pathname.endsWith("/1")) return Response.json({ id: "1", displayName: "A", value: 2, version: 7, assignments: [] })
       if (url.pathname.endsWith("/9/relationships")) return Response.json({ value: [] })

@@ -52,6 +52,7 @@ it('lists selectable policies from every page and decodes escaped filenames', as
     const url = new URL(String(input))
     if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
     if (url.pathname.endsWith('metadata.json')) return Response.json({ Status: 'Success' })
+    if (url.pathname.endsWith('.tenuvault-owner.json')) return new Response('', { status: 404 })
     const second = url.searchParams.get('marker') === 'next&part'
     return new Response(`<Blobs><Blob><Name>${args.backupId}/DeviceConfigurations/${second ? 'Two' : 'A&amp;B'}.json</Name><Properties><Content-Length>10</Content-Length></Properties></Blob></Blobs><NextMarker>${second ? '' : 'next&amp;part'}</NextMarker>`)
   }))
