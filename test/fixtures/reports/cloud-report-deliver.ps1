@@ -1,8 +1,9 @@
 # Runs the watcher's change report delivery against faked storage and mail, for
 # test/cloud-change-report.test.ts. Notes come from a JSON file of { name: note text }. With
 # -StatePath, the delivered report names are kept in that file between runs, as the watcher keeps
-# them in its state; -FailDelete makes every delete fail with HTTP 403.
-param([Parameter(Mandatory)][string]$NotesPath, [Parameter(Mandatory)][string]$TenantId, [string]$MailEnabled = "true", [string]$FailMail = "false", [string]$StatePath = "", [string]$FailDelete = "false")
+# them in its state; -FailDelete makes every delete fail with HTTP 403. -LeaseFailAt n makes the
+# n-th lease renewal fail, as when another run took the lease; -FailSave makes state saves fail.
+param([Parameter(Mandatory)][string]$NotesPath, [Parameter(Mandatory)][string]$TenantId, [string]$MailEnabled = "true", [string]$FailMail = "false", [string]$StatePath = "", [string]$FailDelete = "false", [int]$LeaseFailAt = 0, [string]$FailSave = "false")
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "../../../resources/runbooks/Invoke-TenuVaultNotificationCheck.ps1") -LibraryOnly
 $notes = [IO.File]::ReadAllText($NotesPath) | ConvertFrom-Json
@@ -23,6 +24,7 @@ function Invoke-TvStorageRequest {
         $script:Deleted.Add($name)
         return $null
     }
+    $script:Downloads++
     $stream = [IO.MemoryStream]::new([Text.Encoding]::UTF8.GetBytes($script:Stored[$name]))
     return [pscustomobject]@{ RawContentStream = $stream }
 }
@@ -34,7 +36,19 @@ function Send-TvRawMail {
 $delivered = [System.Collections.Generic.List[string]]::new()
 if ($StatePath -and (Test-Path $StatePath)) { foreach ($name in @([IO.File]::ReadAllText($StatePath) | ConvertFrom-Json)) { if ($name) { $delivered.Add([string]$name) } } }
 $script:Saves = 0
-$save = { $script:Saves++; if ($StatePath) { [IO.File]::WriteAllText($StatePath, (ConvertTo-Json -InputObject @($delivered.ToArray()) -Compress)) } }
+$script:Renewals = 0
+$script:Downloads = 0
+$renew = {
+    $script:Renewals++
+    if ($LeaseFailAt -gt 0 -and $script:Renewals -ge $LeaseFailAt) { throw "Failed to renew the state lease. Aborting without sending anything further. HTTP 409 LeaseIdMismatchWithLeaseOperation" }
+}
+$save = {
+    if ($FailSave -eq "true") { throw "State write failed because the state lease was lost (HTTP 412). Aborting before any further delivery." }
+    $script:Saves++; if ($StatePath) { [IO.File]::WriteAllText($StatePath, (ConvertTo-Json -InputObject @($delivered.ToArray()) -Compress)) } }
+$thrown = $null
+$result = $null
+try {
 $result = Send-TvChangeReports -ContainerUri $container -Token "storage" -TenantId $TenantId -TenantName "Contoso" -MailEnabled ($MailEnabled -eq "true") `
-    -MailSender "reports@contoso.example" -Recipients "security@contoso.example; auditor@fabrikam.example" -GraphToken "graph" -RenewLease {} -Now ([DateTime]::Parse("2026-11-06T08:00:00Z").ToUniversalTime()) -Delivered $delivered -SaveState $save
-[Console]::Out.Write(([ordered]@{ result = $result; deleted = $script:Deleted.ToArray(); mails = $script:Mails.ToArray(); delivered = @($delivered.ToArray()); saves = $script:Saves } | ConvertTo-Json -Depth 6 -Compress))
+    -MailSender "reports@contoso.example" -Recipients "security@contoso.example; auditor@fabrikam.example" -GraphToken "graph" -RenewLease $renew -Now ([DateTime]::Parse("2026-11-06T08:00:00Z").ToUniversalTime()) -Delivered $delivered -SaveState $save
+} catch { $thrown = $_.Exception.Message }
+[Console]::Out.Write(([ordered]@{ result = $result; deleted = $script:Deleted.ToArray(); mails = $script:Mails.ToArray(); delivered = @($delivered.ToArray()); saves = $script:Saves; renewals = $script:Renewals; downloads = $script:Downloads; thrown = $thrown } | ConvertTo-Json -Depth 6 -Compress))

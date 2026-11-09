@@ -2479,12 +2479,13 @@ function Send-TvChangeReports {
         [DateTime]$Now = [DateTime]::UtcNow,
         [int]$MaxAgeDays = 7,
         [System.Collections.Generic.List[string]]$Delivered = $null,
-        [scriptblock]$SaveState = {}
+        [scriptblock]$SaveState = {},
+        [int]$MaxDelivered = 200
     )
     if ($null -eq $Delivered) { $Delivered = [System.Collections.Generic.List[string]]::new() }
     $oldest = ConvertTo-TvIso ($Now.ToUniversalTime().AddDays(-$MaxAgeDays))
     # Messages are returned, not written, so the function's output stays one object.
-    $result = [pscustomobject][ordered]@{ Sent = 0; Waiting = 0; Expired = 0; Ignored = 0; Error = $null; Messages = [System.Collections.Generic.List[string]]::new() }
+    $result = [pscustomobject][ordered]@{ Sent = 0; Waiting = 0; Held = 0; Expired = 0; Ignored = 0; Error = $null; Messages = [System.Collections.Generic.List[string]]::new() }
     $to = @(($Recipients -split "[,;]") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     $canSend = $MailEnabled -and $MailSender -and $GraphToken -and $to.Count -gt 0
     $names = [System.Collections.Generic.List[object]]::new()
@@ -2512,7 +2513,8 @@ function Send-TvChangeReports {
         $result.Error = "Change reports could not be listed in this run: $(Get-TvSafeError $_.Exception.Message)"
         return $result
     }
-    # A delivered report whose note is gone was deleted after all: forget it.
+    # A delivered report whose note is gone was deleted after all: forget it. A name whose note
+    # still exists is never dropped, whatever the count: dropping it would send the report again.
     $listed = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     foreach ($blob in $names) { [void]$listed.Add($blob.Name) }
     $forgotten = @($Delivered | Where-Object { -not $listed.Contains($_) })
@@ -2520,13 +2522,18 @@ function Send-TvChangeReports {
         foreach ($name in $forgotten) { [void]$Delivered.Remove($name) }
         & $SaveState
     }
-    foreach ($blob in $names) {
+    # Delivered ones first: their deletes free room in the state before new reports are sent.
+    $ordered = @(@($names | Where-Object { $Delivered.Contains($_.Name) }) + @($names | Where-Object { -not $Delivered.Contains($_.Name) }))
+    foreach ($blob in $ordered) {
         if (-not $blob.Name.StartsWith($script:TvReportPrefix, [StringComparison]::Ordinal)) { continue }
         & $RenewLease
         $encodedName = ($blob.Name -split "/" | ForEach-Object { [uri]::EscapeDataString($_) }) -join "/"
         $uri = "$ContainerUri/$encodedName"
         $remove = $false
         $sent = $Delivered.Contains($blob.Name)
+        # A lost lease or a state that cannot be saved stops delivery and fails the run: another
+        # watcher run may own the state now, and an unrecorded send could be repeated.
+        $stop = $null
         try {
             $report = $null
             if ($sent) {
@@ -2546,6 +2553,10 @@ function Send-TvChangeReports {
                 $remove = $true
             } elseif (-not $canSend) {
                 $result.Waiting++
+            } elseif ($Delivered.Count -ge $MaxDelivered) {
+                # The state holds as many sent reports as it may while their deletes fail; this one
+                # waits until room is free, so nothing is ever sent twice.
+                $result.Held++
             } else {
                 $attachments = Get-TvReportAttachments $report
                 $note = $null
@@ -2553,18 +2564,22 @@ function Send-TvChangeReports {
                 $envelope = New-TenuVaultChangeReportEnvelope -Report $report -TenantId $TenantId -TenantName $TenantName -AttachmentNote $note
                 $subject = "TenuVault: $(if ($envelope.severity -eq 'warning') { '[Warning] ' })$($envelope.title)"
                 if ($subject.Length -gt 250) { $subject = $subject.Substring(0, 250) }
-                Send-TvRawMail -From $MailSender -To $to -Subject $subject -BodyText (Get-TvEmailHtml $envelope) -GraphToken $GraphToken -BodyContentType "HTML" -Attachments $attachments
+                $html = Get-TvEmailHtml $envelope
+                # Renewed right before the send: the download and parsing above can take most of
+                # the 60 second lease. Without the lease, nothing is sent or deleted.
+                try { & $RenewLease } catch { $stop = $_; throw }
+                Send-TvRawMail -From $MailSender -To $to -Subject $subject -BodyText $html -GraphToken $GraphToken -BodyContentType "HTML" -Attachments $attachments
                 $result.Messages.Add("Sent the change report of $($report.backupFolder) to $($to.Count) recipient(s).")
                 $result.Sent++
                 $sent = $true
                 $remove = $true
                 $Delivered.Add($blob.Name)
-                try { & $SaveState }
-                catch { if (-not $result.Error) { $result.Error = "A sent change report could not be recorded in the watcher state: $(Get-TvSafeError $_.Exception.Message)" } }
+                try { & $SaveState } catch { $stop = $_; throw }
             }
         } catch {
-            if (-not $result.Error) { $result.Error = "A change report could not be sent: $(Get-TvSafeError $_.Exception.Message)" }
+            if (-not $stop -and -not $result.Error) { $result.Error = "A change report could not be sent: $(Get-TvSafeError $_.Exception.Message)" }
         }
+        if ($stop -and -not $sent) { throw $stop }
         if ($remove) {
             $removed = $false
             try { Invoke-TvStorageRequest -Uri $uri -Method Delete -Token $Token | Out-Null; $removed = $true }
@@ -2576,11 +2591,19 @@ function Send-TvChangeReports {
                     if (-not $result.Error) { $result.Error = $why }
                 }
             }
+            # Sent but not recorded: the delete above was the last chance to prevent a resend.
+            if ($stop) { throw $stop }
             if ($removed -and $sent) {
                 [void]$Delivered.Remove($blob.Name)
-                try { & $SaveState } catch { if (-not $result.Error) { $result.Error = "The watcher state could not be saved: $(Get-TvSafeError $_.Exception.Message)" } }
+                & $SaveState
             }
         }
+    }
+    if ($result.Held -gt 0) {
+        $held = "$($result.Held) change report(s) wait: $($Delivered.Count) sent report(s) could not be deleted yet, the most the watcher state keeps. Give the watcher delete access to tenuvault-backup-results (run its setup again)."
+        $result.Messages.Add($held)
+        # The backlog explains the delete failures too, so it is what the heartbeat shows.
+        $result.Error = $held
     }
     if ($result.Waiting -gt 0) { $result.Messages.Add("$($result.Waiting) change report(s) wait for verified mail and report recipients.") }
     return $result
@@ -3041,7 +3064,8 @@ try {
             sentEventIds = $sentArr
             lastMissedKey = $lastMissedKey
             failedBackupFolders = @($failedBackupFolders.ToArray() | Sort-Object -Descending | Select-Object -First 200)
-            deliveredReports = @($deliveredReports.ToArray() | Select-Object -Last 200)
+            # Never trimmed: Send-TvChangeReports keeps it at 200 names by holding new reports back.
+            deliveredReports = @($deliveredReports.ToArray())
             continuation = $continuation
             # While Conditional Access is not watched its position is not kept, so turning it
             # on later starts an hour back instead of replaying everything since an old watermark.

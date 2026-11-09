@@ -351,24 +351,54 @@ class TvOversizedError : System.Exception {
     TvOversizedError([string]$message) : base($message) { }
 }
 
+# A response body that did not arrive in time. HttpClient.Timeout ends once the headers are read
+# (ResponseHeadersRead), so the body has a deadline of its own.
+class TvReadTimeoutError : System.Exception {
+    TvReadTimeoutError([string]$message) : base($message) { }
+}
+
+# How long one capped response body may take to arrive, in seconds.
+$script:BodyReadSeconds = 90
+
 # Reads a successful response body up to $MaxBytes, by its declared length first and then by the
-# bytes actually read, so a large or endless body cannot exhaust the sandbox's memory.
+# bytes actually read, so a large or endless body cannot exhaust the sandbox's memory, and within
+# $script:BodyReadSeconds, so a stalled body cannot hang the run. Each read is a Stream.ReadAsync
+# with a CancellationToken, waited for with Task.Wait(timeout); on the deadline the token is
+# cancelled and the response disposed, which ends the pending read. All of these exist in .NET
+# Framework 4.7.2 and in .NET for PowerShell 7.
 function Read-TvCappedBody {
     param([Parameter(Mandatory)][System.Net.Http.HttpResponseMessage]$Response, [Parameter(Mandatory)][long]$MaxBytes)
     $declared = $Response.Content.Headers.ContentLength
     if ($null -ne $declared -and $declared -gt $MaxBytes) { throw [TvOversizedError]::new("The response is larger than $MaxBytes bytes.") }
+    $clock = [System.Diagnostics.Stopwatch]::StartNew()
+    $deadline = [TimeSpan]::FromSeconds($script:BodyReadSeconds)
+    $cancel = [System.Threading.CancellationTokenSource]::new()
     $stream = $Response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
     $buffer = [byte[]]::new(81920)
     $memory = [System.IO.MemoryStream]::new()
     try {
-        while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
-            if ($memory.Length + $read -gt $MaxBytes) { throw [TvOversizedError]::new("The response is larger than $MaxBytes bytes.") }
-            $memory.Write($buffer, 0, $read)
+        while ($true) {
+            $left = $deadline - $clock.Elapsed
+            $read = $null
+            if ($left -gt [TimeSpan]::Zero) {
+                $read = $stream.ReadAsync($buffer, 0, $buffer.Length, $cancel.Token)
+                if (-not $read.Wait($left)) { $read = $null }
+            }
+            if ($null -eq $read) {
+                $cancel.Cancel()
+                $Response.Dispose()
+                throw [TvReadTimeoutError]::new("The response did not arrive within $($script:BodyReadSeconds) seconds.")
+            }
+            $count = $read.Result
+            if ($count -le 0) { break }
+            if ($memory.Length + $count -gt $MaxBytes) { throw [TvOversizedError]::new("The response is larger than $MaxBytes bytes.") }
+            $memory.Write($buffer, 0, $count)
         }
         return , $memory.ToArray()
     } finally {
         $stream.Dispose()
         $memory.Dispose()
+        $cancel.Dispose()
     }
 }
 
@@ -2197,6 +2227,7 @@ function Read-TvPlainJson {
     $tooLarge = "$file is larger than the 32 MiB TenuVault reads."
     try { $result = Invoke-TvHttp -Uri $target.Uri -Token $Context.StorageToken -Method "Get" -Headers @{ "x-ms-version" = "2021-12-02" } -MaxBytes $script:MaxBlobBytes }
     catch [TvOversizedError] { throw [TvOversizedError]::new($tooLarge) }
+    catch [TvReadTimeoutError] { throw [TvReadTimeoutError]::new("$file did not arrive within $($script:BodyReadSeconds) seconds.") }
     if ($result.Bytes.Length -gt $script:MaxBlobBytes) { throw [TvOversizedError]::new($tooLarge) }
     if (Test-TvSealedBlob $result.Bytes) { throw [TvSealedBlobError]::new("The backup file is sealed with a key from before plain Azure backups, which TenuVault in Azure does not have.") }
     try { $value = ConvertFrom-TvJson ([Text.Encoding]::UTF8.GetString($result.Bytes)) } catch { throw "The backup file is not valid JSON." }
@@ -2304,6 +2335,7 @@ function Find-TvPreviousBackup {
         try { $metadata = Read-TvPlainJson $Context "$name/metadata.json" }
         catch [TvSealedBlobError] { $sealed++; continue }
         catch [TvOversizedError] { $notes.Add("Skipped $($name): $($_.Exception.Message)"); continue }
+        catch [TvReadTimeoutError] { $notes.Add("Skipped $($name): $($_.Exception.Message)"); continue }
         catch { continue }
         if (-not (Test-TvOwnedBackup $Context $metadata $owner)) { continue }
         if (-not (Test-TvCompleteBackup $metadata)) { continue }

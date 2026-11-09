@@ -152,6 +152,14 @@ describe.runIf(Boolean(pwsh))("cloud change reports match the desktop app", () =
     expect(note.files[1].content).toContain("DeviceConfigurations/Wi-Fi.json \\(backup-2026-11-05-020000\\): Wi-Fi.json is larger than the 32 MiB TenuVault reads.")
   }, 120_000)
 
+  it("counts a body that misses the read deadline as a failed read: the backup is skipped, the file not compared", () => {
+    const run = runReport("stalled")
+    expect(run.output[0]).toBe("Skipped backup-2026-11-05-230000: metadata.json did not arrive within 90 seconds.")
+    const note = JSON.parse(run.writes[0]!.body)
+    expect(note.email.details[0]).toEqual({ label: "From backup", value: "backup-2026-11-05-020000" })
+    expect(note.files[1].content).toContain("DeviceConfigurations/Wi-Fi.json \\(backup-2026-11-05-020000\\): Wi-Fi.json did not arrive within 90 seconds.")
+  }, 60_000)
+
   it("finds this tenant's previous backup past other tenants' folders without reading their manifests", () => {
     const run = runReport("crowded")
     expect(JSON.parse(run.writes[0]!.body).email.details[0]).toEqual({ label: "From backup", value: "backup-2026-11-05-020000" })
@@ -165,8 +173,11 @@ describe.runIf(Boolean(pwsh))("cloud change reports match the desktop app", () =
     expect(run.writes).toHaveLength(0)
   }, 60_000)
 
-  it("stops reading a response at the 32 MiB cap, by declared length and by bytes read", () => {
-    expect(JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", cappedScript], { encoding: "utf8", timeout: 60_000 }))).toEqual({ declared: "oversized", chunked: "oversized", small: "read 100" })
+  it("stops reading a response at the cap, by declared length and by bytes read, and at the body deadline", () => {
+    const read = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", cappedScript], { encoding: "utf8", timeout: 60_000 }))
+    expect(read).toMatchObject({ declared: "oversized", chunked: "oversized", small: "read 100", stall: "timed out" })
+    // A body that stops mid-way ends at the 1 second deadline, long before the server gives up.
+    expect(read.stallSeconds).toBeLessThan(4)
     expect(readFileSync(new URL("../resources/runbooks/Invoke-TenuVaultBackup.ps1", import.meta.url), "utf8")).toContain(`$script:MaxBlobBytes = ${MAX_BACKUP_ARCHIVE_BYTES}`)
   }, 60_000)
 
@@ -230,10 +241,58 @@ describe.runIf(Boolean(pwsh))("cloud change reports match the desktop app", () =
       expect(third.deleted).toContain("cloud-change-reports/backup-2026-11-06-020000.json")
       expect(third.result.Error).toBeNull()
       expect(JSON.parse(readFileSync(statePath, "utf8"))).toEqual([])
+
+      // The lease is lost between the download and the send (renewals: list, item, before send):
+      // nothing is sent or deleted, and the run stops with the lease error.
+      const single = join(folder, "single.json")
+      writeFileSync(single, JSON.stringify({ "backup-2026-11-06-020000.json": note("2026-11-06T02:14:00.000Z") }))
+      const leaseLost = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", deliverScript, "-NotesPath", single, "-TenantId", fixture.tenantId, "-LeaseFailAt", "3"], { encoding: "utf8", maxBuffer: 20_000_000 }))
+      expect(leaseLost.downloads).toBe(1)
+      expect(leaseLost.mails).toHaveLength(0)
+      expect(leaseLost.deleted).toEqual([])
+      expect(leaseLost.thrown).toMatch(/Failed to renew the state lease/)
+      // A state that cannot be saved after a send stops the run too, after one last delete.
+      const saveLost = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", deliverScript, "-NotesPath", single, "-TenantId", fixture.tenantId, "-FailSave", "true"], { encoding: "utf8", maxBuffer: 20_000_000 }))
+      expect(saveLost.mails).toHaveLength(1)
+      expect(saveLost.deleted).toEqual(["cloud-change-reports/backup-2026-11-06-020000.json"])
+      expect(saveLost.thrown).toMatch(/state lease was lost/)
     } finally {
       rmSync(folder, { recursive: true, force: true })
     }
   }, 60_000)
+
+  it("never sends a report twice when more sent reports than the state keeps cannot be deleted", () => {
+    const cloud = cloudReport({ values: false, actors: false })
+    const notes: Record<string, string> = {}
+    for (let i = 0; i < 201; i++) {
+      const name = `backup-2026-11-05-${String(10 + Math.floor(i / 60)).padStart(2, "0")}${String(i % 60).padStart(2, "0")}00`
+      notes[`${name}.json`] = JSON.stringify({ schema: "tenuvault.cloud-change-report/v1", tenantId: fixture.tenantId, runId: `run-${i}`, backupFolder: name, createdAt: "2026-11-06T02:14:00.000Z", changes: 1, email: cloud.email, files: [] })
+    }
+    const folder = mkdtempSync(join(tmpdir(), "tenuvault-report-backlog-"))
+    try {
+      const notesPath = join(folder, "notes.json")
+      const statePath = join(folder, "state.json")
+      writeFileSync(notesPath, JSON.stringify(notes))
+      const run = () => JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", deliverScript, "-NotesPath", notesPath, "-TenantId", fixture.tenantId, "-StatePath", statePath, "-FailDelete", "true"], { encoding: "utf8", maxBuffer: 50_000_000 }))
+      const first = run()
+      expect(first.mails).toHaveLength(200)
+      expect(first.result).toMatchObject({ Sent: 200, Held: 1 })
+      expect(first.delivered).toHaveLength(200)
+      const second = run()
+      // The 200 sent ones are only retried for deletion; the one held back still waits.
+      expect(second.mails).toHaveLength(0)
+      expect(second.result).toMatchObject({ Sent: 0, Held: 1 })
+      expect(second.delivered).toEqual(first.delivered)
+      // The backlog is the run's error, so the heartbeat shows it.
+      expect(second.result.Error).toContain("1 change report(s) wait: 200 sent report(s) could not be deleted yet")
+      // The watcher state keeps every delivered name whose note still exists: it is never trimmed.
+      const watcher = readFileSync(new URL("../resources/runbooks/Invoke-TenuVaultNotificationCheck.ps1", import.meta.url), "utf8")
+      expect(watcher).toContain("deliveredReports = @($deliveredReports.ToArray())")
+      expect(watcher).not.toMatch(/deliveredReports\.ToArray\(\) \| Select-Object/)
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  }, 180_000)
 
   it("covers the cases that matter in the fixture", async () => {
     const { report, html } = await desktopReport({ values: true, actors: true })

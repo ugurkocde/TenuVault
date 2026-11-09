@@ -4,7 +4,8 @@
 # runbook output. -Scenario nopredecessor leaves only backups the runbook must skip; succeeded
 # adds an earlier backup recorded as Succeeded; oversized adds a newer backup whose metadata.json
 # is over 32 MiB and an oversized policy file in the previous backup; crowded puts other tenants'
-# folders between the backups; throws makes storage fail with an unexpected error.
+# folders between the backups; throws makes storage fail with an unexpected error; stalled makes
+# a newer manifest and a policy file of the previous backup miss the body read deadline.
 param([Parameter(Mandatory)][string]$FixturePath, [string]$Level = "full", [string]$Scenario = "default")
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "../../../resources/runbooks/Invoke-TenuVaultBackup.ps1") -LibraryOnly
@@ -66,6 +67,7 @@ if ($Scenario -eq "nopredecessor") {
         $folders.Insert($folders.Count - 1, "backup-2026-11-05-230000")
         $script:Blobs[(Get-TvBlobTarget $account "$($fixture.older.name)/DeviceConfigurations/Wi-Fi.json").Uri] = [byte[]]::new(33554433)
     }
+    if ($Scenario -eq "stalled") { $folders.Insert($folders.Count - 1, "backup-2026-11-05-230000") }
     if ($Scenario -eq "crowded") {
         # 40 other tenants' backups between the two: skipped by their markers, manifests unread.
         for ($i = 0; $i -lt 40; $i++) {
@@ -84,6 +86,7 @@ function Invoke-TvHttp {
     param([string]$Uri, [string]$Token, [string]$Method = "Get", [hashtable]$Headers, [byte[]]$BodyBytes, [string]$ContentType, [long]$MaxBytes = 0)
     $script:Methods.Add($Method)
     if ($Scenario -eq "throws" -and $Method -eq "Get") { throw [InvalidOperationException]::new("storage is unavailable") }
+    if ($Scenario -eq "stalled" -and ($Uri -like "*/backup-2026-11-05-230000/metadata.json" -or $Uri -like "*/$($fixture.older.name)/DeviceConfigurations/Wi-Fi.json")) { throw [TvReadTimeoutError]::new("The response did not arrive within 90 seconds.") }
     if ($Method -eq "Get") { $script:Reads.Add($Uri) }
     if ($Method -eq "Put") { $script:Writes.Add([ordered]@{ uri = $Uri; contentType = $ContentType; headers = $Headers; body = [Text.Encoding]::UTF8.GetString($BodyBytes) }); return @{ Status = 201 } }
     if ($Uri -like "*comp=list*") {
