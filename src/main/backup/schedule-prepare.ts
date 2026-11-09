@@ -1,17 +1,28 @@
 import type { KeyValueStore } from "../storage/secure-store"
-import type { BackupSchedule } from "../../shared/ipc"
+import type { BackupScheduler } from "./scheduler"
 import { isLocalAccount } from "../storage/blob-emulator"
 import type { LicenseService } from "../license/service"
 import type { Plan } from "../../shared/plans"
 
-export async function prepareScheduledCoverage(
-  schedules: () => BackupSchedule[],
+const RECHECK_MS = 6 * 60 * 60_000
+
+export function prepareScheduledCoverage(
   license: { plan: (tenantId: string) => Plan | null; requireEntitlement: (tenantId: string) => Promise<unknown> },
-): Promise<void> {
-  for (const schedule of schedules()) {
-    if (!schedule.enabled) continue
-    const plan = license.plan(schedule.tenantId)
-    if (plan === null || (plan === "community" && schedule.frequency === "daily")) {
+  now: () => number = Date.now,
+): (scheduler: Pick<BackupScheduler, "list" | "isDue">) => Promise<void> {
+  const checked = new Map<string, number>()
+  return async (scheduler) => {
+    for (const schedule of scheduler.list()) {
+      if (!schedule.enabled) continue
+      const plan = license.plan(schedule.tenantId)
+      if (plan === null) {
+        const previous = checked.get(schedule.tenantId)
+        if (previous === undefined ? !scheduler.isDue({ ...schedule, pausedReason: undefined }) : now() - previous < RECHECK_MS) continue
+        checked.set(schedule.tenantId, now())
+      } else {
+        checked.delete(schedule.tenantId)
+        if (plan !== "community" || schedule.frequency !== "daily") continue
+      }
       await license.requireEntitlement(schedule.tenantId).catch(() => undefined)
     }
   }
@@ -27,7 +38,7 @@ export function announceCommunityChoice(store: KeyValueStore, pending: boolean, 
   }
 }
 
-
 export function scheduledCoverage(license: Pick<LicenseService, "plan" | "coverageEndedAt" | "communityPendingTenants">, tenantId: string, profile: { storageAccountName: string } | null) {
-  return { plan: license.plan(tenantId), azure: Boolean(profile && !isLocalAccount(profile.storageAccountName)), endedAt: license.coverageEndedAt(tenantId), pendingChoice: license.communityPendingTenants().includes(tenantId.toLowerCase()) }
+  if (!profile) return undefined
+  return { plan: license.plan(tenantId), azure: !isLocalAccount(profile.storageAccountName), endedAt: license.coverageEndedAt(tenantId), pendingChoice: license.communityPendingTenants().includes(tenantId.toLowerCase()) }
 }

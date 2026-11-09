@@ -2055,6 +2055,7 @@ describe("Community choice after coverage ends", () => {
 })
 
 it("explains that a locked tenant keeps its backups even without a server message", () => {
+  store.set(`license.coverageEnd.${TENANT}`, String(T0 - DAY))
   const license = service()
   expect(renderLicensePage(license.status([TENANT]))).toContain("Backups of this tenant are kept. Add a license to use it again.")
 })
@@ -2081,7 +2082,8 @@ describe("Community eligibility verification", () => {
     expect(license.status([TENANT, TENANT_B]).communityChoiceTenantIds).toEqual([])
     expect(() => license.chooseCommunity(TENANT)).toThrow("Choose a connected tenant")
     expect(store.get("license.communityTenant")).toBeNull()
-    const scheduler = new BackupScheduler(store, async () => ({ status: "Failed", message: "Unavailable" }), undefined, undefined, (id) => ({ plan: license.plan(id), azure: true, pendingChoice: license.communityPendingTenants().includes(id) }), () => prepareScheduledCoverage(() => scheduler.list(), license))
+    const prepareCoverage = prepareScheduledCoverage(license)
+    const scheduler = new BackupScheduler(store, async () => ({ status: "Failed", message: "Unavailable" }), undefined, undefined, (id) => ({ plan: license.plan(id), azure: true, pendingChoice: license.communityPendingTenants().includes(id) }), () => prepareCoverage(scheduler))
     scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00" })
     await scheduler.tick()
     expect(scheduler.list()[0]).toMatchObject({ frequency: "daily" })
@@ -2199,7 +2201,8 @@ it("checks pending tenants before slots without background claiming and updates 
     store.set(`license.coverageEnd.${TENANT}`, String(T0 - DAY))
     const license = service({ connectedTenantIds: () => connected })
     const run = vi.fn(async (id: string) => { await license.requireEntitlement(id); return { status: "Completed" as const, message: "Done" } })
-    const scheduler = new BackupScheduler(store, run, undefined, undefined, (id) => ({ plan: license.plan(id), azure: false, pendingChoice: license.communityPendingTenants().includes(id) }), () => prepareScheduledCoverage(() => scheduler.list(), license))
+    const prepareCoverage = prepareScheduledCoverage(license)
+    const scheduler = new BackupScheduler(store, run, undefined, undefined, (id) => ({ plan: license.plan(id), azure: false, pendingChoice: license.communityPendingTenants().includes(id) }), () => prepareCoverage(scheduler))
     for (const tenantId of connected) scheduler.set({ tenantId, enabled: true, frequency: "weekly", weekday: new Date(T0).getDay(), time: "00:00" })
     vi.setSystemTime(T0 + 7 * DAY)
     await scheduler.tick()
@@ -2223,7 +2226,8 @@ it("discovers renewed organization coverage before the next weekly slot through 
     const license = service({ connectedTenantIds: () => [TENANT] })
     await license.requireEntitlement(TENANT)
     const run = vi.fn(async () => ({ status: "Completed" as const, message: "Done" }))
-    const scheduler = new BackupScheduler(store, run, undefined, undefined, (id) => ({ plan: license.plan(id), azure: false }), () => prepareScheduledCoverage(() => scheduler.list(), license))
+    const prepareCoverage = prepareScheduledCoverage(license)
+    const scheduler = new BackupScheduler(store, run, undefined, undefined, (id) => ({ plan: license.plan(id), azure: false }), () => prepareCoverage(scheduler))
     scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00" })
     expect(scheduler.list()[0]?.fallbackWeekday).not.toBeUndefined()
     const checks = calls.length
@@ -2237,5 +2241,25 @@ it("discovers renewed organization coverage before the next weekly slot through 
     vi.setSystemTime(T0 + DAY)
     await scheduler.tick()
     expect(run).toHaveBeenCalledTimes(1)
+  } finally { vi.useRealTimers() }
+})
+
+
+it("does not claim Community for restored profiles before a schedule is due", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] })
+  try {
+    vi.setSystemTime(T0)
+    const license = service({ connectedTenantIds: () => [TENANT, TENANT_B] })
+    const scheduler = new BackupScheduler(store, async () => ({ status: "Completed", message: "Done" }))
+    const slot = new Date(T0 + 60_000)
+    const time = `${String(slot.getHours()).padStart(2, "0")}:${String(slot.getMinutes()).padStart(2, "0")}`
+    for (const tenantId of [TENANT, TENANT_B]) scheduler.set({ tenantId, enabled: true, frequency: "daily", time })
+    const prepare = prepareScheduledCoverage(license)
+    await prepare(scheduler)
+    expect(calls).toHaveLength(0)
+    expect(store.get("license.communityTenant")).toBeNull()
+    vi.setSystemTime(T0 + 60_000)
+    await prepare(scheduler)
+    expect(store.get("license.communityTenant")).toBe(TENANT)
   } finally { vi.useRealTimers() }
 })

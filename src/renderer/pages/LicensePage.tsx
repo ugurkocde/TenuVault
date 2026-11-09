@@ -232,12 +232,14 @@ function TenantRow({
   busy,
   onRetry,
   onShare,
+  choicePending,
 }: {
   tenant: TenantLicenseStatus
   name: string | undefined
   busy: Busy
   onRetry: () => void
   onShare: (shared: boolean) => void
+  choicePending: boolean
 }) {
   const organization = tenant.entitled && tenant.source === "tenant"
   const keyHolder = tenant.entitled && tenant.source === "key"
@@ -272,7 +274,7 @@ function TenantRow({
         </p>
       )}
       {!tenant.entitled && tenant.message && <p className="text-xs text-orange-700">{tenant.message}</p>}
-      {!tenant.entitled && tenant.plan !== "community" && tenant.signedIn && <p className="text-xs text-gray-600">Backups of this tenant are kept. Add a license to use it again.</p>}
+      {!tenant.entitled && tenant.plan !== "community" && tenant.signedIn && tenant.coverageEnded && !choicePending && <p className="text-xs text-gray-600">Backups of this tenant are kept. Add a license to use it again.</p>}
       {keyHolder && (
         <div className="rounded-2xl bg-gray-50 p-4">
           <label className="flex items-center gap-2 text-sm text-gray-900">
@@ -583,6 +585,7 @@ export default function LicensePage() {
                 <TenantRow
                   key={tenant.tenantId}
                   tenant={tenant}
+                  choicePending={status.communityChoicePendingTenantIds?.includes(tenant.tenantId) ?? false}
                   name={nameOf(tenant.tenantId)}
                   busy={busy}
                   onRetry={() => retry(tenant.tenantId)}

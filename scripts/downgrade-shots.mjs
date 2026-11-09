@@ -165,11 +165,11 @@ try {
     await assertText(text)
   }
   const shots = []
-  const screenshot = async (name) => {
+  const screenshot = async (name, expectedVerificationFailure = false) => {
     await evaluate(`document.activeElement?.blur?.()`)
     await sleep(400)
     const toast = await evaluate(`[...document.querySelectorAll('[role="status"], [role="alert"]')].map(e => e.innerText).join(" | ")`)
-    if (/fail|error|unavailable/i.test(toast)) throw new Error(`Error visible before ${name}: ${toast}`)
+    if (!expectedVerificationFailure && /fail|error|unavailable/i.test(toast)) throw new Error(`Error visible before ${name}: ${toast}`)
     const { data } = await send("Page.captureScreenshot", { format: "png" })
     const file = join(shotsDir, `${name}.png`)
     writeFileSync(file, Buffer.from(data, "base64"))
@@ -192,7 +192,7 @@ try {
   const community = async (id, pending = false, unchecked = false) => {
     await main.evaluate(`(() => {
       const M = globalThis.__marketingMock
-      M.license = { ...M.license, hasKey: true, keyState: "failed", keyMessage: null, plan: null, trial: false, tenantLimit: null, communityTenantId: ${pending ? "null" : JSON.stringify(id)}, communityChoiceTenantIds: ${pending ? JSON.stringify(TENANTS.map(t => t.guid)) : "[]"}, communityChoicePendingTenantIds: ${pending ? JSON.stringify(TENANTS.map(t => t.guid)) : "[]"}, tenants: M.license.tenants.map(t => ({ ...t, entitled: false, plan: t.tenantId === ${JSON.stringify(id)} && !${pending} ? "community" : null, message: null, coverageEnded: true })) }
+      M.license = { ...M.license, hasKey: true, keyState: "failed", keyMessage: null, message: null, offline: false, plan: null, trial: false, tenantLimit: null, communityTenantId: ${pending ? "null" : JSON.stringify(id)}, communityChoiceTenantIds: ${pending ? JSON.stringify(TENANTS.map(t => t.guid)) : "[]"}, communityChoicePendingTenantIds: ${pending ? JSON.stringify(TENANTS.map(t => t.guid)) : "[]"}, tenants: M.license.tenants.map(t => ({ ...t, entitled: false, plan: t.tenantId === ${JSON.stringify(id)} && !${pending} ? "community" : null, message: null, coverageEnded: true })) }
       if (${unchecked}) { M.license.communityChoiceTenantIds = [${JSON.stringify(TENANTS[0].guid)}]; M.license.tenants[1].coverageEnded = false }
       M.schedules.forEach(s => { s.fallbackWeekday = 1; s.pausedReason = s.tenantId === ${JSON.stringify(TENANTS[1].guid)} ? "Paused: Azure storage needs Pro" : undefined; s.nextRunAt = s.pausedReason ? null : (() => { const next = new Date(); next.setDate(next.getDate() + ((1 - next.getDay() + 6) % 7) + 1); next.setHours(2, 0, 0, 0); return next.toISOString() })() })
     })()`)
@@ -225,6 +225,23 @@ try {
   await go("#/license", "Backups of this tenant are kept")
   await scrollAll(350)
   await screenshot("tenant-locked")
+  await main.evaluate(`(() => {
+    const M = globalThis.__marketingMock
+    const tenant = M.license.tenants.find(tenant => tenant.tenantId === ${JSON.stringify(TENANTS[1].guid)})
+    M.license.keyState = "pending"
+    M.license.offline = true
+    M.license.message = "The licensing service is unavailable. Please try again later."
+    tenant.coverageEnded = false
+    tenant.activated = true
+    tenant.source = "key"
+    tenant.message = "The licensing service is unavailable. Please try again later."
+  })()`)
+  await evaluate(`location.reload()`)
+  await assertText("The licensing service is unavailable")
+  await disableAnimations()
+  await scrollAll(350)
+  await screenshot("tenant-verification-failed", true)
+
   await evaluate(`window.tenuvault.storage.setItem("tenuvault_selected_tenant", "2")`)
   await community(TENANTS[1].guid)
   await go("#/portal/backup?tab=schedule", "Paused: Azure storage needs Pro")

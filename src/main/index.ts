@@ -275,6 +275,7 @@ async function bootstrap(): Promise<void> {
     onChange: pushLicense,
     connectedTenantIds: () => connectedTenantIds(),
   })
+  const prepareCoverage = prepareScheduledCoverage(license)
   // License check of the fetch bridge and the backup engine; a rollback in progress may use a
   // tenant whose license ended, and its backup keeps every older backup (features/recovery.ts).
   // tokenFor and preferences are declared below; they are only called once the app runs.
@@ -821,7 +822,7 @@ async function bootstrap(): Promise<void> {
   const scheduler = new BackupScheduler(appStore, (tenantId, afterFailure, slot) => runScheduledBackup(tenantId, "scheduled", afterFailure, slot), () => {
     mainWindow?.webContents.send("schedules:changed", scheduler.list())
     tray.refresh()
-  }, () => new Date(), (tenantId) => scheduledCoverage(license, tenantId, tenantProfile(tenantId)), async () => { await prepareScheduledCoverage(() => scheduler.list(), license); pushLicense() }, (tenantId) => {
+  }, () => new Date(), (tenantId) => scheduledCoverage(license, tenantId, tenantProfile(tenantId)), async () => { await prepareCoverage(scheduler); pushLicense() }, (tenantId) => {
     if (Notification.isSupported()) new Notification({ title: "Backup schedule now weekly", body: `${tenantProfile(tenantId)?.name ?? "This tenant"}: Runs weekly on Community (daily needs Pro).` }).show()
   }, (tenantId, reason) => {
     if (reason === "choice") { pushLicense(); return }
