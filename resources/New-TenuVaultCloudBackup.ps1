@@ -33,8 +33,9 @@
     (kv-tenuvault-<suffix>) for the recovery key. Running this script again is the upgrade: it
     republishes the runbook and rewrites the variables in place. Once the published runbook reads
     back as 1.2.0 or later, it removes the tenant's old TenuVaultKeyVault variable and names the
-    old vault, which you can delete once no setup uses it. Backups made before the upgrade stay
-    sealed and open in TenuVault with the recovery key.
+    old vault. Delete it once no TenuVault setup in this or any other Automation account still has
+    a TenuVaultKeyVault variable; the script checks this account and names the tenants that still
+    have one. Backups made before the upgrade stay sealed and open in TenuVault with the recovery key.
 
     Microsoft Graph application roles are the one part Azure RBAC cannot grant. With
     -GrantGraphRoles (Global Administrator) the script assigns the read-only DeviceManagement
@@ -51,8 +52,10 @@
     With -Remove, the script deletes this tenant's schedule link, schedule and Automation
     variables, and lists what stays behind on purpose (Automation account, roles, backups) and
     what to revoke by hand. When the tenant's schedule link, schedule and variables read back as
-    gone, it also names the Key Vault of an earlier setup, which can be deleted once no setup
-    uses it; otherwise it lists what is left and says to keep the vault.
+    gone, and no tenant in this Automation account still has a TenuVaultKeyVault variable, it
+    names the Key Vault of an earlier setup for deletion under the same rule; otherwise it says
+    what is left, what could not be checked or which tenants still have the variable, and to
+    keep the vault.
 
     Needs Az.Accounts, Az.Resources, Az.Automation and Az.Storage, plus an account
     that can create Automation accounts and role assignments (Owner, or Contributor
@@ -273,22 +276,57 @@ function Get-TenuVaultLegacyKeyVaults {
     return @($names)
 }
 
+# Whether a failed Az lookup means the resource does not exist. Only that counts as absent; an
+# auth, transport or service error leaves the state unknown.
+function Test-TenuVaultNotFound {
+    param([Parameter(Mandatory)][System.Management.Automation.ErrorRecord]$ErrorRecord)
+    for ($exception = $ErrorRecord.Exception; $exception; $exception = $exception.InnerException) {
+        if ($exception.GetType().Name -eq "ResourceNotFoundException") { return $true }
+        $response = $exception.PSObject.Properties["Response"]
+        if ($response -and $response.Value -and [int]$response.Value.StatusCode -eq 404) { return $true }
+    }
+    return $false
+}
+
+# The tenant keys whose TenuVaultKeyVault variable is still in this Automation account, or
+# Error when the variables could not be listed.
+function Get-TenuVaultKeyVaultUsers {
+    try {
+        $variables = @(Get-AzAutomationVariable -ResourceGroupName $ResourceGroupName `
+            -AutomationAccountName $AutomationAccountName -ErrorAction Stop)
+    } catch {
+        if (Test-TenuVaultNotFound $_) { return @{ Keys = @(); Error = $null } }
+        return @{ Keys = @(); Error = $_.Exception.Message }
+    }
+    $keys = @($variables | Where-Object { $_ -and $_.Name -like "TenuVaultKeyVault-*" } | ForEach-Object { $_.Name.Substring("TenuVaultKeyVault-".Length) } | Sort-Object -Unique)
+    return @{ Keys = $keys; Error = $null }
+}
+
 # $KeptBecause names why the vault may still be read (the runbook was not verified as plain, or
-# this tenant's setup was not fully removed); without it the vault is reported as unused.
+# this tenant's setup was not verified as removed). Without it, deletion advice is given only
+# when no tenant in this Automation account still has a TenuVaultKeyVault variable.
 function Write-TenuVaultLegacyKeyVaultNote {
     param([string[]]$Names, [string]$KeptBecause)
     if (-not $Names) { return }
+    if (-not $KeptBecause) {
+        $users = Get-TenuVaultKeyVaultUsers
+        if ($users.Error) {
+            $KeptBecause = "the variables of Automation account '$AutomationAccountName' could not be read to check which setups still use it ($($users.Error))"
+        } elseif ($users.Keys.Count) {
+            $KeptBecause = "tenant key(s) $($users.Keys -join ', ') in Automation account '$AutomationAccountName' still have a TenuVaultKeyVault variable; run this script for those tenants too"
+        }
+    }
     Write-Host ""
     if ($KeptBecause) {
-        Write-Host "Keep Key Vault $($Names -join ', '): $KeptBecause, so this setup may still read it." -ForegroundColor Yellow
-        Write-Host "Run this script again to finish; it reports when the vault is no longer used." -ForegroundColor Yellow
+        Write-Host "Keep Key Vault $($Names -join ', '): $KeptBecause, so a setup may still read it." -ForegroundColor Yellow
+        Write-Host "Run this script again to finish; it reports when this setup no longer needs the vault." -ForegroundColor Yellow
         return
     }
-    Write-Host "Cloud backups no longer use Key Vault. Key Vault $($Names -join ', ') from an earlier setup is no"
-    Write-Host "longer read. Delete it once no setup uses it (no other Automation account still runs a TenuVault"
-    Write-Host "runbook older than 1.2.0 with it), in the portal or with Remove-AzKeyVault. Deleting it also"
-    Write-Host "removes its role assignments. Keep the recovery key saved: backups made before the upgrade"
-    Write-Host "stay sealed with it and open in TenuVault with it."
+    Write-Host "This setup no longer needs Key Vault $($Names -join ', ') from an earlier setup, and no tenant in"
+    Write-Host "Automation account '$AutomationAccountName' still has a TenuVaultKeyVault variable. Delete the vault once no"
+    Write-Host "TenuVault setup in this or any other Automation account still has a TenuVaultKeyVault variable, in the"
+    Write-Host "portal or with Remove-AzKeyVault. Deleting it also removes its role assignments. Keep the recovery"
+    Write-Host "key saved: backups made before the upgrade stay sealed with it and open in TenuVault with it."
 }
 
 # The version the published runbook carries, read back from Azure, or $null when it cannot be read.
@@ -353,23 +391,31 @@ function Remove-TenuVaultLegacyKeyVaultVariable {
 }
 
 # What of this tenant's setup is still in Azure: the schedule link, the schedule and the variables.
+# Left lists what exists; Unknown lists what could not be checked (any lookup error but not found).
 function Get-TenuVaultTenantSetupLeft {
     $left = [System.Collections.Generic.List[string]]::new()
-    $link = $null
-    try {
-        $link = Get-AzAutomationScheduledRunbook -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName `
-            -RunbookName $runbookName -ScheduleName $scheduleName -ErrorAction Stop
-    } catch { }
-    if ($link) { $left.Add("the link of '$runbookName' to '$scheduleName'") }
-    $schedule = Get-AzAutomationSchedule -ResourceGroupName $ResourceGroupName `
-        -AutomationAccountName $AutomationAccountName -Name $scheduleName -ErrorAction SilentlyContinue
-    if ($schedule) { $left.Add("schedule '$scheduleName'") }
-    foreach ($name in @($variableNames) + $legacyKeyVaultVariable) {
-        $variable = Get-AzAutomationVariable -ResourceGroupName $ResourceGroupName `
-            -AutomationAccountName $AutomationAccountName -Name $name -ErrorAction SilentlyContinue
-        if ($variable) { $left.Add("variable '$name'") }
+    $unknown = [System.Collections.Generic.List[string]]::new()
+    $probe = {
+        param([string]$Label, [scriptblock]$Read)
+        try {
+            if (& $Read) { $left.Add($Label) }
+        } catch {
+            if (-not (Test-TenuVaultNotFound $_)) { $unknown.Add("$Label ($($_.Exception.Message))") }
+        }
     }
-    return @($left)
+    & $probe "the link of '$runbookName' to '$scheduleName'" {
+        Get-AzAutomationScheduledRunbook -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName `
+            -RunbookName $runbookName -ScheduleName $scheduleName -ErrorAction Stop
+    }
+    & $probe "schedule '$scheduleName'" {
+        Get-AzAutomationSchedule -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName -Name $scheduleName -ErrorAction Stop
+    }
+    foreach ($name in @($variableNames) + $legacyKeyVaultVariable) {
+        & $probe "variable '$name'" {
+            Get-AzAutomationVariable -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName -Name $name -ErrorAction Stop
+        }
+    }
+    return @{ Left = @($left); Unknown = @($unknown) }
 }
 
 # -Remove: this tenant's schedule link, schedule and variables go away, then what is left is read back.
@@ -405,12 +451,17 @@ function Remove-TenuVaultCloudBackupSetup {
         }
     }
     # Read back instead of trusting the prompts: a declined or failed step leaves the setup running.
-    $left = Get-TenuVaultTenantSetupLeft
+    $state = Get-TenuVaultTenantSetupLeft
     Write-Host ""
-    if ($left.Count) {
-        Write-Host "Cloud backups for tenant $TenantId were not fully removed. Still in place: $($left -join ', ')." -ForegroundColor Yellow
+    if ($state.Left.Count) {
+        Write-Host "Cloud backups for tenant $TenantId were not fully removed. Still in place: $($state.Left -join ', ')." -ForegroundColor Yellow
         Write-Host "Run this script with -Remove again to finish."
-    } else {
+    }
+    if ($state.Unknown.Count) {
+        Write-Host "The removal could not be verified. Could not check: $($state.Unknown -join '; ')." -ForegroundColor Yellow
+        Write-Host "Run this script with -Remove again once Azure answers."
+    }
+    if (-not $state.Left.Count -and -not $state.Unknown.Count) {
         Write-Host "Cloud backup schedule and variables for tenant $TenantId removed." -ForegroundColor Green
     }
     Write-Host "Left in place on purpose: Automation account '$AutomationAccountName' and runbook '$runbookName'"
@@ -420,7 +471,8 @@ function Remove-TenuVaultCloudBackupSetup {
     Write-Host "from its managed identity (Entra ID > Enterprise applications > Permissions):"
     foreach ($role in $graphRoleNames) { Write-Host "  * $role" }
     if ($principalId) { Write-Host "Managed identity object (principal) id: $principalId" }
-    Write-TenuVaultLegacyKeyVaultNote $legacyKeyVaults -KeptBecause $(if ($left.Count) { "this tenant's cloud backup setup was not fully removed" } else { $null })
+    $keptBecause = if ($state.Left.Count) { "this tenant's cloud backup setup was not fully removed" } elseif ($state.Unknown.Count) { "the removal of this tenant's cloud backup setup could not be verified" } else { $null }
+    Write-TenuVaultLegacyKeyVaultNote $legacyKeyVaults -KeptBecause $keptBecause
 }
 
 function Assert-TenuVaultAuthorizationActions {

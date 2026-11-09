@@ -96,8 +96,9 @@ Put these in the next stable release's notes, then remove them here.
   restore unassigned copies, but replace restore, assignment restore and revert are blocked there.
   Ask all admins of a tenant to update. Cloud backups (runbook 1.2.0) write plain JSON too and no
   longer use Key Vault: run the cloud backup setup script once more with the same values to update
-  the runbook, after which the old Key Vault (kv-tenuvault-<suffix>) can be deleted once no setup
-  uses it. Older sealed cloud backups stay readable with the recovery key.
+  the runbook. Delete the old Key Vault (kv-tenuvault-<suffix>) once no TenuVault setup in any
+  Automation account still has a TenuVaultKeyVault variable; the script checks its own account.
+  Older sealed cloud backups stay readable with the recovery key.
 
 ## Cutting a stable release
 

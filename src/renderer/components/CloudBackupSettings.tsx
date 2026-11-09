@@ -232,7 +232,7 @@ export function CloudBackupSettings({ tenant, community, cloud, scopeVersion = 0
               <p className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
                 The cloud runner still uses runbook {cloud.status.runbookVersion}, which encrypts backups with the
                 recovery key from Key Vault. Run the setup script again with the same values to update it to plain
-                backups. Afterwards the old Key Vault can be deleted once no setup uses it. Backups made before stay
+                backups. Delete the old Key Vault only once no TenuVault setup still has a TenuVaultKeyVault variable. Backups made before stay
                 readable here with the recovery key.
               </p>
             )}

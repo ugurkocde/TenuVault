@@ -46,6 +46,17 @@ $legacyKeyVaultVariable = "TenuVaultKeyVault-$tenantKey"
 $plainRunbookVersion = "1.2.0"
 $oldRunbook = '$script:RunbookVersion = "1.1.0"'
 
+# Az.Automation reports a missing resource as this exception type, written as a non-terminating error.
+class ResourceNotFoundException : System.Exception {
+    ResourceNotFoundException([string]$message) : base($message) { }
+}
+function Write-MockError {
+    param([Parameter(Mandatory)]$Cmdlet, [Parameter(Mandatory)][System.Exception]$Exception)
+    $Cmdlet.WriteError([System.Management.Automation.ErrorRecord]::new($Exception, "MockError", "NotSpecified", $null))
+}
+# Any lookup error that is not "not found": Azure did not answer, or refused the read.
+function New-OutageException { [System.Net.Http.HttpRequestException]::new("The SSL connection could not be established.") }
+
 # Mocked Azure state.
 $script:variables = @{}
 $script:actions = [System.Collections.Generic.List[string]]::new()
@@ -56,6 +67,8 @@ $script:link = $false
 $script:declineImport = $false
 $script:publishBehavior = "publish"
 $script:declineVariable = $null
+$script:failLookups = $false
+$script:failList = $false
 
 function Import-AzAutomationRunbook {
     [CmdletBinding(SupportsShouldProcess)]
@@ -81,8 +94,15 @@ function Export-AzAutomationRunbook {
     return Get-Item -Path $OutputFolder
 }
 function Get-AzAutomationVariable {
-    param($ResourceGroupName, $AutomationAccountName, $Name, $ErrorAction)
+    [CmdletBinding()]
+    param($ResourceGroupName, $AutomationAccountName, $Name)
+    if (-not $Name) {
+        if ($script:failLookups -or $script:failList) { Write-MockError $PSCmdlet (New-OutageException); return }
+        return @($script:variables.Keys | Sort-Object | ForEach-Object { [pscustomobject]@{ Name = $_; Value = $script:variables[$_] } })
+    }
+    if ($script:failLookups) { Write-MockError $PSCmdlet (New-OutageException); return }
     if ($script:variables.ContainsKey($Name)) { return [pscustomobject]@{ Name = $Name; Value = $script:variables[$Name] } }
+    Write-MockError $PSCmdlet ([ResourceNotFoundException]::new("Variable $Name not found."))
 }
 function Set-AzAutomationVariable { param($ResourceGroupName, $AutomationAccountName, $Name, $Encrypted, $Value) $script:variables[$Name] = $Value }
 function New-AzAutomationVariable { param($ResourceGroupName, $AutomationAccountName, $Name, $Encrypted, $Value) $script:variables[$Name] = $Value }
@@ -107,11 +127,19 @@ function Unregister-AzAutomationScheduledRunbook {
     $script:link = $false
 }
 function Get-AzAutomationScheduledRunbook {
-    param($ResourceGroupName, $AutomationAccountName, $RunbookName, $ScheduleName, $ErrorAction)
-    if (-not $script:link) { throw "The job schedule was not found." }
+    [CmdletBinding()]
+    param($ResourceGroupName, $AutomationAccountName, $RunbookName, $ScheduleName)
+    if ($script:failLookups) { Write-MockError $PSCmdlet (New-OutageException); return }
+    if (-not $script:link) { Write-MockError $PSCmdlet ([ResourceNotFoundException]::new("Job schedule for $RunbookName and $ScheduleName not found.")); return }
     [pscustomobject]@{ RunbookName = $RunbookName; ScheduleName = $ScheduleName }
 }
-function Get-AzAutomationSchedule { param($ResourceGroupName, $AutomationAccountName, $Name, $ErrorAction) if ($script:schedule) { [pscustomobject]@{ Name = $Name } } }
+function Get-AzAutomationSchedule {
+    [CmdletBinding()]
+    param($ResourceGroupName, $AutomationAccountName, $Name)
+    if ($script:failLookups) { Write-MockError $PSCmdlet (New-OutageException); return }
+    if ($script:schedule) { return [pscustomobject]@{ Name = $Name } }
+    Write-MockError $PSCmdlet ([ResourceNotFoundException]::new("Schedule $Name not found."))
+}
 function Remove-AzAutomationSchedule {
     [CmdletBinding(SupportsShouldProcess)]
     param($ResourceGroupName, $AutomationAccountName, $Name, [switch]$Force)
@@ -131,7 +159,11 @@ function Reset-OldSetup {
     $script:declineImport = $false
     $script:publishBehavior = "publish"
     $script:declineVariable = $null
+    $script:failLookups = $false
+    $script:failList = $false
 }
+# Tenant B (22222222) shares the Automation account and still has its vault variable.
+function Add-TenantB { $script:variables["TenuVaultKeyVault-22222222"] = "kv-tenuvault-abc123" }
 
 function Write-Scenario {
     param([string]$Name, [object]$Runbook, [object]$ErrorText, [object[]]$Output)
@@ -151,8 +183,10 @@ function Write-Scenario {
 
 # Upgrade runs: approved, the outer step declined, the import's own prompt declined with an old
 # draft present, the publish throwing, and a publish that leaves the older version published.
-foreach ($scenario in "approved", "outer-declined", "import-declined", "publish-throws", "published-older") {
+foreach ($scenario in "approved", "outer-declined", "import-declined", "publish-throws", "published-older", "upgrade-tenant-b-remains", "upgrade-list-fails") {
     Reset-OldSetup
+    if ($scenario -eq "upgrade-tenant-b-remains") { Add-TenantB }
+    if ($scenario -eq "upgrade-list-fails") { $script:failList = $true }
     $PSDefaultParameterValues = @{}
     if ($scenario -eq "outer-declined") { $PSDefaultParameterValues["Publish-TenuVaultRunbook:WhatIf"] = $true }
     if ($scenario -eq "import-declined") { $script:declineImport = $true }
@@ -169,10 +203,14 @@ foreach ($scenario in "approved", "outer-declined", "import-declined", "publish-
     Write-Scenario -Name $scenario -Runbook $runbook -ErrorText $errorText -Output $output
 }
 
-# -Remove runs: complete, -WhatIf, and one variable's own confirmation declined.
-foreach ($scenario in "remove-complete", "remove-whatif", "remove-variable-declined") {
+# -Remove runs: complete, -WhatIf, one variable's own confirmation declined, -WhatIf while every
+# lookup fails, a complete removal whose variable list fails, and tenant B still on the vault.
+foreach ($scenario in "remove-complete", "remove-whatif", "remove-variable-declined", "remove-whatif-lookups-fail", "remove-list-fails", "remove-tenant-b-remains") {
     Reset-OldSetup
     if ($scenario -eq "remove-variable-declined") { $script:declineVariable = "TenuVaultScope-$tenantKey" }
-    $output = if ($scenario -eq "remove-whatif") { @(Remove-TenuVaultCloudBackupSetup -WhatIf 6>&1) } else { @(Remove-TenuVaultCloudBackupSetup 6>&1) }
+    if ($scenario -eq "remove-whatif-lookups-fail") { $script:failLookups = $true }
+    if ($scenario -eq "remove-list-fails") { $script:failList = $true }
+    if ($scenario -eq "remove-tenant-b-remains") { Add-TenantB }
+    $output = if ($scenario -like "remove-whatif*") { @(Remove-TenuVaultCloudBackupSetup -WhatIf 6>&1) } else { @(Remove-TenuVaultCloudBackupSetup 6>&1) }
     Write-Scenario -Name $scenario -Output $output
 }

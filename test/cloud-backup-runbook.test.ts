@@ -230,7 +230,7 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
     expect(removeMode).toContain("Write-TenuVaultLegacyKeyVaultNote $legacyKeyVaults")
     expect(setup).toContain('-ResourceType "Microsoft.KeyVault/vaults"')
     expect(setup).toContain('$_.Name -like "kv-tenuvault-*"')
-    expect(setup).toContain("Delete it once no setup uses it")
+    expect(setup).toContain("TenuVault setup in this or any other Automation account still has a TenuVaultKeyVault variable")
     expect(setup).toContain("open in TenuVault with it")
     // The variable goes only when the published runbook, read back from Azure, no longer reads it.
     expect(setup).toContain("-Slot Published -OutputFolder $folder")
@@ -248,7 +248,7 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
     }
     return setupScenarios.get(name)!
   }
-  const DELETE_ADVICE = "Delete it once no setup uses it"
+  const DELETE_ADVICE = "Delete the vault once no"
 
   it.runIf(Boolean(pwsh))("removes the Key Vault variable only when the published runbook reads back as plain", () => {
     const approved = setupRun("approved")
@@ -289,6 +289,42 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
     // -WhatIf changes nothing; a declined variable is named as left in place.
     expect(setupRun("remove-whatif")).toMatchObject({ actions: [], schedule: true, link: true, legacyVariableKept: true })
     expect(setupRun("remove-variable-declined").output.join(" ")).toContain("Still in place: variable 'TenuVaultScope-11111111'.")
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("treats a failed -Remove lookup as unverified, not as removed", () => {
+    // -WhatIf removes nothing, and every lookup fails with a transport error instead of "not found".
+    const run = setupRun("remove-whatif-lookups-fail")
+    expect(run).toMatchObject({ schedule: true, link: true, legacyVariableKept: true })
+    const text = run.output.join(" ")
+    expect(text).toContain("The removal could not be verified. Could not check: the link of 'Invoke-TenuVaultBackup' to 'TenuVaultBackup-11111111' (The SSL connection could not be established.); schedule 'TenuVaultBackup-11111111'")
+    expect(text).toContain("variable 'TenuVaultKeyVault-11111111' (The SSL connection could not be established.)")
+    expect(text).toContain("Keep Key Vault kv-tenuvault-abc123: the removal of this tenant's cloud backup setup could not be verified")
+    expect(text).not.toContain("removed.")
+    expect(text).not.toContain(DELETE_ADVICE)
+    // A real "not found" still counts as gone.
+    expect(setupRun("remove-complete").output.join(" ")).not.toContain("could not be verified")
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("keeps the vault while another tenant in the Automation account still has its variable, or when that cannot be checked", () => {
+    for (const name of ["upgrade-tenant-b-remains", "remove-tenant-b-remains"]) {
+      const run = setupRun(name)
+      const text = run.output.join(" ")
+      expect(run.variables, name).toContain("TenuVaultKeyVault-22222222")
+      expect(run.variables, name).not.toContain("TenuVaultKeyVault-11111111")
+      expect(text, name).toContain("Keep Key Vault kv-tenuvault-abc123: tenant key(s) 22222222 in Automation account 'aa-tenuvault' still have a TenuVaultKeyVault variable; run this script for those tenants too")
+      expect(text, name).not.toContain(DELETE_ADVICE)
+    }
+    expect(setupRun("upgrade-tenant-b-remains").plain).toBe(true)
+    for (const name of ["upgrade-list-fails", "remove-list-fails"]) {
+      const text = setupRun(name).output.join(" ")
+      expect(text, name).toContain("Keep Key Vault kv-tenuvault-abc123: the variables of Automation account 'aa-tenuvault' could not be read to check which setups still use it")
+      expect(text, name).not.toContain(DELETE_ADVICE)
+    }
+    // With no TenuVaultKeyVault variable left, the advice stays neutral: it never claims the vault is unused elsewhere.
+    const advice = setupRun("approved").output.join(" ")
+    expect(advice).toContain("no tenant in Automation account 'aa-tenuvault' still has a TenuVaultKeyVault variable")
+    expect(advice).toContain("Delete the vault once no TenuVault setup in this or any other Automation account still has a TenuVaultKeyVault variable")
+    expect(advice).not.toContain("is no longer read")
   }, 60_000)
 
   it("scopes the writer role to the container without delete and prints the paste block", () => {
@@ -339,7 +375,8 @@ describe("azuredeploy.json", () => {
     expect(Object.keys(template.parameters)).not.toContain("recoveryKey")
     expect(Object.keys(template.parameters)).not.toContain("keyVaultName")
     expect(Object.values(template.parameters).map((parameter) => (parameter as { type: string }).type)).not.toContain("securestring")
-    const text = JSON.stringify(template)
+    // The description may name the old vault for upgrades; nothing the template deploys or outputs does.
+    const text = JSON.stringify({ ...template, metadata: undefined })
     for (const keyVault of ["keyVault", "TenuVaultKeyVault", "tenuvault-recovery-key", "keyVaultSecretsUserRoleId", "4633458b-17de-408a-b874-0445c86b69e6"]) {
       expect(text, keyVault).not.toContain(keyVault)
     }
