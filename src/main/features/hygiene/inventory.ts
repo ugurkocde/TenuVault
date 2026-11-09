@@ -82,13 +82,17 @@ export async function collectFromBackup(deps: FeatureDeps, tenantId: string, bac
   const failed = new Set(strings(metadata.FailedTypes))
   const notCollected: NotCollected[] = []
   const covered: string[] = []
+  // Inventory such as Autopilot devices is not configuration, so hygiene neither reads nor reports it.
   for (const type of INTUNE_TYPES) {
+    if (type.inventory) continue
     const reason = excluded.has(type.folder) ? "excluded" : skipped.has(type.folder) ? "skipped" : failed.has(type.folder) ? "failed" : null
     if (reason) notCollected.push({ folder: type.folder, label: type.label, reason })
     else covered.push(type.folder)
   }
 
-  const paths = (content.groups ?? []).flatMap((group) => (group.policies ?? []).map((policy) => policy.path).filter((path): path is string => typeof path === "string"))
+  const paths = (content.groups ?? [])
+    .filter((group) => !(typeof group.folder === "string" && typeForFolder(group.folder)?.inventory))
+    .flatMap((group) => (group.policies ?? []).map((policy) => policy.path).filter((path): path is string => typeof path === "string"))
   const items: InventoryItem[] = []
   const unreadableFolders = new Set<string>()
   let unreadable = 0

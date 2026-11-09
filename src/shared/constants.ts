@@ -43,14 +43,24 @@ export function localStorageAccountName(tenantId: string): string {
 export const BACKUP_CONTAINER = "intune-backups"
 
 /**
- * Largest total size of the files in one backup archive, in bytes. Backup
- * downloads are built in memory, and imports refuse larger archives, so both
- * paths share this bound. Defined here so every caller uses the same value.
+ * Largest single backup file TenuVault reads, such as metadata.json or one
+ * file of a backup download, in bytes. Defined here so every caller uses the
+ * same value.
  */
 export const MAX_BACKUP_ARCHIVE_BYTES = 32 * 1024 * 1024
 
-/** Most files in one backup archive, matching the import bound. */
-export const MAX_BACKUP_ARCHIVE_FILES = 5000
+/**
+ * Largest total size of the files in one backup archive, in bytes. Backup
+ * downloads are built in memory, and imports refuse larger archives, so both
+ * paths share this bound. It fits a tenant with about 50,000 Autopilot devices.
+ */
+export const MAX_BACKUP_ARCHIVE_TOTAL_BYTES = 128 * 1024 * 1024
+
+/**
+ * Most files in one backup archive, matching the import bound. A ZIP without
+ * ZIP64 holds at most 65,535 entries, and imports read only that format.
+ */
+export const MAX_BACKUP_ARCHIVE_FILES = 60000
 
 /** Encrypted ownership evidence for abandoned folders, excluded from exported archives. */
 export const BACKUP_OWNER_FILE = ".tenuvault-owner.json"

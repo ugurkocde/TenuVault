@@ -23,6 +23,7 @@ Items copied to another tenant are handled differently from restores in the same
 * Copies keep their **original names**, without the `[Restored]` prefix.
 * Copies get the **Default** scope tag.
 * Copies are **never assigned**. Recreate group targeting, exclusions and filters in the target tenant after you review the copies.
+* **Windows Autopilot devices** are not copied. A device is registered with its hardware hash, which backups cannot include, so the review shows them as **Cannot be restored**.
 * **Compliance policy settings** are not copied. They are a tenant-wide setting, not a policy, so the review shows them as **Cannot be restored**. Set them in the target tenant's Intune admin center if it needs the same values.
 * The source tenant does not change. The review step says "Copies go to *N* tenants; *source tenant* does not change."
 

@@ -9,6 +9,7 @@
 
 import { COMPLIANCE_SETTING_KEYS, COMPLIANCE_SETTINGS_ID, complianceSettingChanges, complianceSettingsUpdate } from "./compliance-settings"
 import { createState, isMicrosoftManaged, MICROSOFT_MANAGED, policyBody, policyChanges, policyWarnings, replaceState, strengthBody, strengthUpdate } from "./conditional-access"
+import { AUTOPILOT_DEVICE_DELAY, AUTOPILOT_DEVICE_PROPERTIES, AUTOPILOT_DEVICE_REIMPORT, autopilotDeviceChanges, autopilotDeviceUpdate } from "./autopilot-devices"
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
 export type Item = { [key: string]: Json }
@@ -58,7 +59,25 @@ export interface IntuneType {
    */
   singleton?: { id: string; name: string; properties: string[] }
   /** Property holding the object's name. */
-  nameKey: "displayName" | "name" | "profileName" | "tokenName"
+  nameKey: "displayName" | "name" | "profileName" | "tokenName" | "serialNumber"
+  /**
+   * Keeps only these properties (and `id`) of every read, for objects whose other properties change on
+   * their own or hold secrets. A kept value Graph leaves out or returns as null is stored as "", because
+   * some lists return "" where the detail GET returns null for the same empty value.
+   */
+  keep?: string[]
+  /** The list GET returns every property `keep` names, so backups store the list entry and skip the detail GET. */
+  listOnly?: true
+  /**
+   * Property that identifies the same object after it was deleted and added again under a new ID.
+   * Replacing in the same tenant looks the object up by it when the backed-up ID no longer exists.
+   */
+  locateBy?: string
+  /**
+   * Tenant inventory rather than configuration, such as registered devices: left out of policy counts,
+   * hygiene checks and alert suggestions, and never part of baselines or Sync.
+   */
+  inventory?: true
   /** $expand for the detail GET. */
   expand?: string
   /** $select for the detail GET, for types that leave properties out by default. */
@@ -854,6 +873,24 @@ export const INTUNE_TYPES: IntuneType[] = [
     assign: "post",
     // language, extractHardwareHash, enableWhiteGlove and outOfBoxExperienceSettings are deprecated and rejected on create.
     readOnly: ["assignedDevices", "managementServiceAppId", "language", "extractHardwareHash", "enableWhiteGlove", "outOfBoxExperienceSettings"],
+  },
+  {
+    folder: "AutopilotDevices",
+    label: "Windows Autopilot devices",
+    area: "Enrollment",
+    path: "deviceManagement/windowsAutopilotDeviceIdentities",
+    // Graph answers $select on this collection and its items with a server error, so nothing is selected.
+    nameKey: "serialNumber",
+    keep: AUTOPILOT_DEVICE_PROPERTIES,
+    listOnly: true,
+    locateBy: "serialNumber",
+    inventory: true,
+    // Microsoft Graph never returns the hardware hash, so a device that is gone cannot be registered again from a backup.
+    restore: "create",
+    restorable: () => AUTOPILOT_DEVICE_REIMPORT,
+    update: (_payload, snapshot, current) => autopilotDeviceUpdate(snapshot, current),
+    review: autopilotDeviceChanges,
+    warnings: () => [AUTOPILOT_DEVICE_DELAY],
   },
   {
     folder: "AppleEnrollmentProfiles",

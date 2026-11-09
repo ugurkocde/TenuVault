@@ -23,7 +23,8 @@ import { FirstBackupNote } from "@desktop/components/FirstBackupNote"
 import { LegacySealedBackupsNotice } from "@desktop/components/LegacySealedBackupsNotice"
 import { allows } from "../../../../shared/plans"
 import { AREAS } from "../../../../shared/intune/scope"
-import { typeForFolder } from "../../../../shared/intune/registry"
+import { typeForFolder, type Item } from "../../../../shared/intune/registry"
+import { autopilotDevicesCsv } from "../../../../shared/intune/autopilot-devices"
 import { storageLabel } from "~/lib/storage-label"
 import { storageResources, type StorageChoice } from "@desktop/lib/storage"
 import { LinkedMessage } from "~/components/linked-message"
@@ -105,6 +106,7 @@ export default function BackupRestorePage() {
   const [completedBackup, setCompletedBackup] = useState<{ jobId: string; tenantId: string } | null>(null)
   const [changesOpen, setChangesOpen] = useState(false)
   const [isDownloading, setIsDownloading] = useState(false)
+  const [exportingDevices, setExportingDevices] = useState(false)
   const detailRef = useRef<HTMLDivElement | null>(null)
 
   const tenant: BackupTenant | null = useMemo(
@@ -185,6 +187,41 @@ export default function BackupRestorePage() {
       alert(`Failed to download backup: ${failure instanceof Error ? failure.message : "Unknown error"}`)
     } finally {
       setIsDownloading(false)
+    }
+  }
+
+  // The backed-up Autopilot devices as CSV, read through the same routes the restore wizard uses.
+  const exportDevices = async (backup: BackupSummary) => {
+    if (!tenant) return
+    setExportingDevices(true)
+    try {
+      const credentials = { ...tenant.credentials, storageAccountName: tenant.storageAccountName, subscriptionId: "local", resourceGroupName: "local", backupId: backup.id }
+      const call = async <T,>(path: string, body: unknown): Promise<T> => {
+        const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+        const json = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error((json as { error?: string }).error || "The backup could not be read")
+        return json as T
+      }
+      const contents = await call<{ content?: { groups?: Array<{ folder: string; policies: Array<{ path: string }> }> } }>("/api/list-backup-contents", credentials)
+      const paths = (contents.content?.groups ?? []).filter((group) => group.folder === "AutopilotDevices").flatMap((group) => group.policies.map((policy) => policy.path))
+      const devices: Item[] = []
+      for (let start = 0; start < paths.length; start += 2000) {
+        const preview = await call<{ items: Array<{ snapshot?: Item; error?: string }> }>("/api/restore-preview", { ...credentials, paths: paths.slice(start, start + 2000) })
+        for (const item of preview.items) if (item.snapshot && !item.error) devices.push(item.snapshot)
+      }
+      if (devices.length < paths.length) throw new Error(`${paths.length - devices.length} of ${paths.length} device files could not be read`)
+      const url = URL.createObjectURL(new Blob([autopilotDevicesCsv(devices)], { type: "text/csv;charset=utf-8" }))
+      const link = document.createElement("a")
+      link.href = url
+      link.download = `${backup.id}-autopilot-devices.csv`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+    } catch (failure) {
+      alert(`Failed to export the Autopilot devices: ${failure instanceof Error ? failure.message : "Unknown error"}`)
+    } finally {
+      setExportingDevices(false)
     }
   }
 
@@ -378,8 +415,10 @@ export default function BackupRestorePage() {
               first={selected.id === backups[backups.length - 1]?.id}
               storageAccountName={tenant.storageAccountName}
               downloading={isDownloading}
+              exportingDevices={exportingDevices}
               onChanges={() => setChangesOpen(true)}
               onDownload={() => void download(selected)}
+              onExportDevices={() => void exportDevices(selected)}
               onRestore={() => restore(selected)}
             />
           )}
@@ -487,14 +526,16 @@ interface BackupDetailsProps {
   first: boolean
   storageAccountName: string
   downloading: boolean
+  exportingDevices: boolean
   onChanges: () => void
   onDownload: () => void
+  onExportDevices: () => void
   onRestore: () => void
   ref: React.Ref<HTMLDivElement>
 }
 
 /** Everything known about one backup, from its metadata and file listing. */
-function BackupDetails({ backup, first, storageAccountName, downloading, onChanges, onDownload, onRestore, ref }: BackupDetailsProps) {
+function BackupDetails({ backup, first, storageAccountName, downloading, exportingDevices, onChanges, onDownload, onExportDevices, onRestore, ref }: BackupDetailsProps) {
   const kind = statusKind(backup.status)
   // Damaged or unreadable files of this backup on this device: nothing can be read from it.
   const unavailable = backup.status === "unavailable"
@@ -581,9 +622,16 @@ function BackupDetails({ backup, first, storageAccountName, downloading, onChang
                   </summary>
                   <ul className="mt-2 space-y-1 border-t border-gray-100 pt-2 text-xs">
                     {entry.types.map((type) => (
-                      <li key={type.folder} className="flex justify-between text-gray-600">
+                      <li key={type.folder} className="flex items-center justify-between gap-2 text-gray-600">
                         <span>{capitalize(type.label)}</span>
-                        <span>{counts[type.folder]}</span>
+                        <span className="flex items-center gap-2">
+                          {type.folder === "AutopilotDevices" && !unavailable && (
+                            <button type="button" className="font-medium text-coral-700 underline disabled:text-gray-400" disabled={exportingDevices} onClick={onExportDevices}>
+                              {exportingDevices ? "Exporting..." : "Export CSV"}
+                            </button>
+                          )}
+                          <span>{counts[type.folder]}</span>
+                        </span>
                       </li>
                     ))}
                     {entry.types.length === 0 && <li className="text-gray-500">No items of these types in the tenant.</li>}

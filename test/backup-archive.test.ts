@@ -36,7 +36,7 @@ it('rejects missing provenance and missing or modified snapshots', async () => {
   await expect(reviewArchive(await archive(zip => { zip.file('DeviceConfigurations/policy.json', '{"id":"policy","displayName":"Tampered"}') }))).rejects.toThrow('inventory')
 })
 it('rejects an archive whose declared expansion exceeds the limit', async () => {
-  const raw = await archive(); const offset = raw.indexOf(Buffer.from([0x50,0x4b,0x01,0x02])); raw.writeUInt32LE(33 * 1024 * 1024, offset + 24)
+  const raw = await archive(); const offset = raw.indexOf(Buffer.from([0x50,0x4b,0x01,0x02])); raw.writeUInt32LE(129 * 1024 * 1024, offset + 24)
   await expect(reviewArchive(raw)).rejects.toThrow('oversized')
 })
 
@@ -71,4 +71,15 @@ it('claims a license slot for the archive tenant only after the import is confir
     expect(order).toEqual(['confirm', `license ${tenant}`])
     expect(await list()).toContain(`${id}/metadata.json`)
   } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+it('reviews an archive with Autopilot devices, which TotalPolicies leaves out', async () => {
+  const device = { id: 'ap-1', serialNumber: 'SN-0001', groupTag: 'Sales' }
+  const hash = (value: Parameters<typeof comparableSnapshot>[0]) => createHash('sha256').update(JSON.stringify(comparableSnapshot(value))).digest('base64').slice(0, 22)
+  const policy = { id: 'policy', displayName: 'Example' }
+  const raw = await archive(zip => {
+    zip.file('AutopilotDevices/SN-0001.json', JSON.stringify(device))
+    zip.file('metadata.json', JSON.stringify({ BackupFolder: id, Status: 'Success', Failures: 0, ItemCounts: { DeviceConfigurations: 1, AutopilotDevices: 1, TotalPolicies: 1 }, Items: { 'DeviceConfigurations/policy': { file: 'policy.json', hash: hash(policy) }, 'AutopilotDevices/ap-1': { file: 'SN-0001.json', hash: hash(device) } } }))
+  })
+  expect(await reviewArchive(raw)).toMatchObject({ count: 2 })
 })

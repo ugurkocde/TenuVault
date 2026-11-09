@@ -22,6 +22,7 @@ The restore wizard marks these items as **Cannot be restored** (or greys them ou
 | --- | --- | --- |
 | Apps that use an installer file, such as Win32, line-of-business and MSI apps | "Intune does not let apps download installer files. Upload the installer again to restore this app." | Get the original installer from its trusted source and upload it through Intune's app workflow. |
 | Apple automated device enrollment tokens and profiles | "The Apple token must be uploaded again in Intune. Its enrollment profiles are kept for reference." | Renew or upload the token through Apple Business Manager or Apple School Manager and Intune. Use the backed-up profiles as a reference. |
+| Windows Autopilot devices that are not registered in the tenant, and every Autopilot device with **Create copies** or **Copy to other tenants instead** | "This device is not registered in Windows Autopilot in this tenant. Backups cannot include its hardware hash, so it cannot be registered again from a backup: import it again with its hardware hash, then restore it to bring back its group tag, user and device name." | Import the device again in Intune with its hardware hash, from the file you imported it with or from your OEM or reseller. Then restore it with **Replace in place**: TenuVault finds it by its serial number and puts its group tag, user and device name back. |
 | Device configuration profiles with a masked OMA-URI secret | "This backup holds a masked OMA-URI value (****). Create a new backup to restore it; restoring would send **** to devices." | Run a new backup, then restore from it. |
 | The tenant default enrollment configuration | "This is the tenant default. Restore updates it in place." | Use **Replace in place**. The default cannot be copied. |
 | The default Company Portal branding | "This is the default branding. Restore updates it in place." | Use **Replace in place**. |
@@ -55,6 +56,7 @@ Intune does not export some data, so no backup can hold it:
 
 * Installer payloads of apps
 * Apple enrollment and content tokens
+* Windows Autopilot hardware hashes, which Microsoft Graph returns only while a device is imported
 * Private keys and other secret material that the Microsoft Graph API does not return
 
 Built-in scope tags and built-in Intune roles are not backed up, because they exist in every tenant.
@@ -63,6 +65,7 @@ Built-in scope tags and built-in Intune roles are not backed up, because they ex
 
 * **Android Enterprise enrollment profiles** that are recreated get a new enrollment token that is valid for 90 days. A replace in place keeps the live token.
 * **Types with limited assignment restore.** Windows Autopilot deployment profiles, Apple user enrollment profiles, terms and conditions and Intune roles cannot have their assignments replaced in place. See [Restore modes and assignments](/restore/modes/#types-that-need-assignments-reconciled-in-intune).
+* **Windows Autopilot devices** restore in place only: the group tag, the assigned user and its friendly name, and the device name. A device with no user in the backup has its user unassigned. Intune applies the changes within a few minutes, so the device can show its old values right after the restore. See [Windows Autopilot devices](/backups/coverage/#windows-autopilot-devices).
 * **Exclusions.** Enrollment configurations and terms and conditions do not accept exclusion assignments, so exclusions are left out when their assignments are restored.
 * **Cross-tenant copies** are always unassigned and get the Default scope tag. See [Restore to another tenant](/restore/cross-tenant/).
 * **Compliance policy settings.** Replace in place writes only the settings that differ from the tenant. A compliance status validity period the backup holds as 0 (never set) or outside 1 to 120 days is never written; the tenant keeps its value and the review says so. See [Compliance policy settings](/restore/modes/#compliance-policy-settings).

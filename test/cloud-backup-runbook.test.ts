@@ -2,7 +2,10 @@ import { execFileSync } from "node:child_process"
 import { existsSync, readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
-import { INTUNE_TYPES } from "../src/shared/intune/registry"
+import { createHash } from "node:crypto"
+import { INTUNE_TYPES, typeForFolder } from "../src/shared/intune/registry"
+import { listSnapshot } from "../src/shared/intune/read"
+import { comparableSnapshot } from "../src/shared/intune/compare"
 import { COMPLIANCE_SETTING_KEYS, COMPLIANCE_SETTINGS_ID } from "../src/shared/intune/compliance-settings"
 import { PLAIN_CLOUD_RUNBOOK, cloudRunbookNeedsUpgrade, cloudStatusBlobName, parseCloudStatus } from "../src/shared/cloud-backup"
 import { resolveBackupOwnership } from "../src/shared/backup-ownership"
@@ -49,6 +52,12 @@ describe("Invoke-TenuVaultBackup.ps1 type table", () => {
       expect(row).toContain(type.select ? `Select = '${type.select}'` : "Select = $null")
       expect(row).toContain(type.listQuery ? `ListQuery = '${type.listQuery}'` : "ListQuery = $null")
       expect(row).toContain(`AssignmentsFormerlyExpanded = $${type.assignmentsFormerlyExpanded === true ? "true" : "false"}`)
+      if (type.listOnly) expect(row).toContain("ListOnly = $true")
+      else expect(row).not.toContain("ListOnly")
+      if (type.inventory) expect(row).toContain("Inventory = $true")
+      else expect(row).not.toContain("Inventory")
+      if (type.keep) expect(row).toContain(`Keep = @(${type.keep.map((key) => `'${key}'`).join(",")})`)
+      else expect(row).not.toContain("Keep =")
       for (const extra of type.extras ?? []) {
         expect(row, `${type.folder}/${extra.property}`).toContain(`Property = '${extra.property}'`)
         expect(row).toContain(`Template = '${extra.path("{id}")}'`)
@@ -135,6 +144,25 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     expect(parseCloudStatus(JSON.parse(failedStatus!.body!), "11111111-2222-3333-4444-555555555555")).toMatchObject({ lastStatus: "Failed" })
     expect(failed!.calls.some((call) => call.method === "Put" && call.uri.includes("/tenuvault-backup-results/cloud-backup-outcomes/run-"))).toBe(true)
     expect(failed!.calls.some((call) => call.uri.includes("/intune-backups/backup-"))).toBe(false)
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("saves a list-only type from its list entry, with the desktop snapshot and fingerprint", () => {
+    const [run] = runPlainFixture()
+    // No detail GET for the device: the list entry is the snapshot.
+    expect(run!.calls.some((call) => call.uri.includes("windowsAutopilotDeviceIdentities/"))).toBe(false)
+    const type = typeForFolder("AutopilotDevices")!
+    const listed = { id: "ap-1", serialNumber: "SN-0001", manufacturer: "Contoso", model: "Laptop 7", groupTag: "Sales", displayName: null, userPrincipalName: "", lastContactedDateTime: "2026-11-01T10:00:00Z", enrollmentState: "enrolled", deviceAccountPassword: "secret", productKey: "PK-1", managedDeviceId: "md-1" }
+    const expected = listSnapshot(type, listed)
+    const put = run!.calls.find((call) => call.method === "Put" && call.uri.includes("/AutopilotDevices/"))!
+    expect(put.uri).toContain("/AutopilotDevices/SN-0001.json")
+    const saved = JSON.parse(put.body!)
+    expect(saved).toEqual(expected)
+    for (const left of ["deviceAccountPassword", "productKey", "managedDeviceId", "lastContactedDateTime", "enrollmentState"]) expect(saved).not.toHaveProperty(left)
+    const metadata = JSON.parse(run!.calls.find((call) => call.method === "Put" && call.uri.endsWith("/metadata.json"))!.body!)
+    const desktopHash = createHash("sha256").update(JSON.stringify(comparableSnapshot(expected))).digest("base64").slice(0, 22)
+    expect(metadata.Items["AutopilotDevices/ap-1"].hash).toBe(desktopHash)
+    // Devices are counted under their own folder, not as policies.
+    expect(metadata.ItemCounts).toMatchObject({ AutopilotDevices: 1, DeviceConfigurations: 1, CompliancePolicySettings: 1, TotalPolicies: 2 })
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("leaves the tenant evidence the app's ownership check needs, in complete, failed and in-flight backups", async () => {

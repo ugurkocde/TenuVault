@@ -1,5 +1,6 @@
 import type { RouteModule } from "../../api/host"
 import { allows } from "../../../shared/plans"
+import { typeForFolder } from "../../../shared/intune/registry"
 import { NOTIFICATION_EVENT_TYPES, testEvent } from "../../../shared/notifications/envelope"
 import { changeEvent } from "../../../shared/notifications/audit"
 import { describeConditions, hasConditions, isChangeEventType, parseConditions, parseDelivery, watcherAlertsHash } from "../../../shared/notifications/alerts"
@@ -386,6 +387,8 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
           const contents = (await read.json().catch(() => ({}))) as { content?: { groups?: Array<{ folder?: string; label?: string; policies?: Array<{ displayName?: string }> }> } }
           const seen = new Set<string>()
           for (const group of contents.content?.groups ?? []) {
+            // Inventory such as Autopilot devices names devices, not policies.
+            if (typeForFolder(group.folder ?? "")?.inventory) continue
             const service = /conditionalaccess|namedlocation|authenticationstrength/i.test(group.folder ?? "") ? "conditionalAccess" : "intune"
             for (const policy of group.policies ?? []) {
               const name = (policy.displayName ?? "").trim()

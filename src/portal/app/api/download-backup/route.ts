@@ -1,7 +1,7 @@
 import { decodeXml } from "~/lib/storage/list"
 import { blobPath, isSafeArchivePath } from "../../../../shared/security"
 import { isBackupName } from "../../../../shared/intune/backup-names"
-import { BACKUP_OWNER_FILE, MAX_BACKUP_ARCHIVE_BYTES, MAX_BACKUP_ARCHIVE_FILES } from "../../../../shared/constants"
+import { BACKUP_OWNER_FILE, MAX_BACKUP_ARCHIVE_BYTES, MAX_BACKUP_ARCHIVE_FILES, MAX_BACKUP_ARCHIVE_TOTAL_BYTES } from "../../../../shared/constants"
 import { readBytesCapped } from "../../../../shared/capped-body"
 import { type NextRequest, NextResponse } from "next/server"
 import { readOwnedBackup } from "~/lib/policies/backup-owner"
@@ -164,9 +164,9 @@ export async function POST(request: NextRequest) {
       )
     }
     const totalBytes = listedFiles.reduce((sum, file) => sum + (file.size ?? 0), 0)
-    if (totalBytes > MAX_BACKUP_ARCHIVE_BYTES) {
+    if (totalBytes > MAX_BACKUP_ARCHIVE_TOTAL_BYTES) {
       return NextResponse.json(
-        { error: `Download refused: this backup totals ${totalBytes} bytes, more than the 32 MiB limit for a backup download. Restore the backup from Backup Details instead of downloading it, or choose a smaller backup.` },
+        { error: `Download refused: this backup totals ${totalBytes} bytes, more than the 128 MiB limit for a backup download. Restore the backup from Backup Details instead of downloading it, or choose a smaller backup.` },
         { status: 413 }
       )
     }
@@ -213,13 +213,13 @@ export async function POST(request: NextRequest) {
           })
 
           if (fileResponse.ok) {
-            const content = await readBytesCapped(fileResponse, Math.max(0, MAX_BACKUP_ARCHIVE_BYTES - fetchedBytes))
+            const content = await readBytesCapped(fileResponse, Math.min(MAX_BACKUP_ARCHIVE_BYTES, Math.max(0, MAX_BACKUP_ARCHIVE_TOTAL_BYTES - fetchedBytes)))
             if (content === null) {
               oversized = true
               return { success: false, path: filePath }
             }
             fetchedBytes += content.byteLength
-            if (fetchedBytes > MAX_BACKUP_ARCHIVE_BYTES) oversized = true
+            if (fetchedBytes > MAX_BACKUP_ARCHIVE_TOTAL_BYTES) oversized = true
             // Remove the backup folder prefix from the path in the zip
             const zipPath = filePath.replace(`${backupId}/`, '')
 
@@ -246,7 +246,7 @@ export async function POST(request: NextRequest) {
       results.push(...batchResults)
       if (oversized) {
         return NextResponse.json(
-          { error: `Download refused: this backup's files total more than the 32 MiB limit for a backup download, although the listing reported less. Restore the backup from Backup Details instead of downloading it, or choose a smaller backup.` },
+          { error: `Download refused: this backup's files are larger than a backup download allows (32 MiB per file, 128 MiB in total), although the listing reported less. Restore the backup from Backup Details instead of downloading it, or choose a smaller backup.` },
           { status: 413 }
         )
       }

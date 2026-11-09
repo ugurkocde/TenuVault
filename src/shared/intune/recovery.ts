@@ -8,6 +8,7 @@ export function recoveryReadiness(type: IntuneType, snapshot: Item): RecoveryRea
   if (blocker) {
     manualActions.push(blocker)
     if (/installer|token|certificate|secret|content/i.test(blocker)) externalArtifacts.push('Recover the original installer, signing material or service token from its authorized owner; upload or renew it in Intune before mapping the resulting object.')
+    else if (/hardware hash/i.test(blocker)) externalArtifacts.push("Recover the device's hardware hash, from the file used to import it or from its OEM or reseller, and import the device again in Intune.")
   } else {
     try {
       const source = structuredClone(snapshot); delete source.assignments; delete source.roleAssignments; if (source.roleScopeTagIds) source.roleScopeTagIds = ['0']

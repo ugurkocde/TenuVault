@@ -7,7 +7,7 @@ import { typeForFolder, type IntuneType, type Item, type Json, type Step } from 
 
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 import { buildRestorePlan, buildUpdatePlan, NotRestorableError, resolveStep, restoreBlocker } from "../../../shared/intune/restore-plan"
-import { assignmentsUnread, readObject, type GraphReader } from "../../../shared/intune/read"
+import { assignmentsUnread, locateObject, readObject, type GraphReader } from "../../../shared/intune/read"
 import { comparableSnapshot, sameSnapshot } from "../../../shared/intune/compare"
 import { saveWrite, removeWrite, writeKey, writeRecords } from "../../../main/storage/restore-journal"
 import { moduleForFolder, restorePermissionBlocker, SERVICES_PAGE, type GrantedPermissions } from "../../../shared/services/modules"
@@ -290,6 +290,15 @@ export class Restorer {
         return withNote({ success: true, path, policyId: snapshot.id as string, policyName: typeof name === "string" ? name : undefined, action: "unchanged" })
       }
       if (current) return withNote(await this.update(type, path, source, snapshot.id as string, current, assignments))
+      // Added again under a new ID (such as an Autopilot device imported again): found by the type's locateBy property.
+      const located = this.options.mode === "replace" && !this.options.crossTenant && type.locateBy ? await locateLive(this.graph, type, snapshot) : undefined
+      if (located && typeof located.id === "string") {
+        if (this.matches({ ...snapshot, id: located.id }, located, assignments)) {
+          const name = located[type.nameKey] ?? located.displayName ?? located.name
+          return withNote({ success: true, path, policyId: located.id, policyName: typeof name === "string" ? name : undefined, action: "unchanged" })
+        }
+        return withNote(await this.update(type, path, source, located.id, located, assignments))
+      }
       if (this.options.mode === "replace" && typeof snapshot.id === "string") {
         // An earlier replace run may already have recreated this deleted object under a new ID.
         // Reuse that object instead of creating a duplicate on every fresh run.
@@ -710,8 +719,26 @@ export class Restorer {
 
 }
 
+/**
+ * The live object with the snapshot's locateBy value (see IntuneType.locateBy), read like a backup,
+ * or undefined when the type has none or no single object matches.
+ */
+export function locateLive(graph: GraphCall, type: IntuneType, snapshot: Item): Promise<Item | undefined> {
+  return locateObject(type, snapshot, liveReader(graph))
+}
+
 /** The live object read like a backup, or undefined when it was deleted. */
 export async function readLive(graph: GraphCall, type: IntuneType, id: string): Promise<Item | undefined> {
+  try {
+    return await readObject(type, id, liveReader(graph))
+  } catch (error) {
+    if (error instanceof Gone) return undefined
+    throw error
+  }
+}
+
+/** Reads through the restore's Graph caller; a deleted object reads as Gone. */
+function liveReader(graph: GraphCall): GraphReader {
   const reader: GraphReader = {
     get: async (path) => {
       const response = await graph("GET", path)
@@ -737,12 +764,7 @@ export async function readLive(graph: GraphCall, type: IntuneType, id: string): 
       return items
     },
   }
-  try {
-    return await readObject(type, id, reader)
-  } catch (error) {
-    if (error instanceof Gone) return undefined
-    throw error
-  }
+  return reader
 }
 
 export { NotRestorableError }

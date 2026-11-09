@@ -544,6 +544,27 @@ function Get-TvEncryptedOmaSettings {
     })
 }
 
+# Only the ID and the properties the type keeps, with a value Graph leaves out or returns as null stored
+# as "", like keptSnapshot in shared/intune/read.
+function Get-TvKeptSnapshot {
+    param([Parameter(Mandatory)][hashtable]$Type, [Parameter(Mandatory)][object]$Detail)
+    $snapshot = [ordered]@{ id = Get-TvProp $Detail "id" }
+    foreach ($key in $Type.Keep) {
+        $value = Get-TvProp $Detail $key
+        $snapshot[$key] = if ($null -eq $value) { "" } else { $value }
+    }
+    return $snapshot
+}
+
+# The snapshot of a list-only type's list entry, like listSnapshot in shared/intune/read.
+function Get-TvListSnapshot {
+    param([Parameter(Mandatory)][hashtable]$Type, [Parameter(Mandatory)][object]$Item)
+    if ($Type.Keep) { return Get-TvKeptSnapshot $Type $Item }
+    $copy = Copy-TvDeep $Item
+    Remove-TvProp $copy "@odata.context"
+    return $copy
+}
+
 function Read-TvObject {
     param(
         [Parameter(Mandatory)][hashtable]$Type,
@@ -552,6 +573,7 @@ function Read-TvObject {
         [Parameter(Mandatory)][hashtable]$Outcome
     )
     $detail = Invoke-TvGraphGet (Get-TvDetailPath $Type $Id) $Token
+    if ($Type.Keep) { return Get-TvKeptSnapshot $Type $detail }
     if ($Type.Singleton) {
         $snapshot = [ordered]@{ id = $Type.Singleton.Id }
         foreach ($key in $Type.Singleton.Properties) {
@@ -681,6 +703,7 @@ function Get-TvTypes {
     @{ Folder = 'PolicySets'; Label = 'policy sets'; Path = 'deviceAppManagement/policySets'; NameKey = 'displayName'; Expand = 'items,assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
     @{ Folder = 'EnrollmentConfigurations'; Label = 'enrollment configurations'; Path = 'deviceManagement/deviceEnrollmentConfigurations'; NameKey = 'displayName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
     @{ Folder = 'AutopilotProfiles'; Label = 'Windows Autopilot deployment profiles'; Path = 'deviceManagement/windowsAutopilotDeploymentProfiles'; NameKey = 'displayName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
+    @{ Folder = 'AutopilotDevices'; Label = 'Windows Autopilot devices'; Path = 'deviceManagement/windowsAutopilotDeviceIdentities'; NameKey = 'serialNumber'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @(); ListOnly = $true; Inventory = $true; Keep = @('serialNumber','manufacturer','model','systemFamily','skuNumber','groupTag','purchaseOrderIdentifier','userPrincipalName','addressableUserName','displayName','resourceName','azureAdDeviceId','deviceAccountUpn','deviceFriendlyName') }
     @{ Folder = 'AppleEnrollmentProfiles'; Label = 'Apple user enrollment profiles'; Path = 'deviceManagement/appleUserInitiatedEnrollmentProfiles'; NameKey = 'displayName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
     @{ Folder = 'AppleAutomatedEnrollment'; Label = 'Apple automated device enrollment tokens and profiles'; Path = 'deviceManagement/depOnboardingSettings'; NameKey = 'tokenName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @(@{ Property = 'enrollmentProfiles'; Single = $false; Template = 'deviceManagement/depOnboardingSettings/{id}/enrollmentProfiles'; Each = $null }) }
     @{ Folder = 'AndroidEnrollmentProfiles'; Label = 'Android Enterprise enrollment profiles'; Path = 'deviceManagement/androidDeviceOwnerEnrollmentProfiles'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
@@ -839,7 +862,8 @@ function Invoke-TvBackup {
                 $fileName = Get-TvUniqueName (Get-TvSafeFileName $displayName) $id $used
                 try {
                     $outcome = @{ Masked = $false }
-                    $detail = Read-TvObject $type $id $graphToken $outcome
+                    # A list-only type's list entry already holds everything its snapshot keeps.
+                    $detail = if ($type.ListOnly) { Get-TvListSnapshot $type $item } else { Read-TvObject $type $id $graphToken $outcome }
                     $body = $detail | ConvertTo-Json -Depth 100
                     Set-TvBlob $storageAccount "$backupFolder/$($type.Folder)/$fileName.json" $body $storageToken
                     $record = [ordered]@{ file = "$fileName.json"; hash = Get-TvSnapshotHash $detail }
@@ -873,14 +897,20 @@ function Invoke-TvBackup {
 
         $ended = [DateTime]::UtcNow
         $seconds = [int][Math]::Round(($ended - $started).TotalSeconds)
+        # Inventory such as Autopilot devices is counted under its own folder, not as policies.
         $totalPolicies = 0
-        foreach ($count in $counts.Values) { $totalPolicies += $count }
+        $saved = 0
+        foreach ($type in $types) {
+            $count = [int]$counts[$type.Folder]
+            $saved += $count
+            if (-not $type.Inventory) { $totalPolicies += $count }
+        }
         $itemCounts = [ordered]@{}
         foreach ($key in $counts.Keys) { $itemCounts[$key] = $counts[$key] }
         $itemCounts.TotalPolicies = $totalPolicies
         $sortedItems = [ordered]@{}
         foreach ($key in @($items.Keys | Sort-Object)) { $sortedItems[$key] = $items[$key] }
-        $status = if ($failures -gt 0) { if ($totalPolicies -eq 0) { "Failed" } else { "CompletedWithWarnings" } } else { "Success" }
+        $status = if ($failures -gt 0) { if ($saved -eq 0) { "Failed" } else { "CompletedWithWarnings" } } else { "Success" }
         $metadata = [ordered]@{
             BackupDate     = ConvertTo-TvFolderTimestamp $started
             BackupFolder   = $backupFolder
@@ -919,7 +949,7 @@ function Invoke-TvBackup {
             $itemCounts = [ordered]@{}
             foreach ($key in $counts.Keys) { $itemCounts[$key] = $counts[$key] }
             $totalPolicies = 0
-            foreach ($count in $counts.Values) { $totalPolicies += $count }
+            foreach ($type in $types) { if (-not $type.Inventory) { $totalPolicies += [int]$counts[$type.Folder] } }
             $itemCounts.TotalPolicies = $totalPolicies
             $sortedItems = [ordered]@{}
             foreach ($key in @($items.Keys | Sort-Object)) { $sortedItems[$key] = $items[$key] }

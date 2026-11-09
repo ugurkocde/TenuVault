@@ -8,8 +8,8 @@ import { GraphSession, type GraphItem } from "./graph-session"
 import { GRAPH, BlobClaimError, GraphError, InventoryDamagedError, ProtectedBlobError, RequestTimeoutError, StorageError, TokenError, isUnreachable } from "./request"
 import { isLocalAccount } from "../storage/blob-emulator"
 import { FetchApplicationError } from "../api/network-error"
-import { INTUNE_TYPES, itemName, type IntuneType, type Item } from "../../shared/intune/registry"
-import { readObject, withMaskedSecrets } from "../../shared/intune/read"
+import { INTUNE_TYPES, itemName, typeForFolder, type IntuneType, type Item } from "../../shared/intune/registry"
+import { listSnapshot, readObject, withMaskedSecrets } from "../../shared/intune/read"
 import { comparableSnapshot } from "../../shared/intune/compare"
 import type { BackupItems } from "../../shared/intune/backup-changes"
 import { EVERYTHING, includedTypes, normalizeScope, restorableFolders, type BackupScope } from "../../shared/intune/scope"
@@ -555,7 +555,8 @@ export class BackupEngine {
         EndTime: displayTime(ended),
         Duration: seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`,
         DurationSeconds: seconds,
-        ItemCounts: { ...counts, TotalPolicies: Object.values(counts).reduce((sum, count) => sum + count, 0) },
+        // Inventory such as Autopilot devices is counted under its own folder, not as policies.
+        ItemCounts: { ...counts, TotalPolicies: policyCount(counts) },
         Status: status,
         RunbookVersion: "desktop",
         BackupFormat: "Individual policy files with Intune-compatible JSON",
@@ -586,7 +587,8 @@ export class BackupEngine {
       job.progressMessage = `Backing up ${type.label}`
       try {
         let masked = false
-        const detail = await readObject(type, item.id, reader, keepMasked ? { keepMasked: (error) => (masked = keepMasked(error)) } : {})
+        // A list-only type's list entry already holds everything its snapshot keeps.
+        const detail = type.listOnly ? listSnapshot(type, item as Item) : await readObject(type, item.id, reader, keepMasked ? { keepMasked: (error) => (masked = keepMasked(error)) } : {})
         const body = JSON.stringify(detail, null, 2)
         await storage.put(`${backupFolder}/${type.folder}/${fileName}.json`, body)
         const maskedView = withMaskedSecrets(type, detail)
@@ -621,8 +623,10 @@ export class BackupEngine {
     }, network.signal)
 
     const ended = this.now()
-    const totalPolicies = Object.values(counts).reduce((sum, count) => sum + count, 0)
-    const metadata = manifest(failures > 0 ? (totalPolicies === 0 ? "Failed" : "CompletedWithWarnings") : "Success", ended)
+    const totalPolicies = policyCount(counts)
+    const saved = Object.values(counts).reduce((sum, count) => sum + count, 0)
+    const inventory = Object.entries(counts).filter(([folder, count]) => count > 0 && typeForFolder(folder)?.inventory)
+    const metadata = manifest(failures > 0 ? (saved === 0 ? "Failed" : "CompletedWithWarnings") : "Success", ended)
 
     // Detach cancellation at the first manifest PUT, after cancellable token acquisition.
     // Retention reads cannot delay the manifest, and a saved backup must not burn a retry slot.
@@ -674,7 +678,7 @@ export class BackupEngine {
     job.failures = failures
     job.totalPolicies = totalPolicies
     job.failedTypes = [...failedTypes]
-    job.status = failures > 0 && totalPolicies === 0 ? "Failed" : "Completed"
+    job.status = failures > 0 && saved === 0 ? "Failed" : "Completed"
     if (job.status === "Failed" && !outcome.answered && !outcome.otherFailures) job.unreachable = true
     if (maskedItems.length) {
       this.write(job, `Saved ${maskedItems.length} object${maskedItems.length === 1 ? "" : "s"} with encrypted OMA-URI values masked (****): Microsoft refused the plain-text read, so these copies cannot be restored. A manual backup with your sign-in captures them when Microsoft returns the values.`)
@@ -682,7 +686,8 @@ export class BackupEngine {
     const warnings = failures + retentionWarnings + (maskedItems.length ? 1 : 0)
     job.progressMessage =
       job.status === "Failed" ? "Backup failed: no policies could be saved" : warnings > 0 ? `Backup completed with ${warnings} warning${warnings === 1 ? "" : "s"}` : "Backup completed successfully"
-    this.write(job, `Backup completed: ${totalPolicies} policies in ${metadata.Duration}.`)
+    const extra = inventory.map(([folder, count]) => ` and ${count} ${typeForFolder(folder)!.label}`).join("")
+    this.write(job, `Backup completed: ${totalPolicies} policies${extra} in ${metadata.Duration}.`)
   }
 
   /**
@@ -973,4 +978,9 @@ async function moduleGrants(tokens: RunTokens, needed: boolean) {
     // A token that cannot be acquired fails the run on the first read with the usual sign-in handling.
     return undefined
   }
+}
+
+/** Saved objects that are configuration, leaving out tenant inventory such as Autopilot devices. */
+function policyCount(counts: Record<string, number>): number {
+  return Object.entries(counts).reduce((sum, [folder, count]) => (typeForFolder(folder)?.inventory ? sum : sum + count), 0)
 }
