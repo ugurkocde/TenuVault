@@ -11,6 +11,7 @@ import { mapAuditEvent, type AuditEventRaw } from "../src/shared/notifications/a
 import { buildChangeReport, changeReportMarkdown, reportFileName } from "../src/shared/reports/change-report"
 import { buildChangeReportDocument } from "../src/shared/reports/change-report-html"
 import { reportEmail } from "../src/main/features/reports"
+import { MAX_BACKUP_ARCHIVE_BYTES } from "../src/shared/constants"
 import type { DriftResult } from "../src/shared/intune/drift"
 import { readFileSync } from "node:fs"
 import fixture from "./fixtures/reports/cloud-backups.json"
@@ -21,6 +22,11 @@ const script = fileURLToPath(new URL("./fixtures/reports/cloud-report.ps1", impo
 const mailScript = fileURLToPath(new URL("./fixtures/reports/cloud-report-mail.ps1", import.meta.url))
 const runScript = fileURLToPath(new URL("./fixtures/reports/cloud-report-run.ps1", import.meta.url))
 const deliverScript = fileURLToPath(new URL("./fixtures/reports/cloud-report-deliver.ps1", import.meta.url))
+const cappedScript = fileURLToPath(new URL("./fixtures/reports/capped-read.ps1", import.meta.url))
+
+type Run = { output: string[]; methods: string[]; reads: string[]; writes: Array<{ uri: string; contentType: string; headers: Record<string, string>; body: string }> }
+const runReport = (scenario = "default", level = "full") => JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", runScript, "-FixturePath", fixturePath, "-Level", level, "-Scenario", scenario], { encoding: "utf8", maxBuffer: 100_000_000 })) as Run
+const manifestReads = (run: Run) => run.reads.filter((uri) => uri.endsWith("/metadata.json")).map((uri) => uri.split("/")[4])
 
 type Backup = { name: string; metadata: unknown; files: Record<string, unknown> }
 const backups: Backup[] = [fixture.older as Backup, fixture.newer as Backup]
@@ -29,7 +35,7 @@ const definitions = fixture.definitions as Record<string, unknown>
 afterEach(() => vi.unstubAllGlobals())
 
 /** The desktop app's report of the fixture: the drift route over storage and Graph fakes, then the report code. */
-async function desktopReport(options: { values: boolean; actors: boolean }) {
+async function desktopReport(options: { values: boolean; actors: boolean; auditError?: string }) {
   clearSettingNames()
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input))
@@ -58,24 +64,27 @@ async function desktopReport(options: { values: boolean; actors: boolean }) {
   const drift = (await response.json()) as DriftResult
   expect(response.status, JSON.stringify(drift)).toBe(200)
   const changes = fixture.audit.flatMap((raw) => { const change = mapAuditEvent(raw as AuditEventRaw); return change ? [{ ...change, source: "Intune" }] : [] })
-  const report = buildChangeReport(drift, { changes, note: null }, { tenantId: fixture.tenantId, tenantName: fixture.tenantName, generatedAt: fixture.generatedAt, trigger: "scheduled", includeValues: options.values, includeActors: options.actors })
+  const report = buildChangeReport(drift, options.auditError ? { error: options.auditError } : { changes, note: null }, { tenantId: fixture.tenantId, tenantName: fixture.tenantName, generatedAt: fixture.generatedAt, trigger: "scheduled", includeValues: options.values, includeActors: options.actors })
   return { report, markdown: changeReportMarkdown(report), html: buildChangeReportDocument(report).html, email: reportEmail({ report }, null, "azure-watcher"), fileName: reportFileName(report) }
 }
 
-function cloudReport(options: { values: boolean; actors: boolean }) {
-  const output = execFileSync(pwsh!, ["-NoProfile", "-File", script, "-FixturePath", fixturePath, "-Level", options.values ? "full" : "names", "-Actors", String(options.actors)], { encoding: "utf8", maxBuffer: 20_000_000 })
+function cloudReport(options: { values: boolean; actors: boolean; auditError?: string }) {
+  const output = execFileSync(pwsh!, ["-NoProfile", "-File", script, "-FixturePath", fixturePath, "-Level", options.values ? "full" : "names", "-Actors", String(options.actors), ...(options.auditError ? ["-AuditError", options.auditError] : [])], { encoding: "utf8", maxBuffer: 20_000_000 })
   return JSON.parse(output) as { report: unknown; markdown: string; html: string; email: Record<string, unknown>; fileName: string }
 }
 
 describe.runIf(Boolean(pwsh))("cloud change reports match the desktop app", () => {
-  for (const options of [{ values: true, actors: true }, { values: false, actors: false }]) {
-    it(`builds the same report, Markdown and HTML (${options.values ? "with values" : "names only"})`, async () => {
+  // A raw Graph error as the audit note: both clean it the same way before it is shown or sent.
+  const rawAuditError = 'The Intune audit log could not be read: Microsoft Graph returned 400: {"error":{"code":"BadRequest","message":"https://proxy.example/x tenant 8c6f2b1e-4d3a-4f7b-9e21-6a5d0c3b7f14 Operation ID: 1"}}'
+  for (const options of [{ values: true, actors: true }, { values: false, actors: false }, { values: true, actors: true, auditError: rawAuditError }]) {
+    it(`builds the same report, Markdown and HTML (${options.values ? "with values" : "names only"}${options.auditError ? ", audit error" : ""})`, async () => {
       const desktop = await desktopReport(options)
       const cloud = cloudReport(options)
       expect(cloud.report).toEqual(JSON.parse(JSON.stringify(desktop.report)))
       expect(cloud.markdown).toBe(desktop.markdown)
       expect(cloud.html).toBe(desktop.html)
       expect(cloud.fileName).toBe(desktop.fileName)
+      if (options.auditError) expect(cloud.markdown).toContain("- Audit log: Microsoft Graph returned 400.")
     }, 60_000)
   }
 
@@ -106,8 +115,8 @@ describe.runIf(Boolean(pwsh))("cloud change reports match the desktop app", () =
   }, 60_000)
 
   it("leaves the report next to the result notes after a backup, compared with the previous complete plain backup", () => {
-    const run = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", runScript, "-FixturePath", fixturePath], { encoding: "utf8", maxBuffer: 20_000_000 })) as { output: string[]; methods: string[]; writes: Array<{ uri: string; contentType: string; headers: Record<string, string>; body: string }> }
-    // Storage and Graph are only read, and the report is the one write.
+    const run = runReport()
+    // Storage and Graph are only read (GET), and the report is the one write.
     expect(run.methods).toEqual(["Get", "Put"])
     expect(run.writes).toHaveLength(1)
     const [write] = run.writes
@@ -117,25 +126,58 @@ describe.runIf(Boolean(pwsh))("cloud change reports match the desktop app", () =
     const note = JSON.parse(write!.body)
     expect(note).toMatchObject({ schema: "tenuvault.cloud-change-report/v1", tenantId: fixture.tenantId, runId: "run-1", backupFolder: "backup-2026-11-06-020000" })
     // The newest earlier backup is sealed, and the backups in between completed with warnings,
-    // belong to another tenant, name no tenant or an invalid one: all skipped.
+    // record failures or no completed status, belong to another tenant, name no tenant or an
+    // invalid one: all skipped. The one whose marker names another tenant is skipped unread.
     expect(note.email.details[0]).toEqual({ label: "From backup", value: "backup-2026-11-05-020000" })
     expect(run.output).toContain("Skipped 1 newer backup(s) sealed before plain Azure backups: TenuVault in Azure cannot open them. Comparing with backup-2026-11-05-020000.")
+    expect(manifestReads(run)).toEqual(["backup-2026-11-05-220000", "backup-2026-11-05-210000", "backup-2026-11-05-200000", "backup-2026-11-05-180000", "backup-2026-11-05-120000", "backup-2026-11-05-115000", "backup-2026-11-05-110000", "backup-2026-11-05-020000"])
     expect(note.files.map((file: { name: string }) => file.name)).toEqual(["change-report-contoso-m-ller-co-2026-11-06.html", "change-report-contoso-m-ller-co-2026-11-06.md"])
     expect(write!.body).not.toMatch(/hunter2|old-key|new-key|old-secret|new-secret/)
     // Setting names come from Graph, read one definition at a time.
     expect(note.files[1].content).toContain("| Allow Cloud Protection | Allowed. Turns on Cloud Protection. | Not allowed. Turns off Cloud Protection. |")
     // Read past the empty first audit page Graph answers with: the changes still have actors.
-    expect(run.output.join("\n")).toContain("Left a change report for the notification watcher: 6 changed, 2 added, 1 deleted; 3 of 9 with matching audit events.")
+    expect(run.output.join("\n")).toContain("Left a change report for the notification watcher: 8 changed, 2 added, 1 deleted; 3 of 11 with matching audit events.")
+  }, 60_000)
+
+  it("accepts an earlier backup recorded as Succeeded with no failures, like the app's status normalizer", () => {
+    const run = runReport("succeeded")
+    expect(JSON.parse(run.writes[0]!.body).email.details[0]).toEqual({ label: "From backup", value: "backup-2026-11-05-100000" })
+  }, 60_000)
+
+  it("skips a backup whose manifest is over 32 MiB with a line in the output, and notes an oversized policy file", () => {
+    const run = runReport("oversized")
+    expect(run.output[0]).toBe("Skipped backup-2026-11-05-230000: metadata.json is larger than the 32 MiB TenuVault reads.")
+    const note = JSON.parse(run.writes[0]!.body)
+    expect(note.email.details[0]).toEqual({ label: "From backup", value: "backup-2026-11-05-020000" })
+    expect(note.files[1].content).toContain("DeviceConfigurations/Wi-Fi.json \\(backup-2026-11-05-020000\\): Wi-Fi.json is larger than the 32 MiB TenuVault reads.")
+  }, 120_000)
+
+  it("finds this tenant's previous backup past other tenants' folders without reading their manifests", () => {
+    const run = runReport("crowded")
+    expect(JSON.parse(run.writes[0]!.body).email.details[0]).toEqual({ label: "From backup", value: "backup-2026-11-05-020000" })
+    expect(manifestReads(run).some((name) => /^backup-2026-11-05-03\d{4}$/.test(name!))).toBe(false)
+    expect(run.reads.filter((uri) => uri.endsWith("/.tenuvault-owner.json")).length).toBeGreaterThanOrEqual(40)
+  }, 60_000)
+
+  it("never makes the report step throw, whatever storage does", () => {
+    const run = runReport("throws")
+    expect(run.output).toEqual(["No change report was made: storage is unavailable"])
+    expect(run.writes).toHaveLength(0)
+  }, 60_000)
+
+  it("stops reading a response at the 32 MiB cap, by declared length and by bytes read", () => {
+    expect(JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", cappedScript], { encoding: "utf8", timeout: 60_000 }))).toEqual({ declared: "oversized", chunked: "oversized", small: "read 100" })
+    expect(readFileSync(new URL("../resources/runbooks/Invoke-TenuVaultBackup.ps1", import.meta.url), "utf8")).toContain(`$script:MaxBlobBytes = ${MAX_BACKUP_ARCHIVE_BYTES}`)
   }, 60_000)
 
   it("makes no report when no earlier complete plain backup of the tenant exists, and says why", () => {
-    const run = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", runScript, "-FixturePath", fixturePath, "-Scenario", "nopredecessor"], { encoding: "utf8", maxBuffer: 20_000_000 })) as { output: string[]; writes: unknown[] }
+    const run = runReport("nopredecessor")
     expect(run.writes).toHaveLength(0)
     expect(run.output).toEqual(["No earlier complete plain backup of this tenant to compare with (2 earlier backup(s) sealed before plain Azure backups were skipped: TenuVault in Azure cannot open them), so no change report was made."])
   }, 60_000)
 
   it("leaves values out at the names level", () => {
-    const run = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", runScript, "-FixturePath", fixturePath, "-Level", "names"], { encoding: "utf8", maxBuffer: 20_000_000 })) as { writes: Array<{ body: string }> }
+    const run = runReport("default", "names")
     const markdown = JSON.parse(run.writes[0]!.body).files[1].content as string
     expect(markdown).toContain("Setting values are left out of this report.")
     expect(markdown).not.toContain("10.0.22631")
@@ -168,6 +210,26 @@ describe.runIf(Boolean(pwsh))("cloud change reports match the desktop app", () =
       const failed = run(true, true)
       expect(failed.result.Error).toMatch(/403/)
       expect(failed.deleted).not.toContain("cloud-change-reports/backup-2026-11-06-020000.json")
+      // Graph accepts the mail but the delete fails, twice: the report is mailed once, the
+      // delivered name is kept in the watcher state, and both runs name the failed cleanup.
+      const statePath = join(folder, "state.json")
+      const runWithState = (failDelete: boolean) => JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", deliverScript, "-NotesPath", notesPath, "-TenantId", fixture.tenantId, "-StatePath", statePath, "-FailDelete", String(failDelete)], { encoding: "utf8", maxBuffer: 20_000_000 }))
+      const first = runWithState(true)
+      expect(first.mails).toHaveLength(1)
+      expect(first.result.Sent).toBe(1)
+      expect(first.result.Error).toMatch(/Could not remove the change report cloud-change-reports\/backup-2026-11-06-020000\.json: .*403.*It was sent and is not sent again/)
+      expect(first.delivered).toEqual(["cloud-change-reports/backup-2026-11-06-020000.json"])
+      const second = runWithState(true)
+      expect(second.mails).toHaveLength(0)
+      expect(second.result.Sent).toBe(0)
+      expect(second.result.Error).toMatch(/Could not remove the change report cloud-change-reports\/backup-2026-11-06-020000\.json/)
+      expect(JSON.parse(readFileSync(statePath, "utf8"))).toEqual(["cloud-change-reports/backup-2026-11-06-020000.json"])
+      // Once the delete works, the note goes, nothing is sent again and the state forgets it.
+      const third = runWithState(false)
+      expect(third.mails).toHaveLength(0)
+      expect(third.deleted).toContain("cloud-change-reports/backup-2026-11-06-020000.json")
+      expect(third.result.Error).toBeNull()
+      expect(JSON.parse(readFileSync(statePath, "utf8"))).toEqual([])
     } finally {
       rmSync(folder, { recursive: true, force: true })
     }
@@ -182,6 +244,17 @@ describe.runIf(Boolean(pwsh))("cloud change reports match the desktop app", () =
     expect(report.items.find((item) => item.name === "Windows 11 - Compliance")).toMatchObject({ previousName: "Win11 Compliance" })
     expect(report.items.find((item) => item.name === "macOS - FileVault")!.activity[0]).toMatchObject({ who: "alex@contoso.example" })
     expect(report.otherActivity).toHaveLength(1)
+    // Unkeyed and app lists are matched like the desktop: an inserted app, an exclusion inserted
+    // before an unchanged assignment, and a removed app are reported as themselves; a reorder
+    // (with new item IDs) is not a change.
+    const android = report.items.find((item) => item.name === "APP - Android")!
+    expect(android.settings.map((setting) => [setting.name, setting.before, setting.after])).toEqual([
+      ["Allowed data storage locations: box", "Not set", "box"],
+      ["Apps: com.microsoft.teams", "com.microsoft.teams", "Not set"],
+      ["Apps: com.microsoft.emmx", "Not set", "com.microsoft.emmx"],
+      ["Assignments (item 1)", "Not set", "Excluded group bbbbbbbb-2222-4222-8222-222222222222"],
+    ])
+    expect(report.items.find((item) => item.name === "APP - iOS")!.settings.map((setting) => setting.name)).toEqual(["PIN required"])
     expect(html).not.toContain("<script>alert")
   })
 })

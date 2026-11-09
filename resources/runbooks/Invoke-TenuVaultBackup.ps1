@@ -346,6 +346,32 @@ class TvHttpError : System.Exception {
     TvHttpError([int]$status, [string]$message) : base($message) { $this.Status = $status }
 }
 
+# A response body larger than the cap the caller set; it is never buffered past the cap.
+class TvOversizedError : System.Exception {
+    TvOversizedError([string]$message) : base($message) { }
+}
+
+# Reads a successful response body up to $MaxBytes, by its declared length first and then by the
+# bytes actually read, so a large or endless body cannot exhaust the sandbox's memory.
+function Read-TvCappedBody {
+    param([Parameter(Mandatory)][System.Net.Http.HttpResponseMessage]$Response, [Parameter(Mandatory)][long]$MaxBytes)
+    $declared = $Response.Content.Headers.ContentLength
+    if ($null -ne $declared -and $declared -gt $MaxBytes) { throw [TvOversizedError]::new("The response is larger than $MaxBytes bytes.") }
+    $stream = $Response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
+    $buffer = [byte[]]::new(81920)
+    $memory = [System.IO.MemoryStream]::new()
+    try {
+        while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+            if ($memory.Length + $read -gt $MaxBytes) { throw [TvOversizedError]::new("The response is larger than $MaxBytes bytes.") }
+            $memory.Write($buffer, 0, $read)
+        }
+        return , $memory.ToArray()
+    } finally {
+        $stream.Dispose()
+        $memory.Dispose()
+    }
+}
+
 function Invoke-TvHttp {
     param(
         [Parameter(Mandatory)][string]$Uri,
@@ -353,7 +379,9 @@ function Invoke-TvHttp {
         [string]$Method = "Get",
         [hashtable]$Headers,
         [byte[]]$BodyBytes,
-        [string]$ContentType
+        [string]$ContentType,
+        # A cap on the response body in bytes; 0 reads it whole. Over the cap: TvOversizedError.
+        [long]$MaxBytes = 0
     )
     $lastError = $null
     foreach ($attempt in 1..3) {
@@ -366,13 +394,18 @@ function Invoke-TvHttp {
             $request.Content = $content
         }
         $response = $null
-        try { $response = $script:HttpClient.SendAsync($request).GetAwaiter().GetResult() }
+        $completion = if ($MaxBytes -gt 0) { [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead } else { [System.Net.Http.HttpCompletionOption]::ResponseContentRead }
+        try { $response = $script:HttpClient.SendAsync($request, $completion).GetAwaiter().GetResult() }
         catch {
             $lastError = $_
             if ($attempt -lt 3) { Start-Sleep -Seconds $attempt; continue }
             throw [TvHttpError]::new(0, (Get-TvSafeError $_.Exception.Message))
         }
         $status = [int]$response.StatusCode
+        if ($status -ge 200 -and $status -lt 300 -and $MaxBytes -gt 0) {
+            try { $bytes = Read-TvCappedBody $response $MaxBytes } finally { $response.Dispose() }
+            return @{ Status = $status; Bytes = $bytes; Text = [Text.Encoding]::UTF8.GetString($bytes) }
+        }
         $bytes = $response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()
         if ($status -ge 200 -and $status -lt 300) {
             return @{ Status = $status; Bytes = $bytes; Text = [Text.Encoding]::UTF8.GetString($bytes) }
@@ -889,6 +922,30 @@ function Get-TvReportSafe {
 
 $script:CompareSkipped = [System.Collections.Generic.HashSet[string]]::new([string[]]@('@odata.context', 'lastModifiedDateTime', 'createdDateTime', 'modifiedDateTime', 'id', 'version', 'description', 'settings@odata.context', 'secretReferenceValueId'))
 
+# skippedKey: fields the comparison leaves out, annotations included.
+function Test-TvSkippedKey {
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Key)
+    return $script:CompareSkipped.Contains($Key) -or $Key.EndsWith("@odata.context", [StringComparison]::Ordinal) -or $Key.EndsWith("@odata.nextLink", [StringComparison]::Ordinal)
+}
+
+# canonical: key order independent text of one value without the skipped fields, for spotting
+# unchanged items in unkeyed arrays.
+function ConvertTo-TvCanonicalText {
+    param([AllowNull()][object]$Value)
+    if (Test-TvUndef $Value) { return "undefined" }
+    if ($null -eq $Value -or -not (Test-TvJsObject $Value)) { return ConvertTo-TvJsJson $Value }
+    $parts = [System.Collections.Generic.List[string]]::new()
+    if (Test-TvJsArray $Value) {
+        foreach ($entry in $Value) { $parts.Add((ConvertTo-TvCanonicalText $entry)) }
+        return "[" + ($parts -join ",") + "]"
+    }
+    $keys = [System.Collections.Generic.List[string]]::new()
+    foreach ($key in (Get-TvJsKeys $Value)) { if (-not (Test-TvSkippedKey $key)) { $keys.Add($key) } }
+    $keys.Sort([StringComparer]::Ordinal)
+    foreach ($key in $keys) { $parts.Add((ConvertTo-TvJsJson $key) + ":" + (ConvertTo-TvCanonicalText $Value[$key])) }
+    return "{" + ($parts -join ",") + "}"
+}
+
 function New-TvChangeRow {
     param([string]$Field, [AllowNull()][object]$Old, [AllowNull()][object]$New)
     return [ordered]@{ field = $Field; oldValue = $Old; newValue = $New }
@@ -906,9 +963,19 @@ function Get-TvArrayItemKeys {
             $display = Get-TvMember $item "displayName"
             $key = if (Test-TvTruthy $display) { $display } else { Get-TvMember $item "omaUri" }
         } else {
-            $instance = Get-TvMember $item "settingInstance"
-            $key = if ((Test-TvUndef $instance) -or $null -eq $instance) { $script:TvUndefined } else { Get-TvMember $instance "settingDefinitionId" }
-            if ((Test-TvUndef $key) -or $null -eq $key) { $key = Get-TvMember $item "settingDefinitionId" }
+            # App protection and app list entries are identified by their package or bundle ID;
+            # without it, one added app would shift every later index.
+            $identifier = Get-TvMember $item "mobileAppIdentifier"
+            if ((Test-TvUndef $identifier) -or $null -eq $identifier) { $identifier = $item }
+            $packageId = Get-TvMember $identifier "packageId"
+            $bundleId = Get-TvMember $identifier "bundleId"
+            if ($packageId -is [string] -and $packageId) { $key = $packageId }
+            elseif ($bundleId -is [string] -and $bundleId) { $key = $bundleId }
+            else {
+                $instance = Get-TvMember $item "settingInstance"
+                $key = if ((Test-TvUndef $instance) -or $null -eq $instance) { $script:TvUndefined } else { Get-TvMember $instance "settingDefinitionId" }
+                if ((Test-TvUndef $key) -or $null -eq $key) { $key = Get-TvMember $item "settingDefinitionId" }
+            }
         }
         if ($key -isnot [string]) { return $null }
         if (-not $seen.Add($key)) { return $null }
@@ -917,9 +984,10 @@ function Get-TvArrayItemKeys {
     return , $keys.ToArray()
 }
 
-# Adds the changes between two values to $Rows, like compareObjects.
+# Adds the changes between two values to $Rows, like compareObjects. $EqualityOnly is
+# context.equalityOnly: set inside the probes of the unkeyed array matching, which it disables.
 function Compare-TvObjects {
-    param([AllowNull()][object]$Old, [AllowNull()][object]$New, [AllowEmptyString()][string]$Path = "", [AllowNull()][object]$Parent = $null, [Parameter(Mandatory)][AllowEmptyCollection()][System.Collections.Generic.List[object]]$Rows)
+    param([AllowNull()][object]$Old, [AllowNull()][object]$New, [AllowEmptyString()][string]$Path = "", [AllowNull()][object]$Parent = $null, [Parameter(Mandatory)][AllowEmptyCollection()][System.Collections.Generic.List[object]]$Rows, [bool]$EqualityOnly = $false)
     if ($null -eq $Old -or $null -eq $New -or -not (Test-TvJsObject $Old) -or -not (Test-TvJsObject $New)) {
         if ((ConvertTo-TvJsJson $Old) -cne (ConvertTo-TvJsJson $New)) { $Rows.Add((New-TvChangeRow $Path $Old $New)) }
         return
@@ -933,21 +1001,57 @@ function Compare-TvObjects {
             for ($i = 0; $i -lt $newKeys.Count; $i++) { $newMapOrdinal[$newKeys[$i]] = $i }
             for ($i = 0; $i -lt $oldKeys.Count; $i++) {
                 $itemPath = "$Path[$($oldKeys[$i])]"
-                if ($newMapOrdinal.ContainsKey($oldKeys[$i])) { Compare-TvObjects $Old[$i] $New[$newMapOrdinal[$oldKeys[$i]]] $itemPath $Old[$i] $Rows }
+                if ($newMapOrdinal.ContainsKey($oldKeys[$i])) { Compare-TvObjects $Old[$i] $New[$newMapOrdinal[$oldKeys[$i]]] $itemPath $Old[$i] $Rows -EqualityOnly $EqualityOnly }
                 else { $Rows.Add((New-TvChangeRow $itemPath $Old[$i] $script:TvUndefined)) }
             }
             for ($i = 0; $i -lt $newKeys.Count; $i++) {
                 if (-not $oldSet.Contains($newKeys[$i])) { $Rows.Add((New-TvChangeRow "$Path[$($newKeys[$i])]" $script:TvUndefined $New[$i])) }
             }
         } else {
-            $max = [Math]::Max($Old.Count, $New.Count)
-            for ($i = 0; $i -lt $max; $i++) {
-                if ($i -lt $Old.Count -and $i -lt $New.Count) { Compare-TvObjects $Old[$i] $New[$i] "$Path[$i]" $Old[$i] $Rows }
-                else {
-                    $before = if ($i -lt $Old.Count) { $Old[$i] } else { $script:TvUndefined }
-                    $after = if ($i -lt $New.Count) { $New[$i] } else { $script:TvUndefined }
-                    $Rows.Add((New-TvChangeRow "$Path[$i]" $before $after))
+            # No stable key: match items that are unchanged anywhere in the list first, so an
+            # inserted or removed item is reported as itself. What is left is paired in order only
+            # when both sides have the same number left; otherwise it is whole added and removed items.
+            $newByValue = [System.Collections.Generic.Dictionary[string, System.Collections.Generic.List[int]]]::new([StringComparer]::Ordinal)
+            for ($i = 0; $i -lt $New.Count; $i++) {
+                $text = ConvertTo-TvCanonicalText $New[$i]
+                if (-not $newByValue.ContainsKey($text)) { $newByValue[$text] = [System.Collections.Generic.List[int]]::new() }
+                $newByValue[$text].Add($i)
+            }
+            $matchedNew = [System.Collections.Generic.HashSet[int]]::new()
+            $leftoverOld = [System.Collections.Generic.List[int]]::new()
+            for ($i = 0; $i -lt $Old.Count; $i++) {
+                $text = ConvertTo-TvCanonicalText $Old[$i]
+                $match = -1
+                if ($newByValue.ContainsKey($text)) { foreach ($index in $newByValue[$text]) { if (-not $matchedNew.Contains($index)) { $match = $index; break } } }
+                if ($match -lt 0) { $leftoverOld.Add($i) } else { [void]$matchedNew.Add($match) }
+            }
+            $leftoverNew = [System.Collections.Generic.List[int]]::new()
+            for ($i = 0; $i -lt $New.Count; $i++) { if (-not $matchedNew.Contains($i)) { $leftoverNew.Add($i) } }
+            # Items that differ only inside a nested keyed list are unchanged by the comparison's
+            # own rules. The probes are capped and run with EqualityOnly, which disables this pass
+            # inside them, so nested unkeyed lists cannot stall the comparison.
+            if (-not $EqualityOnly -and $leftoverOld.Count * $leftoverNew.Count -le 2500) {
+                foreach ($oldIndex in @($leftoverOld.ToArray())) {
+                    $equalAt = -1
+                    for ($position = 0; $position -lt $leftoverNew.Count; $position++) {
+                        $probe = [System.Collections.Generic.List[object]]::new()
+                        Compare-TvObjects $Old[$oldIndex] $New[$leftoverNew[$position]] "$Path[$oldIndex]" $Old[$oldIndex] $probe -EqualityOnly $true
+                        if ($probe.Count -eq 0) { $equalAt = $position; break }
+                    }
+                    if ($equalAt -ge 0) {
+                        $leftoverNew.RemoveAt($equalAt)
+                        [void]$leftoverOld.Remove($oldIndex)
+                    }
                 }
+            }
+            if ($leftoverOld.Count -eq $leftoverNew.Count) {
+                for ($position = 0; $position -lt $leftoverOld.Count; $position++) {
+                    $oldIndex = $leftoverOld[$position]
+                    Compare-TvObjects $Old[$oldIndex] $New[$leftoverNew[$position]] "$Path[$oldIndex]" $Old[$oldIndex] $Rows -EqualityOnly $EqualityOnly
+                }
+            } else {
+                foreach ($i in $leftoverOld) { $Rows.Add((New-TvChangeRow "$Path[$i]" $Old[$i] $script:TvUndefined)) }
+                foreach ($i in $leftoverNew) { $Rows.Add((New-TvChangeRow "$Path[$i]" $script:TvUndefined $New[$i])) }
             }
         }
         return
@@ -956,12 +1060,12 @@ function Compare-TvObjects {
     $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     foreach ($key in (Get-TvJsKeys $Old) + (Get-TvJsKeys $New)) { if ($seen.Add($key)) { $keys.Add($key) } }
     foreach ($key in $keys) {
-        if ($script:CompareSkipped.Contains($key) -or $key.EndsWith("@odata.context") -or $key.EndsWith("@odata.nextLink")) { continue }
+        if (Test-TvSkippedKey $key) { continue }
         $oldValue = Get-TvMember $Old $key
         $newValue = Get-TvMember $New $key
         $currentPath = if ($Path) { "$Path.$key" } else { $key }
         if ((Test-TvJsObject $oldValue) -and (Test-TvJsObject $newValue)) {
-            Compare-TvObjects $oldValue $newValue $currentPath $Old $Rows
+            Compare-TvObjects $oldValue $newValue $currentPath $Old $Rows -EqualityOnly $EqualityOnly
         } elseif ((ConvertTo-TvJsJson $oldValue) -cne (ConvertTo-TvJsJson $newValue)) {
             $row = New-TvChangeRow $currentPath $oldValue $newValue
             if ($currentPath.Contains("omaSettings") -and $key -ceq "value" -and $null -ne $Parent) {
@@ -1290,6 +1394,14 @@ function Get-TvReportValue {
         $line = Get-TvAssignmentLine $Value
         if ($line) { return $line }
     }
+    if ($null -ne $Value -and (Test-TvJsObject $Value)) {
+        # An app entry reads as its package or bundle ID.
+        $identifier = Get-TvMember $Value "mobileAppIdentifier"
+        if ((Test-TvUndef $identifier) -or $null -eq $identifier) { $identifier = $Value }
+        $app = Get-TvMember $identifier "packageId"
+        if ((Test-TvUndef $app) -or $null -eq $app) { $app = Get-TvMember $identifier "bundleId" }
+        if ($app -is [string] -and $app) { return Get-TvClip $app }
+    }
     if ($Field -match 'omaSettings\[[^\]]+\]$' -and (Test-TvJsObject $Value)) {
         $uri = Get-TvMember $Value "omaUri"
         $inner = Get-TvMember $Value "value"
@@ -1319,7 +1431,7 @@ function Get-TvDefinitionIds {
         if ($ids.Count -ge $script:MaxDefinitions -or $depth -gt 12 -or -not (Test-TvJsObject $value)) { return }
         if (Test-TvJsArray $value) { foreach ($entry in $value) { & $walk $entry ($depth + 1) }; return }
         $id = Get-TvMember $value "settingDefinitionId"
-        if ($id -is [string] -and $seen.Add($id)) { $ids.Add($id) }
+        if ($id -is [string] -and $id -and $seen.Add($id)) { $ids.Add($id) }
         foreach ($key in $value.Keys) { & $walk $value[$key] ($depth + 1) }
     }
     foreach ($row in $Rows) {
@@ -1508,6 +1620,28 @@ function Get-TvBackupDrifts {
 # The report (mirror buildChangeReport and its text helpers in change-report.ts)
 # ---------------------------------------------------------------------------
 
+# publicAuditNote: an audit note fit to show and send. Reports are emailed outside the
+# organization, so a raw Microsoft Graph error (URLs, tenant IDs, the request filter) is replaced
+# by what it means. Plain sentences pass through. ECMAScript regex options keep \b, \d and \w ASCII.
+function Get-TvPublicAuditNote {
+    param([AllowNull()][object]$Note)
+    if ($Note -isnot [string] -or -not $Note) { return $null }
+    $js = [Text.RegularExpressions.RegexOptions]::ECMAScript
+    $jsCase = $js -bor [Text.RegularExpressions.RegexOptions]::IgnoreCase
+    $space = '[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+'
+    $text = ([regex]::Replace($Note, $space, " ")).Trim(" ")
+    if (-not $text) { return $null }
+    $payload = [regex]::IsMatch($text, '[{[]|Operation ID|"_version"|\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b', $jsCase)
+    $raw = $payload -or $text.Length -gt 280 -or [regex]::IsMatch($text, 'https?://', $js)
+    if (-not $raw) { return $text }
+    if ([regex]::IsMatch($text, '\b429\b|throttl', $jsCase)) { return "Microsoft Graph throttled the audit log request (429). Generate the report again in a few minutes." }
+    $status = [regex]::Match($text, '\breturned (\d{3})\b', $js)
+    if ($payload) { if ($status.Success) { return "Microsoft Graph returned $($status.Groups[1].Value)." } else { return "The audit log could not be read." } }
+    $cleaned = [regex]::Replace([regex]::Replace($text, 'https?://[^ ]+', "", $js), ' +', " ").Trim(" ")
+    if ($cleaned.Length -gt 240) { return $cleaned.Substring(0, 237).TrimEnd(" ") + "..." }
+    return $cleaned
+}
+
 function Get-TvReportTime {
     param([Parameter(Mandatory)][string]$Iso)
     $parsed = [DateTimeOffset]::MinValue
@@ -1659,7 +1793,7 @@ function New-TvChangeReport {
         moreActivity = [Math]::Max(0, $other.Count - $script:MaxOtherActivity)
         audit = [ordered]@{
             status = if ($hasAudit) { "included" } else { "unavailable" }
-            note = if ($hasAudit) { $Audit.Note } else { $Audit.Error }
+            note = Get-TvPublicAuditNote $(if ($hasAudit) { $Audit.Note } else { $Audit.Error })
             actors = [bool]$Options.IncludeActors
         }
         values = [bool]$Options.IncludeValues
@@ -1695,7 +1829,8 @@ function ConvertTo-TvReportMarkdown {
     $lines.Add("- To backup: $($Report.to.id) ($(Get-TvReportTime $Report.to.timestamp))")
     $lines.Add("- Generated: $(Get-TvReportTime $Report.generatedAt)$(if ($Report.trigger -eq 'scheduled') { ' after a scheduled backup' })")
     $lines.Add("- Summary: $(& $md (Get-TvSummaryLine $Report))")
-    if ($Report.audit.note) { $lines.Add("- Audit log: $(& $md $Report.audit.note)") }
+    $auditNote = Get-TvPublicAuditNote $Report.audit.note
+    if ($auditNote) { $lines.Add("- Audit log: $(& $md $auditNote)") }
     if (-not $Report.values) { $lines.Add("- Setting values are left out of this report.") }
     $lines.Add("")
     if (@($Report.items).Count -eq 0) { $lines.Add("No items were added, changed or deleted between the two backups."); $lines.Add("") }
@@ -1889,10 +2024,11 @@ function ConvertTo-TvReportHtml {
     $attributed = if ($Report.audit.status -eq "included") { $s.attributed } else { "Unknown" }
     $tiles = "<div class=`"tiles`">$(& $tile 'Changed' $s.modified)$(& $tile 'Added' $s.added)$(& $tile 'Deleted' $s.deleted)$(& $tile 'Critical' $s.critical)$(& $tile 'With audit events' $attributed)</div>"
     $callouts = ""
+    $auditNote = Get-TvPublicAuditNote $Report.audit.note
     if ($Report.audit.status -ne "included") {
-        $note = if ($null -ne $Report.audit.note) { $Report.audit.note } else { "The audit log could not be read." }
+        $note = if ($null -ne $auditNote) { $auditNote } else { "The audit log could not be read." }
         $callouts += "<div class=`"callout`"><b>Who made the changes is unknown.</b> $(Get-TvHtmlText $note)</div>"
-    } elseif ($Report.audit.note) { $callouts += "<div class=`"callout`"><b>Part of the audit log was not read.</b> $(Get-TvHtmlText $Report.audit.note)</div>" }
+    } elseif ($auditNote) { $callouts += "<div class=`"callout`"><b>Part of the audit log was not read.</b> $(Get-TvHtmlText $auditNote)</div>" }
     if (-not $Report.values) { $callouts += '<div class="callout"><b>Setting values are left out.</b> This report lists which settings changed, not their values.</div>' }
     $sections = ""
     foreach ($change in @("deleted", "modified", "added")) {
@@ -1982,7 +2118,9 @@ function ConvertFrom-TvAuditEvent {
     $resultText = Get-TvAuditText (Get-TvProp $Raw "activityResult")
     $resultLower = if ($resultText) { $resultText.ToLowerInvariant() } else { "" }
     if ($resultLower.Contains("fail") -or $resultLower.Contains("error")) { return $null }
+    # Live events carry the operation in activityType with activity null, like mapAuditEvent.
     $activity = Get-TvAuditText (Get-TvProp $Raw "activity")
+    if (-not $activity) { $activity = Get-TvAuditText (Get-TvProp $Raw "activityType") }
     if (-not $activity) { $activity = Get-TvAuditText (Get-TvProp $Raw "displayName") }
     $activityLower = (@((Get-TvAuditText (Get-TvProp $Raw "activityType")), (Get-TvAuditText (Get-TvProp $Raw "activity")), (Get-TvAuditText (Get-TvProp $Raw "displayName"))) -join " ").ToLowerInvariant()
     $resources = @(@(Get-TvProp $Raw "resources") | Where-Object { $_ -is [System.Collections.IDictionary] })
@@ -2046,12 +2184,20 @@ function Test-TvSealedBlob {
     return $true
 }
 
-# One plain JSON object from intune-backups. A sealed blob throws TvSealedBlobError, a missing
-# one TvHttpError 404, and anything that is not a JSON object a plain error.
+# The most TenuVault reads of one backup file, like MAX_BACKUP_ARCHIVE_BYTES in the app.
+$script:MaxBlobBytes = 33554432
+
+# One plain JSON object from intune-backups, at most $script:MaxBlobBytes, checked before it is
+# buffered or parsed. A sealed blob throws TvSealedBlobError, a larger one TvOversizedError, a
+# missing one TvHttpError 404, and anything that is not a JSON object a plain error.
 function Read-TvPlainJson {
     param([Parameter(Mandatory)][hashtable]$Context, [Parameter(Mandatory)][string]$BlobName)
     $target = Get-TvBlobTarget $Context.StorageAccount $BlobName
-    $result = Invoke-TvHttp -Uri $target.Uri -Token $Context.StorageToken -Method "Get" -Headers @{ "x-ms-version" = "2021-12-02" }
+    $file = ($BlobName -split "/")[-1]
+    $tooLarge = "$file is larger than the 32 MiB TenuVault reads."
+    try { $result = Invoke-TvHttp -Uri $target.Uri -Token $Context.StorageToken -Method "Get" -Headers @{ "x-ms-version" = "2021-12-02" } -MaxBytes $script:MaxBlobBytes }
+    catch [TvOversizedError] { throw [TvOversizedError]::new($tooLarge) }
+    if ($result.Bytes.Length -gt $script:MaxBlobBytes) { throw [TvOversizedError]::new($tooLarge) }
     if (Test-TvSealedBlob $result.Bytes) { throw [TvSealedBlobError]::new("The backup file is sealed with a key from before plain Azure backups, which TenuVault in Azure does not have.") }
     try { $value = ConvertFrom-TvJson ([Text.Encoding]::UTF8.GetString($result.Bytes)) } catch { throw "The backup file is not valid JSON." }
     if ($value -isnot [System.Collections.IDictionary]) { throw "The backup file is not a JSON object." }
@@ -2061,22 +2207,44 @@ function Read-TvPlainJson {
 # A recorded tenant, like validTenant in backup-ownership.ts: a string that is not blank.
 function Test-TvRecordedTenant { param([AllowNull()][object]$Value) return ($Value -is [string]) -and $Value.Trim() -ne "" }
 
-# Whether a backup folder belongs to this tenant, with the rules of resolveBackupOwnership: the
+# The ownership marker of a backup folder: owned, other (names another tenant), missing, sealed or
+# unreadable (too large, damaged, or naming no tenant), like the marker step of resolveBackupOwnership.
+function Read-TvOwnerMarker {
+    param([Parameter(Mandatory)][hashtable]$Context, [Parameter(Mandatory)][string]$Name)
+    try { $marker = Read-TvPlainJson $Context "$Name/.tenuvault-owner.json" }
+    catch [TvSealedBlobError] { return "sealed" }
+    catch [TvHttpError] { if ($_.Exception.Status -eq 404) { return "missing" } return "unreadable" }
+    catch { return "unreadable" }
+    $recorded = $marker["TenantId"]
+    if (-not (Test-TvRecordedTenant $recorded)) { return "unreadable" }
+    if ($recorded.ToLowerInvariant() -eq $Context.TenantId.ToLowerInvariant()) { return "owned" }
+    return "other"
+}
+
+# Whether a backup belongs to this tenant, with the rules of resolveBackupOwnership: the
 # manifest's TenantId decides; a manifest that names no tenant is placed by the ownership marker.
 # Only a positive match counts: another tenant, an untagged backup, a damaged marker or a
 # manifest with an invalid tenant are never compared with.
 function Test-TvOwnedBackup {
-    param([Parameter(Mandatory)][hashtable]$Context, [Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][System.Collections.IDictionary]$Metadata)
-    $tenant = $Context.TenantId.ToLowerInvariant()
+    param([Parameter(Mandatory)][hashtable]$Context, [Parameter(Mandatory)][System.Collections.IDictionary]$Metadata, [Parameter(Mandatory)][string]$Marker)
     if ($Metadata.Contains("TenantId")) {
         $recorded = $Metadata["TenantId"]
         if (-not (Test-TvRecordedTenant $recorded)) { return $false }
-        return $recorded.ToLowerInvariant() -eq $tenant
+        return $recorded.ToLowerInvariant() -eq $Context.TenantId.ToLowerInvariant()
     }
-    try { $marker = Read-TvPlainJson $Context "$Name/.tenuvault-owner.json" } catch { return $false }
-    $recorded = $marker["TenantId"]
-    if (-not (Test-TvRecordedTenant $recorded)) { return $false }
-    return $recorded.ToLowerInvariant() -eq $tenant
+    return $Marker -eq "owned"
+}
+
+# A complete backup to compare with: Status (or status) Success, Succeeded or Completed, like the
+# app's status normalizer, and no recorded failures (Failures 0 or absent).
+function Test-TvCompleteBackup {
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Metadata)
+    $status = Get-TvProp $Metadata "Status"
+    if ($null -eq $status) { $status = Get-TvProp $Metadata "status" }
+    if ($status -isnot [string] -or $status.Trim().ToLowerInvariant() -notin @("success", "succeeded", "completed")) { return $false }
+    $failures = Get-TvProp $Metadata "Failures"
+    if ((Test-TvJsNumber $failures) -and $failures -gt 0) { return $false }
+    return $true
 }
 
 # "backup-2026-11-05-020000" as 2026-11-05T02:00:00.000Z, like backupFoldersIn.
@@ -2096,9 +2264,16 @@ function Get-TvBackupRef {
     return [ordered]@{ id = $Name; timestamp = Get-TvBackupTimestamp $Name; trigger = $(if ($trigger -is [string]) { $trigger } else { $null }); status = $(if ($null -ne $status) { ConvertTo-TvJsString $status } else { "unknown" }) }
 }
 
+# Bounds of the search for the previous backup. Ownership markers are tiny, so other tenants'
+# folders in a shared storage account are skipped by their marker without downloading their
+# manifest, and cannot crowd out this tenant's backups: up to 500 earlier folders are looked
+# at, and at most 30 manifests (each at most 32 MiB) are read.
+$script:MaxPredecessorFolders = 500
+$script:MaxPredecessorManifests = 30
+
 # The newest complete plain backup of this tenant older than $Current that records item
-# fingerprints, among the 30 newest older folders. Sealed backups cannot be opened here and are
-# skipped and counted, so the caller can say why no report was made.
+# fingerprints. Sealed backups cannot be opened here: they are skipped and counted, and Notes
+# says why other folders were skipped or the search stopped, for the job output.
 function Find-TvPreviousBackup {
     param([Parameter(Mandatory)][hashtable]$Context, [Parameter(Mandatory)][string]$Current)
     $names = [System.Collections.Generic.List[string]]::new()
@@ -2110,19 +2285,32 @@ function Find-TvPreviousBackup {
         foreach ($match in [regex]::Matches($text, '<BlobPrefix><Name>(backup-\d{4}-\d{2}-\d{2}-\d{6})/</Name></BlobPrefix>')) { $names.Add($match.Groups[1].Value) }
         $marker = [regex]::Match($text, '<NextMarker>([^<]+)</NextMarker>').Groups[1].Value
     } while ($marker)
-    $older = @($names | Where-Object { [string]::CompareOrdinal($_, $Current) -lt 0 } | Sort-Object -Descending -CaseSensitive | Select-Object -First 30)
+    $older = @($names | Where-Object { [string]::CompareOrdinal($_, $Current) -lt 0 } | Sort-Object -Descending -CaseSensitive -Unique)
     $sealed = 0
+    $notes = [System.Collections.Generic.List[string]]::new()
+    $examined = 0
+    $manifests = 0
     foreach ($name in $older) {
+        if ($examined -ge $script:MaxPredecessorFolders -or $manifests -ge $script:MaxPredecessorManifests) {
+            $notes.Add("Stopped looking for an earlier backup after $examined folders and $manifests manifests.")
+            break
+        }
+        $examined++
+        # Tenant evidence first: a folder whose marker names another tenant is never this tenant's
+        # (the manifest of a backup names the same tenant as its marker), so it is skipped unread.
+        $owner = Read-TvOwnerMarker $Context $name
+        if ($owner -eq "other") { continue }
+        $manifests++
         try { $metadata = Read-TvPlainJson $Context "$name/metadata.json" }
         catch [TvSealedBlobError] { $sealed++; continue }
+        catch [TvOversizedError] { $notes.Add("Skipped $($name): $($_.Exception.Message)"); continue }
         catch { continue }
-        if (-not (Test-TvOwnedBackup $Context $name $metadata)) { continue }
-        $status = [string](Get-TvProp $metadata "Status")
-        if ($status.ToLowerInvariant() -notin @("success", "completed")) { continue }
+        if (-not (Test-TvOwnedBackup $Context $metadata $owner)) { continue }
+        if (-not (Test-TvCompleteBackup $metadata)) { continue }
         if ((Get-TvProp $metadata "Items") -isnot [System.Collections.IDictionary]) { continue }
-        return @{ Name = $name; Metadata = $metadata; Sealed = $sealed }
+        return @{ Name = $name; Metadata = $metadata; Sealed = $sealed; Notes = $notes }
     }
-    return @{ Name = $null; Sealed = $sealed }
+    return @{ Name = $null; Sealed = $sealed; Notes = $notes }
 }
 
 # Setting definitions from Graph, one read each: the runbook only ever reads from Graph, so no
@@ -2160,6 +2348,7 @@ function Read-TvReportAudit {
         }
     } catch [TvHttpError] {
         if ($_.Exception.Status -eq 403) { return @{ Error = "Microsoft Graph returned 403 for the Intune audit log. The cloud backup identity needs DeviceManagementApps.Read.All." } }
+        if ($_.Exception.Status -eq 429) { return @{ Error = "The Intune audit log could not be read: Microsoft Graph throttled the request (429). Generate the report again in a few minutes." } }
         return @{ Error = "The Intune audit log could not be read: $(Get-TvSafeError $_.Exception.Message)" }
     }
     $note = $null
@@ -2172,12 +2361,20 @@ function Read-TvReportAudit {
 
 # After a successful backup: the report of what changed since the previous complete backup,
 # left in the results container for the watcher. Best effort: never fails the backup.
+# The change report level from TenuVaultChangeReport: "names", "full" or "off".
+function Get-TvChangeReportLevel {
+    $level = ([string](Get-TvAutomationVariable "TenuVaultChangeReport")).Trim().ToLowerInvariant()
+    if ($level -in @("names", "full")) { return $level }
+    return "off"
+}
+
 function Invoke-TvChangeReport {
     param([Parameter(Mandatory)][hashtable]$Context, [Parameter(Mandatory)][string]$BackupFolder, [Parameter(Mandatory)][object]$Metadata, [Parameter(Mandatory)][object[]]$Types, [Parameter(Mandatory)][string]$GraphToken, [Parameter(Mandatory)][string]$RunId)
-    $level = ([string](Get-TvAutomationVariable "TenuVaultChangeReport")).Trim().ToLowerInvariant()
-    if ($level -notin @("names", "full")) { return }
+    $level = Get-TvChangeReportLevel
+    if ($level -eq "off") { return }
     try {
         $previous = Find-TvPreviousBackup $Context $BackupFolder
+        foreach ($line in $previous.Notes) { Write-Output $line }
         if (-not $previous.Name) {
             $why = if ($previous.Sealed) { " ($($previous.Sealed) earlier backup(s) sealed before plain Azure backups were skipped: TenuVault in Azure cannot open them)" } else { "" }
             Write-Output "No earlier complete plain backup of this tenant to compare with$why, so no change report was made."
@@ -2450,7 +2647,13 @@ function Invoke-TvBackup {
         if ($status -eq "Failed") { throw "The backup saved no policies. See the runbook output above." }
         # Only a complete backup is compared, like the desktop app's report after a scheduled backup:
         # items a backup with warnings could not read would show up as deleted.
-        if ($status -eq "Success") { Invoke-TvChangeReport -Context $context -BackupFolder $backupFolder -Metadata $metadata -Types $types -GraphToken $graphToken -RunId $runId }
+        # The report is optional: nothing it does may change the backup's result.
+        if ($status -eq "Success") {
+            try { Invoke-TvChangeReport -Context $context -BackupFolder $backupFolder -Metadata $metadata -Types $types -GraphToken $graphToken -RunId $runId }
+            catch { Write-Output "No change report was made: $(Get-TvSafeError $_.Exception.Message)" }
+        } else {
+            try { if ((Get-TvChangeReportLevel) -ne "off") { Write-Output "No change report: the backup completed with warnings." } } catch { }
+        }
     } catch {
         $reason = Get-TvSafeError $_.Exception.Message
         # Record the claimed folder as a failed backup, create-only, like the desktop engine.

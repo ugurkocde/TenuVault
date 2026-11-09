@@ -41,6 +41,9 @@ $graphRoleNames = @("DeviceManagementConfiguration.Read.All")
 $ChangeReport = "Off"
 $ChangeReportWithoutActors = $false
 $TenantName = ""
+# Whether the setup command passed -ChangeReport and -ChangeReportWithoutActors.
+$changeReportPassed = $false
+$changeReportActorsPassed = $false
 $variableNames = @(
     "TenuVaultTenantId-$tenantKey", "TenuVaultStorageAccount-$tenantKey",
     "TenuVaultScope-$tenantKey", "TenuVaultExcludedFolders-$tenantKey", "TenuVaultAppOnlyExcluded-$tenantKey",
@@ -182,6 +185,8 @@ function Write-Scenario {
         error = $ErrorText
         actions = @($script:actions.ToArray())
         legacyVariableKept = $script:variables.ContainsKey($legacyKeyVaultVariable)
+        changeReport = $script:variables["TenuVaultChangeReport-$tenantKey"]
+        changeReportActors = $script:variables["TenuVaultChangeReportActors-$tenantKey"]
         variables = @($script:variables.Keys | Sort-Object)
         schedule = $script:schedule
         link = $script:link
@@ -210,6 +215,26 @@ foreach ($scenario in "approved", "outer-declined", "import-declined", "publish-
         $output += @(Write-TenuVaultLegacyKeyVaultNote $legacyKeyVaults -KeptBecause $runbook.Reason 6>&1)
     } catch { $errorText = $_.Exception.Message }
     $PSDefaultParameterValues = @{}
+    Write-Scenario -Name $scenario -Runbook $runbook -ErrorText $errorText -Output $output
+}
+
+# Reruns with change reports set up before (names, without actors): a command without the change
+# report parameters keeps both; one that passes them sets both.
+foreach ($scenario in "rerun-keeps-report", "rerun-sets-report") {
+    Reset-OldSetup
+    $script:variables["TenuVaultChangeReport-$tenantKey"] = "names"
+    $script:variables["TenuVaultChangeReportActors-$tenantKey"] = "false"
+    $changeReportPassed = $scenario -eq "rerun-sets-report"
+    $changeReportActorsPassed = $changeReportPassed
+    $ChangeReport = "Full"
+    $ChangeReportWithoutActors = $false
+    $runbook = $null
+    $errorText = $null
+    $output = @()
+    try { $output = @(. $upgradeStep 6>&1) } catch { $errorText = $_.Exception.Message }
+    $changeReportPassed = $false
+    $changeReportActorsPassed = $false
+    $ChangeReport = "Off"
     Write-Scenario -Name $scenario -Runbook $runbook -ErrorText $errorText -Output $output
 }
 

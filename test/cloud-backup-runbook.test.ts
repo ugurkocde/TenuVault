@@ -15,9 +15,9 @@ const runbook = readFileSync(new URL("../resources/runbooks/Invoke-TenuVaultBack
 const RUNBOOK_VERSION = /\$script:RunbookVersion = "([^"]+)"/.exec(runbook)?.[1]
 const setup = readFileSync(new URL("../resources/New-TenuVaultCloudBackup.ps1", import.meta.url), "utf8")
 type RunCall = { uri: string; method: string; contentType: string | null; ifNoneMatch: string | null; body: string | null }
-type Run = { calls: RunCall[]; error?: string | null }
+type Run = { calls: RunCall[]; error?: string | null; output?: string[] }
 let plainRuns: Run[] | undefined
-/** The three scenarios of the plain-run fixture: a full run, an early failure and a failed manifest. */
+/** The scenarios of the plain-run fixture: a full run, an early failure, a failed manifest, and two runs with change reports on. */
 function runPlainFixture(): Run[] {
   const script = fileURLToPath(new URL("./fixtures/cloud-backup/plain-run.ps1", import.meta.url))
   plainRuns ??= execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }).trim().split(/\r?\n/).map((line) => JSON.parse(line) as Run)
@@ -102,6 +102,19 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     expect(cloudRunbookNeedsUpgrade("2.0.0")).toBe(false)
     expect(cloudRunbookNeedsUpgrade("")).toBe(false)
     expect(cloudRunbookNeedsUpgrade("desktop")).toBe(false)
+  })
+
+  it.runIf(Boolean(pwsh))("never lets the optional change report fail a backup, and says when a backup with warnings gets none", () => {
+    const [, , , reportFails, warnings] = runPlainFixture()
+    // The report step meets an unexpected error: the backup is still recorded as a success.
+    expect(reportFails!.error).toBeNull()
+    expect(reportFails!.output).toContain("No change report was made: storage listing is unavailable")
+    const status = reportFails!.calls.filter((call) => call.method === "Put" && call.uri.endsWith("/cloud-backup-status-11111111.json")).map((call) => JSON.parse(call.body!).LastStatus)
+    expect(status).toEqual(["Success"])
+    // A backup with warnings gets no report, and the job output says so.
+    expect(warnings!.error).toBeNull()
+    expect(warnings!.output).toContain("No change report: the backup completed with warnings.")
+    expect(warnings!.calls.some((call) => call.uri.includes("comp=list"))).toBe(false)
   })
 
   it.runIf(Boolean(pwsh))("puts only plain JSON blobs during a run, records early failures and never calls Key Vault", () => {
@@ -244,7 +257,7 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
     expect(setup).toContain('-Force -Confirm:$false | Out-Null\n    Publish-AzAutomationRunbook')
   })
 
-  type SetupScenario = { scenario: string; plain: boolean; reason: string | null; error: string | null; actions: string[]; legacyVariableKept: boolean; variables: string[]; schedule: boolean; link: boolean; output: string[] }
+  type SetupScenario = { scenario: string; plain: boolean; reason: string | null; error: string | null; actions: string[]; legacyVariableKept: boolean; changeReport?: string | null; changeReportActors?: string | null; variables: string[]; schedule: boolean; link: boolean; output: string[] }
   let setupScenarios: Map<string, SetupScenario> | undefined
   const setupRun = (name: string) => {
     if (!setupScenarios) {
@@ -255,6 +268,14 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
     return setupScenarios.get(name)!
   }
   const DELETE_ADVICE = "Delete the vault once no"
+
+  it.runIf(Boolean(pwsh))("keeps the change report level and actors on a rerun without their parameters, and sets them when passed", () => {
+    // An upgrade with a command that does not carry the change report choice keeps it.
+    expect(setupRun("rerun-keeps-report")).toMatchObject({ error: null, changeReport: "names", changeReportActors: "false" })
+    expect(setupRun("rerun-sets-report")).toMatchObject({ error: null, changeReport: "full", changeReportActors: "true" })
+    expect(setup).toContain('$changeReportPassed = $PSBoundParameters.ContainsKey("ChangeReport")')
+    expect(setup).toContain('$changeReportActorsPassed = $PSBoundParameters.ContainsKey("ChangeReportWithoutActors")')
+  })
 
   it.runIf(Boolean(pwsh))("removes the Key Vault variable only when the published runbook reads back as plain", () => {
     const approved = setupRun("approved")

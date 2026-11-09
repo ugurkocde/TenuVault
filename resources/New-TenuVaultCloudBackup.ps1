@@ -103,10 +103,12 @@
     container for the notification watcher to send by email. Names lists which settings changed
     without their values; Full includes the values. Secret values are never included. Like the
     backups, the report is plain JSON; it is deleted once sent, or unsent after 7 days. Backups
-    sealed before runbook 1.2.0 cannot be opened in Azure and are never compared.
+    sealed before runbook 1.2.0 cannot be opened in Azure and are never compared. A rerun
+    without -ChangeReport keeps the level an earlier setup chose (off when none did).
 
 .PARAMETER ChangeReportWithoutActors
-    Leave out who made each change (user principal names are personal data).
+    Leave out who made each change (user principal names are personal data). Pass
+    -ChangeReportWithoutActors:$false to name them again. A rerun without it keeps the earlier choice.
 
 .PARAMETER GrantGraphRoles
     Assign the Graph application roles to the managed identity now. Needs Global Administrator.
@@ -178,6 +180,10 @@ $variableNames = @(
 $legacyKeyVaultVariable = "TenuVaultKeyVault-$tenantKey"
 # The first runbook that writes plain backups and reads no Key Vault.
 $plainRunbookVersion = "1.2.0"
+# A rerun without -ChangeReport or -ChangeReportWithoutActors keeps what an earlier setup chose,
+# so an upgrade with an older command never turns a report off or its actors back on.
+$changeReportPassed = $PSBoundParameters.ContainsKey("ChangeReport")
+$changeReportActorsPassed = $PSBoundParameters.ContainsKey("ChangeReportWithoutActors")
 
 # Validate every input before the first Azure write.
 if ($TenantId -notmatch '^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$') {
@@ -725,9 +731,9 @@ Set-TenuVaultAutomationVariable -Name "TenuVaultStorageAccount-$tenantKey" -Valu
 Set-TenuVaultAutomationVariable -Name "TenuVaultScope-$tenantKey" -Value $Scope
 Set-TenuVaultAutomationVariable -Name "TenuVaultExcludedFolders-$tenantKey" -Value $ExcludedFolders
 Set-TenuVaultAutomationVariable -Name "TenuVaultAppOnlyExcluded-$tenantKey" -Value $appOnlyExcluded
-Set-TenuVaultAutomationVariable -Name "TenuVaultChangeReport-$tenantKey" -Value $ChangeReport.ToLowerInvariant()
+if ($changeReportPassed) { Set-TenuVaultAutomationVariable -Name "TenuVaultChangeReport-$tenantKey" -Value $ChangeReport.ToLowerInvariant() }
 if ($TenantName) { Set-TenuVaultAutomationVariable -Name "TenuVaultTenantName-$tenantKey" -Value $TenantName.Trim() }
-Set-TenuVaultAutomationVariable -Name "TenuVaultChangeReportActors-$tenantKey" -Value $(if ($ChangeReportWithoutActors) { "false" } else { "true" })
+if ($changeReportActorsPassed) { Set-TenuVaultAutomationVariable -Name "TenuVaultChangeReportActors-$tenantKey" -Value $(if ($ChangeReportWithoutActors) { "false" } else { "true" }) }
 
 # Upgrade from a setup before runbook 1.2.0: name the old Key Vault, then drop its variable once
 # the published runbook was read back as one that no longer reads it.
@@ -898,7 +904,9 @@ Write-Host "  Runbook:             $runbookName ($(if ($runbook.Plain) { "publis
 Write-Host "  Storage account:     $StorageAccountName (container '$backupContainer', writer role has no delete)"
 Write-Host "  Backup results:      '$outcomeContainer' (result notes for the notification watcher, same writer role)"
 Write-Host "  Encryption:          Azure encryption at rest; backups are plain JSON, readable by whoever your role assignments allow"
-Write-Host "  Change reports:      $(switch ($ChangeReport) { 'Off' { 'off' } 'Names' { 'names only, sent by the notification watcher' } default { 'with setting values, sent by the notification watcher' } })$(if ($ChangeReport -ne 'Off' -and $ChangeReportWithoutActors) { ', without who made each change' })"
+$changeReportSummary = if (-not $changeReportPassed) { "unchanged (as an earlier setup chose; off when none did)" } else { switch ($ChangeReport) { 'Off' { 'off' } 'Names' { 'names only, sent by the notification watcher' } default { 'with setting values, sent by the notification watcher' } } }
+if ($changeReportActorsPassed) { $changeReportSummary += $(if ($ChangeReportWithoutActors) { ', without who made each change' } else { ', naming who made each change' }) }
+Write-Host "  Change reports:      $changeReportSummary"
 if ($principalId) { Write-Host "  Managed identity:    $principalId" }
 if ($alertStatus) { Write-Host "  Failure alert:       $alertStatus" }
 Write-Host "  Schedule:            $(if ($linked) { "$Frequency at $Time $TimeZone ('$scheduleName')" } else { 'not linked yet' })"

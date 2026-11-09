@@ -1,6 +1,6 @@
 # Builds the change report of test/fixtures/reports/cloud-backups.json with the cloud backup runbook,
 # for test/cloud-change-report.test.ts. Prints the report, its Markdown and HTML, and the email fields.
-param([Parameter(Mandatory)][string]$FixturePath, [string]$Level = "full", [string]$Actors = "true")
+param([Parameter(Mandatory)][string]$FixturePath, [string]$Level = "full", [string]$Actors = "true", [string]$AuditError = "")
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "../../../resources/runbooks/Invoke-TenuVaultBackup.ps1") -LibraryOnly
 $fixture = ConvertFrom-TvJson ([IO.File]::ReadAllText($FixturePath))
@@ -24,6 +24,7 @@ $names = ConvertTo-TvSettingNames $ids $definitions
 $drift = @{ drifts = $compared.Drifts; warnings = $compared.Warnings; settingNames = $names; baseline = (Get-TvBackupRef $older.Name $older.Metadata); comparison = (Get-TvBackupRef $newer.Name $newer.Metadata) }
 $changes = @($fixture.audit | ForEach-Object { ConvertFrom-TvAuditEvent $_ } | Where-Object { $_ })
 $options = @{ TenantId = $fixture.tenantId; TenantName = $fixture.tenantName; GeneratedAt = $fixture.generatedAt; IncludeValues = $Level -eq "full"; IncludeActors = $Actors -eq "true" }
-$report = New-TvChangeReport -Drift $drift -Audit @{ Changes = $changes; Note = $null } -Options $options
+$audit = if ($AuditError) { @{ Error = $AuditError } } else { @{ Changes = $changes; Note = $null } }
+$report = New-TvChangeReport -Drift $drift -Audit $audit -Options $options
 $output = [ordered]@{ ids = $ids; report = $report; markdown = ConvertTo-TvReportMarkdown $report; html = ConvertTo-TvReportHtml $report; email = Get-TvReportEmail $report; fileName = Get-TvReportFileName $report }
 [Console]::Out.Write((ConvertTo-TvJsJson $output))
