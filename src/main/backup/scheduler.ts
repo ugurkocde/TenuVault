@@ -1,3 +1,5 @@
+import { CommunityChoicePendingError } from "../../shared/plan-errors"
+import type { Plan } from "../../shared/plans"
 import type { BackupSchedule, ScheduleInput } from "../../shared/ipc"
 import type { KeyValueStore } from "../storage/secure-store"
 import type { BackupEngine, BackupJob, BackupRequest } from "./engine"
@@ -73,6 +75,7 @@ export class BackupScheduler {
   private timer: NodeJS.Timeout | null = null
   private startupTimer: NodeJS.Timeout | null = null
   private running: Promise<void> | null = null
+  private reconciliationFailed = false
 
   constructor(
     private readonly store: KeyValueStore,
@@ -83,10 +86,14 @@ export class BackupScheduler {
     private readonly run: (tenantId: string, afterFailure: boolean, slot: string) => Promise<ScheduledRunResult>,
     private readonly onChange: () => void = () => undefined,
     private readonly now: () => Date = () => new Date(),
+    private readonly coverage?: (tenantId: string) => { plan: Plan | null; azure: boolean; endedAt?: number; pendingChoice?: boolean } | undefined,
+    private readonly prepare: (() => Promise<void>) | undefined = undefined,
+    private readonly onFallback: (tenantId: string) => void = () => undefined,
+    private readonly onPaused: (tenantId: string, reason: "azure" | "choice") => void = () => undefined,
   ) {}
 
   list(): BackupSchedule[] {
-    return Object.values(this.read()).map((schedule) => ({ ...schedule, nextRunAt: this.nextRun(schedule)?.toISOString() ?? null }))
+    return Object.values(this.reconcile()).map((schedule) => ({ ...schedule, nextRunAt: this.nextRun(schedule)?.toISOString() ?? null }))
   }
 
   set(input: ScheduleInput): BackupSchedule {
@@ -97,12 +104,20 @@ export class BackupScheduler {
     const all = this.read()
     const id = input.tenantId.toLowerCase()
     const previous = all[id]
+    if (previous && previous.enabled !== input.enabled && previous.frequency === input.frequency && previous.time === input.time && (input.frequency === "daily" || previous.weekday === input.weekday)) {
+      all[id] = { ...previous, enabled: input.enabled }
+      this.write(all)
+      return this.list().find((schedule) => schedule.tenantId === id)!
+    }
     all[id] = {
+      ...previous,
       tenantId: id,
       enabled: input.enabled,
       frequency: input.frequency,
       time: input.time,
       weekday: input.frequency === "weekly" ? input.weekday : undefined,
+      fallbackWeekday: input.frequency === "daily" ? previous?.fallbackWeekday : undefined,
+      fallbackStartsAt: input.frequency === "daily" ? previous?.fallbackStartsAt : undefined,
       // Changing a schedule does not trigger a catch-up run for slots before the change.
       since: this.now().toISOString(),
       lastRunAt: previous?.lastRunAt,
@@ -129,7 +144,7 @@ export class BackupScheduler {
   /** The next scheduled backup across all tenants. */
   next(): { tenantId: string; at: Date } | null {
     let best: { tenantId: string; at: Date } | null = null
-    for (const schedule of Object.values(this.read())) {
+    for (const schedule of Object.values(this.reconcile())) {
       const at = this.nextRun(schedule)
       if (at && (!best || at < best.at)) best = { tenantId: schedule.tenantId, at }
     }
@@ -157,7 +172,10 @@ export class BackupScheduler {
   tick(): Promise<void> {
     if (this.running) return this.running
     this.running = (async () => {
-      for (const tenantId of Object.keys(this.read())) {
+      if (this.prepare) await this.prepare()
+      const reconciled = this.reconcile()
+      if (this.reconciliationFailed) return
+      for (const tenantId of Object.keys(reconciled)) {
         const schedule = this.read()[tenantId]
         if (!schedule || !this.isDue(schedule)) continue
         const slot = this.lastSlot(schedule)
@@ -178,12 +196,16 @@ export class BackupScheduler {
             lastMessage: keepStatus ? schedule.lastMessage : undefined,
           },
         })
-        const result: ScheduledRunResult = await this.run(schedule.tenantId, afterFailure, slot.toISOString()).catch((error: unknown) => ({
+        const result: ScheduledRunResult | null = await this.run(schedule.tenantId, afterFailure, slot.toISOString()).catch((error: unknown) => error instanceof CommunityChoicePendingError ? null : ({
           status: "Failed" as const,
           message: error instanceof Error ? error.message : String(error),
         }))
         const all = this.read()
         const current = all[schedule.tenantId]
+        if (!result) {
+          if (current && current.since === schedule.since) this.write({ ...all, [tenantId]: { ...current, lastAttemptAt: schedule.lastAttemptAt, attemptSlot: schedule.attemptSlot, attempts: schedule.attempts, lastStatus: schedule.lastStatus, lastMessage: schedule.lastMessage } })
+          continue
+        }
         if (current) {
           const at = this.now().toISOString()
           all[schedule.tenantId] = {
@@ -209,7 +231,7 @@ export class BackupScheduler {
   }
 
   isDue(schedule: BackupSchedule): boolean {
-    if (!schedule.enabled) return false
+    if (!schedule.enabled || schedule.pausedReason) return false
     const slot = this.lastSlot(schedule)
     if (!this.owed(schedule, slot)) return false
     if (schedule.lastStatus === "Cancelled" && schedule.attemptSlot === slot.toISOString()) return false
@@ -218,13 +240,13 @@ export class BackupScheduler {
   }
 
   nextRun(schedule: BackupSchedule): Date | null {
-    if (!schedule.enabled) return null
+    if (!schedule.enabled || schedule.pausedReason) return null
     if (this.isDue(schedule)) return this.now()
     const now = this.now()
     let next = this.slotOn(schedule, now)
     if (next <= now) {
       const reference = new Date(now)
-      reference.setDate(reference.getDate() + (schedule.frequency === "weekly" ? 7 : 1))
+      reference.setDate(reference.getDate() + (schedule.frequency === "weekly" || schedule.fallbackWeekday !== undefined ? 7 : 1))
       next = this.slotOn(schedule, reference)
     }
     const slot = this.lastSlot(schedule)
@@ -238,7 +260,7 @@ export class BackupScheduler {
   /** Whether `slot` still needs a backup: it is after the last change to the schedule and the last successful run. */
   private owed(schedule: BackupSchedule, slot: Date): boolean {
     const lastRun = schedule.lastRunAt ? Date.parse(schedule.lastRunAt) : 0
-    return slot.getTime() > Date.parse(schedule.since) && slot.getTime() > lastRun
+    return (!schedule.fallbackStartsAt || slot.getTime() >= Date.parse(schedule.fallbackStartsAt)) && slot.getTime() > Date.parse(schedule.since) && slot.getTime() > lastRun
   }
 
   /** Whether the latest attempt, since the schedule was last changed, belongs to `slot`. */
@@ -261,7 +283,7 @@ export class BackupScheduler {
     const slot = this.slotOn(schedule, reference)
     if (slot <= reference) return slot
     const previous = new Date(reference)
-    previous.setDate(previous.getDate() - (schedule.frequency === "weekly" ? 7 : 1))
+    previous.setDate(previous.getDate() - (schedule.frequency === "weekly" || schedule.fallbackWeekday !== undefined ? 7 : 1))
     return this.slotOn(schedule, previous)
   }
 
@@ -269,9 +291,68 @@ export class BackupScheduler {
   private slotOn(schedule: BackupSchedule, reference: Date): Date {
     const [hours, minutes] = schedule.time.split(":").map(Number) as [number, number]
     const slot = new Date(reference)
-    if (schedule.frequency === "weekly") slot.setDate(slot.getDate() + ((schedule.weekday ?? 0) - slot.getDay()))
+    if (schedule.frequency === "weekly" || schedule.fallbackWeekday !== undefined) slot.setDate(slot.getDate() + ((schedule.fallbackWeekday ?? schedule.weekday ?? 0) - slot.getDay()))
     slot.setHours(hours, minutes, 0, 0)
     return slot
+  }
+
+  private firstFallbackSlot(schedule: BackupSchedule, endedAt?: number): Date {
+    const now = this.now().getTime()
+    const reference = new Date(Math.max(Math.min(endedAt ?? now, now), Date.parse(schedule.since)))
+    const slot = this.slotOn({ ...schedule, fallbackWeekday: undefined }, reference)
+    if (slot <= reference) slot.setDate(slot.getDate() + 1)
+    return slot
+  }
+
+  private reconcile(): Record<string, BackupSchedule> {
+    this.reconciliationFailed = false
+    const all = this.read()
+    let changed = false
+    const notices: (() => void)[] = []
+    let choiceNotified = Object.values(all).some((schedule) => schedule.choicePauseNotified)
+    for (const schedule of Object.values(all)) {
+      const coverage = this.coverage?.(schedule.tenantId)
+      if (!coverage) continue
+      const before = JSON.stringify(schedule)
+      const pausedReason = coverage.plan === "community" && coverage.azure ? "Paused: Azure storage needs Pro"
+        : coverage.plan === null && coverage.pendingChoice ? "Paused: choose a Community tenant or add a license" : undefined
+      const fallback = coverage.plan === "community" && schedule.frequency === "daily"
+        ? schedule.fallbackWeekday ?? this.firstFallbackSlot(schedule, coverage.endedAt).getDay() : undefined
+      schedule.pausedReason = pausedReason
+      schedule.fallbackStartsAt = fallback === undefined ? undefined : schedule.fallbackStartsAt ?? this.firstFallbackSlot(schedule, coverage.endedAt).toISOString()
+      schedule.fallbackWeekday = fallback
+      const noticeFor = String(coverage.endedAt ?? schedule.fallbackStartsAt)
+      if (schedule.enabled && fallback !== undefined && !pausedReason && schedule.fallbackNoticeFor !== noticeFor) {
+        schedule.fallbackNoticeFor = noticeFor
+        notices.push(() => this.onFallback(schedule.tenantId))
+      }
+      if (pausedReason && coverage.azure && coverage.plan === "community") {
+        if (schedule.enabled && !schedule.azurePauseNotified) {
+          schedule.azurePauseNotified = true
+          notices.push(() => this.onPaused(schedule.tenantId, "azure"))
+        }
+      } else schedule.azurePauseNotified = undefined
+      if (coverage.pendingChoice) {
+        if (schedule.enabled && !schedule.choicePauseNotified) {
+          schedule.choicePauseNotified = true
+          if (!choiceNotified) notices.push(() => this.onPaused(schedule.tenantId, "choice"))
+          choiceNotified = true
+        }
+      } else schedule.choicePauseNotified = undefined
+      changed ||= before !== JSON.stringify(schedule)
+    }
+    // Persist before broadcasting or notifying: either callback may list schedules again.
+    if (changed) {
+      try { this.store.set(KEY, JSON.stringify(all)) }
+      catch {
+        this.reconciliationFailed = true
+        console.warn("[backup-scheduler] Could not save reconciled schedules.")
+        return all
+      }
+      this.onChange()
+    }
+    for (const notify of notices) notify()
+    return all
   }
 
   private read(): Record<string, BackupSchedule> {
@@ -311,6 +392,12 @@ function parseSchedule(id: string, value: unknown): BackupSchedule | null {
     || typeof entry.enabled !== "boolean" || (entry.frequency !== "daily" && entry.frequency !== "weekly")
     || typeof entry.time !== "string" || !VALID_TIME.test(entry.time) || !validDate(entry.since)
     || (entry.frequency === "weekly" && !validWeekday(entry.weekday))
+    || (entry.fallbackStartsAt !== undefined && !validDate(entry.fallbackStartsAt))
+    || (entry.fallbackWeekday !== undefined && !validWeekday(entry.fallbackWeekday))
+    || (entry.fallbackNoticeFor !== undefined && typeof entry.fallbackNoticeFor !== "string")
+    || (entry.azurePauseNotified !== undefined && typeof entry.azurePauseNotified !== "boolean")
+    || (entry.choicePauseNotified !== undefined && typeof entry.choicePauseNotified !== "boolean")
+    || (entry.pausedReason !== undefined && typeof entry.pausedReason !== "string")
     || (entry.weekday !== undefined && !validWeekday(entry.weekday))
     || (entry.lastRunAt !== undefined && !validDate(entry.lastRunAt))
     || (entry.lastAttemptAt !== undefined && !validDate(entry.lastAttemptAt))

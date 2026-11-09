@@ -17,7 +17,8 @@ import { describeSchedule, formatWhen, useRefusals, useSchedules, WEEKDAYS } fro
 import { settingsHref } from "../lib/settings-section"
 import { scheduledIdentity } from "../lib/backup-reader-view"
 import { showFeaturePlanError } from "../lib/plan-dialog"
-import type { StorageChoice } from "../lib/storage"
+import { useConfirm } from "~/components/ConfirmDialog"
+import { savedAzureStorage, LOCAL_SWITCH_CONFIRMATION, type StorageChoice } from "../lib/storage"
 import { toast } from "../lib/toast"
 import { weeklyScheduleNote } from "../lib/plan-notes"
 import { PlanBadge, UpgradeNote } from "./UpgradeNote"
@@ -46,6 +47,7 @@ export function BackupSchedulePanel(props: BackupSchedulePanelProps) {
 }
 
 function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageChange }: BackupSchedulePanelProps) {
+  const { confirm, confirmDialog } = useConfirm()
   const tenant = tenantProp ?? null
   const cloud = useCloudBackup(tenant, tenantId)
   const [scopeVersion, setScopeVersion] = useState(0)
@@ -126,14 +128,17 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
   const weeklyMessage = weeklyScheduleNote(plan, !!(current?.enabled && current.frequency === "weekly") || (enabled && frequency === "weekly"))
   const select = "h-10 rounded-full border border-gray-300 bg-white px-4 text-sm"
   const localTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
+  const azurePaused = !!(current?.enabled && community && tenant?.resources?.storageAccountName && !tenant.resources.storageAccountName.startsWith(LOCAL_STORAGE_PREFIX))
+  const fallbackWeekday = community && current?.frequency === "daily" ? current.fallbackWeekday : undefined
   const nextComputerRuns = useMemo(
-    () => (enabled ? nextRunsInZone({ frequency, time, weekday }, localTimeZone, new Date(), 4) : []),
-    [enabled, frequency, time, weekday, localTimeZone],
+    () => (enabled && !azurePaused ? nextRunsInZone({ frequency: fallbackWeekday === undefined ? frequency : "weekly", time, weekday: fallbackWeekday ?? weekday }, localTimeZone, new Date(), 4) : []),
+    [enabled, frequency, time, weekday, localTimeZone, azurePaused, fallbackWeekday],
   )
   const bothRunners = !!(current?.enabled && cloud.config?.linked)
 
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+      {confirmDialog}
       <div className="space-y-4 lg:col-span-2">
       <TenantStorageSettings tenant={tenant} tenantName={tenantName} prefs={prefs} community={community} onStorageChange={onStorageChange} cloudOnly={!!cloud.config?.linked && !current?.enabled} />
       <BackupScopeSettings tenantId={tenantId} tenantName={tenantName} hasCloud={!!cloud.config} onSaved={() => setScopeVersion((version) => version + 1)} />
@@ -196,6 +201,23 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
         ) : (
         <>
 
+        {current?.enabled && community && !azurePaused && current.frequency === "daily" && <p role="status" className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">Runs weekly on Community (daily needs Pro)</p>}
+        {current?.enabled && community && tenant?.resources?.storageAccountName && !tenant.resources.storageAccountName.startsWith(LOCAL_STORAGE_PREFIX) && (
+          <div role="status" className="space-y-3 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            <p>Paused: Azure storage needs Pro</p>
+            <Button disabled={saving || !onStorageChange || !tenant?.credentials} onClick={async () => {
+              if (!tenant?.credentials || !onStorageChange || !await confirm(LOCAL_SWITCH_CONFIRMATION)) return
+              setSaving(true)
+              try {
+                onStorageChange(tenant, { kind: "local" })
+                drafts.delete(tenantId)
+                reloadSchedules()
+                toast("Weekly local backups enabled", "success")
+              } catch (error) { toast(error instanceof Error ? error.message : String(error), "error") }
+              finally { setSaving(false) }
+            }}>Switch to weekly local backups</Button>
+          </div>
+        )}
         {schedulesError && (
           <div className="flex flex-wrap items-center gap-3 rounded-3xl bg-red-50 px-5 py-4">
             <p role="alert" className="text-sm text-red-700">Could not load the saved schedule: {schedulesError} Saving is paused so the saved schedule is not overwritten.</p>
@@ -382,7 +404,7 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
           </div>
           <div>
             <dt className="text-xs text-gray-500">Next backup</dt>
-            <dd className="mt-0.5 text-base text-gray-900">{formatWhen(current?.nextRunAt)}</dd>
+            <dd className="mt-0.5 text-base text-gray-900">{azurePaused ? "Paused: Azure storage needs Pro" : formatWhen(current?.nextRunAt)}</dd>
           </div>
           <div>
             <dt className="text-xs text-gray-500">{current?.lastStatus === "Cancelled" ? "Last automatic backup cancelled" : current?.lastStatus === "Failed" ? "Last automatic backup attempt failed" : "Last automatic backup"}</dt>
@@ -559,6 +581,7 @@ function BackupScopeSettings({ tenantId, tenantName, hasCloud, onSaved }: Backup
 
 /** The tenant's storage choice, edited here and in Settings through the same chooser. */
 function TenantStorageSettings({ tenant, tenantName, prefs, community, onStorageChange, cloudOnly }: { tenant: Tenant | null; tenantName: string; prefs: AppPreferences | null; community: boolean; onStorageChange?: (tenant: Tenant, choice: StorageChoice) => void; cloudOnly?: boolean }) {
+  const { confirm, confirmDialog } = useConfirm()
   const [editing, setEditing] = useState(false)
   const [choice, setChoice] = useState<StorageChoice | null>(null)
   const [draft, setDraft] = useState<StorageChooserDraft | null>(null)
@@ -582,8 +605,9 @@ function TenantStorageSettings({ tenant, tenantName, prefs, community, onStorage
           location: tenant?.resources?.resourceGroupLocation ?? "",
         }
 
-  const save = () => {
+  const save = async () => {
     if (!tenant?.credentials || !choice || !onStorageChange) return
+    if (choice.kind === "local" && !local && !await confirm(LOCAL_SWITCH_CONFIRMATION)) return
     onStorageChange(tenant, choice)
     toast(`Backups for ${tenantName} now go to ${choice.kind === "local" ? "this device" : choice.storageAccountName}.`, "success")
     setDraft(null)
@@ -592,6 +616,7 @@ function TenantStorageSettings({ tenant, tenantName, prefs, community, onStorage
 
   return (
     <div className="rounded-3xl bg-white px-6 py-4 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
+      {confirmDialog}
       <div className="flex flex-wrap items-center gap-3">
         <span className="flex size-8 flex-shrink-0 items-center justify-center rounded-full bg-coral-500 text-white" aria-hidden="true">
           <Database className="h-4 w-4" />
@@ -612,7 +637,8 @@ function TenantStorageSettings({ tenant, tenantName, prefs, community, onStorage
             {" "}Backups never go to a TenuVault server.
           </p>
         </div>
-        <div className="flex shrink-0 flex-wrap items-center gap-2">
+        <div className="flex w-full shrink-0 flex-wrap items-center justify-end gap-2">
+          {local && tenant && savedAzureStorage(tenant) && <Button variant="outline" size="sm" disabled={!onStorageChange} onClick={() => onStorageChange?.(tenant, savedAzureStorage(tenant)!)}>Switch back to saved Azure storage</Button>}
           <Button variant="outline" size="sm" disabled={!tenant?.credentials || !onStorageChange} onClick={() => { setChoice(null); setEditing(true) }}>
             Change storage
           </Button>
@@ -637,6 +663,7 @@ function TenantStorageSettings({ tenant, tenantName, prefs, community, onStorage
               tenantId={tenant.credentials.tenantId}
               clientId={tenant.credentials.appId}
               initial={current}
+              savedAzure={savedAzureStorage(tenant)}
               initialDraft={draft ?? undefined}
               onChange={setChoice}
               onDraftChange={setDraft}

@@ -26,7 +26,7 @@ import { AREAS } from "../../../../shared/intune/scope"
 import { typeForFolder, type Item } from "../../../../shared/intune/registry"
 import { autopilotDevicesCsv } from "../../../../shared/intune/autopilot-devices"
 import { storageLabel } from "~/lib/storage-label"
-import { storageResources, type StorageChoice } from "@desktop/lib/storage"
+import { changeTenantStorage, type StorageChoice } from "@desktop/lib/storage"
 import { LinkedMessage } from "~/components/linked-message"
 import { SERVICES_PAGE } from "../../../../shared/services/modules"
 
@@ -68,10 +68,7 @@ export default function BackupRestorePage() {
   const { selectedTenantId, selectedTenant, setSelectedTenantId } = useSelectedTenant()
   const { updateTenant } = useTenantOperations()
   const changeStorage = (tenant: Tenant, choice: StorageChoice) => {
-    const resources = storageResources(tenant.credentials!.tenantId, choice)
-    updateTenant(tenant.id, {
-      resources: { ...tenant.resources, ...resources, subscriptionName: tenant.resources?.subscriptionName ?? "", automationAccountName: tenant.resources?.automationAccountName ?? "" },
-    })
+    updateTenant(tenant.id, changeTenantStorage(tenant, choice))
   }
   const requestedTenant = searchParams.get("tenant")?.toLowerCase()
   // Notification links select the affected tenant and keep the requested tab.

@@ -1,3 +1,4 @@
+import { CommunityChoiceBanner } from "./CommunityTenantPicker"
 import { useEffect, useRef, useState, type ComponentType, type ReactNode, type RefObject } from "react"
 import { Link, Outlet, useLocation } from "react-router-dom"
 import {
@@ -30,7 +31,7 @@ import { useTenants } from "~/contexts/TenantContext"
 import { cn } from "~/lib/utils"
 import { BrandMark } from "./BrandMark"
 import { ErrorBoundary } from "./ErrorBoundary"
-import { communityBannerVisible, earliestExpiringTenant, formatDate, formatDateTime, hasPaidLicense, isUnlicensed, licenseChipState, licenseExpiryWarning, offlineDeadline, trialEndedNotice, trialReminder, unlicensedTenants, useLicense } from "../lib/license"
+import { communityBannerVisible, earliestExpiringTenant, formatDate, formatDateTime, hasPaidLicense, inactiveTenantNotice, isUnlicensed, licenseChipState, licenseExpiryWarning, offlineDeadline, trialEndedNotice, trialReminder, unlicensedTenants, useLicense } from "../lib/license"
 import { openCheckout } from "../lib/purchase"
 import { PlanPromptButton } from "./PlanPromptButton"
 import { PurchaseKeyWatcher } from "./PurchaseKeyWatcher"
@@ -218,7 +219,7 @@ function LicenseBanner() {
       setDismissing(false)
     }
   }
-  if (!status) return null
+  if (!status || (status.communityChoicePendingTenantIds?.length ?? 0) > 1) return null
   if (isUnlicensed(status) && unlicensedTenants(status).length === 0) {
     // The start pages only: the all-tenants overview, or the dashboard for a single tenant.
     const startPage = pathname === "/portal/overview" || pathname === "/portal/dashboard"
@@ -240,7 +241,7 @@ function LicenseBanner() {
     return (
       <BannerLink tone="amber" icon={<AlertTriangle className="h-4 w-4" />} action={buy}>
         {inactive.length === 1 ? "A signed-in tenant is" : `${inactive.length} signed-in tenants are`} not covered by your
-        license. Open License for details.
+        license. {inactiveTenantNotice(inactive)}
       </BannerLink>
     )
   }
@@ -474,6 +475,7 @@ export function DesktopLayout() {
       )}
 
       <div className={focus ? undefined : "pl-64"}>
+        <CommunityChoiceBanner />
         {!focus && <LicenseBanner />}
         {!focus && <SignInBanner />}
         {[/portal\/backup/, /portal\/drift/, /portal\/audit/, /portal\/(governance|changes|operations|reports|alerts|sync)/].some(pattern => pattern.test(pathname)) && <TenantAccessNotice />}

@@ -1,5 +1,5 @@
 import type { PlanIpcError } from "../../shared/plan-errors"
-import { CommunityLimitError } from "../../shared/plan-errors"
+import { CommunityChoicePendingError, CommunityLimitError } from "../../shared/plan-errors"
 import type { TenuVaultBridge, TenuVaultPreloadBridge } from "../../shared/ipc"
 import { FeatureApiError } from "./feature-api"
 
@@ -8,7 +8,8 @@ export async function unwrapPlanResult<T>(result: Promise<T | PlanIpcError>): Pr
   const value = await result
   if (value && typeof value === "object" && "planError" in value) {
     const error = value.planError
-    if (error.code === "community_tenant_limit") throw new CommunityLimitError(error.tenantId, error.message)
+    if (error.code === "community_choice_pending") throw new CommunityChoicePendingError()
+    if (error.code === "community_tenant_limit") throw new CommunityLimitError(error.tenantId, error.message, error.existingTenant)
     throw new FeatureApiError(error.message, 402, error.upgrade)
   }
   return value

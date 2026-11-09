@@ -64,6 +64,7 @@ const bridge: TenuVaultPreloadBridge = {
     setEnabled: (tenantId, clientId, id, enabled) => invoke("services:setEnabled", tenantId, clientId, id, enabled),
   },
   license: {
+    chooseCommunity: (tenantId) => invoke("license:chooseCommunity", tenantId),
     status: () => invoke("license:status"),
     refresh: () => invoke("license:refresh"),
     setKey: (key) => invoke("license:setKey", key),

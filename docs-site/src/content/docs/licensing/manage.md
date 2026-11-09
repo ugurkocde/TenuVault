@@ -60,7 +60,7 @@ The top card shows your plan, for example **Pro plan active**, and how many tena
 
 When the licensing service supplies a key expiry date, the top card also shows **License valid until** with the date. With several tenants, this is the earliest key expiry. Each tenant's License fact on the overview also shows its own **Valid until** date. Automatically renewing subscription keys may have no expiry date, so these lines stay hidden.
 
-An amber warning appears 30 days before a license key expires and links to the **License** page. It names the key or, for a license shared by your organization, that license, and Pro or MSP features stop on that date unless the license is renewed. When the licensing service is unreachable and a cached verification runs out sooner, that warning is shown first. If the key has expired while a cached verification is still current, the warning says so. Once the service confirms the key has expired, the tenant falls back to Community under the existing free tenant limit.
+An amber warning appears 30 days before a license key expires and links to the **License** page. It names the key or, for a license shared by your organization, that license, and Pro or MSP features stop on that date unless the license is renewed. When the licensing service is unreachable and a cached verification runs out sooner, that warning is shown first. If the key has expired while a cached verification is still current, the warning says so. Once the service confirms the key has expired, Community can cover one tenant. When several connected tenants lack coverage and no Community tenant has been chosen, backups pause until the admin chooses one. You can decide later or add a license instead.
 
 The **Tenants** card lists every tenant on this machine with its license state:
 
@@ -123,7 +123,7 @@ To keep Pro:
 2. Your new license key arrives by email.
 3. On the **License** page, click **Enter your new key**, paste the key and click **Use this key**. TenuVault activates the new key for every tenant the trial key covers on this machine, and for signed-in tenants that are not licensed yet, and only then releases the trial key. If the new key is refused for a tenant the trial key covers, nothing changes: the trial key stays active and the reason is shown. Tenants licensed through your organization keep that license.
 
-If you do nothing, the trial key expires at the end of day 30, also when TenuVault is offline. Nothing is charged. One tenant continues on Community, the free plan for one tenant; a second tenant is no longer covered. Pro features turn off, and your backups stay where they are.
+If you do nothing, the trial key expires at the end of day 30, also when TenuVault is offline. Nothing is charged. One tenant continues on Community, the free plan for one tenant; a second tenant is no longer covered. Pro features turn off, and your backups stay where they are. When several connected tenants lack coverage and no Community tenant is selected yet, TenuVault asks which one continues on Community. See [When paid coverage ends](#when-paid-coverage-ends) for schedules and paused features.
 
 To use a different key while one is active, click **Use a different key** next to the saved key on the **License** page and paste the new key. The new key is activated first, for every tenant the saved key covers on this machine; only then is the saved key released. If the new key does not cover one of those tenants, nothing changes and the reason is shown. Replacing a running trial key with **Enter your new key** works the same way, and so does **Enter a new key** for a saved key that is no longer active, for example after the trial ended. Licenses shared by your organization stay in place through every swap.
 
@@ -157,3 +157,19 @@ To upgrade from Community, start the free trial or click **Buy now** on the **Li
 * [Start TenuVault for the first time](/getting-started/first-launch/)
 * [Manage tenants](/tenants/)
 * [Network connections and data flows](/security/data-flows/)
+
+## When paid coverage ends
+
+A saved daily schedule runs weekly on Community at its saved time. The weekday comes from the first slot after coverage ended. The daily schedule stays saved and resumes daily when Pro returns. You can pause and resume the saved schedule on Community. You can also change its saved time. Creating a daily schedule or changing a weekly schedule to daily needs Pro. TenuVault checks for renewed coverage in the background, including while the app is in the tray.
+
+Azure storage schedules pause with **Paused: Azure storage needs Pro**. Choose **Switch to weekly local backups** and confirm to save future backups on this computer. Your saved schedule stays unchanged. If backups were missed while paused, the most recent due slot is caught up under the normal retry rules. Missed weeks are not queued as separate backups. The Azure account settings are kept on this computer across restarts. Choose **Switch back to saved Azure storage**, or select the saved account in **Change storage**, to list or restore existing Azure backups. On Community, new backups pause again while Azure is selected. With Pro, Azure backups resume. Community cannot set up a new Azure account. Tenant profile edits stay on this computer while Azure storage needs Pro.
+
+An operating system notification announces the weekly fallback or a paused Azure schedule once. A pending Community choice also sends a notification asking you to open TenuVault and choose a tenant to resume backups.
+
+Configured alerts, scheduled health reviews and automatic change reports pause on Community. Their pages say **Paused on Community** and link to License. Their configuration stays saved.
+
+After coverage is known to have ended, if more than one connected tenant lacks coverage and Community has no tenant yet, choose which tenant continues on Community. Backups pause while the choice is pending. Tenants whose coverage cannot be checked are shown but cannot be chosen yet. Use **Retry** in the picker to check them again.
+
+The Community choice is final. Other tenants stay locked, and their backups are kept. Add a license to use them again. Fresh installations without coverage history still assign Community to the first tenant used.
+
+You can close the picker with **Decide later** without choosing. A notice and **Choose tenant** buttons let you return during the same session. The picker opens again after restarting the app. **Add a license instead** opens License so you can buy Pro or enter a key.

@@ -1,6 +1,9 @@
 "use client"
 
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from "react"
+import { tenantLicense, tenantPlan, useLicense } from "@desktop/lib/license"
+import { allows } from "../../shared/plans"
+import { LOCAL_STORAGE_PREFIX } from "../../shared/constants"
+import React, { createContext, useContext, useState, useEffect, useLayoutEffect, useCallback, useRef } from "react"
 import type { TenantCredentials } from "~/components/tenants/add-tenant-modal"
 import type { TenantMetadata } from "~/types/tenant-metadata"
 import { tenantStorage } from "~/lib/tenant-storage"
@@ -46,6 +49,7 @@ interface Tenant {
   }
   credentials?: TenantCredentials
   resources?: SelectedResources
+  previousAzureStorage?: SelectedResources
   organizationId?: string
   isLoading?: boolean
   preferredRunbook?: string
@@ -72,6 +76,10 @@ const STORAGE_KEY = "tenuvault_tenants"
 const SELECTED_TENANT_KEY = "tenuvault_selected_tenant"
 
 export function TenantProvider({ children }: { children: React.ReactNode }) {
+  const { status: licenseStatus } = useLicense()
+  const licenseRef = useRef(licenseStatus)
+  useLayoutEffect(() => { licenseRef.current = licenseStatus }, [licenseStatus])
+  const canSyncMetadata = useCallback((tenant: Tenant) => tenant.resources?.storageAccountName?.startsWith(LOCAL_STORAGE_PREFIX) || allows(tenantPlan(tenantLicense(licenseRef.current, tenant.credentials?.tenantId ?? "")) ?? "community", "azureStorage"), [])
   const [tenants, setTenants] = useState<Tenant[]>([])
   const [selectedTenantId, setSelectedTenantId] = useState<number | null>(null)
   const [isLoaded, setIsLoaded] = useState(false)
@@ -159,6 +167,8 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
       return
     }
 
+    if (!canSyncMetadata(tenant)) return
+
     try {
       const metadata: Partial<TenantMetadata> = {
         tenantId: tenant.credentials.tenantId,
@@ -198,7 +208,8 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
       })
 
       if (!response.ok) {
-        const errorData = await response.json() as { error?: string }
+        const errorData = await response.json() as { error?: string; upgrade?: string }
+        if (response.status === 402 && errorData.upgrade === "azureStorage") return
         console.error("Failed to sync tenant to Azure:", errorData)
         
         // If container doesn't exist, log but don't throw - this is not critical
@@ -214,7 +225,7 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
     } catch (error) {
       console.error("Error syncing tenant to Azure:", error)
     }
-  }, [tenants])
+  }, [tenants, canSyncMetadata])
   
   // Direct sync method that accepts tenant object instead of ID
   const syncTenantToAzureDirect = useCallback(async (tenant: Tenant) => {
@@ -222,6 +233,8 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
       console.warn("Cannot sync tenant without credentials and storage account")
       return
     }
+
+    if (!canSyncMetadata(tenant)) return
 
     console.log("Starting sync to Azure for tenant:", {
       id: tenant.id,
@@ -269,7 +282,8 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
       })
 
       if (!response.ok) {
-        const errorData = await response.json() as { error?: string }
+        const errorData = await response.json() as { error?: string; upgrade?: string }
+        if (response.status === 402 && errorData.upgrade === "azureStorage") return
         console.error("Failed to sync tenant to Azure:", errorData)
         
         // If container doesn't exist, log but don't throw - this is not critical
@@ -285,7 +299,7 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
     } catch (error) {
       console.error("Error syncing tenant to Azure:", error)
     }
-  }, [])
+  }, [canSyncMetadata])
 
   const loadTenantFromAzure = useCallback(async (
     credentials: TenantCredentials, 
@@ -353,6 +367,8 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
       return
     }
 
+    if (!canSyncMetadata(tenant)) return
+
     try {
       await fetch("/api/tenant-metadata/delete", {
         method: "POST",
@@ -367,14 +383,14 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
     } catch (error) {
       console.error("Error deleting tenant metadata:", error)
     }
-  }, [tenants])
+  }, [tenants, canSyncMetadata])
 
   // Auto-sync to Azure when tenant is updated (with debouncing)
   const updateTenantWithSync = useCallback((id: number, updates: Partial<Tenant>) => {
     updateTenant(id, updates)
     scheduleTenantSync(syncTimeoutsRef.current, id, () => {
       const updatedTenant = tenantsRef.current.find(t => t.id === id)
-      if (updatedTenant) {
+      if (updatedTenant && canSyncMetadata(updatedTenant)) {
         console.log("Auto-syncing tenant to Azure after update:", {
           id: updatedTenant.id,
           tags: updatedTenant.tags,
@@ -383,7 +399,7 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
         void syncTenantToAzureDirect(updatedTenant)
       }
     })
-  }, [updateTenant, syncTenantToAzureDirect])
+  }, [updateTenant, syncTenantToAzureDirect, canSyncMetadata])
 
   return (
     <TenantContext.Provider value={{

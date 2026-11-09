@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { CommunityLimitError, withPlanError } from "../src/shared/plan-errors"
+import { CommunityChoicePendingError, CommunityLimitError, withPlanError } from "../src/shared/plan-errors"
 import { PlanRequired } from "../src/shared/plans"
 import type { TenuVaultPreloadBridge } from "../src/shared/ipc"
 import { createRendererBridge, unwrapPlanResult } from "../src/renderer/lib/plan-bridge"
@@ -46,4 +46,11 @@ describe("plan errors across IPC and preload", () => {
     await expect(withPlanError(() => { throw failure })).rejects.toBe(failure)
     await expect(unwrapPlanResult(Promise.reject(failure))).rejects.toBe(failure)
   })
+})
+
+it("keeps a pending Community choice distinct from an owned-seat limit across IPC", async () => {
+  const reply = await withPlanError(() => { throw new CommunityChoicePendingError() })
+  await expect(unwrapPlanResult(Promise.resolve(JSON.parse(JSON.stringify(reply))))).rejects.toBeInstanceOf(CommunityChoicePendingError)
+  const locked = await withPlanError(() => { throw new CommunityLimitError("contoso", "Backups are kept", true) })
+  await expect(unwrapPlanResult(Promise.resolve(JSON.parse(JSON.stringify(locked))))).rejects.toMatchObject({ existingTenant: true, tenantId: "contoso" })
 })

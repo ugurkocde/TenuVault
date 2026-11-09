@@ -1,5 +1,5 @@
-import { CommunityLimitError } from "../../shared/plan-errors"
-import { createPublicKey, randomUUID, verify, type KeyObject } from "node:crypto"
+import { CommunityChoicePendingError, CommunityLimitError } from "../../shared/plan-errors"
+import { createHash, createPublicKey, randomUUID, verify, type KeyObject } from "node:crypto"
 import type { LicenseStatus, TenantLicenseStatus } from "../../shared/ipc"
 import type { Plan } from "../../shared/plans"
 import { networkFailure } from "../api/network-error"
@@ -108,6 +108,7 @@ export interface LicenseServiceOptions {
   clientId?: ClientIdProvider
   /** Whether the tenant is still saved or has a new sign-in being added. */
   tenantPresent?: (tenantId: string) => boolean
+  connectedTenantIds?: () => string[]
   fetch?: typeof fetch
   /** Called after the stored license or a tenant's license message changed. */
   onChange?: () => void
@@ -141,6 +142,7 @@ class NoIdToken extends Error {
 
 // Community is free for one tenant: the first tenant used without a license.
 const COMMUNITY_KEY = "license.communityTenant"
+const COMMUNITY_ELIGIBILITY_KEY = "license.communityEligibility"
 // A Community tenant is checked for a new license (a key or an organization license) at
 // most this often, unless the admin asks.
 export const COMMUNITY_RECHECK_MS = 6 * 60 * 60_000
@@ -314,6 +316,8 @@ export class LicenseService {
   private readonly failures = new Map<string, { error: unknown; until: number }>()
   // Community tenants, until their next check for a license.
   private readonly community = new Map<string, number>()
+  private readonly communityEligibility = new Map<string, string>()
+  private readonly coverageEnds = new Map<string, number>()
   private readonly publicKeys: readonly KeyObject[]
   private readonly fetchImpl: typeof fetch
   private readonly idToken: IdTokenProvider
@@ -357,6 +361,14 @@ export class LicenseService {
     }
     if (!this.options.persist) return
 
+    try {
+      const eligible: unknown = JSON.parse(store.get(COMMUNITY_ELIGIBILITY_KEY) ?? "{}")
+      if (eligible && typeof eligible === "object" && !Array.isArray(eligible)) {
+        for (const [id, key] of Object.entries(eligible)) {
+          if (guidPattern.test(id) && typeof key === "string" && /^(none|[a-f0-9]{64})$/.test(key)) this.communityEligibility.set(id, key)
+        }
+      }
+    } catch { /* A damaged local marker must not grant coverage or break a license check. */ }
     const removed = store.get(REMOVED_TENANTS_KEY)
     if (removed) {
       try {
@@ -682,6 +694,7 @@ export class LicenseService {
     }
     this.messages.delete(tenantId)
     this.failures.delete(tenantId)
+    if (this.communityEligibility.delete(tenantId)) this.persistCommunityEligibility()
     if (persist) this.save()
   }
 
@@ -798,6 +811,7 @@ export class LicenseService {
     } catch (error) {
       this.assertCurrent(current)
       if (error instanceof LicenseDenied) {
+        if (LAPSED.has(error.reason)) this.confirmCommunity(tenantId)
         if (entry.source !== "tenant") this.state.keyFailure = error.reason
         delete this.state.activations[tenantId]
         this.save()
@@ -810,6 +824,7 @@ export class LicenseService {
   /** Refreshes every cached activation. Network failures keep the cached token until it expires; a confirmed refusal drops it. */
   async refreshAll(): Promise<void> {
     this.load()
+    for (const tenantId of Object.keys(this.state?.activations ?? {})) this.coverageEndedAt(tenantId)
     const key = this.state?.key
     const entries = Object.entries(this.state?.activations ?? {})
     for (const [tenantId, entry] of entries) {
@@ -1172,6 +1187,7 @@ export class LicenseService {
       this.community.delete(tenant)
     }
     if ((this.community.get(tenant) ?? 0) > Date.now()) return "community"
+    this.coverageEndedAt(tenant)
     const key = this.state?.key
     const current = () => key === this.state?.key && this.tenantPresent(tenant)
     try {
@@ -1185,6 +1201,7 @@ export class LicenseService {
     } catch (error) {
       this.assertCurrent(current)
       if (error instanceof StaleLicenseRequest || !this.lapsedOrUnlicensed(tenant, error)) throw error
+      this.confirmCommunity(tenant)
       return this.useCommunity(tenant)
     }
   }
@@ -1201,10 +1218,98 @@ export class LicenseService {
     return !this.state?.key && !this.state?.activations[tenant]
   }
 
+  coverageEndedAt(tenantId: string): number | undefined {
+    this.load()
+    const tenant = tenantId.toLowerCase()
+    const key = `license.coverageEnd.${tenant}`
+    const entry = this.state?.activations[tenant]
+    const payload = entry ? decodeToken(entry.token, this.publicKeys) : null
+    if (payload) {
+      const endedAt = (payload.v === 2 && typeof payload.keyExp === "number" ? Math.min(payload.exp, payload.keyExp) : payload.exp) * 1000
+      if (!Number.isFinite(endedAt) || !Number.isFinite(new Date(endedAt).getTime())) return undefined
+      this.coverageEnds.set(tenant, endedAt)
+      try {
+        if (this.options.persist && this.options.store.get(key) !== String(endedAt)) this.options.store.set(key, String(endedAt))
+      } catch { console.warn("[license] Could not save the coverage end.") }
+      return endedAt
+    }
+    try {
+      const saved = Number(this.options.store.get(key))
+      if (saved > 0 && Number.isFinite(new Date(saved).getTime()) && !this.coverageEnds.has(tenant)) this.coverageEnds.set(tenant, saved)
+    } catch { /* Keep the date in memory if the store is temporarily unavailable. */ }
+    return this.coverageEnds.get(tenant)
+  }
+
+  private communityKeyIdentity(): string {
+    return this.state?.key ? createHash("sha256").update(this.state.key).digest("hex") : "none"
+  }
+
+  private persistCommunityEligibility(): void {
+    if (!this.options.persist) return
+    try {
+      if (this.communityEligibility.size) this.options.store.set(COMMUNITY_ELIGIBILITY_KEY, JSON.stringify(Object.fromEntries(this.communityEligibility)))
+      else this.options.store.delete(COMMUNITY_ELIGIBILITY_KEY)
+    } catch { console.warn("[license] Could not save Community eligibility.") }
+  }
+
+  private confirmCommunity(tenant: string): void {
+    if (!this.state?.key && !this.state?.activations[tenant]) return
+    const identity = this.communityKeyIdentity()
+    if (this.communityEligibility.get(tenant) === identity) return
+    this.communityEligibility.set(tenant, identity)
+    this.persistCommunityEligibility()
+    this.options.onChange?.()
+  }
+
+  private communityEligible(tenant: string): boolean {
+    const entry = this.state?.activations[tenant]
+    if (!entry) return !this.state?.key || this.communityEligibility.get(tenant) === this.communityKeyIdentity()
+    const payload = entry ? decodeToken(entry.token, this.publicKeys) : null
+    return Boolean(payload?.v === 2 && payload.trial === true && typeof payload.keyExp === "number" && payload.keyExp * 1000 <= Date.now()
+      && payload.tenantId === tenant && payload.installId === this.installId && payload.act === entry?.activationId)
+  }
+
+  private uncoveredTenants(): string[] {
+    return [...new Set((this.options.connectedTenantIds?.() ?? []).map((id) => id.toLowerCase()))]
+      .filter((id) => guidPattern.test(id) && this.tenantPresent(id) && !this.valid(id))
+  }
+
+  private coverageEnded(tenant: string): boolean {
+    const entry = this.state?.activations[tenant]
+    if (entry) return this.communityEligible(tenant)
+    if (this.communityEligibility.get(tenant) === this.communityKeyIdentity()) return true
+    if (this.state?.key) return false
+    const end = this.coverageEndedAt(tenant)
+    return this.communityEligibility.has(tenant) || (end !== undefined && end <= Date.now())
+  }
+
+  communityPendingTenants(): string[] {
+    this.load()
+    if (this.options.store.get(COMMUNITY_KEY)) return []
+    const uncovered = this.uncoveredTenants()
+    return uncovered.length > 1 && uncovered.some((id) => this.coverageEnded(id)) ? uncovered : []
+  }
+
+  communityChoices(): string[] {
+    return this.communityPendingTenants().filter((id) => this.communityEligible(id))
+  }
+
+  chooseCommunity(tenantId: string): void {
+    const tenant = tenantId.toLowerCase()
+    if (!this.communityChoices().includes(tenant)) throw new Error("Choose a connected tenant without license coverage.")
+    this.options.store.set(COMMUNITY_KEY, tenant)
+    this.useCommunity(tenant)
+    this.options.onChange?.()
+  }
+
   private useCommunity(tenant: string): Plan {
     this.assertCurrent(() => this.tenantPresent(tenant))
     const owner = this.options.store.get(COMMUNITY_KEY)
-    if (owner && owner !== tenant) throw new CommunityLimitError(owner, communityLimit(owner))
+    if (!owner && this.communityPendingTenants().length) throw new CommunityChoicePendingError()
+    if (owner && owner !== tenant) {
+      const existing = this.options.connectedTenantIds?.().some((id) => id.toLowerCase() === tenant) ?? false
+      throw new CommunityLimitError(owner, communityLimit(owner) + (existing ? " Backups of this tenant are kept. Add a license to use it again." : ""), existing)
+    }
     if (owner !== tenant) this.options.store.set(COMMUNITY_KEY, tenant)
     const first = !this.community.has(tenant)
     this.community.set(tenant, Date.now() + COMMUNITY_RECHECK_MS)
@@ -1293,6 +1398,7 @@ export class LicenseService {
       this.messages.delete(tenant)
       this.failures.delete(tenant)
       this.community.delete(tenant)
+      if (this.communityEligibility.delete(tenant)) this.persistCommunityEligibility()
       // Removing the Community tenant frees the free plan for another tenant.
       if (this.options.store.get(COMMUNITY_KEY) === tenant) {
         this.options.store.delete(COMMUNITY_KEY)
@@ -1440,6 +1546,7 @@ export class LicenseService {
     let validUntil: string | null = null
     const tenants = tenantIds.map((tenantId): TenantLicenseStatus => {
       const entry = this.state?.activations[tenantId]
+      this.coverageEndedAt(tenantId)
       const payload = this.valid(tenantId)
       const source = payload && entry ? (entry.source ?? "key") : null
       if (payload && source === "key" && (!keyToken || payload.iat > keyToken.iat)) keyToken = payload
@@ -1456,6 +1563,7 @@ export class LicenseService {
         tenantId,
         signedIn: signedIn.has(tenantId),
         activated: Boolean(entry),
+        coverageEnded: !payload && this.coverageEnded(tenantId),
         entitled: payload !== null,
         source,
         plan: payload?.plan ?? (communityTenant === tenantId ? "community" : null),
@@ -1498,6 +1606,8 @@ export class LicenseService {
       trialEndedAt: this.trialEndedAt(latest !== null || tenants.some((tenant) => tenant.entitled)),
       validUntil,
       communityTenantId: communityTenant ?? null,
+      communityChoiceTenantIds: this.communityChoices(),
+      communityChoicePendingTenantIds: this.communityPendingTenants(),
       tenants,
     }
   }

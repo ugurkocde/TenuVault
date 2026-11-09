@@ -454,3 +454,28 @@ describe("alert me about this policy", () => {
     expect(alertForPolicyHref("X", "Compliance policies")).toContain("service=intune")
   })
 })
+
+it("announces configured alerts paused on Community", async () => {
+  state.status = { ...empty, rules: [{ id: "r1", title: "Backup problems", enabled: true, eventTypes: ["backup.failed"], minSeverity: "info", channelIds: [], mode: "immediate", conditions: null, delivery: "digest" }] }
+  const container = await render(AlertsTab, false)
+  expect(container.textContent).toContain("Paused on Community")
+  expect(container.querySelector('a[href="/license"]')).not.toBeNull()
+})
+it("keeps the preview for Community without configured alerts", async () => {
+  state.status = empty
+  expect((await render(AlertsTab, false)).textContent).not.toContain("Paused on Community")
+})
+
+
+it.each([AlertsTab, ChannelsTab, WatchingTab, DeliveriesTab])("announces stopped configuration on every alerts tab", async (tab) => {
+  state.status = { ...empty, licensed: false, channels: [teams] }
+  const container = await render(tab, false)
+  expect(container.textContent).toContain("Paused on Community")
+  expect(container.querySelector('a[href="/license"]')).not.toBeNull()
+})
+
+it.each([AlertsTab, ChannelsTab, WatchingTab, DeliveriesTab])("keeps the existing preview when alerts were never configured", async (tab) => {
+  state.status = { ...empty, licensed: false }
+  const container = await render(tab, false)
+  expect(container.textContent).not.toContain("Paused on Community")
+})

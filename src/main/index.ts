@@ -1,4 +1,4 @@
-import { CommunityLimitError, withPlanError } from "../shared/plan-errors"
+import { CommunityChoicePendingError, CommunityLimitError, withPlanError } from "../shared/plan-errors"
 import { licenseBuyUrl, licenseCheckoutUrl, trialCheckoutUrl } from "./license/buy-url"
 import { requestTrialKey } from "./license/trial"
 import { assertArchiveFileSize, importConfirmedArchive, reviewArchive } from "./backup/archive"
@@ -26,6 +26,7 @@ import { AuthManager, SignInRequiredError } from "./auth/msal"
 import { BackupEngine, verifyStorageAccess, type BackupJob } from "./backup/engine"
 import { BackupScheduler, reportsResult, runUnattended, scheduledResult } from "./backup/scheduler"
 import { runTrayBackups } from "./backup/tray-backup"
+import { announceCommunityChoice, prepareScheduledCoverage, scheduledCoverage } from "./backup/schedule-prepare"
 import { prepareScheduleInput } from "./backup/schedule-input"
 import { BackgroundLaunch } from "./backup/background-launch"
 import { BackupScopes } from "./backup/scopes"
@@ -247,7 +248,17 @@ async function bootstrap(): Promise<void> {
   // Every tenant is licensed on its own: its first use activates it with the licensing
   // service (see license/service.ts), later uses verify the cached token offline.
   const signedInTenants = () => auth.accounts().map((account) => account.tenantId)
-  const pushLicense = () => mainWindow?.webContents.send("license:changed", license.status(signedInTenants()))
+  const currentLicenseStatus = () => {
+    const status = license.status(signedInTenants())
+    announceCommunityChoice(appStore, Boolean(status.communityChoicePendingTenantIds?.length), () => {
+      if (Notification.isSupported()) new Notification({ title: "Choose your Community tenant", body: "Open TenuVault and choose which tenant continues on Community to resume its backups." }).show()
+    })
+    return status
+  }
+  const pushLicense = () => {
+    const status = currentLicenseStatus()
+    mainWindow?.webContents.send("license:changed", status)
+  }
   const license = new LicenseService({
     store: appStore,
     // Without OS encryption the key is kept in memory only, never written in plaintext.
@@ -262,7 +273,9 @@ async function bootstrap(): Promise<void> {
     // Keep licensing outside the local API/storage bridge below.
     fetch: chromiumFetch,
     onChange: pushLicense,
+    connectedTenantIds: () => connectedTenantIds(),
   })
+  const prepareCoverage = prepareScheduledCoverage(license)
   // License check of the fetch bridge and the backup engine; a rollback in progress may use a
   // tenant whose license ended, and its backup keeps every older backup (features/recovery.ts).
   // tokenFor and preferences are declared below; they are only called once the app runs.
@@ -723,11 +736,9 @@ async function bootstrap(): Promise<void> {
     // A tenant the license does not cover is not backed up. Its audit log lives in the
     // tenant's own storage, which is closed without a license too, so the refusal is
     // recorded in the refusal log on this device, notified and shown on the schedule.
-    // The plan must also include how the backup runs: daily schedules and Azure storage are paid.
-    const daily = trigger === "scheduled" && scheduler.list().some((s) => s.tenantId.toLowerCase() === tenantId.toLowerCase() && s.frequency === "daily")
+    // Scheduled downgrades are reconciled before a slot; Azure writes still require Pro.
     const requirePlan = async (id: string) => {
       const plan = await license.requireEntitlement(id)
-      if (daily && !allows(plan, "dailySchedule")) throw new PlanRequired("dailySchedule")
       if (!isLocalAccount(profile.storageAccountName) && !allows(plan, "azureStorage")) throw new PlanRequired("azureStorage")
     }
     const refused = await refuseUnlicensedBackup(
@@ -811,6 +822,11 @@ async function bootstrap(): Promise<void> {
   const scheduler = new BackupScheduler(appStore, (tenantId, afterFailure, slot) => runScheduledBackup(tenantId, "scheduled", afterFailure, slot), () => {
     mainWindow?.webContents.send("schedules:changed", scheduler.list())
     tray.refresh()
+  }, () => new Date(), (tenantId) => scheduledCoverage(license, tenantId, tenantProfile(tenantId)), async () => { await prepareCoverage(scheduler); pushLicense() }, (tenantId) => {
+    if (Notification.isSupported()) new Notification({ title: "Backup schedule now weekly", body: `${tenantProfile(tenantId)?.name ?? "This tenant"}: Runs weekly on Community (daily needs Pro).` }).show()
+  }, (tenantId, reason) => {
+    if (reason === "choice") { pushLicense(); return }
+    if (Notification.isSupported()) new Notification({ title: "Paused: Azure storage needs Pro", body: `${tenantProfile(tenantId)?.name ?? "This tenant"}: Open TenuVault to switch to local backups. Existing Azure backups are kept.` }).show()
   })
 
   const tray = new AppTray({
@@ -1069,7 +1085,8 @@ async function bootstrap(): Promise<void> {
       const connected = connectedTenantIds().some((id) => id.toLowerCase() === tenantId.toLowerCase())
       if (!connected) await auth.signOut(tenantId)
       const message = `The tenant was not added. ${error instanceof Error ? error.message : String(error)}`
-      if (error instanceof CommunityLimitError) throw new CommunityLimitError(error.tenantId, message)
+      if (error instanceof CommunityChoicePendingError) throw error
+      if (error instanceof CommunityLimitError) throw new CommunityLimitError(error.tenantId, message, connected)
       throw new Error(message)
     } finally {
       pushLicense()
@@ -1122,7 +1139,11 @@ async function bootstrap(): Promise<void> {
       pushLicense()
     }
   }
-  handleTrusted("license:status", () => license.status(signedInTenants()))
+  handleTrusted("license:chooseCommunity", (_event, tenantId: unknown) => withStatus(async () => {
+    if (!isTenantId(tenantId)) throw new Error("Unknown tenant.")
+    license.chooseCommunity(tenantId)
+  }))
+  handleTrusted("license:status", currentLicenseStatus)
   handleTrusted("license:refresh", () => withStatus(() => license.refreshAll()))
   handleTrusted("license:setKey", (_event, key: unknown) => {
     if (typeof key !== "string" || key.length > 256) throw new Error("Enter a valid license key.")

@@ -24,6 +24,9 @@ export function requiredFeatures(pathname: string, body: Record<string, unknown>
       if (isBulk(body)) features.push("bulkActions")
       return features
     }
+    case "/api/tenant-metadata/save":
+    case "/api/tenant-metadata/delete":
+      return typeof body.storageAccountName === "string" && !isLocalAccount(body.storageAccountName) ? ["azureStorage"] : []
     case "/api/detect-drifts":
       return isBulk(body) ? ["bulkActions"] : []
     case "/api/restore-backup": {
@@ -129,11 +132,12 @@ export function planGuard(planOf: (tenantId: string) => Promise<Plan | null>) {
     // A new CIS assessment reads the tenant against licensed content, so it needs a current plan
     // here and is never left to the request; saved results stay readable and exportable.
     const newCisAssessment = pathname === "/api/frameworks" && (body.action === "assess" || body.action === "assess-start") && typeof body.frameworkId === "string" && CIS_FRAMEWORKS.has(body.frameworkId)
+    const metadataWrite = pathname === "/api/tenant-metadata/save" || pathname === "/api/tenant-metadata/delete"
     for (const tenantId of [body.tenantId, ...targets]) {
       const plan = await planOf(tenantId)
       // Single tenant calls leave an unusable tenant to the request itself. A bulk run must be
       // refused as a whole before any work starts, so an unusable tenant refuses it here.
-      if (tenantId === body.tenantId && !plan && !newCisAssessment && !((pathname === "/api/backup/start" || pathname === "/api/detect-drifts") && isBulk(body))) return null
+      if (tenantId === body.tenantId && !plan && !newCisAssessment && !metadataWrite && !((pathname === "/api/backup/start" || pathname === "/api/detect-drifts") && isBulk(body))) return null
       const missing = features.find((feature) => !plan || !allows(plan, feature))
       if (missing) return Response.json({ error: upgradeMessage(missing), upgrade: missing }, { status: 402 })
     }

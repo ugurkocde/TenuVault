@@ -354,3 +354,24 @@ describe("planGuard tenant IDs", () => {
     }
   })
 })
+
+it.each(["save", "delete"])("blocks Community Azure metadata %s before its handler while leaving reads and local writes allowed", async (action) => {
+  const write = vi.fn(async () => Response.json({ saved: true }))
+  const read = vi.fn(async () => Response.json({ exists: true }))
+  const routes = { [`/api/tenant-metadata/${action}`]: { POST: write }, "/api/tenant-metadata/load": { POST: read }, "/api/tenant-metadata/check": { POST: read } }
+  const request = (path: string, account = "stcontoso") => new Request(`http://tenuvault.internal${path}`, { method: "POST", body: JSON.stringify({ tenantId: TENANT, storageAccountName: account }) })
+  for (const plan of ["community", null] as const) {
+    const host = new ApiHost({ routes, guard: planGuard(async () => plan) })
+    const blocked = await host.dispatch(request(`/api/tenant-metadata/${action}`))
+    expect(blocked.status).toBe(402)
+    expect(await blocked.json()).toMatchObject({ upgrade: "azureStorage" })
+  }
+  expect(write).not.toHaveBeenCalled()
+  const community = new ApiHost({ routes, guard: planGuard(async () => "community") })
+  for (const path of ["load", "check"]) expect((await community.dispatch(request(`/api/tenant-metadata/${path}`))).status).toBe(200)
+  expect(read).toHaveBeenCalledTimes(2)
+  expect((await community.dispatch(request(`/api/tenant-metadata/${action}`, localStorageAccountName(TENANT)))).status).toBe(200)
+  const pro = new ApiHost({ routes, guard: planGuard(async () => "pro") })
+  expect((await pro.dispatch(request(`/api/tenant-metadata/${action}`))).status).toBe(200)
+  expect(write).toHaveBeenCalledTimes(2)
+})

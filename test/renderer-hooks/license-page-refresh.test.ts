@@ -112,3 +112,16 @@ describe("License page license check on open", () => {
     expect(container.textContent).toContain("The licensing service could not be reached. Tenants that are already active keep working")
   })
 })
+
+it.each([
+  ["coverage ended", true, null, true],
+  ["paid verification failed", false, "pro", false],
+  ["choice pending", true, null, false],
+  ["never covered", undefined, null, false],
+] as const)("uses the ended-coverage sentence only for %s", async (_label, coverageEnded, plan, shown) => {
+  state.status = { ...proStatus, tenants: [{ tenantId: "contoso", signedIn: true, entitled: false, activated: plan === "pro", coverageEnded, plan: null, source: plan === "pro" ? "key" : null, tenants: null, expiresAt: null, validUntil: null, shared: null, shareNeedsSignIn: false, displayKey: null, message: null }], communityChoicePendingTenantIds: _label === "choice pending" ? ["contoso", "fabrikam"] : [] }
+  state.refreshLicenses.mockResolvedValue(state.status)
+  const { container } = renderPage()
+  await flush()
+  expect(container.textContent?.includes("Backups of this tenant are kept. Add a license to use it again.")).toBe(shown)
+})

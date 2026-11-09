@@ -33,14 +33,14 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-function render(status: LicenseStatus) {
+function render(status: LicenseStatus, existingTenant = false) {
   state.status = status
   const container = document.createElement("div")
   document.body.appendChild(container)
   const root = createRoot(container)
   roots.push(root)
   act(() => root.render(createElement(MemoryRouter, null, createElement(PlanDialogs))))
-  act(() => { showCommunityLimitError(new CommunityLimitError("66666666-7777-4888-8999-aaaaaaaaaaaa", "Community covers one tenant.")) })
+  act(() => { showCommunityLimitError(new CommunityLimitError("66666666-7777-4888-8999-aaaaaaaaaaaa", "Community covers one tenant.", existingTenant)) })
   return [...document.body.querySelectorAll("button, a")].map((item) => item.textContent?.trim())
 }
 
@@ -72,4 +72,16 @@ describe("second tenant dialog", () => {
     await act(async () => { plans.click() })
     expect(state.open).toHaveBeenCalledWith("buy", { source: "second-tenant" })
   })
+})
+
+it("keeps the onboarding refusal distinct from an existing locked tenant", () => {
+  render(community)
+  expect(document.body.textContent).toContain("The tenant was not added.")
+  expect(document.body.textContent).not.toContain("Backups of this tenant are kept")
+})
+
+it("explains preservation for an existing locked tenant", () => {
+  render(community, true)
+  expect(document.body.textContent).toContain("Backups of this tenant are kept. Add a license to use it again.")
+  expect(document.body.textContent).not.toContain("The tenant was not added.")
 })

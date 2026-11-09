@@ -20,7 +20,7 @@ import { RecoveryKeyImport } from "../components/RecoveryKeyImport"
 import { RecoveryKeyNotice } from "../components/RecoveryKeyNotice"
 import { bridge } from "../lib/bridge"
 import { localTenantIds, useBackupSettings, useLocalInventoryProblems } from "../lib/local-inventory"
-import { storageResources, type StorageChoice } from "../lib/storage"
+import { changeTenantStorage, savedAzureStorage, LOCAL_SWITCH_CONFIRMATION, type StorageChoice } from "../lib/storage"
 import { toast } from "../lib/toast"
 import { tenantPlan, useLicense } from "../lib/license"
 import { anyTenantIncludes } from "../lib/selected-plan"
@@ -404,6 +404,7 @@ export function ProxySignInSettings() {
 }
 
 function TenantSettings({ active }: { active: boolean }) {
+  const { confirm, confirmDialog } = useConfirm()
   const tenants = useTenants()
   const { updateTenant } = useTenantOperations()
   const [accounts, setAccounts] = useState<SignedInAccount[]>([])
@@ -430,13 +431,10 @@ function TenantSettings({ active }: { active: boolean }) {
     }
   }
 
-  const saveStorage = () => {
+  const saveStorage = async () => {
     if (!editing?.credentials || !choice) return
-    const current = editing.resources
-    const storage = storageResources(editing.credentials.tenantId, choice)
-    updateTenant(editing.id, {
-      resources: { ...current, ...storage, subscriptionName: current?.subscriptionName ?? "", automationAccountName: "" },
-    })
+    if (choice.kind === "local" && editing.resources?.storageAccountName && !editing.resources.storageAccountName.startsWith(LOCAL_STORAGE_PREFIX) && !await confirm(LOCAL_SWITCH_CONFIRMATION)) return
+    updateTenant(editing.id, changeTenantStorage(editing, choice))
     toast(`Backups for ${editing.name} now go to ${choice.kind === "local" ? "this device" : choice.storageAccountName}.`, "success")
     setStorageDraft(null)
     setEditing(null)
@@ -444,6 +442,7 @@ function TenantSettings({ active }: { active: boolean }) {
 
   return (
     <Card>
+      {confirmDialog}
       <CardHeader className="p-7 pb-4">
         <CardTitle className="flex items-center gap-3 text-xl font-medium">
           <span className="flex size-10 items-center justify-center rounded-full bg-secondary" aria-hidden="true"><KeyRound className="h-[18px] w-[18px]" /></span> Tenants
@@ -496,6 +495,7 @@ function TenantSettings({ active }: { active: boolean }) {
               tenantId={editing.credentials.tenantId}
               clientId={editing.credentials.appId}
               initial={currentChoice(editing)}
+              savedAzure={savedAzureStorage(editing)}
               initialDraft={storageDraft ?? undefined}
               onChange={setChoice}
               onDraftChange={setStorageDraft}

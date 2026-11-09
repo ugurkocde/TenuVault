@@ -18,6 +18,8 @@ TenuVault has three plans: Community, which is free, and the paid Pro and MSP pl
 
 Enter your email address on the **License** page or the welcome screen in TenuVault, or at [tenuvault.com/trial](https://tenuvault.com/trial). A Pro license key for 30 days arrives by email, usually within a minute. You need no payment card, and nothing is charged when the trial ends: the trial key stops working and TenuVault continues on Community. Each email address gets one trial; asking again sends the same key again.
 
+When the trial or paid coverage ends, saved daily schedules run weekly on Community and configured paid automation pauses. See [When paid coverage ends](#when-paid-coverage-ends) for the Azure storage choice and Community tenant picker.
+
 TenuVault reminds you in the app on day 20 and day 27 of the trial, with a **Buy Pro** button that opens the checkout. Unless you have bought a plan, you also get an email 5 days and 1 day before the trial ends, with a link to buy and a link to stop these emails. To keep Pro or move to MSP, buy a plan and enter the new key on the **License** page; see [Activate and manage your license](/licensing/manage/#after-your-trial).
 
 The trial covers two tenants, like Pro. To evaluate MSP with more tenants, the MSP checkout on [tenuvault.com/pricing](https://tenuvault.com/pricing) also offers a 30 day subscription trial that needs a card, or email [support@tenuvault.com](mailto:support@tenuvault.com).
@@ -97,7 +99,7 @@ If you lower the number of tenants on an MSP subscription, the tenants that were
 
 ## If a license ends
 
-When a subscription ends or a license is revoked, the licensing service refuses the next check and the affected tenant falls back to Community, provided no other tenant on that machine already uses the free plan. Your backups remain available.
+When a subscription ends or a license is revoked, the licensing service refuses the next check. An affected tenant can continue on Community if the free plan is available on that machine. When several connected tenants lack coverage and no Community tenant has been chosen, backups pause until the admin chooses which tenant continues on the free plan. You can decide later or add a license instead. Your backups are kept.
 
 If the licensing service is only unreachable, nothing changes: active tenants keep their plan offline for up to 14 days after their last successful check.
 
@@ -112,3 +114,19 @@ See [Activate and manage your license](/licensing/manage/) for how to turn shari
 * [Activate and manage your license](/licensing/manage/)
 * [Start TenuVault for the first time](/getting-started/first-launch/)
 * [Network connections and data flows](/security/data-flows/)
+
+## When paid coverage ends
+
+A saved daily schedule runs weekly on Community at its saved time. The weekday comes from the first slot after coverage ended. The daily schedule stays saved and resumes daily when Pro returns. You can pause and resume the saved schedule on Community. You can also change its saved time. Creating a daily schedule or changing a weekly schedule to daily needs Pro. TenuVault checks for renewed coverage in the background, including while the app is in the tray.
+
+Azure storage schedules pause with **Paused: Azure storage needs Pro**. Choose **Switch to weekly local backups** and confirm to save future backups on this computer. Your saved schedule stays unchanged. If backups were missed while paused, the most recent due slot is caught up under the normal retry rules. Missed weeks are not queued as separate backups. The Azure account settings are kept on this computer across restarts. Choose **Switch back to saved Azure storage**, or select the saved account in **Change storage**, to list or restore existing Azure backups. On Community, new backups pause again while Azure is selected. With Pro, Azure backups resume. Community cannot set up a new Azure account. Tenant profile edits stay on this computer while Azure storage needs Pro.
+
+An operating system notification announces the weekly fallback or a paused Azure schedule once. A pending Community choice also sends a notification asking you to open TenuVault and choose a tenant to resume backups.
+
+Configured alerts, scheduled health reviews and automatic change reports pause on Community. Their pages say **Paused on Community** and link to License. Their configuration stays saved.
+
+After coverage is known to have ended, if more than one connected tenant lacks coverage and Community has no tenant yet, choose which tenant continues on Community. Backups pause while the choice is pending. Tenants whose coverage cannot be checked are shown but cannot be chosen yet. Use **Retry** in the picker to check them again.
+
+The Community choice is final. Other tenants stay locked, and their backups are kept. Add a license to use them again. Fresh installations without coverage history still assign Community to the first tenant used.
+
+You can close the picker with **Decide later** without choosing. A notice and **Choose tenant** buttons let you return during the same session. The picker opens again after restarting the app. **Add a license instead** opens License so you can buy Pro or enter a key.

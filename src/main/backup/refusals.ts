@@ -1,3 +1,4 @@
+import { CommunityChoicePendingError } from "../../shared/plan-errors"
 import type { BackupRefusal } from "../../shared/ipc"
 import type { KeyValueStore } from "../storage/secure-store"
 
@@ -74,6 +75,7 @@ export async function refuseUnlicensedBackup(
     await guard.requireEntitlement(tenant.tenantId)
     return null
   } catch (error) {
+    if (error instanceof CommunityChoicePendingError) throw error
     const reason = error instanceof Error ? error.message : String(error)
     guard.log.record({ tenantId: tenant.tenantId, tenantName: tenant.name, trigger, reason })
     const message = `Not backed up: ${reason}`
