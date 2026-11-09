@@ -1,3 +1,4 @@
+import { CommunityChoiceBanner } from "./CommunityTenantPicker"
 import { useEffect, useRef, useState, type ComponentType, type ReactNode, type RefObject } from "react"
 import { Link, Outlet, useLocation } from "react-router-dom"
 import {
@@ -218,7 +219,7 @@ function LicenseBanner() {
       setDismissing(false)
     }
   }
-  if (!status) return null
+  if (!status || (status.communityChoicePendingTenantIds?.length ?? 0) > 1) return null
   if (isUnlicensed(status) && unlicensedTenants(status).length === 0) {
     // The start pages only: the all-tenants overview, or the dashboard for a single tenant.
     const startPage = pathname === "/portal/overview" || pathname === "/portal/dashboard"
@@ -474,6 +475,7 @@ export function DesktopLayout() {
       )}
 
       <div className={focus ? undefined : "pl-64"}>
+        <CommunityChoiceBanner />
         {!focus && <LicenseBanner />}
         {!focus && <SignInBanner />}
         {[/portal\/backup/, /portal\/drift/, /portal\/audit/, /portal\/(governance|changes|operations|reports|alerts|sync)/].some(pattern => pattern.test(pathname)) && <TenantAccessNotice />}

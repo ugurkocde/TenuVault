@@ -194,7 +194,7 @@ try {
       const M = globalThis.__marketingMock
       M.license = { ...M.license, hasKey: true, keyState: "failed", keyMessage: null, message: null, offline: false, plan: null, trial: false, tenantLimit: null, communityTenantId: ${pending ? "null" : JSON.stringify(id)}, communityChoiceTenantIds: ${pending ? JSON.stringify(TENANTS.map(t => t.guid)) : "[]"}, communityChoicePendingTenantIds: ${pending ? JSON.stringify(TENANTS.map(t => t.guid)) : "[]"}, tenants: M.license.tenants.map(t => ({ ...t, entitled: false, plan: t.tenantId === ${JSON.stringify(id)} && !${pending} ? "community" : null, message: null, coverageEnded: true })) }
       if (${unchecked}) { M.license.communityChoiceTenantIds = [${JSON.stringify(TENANTS[0].guid)}]; M.license.tenants[1].coverageEnded = false }
-      M.schedules.forEach(s => { s.fallbackWeekday = 1; s.pausedReason = s.tenantId === ${JSON.stringify(TENANTS[1].guid)} ? "Paused: Azure storage needs Pro" : undefined; s.nextRunAt = s.pausedReason ? null : (() => { const next = new Date(); next.setDate(next.getDate() + ((1 - next.getDay() + 6) % 7) + 1); next.setHours(2, 0, 0, 0); return next.toISOString() })() })
+      M.schedules.forEach(s => { s.fallbackWeekday = ${pending ? "undefined" : "1"}; s.pausedReason = ${pending} ? "Paused: choose a Community tenant or add a license" : s.tenantId === ${JSON.stringify(TENANTS[1].guid)} ? "Paused: Azure storage needs Pro" : undefined; s.nextRunAt = s.pausedReason ? null : (() => { const next = new Date(); next.setDate(next.getDate() + ((1 - next.getDay() + 6) % 7) + 1); next.setHours(2, 0, 0, 0); return next.toISOString() })() })
     })()`)
     await evaluate(`location.reload()`)
     await sleep(1500)
@@ -206,6 +206,12 @@ try {
   await community(TENANTS[0].guid, true, true)
   await assertText("Coverage could not be checked")
   await screenshot("community-tenant-unchecked")
+  await evaluate(`[...document.querySelectorAll('[role="dialog"] button')].find(button => button.textContent === 'Decide later').click()`)
+  await go("#/portal/overview", "Choose which tenant continues on Community. Backups are paused until you choose.")
+  await sleep(600)
+  if (await evaluate(`Boolean(document.querySelector('[role="dialog"]'))`)) throw new Error("Community choice reopened after dismissal")
+  await scrollAll(0)
+  await screenshot("community-choice-notice")
   await community(TENANTS[0].guid)
   await go("#/portal/backup?tab=schedule", "Runs weekly on Community (daily needs Pro)")
   await scrollAll(280)

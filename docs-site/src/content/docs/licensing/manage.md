@@ -168,4 +168,8 @@ An operating system notification announces the weekly fallback or a paused Azure
 
 Configured alerts, scheduled health reviews and automatic change reports pause on Community. Their pages say **Paused on Community** and link to License. Their configuration stays saved.
 
-After coverage is known to have ended, if more than one connected tenant lacks coverage and Community has no tenant yet, choose which tenant continues on Community. Backups pause while the choice is pending. Tenants whose coverage cannot be checked are shown but cannot be chosen yet. Fresh installations without coverage history still assign Community to the first tenant used. Other tenants stay locked: backups of those tenants are kept. Add a license to use them again.
+After coverage is known to have ended, if more than one connected tenant lacks coverage and Community has no tenant yet, choose which tenant continues on Community. Backups pause while the choice is pending. Tenants whose coverage cannot be checked are shown but cannot be chosen yet. Use **Retry** in the picker to check them again.
+
+The Community choice is final. Other tenants stay locked, and their backups are kept. Add a license to use them again. Fresh installations without coverage history still assign Community to the first tenant used.
+
+You can close the picker with **Decide later** without choosing. A notice and **Choose tenant** buttons let you return during the same session. The picker opens again after restarting the app. **Add a license instead** opens License so you can buy Pro or enter a key.

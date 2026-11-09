@@ -1,3 +1,4 @@
+import { CommunityTenantChoiceButton } from "../components/CommunityTenantPicker"
 import { useEffect, useRef, useState, type MouseEvent, type Ref } from "react"
 import { Link, useLocation } from "react-router-dom"
 import {
@@ -573,7 +574,7 @@ export default function LicensePage() {
       {tenantRows.length > 0 && (
         <Card>
           <CardHeader className="p-7 pb-4">
-            <CardTitle className="text-xl font-medium">Tenants</CardTitle>
+            <div className="flex flex-wrap items-center justify-between gap-3"><CardTitle className="text-xl font-medium">Tenants</CardTitle><CommunityTenantChoiceButton /></div>
             <CardDescription>
               The license state of every tenant on this machine. Removing a tenant from TenuVault frees its place on the
               license.
