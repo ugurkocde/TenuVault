@@ -2022,10 +2022,10 @@ describe("Community choice after coverage ends", () => {
     expect(license.communityChoices()).toEqual([])
     expect(license.coverageEndedAt(TENANT)).toBe(end * 1000)
     vi.setSystemTime(T0 + 2 * 86400_000 + 1)
-    expect(license.status([TENANT, TENANT_B]).communityChoiceTenantIds).toEqual([TENANT, TENANT_B])
+    expect(license.status([TENANT, TENANT_B]).communityChoiceTenantIds).toEqual(trial ? [TENANT, TENANT_B] : [])
     answer = () => denied("expired")
     await Promise.all([TENANT, TENANT_B].map(async (id) => {
-      await expect(license.requireEntitlement(id)).rejects.toThrow("Choose which tenant")
+      await expect(license.requireEntitlement(id)).rejects.toThrow(/Choose which tenant|Coverage is still being checked/)
     }))
     expect(store.get("license.communityTenant")).toBeNull()
     await scheduler.tick()
@@ -2053,4 +2053,106 @@ describe("Community choice after coverage ends", () => {
 it("explains that a locked tenant keeps its backups even without a server message", () => {
   const license = service()
   expect(renderLicensePage(license.status([TENANT]))).toContain("Backups of this tenant are kept. Add a license to use it again.")
+})
+
+describe("Community eligibility verification", () => {
+  beforeEach(() => { vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(T0) })
+  afterEach(() => vi.useRealTimers())
+
+  function expiredVerification(keyExpired = false) {
+    const now = Math.floor(T0 / 1000)
+    store.set("license.state", JSON.stringify({ key: "TEST-LICENSE-KEY", activations: {
+      [TENANT]: { activationId: "act-1", token: token({ v: 2, keyExp: now + (keyExpired ? 1 : 30) * 86400, exp: now + 86400 }) },
+      [TENANT_B]: { activationId: "act-2", token: token({ tenantId: TENANT_B, act: "act-2", v: 2, keyExp: now + (keyExpired ? 1 : 30) * 86400, exp: now + 86400 }) },
+    } }))
+    vi.setSystemTime(T0 + 2 * DAY)
+  }
+
+  it.each([false, true])("does not offer or grant Community offline (saved key expired: %s)", async (keyExpired) => {
+    expiredVerification(keyExpired)
+    const license = service({ connectedTenantIds: () => [TENANT, TENANT_B] })
+    answer = async () => { throw new TypeError("fetch failed") }
+    expect(license.communityChoices()).toEqual([])
+    await expect(license.requireEntitlement(TENANT)).rejects.toThrow()
+    expect(license.status([TENANT, TENANT_B]).communityChoiceTenantIds).toEqual([])
+    expect(() => license.chooseCommunity(TENANT)).toThrow("Choose a connected tenant")
+    expect(store.get("license.communityTenant")).toBeNull()
+  })
+
+  it("assesses both tenants before claiming Community and persists confirmed refusals", async () => {
+    expiredVerification()
+    const connectedTenantIds = () => [TENANT, TENANT_B]
+    let license = service({ connectedTenantIds })
+    answer = () => denied("revoked")
+    await expect(license.requireEntitlement(TENANT)).rejects.toThrow("Coverage is still being checked")
+    expect(store.get("license.communityTenant")).toBeNull()
+    expect(license.communityChoices()).toEqual([])
+    license = service({ connectedTenantIds })
+    await expect(license.requireEntitlement(TENANT_B)).rejects.toThrow("Choose which tenant")
+    expect(license.communityChoices()).toEqual([TENANT, TENANT_B])
+    expect(store.get("license.communityTenant")).toBeNull()
+    const confirmedMarkers = store.get("license.communityEligibility")!
+    answer = (call) => granted(`renewed-${call.body.tenantId}`, {}, { tenantId: call.body.tenantId, v: 2, keyExp: Math.floor(Date.now() / 1000) + 30 * 86400, exp: Math.floor(Date.now() / 1000) + 86400 })
+    await license.retry([TENANT, TENANT_B])
+    expect(license.plan(TENANT)).toBe("pro")
+    expect(license.plan(TENANT_B)).toBe("pro")
+    vi.setSystemTime(T0 + 4 * DAY)
+    expect(license.communityChoices()).toEqual([])
+    store.set("license.communityEligibility", confirmedMarkers)
+    expect(service({ connectedTenantIds }).communityChoices()).toEqual([])
+  })
+
+  it("does not reuse a confirmed refusal after the saved key changes", async () => {
+    expiredVerification()
+    const connectedTenantIds = () => [TENANT, TENANT_B]
+    const license = service({ connectedTenantIds })
+    answer = () => denied("revoked")
+    await license.retry([TENANT, TENANT_B])
+    expect(license.communityChoices()).toEqual([TENANT, TENANT_B])
+    const state = JSON.parse(store.get("license.state")!)
+    store.set("license.state", JSON.stringify({ ...state, key: "OTHER-LICENSE-KEY" }))
+    expect(service({ connectedTenantIds }).communityChoices()).toEqual([])
+  })
+
+  it.each(["invalid", "[]", '{"bad":"none"}', `{"${TENANT}":42}`, `{"${TENANT}":"invalid"}`])("ignores malformed eligibility markers: %s", (markers) => {
+    expiredVerification()
+    store.set("license.communityEligibility", markers)
+    expect(service({ connectedTenantIds: () => [TENANT, TENANT_B] }).communityChoices()).toEqual([])
+  })
+
+  it("does not flush an unchanged coverage date from status reads", () => {
+    storeLicense(token({ v: 2, keyExp: Math.floor(T0 / 1000) + 86400 }))
+    const license = service()
+    const writes = vi.spyOn(store, "set")
+    license.status([TENANT])
+    license.coverageEndedAt(TENANT)
+    license.status([TENANT])
+    expect(writes.mock.calls.filter(([key]) => key.startsWith("license.coverageEnd."))).toHaveLength(1)
+  })
+
+  it("keeps coverage dates in memory if persistence fails and a refresh removes the token", async () => {
+    const end = Math.floor(T0 / 1000) + 86400
+    storeLicense(token({ v: 2, keyExp: end }))
+    const license = service()
+    const set = store.set
+    vi.spyOn(store, "set").mockImplementation((key, value) => {
+      if (key.startsWith("license.coverageEnd.")) throw new Error("Write unavailable")
+      set(key, value)
+    })
+    expect(() => license.status([TENANT])).not.toThrow()
+    answer = () => denied("revoked")
+    await license.refreshAll()
+    expect(license.coverageEndedAt(TENANT)).toBe(end * 1000)
+    const get = store.get
+    vi.spyOn(store, "get").mockImplementation((key) => {
+      if (key.startsWith("license.coverageEnd.")) throw new Error("Read unavailable")
+      return get(key)
+    })
+    expect(license.coverageEndedAt(TENANT)).toBe(end * 1000)
+  })
+
+  it("ignores a non-finite saved coverage date", () => {
+    store.set(`license.coverageEnd.${TENANT}`, "Infinity")
+    expect(service().coverageEndedAt(TENANT)).toBeUndefined()
+  })
 })

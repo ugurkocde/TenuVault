@@ -73,3 +73,18 @@ describe("schedule downgrade", () => {
     expect(run).toHaveBeenCalledTimes(1)
   })
 })
+
+it("starts weekly fallback promptly when coverage is revoked before its saved expiry", async () => {
+  vi.useFakeTimers()
+  vi.setSystemTime(new Date(2026, 10, 8, 12))
+  let plan: Plan = "pro"
+  const run = vi.fn(async () => ({ status: "Completed" as const, message: "Done" }))
+  const scheduler = new BackupScheduler(memoryStore(), run, undefined, undefined, () => ({ plan, azure: false, endedAt: new Date(2026, 10, 23, 12).getTime() }))
+  scheduler.set({ tenantId: "contoso", enabled: true, frequency: "daily", time: "02:00" })
+  vi.setSystemTime(new Date(2026, 10, 9, 1))
+  plan = "community"
+  expect(scheduler.list()[0]?.fallbackWeekday).toBe(1)
+  vi.setSystemTime(new Date(2026, 10, 9, 2))
+  await scheduler.tick()
+  expect(run).toHaveBeenCalledTimes(1)
+})

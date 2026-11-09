@@ -282,7 +282,8 @@ export class BackupScheduler {
   }
 
   private firstFallbackSlot(schedule: BackupSchedule, endedAt?: number): Date {
-    const reference = new Date(Math.max(endedAt ?? this.now().getTime(), Date.parse(schedule.since)))
+    const now = this.now().getTime()
+    const reference = new Date(Math.max(Math.min(endedAt ?? now, now), Date.parse(schedule.since)))
     const slot = this.slotOn({ ...schedule, fallbackWeekday: undefined }, reference)
     if (slot <= reference) slot.setDate(slot.getDate() + 1)
     return slot
