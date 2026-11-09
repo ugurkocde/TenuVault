@@ -200,3 +200,15 @@ it('refuses a sealed envelope over the backup size limit at the cap, as an appli
   expect(isLegacySealedError(failure)).toBe(false)
   expect(big.pulled()).toBeLessThan(40)
 })
+
+it('refuses a sealed envelope over the limit that arrives as one chunk, before any key lookup', async () => {
+  registerStorageToken('one-chunk-token', tenant)
+  const envelope = new Uint8Array(40 * 1024 * 1024)
+  envelope.set(new TextEncoder().encode('TVAZ1\n'))
+  let lookups = 0
+  const body = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(envelope); controller.close() } })
+  const reader = legacyAzureReader(async () => new Response(body), () => { lookups++; return [master] })
+  const failure = await reader(url, { headers: { Authorization: 'Bearer one-chunk-token' } }).catch((error: unknown) => error)
+  expect(failure).toBeInstanceOf(OversizedSealedError)
+  expect(lookups).toBe(0)
+})

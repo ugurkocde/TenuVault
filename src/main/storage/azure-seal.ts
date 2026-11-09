@@ -86,6 +86,11 @@ function replay(prefix: Uint8Array, done: boolean, stream: ReadableStreamDefault
 async function readSealed(prefix: Uint8Array, done: boolean, stream: ReadableStreamDefaultReader<Uint8Array>): Promise<Buffer> {
   const chunks = [prefix]
   let total = prefix.byteLength
+  // The first chunk alone can already be over the limit.
+  if (total > MAX_BACKUP_ARCHIVE_BYTES) {
+    try { await stream.cancel() } catch { /* The refusal is the result. */ }
+    throw new OversizedSealedError()
+  }
   for (let ended = done; !ended;) {
     const { done: last, value } = await stream.read()
     ended = last
@@ -121,7 +126,7 @@ export function legacyAzureReader(fetchImpl: typeof fetch, keys: () => Buffer[])
     const stream = response.body.getReader()
     const prefix = await peek(stream, MAGIC.length)
     const headers = new Headers(response.headers); headers.delete('content-length'); headers.delete('content-encoding')
-    if (!isLegacySealed(Buffer.from(prefix.bytes))) return new Response(replay(prefix.bytes, prefix.done, stream), { status: response.status, statusText: response.statusText, headers })
+    if (!isLegacySealed(Buffer.from(prefix.bytes.subarray(0, MAGIC.length)))) return new Response(replay(prefix.bytes, prefix.done, stream), { status: response.status, statusText: response.statusText, headers })
     const raw = await readSealed(prefix.bytes, prefix.done, stream)
     const bearer = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).get('authorization')?.replace(/^Bearer /i, '') ?? ''
     const context = tokens.get(digest(bearer))
