@@ -56,11 +56,13 @@ describe("tenant trials", () => {
     expect(license.status([]).tenantTrialsEnabled).toBe(false)
   })
   it("leaves existing tenants on Community until opt-in", async () => {
+    store.set("license.communityTenant", tenant)
     const license = service([tenant])
     await license.checkNewTenant(tenant)
     expect(calls.some(c => c.action === "start_trial")).toBe(false)
     await license.startTenantTrial(tenant)
     expect(calls.find(c => c.action === "start_trial")?.source).toBe("opt-in")
+    expect(license.status([tenant]).communityTenantId).toBeNull()
   })
   it("does not start with a key or while disabled", async () => {
     enabled = false

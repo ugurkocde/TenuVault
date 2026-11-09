@@ -832,6 +832,7 @@ export class LicenseService {
       throw new Error(this.problemOf(tenantId, data.token, data.activationId))
     }
     this.message = null
+    if (source === "trial" && this.options.store.get(COMMUNITY_KEY) === tenantId) this.options.store.delete(COMMUNITY_KEY)
     if (source === "key") {
       delete this.state.keyFailure
       const payload = decodeToken(data.token, this.publicKeys)

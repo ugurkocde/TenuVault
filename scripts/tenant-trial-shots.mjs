@@ -1,4 +1,4 @@
-/** Capture downgrade screens from the built app with fictional data and swapped IPC handlers. */
+/** Capture tenant trial screens from the built app with fictional data and swapped IPC handlers. */
 import { spawn } from "node:child_process"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
