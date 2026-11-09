@@ -2049,3 +2049,8 @@ describe("Community choice after coverage ends", () => {
     expect(license.coverageEndedAt(TENANT)).toBeUndefined()
   })
 })
+
+it("explains that a locked tenant keeps its backups even without a server message", () => {
+  const license = service()
+  expect(renderLicensePage(license.status([TENANT]))).toContain("Backups of this tenant are kept. Add a license to use it again.")
+})

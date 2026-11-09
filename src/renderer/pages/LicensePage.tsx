@@ -272,6 +272,7 @@ function TenantRow({
         </p>
       )}
       {!tenant.entitled && tenant.message && <p className="text-xs text-orange-700">{tenant.message}</p>}
+      {!tenant.entitled && tenant.plan !== "community" && tenant.signedIn && <p className="text-xs text-gray-600">Backups of this tenant are kept. Add a license to use it again.</p>}
       {keyHolder && (
         <div className="rounded-2xl bg-gray-50 p-4">
           <label className="flex items-center gap-2 text-sm text-gray-900">

@@ -192,7 +192,7 @@ try {
   const community = async (id, pending = false) => {
     await main.evaluate(`(() => {
       const M = globalThis.__marketingMock
-      M.license = { ...M.license, hasKey: true, keyState: "failed", keyMessage: null, plan: null, trial: false, tenantLimit: null, communityTenantId: ${pending ? "null" : JSON.stringify(id)}, communityChoiceTenantIds: ${pending ? JSON.stringify(TENANTS.map(t => t.guid)) : "[]"}, tenants: M.license.tenants.map(t => ({ ...t, entitled: false, plan: t.tenantId === ${JSON.stringify(id)} && !${pending} ? "community" : null, message: t.tenantId === ${JSON.stringify(id)} && !${pending} ? null : "Backups of this tenant are kept. Add a license to use it again." })) }
+      M.license = { ...M.license, hasKey: true, keyState: "failed", keyMessage: null, plan: null, trial: false, tenantLimit: null, communityTenantId: ${pending ? "null" : JSON.stringify(id)}, communityChoiceTenantIds: ${pending ? JSON.stringify(TENANTS.map(t => t.guid)) : "[]"}, tenants: M.license.tenants.map(t => ({ ...t, entitled: false, plan: t.tenantId === ${JSON.stringify(id)} && !${pending} ? "community" : null, message: null })) }
       M.schedules.forEach(s => { s.fallbackWeekday = 1; s.pausedReason = s.tenantId === ${JSON.stringify(TENANTS[1].guid)} ? "Paused: Azure storage needs Pro" : undefined; s.nextRunAt = s.pausedReason ? null : (() => { const next = new Date(); next.setDate(next.getDate() + ((1 - next.getDay() + 6) % 7) + 1); next.setHours(2, 0, 0, 0); return next.toISOString() })() })
     })()`)
     await evaluate(`location.reload()`)
