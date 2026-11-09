@@ -55,6 +55,8 @@ export function saveRestoreApproval(record: RestoreApproval): void {
   const index = entries.findIndex(entry => entry.tenantId.toLowerCase() === record.tenantId.toLowerCase() && (entry.id === record.id || (entry.status === "justification-required" && record.status === "justification-required" && entry.step.method === record.step.method && entry.step.path === record.step.path && entry.step.body === record.step.body)))
   if (index < 0) entries.push(record)
   else entries[index] = record
+  // A finished request is never sent again, so it keeps only what the list shows, not request bodies that may hold secrets.
+  entries = entries.map(entry => terminal(entry) && (entry.step.body !== undefined || entry.remaining.length || Object.keys(entry.source).length) ? { ...entry, source: {}, step: { ...entry.step, body: undefined }, remaining: [] } : entry)
   while (entries.length > 200) {
     const oldest = entries.filter(terminal).sort((a, b) => Date.parse(a.submittedAt) - Date.parse(b.submittedAt))[0]
     if (!oldest) throw new Error("Approval storage is full. Dismiss finished requests before submitting more.")

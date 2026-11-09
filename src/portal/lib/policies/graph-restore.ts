@@ -640,12 +640,8 @@ export class Restorer {
     record = await this.refreshApproval(record)
     if (record.status !== "approved") throw new Error("This request is not approved")
     const type = typeForFolder(record.folder)!
-    if (record.action === "updated" && record.objectId && !record.fingerprint) {
-      const live = await this.current(type, record.objectId)
-      if (!live) throw new Error("The live object could not be fingerprinted. Retry when it can be read.")
-      record = { ...record, fingerprint: approvalFingerprint(live, record.assignments) }
-      saveRestoreApproval(record)
-    }
+    // Without a baseline from submission time, a live read now cannot show whether someone changed the object meanwhile.
+    if (record.action === "updated" && record.objectId && !record.fingerprint) throw new Error("TenuVault could not read this object when the request was sent, so it cannot check whether it changed since. Review it in Intune, then withdraw this request and restore again.")
     if (record.fingerprint && record.objectId) {
       const live = await this.current(type, record.objectId)
       if (!live || approvalFingerprint(live, record.assignments) !== record.fingerprint) {

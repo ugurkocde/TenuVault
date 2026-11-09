@@ -24,7 +24,7 @@ Multi Admin Approval only intercepts **changes**: creating, updating, assigning 
 * [Drift detection](/drift/), [change reports](/reports/), the [audit log](/audit-log/) and [alerts](/notifications/)
 * Framework coverage and CIS assessments
 
-Tenants that have no access policy for an area see no change at all, and the restore wizard shows no approval fields for them.
+Tenants that have no access policy at all see no change, and the restore wizard shows no approval fields for them. The wizard checks the tenant as a whole: when it has any access policy, the justification field appears even if the items you restore are not protected. Unprotected items are then restored directly; the justification is only used for protected ones.
 
 ## Which changes need approval
 
@@ -54,7 +54,7 @@ A restore in the same tenant, with **Create copies** or **Replace in place**, se
 
 When the tenant has an access policy, the **Review** step of the restore wizard shows a **Justification** field, prefilled with the number of items and the backup date. Edit it to say why you restore (up to 700 characters). Approvers see it in Intune. The field is required for the restore to start.
 
-If TenuVault cannot read the access policies (your Intune role lacks the Multi Admin Approval read permission), the field does not appear. A protected item then ends as **Approval required**, and you can send it from **Waiting for approval** with a justification.
+The field does not appear when TenuVault cannot read the access policies (your Intune role lacks the Multi Admin Approval read permission), or when the tenant has none yet. The second case matters when you restore **Multi admin approval policies** themselves: creating the first access policy always needs approval. A protected item then ends as **Approval required**, nothing is sent yet, and you send it from **Waiting for approval** with a justification.
 
 ### 2. Run the restore
 
@@ -66,7 +66,7 @@ An admin in the access policy's approver group approves the request in the Intun
 
 ### 4. Complete it in TenuVault
 
-**Waiting for approval**, above the restore steps, lists the requests of this tenant with their status, the approver's note and the time left. It refreshes when you open it, when you select **Refresh**, and once a minute while it is open.
+**Waiting for approval**, above the restore steps, lists the restore requests sent from this TenuVault installation for this tenant, with their status, the approver's note and the time left. It does not list every request in the tenant: requests made in the admin center or from another computer are not shown. Complete a request on the installation that sent it, and keep that installation's data until the request is completed. The list refreshes when you open it, when you select **Refresh**, and once a minute while it is open.
 
 When a request shows **Approved, ready to complete**, select **Complete**. TenuVault then:
 
@@ -76,7 +76,12 @@ When a request shows **Approved, ready to complete**, select **Complete**. TenuV
 
 ### Assignments need a second round
 
-Intune treats assigning a policy as a separate protected change. With **Restore assignments** on, a protected policy therefore takes two rounds: first the policy itself, then its assignments. After you complete the first round, TenuVault sends the assignments for approval automatically with the same justification, and the list shows **Step 2 of 2**. Until the second round is completed, the policy exists in Intune without its restored assignments.
+Intune treats assigning a policy as a separate protected change. When the restore has assignments to write (**Restore assignments** on, and the backup holds assignments for the policy), a protected policy takes two rounds: first the policy itself, then its assignments. After you complete the first round, TenuVault sends the assignments for approval automatically with the same justification, and the list shows **Step 2 of 2**. A policy restored without assignments, such as an unassigned copy, has only one round.
+
+While the assignments round waits, the first round is already applied:
+
+* A **recreated** policy or a **copy** exists in Intune without its restored assignments, so it reaches no devices yet.
+* A **replaced** Settings Catalog policy already has the backed-up settings and keeps its current assignments. Devices in those current groups receive the restored settings before the assignments round is approved.
 
 ### Other actions
 
@@ -89,13 +94,17 @@ Intune treats assigning a policy as a separate protected change. With **Restore 
 
 | Message | Meaning | What to do |
 | --- | --- | --- |
-| Submitted for approval | The request is waiting in Intune. Nothing was written. | Ask an approver to approve it, then select **Complete**. |
+| Submitted for approval | The request is waiting in Intune. Nothing was written for this step. | Ask an approver to approve it, then select **Complete**. |
+| Earlier restore steps were written. Submitted for approval | The policy was already created or updated; its assignments (step 2) wait for approval. | Ask an approver to approve the assignments request, then select **Complete**. |
 | Multi Admin Approval protects *type* in this tenant. Nothing was changed. | Intune asked for approval, and the item was not sent (no justification). | Open **Waiting for approval**, enter a justification and select **Submit for approval**. |
 | Another admin already has a pending request for this object in Intune. | Intune allows one pending request per object. | Wait until that request is completed or withdrawn, then restore again. |
 | A different change to this object is already waiting for approval in Intune. Complete or withdraw it first. | You already sent another change for the same policy. | Complete or withdraw the earlier request. |
 | The live object changed after submission. Review it and start a fresh restore. | Someone changed the policy while the request waited. Completing would overwrite that change. | Review the policy, then start a new restore. |
 | Intune refused to complete this request. It may have expired, been changed, or been completed already. | Intune did not accept the completion. | Check the request in the Intune admin center. |
 | Only the original requester can complete or withdraw this request | You are signed in as a different admin. | Sign in as the admin shown as requester. |
+| TenuVault could not read this object when the request was sent, so it cannot check whether it changed since. | The live policy could not be read when the request was sent, so overwriting it now could undo someone else's change. | Review the policy in Intune, withdraw the request and restore again. |
+
+A **copy to other tenants** does not send approval requests. If a protected item is refused there, make the change in the target tenant's Intune admin center.
 
 ## Promotions, CIS remediation and baselines
 

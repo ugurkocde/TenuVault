@@ -158,6 +158,9 @@ it("refreshes rejected notes and server expiration without trusting payload", as
   const reader = new Restorer(graph, { mode: "copy", assignments: false, approvalContext: context })
   const refreshed = await reader.refreshApproval(record)
   expect(refreshed).toMatchObject({ status: "rejected", expiresAt: "2026-11-13T12:00:00Z", approverNote: "Wrong change window", step: record.step })
+  const stored = restoreApprovals(tenant).find(entry => entry.id === code)!
+  expect(stored).toMatchObject({ status: "rejected", label: record.label, source: {}, remaining: [] })
+  expect(stored.step.body).toBeUndefined()
 })
 
 it("ignores header names mentioned in successful object content", () => {
@@ -267,9 +270,10 @@ it("saves a pending continuation when the baseline read fails", async () => {
 
 it("preserves pending approval after an intermediate baseline read throws", async () => {
   let wrote = false
+  let requestStatus = "needsApproval"
   const graph: GraphCall = async (method, target): ReturnType<GraphCall> => {
     if (method === "GET") {
-      if (target.includes("operationApprovalRequests")) return { status: 200, body: { status: "needsApproval" } }
+      if (target.includes("operationApprovalRequests")) return { status: 200, body: { status: requestStatus } }
       if (wrote) throw new Error("Read unavailable")
       if (target.endsWith("/settings") || target.endsWith("/assignments")) return { status: 200, body: { value: [] } }
       return { status: 200, body: { ...snapshot, name: "Current" } }
@@ -281,6 +285,9 @@ it("preserves pending approval after an intermediate baseline read throws", asyn
   expect(outcome).toMatchObject({ approvalId: code, approvalState: "submitted", partial: true })
   expect(restoreApprovals(tenant).find(record => record.id === code)).toMatchObject({ status: "needsApproval" })
   expect(restoreApprovals(tenant).find(record => record.id === code)?.fingerprint).toBeUndefined()
+  requestStatus = "approved"
+  wrote = false
+  await expect(new Restorer(graph, { mode: "replace", assignments: true, approvalContext: context }).completeApproval(restoreApprovals(tenant).find(record => record.id === code)!)).rejects.toThrow("could not read this object when the request was sent")
 })
 it("passes the verified repair baseline to a protected remaining update", async () => {
   let assignmentAttempts = 0

@@ -115,7 +115,7 @@ Apps are the slowest type to back up. Because installer files are never download
 | Compliance notification templates | No | With their messages in every language |
 | Company Portal branding | Yes | With the logos and images |
 | Device clean-up rules | No | In a scheduled backup made by the [Backup Reader](/backups/backup-reader/), only with its optional device inventory permission; otherwise left out |
-| Multi admin approval policies | No | Restoring them always needs a second administrator's approval: the restore sends them to Intune for approval like other protected items. See [Multi Admin Approval and TenuVault](/restore/multi-admin-approval/). |
+| Multi admin approval policies | No | Restoring them always needs a second administrator's approval. In a tenant that has no access policy yet, the restore marks them **Approval required**; send them from **Waiting for approval** with a justification. See [Multi Admin Approval and TenuVault](/restore/multi-admin-approval/). |
 
 ## Entra Conditional Access (opt-in)
 
