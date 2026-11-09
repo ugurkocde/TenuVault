@@ -38,9 +38,13 @@ $Scope = "policies"
 $ExcludedFolders = ""
 $appOnlyExcluded = "DeviceCategories,DeviceCleanupRules"
 $graphRoleNames = @("DeviceManagementConfiguration.Read.All")
+$ChangeReport = "Off"
+$ChangeReportWithoutActors = $false
+$TenantName = ""
 $variableNames = @(
     "TenuVaultTenantId-$tenantKey", "TenuVaultStorageAccount-$tenantKey",
-    "TenuVaultScope-$tenantKey", "TenuVaultExcludedFolders-$tenantKey", "TenuVaultAppOnlyExcluded-$tenantKey"
+    "TenuVaultScope-$tenantKey", "TenuVaultExcludedFolders-$tenantKey", "TenuVaultAppOnlyExcluded-$tenantKey",
+    "TenuVaultChangeReport-$tenantKey", "TenuVaultChangeReportActors-$tenantKey", "TenuVaultTenantName-$tenantKey"
 )
 $legacyKeyVaultVariable = "TenuVaultKeyVault-$tenantKey"
 $plainRunbookVersion = "1.2.0"

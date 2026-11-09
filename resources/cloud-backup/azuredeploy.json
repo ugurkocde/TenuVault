@@ -37,6 +37,22 @@
       "defaultValue": "",
       "metadata": { "description": "Comma separated type folders to leave out. Wins over the scope. Leave empty for the scope." }
     },
+    "tenantName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": { "description": "The tenant's name as change reports show it. Leave empty to name the tenant by its id." }
+    },
+    "changeReport": {
+      "type": "string",
+      "allowedValues": ["off", "names", "full"],
+      "defaultValue": "off",
+      "metadata": { "description": "Change reports by email through the notification watcher: off, names (which settings changed) or full (with their values). Secret values are never included." }
+    },
+    "changeReportActors": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": { "description": "Name who made each change in change reports, from the Intune audit log." }
+    },
     "includeDeviceCategories": {
       "type": "bool",
       "defaultValue": false,
@@ -84,7 +100,10 @@
       { "name": "[concat('TenuVaultStorageAccount-', variables('tenantKey'))]", "value": "[parameters('storageAccountName')]" },
       { "name": "[concat('TenuVaultScope-', variables('tenantKey'))]", "value": "[parameters('scope')]" },
       { "name": "[concat('TenuVaultExcludedFolders-', variables('tenantKey'))]", "value": "[parameters('excludedFolders')]" },
-      { "name": "[concat('TenuVaultAppOnlyExcluded-', variables('tenantKey'))]", "value": "[variables('appOnlyExcluded')]" }
+      { "name": "[concat('TenuVaultAppOnlyExcluded-', variables('tenantKey'))]", "value": "[variables('appOnlyExcluded')]" },
+      { "name": "[concat('TenuVaultChangeReport-', variables('tenantKey'))]", "value": "[parameters('changeReport')]" },
+      { "name": "[concat('TenuVaultTenantName-', variables('tenantKey'))]", "value": "[parameters('tenantName')]" },
+      { "name": "[concat('TenuVaultChangeReportActors-', variables('tenantKey'))]", "value": "[if(parameters('changeReportActors'), 'true', 'false')]" }
     ],
     "writerRoleName": "TenuVault Backup Writer"
   },

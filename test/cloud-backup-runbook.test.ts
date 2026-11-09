@@ -12,6 +12,7 @@ import { OTHER_TENANT_BACKUP, readOwnedBackup } from "../src/portal/lib/policies
 const pwsh = ["/usr/local/bin/pwsh", "/opt/homebrew/bin/pwsh", "/usr/bin/pwsh", ...(process.env.HOME ? [`${process.env.HOME}/.local/bin/pwsh`] : [])].find((candidate) => existsSync(candidate))
 
 const runbook = readFileSync(new URL("../resources/runbooks/Invoke-TenuVaultBackup.ps1", import.meta.url), "utf8")
+const RUNBOOK_VERSION = /\$script:RunbookVersion = "([^"]+)"/.exec(runbook)?.[1]
 const setup = readFileSync(new URL("../resources/New-TenuVaultCloudBackup.ps1", import.meta.url), "utf8")
 type RunCall = { uri: string; method: string; contentType: string | null; ifNoneMatch: string | null; body: string | null }
 type Run = { calls: RunCall[]; error?: string | null }
@@ -74,7 +75,10 @@ describe("Invoke-TenuVaultBackup.ps1 type table", () => {
 
 describe("Invoke-TenuVaultBackup.ps1 format", () => {
   it("writes plain JSON and never reads Key Vault or the recovery key", () => {
-    for (const sealing of ['"TVAZ1`n"', "HKDF", "AesGcm", "tenuvault-azure-backup-v1", "tenuvault-recovery-key", "vault.azure.net", "application/octet-stream"]) {
+    // The legacy envelope is only recognised, so a sealed earlier backup is skipped, never opened.
+    expect(runbook.match(/"TVAZ1`n"/g)).toHaveLength(1)
+    expect(runbook).toMatch(/function Test-TvSealedBlob \{[^}]*"TVAZ1`n"/)
+    for (const sealing of ["HKDF", "AesGcm", "Decrypt(", "tenuvault-azure-backup-v1", "tenuvault-recovery-key", "vault.azure.net", "application/octet-stream"]) {
       expect(runbook, sealing).not.toContain(sealing)
     }
     expect(runbook).not.toMatch(/Get-TvRequiredVariable "TenuVaultKeyVault"/)
@@ -85,9 +89,11 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     expect(runbook).toContain('headers["If-None-Match"] = "*"')
   })
 
-  it("carries the first plain runbook version, which the app does not flag for upgrade", () => {
-    const version = /\$script:RunbookVersion = "([^"]+)"/.exec(runbook)?.[1]
-    expect(version).toBe(PLAIN_CLOUD_RUNBOOK)
+  it("carries a plain runbook version, which the app does not flag for upgrade", () => {
+    const version = RUNBOOK_VERSION
+    // 1.3.0 adds change reports on top of the first plain runbook, 1.2.0.
+    expect(version).toBe("1.3.0")
+    expect(PLAIN_CLOUD_RUNBOOK).toBe("1.2.0")
     expect(cloudRunbookNeedsUpgrade(version!)).toBe(false)
     expect(cloudRunbookNeedsUpgrade("1.1.0")).toBe(true)
     expect(cloudRunbookNeedsUpgrade("1.0.0")).toBe(true)
@@ -126,9 +132,9 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     expect(policy).toMatchObject({ id: "cfg-1", displayName: "Baseline Wi-Fi" })
     expect(policy["@odata.context"]).toBeUndefined()
     const metadata = JSON.parse(puts.find((call) => call.uri.endsWith("/metadata.json"))!.body!)
-    expect(metadata).toMatchObject({ Status: "Success", RunbookVersion: PLAIN_CLOUD_RUNBOOK, Source: "TenuVault Cloud Backup", TenantId: "11111111-2222-3333-4444-555555555555" })
+    expect(metadata).toMatchObject({ Status: "Success", RunbookVersion: RUNBOOK_VERSION, Source: "TenuVault Cloud Backup", TenantId: "11111111-2222-3333-4444-555555555555" })
     const status = JSON.parse(puts.find((call) => call.uri.endsWith("/cloud-backup-status-11111111.json"))!.body!)
-    expect(parseCloudStatus(status, "11111111-2222-3333-4444-555555555555")).toMatchObject({ lastStatus: "Success", runbookVersion: PLAIN_CLOUD_RUNBOOK })
+    expect(parseCloudStatus(status, "11111111-2222-3333-4444-555555555555")).toMatchObject({ lastStatus: "Success", runbookVersion: RUNBOOK_VERSION })
     // A run that fails before any backup write still records why, in the status blob and the note.
     expect(failed!.error).toContain("managed identity token")
     const failedStatus = failed!.calls.find((call) => call.method === "Put" && call.uri.endsWith("/cloud-backup-status-11111111.json"))

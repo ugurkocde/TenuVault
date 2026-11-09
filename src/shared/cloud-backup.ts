@@ -158,6 +158,10 @@ export function cloudSetupCommand(options: {
   weekday: number
   timeZone: string
   scope: "everything" | "policies"
+  /** Change reports by email through the notification watcher; off when left out. */
+  changeReport?: "off" | "names" | "full"
+  /** The tenant's name for change reports; passed only when a report is on. */
+  tenantName?: string
   /** The tenant's known Azure placement, when the app has it; first setup needs one of these. */
   resourceGroup?: string
   location?: string
@@ -174,7 +178,14 @@ export function cloudSetupCommand(options: {
   if (options.location) parts.push(`-Location ${options.location}`)
   if (options.subscriptionId) parts.push(`-SubscriptionId ${options.subscriptionId}`)
   if (options.frequency === "weekly") parts.push(`-WeekDay ${WEEKDAYS[options.weekday] ?? "Sunday"}`)
-  parts.push(`-TimeZone ${options.timeZone}`, `-Scope ${options.scope}`, "-GrantGraphRoles")
+  parts.push(`-TimeZone ${options.timeZone}`, `-Scope ${options.scope}`)
+  if (options.changeReport === "names") parts.push("-ChangeReport Names")
+  if (options.changeReport === "full") parts.push("-ChangeReport Full")
+  // Single quoted for PowerShell: nothing in it is expanded, a quote is doubled, control characters go.
+  // oxlint-disable-next-line no-control-regex
+  const name = options.tenantName?.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 200)
+  if (name && options.changeReport && options.changeReport !== "off") parts.push(`-TenantName '${name.replace(/'/g, "''")}'`)
+  parts.push("-GrantGraphRoles")
   return parts.join(" ")
 }
 
