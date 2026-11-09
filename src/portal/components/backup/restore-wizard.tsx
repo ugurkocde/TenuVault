@@ -260,6 +260,12 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   const [mappingsConfirmed, setMappingsConfirmed] = useState(false)
 
   const [review, setReview] = useState<Record<string, LiveState> | null>(null)
+  /** Counts review loads, so a load that a newer one or a reset replaced never writes its result. */
+  const reviewLoad = useRef(0)
+  const clearReview = () => {
+    reviewLoad.current++
+    setReview(null)
+  }
   const [reviewError, setReviewError] = useState("")
   const [confirmed, setConfirmed] = useState(false)
   const [approvalRevision, setApprovalRevision] = useState(0)
@@ -317,7 +323,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     setCatalogCheck(null)
     setSelected(new Set())
     setShown({})
-    setReview(null)
+    clearReview()
     setValidation(null)
     setValidationError("")
     const controller = new AbortController()
@@ -441,7 +447,9 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   const changesTenant = plans.some((entry) => entry.plan === "overwrite" || entry.plan === "recreate" || entry.plan === "unchecked")
 
   const loadReview = async () => {
-    setReview(null)
+    clearReview()
+    const load = reviewLoad.current
+    const current = () => load === reviewLoad.current
     setReviewError("")
     setConfirmed(false)
     // Copies never touch the existing items, so the tenant is only read when replacing in place.
@@ -460,10 +468,12 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
           paths: selectedPaths.slice(start, start + PREVIEW_CHUNK),
           live: true,
         })
+        if (!current()) return
         live.push(...preview.items)
       }
       setReview(Object.fromEntries(live.map((item) => [item.path, item])))
     } catch (error) {
+      if (!current()) return
       showPlanError(error)
       setReviewError(error instanceof Error ? error.message : String(error))
     }
@@ -585,7 +595,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     setResult(null)
     setProgress(null)
     setSelected(new Set())
-    setReview(null)
+    clearReview()
     setStep("items")
   }
 
@@ -750,7 +760,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                 <ul className="max-h-64 overflow-auto">{items.slice(0, shown[READINESS] ?? LIST_PAGE).map(item => <li key={item.path} className="border-t py-2"><strong>{item.name}</strong>{item.readiness ? <><p>{item.readiness.automatic ? "Automatic configuration restore available" : "Review required"}</p><p>External artifacts: {item.readiness.externalArtifacts.join(" ") || "None identified"}</p><p>Missing mappings: {item.readiness.missingMappings.join(", ") || "None identified"}</p><p>Manual actions: {item.readiness.manualActions.join(" ") || "None identified"}</p></> : <p>Readiness unavailable. Retry loading the backup.</p>}</li>)}</ul>
                 <ShowMore total={items.length} shown={shown[READINESS] ?? LIST_PAGE} onMore={() => setShown((current) => ({ ...current, [READINESS]: (current[READINESS] ?? LIST_PAGE) + LIST_PAGE * 5 }))} />
               </details>
-              {copying && <div className="mt-4 space-y-2 rounded-xl border p-4 text-sm"><label>Reviewed target dependencies (one target tenant)<textarea className="block w-full rounded border p-2 font-mono text-xs" value={mappingJson} onChange={event => { setMappingJson(event.target.value); setMappingsConfirmed(false); setReview(null) }} /></label><p>Use an array of {`{ "folder": "Apps" or "AppCategories", "sourceId": "source GUID", "targetId": "target GUID" }`}. Upload missing installers in Intune first. Other dependency families require manual recovery.</p><label><input type="checkbox" checked={mappingsConfirmed} onChange={event => setMappingsConfirmed(event.target.checked)} /> I reviewed these IDs in the selected target tenant. Target objects will be checked before any restore writes.</label></div>}
+              {copying && <div className="mt-4 space-y-2 rounded-xl border p-4 text-sm"><label>Reviewed target dependencies (one target tenant)<textarea className="block w-full rounded border p-2 font-mono text-xs" value={mappingJson} onChange={event => { setMappingJson(event.target.value); setMappingsConfirmed(false); clearReview() }} /></label><p>Use an array of {`{ "folder": "Apps" or "AppCategories", "sourceId": "source GUID", "targetId": "target GUID" }`}. Upload missing installers in Intune first. Other dependency families require manual recovery.</p><label><input type="checkbox" checked={mappingsConfirmed} onChange={event => setMappingsConfirmed(event.target.checked)} /> I reviewed these IDs in the selected target tenant. Target objects will be checked before any restore writes.</label></div>}
               <div className="mt-5 flex flex-wrap items-center justify-between gap-3 text-sm">
                 <span className="text-gray-600">
                   {selected.size} of {items.length} selected
