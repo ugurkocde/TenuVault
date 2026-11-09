@@ -2591,7 +2591,13 @@ function Send-TvChangeReports {
                     if (-not $result.Error) { $result.Error = $why }
                 }
             }
-            # Sent but not recorded: the delete above was the last chance to prevent a resend.
+            # Sent but not recorded: the delete above was the last chance to prevent a resend. When
+            # it failed too, the next run sends the report once more. That is accepted on purpose:
+            # delivery is at least once, because a rare duplicate after two storage failures is
+            # better than a report that is never sent (a claim before the send would risk that).
+            if ($stop -and -not $removed) {
+                throw "The change report $($blob.Name) was sent but could neither be recorded in the watcher state nor deleted, so the next run may send it once more. $(Get-TvSafeError $stop.Exception.Message)"
+            }
             if ($stop) { throw $stop }
             if ($removed -and $sent) {
                 [void]$Delivered.Remove($blob.Name)
@@ -2604,6 +2610,12 @@ function Send-TvChangeReports {
         $result.Messages.Add($held)
         # The backlog explains the delete failures too, so it is what the heartbeat shows.
         $result.Error = $held
+    }
+    if ($result.Expired -gt 0) {
+        # Waiting or held reports keep their original 7 day expiry; dropping one is never silent.
+        $expired = "$($result.Expired) change report(s) were deleted unsent because they were older than $MaxAgeDays days (they waited for verified mail or for room in the watcher state)."
+        $result.Messages.Add($expired)
+        $result.Error = if ($result.Error) { "$($result.Error) $expired" } else { $expired }
     }
     if ($result.Waiting -gt 0) { $result.Messages.Add("$($result.Waiting) change report(s) wait for verified mail and report recipients.") }
     return $result

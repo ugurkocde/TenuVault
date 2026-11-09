@@ -178,6 +178,11 @@ describe.runIf(Boolean(pwsh))("cloud change reports match the desktop app", () =
     expect(read).toMatchObject({ declared: "oversized", chunked: "oversized", small: "read 100", stall: "timed out" })
     // A body that stops mid-way ends at the 1 second deadline, long before the server gives up.
     expect(read.stallSeconds).toBeLessThan(4)
+    // Error bodies go through the same reader with a 64 KiB cap: an 8 MiB one and a stalled one
+    // both end as the HTTP error, quickly.
+    expect(read).toMatchObject({ errorlarge: "http 403", errorstall: "http 403" })
+    expect(read.errorlargeSeconds).toBeLessThan(4)
+    expect(read.errorstallSeconds).toBeLessThan(2.5)
     expect(readFileSync(new URL("../resources/runbooks/Invoke-TenuVaultBackup.ps1", import.meta.url), "utf8")).toContain(`$script:MaxBlobBytes = ${MAX_BACKUP_ARCHIVE_BYTES}`)
   }, 60_000)
 
@@ -210,7 +215,9 @@ describe.runIf(Boolean(pwsh))("cloud change reports match the desktop app", () =
       }))
       const run = (mailEnabled: boolean, failMail = false) => JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", deliverScript, "-NotesPath", notesPath, "-TenantId", fixture.tenantId, "-MailEnabled", String(mailEnabled), "-FailMail", String(failMail)], { encoding: "utf8", maxBuffer: 20_000_000 }))
       const sent = run(true)
-      expect(sent.result).toMatchObject({ Sent: 1, Expired: 1, Ignored: 1, Waiting: 0, Error: null })
+      expect(sent.result).toMatchObject({ Sent: 1, Expired: 1, Ignored: 1, Waiting: 0 })
+      // A report dropped because it expired is never silent.
+      expect(sent.result.Error).toBe("1 change report(s) were deleted unsent because they were older than 7 days (they waited for verified mail or for room in the watcher state).")
       expect(sent.deleted.sort()).toEqual(["cloud-change-reports/backup-2026-10-20-020000.json", "cloud-change-reports/backup-2026-11-05-020000.json", "cloud-change-reports/backup-2026-11-06-020000.json"])
       expect(sent.mails).toHaveLength(1)
       expect(sent.mails[0]).toMatchObject({ from: "reports@contoso.example", to: ["security@contoso.example", "auditor@fabrikam.example"], attachments: [`${cloud.fileName}.html`, `${cloud.fileName}.md`] })
@@ -239,7 +246,7 @@ describe.runIf(Boolean(pwsh))("cloud change reports match the desktop app", () =
       const third = runWithState(false)
       expect(third.mails).toHaveLength(0)
       expect(third.deleted).toContain("cloud-change-reports/backup-2026-11-06-020000.json")
-      expect(third.result.Error).toBeNull()
+      expect(third.result.Error).toMatch(/^1 change report\(s\) were deleted unsent because they were older than 7 days/)
       expect(JSON.parse(readFileSync(statePath, "utf8"))).toEqual([])
 
       // The lease is lost between the download and the send (renewals: list, item, before send):
@@ -256,6 +263,15 @@ describe.runIf(Boolean(pwsh))("cloud change reports match the desktop app", () =
       expect(saveLost.mails).toHaveLength(1)
       expect(saveLost.deleted).toEqual(["cloud-change-reports/backup-2026-11-06-020000.json"])
       expect(saveLost.thrown).toMatch(/state lease was lost/)
+      // At least once: when the state save and the fallback delete both fail after Graph took the
+      // mail, the run says the report may be sent again, and the next run sends it once more.
+      const bothFail = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", deliverScript, "-NotesPath", single, "-TenantId", fixture.tenantId, "-FailSave", "true", "-FailDelete", "true"], { encoding: "utf8", maxBuffer: 20_000_000 }))
+      expect(bothFail.mails).toHaveLength(1)
+      expect(bothFail.thrown).toMatch(/was sent but could neither be recorded in the watcher state nor deleted, so the next run may send it once more/)
+      const nextRun = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", deliverScript, "-NotesPath", single, "-TenantId", fixture.tenantId, "-StatePath", join(folder, "fresh-state.json")], { encoding: "utf8", maxBuffer: 20_000_000 }))
+      expect(nextRun.mails.length).toBeLessThanOrEqual(1)
+      expect(nextRun.deleted).toEqual(["cloud-change-reports/backup-2026-11-06-020000.json"])
+      expect(nextRun.thrown).toBeNull()
     } finally {
       rmSync(folder, { recursive: true, force: true })
     }
@@ -289,6 +305,33 @@ describe.runIf(Boolean(pwsh))("cloud change reports match the desktop app", () =
       const watcher = readFileSync(new URL("../resources/runbooks/Invoke-TenuVaultNotificationCheck.ps1", import.meta.url), "utf8")
       expect(watcher).toContain("deliveredReports = @($deliveredReports.ToArray())")
       expect(watcher).not.toMatch(/deliveredReports\.ToArray\(\) \| Select-Object/)
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  }, 180_000)
+
+  it("warns when a report held at the state limit expires and is deleted unsent", () => {
+    const cloud = cloudReport({ values: false, actors: false })
+    const notes: Record<string, string> = {}
+    const delivered: string[] = []
+    for (let i = 0; i < 200; i++) {
+      const name = `backup-2026-11-05-${String(10 + Math.floor(i / 60)).padStart(2, "0")}${String(i % 60).padStart(2, "0")}00`
+      notes[`${name}.json`] = JSON.stringify({ schema: "tenuvault.cloud-change-report/v1", tenantId: fixture.tenantId, runId: `run-${i}`, backupFolder: name, createdAt: "2026-11-06T02:14:00.000Z", changes: 1, email: cloud.email, files: [] })
+      delivered.push(`cloud-change-reports/${name}.json`)
+    }
+    // Held while the state was full, and now past its original 7 day expiry.
+    notes["backup-2026-10-20-020000.json"] = JSON.stringify({ schema: "tenuvault.cloud-change-report/v1", tenantId: fixture.tenantId, runId: "run-old", backupFolder: "backup-2026-10-20-020000", createdAt: "2026-10-20T02:14:00.000Z", changes: 1, email: cloud.email, files: [] })
+    const folder = mkdtempSync(join(tmpdir(), "tenuvault-report-expired-"))
+    try {
+      const notesPath = join(folder, "notes.json")
+      const statePath = join(folder, "state.json")
+      writeFileSync(notesPath, JSON.stringify(notes))
+      writeFileSync(statePath, JSON.stringify(delivered))
+      const run = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", deliverScript, "-NotesPath", notesPath, "-TenantId", fixture.tenantId, "-StatePath", statePath], { encoding: "utf8", maxBuffer: 50_000_000 }))
+      expect(run.mails).toHaveLength(0)
+      expect(run.deleted).toHaveLength(201)
+      expect(run.result.Expired).toBe(1)
+      expect(run.result.Error).toBe("1 change report(s) were deleted unsent because they were older than 7 days (they waited for verified mail or for room in the watcher state).")
     } finally {
       rmSync(folder, { recursive: true, force: true })
     }

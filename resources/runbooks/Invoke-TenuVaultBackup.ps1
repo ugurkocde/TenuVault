@@ -359,6 +359,8 @@ class TvReadTimeoutError : System.Exception {
 
 # How long one capped response body may take to arrive, in seconds.
 $script:BodyReadSeconds = 90
+# The most of an error response body read with a capped request: only its error text is used.
+$script:ErrorBodyMaxBytes = 65536
 
 # Reads a successful response body up to $MaxBytes, by its declared length first and then by the
 # bytes actually read, so a large or endless body cannot exhaust the sandbox's memory, and within
@@ -432,13 +434,26 @@ function Invoke-TvHttp {
             throw [TvHttpError]::new(0, (Get-TvSafeError $_.Exception.Message))
         }
         $status = [int]$response.StatusCode
-        if ($status -ge 200 -and $status -lt 300 -and $MaxBytes -gt 0) {
-            try { $bytes = Read-TvCappedBody $response $MaxBytes } finally { $response.Dispose() }
-            return @{ Status = $status; Bytes = $bytes; Text = [Text.Encoding]::UTF8.GetString($bytes) }
-        }
-        $bytes = $response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()
-        if ($status -ge 200 -and $status -lt 300) {
-            return @{ Status = $status; Bytes = $bytes; Text = [Text.Encoding]::UTF8.GetString($bytes) }
+        $retryAfter = if ($response.Headers.RetryAfter -and $response.Headers.RetryAfter.Delta) { $response.Headers.RetryAfter.Delta } else { $null }
+        try {
+            if ($MaxBytes -gt 0) {
+                if ($status -ge 200 -and $status -lt 300) {
+                    $bytes = Read-TvCappedBody $response $MaxBytes
+                    return @{ Status = $status; Bytes = $bytes; Text = [Text.Encoding]::UTF8.GetString($bytes) }
+                }
+                # Only the error text is needed: the same reader with a small cap and the same
+                # deadline, so a stalled or large error body can neither hang nor exhaust the run.
+                try { $bytes = Read-TvCappedBody $response $script:ErrorBodyMaxBytes }
+                catch [TvOversizedError] { $bytes = [byte[]]@() }
+                catch [TvReadTimeoutError] { $bytes = [byte[]]@() }
+            } else {
+                $bytes = $response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()
+                if ($status -ge 200 -and $status -lt 300) {
+                    return @{ Status = $status; Bytes = $bytes; Text = [Text.Encoding]::UTF8.GetString($bytes) }
+                }
+            }
+        } finally {
+            $response.Dispose()
         }
         $retryable = $status -in @(429, 500, 502, 503, 504)
         $message = "HTTP $status"
@@ -455,8 +470,7 @@ function Invoke-TvHttp {
         $lastError = [TvHttpError]::new($status, (Get-TvSafeError $message))
         if ($retryable -and $attempt -lt 3) {
             $delay = $attempt
-            $retryAfter = $null
-            if ($response.Headers.RetryAfter -and $response.Headers.RetryAfter.Delta) { $delay = [Math]::Ceiling($response.Headers.RetryAfter.Delta.TotalSeconds) }
+            if ($retryAfter) { $delay = [Math]::Ceiling($retryAfter.TotalSeconds) }
             if ($delay -gt 300) { throw $lastError }
             Start-Sleep -Seconds ([Math]::Max(1, $delay))
             continue
