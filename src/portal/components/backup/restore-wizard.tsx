@@ -266,6 +266,10 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     reviewLoad.current++
     setReview(null)
   }
+  // A load still reading for the previous restore mode or copy targets stops writing once either changes.
+  useEffect(() => {
+    reviewLoad.current++
+  }, [mode, copyTargets])
   const [reviewError, setReviewError] = useState("")
   const [confirmed, setConfirmed] = useState(false)
   const [approvalRevision, setApprovalRevision] = useState(0)
@@ -504,6 +508,8 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   const goTo = (next: Step) => {
     setStep(next)
     if (next === "review") void loadReview()
+    // Leaving the review (for example to change the selection) stops a load that is still running.
+    else reviewLoad.current++
   }
 
   const progressId = useRef("")
