@@ -200,6 +200,7 @@ export async function checkSchedulePanel({ check, evaluate, waitForCondition, sc
       assert(await evaluate(`!${body}.querySelector('[role="dialog"]')`), "inline plan note opened a second dialog")
       await evaluate(`window.__scheduleFixture.planChanged({ ...window.__scheduleFixture.status, tenants: [{ tenantId: ${JSON.stringify(tenantId)}, plan: 'pro', entitled: true }] })`)
       assert(await waitForCondition(`!${doc}.querySelector('#schedule-frequency option[value="daily"]').disabled`), "Pro fixture was not applied")
+      await evaluate(`window.tenuvault.schedules.set({ tenantId: ${JSON.stringify(tenantId)}, enabled: true, frequency: 'weekly', weekday: 1, time: '07:45' })`)
       await setValue("schedule-time", "09:00")
       await evaluate(`${save}.click()`)
       assert(await waitForCondition(`${body}.querySelector('[role="dialog"]')?.innerText.includes('Included in TenuVault Pro and MSP')`), "schedule refusal did not open the plan dialog")

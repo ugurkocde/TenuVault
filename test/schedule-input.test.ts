@@ -42,11 +42,12 @@ describe("schedule input plan checks", () => {
     }
   })
 
-  it("refuses both enabling and editing active daily schedules on Community", () => {
+  it("refuses new daily schedules and changing weekly to daily, while letting saved daily times be edited", () => {
     const scheduler = new BackupScheduler(memoryStore(), async () => ({ status: "Completed", message: "Done" }))
     const current = scheduler.set(daily)
     expect(() => prepareScheduleInput(daily, "community")).toThrow(PlanRequired)
-    expect(() => prepareScheduleInput({ ...daily, time: "09:00" }, "community", current)).toThrow(PlanRequired)
+    expect(prepareScheduleInput({ ...daily, time: "09:00" }, "community", current)).toMatchObject({ frequency: "daily", time: "09:00" })
+    expect(() => prepareScheduleInput(daily, "community", { ...current, frequency: "weekly", weekday: 1 })).toThrow(PlanRequired)
     try {
       prepareScheduleInput(daily, "community")
     } catch (error) {
@@ -59,6 +60,6 @@ describe("schedule input plan checks", () => {
     expect(prepareScheduleInput(weekly, "community")).toBe(weekly)
     for (const plan of ["pro", "msp", null] as const) expect(prepareScheduleInput(daily, plan)).toBe(daily)
     const paused = { ...daily, enabled: false }
-    expect(prepareScheduleInput(paused, "community")).toBe(paused)
+    expect(() => prepareScheduleInput(paused, "community")).toThrow(PlanRequired)
   })
 })

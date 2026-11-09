@@ -12,6 +12,6 @@ export function prepareScheduleInput(input: ScheduleInput, plan: Plan | null, cu
       weekday: current.weekday,
     }
   }
-  if (input.enabled && input.frequency === "daily" && plan === "community" && !(current?.frequency === "daily" && current.time === input.time)) throw new PlanRequired("dailySchedule")
+  if (input.frequency === "daily" && plan === "community" && current?.frequency !== "daily") throw new PlanRequired("dailySchedule")
   return input
 }
