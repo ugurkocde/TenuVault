@@ -81,7 +81,7 @@ export interface PlanInput {
   includeAssignments: boolean
   dropUnsupportedExclusions: boolean
   acknowledgeRedacted?: boolean
-  /** Findings added to an item by the calling workflow; a blocking one blocks the item. */
+  /** Warning findings added to an item by the calling workflow; they never block it. */
   items: Array<{ sourceId: string; destinationId: string | null; folder?: string; notes?: DependencyFinding[] }>
   mappings: Mapping[]
   /** The workflow its change set belongs to; Sync passes "sync" and its run. */
@@ -155,8 +155,9 @@ export async function planPromotion(deps: FeatureDeps, destinationTenantId: stri
     }, listings)
     const promotable = (PROMOTION_FOLDERS as readonly string[]).includes(type.folder)
     const findings = promotable ? resolved.findings : [...resolved.findings, { code: "unsupported-type" as const, severity: "blocking" as const, message: `Promotion does not support ${type.label} yet. Supported: Settings Catalog policies, compliance policies, endpoint security policies and device configuration profiles.` }]
-    const notes = item.notes ?? []
-    const blocked = resolved.blocked || !promotable || notes.some((note) => note.severity === "blocking")
+    // Notes of the calling workflow are warnings: they never decide whether the item is blocked.
+    const notes = (item.notes ?? []).map((note) => ({ ...note, severity: note.severity === "blocking" ? "warning" as const : note.severity }))
+    const blocked = resolved.blocked || !promotable
     const proposed = blocked ? { body: null, assignments: null } : resolved.proposed
     items.push({ folder: type.folder, sourceId: item.sourceId, sourceName: resolved.sourceName, sourceVersion, sourceHash: hashOf(comparableSnapshot(snapshot)), destinationId: item.destinationId, action: item.destinationId ? "update" : "create", blocked, findings: [...findings, ...notes], references: resolved.references, targetReads: resolved.targetReads, targetStateHash: resolved.targetStateHash })
     if (!blocked) operations.push({ folder: type.folder, action: item.destinationId ? "update" : "create", targetId: item.destinationId, proposed: proposed.body, assignments: input.includeAssignments ? proposed.assignments : null, source: { tenantId: source, objectId: item.sourceId, version: sourceVersion, label: resolved.sourceName } })

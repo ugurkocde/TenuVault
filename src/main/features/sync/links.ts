@@ -85,7 +85,8 @@ export interface SyncReplay {
  * read-back saw. It runs after every apply while the change-set engine still holds the tenant
  * write, and again before each plan and inside the apply's stale check, so a link whose write was
  * lost is repaired before anything acts on it. The same scan finds creates whose outcome is
- * unconfirmed (uncertain or writing), which may have created the policy without a link.
+ * unconfirmed (uncertain or writing), which may have created the policy without a link; a plan
+ * warns about them, and an applied rollback of the run settles them.
  * Reads current values only, and only the change sets the pair's Sync targets name.
  */
 export function recordSyncLinks(deps: FeatureDeps, targetTenantId: string, sourceTenantId: string): SyncReplay {
@@ -94,7 +95,7 @@ export function recordSyncLinks(deps: FeatureDeps, targetTenantId: string, sourc
   const promotions = deps.records.current<PromotionRecord>(DOMAINS.promotions, target, (promotion) => !!promotion.sync && !!promotion.changeSetId && promotion.sourceTenantId.toLowerCase() === source)
   const unresolved: SyncReplay["unresolved"] = {}
   if (!promotions.length) return { written: 0, unresolved }
-  const named = new Set(promotions.map((promotion) => promotion.changeSetId!))
+  const named = new Set(promotions.flatMap((promotion) => [promotion.changeSetId!, ...(promotion.rollbackChangeSetId ? [promotion.rollbackChangeSetId] : [])]))
   const changeSets = new Map(deps.records.current<ChangeSetRecord>(DOMAINS.changeSets, target, (record) => named.has(record.id)).map((record) => [record.id, record]))
   const linkedAt = deps.now().toISOString()
   const verified: Record<string, SyncLink> = {}
@@ -102,6 +103,8 @@ export function recordSyncLinks(deps: FeatureDeps, targetTenantId: string, sourc
     const changeSet = changeSets.get(promotion.changeSetId!)
     if (!changeSet || changeSet.kind !== "change") continue
     for (const [key, link] of Object.entries(verifiedLinks(promotion, changeSet, linkedAt))) if (replaces(link, verified[key])) verified[key] = link
+    // An applied rollback settled what the run wrote, so its creates are no longer unconfirmed.
+    if (promotion.rollbackChangeSetId && changeSets.get(promotion.rollbackChangeSetId)?.status === "applied") continue
     for (const operation of changeSet.operations) {
       const status = changeSet.results[operation.key]?.status
       if (operation.action !== "create" || (status !== "uncertain" && status !== "writing") || !operation.source?.objectId) continue
@@ -126,20 +129,18 @@ export function recordSyncLinks(deps: FeatureDeps, targetTenantId: string, sourc
   return { written: changed.length, unresolved }
 }
 
-/** The finding for a policy whose earlier Sync to this tenant has an unconfirmed create. */
+/** The warning for a policy whose earlier Sync to this tenant has an unconfirmed create. */
 export function unconfirmedCreate(sourceName: string): string {
-  return `An earlier sync of "${sourceName}" to this tenant has an unconfirmed result. Retry that sync first so TenuVault can check whether the policy was created.`
+  return `An earlier sync of "${sourceName}" to this tenant has an unconfirmed result. Syncing again may create a second copy. Retry that sync first so TenuVault can check.`
 }
 
 /**
  * Reasons the links a Sync target's plan was built from changed: another Sync linked a policy
  * the plan creates, or relinked one it updates. A link to an object this change set's own
- * verified writes made is not a change. A plan without a complete link snapshot is stale too,
- * and so is a create while another Sync's create of that policy is unconfirmed (`unresolved`,
- * from the replay); the target's own unconfirmed create stays retryable. Any reason makes the
- * change set stale, so nothing is written and the admin plans again.
+ * verified writes made is not a change. A plan without a complete link snapshot is stale too.
+ * Any reason makes the change set stale, so nothing is written and the admin plans again.
  */
-export function staleSyncLinks(deps: FeatureDeps, targetTenantId: string, promotionId: string, unresolved: SyncReplay["unresolved"]): string[] {
+export function staleSyncLinks(deps: FeatureDeps, targetTenantId: string, promotionId: string): string[] {
   const target = targetTenantId.toLowerCase()
   const promotion = deps.records.get<PromotionRecord>(DOMAINS.promotions, target, promotionId)
   if (!promotion?.sync) return []
@@ -152,10 +153,6 @@ export function staleSyncLinks(deps: FeatureDeps, targetTenantId: string, promot
     const key = linkKey(item.folder, item.sourceId)
     if (!(key in planned)) {
       reasons.push(`The Sync links this plan relied on for "${item.sourceName}" were not recorded. Plan again.`)
-      continue
-    }
-    if (item.action === "create" && (unresolved[key]?.promotionIds ?? []).some((id) => id !== promotion.id)) {
-      reasons.push(unconfirmedCreate(item.sourceName))
       continue
     }
     const linked = current[key]?.targetPolicyId.toLowerCase() ?? null

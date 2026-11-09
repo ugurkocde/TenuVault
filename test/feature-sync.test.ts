@@ -435,28 +435,79 @@ describe("Sync links", () => {
     expect(context.deps.records.list<SyncLinksRecord>(DOMAINS.syncLinks, TENANT_B)[0]!.history).toHaveLength(revisions)
   })
 
-  it("blocks a new create while an earlier Sync's create of the policy is unconfirmed", async () => {
-    const context = setup()
+  const UNCONFIRMED = 'An earlier sync of "OIB Defender" to this tenant has an unconfirmed result. Syncing again may create a second copy. Retry that sync first so TenuVault can check.'
+  const unconfirmed = (promotion: PromotionRecord) => promotion.items[0]!.findings.filter((finding) => finding.code === "sync-unconfirmed")
+
+  /** Applies the first Sync of the policy with its create left unconfirmed; returns its ID and content hash. */
+  async function unconfirmedFirst(context: Context, failWrite: FakeTenant["failWrite"] = (method) => (method === "POST" ? "lost" : undefined)) {
     const first = (await planned(context)).targets[0]!.promotion!.id
-    const second = (await planned(context)).targets[0]!.promotion!.id
-    // Graph creates the policy but the response is lost.
-    context.targets[TENANT_B]!.failWrite = (method) => (method === "POST" ? "lost" : undefined)
+    context.targets[TENANT_B]!.failWrite = failWrite
     const contentHash = await approved(context, TENANT_B, first)
     expect((await context.post({ tenantId: TENANT_B, action: "apply", id: first, contentHash, confirm: true })).body.changeSet.status).toBe("uncertain")
     context.targets[TENANT_B]!.failWrite = undefined
     expect(syncLinks(context.deps, TENANT_B, TENANT_A)).toEqual({})
-    const blocked = (await planned(context)).targets[0]!.promotion!
-    expect(blocked).toMatchObject({ status: "blocked", changeSetId: null })
-    expect(blocked.items[0]!.findings).toContainEqual({ code: "sync-unconfirmed", severity: "blocking", message: 'An earlier sync of "OIB Defender" to this tenant has an unconfirmed result. Retry that sync first so TenuVault can check whether the policy was created.' })
-    // A plan made before the lost write is refused by the stale check.
-    const preview = await context.post({ tenantId: TENANT_B, action: "preview", id: second })
-    expect(preview.body.changeSet.blockers.join(" ")).toContain("has an unconfirmed result")
-    expect((await context.post({ tenantId: TENANT_B, action: "approve", id: second, contentHash: preview.body.changeSet.contentHash, targetFingerprint: preview.body.changeSet.targetFingerprint })).status).toBe(409)
-    // The earlier run's own retry stays allowed and reconciles the create.
+    return { first, contentHash }
+  }
+
+  it("warns, never blocks, when an earlier Sync's create of the policy is unconfirmed", async () => {
+    const context = setup()
+    await unconfirmedFirst(context)
+    const next = (await planned(context)).targets[0]!.promotion!
+    expect(next).toMatchObject({ status: "in-review" })
+    expect(next.items[0]).toMatchObject({ action: "create", blocked: false })
+    expect(unconfirmed(next)).toEqual([{ code: "sync-unconfirmed", severity: "warning", message: UNCONFIRMED }])
+    expect((await applied(context, TENANT_B, next.id)).body.changeSet.status).toBe("applied")
+    // The accepted outcome the warning names: the lost create had made the policy, so there are two.
+    expect([...context.targets[TENANT_B]!.policies.values()].map((policy) => policy.name)).toEqual(["OIB Defender", "OIB Defender"])
+  })
+
+  it("plans an update without a warning once the earlier Sync's retry verified its create", async () => {
+    const context = setup()
+    const { first, contentHash } = await unconfirmedFirst(context)
     expect((await context.post({ tenantId: TENANT_B, action: "retry", id: first, contentHash, confirm: true })).body.changeSet.status).toBe("applied")
     const [created] = [...context.targets[TENANT_B]!.policies.keys()]
-    expect(context.targets[TENANT_B]!.policies.size).toBe(1)
-    expect((await planned(context)).targets[0]!.promotion!.items[0]).toMatchObject({ action: "update", destinationId: created })
+    const next = (await planned(context)).targets[0]!.promotion!
+    expect(next.items[0]).toMatchObject({ action: "update", destinationId: created })
+    expect(unconfirmed(next)).toEqual([])
+  })
+
+  it("drops the warning once the unconfirmed run was rolled back", async () => {
+    const context = setup()
+    // The create returns its ID but the read-back is denied, so the outcome stays unconfirmed.
+    const target = context.targets[TENANT_B]!
+    const { first } = await unconfirmedFirst(context, (method) => {
+      if (method === "POST") target.denyPolicyReads = true
+      return undefined
+    })
+    target.denyPolicyReads = false
+    expect((await context.post({ tenantId: TENANT_B, action: "rollback-create", id: first })).status).toBe(200)
+    const review = await context.post({ tenantId: TENANT_B, action: "rollback-review", id: first })
+    expect((await context.post({ tenantId: TENANT_B, action: "rollback-approve", id: first, contentHash: review.body.contentHash, targetFingerprint: review.body.targetFingerprint })).status).toBe(200)
+    expect((await context.post({ tenantId: TENANT_B, action: "rollback-apply", id: first, contentHash: review.body.contentHash, confirm: true })).body.changeSet.status).toBe("applied")
+    expect(target.policies.size).toBe(0)
+    const next = (await planned(context)).targets[0]!.promotion!
+    expect(next.items[0]).toMatchObject({ action: "create", blocked: false })
+    expect(unconfirmed(next)).toEqual([])
+  })
+
+  it("never blocks a policy whose unconfirmed run can no longer be retried", async () => {
+    const context = setup()
+    const other = context.source.addPolicy({ name: "OIB Firewall" })
+    const target = context.targets[TENANT_B]!
+    // One run: the Defender create loses its response, the Firewall create is rejected.
+    target.failWrite = (method) => (method !== "POST" ? undefined : target.calls.at(-1)?.body?.name === "OIB Firewall" ? 400 : "lost")
+    const first = (await plan(context, [TENANT_B], { items: [{ sourceId: context.policy.id }, { sourceId: other.id }] })).body.targets[0].promotion.id
+    const contentHash = await approved(context, TENANT_B, first)
+    expect((await context.post({ tenantId: TENANT_B, action: "apply", id: first, contentHash, confirm: true })).body.changeSet.status).toBe("uncertain")
+    target.failWrite = undefined
+    // A later Sync creates the Firewall policy, so the first run is stale and can never reconcile Defender.
+    const firewall = (await plan(context, [TENANT_B], { items: [{ sourceId: other.id }] })).body.targets[0].promotion.id
+    expect((await applied(context, TENANT_B, firewall)).body.changeSet.status).toBe("applied")
+    expect((await context.post({ tenantId: TENANT_B, action: "retry", id: first, contentHash, confirm: true })).status).toBe(409)
+    const next = (await planned(context)).targets[0]!.promotion!
+    expect(next).toMatchObject({ status: "in-review" })
+    expect(next.items[0]).toMatchObject({ action: "create", blocked: false })
+    expect(unconfirmed(next)).toEqual([{ code: "sync-unconfirmed", severity: "warning", message: UNCONFIRMED }])
   })
 
   it("replays links from the current values of the pair's Sync records only", async () => {

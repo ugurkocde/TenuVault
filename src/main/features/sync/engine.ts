@@ -81,12 +81,12 @@ async function linkedItems(deps: FeatureDeps, sourceTenantId: string, targetTena
   for (const item of items) {
     const key = linkKey(item.folder, item.sourceId)
     const link = links[key]
-    // A create whose earlier outcome is unconfirmed may have made the policy without a link,
-    // so no new create of that policy is planned until it is retried.
+    // A create whose earlier outcome is unconfirmed may have made the policy without a link, so a
+    // new create of that policy carries a warning. It never blocks: retrying that sync settles it.
     const unconfirmed = unresolved[key]
-    const blocked: DependencyFinding[] = unconfirmed ? [{ code: "sync-unconfirmed", severity: "blocking", message: unconfirmedCreate(unconfirmed.name) }] : []
+    const warnings: DependencyFinding[] = unconfirmed ? [{ code: "sync-unconfirmed", severity: "warning", message: unconfirmedCreate(unconfirmed.name) }] : []
     if (!link) {
-      planned.push({ ...item, destinationId: null, ...(blocked.length ? { notes: blocked } : {}) })
+      planned.push({ ...item, destinationId: null, ...(warnings.length ? { notes: warnings } : {}) })
       continue
     }
     graph ??= await deps.graph(targetTenantId)
@@ -96,7 +96,7 @@ async function linkedItems(deps: FeatureDeps, sourceTenantId: string, targetTena
       continue
     }
     const note: DependencyFinding = { code: "sync-link-missing", severity: "warning", message: `"${link.targetName}", which an earlier Sync wrote "${link.sourceName}" to, no longer exists in this tenant. This Sync creates a new policy.` }
-    planned.push({ ...item, destinationId: null, notes: [note, ...blocked] })
+    planned.push({ ...item, destinationId: null, notes: [note, ...warnings] })
   }
   return { items: planned, links: relied }
 }
@@ -173,8 +173,8 @@ export function syncCheck(deps: FeatureDeps, targetTenantId: string, promotionId
   return () => {
     const promotion = deps.records.get<PromotionRecord>(DOMAINS.promotions, targetTenantId, promotionId)
     if (!promotion) return []
-    const replay = recordSyncLinks(deps, targetTenantId, promotion.sourceTenantId)
-    return staleSyncLinks(deps, targetTenantId, promotionId, replay.unresolved)
+    recordSyncLinks(deps, targetTenantId, promotion.sourceTenantId)
+    return staleSyncLinks(deps, targetTenantId, promotionId)
   }
 }
 
