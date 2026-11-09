@@ -20,6 +20,7 @@ if (-not $RunbookPath) {
 
 $script:calls = [System.Collections.Generic.List[object]]::new()
 $script:failGraphToken = $false
+$script:failDetail = $false
 
 function Get-TvManagedIdentityToken {
     param([string]$Resource)
@@ -36,6 +37,7 @@ function Invoke-TvHttp {
     if ($Uri -eq "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations") {
         $text = '{"value":[{"id":"cfg-1","displayName":"Baseline Wi-Fi"}]}'
     } elseif ($Uri -like "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations/cfg-1*") {
+        if ($script:failDetail) { throw [TvHttpError]::new(401, "HTTP 401") }
         $text = '{"@odata.context":"x","id":"cfg-1","displayName":"Baseline Wi-Fi","lastModifiedDateTime":"2026-11-01T10:00:00Z","assignments":[]}'
     }
     return @{ Status = 200; Bytes = [Text.Encoding]::UTF8.GetBytes($text); Text = $text }
@@ -49,6 +51,15 @@ Write-Output (@{ calls = @($script:calls.ToArray()); output = $output } | Conver
 $script:calls.Clear()
 $script:OutcomeSent = $false
 $script:failGraphToken = $true
+$errorText = $null
+try { $output = @(Invoke-TvBackup) } catch { $errorText = $_.Exception.Message }
+Write-Output (@{ calls = @($script:calls.ToArray()); error = $errorText } | ConvertTo-Json -Compress -Depth 5)
+
+# 3. The run claims its folder, then Graph refuses: it records a failed manifest.
+$script:calls.Clear()
+$script:OutcomeSent = $false
+$script:failGraphToken = $false
+$script:failDetail = $true
 $errorText = $null
 try { $output = @(Invoke-TvBackup) } catch { $errorText = $_.Exception.Message }
 Write-Output (@{ calls = @($script:calls.ToArray()); error = $errorText } | ConvertTo-Json -Compress -Depth 5)

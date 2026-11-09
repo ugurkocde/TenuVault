@@ -94,8 +94,10 @@ Put these in the next stable release's notes, then remove them here.
   them, and Backup & Restore offers Import recovery key for them. Admins still on an older version
   treat the new plain backups as unverified legacy backups: they can view and compare them and
   restore unassigned copies, but replace restore, assignment restore and revert are blocked there.
-  Ask all admins of a tenant to update. Until cloud backups move to plain JSON as well, the runbook
-  keeps writing sealed backups, which this version reads.
+  Ask all admins of a tenant to update. Cloud backups (runbook 1.2.0) write plain JSON too and no
+  longer use Key Vault: run the cloud backup setup script once more with the same values to update
+  the runbook, after which the old Key Vault (kv-tenuvault-<suffix>) can be deleted once no setup
+  uses it. Older sealed cloud backups stay readable with the recovery key.
 
 ## Cutting a stable release
 

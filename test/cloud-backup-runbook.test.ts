@@ -5,11 +5,33 @@ import { describe, expect, it } from "vitest"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
 import { COMPLIANCE_SETTING_KEYS, COMPLIANCE_SETTINGS_ID } from "../src/shared/intune/compliance-settings"
 import { PLAIN_CLOUD_RUNBOOK, cloudRunbookNeedsUpgrade, cloudStatusBlobName, parseCloudStatus } from "../src/shared/cloud-backup"
+import { resolveBackupOwnership } from "../src/shared/backup-ownership"
+import { BACKUP_OWNER_FILE } from "../src/shared/constants"
+import { OTHER_TENANT_BACKUP, readOwnedBackup } from "../src/portal/lib/policies/backup-owner"
 
 const pwsh = ["/usr/local/bin/pwsh", "/opt/homebrew/bin/pwsh", "/usr/bin/pwsh", ...(process.env.HOME ? [`${process.env.HOME}/.local/bin/pwsh`] : [])].find((candidate) => existsSync(candidate))
 
 const runbook = readFileSync(new URL("../resources/runbooks/Invoke-TenuVaultBackup.ps1", import.meta.url), "utf8")
 const setup = readFileSync(new URL("../resources/New-TenuVaultCloudBackup.ps1", import.meta.url), "utf8")
+type RunCall = { uri: string; method: string; contentType: string | null; ifNoneMatch: string | null; body: string | null }
+type Run = { calls: RunCall[]; error?: string | null }
+let plainRuns: Run[] | undefined
+/** The three scenarios of the plain-run fixture: a full run, an early failure and a failed manifest. */
+function runPlainFixture(): Run[] {
+  const script = fileURLToPath(new URL("./fixtures/cloud-backup/plain-run.ps1", import.meta.url))
+  plainRuns ??= execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }).trim().split(/\r?\n/).map((line) => JSON.parse(line) as Run)
+  return plainRuns
+}
+const TENANT = "11111111-2222-3333-4444-555555555555"
+const BACKUP_CONTAINER_URL = "https://stcontoso.blob.core.windows.net/intune-backups/"
+/** The blobs a run wrote to the backup container, by blob name, as a reader of the container sees them. */
+function writtenBlobs(run: Run): Map<string, string> {
+  return new Map(run.calls.filter((call) => call.method === "Put" && call.uri.startsWith(BACKUP_CONTAINER_URL))
+    .map((call) => [decodeURIComponent(call.uri.slice(BACKUP_CONTAINER_URL.length)), call.body!]))
+}
+const read = (blobs: Map<string, string>) => async (name: string) => blobs.has(name) ? new Response(blobs.get(name)!, { status: 200, headers: { "content-type": "application/json" } }) : new Response(null, { status: 404 })
+const folderOf = (blobs: Map<string, string>) => [...blobs.keys()].find((name) => name.endsWith(`/${BACKUP_OWNER_FILE}`))!.split("/")[0]!
+
 const template = JSON.parse(readFileSync(new URL("../resources/cloud-backup/azuredeploy.json", import.meta.url), "utf8")) as {
   parameters: Record<string, unknown>
   resources: Array<{ type: string }>
@@ -77,9 +99,8 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
   })
 
   it.runIf(Boolean(pwsh))("puts only plain JSON blobs during a run, records early failures and never calls Key Vault", () => {
-    const script = fileURLToPath(new URL("./fixtures/cloud-backup/plain-run.ps1", import.meta.url))
-    const [run, failed] = execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }).trim().split(/\r?\n/).map((line) => JSON.parse(line) as { calls: Array<{ uri: string; method: string; contentType: string | null; ifNoneMatch: string | null; body: string | null }>; error?: string | null })
-    for (const scenario of [run!, failed!]) {
+    const [run, failed, claimed] = runPlainFixture()
+    for (const scenario of [run!, failed!, claimed!]) {
       expect(scenario.calls.some((call) => call.uri.includes("vault.azure.net"))).toBe(false)
       const puts = scenario.calls.filter((call) => call.method === "Put")
       expect(puts.length).toBeGreaterThan(0)
@@ -114,6 +135,39 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     expect(parseCloudStatus(JSON.parse(failedStatus!.body!), "11111111-2222-3333-4444-555555555555")).toMatchObject({ lastStatus: "Failed" })
     expect(failed!.calls.some((call) => call.method === "Put" && call.uri.includes("/tenuvault-backup-results/cloud-backup-outcomes/run-"))).toBe(true)
     expect(failed!.calls.some((call) => call.uri.includes("/intune-backups/backup-"))).toBe(false)
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("leaves the tenant evidence the app's ownership check needs, in complete, failed and in-flight backups", async () => {
+    const [run, , claimed] = runPlainFixture()
+    for (const scenario of [run!, claimed!]) {
+      const blobs = writtenBlobs(scenario)
+      const folder = folderOf(blobs)
+      const manifest = JSON.parse(blobs.get(`${folder}/metadata.json`)!)
+      const marker = JSON.parse(blobs.get(`${folder}/${BACKUP_OWNER_FILE}`)!)
+      expect(typeof manifest.TenantId).toBe("string")
+      expect(typeof marker.TenantId).toBe("string")
+      expect(manifest.RunId).toBe(marker.RunId)
+      // Restore, revert and recreate go through this check: owned by the manifest's tenant, refused for any other.
+      const owned = await readOwnedBackup(read(blobs), folder, TENANT.toUpperCase(), "stcontoso")
+      expect(owned).toMatchObject({ ok: true, owned: true, metadata: { TenantId: TENANT, Source: "TenuVault Cloud Backup" } })
+      expect(await readOwnedBackup(read(blobs), folder, "99999999-2222-3333-4444-555555555555", "stcontoso")).toEqual({ ok: false, status: 403, error: OTHER_TENANT_BACKUP })
+      const resolved = await resolveBackupOwnership(async (file) => {
+        const body = blobs.get(`${folder}/${file}`)
+        return body === undefined ? { kind: "missing" } : { kind: "found", value: JSON.parse(body) }
+      }, TENANT)
+      expect(resolved.owner).toMatchObject({ kind: "owned", source: "manifest", tenantId: TENANT, runId: manifest.RunId })
+    }
+    expect(JSON.parse(writtenBlobs(claimed!).get(`${folderOf(writtenBlobs(claimed!))}/metadata.json`)!)).toMatchObject({ Status: "Failed", Error: "HTTP 401" })
+    // While a run is still writing, before metadata.json exists, the claim alone places the folder.
+    const inFlight = writtenBlobs(run!)
+    const folder = folderOf(inFlight)
+    inFlight.delete(`${folder}/metadata.json`)
+    const resolved = await resolveBackupOwnership(async (file) => {
+      const body = inFlight.get(`${folder}/${file}`)
+      return body === undefined ? { kind: "missing" } : { kind: "found", value: JSON.parse(body) }
+    }, TENANT)
+    expect(resolved.owner).toMatchObject({ kind: "owned", source: "marker", tenantId: TENANT })
+    expect(await readOwnedBackup(read(inFlight), folder, TENANT, "stcontoso")).toMatchObject({ ok: true, owned: true, metadata: null })
   }, 60_000)
 
   it("writes the desktop manifest shape and the per tenant status blob", () => {
