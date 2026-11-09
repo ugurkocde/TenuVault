@@ -101,6 +101,8 @@ describe('Drift comparison', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input))
       if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
+      // These backups have no ownership marker.
+      if (url.pathname.endsWith('/.tenuvault-owner.json')) return new Response('', { status: 404 })
       if (url.pathname === '/api/revert-metadata') return Response.json({ reverts: {} })
       if (url.searchParams.get('delimiter')) return new Response(prefixes(Object.keys(status)))
       const prefix = url.searchParams.get('prefix')
@@ -129,6 +131,8 @@ describe('Drift comparison', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input))
       if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
+      // These backups have no ownership marker.
+      if (url.pathname.endsWith('/.tenuvault-owner.json')) return new Response('', { status: 404 })
       if (url.pathname === '/api/revert-metadata') return Response.json({ reverts: {} })
       if (url.searchParams.get('delimiter')) return new Response(prefixes([newer, older]))
       const prefix = url.searchParams.get('prefix')
@@ -162,6 +166,8 @@ describe('Drift comparison', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input))
       if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
+      // These backups have no ownership marker.
+      if (url.pathname.endsWith('/.tenuvault-owner.json')) return new Response('', { status: 404 })
       if (url.pathname === '/api/revert-metadata') return Response.json({ reverts: {} })
       if (url.searchParams.get('delimiter')) return new Response(prefixes([newer, older]))
       const prefix = url.searchParams.get('prefix')
@@ -195,6 +201,8 @@ describe('Drift comparison', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input))
       if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
+      // These backups have no ownership marker.
+      if (url.pathname.endsWith('/.tenuvault-owner.json')) return new Response('', { status: 404 })
       if (url.pathname === '/api/revert-metadata') return Response.json({ reverts: {} })
       if (url.searchParams.get('delimiter')) return new Response(prefixes([newer, older]))
       const prefix = url.searchParams.get('prefix')
@@ -221,6 +229,8 @@ describe('Backup list', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input))
       if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
+      // These backups have no ownership marker.
+      if (url.pathname.endsWith('/.tenuvault-owner.json')) return new Response('', { status: 404 })
       if (url.pathname.endsWith('/metadata.json')) return Response.json({ Status: 'Success' })
       const prefix = url.searchParams.get('prefix')
       if (prefix) return new Response(`<Blob><Name>${prefix}DeviceConfigurations/A.json</Name><Properties><Content-Length>10</Content-Length></Properties></Blob>`)
@@ -240,6 +250,8 @@ describe('Drift comparison for change reports', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input))
       if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
+      // These backups have no ownership marker.
+      if (url.pathname.endsWith('/.tenuvault-owner.json')) return new Response('', { status: 404 })
       if (url.pathname === '/api/revert-metadata') return Response.json({ reverts: {} })
       if (url.hostname === 'graph.microsoft.com') return Response.json({ value: [] })
       if (url.searchParams.get('delimiter')) return new Response(prefixes(['backup-2026-11-06-020000', 'backup-2026-11-05-020000']))

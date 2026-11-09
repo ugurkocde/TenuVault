@@ -187,7 +187,7 @@ export interface SelectedBackup extends BackupFolder {
 export class DriftPairError extends Error {
   constructor(
     message: string,
-    readonly code: "INSUFFICIENT_BACKUPS" | "INVALID_PAIR" | "BACKUP_NOT_FOUND" | "BACKUP_INCOMPLETE" | "BACKUP_OTHER_TENANT",
+    readonly code: "INSUFFICIENT_BACKUPS" | "INVALID_PAIR" | "BACKUP_NOT_FOUND" | "BACKUP_INCOMPLETE" | "BACKUP_OTHER_TENANT" | "BACKUP_UNREADABLE",
     readonly status: number,
   ) {
     super(message)

@@ -219,7 +219,7 @@ describe("Compliance policy settings in a drift scan", () => {
       const prefix = url.searchParams.get("prefix")
       if (prefix) return new Response(`<Blob><Name>${prefix.split("/")[0]}/${file}</Name></Blob>`)
       // Backups that recorded the types they attempted, including this one.
-      if (url.pathname.endsWith("/metadata.json")) return Response.json({ Status: "Success", Scope: { Excluded: [], Included: INTUNE_TYPES.map((type) => type.folder) } })
+      if (url.pathname.endsWith("/metadata.json")) return Response.json({ TenantId: "tenant", Status: "Success", Scope: { Excluded: [], Included: INTUNE_TYPES.map((type) => type.folder) } })
       const backup = decodeURIComponent(url.pathname).split("/")[2]!
       return Response.json(contents[backup])
     }))

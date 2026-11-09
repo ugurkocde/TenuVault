@@ -160,7 +160,8 @@ describe("backup folder ownership", () => {
     await complete(engine)
     for (const [name, body] of original) expect(saved.get(name)).toEqual(body)
     expect(saved.has(`${prefix}metadata.json`)).toBe(false)
-    expect(calls.filter(call => call.name.startsWith(prefix)).map(call => [call.request.method, call.name])).toEqual([["GET", `${prefix}metadata.json`]])
+    // Retention reads the marker of a folder without a manifest to know who uses the container, and changes nothing.
+    expect(calls.filter(call => call.name.startsWith(prefix)).map(call => [call.request.method, call.name])).toEqual([["GET", `${prefix}metadata.json`], ["GET", `${prefix}${BACKUP_OWNER_FILE}`]])
     expect(calls.some(call => call.request.method === "DELETE")).toBe(false)
     expect(vi.getTimerCount()).toBe(0)
   })
@@ -225,6 +226,40 @@ describe("backup folder ownership", () => {
     await complete(engine)
     expect([...saved.keys()].some((name) => name.startsWith(ours))).toBe(false)
     for (const [name, body] of kept) expect(saved.get(name)).toEqual(body)
+  })
+
+  it("counts a manifestless folder's marker as another tenant in the container (review repro)", async () => {
+    const { engine, saved, seed, folder } = setup()
+    const abandoned = "backup-2026-08-01-020000/", legacy = "backup-2026-08-02-020000/"
+    // Tenant B's run stopped before its manifest; tenant B's legacy backup records no tenant and has no marker.
+    folder(abandoned, { ...owner, TenantId: OTHER })
+    folder(legacy, null)
+    seed(`${legacy}metadata.json`, { Status: "Success", Scope: { Excluded: request.scope.excluded } })
+    const original = new Map(saved)
+    await complete(engine)
+    for (const [name, body] of original) expect(saved.get(name)).toEqual(body)
+  })
+
+  it("keeps untagged backups when a manifestless folder's marker cannot be read", async () => {
+    const { engine, saved, seed, folder } = setup()
+    const abandoned = "backup-2026-08-01-020000/", legacy = "backup-2026-08-02-020000/"
+    folder(abandoned, "{ damaged")
+    folder(legacy, null)
+    seed(`${legacy}metadata.json`, { Status: "Success", Scope: { Excluded: request.scope.excluded } })
+    const original = new Map(saved)
+    await complete(engine)
+    for (const [name, body] of original) expect(saved.get(name)).toEqual(body)
+  })
+
+  it("still ages out an untagged backup when nothing in the container shows another tenant", async () => {
+    const { engine, saved, seed, folder } = setup()
+    const abandoned = "backup-2026-08-01-020000/", legacy = "backup-2026-08-02-020000/"
+    folder(abandoned)
+    folder(legacy, null)
+    seed(`${legacy}metadata.json`, { Status: "Success", Scope: { Excluded: request.scope.excluded } })
+    await complete(engine)
+    expect([...saved.keys()].some((name) => name.startsWith(legacy))).toBe(false)
+    expect(saved.has(`${abandoned}${BACKUP_OWNER_FILE}`)).toBe(true)
   })
 
   it("keeps ownership when a protected policy interrupts normal retention", async () => {

@@ -354,7 +354,8 @@ describe("backup request recovery", () => {
       }
       if (sent.method === "DELETE") deletes++
       reads++
-      return new Response(new Uint8Array(saved.get(url.pathname)!))
+      const body = saved.get(url.pathname)
+      return body ? new Response(new Uint8Array(body)) : new Response(null, { status: 404 })
     })
     const engine = new BackupEngine({ fetch: azureBridge(networkFetch), getToken: async () => "token", retentionDays: () => 30 })
     const job = engine.start(request)
@@ -362,7 +363,8 @@ describe("backup request recovery", () => {
     expect(job).toMatchObject({ status: "Completed", progress: 100, progressMessage: "Backup completed with 1 warning" })
     expect(job.endTime).toBeDefined()
     expect(job.exception).toBeUndefined()
-    expect(reads).toBe(8)
+    // Each unreadable manifest, then the folder's marker (none here), read once.
+    expect(reads).toBe(16)
     expect(deletes).toBe(0)
     expect(job.log.join("\n")).toContain(`Could not read the metadata of 8 older backups: ${message.replace(/\.$/, "")}. They were left in place.`)
     expect(job.log.join("\n")).not.toContain("Could not remove old backups")
@@ -374,7 +376,7 @@ describe("backup request recovery", () => {
     for (const [path, body] of original) expect(saved.get(path)).toBe(body)
     const calls = networkFetch.mock.calls.length
     await vi.advanceTimersByTimeAsync(300_000)
-    expect(reads).toBe(8)
+    expect(reads).toBe(16)
     expect(networkFetch).toHaveBeenCalledTimes(calls)
     expect(saved.get(manifestUrl.pathname)).toBe(committed)
   })

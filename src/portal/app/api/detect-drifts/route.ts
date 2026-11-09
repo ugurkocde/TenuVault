@@ -6,6 +6,7 @@ import { withoutUnreadAssignments } from "../../../../shared/intune/read"
 import { coveredFolders, type ScopeMetadata } from "../../../../shared/intune/scope"
 import { itemsOf, sameItem, type BackupFingerprint, type BackupItems } from "../../../../shared/intune/backup-changes"
 import { isLegacyOtherTenantError, isLegacySealedError } from "../../../../shared/legacy-sealed"
+import { resolveBackupOwnership, type OwnershipFile } from "../../../../shared/backup-ownership"
 import { backupRef, DriftPairError, selectBackupPair, summarizeDrifts, type BackupMetadata, type Drift, type DriftChange, type DriftResult, type DriftScanProgress, type DriftWarning, type SelectedBackup } from "../../../../shared/intune/drift"
 import { CANCELLED_HEADER, driftScanHooks, type DriftScanHooks } from "~/lib/drift/scan-hooks"
 import { mapLimit } from "../../../../shared/map-limit"
@@ -99,19 +100,41 @@ export async function POST(request: NextRequest) {
 
     // Incomplete snapshots are missing policies and would report them as deleted, and a running
     // backup has no metadata yet, so the default pair skips both (see selectBackupPair).
+    const readFile = async (name: string, file: string): Promise<OwnershipFile> => {
+      let response: Response
+      try {
+        response = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${encodeURIComponent(name)}/${file}`, { headers: { 'x-ms-version': '2021-12-02', Authorization: `Bearer ${accessToken}` }, signal })
+      } catch (error) {
+        // An older encrypted backup without its key, or another tenant's, cannot be opened here.
+        if (error instanceof Error && error.name === 'FetchApplicationError') return { kind: 'unreadable', error }
+        throw error
+      }
+      if (response.status === 404) return { kind: 'missing' }
+      // A backup on this device that damaged files made unavailable is skipped like one without a manifest.
+      if (file === 'metadata.json' && response.status === 409 && ['BackupUnavailable', 'InventoryIncomplete'].includes(response.headers.get('x-ms-error-code') ?? '')) return { kind: 'missing' }
+      if (!response.ok) throw new Error(`Cannot verify that the backups are complete (${response.status}). Check storage access and retry.`)
+      try { return { kind: 'found', value: await response.json() } }
+      catch (error) { return { kind: 'unreadable', error } }
+    }
+    const unreadableBackup = (name: string, error: unknown) => new DriftPairError(
+      isLegacySealedError(error) || isLegacyOtherTenantError(error) ? (error as Error).message : `Backup ${name} cannot be read: ${error instanceof Error ? error.message : String(error)}`,
+      "BACKUP_UNREADABLE",
+      409,
+    )
+    // Ownership comes from the shared resolver (shared/backup-ownership.ts), as for restore and
+    // retention: the pair rules see the tenant it found, also when only the marker names it.
     const loadMetadata = async (name: string): Promise<BackupMetadata | null> => {
-      const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${encodeURIComponent(name)}/metadata.json`, { headers: { 'x-ms-version': '2021-12-02', Authorization: `Bearer ${accessToken}` }, signal })
+      const { manifest, owner } = await resolveBackupOwnership((file) => readFile(name, file), tenantId)
       checked++
       report({ phase: "checking", detail: `Checking the backups: ${checked - 1} read`, done: checked, total: 0 })
-      if (response.status === 404) return null
-      // A backup on this device that damaged files made unavailable is skipped like one without a manifest.
-      if (response.status === 409 && ['BackupUnavailable', 'InventoryIncomplete'].includes(response.headers.get('x-ms-error-code') ?? '')) return null
-      if (!response.ok) throw new Error(`Cannot verify that the backups are complete (${response.status}). Check storage access and retry.`)
-      return await response.json()
+      if (manifest.kind === 'missing') return null
+      if (manifest.kind === 'unreadable') throw unreadableBackup(name, manifest.error)
+      if (owner.kind === 'unreadable') throw unreadableBackup(name, owner.error)
+      return owner.kind === 'untagged' ? manifest.metadata as BackupMetadata : { ...manifest.metadata, TenantId: owner.tenantId } as BackupMetadata
     }
-    // A manifest that cannot be opened here (an older encrypted backup without its key, another
-    // tenant's, or damaged JSON) is skipped when TenuVault picks the pair; a chosen one still fails.
-    const unopened = (error: unknown) => error instanceof SyntaxError || (error instanceof Error && error.name === 'FetchApplicationError')
+    // A backup that cannot be opened here (an older encrypted one without its key, another tenant's,
+    // damaged JSON or a damaged marker) is skipped when TenuVault picks the pair; a chosen one fails.
+    const unopened = (error: unknown) => error instanceof DriftPairError && error.code === 'BACKUP_UNREADABLE'
     const pair = await selectBackupPair({ folders: backupFolders, tenantId, baseline, comparison, limit: typeof backupLimit === "number" && backupLimit > 0 ? backupLimit : undefined, load: loadMetadata, unopened, signal })
     const newerBackup = pair.comparison
     const olderBackup = pair.baseline
@@ -236,8 +259,6 @@ export async function POST(request: NextRequest) {
     // The header tells the audit recorder that the admin stopped the scan; it did not fail.
     if (hooks?.signal.aborted) return NextResponse.json({ error: "The drift scan was cancelled.", code: "CANCELLED" }, { status: 409, headers: { [CANCELLED_HEADER]: "1" } })
     if (error instanceof DriftPairError) return NextResponse.json({ error: error.message, code: error.code }, { status: error.status })
-    // A chosen backup that cannot be opened here says why, for example which recovery key it needs.
-    if (isLegacySealedError(error) || isLegacyOtherTenantError(error)) return NextResponse.json({ error: (error as Error).message, code: "BACKUP_UNREADABLE" }, { status: 409 })
     console.error("Detect drifts error:", error)
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Internal server error while detecting drifts" },

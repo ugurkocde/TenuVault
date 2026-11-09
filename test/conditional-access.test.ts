@@ -393,7 +393,7 @@ describe("Conditional Access in a drift scan", () => {
       if (url.searchParams.get("delimiter")) return new Response([newer, older].map((name) => `<BlobPrefix><Name>${name}/</Name></BlobPrefix>`).join(""))
       const prefix = url.searchParams.get("prefix")
       if (prefix) return new Response(`<Blob><Name>${prefix.split("/")[0]}/${file}</Name></Blob>`)
-      if (url.pathname.endsWith("/metadata.json")) return Response.json({ Status: "Success", Scope: { Excluded: [], Included: INTUNE_TYPES.map((type) => type.folder) } })
+      if (url.pathname.endsWith("/metadata.json")) return Response.json({ TenantId: "tenant", Status: "Success", Scope: { Excluded: [], Included: INTUNE_TYPES.map((type) => type.folder) } })
       return Response.json(contents[decodeURIComponent(url.pathname).split("/")[2]!])
     }))
     const body = { tenantId: "tenant", appId: "app", clientSecret: "test", storageAccountName: "store", subscriptionId: "local", resourceGroupName: "local" }

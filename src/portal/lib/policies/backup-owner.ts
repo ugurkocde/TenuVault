@@ -1,5 +1,6 @@
 import { belongsTo, type BackupMetadata } from "../../../shared/intune/drift"
-import { BACKUP_OWNER_FILE, localStorageAccountName } from "../../../shared/constants"
+import { localStorageAccountName } from "../../../shared/constants"
+import { DAMAGED_OWNER_MARKER, resolveBackupOwnership, type OwnershipFile } from "../../../shared/backup-ownership"
 import { isLegacyOtherTenantError } from "../../../shared/legacy-sealed"
 
 export const OTHER_TENANT_BACKUP = "This backup belongs to another tenant."
@@ -16,7 +17,6 @@ export function ownedBy(metadata: unknown, tenantId: string): boolean {
 
 /** Why a backup without tenant evidence cannot change live policies; it can still be restored as an unassigned copy. */
 export const UNTAGGED_BACKUP = "This backup does not record its tenant. Restore it as a copy instead."
-const DAMAGED_MARKER = "This backup's ownership record is damaged, so TenuVault cannot tell which tenant it belongs to."
 
 /**
  * `owned` is positive ownership: the backup's metadata or ownership marker names `tenantId`, or it
@@ -28,55 +28,50 @@ export type BackupOwnerRead =
   | { ok: true; metadata: Record<string, any> | null; owned: boolean }
   | { ok: false; status: number; error: string }
 
+/** A read the route answers with this status and message instead of the resolver's outcome. */
+class RefusedRead extends Error {
+  constructor(readonly status: number, message: string) { super(message) }
+}
+
 /** A legacy blob sealed for another tenant, or with a key this device lacks, fails to open after it was read. */
 const sealedElsewhere = (error: unknown) => error instanceof Error && error.name === "FetchApplicationError"
 const sealedError = (error: unknown) => isLegacyOtherTenantError(error) ? OTHER_TENANT_BACKUP : SEALED_BACKUP
 
+/** Why a backup whose metadata or marker could not be read is refused. */
+function refusal(error: unknown, fallback: string): { ok: false; status: number; error: string } {
+  if (sealedElsewhere(error)) return { ok: false, status: 403, error: sealedError(error) }
+  if (error instanceof RefusedRead) return { ok: false, status: error.status, error: error.message }
+  if (error instanceof Error && error.message === DAMAGED_OWNER_MARKER) return { ok: false, status: 403, error: DAMAGED_OWNER_MARKER }
+  return { ok: false, status: 500, error: fallback }
+}
+
 /**
- * Reads a backup's metadata and checks that it belongs to `tenantId`. A backup whose metadata
- * records no tenant, or that has none (still running, stopped, or from an older version), is
- * placed by its ownership marker, as the backup list does; without a marker it is untagged: allowed,
- * but not owned. A marker that cannot be parsed or names no tenant is refused. Read failures are
- * errors, never a pass. `read` fetches a blob of the backup container by name. `storageAccountName`
- * is the account read from: this tenant's own store on this device holds only its backups.
+ * Reads a backup's ownership with the shared resolver (shared/backup-ownership.ts) and checks that
+ * it belongs to `tenantId`. Another tenant's backup is refused, and so is one whose metadata or
+ * marker cannot be read; one that records no tenant is allowed, but not owned. `read` fetches a
+ * blob of the backup container by name. `storageAccountName` is the account read from: this
+ * tenant's own store on this device holds only its backups.
  */
 export async function readOwnedBackup(read: (name: string) => Promise<Response>, backupId: string, tenantId: string, storageAccountName?: string): Promise<BackupOwnerRead> {
   const ownStore = storageAccountName?.toLowerCase() === localStorageAccountName(tenantId)
-  let response: Response
-  try {
-    response = await read(`${backupId}/metadata.json`)
-  } catch (error) {
-    if (sealedElsewhere(error)) return { ok: false, status: 403, error: sealedError(error) }
-    throw error
+  const readFile = async (file: string): Promise<OwnershipFile> => {
+    let response: Response
+    try {
+      response = await read(`${backupId}/${file}`)
+    } catch (error) {
+      if (sealedElsewhere(error)) return { kind: "unreadable", error }
+      throw error
+    }
+    if (response.status === 404) return { kind: "missing" }
+    const manifest = file === "metadata.json"
+    if (!response.ok) return { kind: "unreadable", error: new RefusedRead(500, manifest ? "Failed to read backup metadata" : "The backup's ownership record could not be read.") }
+    try { return { kind: "found", value: await response.json() } }
+    catch { return { kind: "unreadable", error: manifest ? new RefusedRead(500, "The backup metadata could not be read.") : new Error(DAMAGED_OWNER_MARKER) } }
   }
-  if (response.ok) {
-    let metadata: unknown
-    try { metadata = await response.json() } catch { return { ok: false, status: 500, error: "The backup metadata could not be read." } }
-    if (!ownedBy(metadata, tenantId)) return { ok: false, status: 403, error: OTHER_TENANT_BACKUP }
-    const record = metadata && typeof metadata === "object" && !Array.isArray(metadata) ? metadata as Record<string, any> : null
-    if (typeof record?.TenantId === "string") return { ok: true, metadata: record, owned: true }
-    const owner = await readMarker(read, backupId, tenantId)
-    return owner.ok ? { ok: true, metadata: record, owned: owner.owned || ownStore } : owner
-  }
-  if (response.status !== 404) return { ok: false, status: 500, error: "Failed to read backup metadata" }
-  const owner = await readMarker(read, backupId, tenantId)
-  return owner.ok ? { ...owner, owned: owner.owned || ownStore } : owner
-}
-
-/** Places a backup whose metadata names no tenant by its ownership marker; no marker leaves it untagged. */
-async function readMarker(read: (name: string) => Promise<Response>, backupId: string, tenantId: string): Promise<BackupOwnerRead> {
-  let marker: Response
-  try {
-    marker = await read(`${backupId}/${BACKUP_OWNER_FILE}`)
-  } catch (error) {
-    if (sealedElsewhere(error)) return { ok: false, status: 403, error: sealedError(error) }
-    throw error
-  }
-  if (marker.status === 404) return { ok: true, metadata: null, owned: false }
-  if (!marker.ok) return { ok: false, status: 500, error: "The backup's ownership record could not be read." }
-  const owner = await marker.json().catch(() => null) as unknown
-  // Every marker names its tenant, so one that does not is damaged, never an untagged backup.
-  if (!owner || typeof owner !== "object" || Array.isArray(owner) || typeof (owner as { TenantId?: unknown }).TenantId !== "string") return { ok: false, status: 403, error: DAMAGED_MARKER }
-  if (!ownedBy(owner, tenantId)) return { ok: false, status: 403, error: OTHER_TENANT_BACKUP }
-  return { ok: true, metadata: null, owned: true }
+  const { manifest, owner } = await resolveBackupOwnership(readFile, tenantId)
+  if (manifest.kind === "unreadable") return refusal(manifest.error, "The backup metadata could not be read.")
+  if (owner.kind === "unreadable") return refusal(owner.error, "The backup's ownership record could not be read.")
+  if (owner.kind === "other") return { ok: false, status: 403, error: OTHER_TENANT_BACKUP }
+  const metadata = manifest.kind === "found" ? manifest.metadata : null
+  return { ok: true, metadata, owned: owner.kind === "owned" || ownStore }
 }

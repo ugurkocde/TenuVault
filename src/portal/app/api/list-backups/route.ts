@@ -9,6 +9,7 @@ import { MetadataCache } from "~/lib/storage/metadata-cache"
 import { manifestStatus } from "../../../../shared/intune/backup-status"
 import { backupFoldersIn, parseBackupName } from "../../../../shared/intune/backup-names"
 import { isLegacyOtherTenantError, isLegacySealedError } from "../../../../shared/legacy-sealed"
+import { resolveBackupOwnership, type OwnershipFile } from "../../../../shared/backup-ownership"
 import { type NextRequest, NextResponse } from "next/server"
 
 // Helper function to format bytes to human readable format
@@ -35,17 +36,13 @@ function unavailableReason(status: number, body: string): string | null {
 }
 const metadataCache = new MetadataCache<MetadataRead>(result => !!result.metadata && !result.metadataError)
 /**
- * What a folder's ownership marker says. `foreign` is a marker sealed by an earlier version that
- * cannot be opened for this tenant (another tenant's, or a key this device lacks); `unreadable` is
- * a marker that exists but could not be read (any status but 404, a network error or a body that
- * cannot be parsed). Only a marker that was read is cached: importing the recovery key, or storage
- * answering again, brings the folder back.
+ * A folder's ownership marker as read. Only a marker that was read is cached: importing the
+ * recovery key, or storage answering again, brings the folder back.
  */
-type OwnerRead = { kind: 'owner'; tenantId: string | null; runId: string | null; sealed?: never } | { kind: 'missing'; sealed?: never } | { kind: 'foreign'; sealed: boolean } | { kind: 'unreadable'; sealed?: never }
-const ownerCache = new MetadataCache<OwnerRead>(result => result.kind === 'owner')
+const ownerCache = new MetadataCache<OwnershipFile>(result => result.kind === 'found')
 
 /** One backup folder, described from metadata and either a folder listing or the summary inventory. */
-async function describeBackup(storageAccountName: string, name: string, accessToken: string, inventory?: { text: string; cacheKey: string; version: string; owner: string }) {
+async function describeBackup(storageAccountName: string, name: string, accessToken: string, tenantId: string, inventory?: { text: string; cacheKey: string; version: string; owner: string }) {
   const parsed = parseBackupName(name)!
   const legacy = parsed.precision === "day"
   const date = parsed.timestamp.slice(0, 10)
@@ -91,26 +88,33 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
   const filesText = typeof listing === 'string' && !unavailable ? listing : ''
   const metadata = unavailable ? null : metadataResult.metadata
   const metadataError = unavailable ?? metadataResult.metadataError
-  // A folder whose manifest does not name its tenant (none, unreadable, or from an older version)
-  // is placed by its ownership marker, read just for those folders: the tenant filter applies to
-  // it, and for a folder without a manifest the run id lets the Dashboard count a failed run once.
-  const readOwner = async (): Promise<OwnerRead> => {
+  // Ownership comes from the shared resolver (shared/backup-ownership.ts): the manifest's tenant,
+  // else the ownership marker, read just for those folders and only when the listing holds one.
+  // For a folder without a manifest the marker's run id lets the Dashboard count a failed run once.
+  const readMarker = async (): Promise<OwnershipFile> => {
     try {
       const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(name)}/${BACKUP_OWNER_FILE}`, { headers: storageHeaders(accessToken) })
       if (response.status === 404) return { kind: 'missing' }
-      if (!response.ok) return { kind: 'unreadable' }
-      const owner = await response.json()
-      return { kind: 'owner', tenantId: typeof owner?.TenantId === 'string' ? owner.TenantId : null, runId: typeof owner?.RunId === 'string' ? owner.RunId : null }
+      if (!response.ok) return { kind: 'unreadable', error: new Error(`The ownership record is unavailable (${response.status}).`) }
+      return { kind: 'found', value: await response.json() }
     } catch (error) {
-      // Sealed by an earlier version for another tenant or with a key this device lacks. A missing sign-in on this device leaves the marker unreadable until it is fixed.
-      if (error instanceof Error && error.name === 'FetchApplicationError') return { kind: 'foreign', sealed: isLegacySealedError(error) }
-      return { kind: 'unreadable' }
+      return { kind: 'unreadable', error }
     }
   }
-  const owner: OwnerRead = typeof metadata?.TenantId === 'string' || !filesText.includes(`<Name>${name}/${BACKUP_OWNER_FILE}</Name>`) ? { kind: 'missing' }
-    : inventory?.owner ? await ownerCache.read(inventory.cacheKey, inventory.owner, readOwner) : await readOwner()
+  const { owner } = await resolveBackupOwnership(async (file) => {
+    if (file === 'metadata.json') return metadata ? { kind: 'found', value: metadata } : metadataError ? { kind: 'unreadable', error: new Error(metadataError) } : { kind: 'missing' }
+    if (!filesText.includes(`<Name>${name}/${BACKUP_OWNER_FILE}</Name>`)) return { kind: 'missing' }
+    return inventory?.owner ? ownerCache.read(inventory.cacheKey, inventory.owner, readMarker) : readMarker()
+  }, tenantId)
+  // A marker sealed by an earlier version that cannot be opened for this tenant is foreign (another
+  // tenant's, or a key this device lacks). One that could not be read otherwise (any status but 404,
+  // a network error, a body that cannot be parsed or names no tenant) leaves the folder unresolved
+  // until it can be. A missing sign-in on this device leaves the marker unreadable until it is fixed.
+  const markerFailure = owner.kind === 'unreadable' ? owner.error : null
+  const foreignMarker = markerFailure instanceof Error && markerFailure.name === 'FetchApplicationError'
   // A folder whose manifest could not be read is not matched to its run: its status is unknown, so the run counts once, through its attempt record.
-  const runId = typeof metadata?.RunId === 'string' ? metadata.RunId as string : owner.kind === 'owner' && !metadata && !metadataError ? owner.runId : null
+  const markerRunId = (owner.kind === 'owned' || owner.kind === 'other') && owner.source === 'marker' ? owner.runId : null
+  const runId = typeof metadata?.RunId === 'string' ? metadata.RunId as string : !metadata && !metadataError ? markerRunId : null
   const recordedTimestamp = metadata?.timestamp ?? metadata?.Timestamp ?? metadata?.BackupDate
   const timestamp = legacy
     ? typeof recordedTimestamp === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(recordedTimestamp) && Number.isFinite(Date.parse(recordedTimestamp)) ? recordedTimestamp : date
@@ -176,11 +180,11 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
     warning: undefined,
     runbookVersion: metadata?.RunbookVersion ?? metadata?.runbookVersion ?? null,
     runId,
-    ownerTenantId: owner.kind === 'owner' ? owner.tenantId : null,
-    foreign: owner.kind === 'foreign' || Boolean(metadataResult.foreign),
-    unresolved: owner.kind === 'unreadable',
+    ownerTenantId: owner.kind === 'owned' || owner.kind === 'other' ? owner.tenantId : null,
+    foreign: foreignMarker || Boolean(metadataResult.foreign),
+    unresolved: owner.kind === 'unreadable' && !foreignMarker,
     // Sealed by an earlier version and not opened on this device: its manifest, or its ownership marker.
-    sealed: Boolean(metadataResult.sealed) || owner.sealed === true,
+    sealed: Boolean(metadataResult.sealed) || (foreignMarker && isLegacySealedError(markerFailure)),
   }
 }
 
@@ -310,7 +314,7 @@ export async function POST(request: NextRequest) {
     // whose marker cannot be opened for this tenant. Older backups that do not record a tenant are still listed.
     // A folder whose marker could not be read may be another tenant's, so it is left out too and
     // counted as unresolved; its run, if it failed, counts once through its attempt record.
-    const described = await mapLimit(backupFolders, 6, (name) => describeBackup(storageAccountName, name, accessToken, inventories.get(name)))
+    const described = await mapLimit(backupFolders, 6, (name) => describeBackup(storageAccountName, name, accessToken, String(tenantId), inventories.get(name)))
     const unresolved = described.filter((backup) => backup.unresolved).length
     // Folders sealed by an earlier version that this device cannot open, for the backups page's offer
     // to import a recovery key. Without the key nobody can tell whose such a folder is, so it counts

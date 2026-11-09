@@ -94,6 +94,7 @@ it('skips a backup on this device that damaged files made unavailable instead of
     const url = new URL(String(input))
     if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
     if (url.searchParams.get('delimiter')) return new Response(folders.map((folder) => `<BlobPrefix><Name>${folder}/</Name></BlobPrefix>`).join(''))
+    if (url.pathname.endsWith('/.tenuvault-owner.json')) return new Response('', { status: 404 })
     if (url.pathname.endsWith('/metadata.json')) {
       metadata(url.pathname)
       // The newest backup is unavailable: its files could not be read.

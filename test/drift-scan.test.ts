@@ -207,6 +207,31 @@ describe('Drift scan', () => {
     expect(await chosen.json()).toMatchObject({ error: LEGACY_SEALED_MESSAGE, code: 'BACKUP_UNREADABLE' })
   })
 
+  it('places manifests that record no tenant by their markers: another tenant is skipped or refused (review repro)', async () => {
+    const theirs = (name: string): FakeBackup => ({ metadata: { Status: 'Success' }, files: { '.tenuvault-owner.json': { TenantId: OTHER_TENANT, RunId: name }, 'DeviceConfigurations/X.json': policy('x', 'X') } })
+    const B1 = 'backup-2026-09-24-120000', B2 = 'backup-2026-09-25-120000'
+    const storage = fakeStorage({ ...twoBackups(true), [B1]: theirs(B1), [B2]: theirs(B2) })
+    const chosen = await drift(request({ baseline: B1, comparison: B2 }))
+    expect(chosen.status).toBe(403)
+    expect(await chosen.json()).toMatchObject({ code: 'BACKUP_OTHER_TENANT' })
+    expect(storage.reads).toContain(`${B1}/.tenuvault-owner.json`)
+    const picked = await drift(request())
+    expect(picked.status).toBe(200)
+    const result = await picked.json()
+    expect([result.baseline.id, result.comparison.id]).toEqual([OLD, NEW])
+  })
+
+  it('skips a backup whose marker is damaged when it picks the pair, and refuses it when chosen', async () => {
+    const DAMAGED = 'backup-2026-09-24-120000'
+    fakeStorage({ ...twoBackups(true), [DAMAGED]: { metadata: { Status: 'Success' }, files: { '.tenuvault-owner.json': { Source: 'TenuVault Desktop' } } } })
+    const picked = await drift(request())
+    expect(picked.status).toBe(200)
+    expect((await picked.json()).comparison.id).toBe(NEW)
+    const chosen = await drift(request({ baseline: NEW, comparison: DAMAGED }))
+    expect(chosen.status).toBe(409)
+    expect(await chosen.json()).toMatchObject({ code: 'BACKUP_UNREADABLE', error: expect.stringContaining('ownership record is damaged') })
+  })
+
   it('reports an unreadable file as a warning instead of failing the scan', async () => {
     fakeStorage(twoBackups(true), { unreadable: [`${NEW}/DeviceConfigurations/B.json`] })
     const response = await drift(request())

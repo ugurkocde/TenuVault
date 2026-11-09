@@ -1,5 +1,5 @@
 import { isGuid } from "../../../shared/security"
-import { BACKUP_OWNER_FILE } from "../../../shared/constants"
+import { resolveBackupOwnership } from "../../../shared/backup-ownership"
 
 /**
  * The revert history that older versions kept for the whole container, keyed by policy ID only.
@@ -56,21 +56,21 @@ function backupOf(value: unknown): string | null {
   return /^[A-Za-z0-9_-]+$/.test(folder) ? folder : null
 }
 
-/** Whether the backup's metadata, or else its ownership marker, positively names `tenantId`. */
+/** Whether the backup's metadata, or else its ownership marker, positively names `tenantId` (shared/backup-ownership.ts). */
 async function backupOwnedBy(read: BlobRead, backup: string, tenantId: string): Promise<boolean> {
-  for (const file of ["metadata.json", BACKUP_OWNER_FILE]) {
+  const { owner } = await resolveBackupOwnership(async (file) => {
     let response: Response
     try {
       response = await read(`${backup}/${file}`)
     } catch (error) {
       // Sealed by an earlier version for another tenant or with a key this device lacks: not this tenant's to claim.
-      if (error instanceof Error && error.name === "FetchApplicationError") return false
+      if (error instanceof Error && error.name === "FetchApplicationError") return { kind: "unreadable", error }
       throw error
     }
-    if (response.status === 404) continue
+    if (response.status === 404) return { kind: "missing" }
     if (!response.ok) throw new Error(`Failed to read ${backup}/${file} (${response.status})`)
-    const record = await response.json().catch(() => null)
-    if (typeof record?.TenantId === "string") return record.TenantId.toLowerCase() === tenantId.toLowerCase()
-  }
-  return false
+    try { return { kind: "found", value: await response.json() } }
+    catch (error) { return { kind: "unreadable", error } }
+  }, tenantId)
+  return owner.kind === "owned"
 }
