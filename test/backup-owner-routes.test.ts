@@ -6,7 +6,9 @@ import { POST as restorePreview } from "../src/portal/app/api/restore-preview/ro
 import { POST as listBackupContents } from "../src/portal/app/api/list-backup-contents/route"
 import { POST as downloadBackup } from "../src/portal/app/api/download-backup/route"
 import { POST as backupChanges } from "../src/portal/app/api/backup-changes/route"
-import { ownedBy } from "../src/portal/lib/policies/backup-owner"
+import { UNTAGGED_BACKUP } from "../src/portal/lib/policies/backup-owner"
+import { INVALID_MANIFEST_TENANT } from "../src/shared/backup-ownership"
+import { endlessBody } from "./helpers"
 
 const OWN = "11111111-1111-1111-1111-111111111111"
 const OTHER = "22222222-2222-2222-2222-222222222222"
@@ -34,7 +36,7 @@ function stubStorage(blobs: Record<string, unknown>) {
       }
       const name = url.pathname.split("/").slice(2).map(decodeURIComponent).join("/")
       if (!(name in blobs)) return new Response("", { status: 404 })
-      return Response.json(blobs[name], { headers: { "x-tenuvault-authenticated": "true" } })
+      return Response.json(blobs[name])
     }
     graph.push(`${init?.method ?? "GET"} ${url.pathname}`)
     return Response.json({ id: "created" }, { status: 201 })
@@ -80,11 +82,6 @@ describe("backup routes refuse another tenant's backup", () => {
     expect((await response.json()).comparedWith).toBe(older)
   })
 
-  it("allows older backups that record no tenant", () => {
-    expect(ownedBy(null, OWN)).toBe(true)
-    expect(ownedBy({ Status: "Success" }, OWN)).toBe(true)
-    expect(ownedBy({ TenantId: OTHER }, OWN)).toBe(false)
-  })
 })
 
 describe("backups without metadata and unreadable metadata", () => {
@@ -115,6 +112,41 @@ describe("backups without metadata and unreadable metadata", () => {
   })
 })
 
+describe("positive ownership for changes to live policies", () => {
+  it("refuses a restore whose ownership marker is oversized with 413, before any Graph call, reading it only to the cap", async () => {
+    const graph = stubStorage({ [policyPath]: snapshot })
+    const served = globalThis.fetch as unknown as (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+    const big = endlessBody(40, new TextEncoder().encode('{"TenantId":"'))
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => String(input).endsWith("/.tenuvault-owner.json") ? new Response(big.body) : served(input, init)))
+    const response = await restoreBackup(request("/api/restore-backup", { ...base, restoreType: "selective", selectedPolicies: [{ path: policyPath }] }))
+    expect(response.status).toBe(413)
+    expect(graph).toEqual([])
+    expect(big.pulled()).toBeLessThan(40)
+  })
+
+  it("previews a backup that records no tenant as copy only, with the reason", async () => {
+    stubStorage({ [policyPath]: snapshot })
+    const { items } = await (await restorePreview(request("/api/restore-preview", { ...base, paths: [policyPath] }))).json()
+    expect(items[0].replaceBlocker).toBe(UNTAGGED_BACKUP)
+    expect(items[0].blocker).toBeUndefined()
+  })
+
+  it.each([
+    ["the manifest", { [`${backupId}/metadata.json`]: { TenantId: OWN, Status: "Success" } }],
+    ["the ownership marker", { [`${backupId}/.tenuvault-owner.json`]: { TenantId: OWN } }],
+  ])("offers replace for a backup whose %s names this tenant", async (_kind, evidence) => {
+    stubStorage({ ...evidence, [policyPath]: snapshot })
+    const { items } = await (await restorePreview(request("/api/restore-preview", { ...base, paths: [policyPath] }))).json()
+    expect(items[0].replaceBlocker).toBeUndefined()
+  })
+
+  it("treats this tenant's own store on this device as ownership evidence", async () => {
+    stubStorage({ [policyPath]: snapshot })
+    const { items } = await (await restorePreview(request("/api/restore-preview", { ...base, storageAccountName: `tvlocal-${OWN}`, paths: [policyPath] }))).json()
+    expect(items[0].replaceBlocker).toBeUndefined()
+  })
+})
+
 describe("ownership is settled before other files are read", () => {
   it("download refuses unreadable metadata without reading other files", async () => {
     const reads: string[] = []
@@ -126,8 +158,25 @@ describe("ownership is settled before other files are read", () => {
       return url.pathname.endsWith("metadata.json") ? new Response("not json") : Response.json(snapshot)
     }))
     const response = await downloadBackup(request("/api/download-backup", base))
-    expect(response.status).toBe(502)
-    expect(reads).toEqual([`/intune-backups/${backupId}/metadata.json`])
+    expect(response.status).toBe(500)
+    expect(reads).not.toContain(`/intune-backups/${policyPath}`)
+  })
+
+  it.each(["", "   "])("download refuses metadata with the blank tenant %j as invalid, even when the marker names this tenant", async (tenant) => {
+    const reads: string[] = []
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input))
+      if (url.hostname === "login.microsoftonline.com") return Response.json({ access_token: "test" })
+      if (url.searchParams.get("comp") === "list") return new Response(`<Blobs><Blob><Name>${backupId}/metadata.json</Name></Blob><Blob><Name>${policyPath}</Name></Blob></Blobs>`)
+      reads.push(url.pathname)
+      if (url.pathname.endsWith("metadata.json")) return Response.json({ TenantId: tenant, Status: "Success" })
+      if (url.pathname.endsWith(".tenuvault-owner.json")) return Response.json({ TenantId: OWN })
+      return Response.json(snapshot)
+    }))
+    const response = await downloadBackup(request("/api/download-backup", base))
+    expect(response.status).toBe(403)
+    expect((await response.json()).error).toBe(INVALID_MANIFEST_TENANT)
+    expect(reads).not.toContain(`/intune-backups/${policyPath}`)
   })
 
   it("backup changes places an older backup that records no tenant by its ownership marker", async () => {

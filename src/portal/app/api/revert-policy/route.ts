@@ -1,4 +1,5 @@
-import { readOwnedBackup } from "~/lib/policies/backup-owner"
+import { readOwnedBackup, UNTAGGED_BACKUP } from "~/lib/policies/backup-owner"
+import { checkRestoreManifest, verifySnapshot } from "~/lib/policies/backup-manifest"
 import { grantedPermissions } from "../../../../shared/services/token"
 import { validPolicyPath } from "~/lib/policies/restore"
 import { isGraphId, isGuid } from "../../../../shared/security"
@@ -93,11 +94,17 @@ export async function POST(request: NextRequest) {
       getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default")
     ])
 
-    // A shared container can hold other tenants' backups; never restore from one of those.
+    // A shared container can hold other tenants' backups; never restore from one of those. Revert
+    // and recreate change the live policy, so they need a backup that names this tenant.
+    const backupId = backupPath.split('/')[0] ?? ''
     const owned = await readOwnedBackup((name) => fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${name.split("/").map(encodeURIComponent).join("/")}`, {
       headers: { 'x-ms-version': '2021-12-02', 'Authorization': `Bearer ${storageToken}` },
-    }), backupPath.split('/')[0] ?? '', tenantId)
+    }), backupId, tenantId, storageAccountName)
     if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
+    if (action === "revert" && !owned.owned) return NextResponse.json({ error: UNTAGGED_BACKUP }, { status: 400 })
+    // The same manifest checks as a restore: the file must be listed and the backup complete for it.
+    const checked = checkRestoreManifest(owned.metadata, backupId, [backupPath], false)
+    if (!checked.ok) return NextResponse.json({ error: checked.error }, { status: 400 })
 
     // Fetch the policy content from the backup
     const policyUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups/${backupPath.split("/").map(encodeURIComponent).join("/")}`
@@ -140,9 +147,10 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    if (action === "revert" && backupResponse.headers.get("x-tenuvault-authenticated") !== "true") throw new Error("Unverified legacy snapshots cannot revert live policies. Review and restore a copy instead.")
     const policyContent = await backupResponse.json()
-    if (action === "revert" && policyContent.id !== policyId) throw new Error("The authenticated snapshot does not belong to the selected policy")
+    if (action === "revert" && policyContent.id !== policyId) return NextResponse.json({ error: "The backup snapshot does not belong to the selected policy" }, { status: 400 })
+    try { verifySnapshot(policyContent, checked.manifest?.get(backupPath)) }
+    catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 }) }
     
     // Restore creates an unassigned copy; revert puts the existing policy back to the backed-up version.
     const outcome = await new Restorer(graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) }), { mode: action === 'revert' ? 'replace' : 'copy', assignments: false, granted: grantedPermissions(graphToken) })

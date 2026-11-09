@@ -13,6 +13,9 @@ import { createAuditRecorder } from '../src/main/api/audit'
 import { CANCELLED_HEADER, registerDriftScan } from '../src/portal/lib/drift/scan-hooks'
 import type { DriftScanProgress } from '../src/shared/intune/drift'
 import { listBlobPages } from '../src/portal/lib/storage/list'
+import { LegacySealedError } from '../src/main/api/network-error'
+import { LEGACY_SEALED_MESSAGE } from '../src/shared/legacy-sealed'
+import { endlessBody } from './helpers'
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -98,7 +101,7 @@ describe('Backup pair selection', () => {
 
 /** A storage account with backups, served the way the blob endpoints answer the route. */
 interface FakeBackup { metadata: Record<string, unknown> | null; files: Record<string, unknown> }
-function fakeStorage(backups: Record<string, FakeBackup>, options: { unreadable?: string[]; beforeRead?: (path: string) => Promise<void> | void } = {}) {
+function fakeStorage(backups: Record<string, FakeBackup>, options: { unreadable?: string[]; sealed?: string[]; otherTenant?: string[]; oversized?: Array<{ path: string; body: ReturnType<typeof endlessBody> }>; beforeRead?: (path: string) => Promise<void> | void } = {}) {
   const reads: string[] = []
   const stub = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input))
@@ -123,6 +126,11 @@ function fakeStorage(backups: Record<string, FakeBackup>, options: { unreadable?
     }
     const [, , backup, ...rest] = url.pathname.split('/').map(decodeURIComponent)
     const path = rest.join('/')
+    // A manifest an earlier version encrypted with a key this device lacks fails as the legacy reader does.
+    if (path === 'metadata.json' && options.sealed?.includes(backup!)) throw new LegacySealedError()
+    const oversized = options.oversized?.find((entry) => entry.path === `${backup}/${path}`)
+    if (oversized) return new Response(oversized.body.body)
+    if (path === 'metadata.json' && options.otherTenant?.includes(backup!)) throw new LegacySealedError(undefined, true)
     if (path === 'metadata.json') return backups[backup!]?.metadata ? Response.json(backups[backup!]!.metadata) : new Response('', { status: 404 })
     reads.push(`${backup}/${path}`)
     await options.beforeRead?.(`${backup}/${path}`)
@@ -188,6 +196,79 @@ describe('Drift scan', () => {
     expect(skipResult.summary).toMatchObject({ total: 3, added: 1, modified: 1, deleted: 1 })
     expect(skipResult.baseline).toEqual({ id: OLD, timestamp: '2026-09-22T12:00:00.000Z', trigger: 'manual', status: 'Success' })
     expect(skipResult.comparison).toMatchObject({ id: NEW, trigger: 'scheduled' })
+  })
+
+  it('skips a newer backup it cannot open when it picks the pair, and names the key when that backup is chosen', async () => {
+    const SEALED = 'backup-2026-09-24-120000'
+    fakeStorage({ ...twoBackups(true), [SEALED]: { metadata: { Status: 'Success' }, files: {} } }, { sealed: [SEALED] })
+    const picked = await drift(request())
+    expect(picked.status).toBe(200)
+    const result = await picked.json()
+    expect([result.baseline.id, result.comparison.id]).toEqual([OLD, NEW])
+
+    const chosen = await drift(request({ baseline: NEW, comparison: SEALED }))
+    expect(chosen.status).toBe(409)
+    expect(await chosen.json()).toMatchObject({ error: LEGACY_SEALED_MESSAGE, code: 'BACKUP_UNREADABLE' })
+  })
+
+  it('places manifests that record no tenant by their markers: another tenant is skipped or refused (review repro)', async () => {
+    const theirs = (name: string): FakeBackup => ({ metadata: { Status: 'Success' }, files: { '.tenuvault-owner.json': { TenantId: OTHER_TENANT, RunId: name }, 'DeviceConfigurations/X.json': policy('x', 'X') } })
+    const B1 = 'backup-2026-09-24-120000', B2 = 'backup-2026-09-25-120000'
+    const storage = fakeStorage({ ...twoBackups(true), [B1]: theirs(B1), [B2]: theirs(B2) })
+    const chosen = await drift(request({ baseline: B1, comparison: B2 }))
+    expect(chosen.status).toBe(403)
+    expect(await chosen.json()).toMatchObject({ code: 'BACKUP_OTHER_TENANT' })
+    expect(storage.reads).toContain(`${B1}/.tenuvault-owner.json`)
+    const picked = await drift(request())
+    expect(picked.status).toBe(200)
+    const result = await picked.json()
+    expect([result.baseline.id, result.comparison.id]).toEqual([OLD, NEW])
+  })
+
+  it('skips a backup whose marker is damaged when it picks the pair, and refuses it when chosen', async () => {
+    const DAMAGED = 'backup-2026-09-24-120000'
+    fakeStorage({ ...twoBackups(true), [DAMAGED]: { metadata: { Status: 'Success' }, files: { '.tenuvault-owner.json': { Source: 'TenuVault Desktop' } } } })
+    const picked = await drift(request())
+    expect(picked.status).toBe(200)
+    expect((await picked.json()).comparison.id).toBe(NEW)
+    const chosen = await drift(request({ baseline: NEW, comparison: DAMAGED }))
+    expect(chosen.status).toBe(409)
+    expect(await chosen.json()).toMatchObject({ code: 'BACKUP_UNREADABLE', error: expect.stringContaining('ownership record is damaged') })
+  })
+
+  it('refuses another tenant\'s backup as such before missing or unreadable handling, and skips it when picking', async () => {
+    const MANIFESTLESS = 'backup-2026-09-24-120000', SEALED = 'backup-2026-09-25-120000'
+    fakeStorage({
+      ...twoBackups(true),
+      // Another tenant's run that stopped before its manifest.
+      [MANIFESTLESS]: { metadata: null, files: { '.tenuvault-owner.json': { TenantId: OTHER_TENANT } } },
+      // An older encrypted manifest that a key here opens only for another signed-in tenant.
+      [SEALED]: { metadata: { Status: 'Success' }, files: {} },
+    }, { sealed: [], otherTenant: [SEALED] })
+    for (const comparison of [MANIFESTLESS, SEALED]) {
+      const chosen = await drift(request({ baseline: NEW, comparison }))
+      expect(chosen.status).toBe(403)
+      expect(await chosen.json()).toMatchObject({ code: 'BACKUP_OTHER_TENANT' })
+    }
+    const picked = await drift(request())
+    expect(picked.status).toBe(200)
+    const result = await picked.json()
+    expect([result.baseline.id, result.comparison.id]).toEqual([OLD, NEW])
+  })
+
+  it('skips a backup whose marker is oversized when it picks the pair, and refuses it when chosen, reading it only to the cap', async () => {
+    const BIG = 'backup-2026-09-24-120000'
+    const bodies = [endlessBody(40, new TextEncoder().encode('{"TenantId":"')), endlessBody(40, new TextEncoder().encode('{"TenantId":"'))]
+    const backups = { ...twoBackups(true), [BIG]: { metadata: { Status: 'Success' }, files: {} } }
+    fakeStorage(backups, { oversized: [{ path: `${BIG}/.tenuvault-owner.json`, body: bodies[0]! }] })
+    const picked = await drift(request())
+    expect(picked.status).toBe(200)
+    expect((await picked.json()).comparison.id).toBe(NEW)
+    fakeStorage(backups, { oversized: [{ path: `${BIG}/.tenuvault-owner.json`, body: bodies[1]! }] })
+    const chosen = await drift(request({ baseline: NEW, comparison: BIG }))
+    expect(chosen.status).toBe(409)
+    expect(await chosen.json()).toMatchObject({ code: 'BACKUP_UNREADABLE', error: expect.stringContaining('32 MiB') })
+    for (const body of bodies) expect(body.pulled()).toBeLessThan(40)
   })
 
   it('reports an unreadable file as a warning instead of failing the scan', async () => {

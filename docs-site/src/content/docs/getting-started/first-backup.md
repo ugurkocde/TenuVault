@@ -29,7 +29,7 @@ If the first backup fails or you cancel it, select **Try again** to run it again
 After a successful first backup, the step offers two things:
 
 * **Turn on automatic backups.** One button turns on a schedule for this tenant: **Back up every Sunday at 02:00** on Community, or **Back up daily at 02:00** on Pro and MSP. TenuVault backs up while it is open or in the tray. A backup missed while the computer was off runs the next time TenuVault starts. Change the day and time later in **Backup & Restore**, **Schedule**. See [Schedule backups](/backups/schedules/).
-* **Save your recovery key**, if you have not saved it yet. Select **Save recovery key** and keep the file somewhere safe, such as your password manager. Without the recovery key, your backups cannot be read after a reinstall or on another computer. See [Save your recovery key](/getting-started/choose-storage/#save-your-recovery-key).
+* **Save your recovery key**, for backups on this device, if you have not saved it yet. Select **Save recovery key** and keep the file somewhere safe, such as your password manager. Without the recovery key, backups on this device cannot be read after a reinstall or on another computer. See [Save your recovery key](/getting-started/choose-storage/#save-your-recovery-key). For a tenant with Azure storage this step is left out, because Azure backups do not need the key.
 
 When a schedule is already on or the key is already saved, the step says so instead.
 
@@ -56,13 +56,12 @@ For more on manual backups, see [Run a backup](/backups/).
 
 The log ends with a summary such as **Backup completed: 214 policies in 1m 12s.** Each type also gets a line such as **Found 12 &lt;type&gt;** and **Backed up 12 &lt;type&gt;**.
 
-After a successful manual backup on Community, a line beside the completion result appears once per machine and describes encrypted copies in your own Azure storage account and longer retention, included in TenuVault Pro and MSP.
+After a successful manual backup on Community, a line beside the completion result appears once per machine and describes backups in your own Azure storage account, which every admin with access sees, and longer retention, included in TenuVault Pro and MSP.
 
 ## Common problems on the first backup
 
 | Log or error message | Fix |
 | --- | --- |
-| **Save your current backup recovery key in Settings before the first encrypted Azure backup.** | Open **Settings** > **Storage and recovery** and select **Save recovery key**, then run the backup again from **Backup & Restore**. See [Save your recovery key](/getting-started/choose-storage/#save-your-recovery-key). |
 | **Skipped &lt;type&gt;: access was denied. The app registration may lack the permission or admin consent, or your Intune role may not allow it.** | Your app registration is missing a permission TenuVault uses or its admin consent, or your Intune role does not cover this type. Open the app registration in Microsoft Entra, go to **API permissions** and select **Grant admin consent for &lt;your tenant&gt;**, or run the setup script again. Then sign out of the tenant in TenuVault and sign in again. If every permission already shows **Granted**, check that your Intune role covers these items. See [Create the app registration manually](/getting-started/app-registration/#3-add-the-delegated-permissions). |
 | **Could not read &lt;type&gt;: ...** | The log shows the error Microsoft Graph returned. If it is an access error, check that your Intune role includes this type. |
 | A banner asks you to sign in again | Your Microsoft session ended. Select **Sign in** in the banner, then run the backup again. |

@@ -1,5 +1,7 @@
 import { assertStorageAccountName } from "../../shared/storage-account"
-import { BACKUP_CONTAINER } from "../../shared/constants"
+import { BACKUP_CONTAINER, MAX_BACKUP_ARCHIVE_BYTES } from "../../shared/constants"
+import { readJsonCapped } from "../../shared/capped-body"
+import { oversizedOwnershipFile } from "../../shared/backup-ownership"
 import { retryDelay, retryableStatus, sleep } from "../graph-retry"
 import { FetchApplicationError } from "../api/network-error"
 import type { NetworkCircuit } from "./engine"
@@ -30,7 +32,7 @@ export class BlobWriter {
    */
   async put(name: string, body: string, beforeCommit?: NetworkCircuit, createOnly = false, onDispatch?: () => void): Promise<void> {
     const path = `${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`
-    // The earlier PUT may have landed. Read through the same decrypting wrapper and compare plaintext.
+    // The earlier PUT may have landed. Read it back and compare it with what this writer sent.
     const landed = async (response: Response, signal: AbortSignal) => {
       const stored = await this.request(path, { method: "GET", signal }, async (readBack) => {
         if (!readBack.ok) throw new StorageError(await storageError(readBack, this.account))
@@ -88,21 +90,22 @@ export class BlobWriter {
     return { blobs, prefixes }
   }
 
-  /** A JSON blob, or null when it does not exist or is not valid JSON. */
-  async readJson(name: string, authenticated = false): Promise<Record<string, unknown> | null> {
+  /**
+   * A JSON object blob, or null when it does not exist. A blob that exists but is not a JSON object
+   * (damaged, or written by something else) throws a FetchApplicationError: it is unreadable, never
+   * the same as a missing blob, so retention keeps it and counts the container as shared.
+   */
+  async readJson(name: string): Promise<Record<string, unknown> | null> {
     return this.request(`${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`, { method: "GET" }, async (response) => {
       if (response.status === 404) return null
       if (!response.ok) throw await storageFailure(response, this.account)
-      if (authenticated && response.headers.get("x-tenuvault-authenticated") !== "true") {
-        void response.body?.cancel().catch(() => undefined)
-        return null
-      }
-      try {
-        return (await response.json()) as Record<string, unknown>
-      } catch (error) {
-        if (error instanceof SyntaxError) return null
-        throw error
-      }
+      // Capped like every other backup read; an oversized file is unreadable, never buffered whole.
+      const body = await readJsonCapped(response, MAX_BACKUP_ARCHIVE_BYTES)
+      if (body.kind === "oversized") throw new FetchApplicationError(new Error(oversizedOwnershipFile(name.split("/").pop() ?? name)))
+      if (body.kind === "invalid") throw new FetchApplicationError(new Error(`${name.split("/").pop()} is not valid JSON`))
+      const value = body.value
+      if (!value || typeof value !== "object" || Array.isArray(value)) throw new FetchApplicationError(new Error(`${name.split("/").pop()} is not a JSON object`))
+      return value as Record<string, unknown>
     })
   }
 

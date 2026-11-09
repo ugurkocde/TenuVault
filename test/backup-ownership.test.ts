@@ -2,7 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import JSZip from "jszip"
 import { NextRequest } from "next/server"
 import { BackupEngine } from "../src/main/backup/engine"
-import { encryptedAzureFetch, openAzure, registerStorageToken, sealAzure } from "../src/main/storage/azure-seal"
+import { legacyAzureReader, registerStorageToken } from "../src/main/storage/azure-seal"
+import { LEGACY_SEALED_MESSAGE } from "../src/shared/legacy-sealed"
+import { sealLegacyAzure } from "./legacy-seal"
+import { endlessBody } from "./helpers"
 import { POST as downloadBackup } from "../src/portal/app/api/download-backup/route"
 import { reviewArchive } from "../src/main/backup/archive"
 import { BACKUP_OWNER_FILE } from "../src/shared/constants"
@@ -56,15 +59,16 @@ function setup(options: { retention?: number; count?: number; override?: (url: U
     return new Response(sent.method === "HEAD" || !saved.has(name) ? null : new Uint8Array(saved.get(name)!), { status: saved.has(name) ? 200 : 404 })
   }
   registerStorageToken("token", TENANT)
-  const fetch = encryptedAzureFetch(wireFetch, () => [master], () => undefined)
+  const fetch = legacyAzureReader(wireFetch, () => [master])
   const engine = new BackupEngine({ fetch, getToken: async () => { registerStorageToken("token", TENANT); return "token" }, retentionDays: () => options.retention ?? 30 })
-  function seed(name: string, value: unknown, authenticated = true) {
+  /** A plain blob, as this version writes, or one sealed by an earlier version with `key`. */
+  function seed(name: string, value: unknown, sealed = false, key = master) {
     const body = Buffer.from(typeof value === "string" ? value : JSON.stringify(value))
-    saved.set(name, authenticated ? sealAzure(body, master, TENANT, new URL(`${base}${name}`)) : body)
+    saved.set(name, sealed ? sealLegacyAzure(body, key, TENANT, new URL(`${base}${name}`)) : body)
   }
-  function folder(prefix: string, marker: unknown = owner, authenticated = true) {
-    seed(`${prefix}DeviceConfigurations/Old.json`, { id: "old" })
-    if (marker !== null) seed(`${prefix}${BACKUP_OWNER_FILE}`, marker, authenticated)
+  function folder(prefix: string, marker: unknown = owner, sealed = false) {
+    seed(`${prefix}DeviceConfigurations/Old.json`, { id: "old" }, sealed)
+    if (marker !== null) seed(`${prefix}${BACKUP_OWNER_FILE}`, marker, sealed)
   }
   return { engine, fetch, saved, calls, seed, folder }
 }
@@ -80,45 +84,39 @@ async function complete(engine: BackupEngine) {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
 describe("backup folder ownership", () => {
-  it("encrypts ownership before policy uploads, even when retention keeps everything", async () => {
+  it("writes plain ownership before policy uploads, even when retention keeps everything", async () => {
     const { engine, saved, calls } = setup({ count: 1, retention: 0 })
     const job = await complete(engine)
     const name = `${job.backupFolder}/${BACKUP_OWNER_FILE}`
-    const raw = saved.get(name)!
-    expect(raw.toString()).not.toContain(TENANT)
-    expect(raw.toString()).not.toContain("TenuVault Desktop")
-    const opened = openAzure(raw, [master], TENANT, new URL(`${base}${name}`))
-    expect(opened.authenticated).toBe(true)
-    expect(JSON.parse(opened.data.toString())).toEqual({ ...owner, RunId: job.id })
+    for (const blob of [name, `${job.backupFolder}/DeviceConfigurations/Policy 0.json`, `${job.backupFolder}/metadata.json`]) {
+      expect(saved.get(blob)!.subarray(0, 5).toString()).not.toBe("TVAZ1")
+      expect(() => JSON.parse(saved.get(blob)!.toString())).not.toThrow()
+    }
+    expect(JSON.parse(saved.get(name)!.toString())).toEqual({ ...owner, RunId: job.id })
+    expect(JSON.parse(saved.get(`${job.backupFolder}/metadata.json`)!.toString())).toMatchObject({ TenantId: TENANT, Status: "Success" })
+    const putRequests = calls.filter(call => call.request.method === "PUT" && !new URL(call.request.url).search)
+    for (const call of putRequests) expect(call.request.headers.get("content-type")).toBe("application/json")
     const puts = calls.filter(call => call.request.method === "PUT" && !new URL(call.request.url).search).map(call => call.name)
     expect(puts).toEqual([name, `${job.backupFolder}/DeviceConfigurations/Policy 0.json`, `${job.backupFolder}/metadata.json`])
     expect(calls.some(call => call.request.method === "DELETE")).toBe(false)
     expect(vi.getTimerCount()).toBe(0)
   })
 
-  it("authenticates an encrypted ownership read", async () => {
+  it.each([false, true])("reads a plain or legacy sealed ownership marker (sealed: %s)", async sealed => {
     const { fetch, folder } = setup()
-    folder(old)
+    folder(old, owner, sealed)
     const response = await fetch(`${base}${old}${BACKUP_OWNER_FILE}`, { headers: { Authorization: "Bearer token" } })
-    expect(response.headers.get("x-tenuvault-authenticated")).toBe("true")
+    expect(response.headers.get("x-tenuvault-authenticated")).toBeNull()
     expect(await response.json()).toEqual(owner)
   })
 
-  it("does not authenticate a plaintext ownership read", async () => {
-    const { fetch, folder } = setup()
-    folder(old, owner, false)
-    const response = await fetch(`${base}${old}${BACKUP_OWNER_FILE}`, { headers: { Authorization: "Bearer token" } })
-    expect(response.headers.get("x-tenuvault-authenticated")).toBe("false")
-    expect(await response.json()).toEqual(owner)
-  })
-
-  it.each(["key", "tenant", "path", "ciphertext"])("rejects ownership with invalid %s authentication", async mismatch => {
+  it.each(["key", "tenant", "path", "ciphertext"])("names the missing key for legacy sealed ownership with an invalid %s", async mismatch => {
     const { fetch, saved } = setup()
     const name = `${old}${BACKUP_OWNER_FILE}`
-    const raw = sealAzure(Buffer.from(JSON.stringify(owner)), mismatch === "key" ? Buffer.alloc(32, 9) : master, mismatch === "tenant" ? OTHER : TENANT, new URL(`${base}${mismatch === "path" ? "another-folder/" + BACKUP_OWNER_FILE : name}`))
+    const raw = sealLegacyAzure(Buffer.from(JSON.stringify(owner)), mismatch === "key" ? Buffer.alloc(32, 9) : master, mismatch === "tenant" ? OTHER : TENANT, new URL(`${base}${mismatch === "path" ? "another-folder/" + BACKUP_OWNER_FILE : name}`))
     if (mismatch === "ciphertext") raw[raw.length - 1] = raw[raw.length - 1]! ^ 1
     saved.set(name, raw)
-    await expect(fetch(`${base}${name}`, { headers: { Authorization: "Bearer token" } })).rejects.toThrow("Backup authentication failed")
+    await expect(fetch(`${base}${name}`, { headers: { Authorization: "Bearer token" } })).rejects.toThrow(LEGACY_SEALED_MESSAGE)
   })
 
   it("records a cancelled folder as cancelled and keeps it through a later complete backup within retention", async () => {
@@ -134,9 +132,7 @@ describe("backup folder ownership", () => {
     await engine.waitForJob(cancelled)
     expect(cancelled.status).toBe("Cancelled")
     const manifest = `${cancelled.backupFolder}/metadata.json`
-    const opened = openAzure(saved.get(manifest)!, [master], TENANT, new URL(`${base}${manifest}`))
-    expect(opened.authenticated).toBe(true)
-    expect(JSON.parse(opened.data.toString())).toMatchObject({ Status: "Cancelled", TenantId: TENANT, Trigger: "manual", ItemCounts: { TotalPolicies: 0 }, Error: cancelled.exception })
+    expect(JSON.parse(saved.get(manifest)!.toString())).toMatchObject({ Status: "Cancelled", TenantId: TENANT, Trigger: "manual", ItemCounts: { TotalPolicies: 0 }, Error: cancelled.exception })
     expect(cancelled.log.join("\n")).toContain("Recorded this backup as cancelled.")
     hanging = false
     const original = new Map(saved)
@@ -160,14 +156,13 @@ describe("backup folder ownership", () => {
     const { engine, saved, calls, folder } = setup()
     folder(prefix, { ...owner, TenantId: TENANT.toUpperCase() })
     const marker = `${prefix}${BACKUP_OWNER_FILE}`
-    const opened = openAzure(saved.get(marker)!, [master], TENANT, new URL(`${base}${marker}`))
-    expect(opened.authenticated).toBe(true)
-    expect(JSON.parse(opened.data.toString())).toEqual({ ...owner, TenantId: TENANT.toUpperCase() })
+    expect(JSON.parse(saved.get(marker)!.toString())).toEqual({ ...owner, TenantId: TENANT.toUpperCase() })
     const original = new Map(saved)
     await complete(engine)
     for (const [name, body] of original) expect(saved.get(name)).toEqual(body)
     expect(saved.has(`${prefix}metadata.json`)).toBe(false)
-    expect(calls.filter(call => call.name.startsWith(prefix)).map(call => [call.request.method, call.name])).toEqual([["GET", `${prefix}metadata.json`]])
+    // Retention reads the marker of a folder without a manifest to know who uses the container, and changes nothing.
+    expect(calls.filter(call => call.name.startsWith(prefix)).map(call => [call.request.method, call.name])).toEqual([["GET", `${prefix}metadata.json`], ["GET", `${prefix}${BACKUP_OWNER_FILE}`]])
     expect(calls.some(call => call.request.method === "DELETE")).toBe(false)
     expect(vi.getTimerCount()).toBe(0)
   })
@@ -175,20 +170,112 @@ describe("backup folder ownership", () => {
   it("preserves manifestless folders with missing, foreign or unreadable ownership", async () => {
     const { engine, saved, folder } = setup()
     const cases = [
-      ["backup-2026-08-01-020000/", null, true],
-      ["backup-2026-08-02-020000/", { ...owner, TenantId: OTHER }, true],
-      ["backup-2026-08-03-020000/", { ...owner, Source: "Another app" }, true],
-      ["backup-2026-08-04-020000/", owner, false],
-      ["backup-2026-08-05-020000/", "invalid json", true],
+      ["backup-2026-08-01-020000/", null, false],
+      ["backup-2026-08-02-020000/", { ...owner, TenantId: OTHER }, false],
+      ["backup-2026-08-03-020000/", { ...owner, Source: "Another app" }, false],
+      ["backup-2026-08-04-020000/", owner, true],
+      ["backup-2026-08-05-020000/", "invalid json", false],
     ] as const
-    for (const [prefix, marker, authenticated] of cases) folder(prefix, marker, authenticated)
+    for (const [prefix, marker, sealed] of cases) folder(prefix, marker, sealed)
     const broken = "backup-2026-08-06-020000/"
     folder(broken)
     const name = `${broken}${BACKUP_OWNER_FILE}`
-    saved.set(name, sealAzure(Buffer.from(JSON.stringify(owner)), Buffer.alloc(32, 9), TENANT, new URL(`${base}${name}`)))
+    saved.set(name, sealLegacyAzure(Buffer.from(JSON.stringify(owner)), Buffer.alloc(32, 9), TENANT, new URL(`${base}${name}`)))
     const original = new Map(saved)
     await complete(engine)
     for (const [name, body] of original) expect(saved.get(name)).toEqual(body)
+  })
+
+  it("ages out plain and openable legacy backups in a mixed container but never one no key opens", async () => {
+    const { engine, saved, seed, folder } = setup()
+    const plain = "backup-2026-08-01-020000/", legacy = "backup-2026-08-02-020000/", unopenable = "backup-2026-08-03-020000/"
+    const manifest = { TenantId: TENANT, Status: "Success", Scope: { Excluded: request.scope.excluded } }
+    folder(plain)
+    seed(`${plain}metadata.json`, manifest)
+    folder(legacy, owner, true)
+    seed(`${legacy}metadata.json`, manifest, true)
+    folder(unopenable, owner, true)
+    seed(`${unopenable}metadata.json`, manifest, true, Buffer.alloc(32, 9))
+    const kept = [...saved.entries()].filter(([name]) => name.startsWith(unopenable))
+    const job = await complete(engine)
+    expect([...saved.keys()].some(name => name.startsWith(plain) || name.startsWith(legacy))).toBe(false)
+    for (const [name, body] of kept) expect(saved.get(name)).toEqual(body)
+    expect(job.log.join("\n")).toContain(`Could not read the metadata of 1 older backup: ${LEGACY_SEALED_MESSAGE.replace(/\.$/, "")}. It was left in place.`)
+  })
+
+  it("never deletes another tenant's untagged backup when a damaged manifest sits in the container", async () => {
+    const { engine, saved, seed, folder } = setup()
+    const damaged = "backup-2026-08-01-020000/", theirs = "backup-2026-08-02-020000/"
+    folder(damaged)
+    saved.set(`${damaged}metadata.json`, Buffer.from("{ not json"))
+    folder(theirs, { ...owner, TenantId: OTHER })
+    seed(`${theirs}metadata.json`, { Status: "Success", Scope: { Excluded: request.scope.excluded } })
+    const original = new Map(saved)
+    const job = await complete(engine)
+    for (const [name, body] of original) expect(saved.get(name)).toEqual(body)
+    expect(job.log.join("\n")).toContain("Could not read the metadata of 1 older backup: metadata.json is not valid JSON. It was left in place.")
+  })
+
+  it("places an expired untagged backup by its ownership marker", async () => {
+    const { engine, saved, seed, folder } = setup()
+    const ours = "backup-2026-08-01-020000/", theirs = "backup-2026-08-02-020000/", damagedMarker = "backup-2026-08-03-020000/"
+    for (const prefix of [ours, theirs, damagedMarker]) seed(`${prefix}metadata.json`, { Status: "Success", Scope: { Excluded: request.scope.excluded } })
+    folder(ours)
+    folder(theirs, { ...owner, TenantId: OTHER })
+    folder(damagedMarker, { Source: "TenuVault Desktop" })
+    const kept = [...saved.entries()].filter(([name]) => name.startsWith(theirs) || name.startsWith(damagedMarker))
+    await complete(engine)
+    expect([...saved.keys()].some((name) => name.startsWith(ours))).toBe(false)
+    for (const [name, body] of kept) expect(saved.get(name)).toEqual(body)
+  })
+
+  it("counts a manifestless folder's marker as another tenant in the container (review repro)", async () => {
+    const { engine, saved, seed, folder } = setup()
+    const abandoned = "backup-2026-08-01-020000/", legacy = "backup-2026-08-02-020000/"
+    // Tenant B's run stopped before its manifest; tenant B's legacy backup records no tenant and has no marker.
+    folder(abandoned, { ...owner, TenantId: OTHER })
+    folder(legacy, null)
+    seed(`${legacy}metadata.json`, { Status: "Success", Scope: { Excluded: request.scope.excluded } })
+    const original = new Map(saved)
+    await complete(engine)
+    for (const [name, body] of original) expect(saved.get(name)).toEqual(body)
+  })
+
+  it("keeps untagged backups when a manifestless folder's marker cannot be read", async () => {
+    const { engine, saved, seed, folder } = setup()
+    const abandoned = "backup-2026-08-01-020000/", legacy = "backup-2026-08-02-020000/"
+    folder(abandoned, "{ damaged")
+    folder(legacy, null)
+    seed(`${legacy}metadata.json`, { Status: "Success", Scope: { Excluded: request.scope.excluded } })
+    const original = new Map(saved)
+    await complete(engine)
+    for (const [name, body] of original) expect(saved.get(name)).toEqual(body)
+  })
+
+  it("still ages out an untagged backup when nothing in the container shows another tenant", async () => {
+    const { engine, saved, seed, folder } = setup()
+    const abandoned = "backup-2026-08-01-020000/", legacy = "backup-2026-08-02-020000/"
+    folder(abandoned)
+    folder(legacy, null)
+    seed(`${legacy}metadata.json`, { Status: "Success", Scope: { Excluded: request.scope.excluded } })
+    await complete(engine)
+    expect([...saved.keys()].some((name) => name.startsWith(legacy))).toBe(false)
+    expect(saved.has(`${abandoned}${BACKUP_OWNER_FILE}`)).toBe(true)
+  })
+
+  it("keeps an untagged backup whose marker is oversized, reads it only to the cap, and continues", async () => {
+    const big = endlessBody(40, new TextEncoder().encode('{"TenantId":"'))
+    const oversized = "backup-2026-08-01-020000/", ours = "backup-2026-08-02-020000/"
+    const { engine, saved, seed, folder } = setup({ override: (url, sent) => sent.method === "GET" && url.pathname.endsWith(`${oversized}${BACKUP_OWNER_FILE}`) ? new Response(big.body) : undefined })
+    seed(`${oversized}metadata.json`, { Status: "Success", Scope: { Excluded: request.scope.excluded } })
+    folder(oversized)
+    seed(`${ours}metadata.json`, { TenantId: TENANT, Status: "Success", Scope: { Excluded: request.scope.excluded } })
+    folder(ours)
+    const job = await complete(engine)
+    expect(saved.has(`${oversized}metadata.json`)).toBe(true)
+    expect([...saved.keys()].some((name) => name.startsWith(ours))).toBe(false)
+    expect(job.log.join("\n")).toContain("is larger than the 32 MiB TenuVault reads")
+    expect(big.pulled()).toBeLessThan(40)
   })
 
   it("keeps ownership when a protected policy interrupts normal retention", async () => {

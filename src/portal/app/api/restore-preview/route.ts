@@ -1,7 +1,7 @@
 import { recoveryReadiness, type RecoveryReadiness } from "../../../../shared/intune/recovery"
 import { type NextRequest, NextResponse } from "next/server"
 import { validPolicyPath } from "~/lib/policies/restore"
-import { readOwnedBackup } from "~/lib/policies/backup-owner"
+import { readOwnedBackup, UNTAGGED_BACKUP } from "~/lib/policies/backup-owner"
 import { graphCaller, readLive } from "~/lib/policies/graph-restore"
 import { itemName, typeForFolder, type Item, type ReviewChange } from "../../../../shared/intune/registry"
 import { restoreCapabilities } from "../../../../shared/intune/restore-plan"
@@ -9,6 +9,7 @@ import { sameSnapshot } from "../../../../shared/intune/compare"
 import { assignmentsUnread } from "../../../../shared/intune/read"
 import { moduleForFolder, restorePermissionBlocker } from "../../../../shared/services/modules"
 import { grantedPermissions } from "../../../../shared/services/token"
+import { isLegacySealedError } from "../../../../shared/legacy-sealed"
 
 const MAX_ITEMS = 2000
 const CONCURRENCY = 6
@@ -74,8 +75,10 @@ export async function POST(request: NextRequest) {
     const granted = grantedPermissions(graphToken)
     const owned = await readOwnedBackup((name) => fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${name.split("/").map(encodeURIComponent).join("/")}`, {
       headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${storageToken}` },
-    }), backupId, tenantId)
+    }), backupId, tenantId, storageAccountName)
     if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
+    // A backup that records no tenant cannot change live policies; it can still be restored as a copy.
+    const ownership = owned.owned ? undefined : UNTAGGED_BACKUP
     const graph = graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => token(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) })
 
     const preview = async (path: string): Promise<PreviewItem> => {
@@ -89,14 +92,13 @@ export async function POST(request: NextRequest) {
       if (!response.ok) return { path, folder: type.folder, name: fallbackName, live: "error", error: "The backup file could not be read.", blocker: "The backup file could not be read.", replaceBlocker: "The backup file could not be read." }
       const snapshot = (await response.json()) as Item
       const item: PreviewItem = { path, folder: type.folder, name: itemName(type, snapshot), snapshot, readiness: recoveryReadiness(type, snapshot), ...restoreCapabilities(type, snapshot) }
-      if (response.headers.get("x-tenuvault-authenticated") !== "true") { item.name = `[Unverified legacy] ${item.name}`; item.replaceBlocker = "This snapshot is not authenticated. Review its content and restore a copy; replacement is blocked." }
+      if (ownership) item.replaceBlocker = ownership
       if (live !== true || typeof snapshot.id !== "string") return item
       try {
         const current = await readLive(graph, type, snapshot.id)
         if (!current) return { ...item, live: "missing" }
-        const authenticationBlocker = response.headers.get("x-tenuvault-authenticated") !== "true" ? item.replaceBlocker : undefined
         Object.assign(item, restoreCapabilities(type, snapshot, current))
-        if (authenticationBlocker) item.replaceBlocker = authenticationBlocker
+        if (ownership) item.replaceBlocker = ownership
         const name = current[type.nameKey] ?? current.displayName ?? current.name
         const { assignments: _a, ...wanted } = snapshot
         const { assignments: _b, ...now } = current
@@ -118,7 +120,11 @@ export async function POST(request: NextRequest) {
         const index = next++
         const path = paths[index] as string
         try { items[index] = withPermission(await preview(path), granted) }
-        catch { items[index] = { path, folder: path.split("/")[1] ?? "", name: path.split("/").pop() ?? path, live: "error", error: "This snapshot could not be read or assessed.", blocker: "This snapshot could not be assessed.", replaceBlocker: "This snapshot could not be assessed." } }
+        catch (error) {
+          // A backup sealed by an earlier version says which key it needs.
+          const sealed = isLegacySealedError(error) ? (error as Error).message : null
+          items[index] = { path, folder: path.split("/")[1] ?? "", name: path.split("/").pop() ?? path, live: "error", error: sealed ?? "This snapshot could not be read or assessed.", blocker: sealed ?? "This snapshot could not be assessed.", replaceBlocker: sealed ?? "This snapshot could not be assessed." }
+        }
       }
     }))
     return NextResponse.json({ backupId, items })

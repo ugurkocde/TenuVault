@@ -1,3 +1,5 @@
+import { LEGACY_OTHER_TENANT_CODE, LEGACY_OTHER_TENANT_MESSAGE, LEGACY_SEALED_CODE, LEGACY_SEALED_MESSAGE, OVERSIZED_SEALED_CODE, OVERSIZED_SEALED_MESSAGE } from "../../shared/legacy-sealed"
+
 /** An application failure that retries cannot repair, separate from request transport failures. */
 export class FetchApplicationError extends Error {
   constructor(error: unknown) {
@@ -6,11 +8,33 @@ export class FetchApplicationError extends Error {
   }
 }
 
-/** An application failure before the fetch bridge or encryption wrapper attempts a network request. */
+/** An application failure before the fetch bridge or legacy backup reader attempts a network request. */
 export class FetchPreconditionError extends FetchApplicationError {
   constructor(error: unknown) {
     super(error)
     this.name = "FetchPreconditionError"
+  }
+}
+
+/**
+ * A backup blob sealed by an earlier version that no key on this device opens for this tenant, or
+ * (`otherTenant`) that opens only for another tenant signed in on this device. It keeps the
+ * FetchApplicationError name, so every caller that handles unreadable blobs still does; `code`
+ * tells the two apart (see shared/legacy-sealed.ts).
+ */
+export class LegacySealedError extends FetchApplicationError {
+  readonly code: string
+  constructor(cause?: unknown, otherTenant = false) {
+    super(new Error(otherTenant ? LEGACY_OTHER_TENANT_MESSAGE : LEGACY_SEALED_MESSAGE, { cause }))
+    this.code = otherTenant ? LEGACY_OTHER_TENANT_CODE : LEGACY_SEALED_CODE
+  }
+}
+
+/** A legacy sealed blob over the backup size limit: refused at the cap, never buffered whole. */
+export class OversizedSealedError extends FetchApplicationError {
+  readonly code = OVERSIZED_SEALED_CODE
+  constructor() {
+    super(new Error(OVERSIZED_SEALED_MESSAGE))
   }
 }
 

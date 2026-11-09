@@ -15,7 +15,7 @@ afterEach(() => vi.unstubAllGlobals())
 const snapshotHash = (snapshot: Item) => createHash('sha256').update(JSON.stringify(comparableSnapshot(snapshot))).digest('base64').slice(0, 22)
 
 /** Stubs token, blob and Graph fetches. `blobs` maps blob names to JSON bodies. */
-function stubFetch(blobs: Record<string, Item>, options: { authenticated?: boolean; list?: string[] } = {}) {
+function stubFetch(blobs: Record<string, Item>, options: { list?: string[] } = {}) {
   const graphWrites: string[] = []
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input))
@@ -28,7 +28,7 @@ function stubFetch(blobs: Record<string, Item>, options: { authenticated?: boole
       const name = url.pathname.split('/').slice(2).map(decodeURIComponent).join('/')
       const blob = blobs[name]
       if (!blob) return new Response('', { status: 404 })
-      return Response.json(blob, options.authenticated === false ? {} : { headers: { 'x-tenuvault-authenticated': 'true' } })
+      return typeof blob === 'string' ? new Response(blob) : Response.json(blob)
     }
     if (url.hostname === 'graph.microsoft.com') {
       graphWrites.push(`${init?.method ?? 'GET'} ${url.pathname}`)
@@ -40,13 +40,55 @@ function stubFetch(blobs: Record<string, Item>, options: { authenticated?: boole
 }
 
 describe('Restore manifest checks', () => {
-  it('refuses an unauthenticated legacy snapshot when a copy restores assignments, before any Graph call', async () => {
-    const snapshot: Item = { id: 'original', displayName: 'Legacy', '@odata.type': '#microsoft.graph.windows10CustomConfiguration', omaSettings: [], assignments: [{ target: { '@odata.type': '#microsoft.graph.allDevicesAssignmentTarget' } }] }
-    const graphWrites = stubFetch({ [policyPath]: snapshot }, { authenticated: false })
+  it('restores a copy with its assignments from a plain backup that records this tenant', async () => {
+    const snapshot: Item = { id: 'original', displayName: 'Plain', '@odata.type': '#microsoft.graph.windows10CustomConfiguration', omaSettings: [], assignments: [{ target: { '@odata.type': '#microsoft.graph.allDevicesAssignmentTarget' } }] }
+    const graphWrites = stubFetch({ [policyPath]: snapshot, [`${backupId}/.tenuvault-owner.json`]: { TenantId: 'tenant' } as Item })
     const response = await POST(request({ ...baseBody, restoreType: 'selective', selectedPolicies: [{ path: policyPath }], mode: 'copy', assignments: true }))
     const result = await response.json()
-    expect(result.details.results[0]).toMatchObject({ success: false, error: expect.stringContaining('Unverified') })
-    expect(result.details.restoredCount).toBe(0)
+    expect(result.details.results[0]).toMatchObject({ success: true })
+    expect(result.details.restoredCount).toBe(1)
+    expect(graphWrites.some((call) => call.startsWith('POST ') && call.endsWith('/assign'))).toBe(true)
+  })
+
+  it.each([
+    ['replace in place', { mode: 'replace', assignments: false }],
+    ['a copy with assignments', { mode: 'copy', assignments: true }],
+  ])('refuses %s from a backup that records no tenant, before any Graph call', async (_kind, options) => {
+    const snapshot: Item = { id: 'original', displayName: 'Untagged', '@odata.type': '#microsoft.graph.windows10CustomConfiguration', omaSettings: [] }
+    const graphWrites = stubFetch({ [policyPath]: snapshot })
+    const response = await POST(request({ ...baseBody, restoreType: 'selective', selectedPolicies: [{ path: policyPath }], ...options }))
+    expect(response.status).toBe(400)
+    expect((await response.json()).error).toBe('This backup does not record its tenant. Restore it as a copy instead.')
+    expect(graphWrites).toEqual([])
+  })
+
+  it('still restores an unassigned copy from a backup that records no tenant', async () => {
+    const snapshot: Item = { id: 'original', displayName: 'Untagged', '@odata.type': '#microsoft.graph.windows10CustomConfiguration', omaSettings: [] }
+    const graphWrites = stubFetch({ [policyPath]: snapshot })
+    const result = await (await POST(request({ ...baseBody, restoreType: 'selective', selectedPolicies: [{ path: policyPath }], mode: 'copy', assignments: false }))).json()
+    expect(result.details.restoredCount).toBe(1)
+    expect(graphWrites.some((call) => call.startsWith('POST '))).toBe(true)
+  })
+
+  it.each([
+    ['is not JSON', 'not json'],
+    ['names no tenant', { Source: 'TenuVault Desktop' }],
+  ])('refuses a backup whose ownership marker %s, even as a copy', async (_kind, marker) => {
+    const snapshot: Item = { id: 'original', displayName: 'Damaged', '@odata.type': '#microsoft.graph.windows10CustomConfiguration', omaSettings: [] }
+    const graphWrites = stubFetch({ [policyPath]: snapshot, [`${backupId}/.tenuvault-owner.json`]: marker as Item })
+    const response = await POST(request({ ...baseBody, restoreType: 'selective', selectedPolicies: [{ path: policyPath }], mode: 'copy', assignments: false }))
+    expect(response.status).toBe(403)
+    expect((await response.json()).error).toContain('ownership record is damaged')
+    expect(graphWrites).toEqual([])
+  })
+
+  it('checks a replace restore from a plain backup against the fingerprints in its manifest', async () => {
+    const snapshot: Item = { id: 'original', displayName: 'Example', '@odata.type': '#microsoft.graph.windows10CustomConfiguration', omaSettings: [] }
+    const metadata: Item = { TenantId: 'tenant', Status: 'Success', Failures: 0, FailedTypes: [], Items: { 'DeviceConfigurations/original': { file: 'Example.json', hash: snapshotHash({ ...snapshot, displayName: 'Changed after the backup' }) } } }
+    const graphWrites = stubFetch({ [`${backupId}/metadata.json`]: metadata, [policyPath]: snapshot }, { list: [policyPath] })
+    const response = await POST(request({ ...baseBody, restoreType: 'selective', selectedPolicies: [{ path: policyPath }], mode: 'replace', assignments: false }))
+    const result = await response.json()
+    expect(result.details.results[0]).toMatchObject({ success: false, error: expect.stringContaining('does not match its recorded fingerprint') })
     expect(graphWrites).toEqual([])
   })
 

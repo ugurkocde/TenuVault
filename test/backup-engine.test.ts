@@ -539,26 +539,25 @@ describe("verifyStorageAccess", () => {
     await expect(outcome).rejects.toThrow(/networking settings/)
   })
 })
-it('never uploads decrypted OMA-URI secrets as plaintext to Azure', async () => {
-  const { encryptedAzureFetch, registerStorageToken, openAzure } = await import('../src/main/storage/azure-seal')
-  const key = Buffer.alloc(32, 9), uploads: { url: URL; body: Buffer }[] = []
+it('keeps decrypted OMA-URI secrets readable in plain Azure backups, so a restore puts them back', async () => {
+  const { legacyAzureReader } = await import('../src/main/storage/azure-seal')
+  const uploads: { url: URL; body: Buffer; type: string | null }[] = []
   const graph = fakeGraph({
     '/beta/deviceManagement/deviceConfigurations': Response.json({ value: [{ id: 'dc1', displayName: 'Secret' }] }),
     '/beta/deviceManagement/deviceConfigurations/dc1?$expand=assignments': Response.json({ id: 'dc1', displayName: 'Secret', omaSettings: [{ omaUri: './x', isEncrypted: true, secretReferenceValueId: 's1', value: '****' }] }),
     "/beta/deviceManagement/deviceConfigurations/dc1/getOmaSettingPlainTextValue(secretReferenceValueId='s1')": Response.json({ value: 'dummy-oma-secret' }),
   })
-  registerStorageToken('storage-token', TENANT)
-  const fetch = encryptedAzureFetch(async input => {
-    const request = input as Request, url = new URL(request.url)
+  const fetch = legacyAzureReader(async (input, init) => {
+    const request = new Request(input, init), url = new URL(request.url)
     if (url.hostname === 'graph.microsoft.com') return graph(url)
-    if (request.method === 'PUT' && url.pathname.startsWith('/intune-backups/')) uploads.push({ url, body: Buffer.from(await request.arrayBuffer()) })
+    if (request.method === 'PUT' && url.pathname.startsWith('/intune-backups/')) uploads.push({ url, body: Buffer.from(await request.arrayBuffer()), type: request.headers.get('content-type') })
     return new Response(null, { status: 201 })
-  }, () => [key], () => {})
+  }, () => { throw new Error('no key is used for Azure writes') })
   const engine = new BackupEngine({ fetch, getToken: async () => 'storage-token' })
   const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: 'example' }).id)
   expect(job.status).toBe('Completed')
   expect(uploads.length).toBeGreaterThan(0)
-  expect(uploads.every(item => !item.body.includes(Buffer.from('dummy-oma-secret')))).toBe(true)
+  expect(uploads.every(item => item.type === 'application/json' && !item.body.subarray(0, 5).equals(Buffer.from('TVAZ1')))).toBe(true)
   const secret = uploads.find(item => item.url.pathname.endsWith('/DeviceConfigurations/Secret.json'))!
-  expect(openAzure(secret.body, [key], TENANT, secret.url).data.toString()).toContain('dummy-oma-secret')
+  expect(JSON.parse(secret.body.toString()).omaSettings[0].value).toBe('dummy-oma-secret')
 })

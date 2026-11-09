@@ -5,6 +5,10 @@ import { complianceSettingLabel, complianceSettingValue } from "../../../../shar
 import { withoutUnreadAssignments } from "../../../../shared/intune/read"
 import { coveredFolders, type ScopeMetadata } from "../../../../shared/intune/scope"
 import { itemsOf, sameItem, type BackupFingerprint, type BackupItems } from "../../../../shared/intune/backup-changes"
+import { isLegacyOtherTenantError, isLegacySealedError } from "../../../../shared/legacy-sealed"
+import { oversizedOwnershipFile, resolveBackupOwnership, type OwnershipFile } from "../../../../shared/backup-ownership"
+import { readJsonCapped } from "../../../../shared/capped-body"
+import { MAX_BACKUP_ARCHIVE_BYTES } from "../../../../shared/constants"
 import { backupRef, DriftPairError, selectBackupPair, summarizeDrifts, type BackupMetadata, type Drift, type DriftChange, type DriftResult, type DriftScanProgress, type DriftWarning, type SelectedBackup } from "../../../../shared/intune/drift"
 import { CANCELLED_HEADER, driftScanHooks, type DriftScanHooks } from "~/lib/drift/scan-hooks"
 import { mapLimit } from "../../../../shared/map-limit"
@@ -98,17 +102,49 @@ export async function POST(request: NextRequest) {
 
     // Incomplete snapshots are missing policies and would report them as deleted, and a running
     // backup has no metadata yet, so the default pair skips both (see selectBackupPair).
+    const readFile = async (name: string, file: string): Promise<OwnershipFile> => {
+      let response: Response
+      try {
+        response = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${encodeURIComponent(name)}/${file}`, { headers: { 'x-ms-version': '2021-12-02', Authorization: `Bearer ${accessToken}` }, signal })
+      } catch (error) {
+        // An older encrypted backup without its key, or another tenant's, cannot be opened here.
+        if (error instanceof Error && error.name === 'FetchApplicationError') return { kind: 'unreadable', error }
+        throw error
+      }
+      if (response.status === 404) return { kind: 'missing' }
+      // A backup on this device that damaged files made unavailable is skipped like one without a manifest.
+      if (file === 'metadata.json' && response.status === 409 && ['BackupUnavailable', 'InventoryIncomplete'].includes(response.headers.get('x-ms-error-code') ?? '')) return { kind: 'missing' }
+      if (!response.ok) throw new Error(`Cannot verify that the backups are complete (${response.status}). Check storage access and retry.`)
+      const body = await readJsonCapped(response, MAX_BACKUP_ARCHIVE_BYTES)
+      if (body.kind === 'oversized') return { kind: 'unreadable', error: new Error(oversizedOwnershipFile(file)) }
+      return body.kind === 'json' ? { kind: 'found', value: body.value } : { kind: 'unreadable', error: new Error(`${file} is not valid JSON`) }
+    }
+    const unreadableBackup = (name: string, error: unknown) => new DriftPairError(
+      isLegacySealedError(error) ? (error as Error).message : `Backup ${name} cannot be read: ${error instanceof Error ? error.message : String(error)}`,
+      "BACKUP_UNREADABLE",
+      409,
+    )
+    // Ownership comes from the shared resolver (shared/backup-ownership.ts), as for restore and
+    // retention: the pair rules see the tenant it found, also when only the marker names it.
     const loadMetadata = async (name: string): Promise<BackupMetadata | null> => {
-      const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${encodeURIComponent(name)}/metadata.json`, { headers: { 'x-ms-version': '2021-12-02', Authorization: `Bearer ${accessToken}` }, signal })
+      const { manifest, owner } = await resolveBackupOwnership((file) => readFile(name, file), tenantId)
       checked++
       report({ phase: "checking", detail: `Checking the backups: ${checked - 1} read`, done: checked, total: 0 })
-      if (response.status === 404) return null
-      // A backup on this device that damaged files made unavailable is skipped like one without a manifest.
-      if (response.status === 409 && ['BackupUnavailable', 'InventoryIncomplete'].includes(response.headers.get('x-ms-error-code') ?? '')) return null
-      if (!response.ok) throw new Error(`Cannot verify that the backups are complete (${response.status}). Check storage access and retry.`)
-      return await response.json()
+      // Known foreign ownership wins over a missing or unreadable manifest: another tenant's backup is
+      // refused as such, as restore refuses it, also when only its marker or a legacy seal says so.
+      const foreign = owner.kind === 'other'
+        || (manifest.kind === 'unreadable' && isLegacyOtherTenantError(manifest.error))
+        || (owner.kind === 'unreadable' && isLegacyOtherTenantError(owner.error))
+      if (foreign) throw new DriftPairError(`Backup ${name} belongs to another tenant.`, "BACKUP_OTHER_TENANT", 403)
+      if (manifest.kind === 'missing') return null
+      if (manifest.kind === 'unreadable') throw unreadableBackup(name, manifest.error)
+      if (owner.kind === 'unreadable') throw unreadableBackup(name, owner.error)
+      return manifest.metadata as BackupMetadata
     }
-    const pair = await selectBackupPair({ folders: backupFolders, tenantId, baseline, comparison, limit: typeof backupLimit === "number" && backupLimit > 0 ? backupLimit : undefined, load: loadMetadata, signal })
+    // Another tenant's backup, and one that cannot be opened here (an older encrypted one without its
+    // key, damaged JSON or a damaged marker), is skipped when TenuVault picks the pair; a chosen one fails.
+    const unopened = (error: unknown) => error instanceof DriftPairError && (error.code === 'BACKUP_UNREADABLE' || error.code === 'BACKUP_OTHER_TENANT')
+    const pair = await selectBackupPair({ folders: backupFolders, tenantId, baseline, comparison, limit: typeof backupLimit === "number" && backupLimit > 0 ? backupLimit : undefined, load: loadMetadata, unopened, signal })
     const newerBackup = pair.comparison
     const olderBackup = pair.baseline
 

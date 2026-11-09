@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import { AlertCircle, Check, CheckCircle2, Cloud, Copy, ExternalLink, HardDrive, Loader2, Lock, RefreshCw, Save } from "lucide-react"
+import { AlertCircle, Check, CheckCircle2, Cloud, Copy, ExternalLink, HardDrive, Loader2, Lock, RefreshCw } from "lucide-react"
 import { Alert, AlertDescription } from "~/components/ui/alert"
 import { Button } from "~/components/ui/button"
 import { Label } from "~/components/ui/label"
@@ -7,7 +7,7 @@ import { cn } from "~/lib/utils"
 import storageSetupScript from "../../../resources/New-TenuVaultStorage.ps1?raw"
 import { bridge } from "../lib/bridge"
 import { useTenantPlan } from "../lib/license"
-import { announceBackupSettings, backupSettingsRevision, useBackupSettings, useLocalInventoryProblems } from "../lib/local-inventory"
+import { useBackupSettings, useLocalInventoryProblems } from "../lib/local-inventory"
 import { listStorageAccounts, type AzureStorageAccount, type StorageChoice } from "../lib/storage"
 import { UnreadableBackupsNotice } from "./UnreadableBackupsNotice"
 import { PlanBadge, UpgradeNote } from "./UpgradeNote"
@@ -31,23 +31,19 @@ interface StorageChooserProps {
   onChange: (choice: StorageChoice | null) => void
   /** Called whenever the in-progress selection changes. */
   onDraftChange?: (draft: StorageChooserDraft) => void
-  /** Called with what still keeps the choice incomplete, such as an unsaved recovery key, or null. */
+  /** Called with what still keeps the choice incomplete, such as an unconfirmed storage account, or null. */
   onBlockerChange?: (blocker: string | null) => void
 }
 
 /** What still keeps an Azure storage choice incomplete, in the order the admin has to fix it, or null. */
 export function azureStorageBlocker(state: {
   community: boolean
-  settingsLoaded: boolean
-  recoveryReady: boolean
   accountsLoaded: boolean
   accountCount: number
   selected: boolean
   verified: boolean
 }): string | null {
   if (state.community) return "Azure storage needs Pro or MSP. Choose This device to continue on Community."
-  if (!state.settingsLoaded) return "Checking whether your recovery key is saved..."
-  if (!state.recoveryReady) return "To continue, save your recovery key."
   if (!state.accountsLoaded) return "Loading your storage accounts..."
   if (state.accountCount === 0) return "To continue, ask an Azure administrator for a storage account, or choose This device."
   if (!state.selected) return "To continue, choose a storage account."
@@ -55,28 +51,14 @@ export function azureStorageBlocker(state: {
   return null
 }
 
-/** Lets the admin keep backups encrypted on this device or in their own Azure storage account. */
+/**
+ * Lets the admin keep backups encrypted on this device or in their own Azure storage account. The
+ * Azure choice is complete once access is confirmed: Azure encrypts the backups at rest and the
+ * account's role assignments decide who reads them, so no recovery key is involved.
+ */
 export function StorageChooser({ tenantId, clientId, initial, initialDraft, onChange, onDraftChange, onBlockerChange }: StorageChooserProps) {
   const [kind, setKind] = useState<StorageChoice["kind"]>(initialDraft?.kind ?? initial?.kind ?? "local")
-  const [settingsError, setSettingsError] = useState("")
-  const [settings, setSettings] = useBackupSettings((error) =>
-    setSettingsError(error instanceof Error ? error.message : String(error)),
-  )
-  // Async settings reads below must never apply after this chooser is gone or after a
-  // newer settings update arrived: a stale "key saved" read would reopen another
-  // chooser's recovery key gate for a different, unsaved key.
-  const mountedRef = useRef(true)
-  useEffect(() => {
-    mountedRef.current = true
-    return () => { mountedRef.current = false }
-  }, [])
-  const applySettingsRead = (startedRevision: number, next: Parameters<typeof setSettings>[0]): boolean => {
-    if (!mountedRef.current || backupSettingsRevision() !== startedRevision) return false
-    setSettings(next)
-    setSettingsError("")
-    announceBackupSettings(next)
-    return true
-  }
+  const [settings, setSettings] = useBackupSettings()
   const [accounts, setAccounts] = useState<AzureStorageAccount[] | null>(null)
   const [loadError, setLoadError] = useState("")
   const [selected, setSelected] = useState(initialDraft?.selectedAccount ?? (initial?.kind === "azure" ? initial.storageAccountName : ""))
@@ -89,15 +71,10 @@ export function StorageChooser({ tenantId, clientId, initial, initialDraft, onCh
   const verified = verifiedFor !== "" && verifiedFor === selected
   const [verifyError, setVerifyError] = useState("")
   const [loadAttempt, setLoadAttempt] = useState(0)
-  const [savingKey, setSavingKey] = useState(false)
-  const [saveKeyError, setSaveKeyError] = useState("")
   const [copied, setCopied] = useState(false)
   const [copyError, setCopyError] = useState("")
   // Community keeps backups on this device; Azure storage is a paid feature.
   const community = useTenantPlan(tenantId) === "community"
-  // Azure uploads are refused in the main process until the current recovery key has been
-  // saved, so the Azure choice stays incomplete until then instead of failing at first backup.
-  const recoveryReady = settings?.recoveryExported === true
 
   // A warning only: the local choice is never held back, and the first backup reports what is wrong.
   const inventory = useLocalInventoryProblems(settings, [tenantId])
@@ -133,18 +110,16 @@ export function StorageChooser({ tenantId, clientId, initial, initialDraft, onCh
     if (community) return onChange(null)
     const account = accounts?.find((a) => a.name === selected)
     onChange(
-      account && verified && recoveryReady
+      account && verified
         ? { kind: "azure", storageAccountName: account.name, subscriptionId: account.subscriptionId, resourceGroupName: account.resourceGroup, location: account.location }
         : null,
     )
     // onChange is a callback prop; re-running on its identity would loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kind, selected, verified, accounts, community, recoveryReady])
+  }, [kind, selected, verified, accounts, community])
 
   const blocker = kind === "local" ? null : azureStorageBlocker({
     community,
-    settingsLoaded: Boolean(settings),
-    recoveryReady,
     accountsLoaded: Boolean(accounts),
     accountCount: accounts?.length ?? 0,
     selected: Boolean(selected),
@@ -160,41 +135,6 @@ export function StorageChooser({ tenantId, clientId, initial, initialDraft, onCh
     setAccounts(null)
     // After a failed load accounts is already null, so only the new attempt retriggers the loader.
     setLoadAttempt((attempt) => attempt + 1)
-  }
-
-  const retrySettings = async () => {
-    const startedRevision = backupSettingsRevision()
-    try {
-      const next = await bridge.backups.settings()
-      applySettingsRead(startedRevision, next)
-    } catch (error) {
-      if (mountedRef.current && backupSettingsRevision() === startedRevision) {
-        setSettingsError(error instanceof Error ? error.message : String(error))
-      }
-    }
-  }
-
-  const saveRecoveryKey = async () => {
-    setSavingKey(true)
-    setSaveKeyError("")
-    try {
-      const result = await bridge.backups.exportRecoveryKey()
-      if (result.saved && mountedRef.current) {
-        const startedRevision = backupSettingsRevision()
-        try {
-          const next = await bridge.backups.settings()
-          applySettingsRead(startedRevision, next)
-        } catch (error) {
-          if (mountedRef.current && backupSettingsRevision() === startedRevision) {
-            setSettingsError(error instanceof Error ? error.message : String(error))
-          }
-        }
-      }
-    } catch (error) {
-      if (mountedRef.current) setSaveKeyError(error instanceof Error ? error.message : String(error))
-    } finally {
-      if (mountedRef.current) setSavingKey(false)
-    }
   }
 
   const copyStorageInstructions = async () => {
@@ -275,43 +215,13 @@ export function StorageChooser({ tenantId, clientId, initial, initialDraft, onCh
       {option(
         "azure",
         <Cloud className="h-5 w-5" />,
-        "Your Azure storage account, encrypted",
-        "Backups are encrypted with AES-256-GCM before upload to your subscription. You need the Storage Blob Data Contributor role on it and a saved recovery key; other devices need that key to read these backups.",
+        "Your Azure storage account",
+        "Backups go to your own subscription. Azure encrypts the data at rest, and access follows your Azure role assignments: every admin with access to the account sees the same backups. You need the Storage Blob Data Contributor role on it.",
         community,
       )}
       {community && <UpgradeNote feature="azureStorage" />}
       {kind === "azure" && !community && (
         <div className="ml-14 space-y-3">
-          {settingsError && (
-            <div className="space-y-2">
-              <Alert variant="destructive">
-                <AlertCircle className="h-4 w-4" />
-                <AlertDescription>Could not check whether your recovery key is saved: {settingsError} Azure storage stays unavailable until this check works.</AlertDescription>
-              </Alert>
-              <Button type="button" variant="outline" size="sm" onClick={() => void retrySettings()}>
-                Try again
-              </Button>
-            </div>
-          )}
-          {!settings && !settingsError && (
-            <p className="flex items-center gap-2 text-sm text-gray-600">
-              <Loader2 className="h-4 w-4 animate-spin" /> Checking your recovery key...
-            </p>
-          )}
-          {settings && !recoveryReady && (
-            <div className="space-y-2 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-              <p className="font-medium">Save your recovery key before you continue</p>
-              <p>
-                Azure backups are encrypted with this device&apos;s key. Without the recovery key saved somewhere safe,
-                such as your password manager, nobody can read them after a reinstall or on another device.
-              </p>
-              <Button type="button" variant="outline" size="sm" onClick={() => void saveRecoveryKey()} disabled={savingKey}>
-                {savingKey ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-                Save recovery key
-              </Button>
-              {saveKeyError && <p role="alert" className="text-red-700">{saveKeyError}</p>}
-            </div>
-          )}
           {!accounts && !loadError && (
             <p className="flex items-center gap-2 text-sm text-gray-600">
               <Loader2 className="h-4 w-4 animate-spin" /> Loading your storage accounts...

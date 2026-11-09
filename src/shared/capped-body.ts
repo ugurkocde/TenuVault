@@ -42,3 +42,14 @@ export async function readTextCapped(response: Response, maxBytes: number): Prom
   const bytes = await readBytesCapped(response, maxBytes)
   return bytes === null ? null : new TextDecoder().decode(bytes)
 }
+
+/**
+ * The response body parsed as JSON when it fits the byte cap. `oversized` when it does not (the
+ * stream is cancelled at the cap), `invalid` when it is not JSON. Transport failures still throw.
+ */
+export async function readJsonCapped(response: Response, maxBytes: number): Promise<{ kind: "json"; value: unknown } | { kind: "oversized" } | { kind: "invalid" }> {
+  const text = await readTextCapped(response, maxBytes)
+  if (text === null) return { kind: "oversized" }
+  try { return { kind: "json", value: JSON.parse(text) } }
+  catch { return { kind: "invalid" } }
+}

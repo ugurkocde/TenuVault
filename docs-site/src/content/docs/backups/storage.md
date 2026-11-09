@@ -3,7 +3,7 @@ title: "Backup storage and retention"
 description: Where backups are kept, how to change the location, how long backups are kept, and how to export and import a backup as a ZIP file.
 ---
 
-Each tenant keeps its backups in one location: encrypted on this device, or encrypted in your own Azure storage account. This page covers both locations, how to change a tenant's location, how long backups are kept, and how to move a backup as a ZIP file.
+Each tenant keeps its backups in one location: encrypted on this device, or in your own Azure storage account, where Azure encrypts them at rest. This page covers both locations, how to change a tenant's location, how long backups are kept, and how to move a backup as a ZIP file.
 
 ## Storage locations
 
@@ -11,11 +11,11 @@ Each tenant keeps its backups in one location: encrypted on this device, or encr
 | --- | --- | --- |
 | Plans | All plans | Pro and MSP |
 | Where | A folder on this computer or a network share | A storage account in your Azure subscription |
-| Encryption | AES-256-GCM, key protected by Windows or the macOS Keychain | AES-256-GCM before upload, with the same key |
-| Readable on another computer | With your recovery key | With your recovery key |
-| What you need | Nothing else | The **Storage Blob Data Contributor** role on the storage account, and your recovery key saved |
+| Encryption | AES-256-GCM by TenuVault, key protected by Windows or the macOS Keychain | Azure Storage encryption at rest; TenuVault stores plain JSON policies |
+| Who can read them | This device, or another computer with your recovery key | Everyone with a blob data role on the storage account, from any computer |
+| What you need | Nothing else | The **Storage Blob Data Contributor** role on the storage account |
 
-TenuVault never sends backups to a TenuVault server. For the encryption details and the recovery key, see [Encryption and recovery key](/security/encryption/).
+TenuVault never sends backups to a TenuVault server. For the protection details, who is trusted, and the recovery key, see [Encryption and recovery key](/security/encryption/).
 
 ## Backups on this device
 
@@ -57,17 +57,18 @@ TenuVault checks each file's header when it reads the inventory. Damage further 
 
 ## Backups in your Azure storage account
 
-Use your own storage account when you want backups off the admin's computer, for example to share them between admins. This needs Pro or MSP. If no storage account exists yet, [Create a storage account for TenuVault](/getting-started/create-storage-account/) covers the recommended settings, a setup script for your Azure administrator, and the role assignments for your admin group.
+Use your own storage account when you want backups off the admin's computer, for example to share them between admins: every admin with access to the account sees, compares and restores the same backups, with no key to hand over. See [Work with other admins in one tenant](/getting-started/multiple-admins/). This needs Pro or MSP. If no storage account exists yet, [Create a storage account for TenuVault](/getting-started/create-storage-account/) covers the recommended settings, a setup script for your Azure administrator, and the role assignments for your admin group.
 
 Before you choose it:
 
 1. Make sure your account has the **Storage Blob Data Contributor** role on the storage account. New role assignments can take a few minutes to apply.
 2. If the storage account's firewall restricts networks, allow your computer's public IP address or connect through an allowed network.
-3. Save your recovery key when the storage step asks for it, or in **Settings**. **Continue** in setup and **Save** in **Change storage** stay unavailable for Azure storage until the current key is saved, and TenuVault does not upload a backup to Azure until it is: "Save your current backup recovery key in Settings before the first encrypted Azure backup."
+
+No recovery key is needed for Azure storage. The choice is complete once access is confirmed.
 
 To choose the storage account:
 
-1. In the storage step of setup, or in **Change storage** (see below), choose **Your Azure storage account, encrypted**.
+1. In the storage step of setup, or in **Change storage** (see below), choose **Your Azure storage account**.
 2. TenuVault lists the storage accounts your account can see, with their resource group and region. Choose one in **Storage account**.
 3. Click **Check access**. TenuVault creates the `intune-backups` container if needed and writes and deletes a test file. When it works, the button shows **Access confirmed**.
 
@@ -87,11 +88,11 @@ If the check fails, TenuVault explains why:
 | `intune-backups` | One folder per backup, named `backup-` and the UTC start time, with one file per object in a folder per type and a `metadata.json` summary |
 | `audit-logs` | The tenant's [audit log](/audit-log/), one file per event |
 
-Backup file contents are encrypted before upload. Blob names, which include the type and the object's display name, are not encrypted, so anyone who can list the container can see them. Audit log events are stored as plain JSON.
+Backup files are plain JSON, protected by Azure encryption at rest and your role assignments. Anyone who can read the container can read them, including the plain-text values of secret OMA-URI settings that a backup keeps so a restore can put them back. Anyone who can write to it is trusted like an Intune admin, because a restore writes what it finds there. Grant blob data roles on the account only to your Intune admin group. Audit log events are stored as plain JSON too. Backups made by earlier TenuVault versions stay encrypted with the key of the device that made them; see [Older encrypted Azure backups](/security/encryption/#older-encrypted-azure-backups).
 
 With the optional [Backup Reader](/backups/backup-reader/), scheduled backups write to `intune-backups` as that read-only app instead of as you. An Azure administrator grants it the custom **TenuVault Backup Writer** role on this container only (read and write, no delete, no container creation) and turns on blob versioning; see [Let the Backup Reader write backups](/getting-started/create-storage-account/#optional-let-the-backup-reader-write-backups). Backup Reader runs write nothing to `audit-logs`; see [Audit log](/audit-log/).
 
-With [cloud backups](/backups/cloud/), a runbook in your own Azure Automation account writes to `intune-backups` as its managed identity with the same writer role and the same sealing, and records each run in a `cloud-backup-status-<tenant>.json` blob in the same container. Cloud runs also write nothing to `audit-logs`.
+With [cloud backups](/backups/cloud/), a runbook in your own Azure Automation account writes to `intune-backups` as its managed identity with the same writer role, and records each run in a `cloud-backup-status-<tenant>.json` blob in the same container. [Cloud backups](/backups/cloud/) describes how the runbook stores them. Cloud runs also write nothing to `audit-logs`.
 
 ## Change where a tenant's backups go
 
@@ -117,19 +118,19 @@ The default is 30 days. The setting applies to every tenant on this computer. Th
 How retention works:
 
 * In Azure storage, a scheduled backup made by the [Backup Reader](/backups/backup-reader/) or by [cloud backups](/backups/cloud/) deletes nothing, because those identities have no delete permission. Expired backups stay until the next backup made with an admin's own sign-in, which then applies retention to all of the tenant's backups with the usual protections. Backups stored on this device are unaffected and follow retention on every run.
-* Old backups are deleted at the end of each backup that saved every selected policy. A backup that failed or left policies unsaved deletes nothing: "Older backups were kept because this backup is incomplete." Cleanup itself can add a warning: if the metadata of an older backup cannot be decrypted, that backup and any backup without a recorded tenant are kept, while other eligible backups are still removed.
+* Old backups are deleted at the end of each backup that saved every selected policy. A backup that failed or left policies unsaved deletes nothing: "Older backups were kept because this backup is incomplete." Cleanup itself can add a warning: if the metadata of an older backup cannot be read, for example an Azure backup an earlier TenuVault version encrypted with a key this device does not have, that backup and any backup without a recorded tenant are kept, while other eligible backups are still removed.
 * The backup that just finished is never deleted, so at least the newest backup is always kept.
 * A backup that left out some types never removes the newest complete copy of those types. For example, if your daily backups leave out apps, the newest backup that includes apps and finished without warnings is kept even after it ages out. A backup that finished with warnings may miss items, so it does not count as holding the newest copy. The log says "Kept N older backup(s) because they hold the newest copy of types this backup leaves out."
 * If cancellation or the job deadline arrives after the manifest PUT starts, TenuVault lets that commit finish within its retry limits, stopping requests and retry waits no later than two minutes after the 30 minute deadline. An unfinished commit fails with the job deadline message. A successful commit remains completed. The warning "Retention was interrupted; older backups are cleaned up on the next run" appears only if retention is enabled (more than zero days), every selected item was saved and cancellation or expiry interrupted retention. Runs that never attempted retention do not report that warning. The scheduler records completion instead of spending another retry attempt on a duplicate backup. A failed manifest commit still fails the job.
 * A run that fails, is cancelled or times out after it claimed its folder, and before its manifest PUT was sent, writes a manifest with status `Failed` (`Cancelled` when you cancelled it), the trigger, the tenant, what it saved and the error. The write only creates the manifest: it never replaces one that is already there, and it gives up after 30 seconds. It is skipped when the storage itself stopped the run (no response, or repeated 401 or 403 responses). A failed or cancelled backup is never used as a complete backup or as the newest copy of a type, selected items it lists can still be restored one by one, and retention removes it once it is older than the retention period.
-* A run that could not record its result, for example because TenuVault was closed or the storage could not be reached, leaves a folder without a manifest. Backup History lists it as incomplete. These folders are left in place regardless of their age or ownership marker. New backup folders contain an encrypted ownership marker.
+* A run that could not record its result, for example because TenuVault was closed or the storage could not be reached, leaves a folder without a manifest. Backup History lists it as incomplete. These folders are left in place regardless of their age or ownership marker. New backup folders contain an ownership marker.
 * Backups on this device: while files in the folder are damaged or a backup is unavailable, retention deletes nothing and logs "Retention is paused." with the reason. See [Damaged backup files](#damaged-backup-files).
 * Retention deletes backup folders only. It does not delete audit log events.
 
-The encrypted `.tenuvault-owner.json` marker records `Source` and `TenantId` before policy uploads. It is excluded from downloaded ZIPs. Restore and drift detection ignore the marker. Normal retention still requires readable metadata. Storage immutability policies and legal holds still apply. The marker is deleted last during retention of an expired backup so interrupted deletion retains ownership evidence. A marker does not make a folder without a manifest eligible for deletion.
+The `.tenuvault-owner.json` marker records `Source` and `TenantId` before policy uploads. In Azure it is plain JSON like the backup itself, and in a storage account several tenants share, it and `metadata.json` decide which tenant a backup belongs to: each tenant lists, restores and downloads only its own backups. It is excluded from downloaded ZIPs. When the manifest names no tenant, the marker supplies the backup's ownership for the backup list, restore, drift detection and retention; a marker that cannot be read or names no tenant is never treated as a backup without a tenant. Normal retention still requires readable metadata. Storage immutability policies and legal holds still apply. The marker is deleted last during retention of an expired backup so interrupted deletion retains ownership evidence. A marker does not make a folder without a manifest eligible for deletion.
 
 :::caution
-Retention applies to every backup in the tenant's storage location, including backups made from other computers. If several admins share one Azure storage account, the shortest retention setting among them wins.
+Retention applies to every backup in the tenant's storage location, including backups made from other computers. If several admins share one Azure storage account, the shortest retention setting among them wins. See [Work with other admins in one tenant](/getting-started/multiple-admins/).
 :::
 
 On Community, backups are kept for 30 days at most. A longer setting, or **Forever**, counts as 30 days for Community tenants. Pro and MSP tenants keep what you choose.

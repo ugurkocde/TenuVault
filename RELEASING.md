@@ -87,6 +87,15 @@ Put these in the next stable release's notes, then remove them here.
   window screenshot is attached only when ticked. Networks that filter by path need that path
   allowed. When sending fails, Copy as email copies the full feedback to the clipboard and opens an
   email to support; that draft may be shortened, so admins paste the copied text if anything is cut.
+- Azure backups are now plain JSON (Azure encryption at rest and role assignments protect them);
+  backups on the device stay encrypted. Every admin with access to the storage account sees,
+  compares and restores the same backups, and the Azure storage choice no longer asks for the
+  recovery key. Older encrypted Azure backups stay readable with the key of the device that made
+  them, and Backup & Restore offers Import recovery key for them. Admins still on an older version
+  treat the new plain backups as unverified legacy backups: they can view and compare them and
+  restore unassigned copies, but replace restore, assignment restore and revert are blocked there.
+  Ask all admins of a tenant to update. Until cloud backups move to plain JSON as well, the runbook
+  keeps writing sealed backups, which this version reads.
 
 ## Cutting a stable release
 

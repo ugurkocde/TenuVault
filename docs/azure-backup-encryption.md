@@ -1,4 +1,17 @@
-# Azure backup encryption and recovery
+# Azure backup encryption and recovery (superseded)
+
+> **Superseded on 2026-11-09.** TenuVault no longer encrypts backups in the customer's Azure
+> storage account. New Azure backups are plain JSON, protected by Azure encryption at rest and the
+> customer's Azure role assignments, so every admin with access to the storage account sees,
+> compares and restores the same backups without a key handover. Anyone who can write to the
+> `intune-backups` container is trusted like an Intune admin, and plain Azure backups support every
+> restore mode. Backups on the device stay AES-256-GCM encrypted with the device key; the recovery
+> key only matters for those and for Azure backups made before this change, which stay readable
+> with the key of the device that made them. Current documentation:
+> [Encryption and recovery key](https://docs.tenuvault.com/security/encryption/) and
+> [Work with other admins in one tenant](https://docs.tenuvault.com/getting-started/multiple-admins/).
+>
+> The text below describes the earlier design and is kept for reference only.
 
 New desktop Azure backup uploads use AES-256-GCM before leaving the app. The key
 comes from the same recovery keyring as local backups. Authentication binds each

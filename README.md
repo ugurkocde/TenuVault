@@ -69,7 +69,8 @@ See the [installation guide](https://docs.tenuvault.com/getting-started/install/
   your own tenant: a public client with no secret. MFA and Conditional Access apply as they do in
   the Intune portal, and every change is attributed to you in the Entra and Intune audit logs.
 - **Backups stay where you want them.** Encrypted on this device by default (AES-256-GCM, key
-  protected by Windows DPAPI or the macOS Keychain), or in your own Azure storage account.
+  protected by Windows DPAPI or the macOS Keychain), or in your own Azure storage account, where
+  Azure encrypts them at rest and your role assignments decide which admins share them.
 
 ## Frequently asked questions
 
@@ -92,7 +93,8 @@ files, Apple tokens and private keys cannot be exported by Microsoft Graph. See 
 ### Where is my data stored?
 
 Encrypted on your device by default, in a folder you choose (a network share works), or in your own
-Azure storage account on Pro and MSP. Backups never reach a TenuVault server. See
+Azure storage account on Pro and MSP, as plain JSON protected by Azure encryption at rest and your
+Azure role assignments. Backups never reach a TenuVault server. See
 [Backup storage and retention](https://docs.tenuvault.com/backups/storage/).
 
 ### Is TenuVault free?
@@ -118,7 +120,7 @@ Copy creates separate policies; replacement updates supported existing policies 
 
 The OpenIntuneBaseline section deploys, compares and validates OIB policies (the OIBDeployer workflows); Frameworks compares Settings Catalog configuration with separate assignment evidence. Neither claims device enforcement or framework certification. See the [framework guide](docs/frameworks.md), [coverage metadata](docs/framework-coverage.md) and [reliability scope](docs/reliability-review.md).
 
-For recovery, see [readiness and manual artifacts](docs/disaster-recovery.md), [Azure encryption and recovery keys](docs/azure-backup-encryption.md), and [background scheduling limits](docs/background-backups.md). ZIP import reviews complete exports before saving locally; it does not modify Intune.
+For recovery, see [readiness and manual artifacts](docs/disaster-recovery.md), [encryption and recovery keys](https://docs.tenuvault.com/security/encryption/), and [background scheduling limits](docs/background-backups.md). ZIP import reviews complete exports before saving locally; it does not modify Intune.
 
 ## Customer setup
 
@@ -204,7 +206,7 @@ Electron with a React renderer (Vite) and a Node main process.
   backup, backups older than the retention period (default 30 days) are deleted, always keeping
   the newest. In Azure,
   `resources/runbooks/Invoke-TenuVaultBackup.ps1` is an Automation runbook
-  with a managed identity that writes the same sealed format (setup:
+  with a managed identity that writes the same backup format (setup:
   `resources/New-TenuVaultCloudBackup.ps1` or `resources/cloud-backup/azuredeploy.json`); the app
   only records the setup and reads the runbook's status blob.
 - **Local storage** (`src/main/storage`): one AES-256-GCM file per blob, named by an HMAC of the
@@ -212,7 +214,8 @@ Electron with a React renderer (Vite) and a Node main process.
   (`TVK2.` bundle containing all key generations) from Settings to read backups on another device.
   Legacy `TVK1.` keys remain importable; save a fresh bundle after importing keys. `blob-emulator.ts` serves the Azure
   Blob REST subset the routes use for local (`tvlocal-<tenant id>`) accounts, so the same code
-  reads local and Azure backups.
+  reads local and Azure backups. Azure backups are plain JSON; `azure-seal.ts` only opens Azure
+  backups an earlier version encrypted (`TVAZ1`) with the device keyring.
 
 ## Development
 

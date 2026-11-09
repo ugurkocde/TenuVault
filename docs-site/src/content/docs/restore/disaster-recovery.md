@@ -3,11 +3,11 @@ title: "Disaster recovery: recover Intune configuration"
 description: "Intune disaster recovery with TenuVault: prepare for and recover from deleted Intune policies, a lost admin device, or a rebuild in another tenant."
 faq:
   - question: "What should I do before I need to recover Intune configuration?"
-    answer: "Schedule backups, save the recovery key in your password manager, keep backups off the admin device (in an Azure storage account on Pro and MSP, or on a network share), keep an independent copy of important backups, check recovery readiness and practice a restore with Create copies."
+    answer: "Schedule backups, keep backups off the admin device (in an Azure storage account on Pro and MSP, or on a network share), save the recovery key in your password manager when backups stay on the device, keep an independent copy of important backups, check recovery readiness and practice a restore with Create copies."
   - question: "How do I restore Intune items that were deleted?"
     answer: "Go to Backup & Restore > Backup History, pick the last backup from before the problem and click Restore from this backup. Select the items and choose Replace in place, which needs Pro or MSP. Deleted items are recreated under their original names. Turn on Restore assignments if their assignments must come back too."
   - question: "Can I read my backups on a new or reinstalled computer?"
-    answer: "Yes, with your recovery key. Install TenuVault, sign in with the same app registration, activate your license, import the recovery key under Settings > Storage and recovery, and point the tenant at the existing backup folder or Azure storage account. Without the recovery key, backups can only be read on the device that made them."
+    answer: "Yes. Install TenuVault, sign in with the same app registration, activate your license and point the tenant at the existing Azure storage account or backup folder. Azure backups need no key. Backups kept on a device, and Azure backups an earlier TenuVault version encrypted, need the recovery key, imported under Settings > Storage and recovery."
   - question: "What cannot be recovered automatically?"
     answer: "Anything Microsoft Graph does not export: app installer files, Apple automated device enrollment tokens, and private keys or other secret material. Upload the original installer again, renew the Apple token through Apple Business Manager or Apple School Manager, and run a new backup for profiles that hold a masked OMA-URI value."
   - question: "Can I rebuild Intune configuration in another tenant?"
@@ -21,8 +21,8 @@ Intune disaster recovery means getting Microsoft Intune configuration back after
 Work through this checklist for every tenant you protect:
 
 1. **Schedule backups.** Set a daily (Pro and MSP) or weekly schedule so a recent backup always exists. See [Schedule backups](/backups/schedules/).
-2. **Save the recovery key.** Go to **Settings** > **Storage and recovery** and click **Save recovery key**. Store the file in your password manager. Without it, your backups can only be read on the device that made them. See [Encryption and recovery key](/security/encryption/).
-3. **Keep backups off the admin device.** Use an Azure storage account (Pro and MSP), or point the local backup folder at a network share. The files are encrypted either way. See [Backup storage and retention](/backups/storage/).
+2. **Save the recovery key, for backups on the device.** Go to **Settings** > **Storage and recovery** and click **Save recovery key**. Store the file in your password manager. Without it, backups on the device can only be read on the device that made them. Azure backups do not need it. See [Encryption and recovery key](/security/encryption/).
+3. **Keep backups off the admin device.** Use an Azure storage account (Pro and MSP), which every admin with access can read from any computer, or point the local backup folder at a network share, where the files stay encrypted. See [Backup storage and retention](/backups/storage/).
 4. **Keep an independent copy.** A storage administrator can delete or lock a storage account. Keep a second copy of important backups under your own recovery policy.
 5. **Check recovery readiness.** Open a backup in the restore wizard and expand **Recovery readiness** to see which items restore automatically and which need manual work. See [Check recovery readiness](#check-recovery-readiness).
 6. **Know who owns external artifacts.** Record where the original app installers and Apple tokens come from, and who can renew them.
@@ -57,11 +57,11 @@ TenuVault restores dependencies such as scope tags, assignment filters and categ
 
 ## Recover on a new device
 
-Backups are encrypted with a key that is protected by your Windows or macOS account. A new or reinstalled device has a different key, so it needs your recovery key to read existing backups.
+Backups in your Azure storage account are readable from any device with access to the storage account. Backups on a device are encrypted with a key that is protected by your Windows or macOS account. A new or reinstalled device has a different key, so it needs your recovery key to read those, and to open Azure backups that an earlier TenuVault version encrypted.
 
 1. Install TenuVault, select **Connect your tenant** and sign in to the tenant with the same app registration. The app registration already exists, so on the **Prepare** step select **Next: sign in** and enter its tenant ID and client ID. See [Install and update TenuVault](/getting-started/install/) and [Sign in to your tenant](/getting-started/connect-tenant/).
 2. Activate your license. If the old device is gone and your license has reached its installation limit, deactivate the old installation in the customer portal. See [Activate and manage your license](/licensing/manage/).
-3. Go to **Settings** > **Storage and recovery**, click **Import a recovery key**, paste the key (it starts with `TVK2.`, or `TVK1` for older keys) and click **Import**. The imported key encrypts new backups, and backups made with earlier keys stay readable.
+3. If the backups are on a device, or include older encrypted Azure backups: go to **Settings** > **Storage and recovery**, click **Import a recovery key**, paste the key (it starts with `TVK2.`, or `TVK1` for older keys) and click **Import**. The imported key encrypts new backups on this device, and backups made with earlier keys stay readable. Skip this step for Azure backups made by this version.
 4. Point the tenant at the existing backups:
    * **Azure storage:** choose the same storage account for the tenant in **Settings** > **Sign-in** > **Change storage**.
    * **This device:** click **Change folder** under **Backups on this device** and choose the folder that holds the backups, for example the network share or a restored copy.

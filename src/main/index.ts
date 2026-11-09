@@ -36,7 +36,7 @@ import { backupTenantLabel, notifyBackupFailure } from "./backup/notifications"
 import { BackupKeys } from "./backup/keys"
 import { readBackupSettings } from "./backup/settings"
 import { localInventoryProblem } from "./backup/local-inventory"
-import { encryptedAzureFetch, registerStorageToken } from "./storage/azure-seal"
+import { legacyAzureReader, registerStorageToken } from "./storage/azure-seal"
 import { createArmCaller } from "./azure/arm"
 import { BackupReaderService } from "./auth/backup-reader"
 // The same setup script the docs site downloads and the card copies, bundled so Save writes it exactly.
@@ -310,9 +310,8 @@ async function bootstrap(): Promise<void> {
 
   const bridgedFetch = createBridgedFetch({
     dispatch: (request) => host.dispatch(request),
-    fetch: encryptedAzureFetch(withNetworkErrors(chromiumFetch), () => backupKeys.keyring(), () => {
-      if (appStore.get("backup.recovery-exported") !== backupKeys.fingerprint()) throw new Error("Save your current backup recovery key in Settings before the first encrypted Azure backup.")
-    }),
+    // Azure backups are written as plain JSON; backups sealed by earlier versions open with the device keyring.
+    fetch: legacyAzureReader(withNetworkErrors(chromiumFetch), () => backupKeys.keyring()),
     authorizeTenant,
     handleLocalBlob: (request) => handleLocalBlobRequest(getLocalStore(), request),
     getDelegatedToken: async (tenant, clientId, scope, forceRefresh) => {
@@ -382,7 +381,7 @@ async function bootstrap(): Promise<void> {
         storage: async () => {
           await license.requireEntitlement(request.tenantId)
           const token = await reader.storage()
-          // The encrypted Azure fetch only seals requests for tenants with a registered storage token.
+          // Backups sealed by earlier versions are opened for the tenant of a registered storage token.
           registerStorageToken(token, request.tenantId)
           return token
         },
@@ -1302,8 +1301,8 @@ async function bootstrap(): Promise<void> {
     return { saved: true, path: result.filePath }
   })
   handleTrusted("backups:importRecoveryKey", async (_event, recoveryKey: string) => {
-    // The imported key encrypts every new backup, so the admin confirms it here, not only in the renderer.
-    const review = await dialog.showMessageBox(mainWindow!, { type: "warning", title: "Import recovery key", message: "Use this recovery key for new backups?", detail: "TenuVault encrypts every new backup on this device with the imported key. Backups made with the previous key stay readable. Import only a key you exported yourself or received from a source you trust.", buttons: ["Cancel", "Import key"], defaultId: 0, cancelId: 0 })
+    // The imported key encrypts every new backup on this device, so the admin confirms it here, not only in the renderer.
+    const review = await dialog.showMessageBox(mainWindow!, { type: "warning", title: "Import recovery key", message: "Use this recovery key for new backups?", detail: "TenuVault encrypts new backups stored on this device with the imported key. Backups made with the previous key stay readable, and so do Azure backups that an earlier TenuVault version encrypted with the imported key. Import only a key you exported yourself or received from a source you trust.", buttons: ["Cancel", "Import key"], defaultId: 0, cancelId: 0 })
     if (review.response !== 1) return null
     backupKeys.importRecoveryKey(recoveryKey)
     localStore = null

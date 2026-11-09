@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { POST } from '../src/portal/app/api/revert-policy/route'
 import { NextRequest } from '../src/main/api/next-server-shim'
+import { readLegacyRevertHistory } from '../src/portal/lib/policies/revert-history'
+import { endlessBody } from './helpers'
 
 const TENANT = '11111111-1111-4111-8111-111111111111'
 const backupPath = 'backup-2026-09-25-120000/DeviceConfigurations/Example.json'
@@ -21,6 +23,7 @@ function stubStorage(options: { history?: History; readStatus?: number; beforeWr
     if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'token' })
     if (url.hostname === 'graph.microsoft.com') return Response.json({ id: 'copy' }, { status: 201 })
     if (url.pathname.endsWith('/metadata/revert-history.json')) return new Response('missing', { status: 404 })
+    if (url.pathname.endsWith('/metadata.json') || url.pathname.endsWith('/.tenuvault-owner.json')) return new Response('missing', { status: 404 })
     if (!url.pathname.endsWith(`/metadata/${TENANT}/revert-history.json`)) return Response.json(snapshot)
     if ((init?.method ?? 'GET') === 'GET') {
       if (options.readStatus) return new Response('busy', { status: options.readStatus })
@@ -65,5 +68,20 @@ describe('Revert history', () => {
     expect((await restore('p1')).status).toBe(200)
     expect(puts.map((headers) => headers['If-Match'])).toEqual(['"1"', '"2"'])
     expect(Object.keys(blob.body!.reverts).sort()).toEqual(['old', 'other', 'p1'])
+  })
+})
+
+describe('Legacy revert history attribution', () => {
+  it('does not attribute an entry whose backup has an oversized marker, and reads the marker only to the cap', async () => {
+    const big = endlessBody(40, new TextEncoder().encode('{"TenantId":"'))
+    const read = async (name: string) => {
+      if (name === 'metadata/revert-history.json') return Response.json({ reverts: { p1: [{ action: 'revert', fromBackup: 'backup-big' }, { action: 'revert', fromBackup: 'backup-own' }] } })
+      if (name === 'backup-big/.tenuvault-owner.json') return new Response(big.body)
+      if (name === 'backup-own/metadata.json') return Response.json({ TenantId: TENANT })
+      return new Response('', { status: 404 })
+    }
+    const history = await readLegacyRevertHistory(read, TENANT)
+    expect(history.reverts.p1).toEqual([{ action: 'revert', fromBackup: 'backup-own' }])
+    expect(big.pulled()).toBeLessThan(40)
   })
 })

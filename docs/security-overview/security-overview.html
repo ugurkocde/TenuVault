@@ -211,8 +211,9 @@
       </div>
       <div class="card">
         <h3>Backups stay with you</h3>
-        <p>Backups are encrypted on the computer with AES-256-GCM and kept on local disk or in your own Azure Storage
-          account. No vendor server stores or processes Intune data, except opt-in feedback. No telemetry or crash reporting.</p>
+        <p>Backups on local disk are encrypted on the computer with AES-256-GCM. Backups in your own Azure Storage
+          account are protected by Azure encryption at rest and your role assignments. No vendor server stores or
+          processes Intune data, except opt-in feedback. No telemetry or crash reporting.</p>
       </div>
     </div>
 
@@ -236,7 +237,7 @@
         <text x="46" y="76" font-size="14.5" font-weight="700" fill="#1f1d1b">TenuVault Desktop</text>
         <text x="46" y="99" font-size="12" fill="#55504a">Sign-in via system browser</text>
         <text x="46" y="118" font-size="12" fill="#55504a">Tokens encrypted by the OS (DPAPI or Keychain)</text>
-        <text x="46" y="137" font-size="12" fill="#55504a">Backups encrypted before they are written</text>
+        <text x="46" y="137" font-size="12" fill="#55504a">Local backups encrypted before they are written</text>
         <text x="46" y="156" font-size="12" fill="#55504a">Scheduled backups run as the signed-in admin</text>
         <text x="46" y="175" font-size="12" fill="#55504a">Writes only when an admin starts a change</text>
         <text x="46" y="194" font-size="12" fill="#55504a">No telemetry or crash reporting</text>
@@ -261,7 +262,7 @@
 
         <rect x="510" y="182" width="360" height="58" rx="8" fill="#ffffff" stroke="#e8c3b7" stroke-dasharray="5 4"/>
         <text x="526" y="205" font-size="13.5" font-weight="700" fill="#1f1d1b">Your Azure Storage account (optional)</text>
-        <text x="526" y="225" font-size="12" fill="#55504a">Encrypted backups, audit log, tenant metadata</text>
+        <text x="526" y="225" font-size="12" fill="#55504a">Backups, audit log, tenant metadata (Azure encryption)</text>
 
         <!-- Arrows to tenant -->
         <path d="M391 78 L508 78" stroke="#c94b30" stroke-width="1.8" fill="none" marker-start="url(#arr)" marker-end="url(#arr)"/>
@@ -305,7 +306,7 @@
         <tr>
           <td class="purpose">Azure backups</td>
           <td class="dest"><code>&lt;account&gt;.blob.core.windows.net</code></td>
-          <td>Optional. Your own storage account: backup content (encrypted before upload) and audit log entries.
+          <td>Optional. Your own storage account: backup content (plain JSON, Azure encryption at rest) and audit log entries.
             Not used when backups are stored locally</td>
         </tr>
         <tr>
@@ -382,10 +383,12 @@
             user. The app will not start without OS encryption.</li>
           <li><b>Local backups</b> use AES-256-GCM per file, with keyed-hash file names so policy names are not visible
             on disk. Default folder: Documents/TenuVault Backups.</li>
-          <li><b>Azure backups</b> are encrypted on the computer (AES-256-GCM) before upload. Blob names (policy display
-            names), audit log and tenant metadata rely on Azure's encryption at rest.</li>
-          <li><b>Recovery key.</b> Azure uploads are blocked until the admin saves it. Keep it in a password manager; without
-            it, backups cannot be read on another computer or after a reinstall.</li>
+          <li><b>Azure backups</b> are stored as plain JSON and rely on Azure's encryption at rest, like the audit log and
+            tenant metadata. Access follows your Azure role assignments, so every admin with access sees the same
+            backups. Anyone who can write to the backup container is trusted like an Intune admin; grant blob data
+            roles only to the admin group. Azure backups made by earlier versions stay encrypted with the device key.</li>
+          <li><b>Recovery key.</b> Needed for local backups on another computer or after a reinstall, and for older
+            encrypted Azure backups. Keep it in a password manager.</li>
           <li><b>Exports</b> (backup ZIP, reports) are unencrypted, saved where the admin chooses. Backups can hold secret
             values such as OMA-URI settings, so treat exports and the recovery key as sensitive.</li>
           <li><b>Retention.</b> Backups older than the retention setting (default 30 days) and audit entries older than

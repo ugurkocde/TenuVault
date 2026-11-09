@@ -86,7 +86,7 @@ describe("Community plan notes", () => {
   it("shows the first backup note only after the machine flag is known and unseen", () => {
     expect(firstBackupNote("community", null)).toBeNull()
     expect(firstBackupNote("community", true)).toBeNull()
-    expect(firstBackupNote("community", false)).toBe("Backed up on this device. Pro can also store encrypted copies in your own Azure storage account and keep them longer.")
+    expect(firstBackupNote("community", false)).toBe("Backed up on this device. Pro can also store backups in your own Azure storage account, where every admin with access sees them, and keep them longer.")
   })
 
   it("persists the shown flag across preference instances and unrelated changes", () => {

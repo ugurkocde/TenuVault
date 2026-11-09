@@ -302,8 +302,9 @@ function BackupsOnDevice() {
           <p className="text-sm text-gray-600">
             The key is protected by your {navigator.platform.startsWith("Mac") ? "macOS Keychain" : "Windows account"}. Save
             the recovery key somewhere safe, such as your password manager: you need it to read these backups on another
-            device or after reinstalling. The saved bundle includes all previous keys on this device.
-            Save a new bundle after importing keys.
+            device or after reinstalling. Azure backups do not need it, except Azure backups that an earlier TenuVault
+            version encrypted. The saved bundle includes all previous keys on this device. Save a new bundle after
+            importing keys.
           </p>
           <p className="text-xs text-gray-500">
             Key fingerprint: <span className="font-mono">{settings?.keyFingerprint ?? "..."}</span>

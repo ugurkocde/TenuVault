@@ -18,7 +18,7 @@ export { catalogSetting, type CatalogMark, type CatalogSetting } from "../../../
  * - Include and exclude targets are kept apart: a policy that excludes a group another policy
  *   includes is intentional targeting, not a conflict.
  * - Evidence holds hashes and short display values only. Snapshot content (which can hold
- *   secret values inside the encrypted backup) never leaves this module.
+ *   secret values inside the backup) never leaves this module.
  */
 
 export type RuleId = "conflicting-setting" | "duplicate-profile" | "unassigned-policy" | "missing-filter" | "missing-scope-tag" | "missing-group" | "deprecated-setting"

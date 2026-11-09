@@ -2,6 +2,7 @@ export { assertStorageAccountName } from "../../shared/storage-account"
 export { ProtectedBlobError, isImmutabilityRefusal } from "./request"
 import { createHash, randomUUID } from "node:crypto"
 import { BACKUP_CANCELLED_MESSAGE, BACKUP_OWNER_FILE } from "../../shared/constants"
+import { resolveBackupOwnership, type OwnershipFile } from "../../shared/backup-ownership"
 import { BlobWriter } from "./blob-writer"
 import { GraphSession, type GraphItem } from "./graph-session"
 import { GRAPH, BlobClaimError, GraphError, InventoryDamagedError, ProtectedBlobError, RequestTimeoutError, StorageError, TokenError, isUnreachable } from "./request"
@@ -720,9 +721,10 @@ export class BackupEngine {
    * Deletes backup folders older than the retention period, never the one just written, and never the
    * newest backup that holds a type the current backup left out: a backup of fewer types must not
    * age out the only copy of the others. Only this tenant's backups are considered: another
-   * tenant's backups and backups without readable metadata are never deleted. Backups from
-   * versions that did not record the tenant count as this tenant's unless the container also
-   * holds a backup recorded as another tenant's.
+   * tenant's backups and backups without readable metadata are never deleted. A manifest that
+   * names no tenant is placed by the folder's ownership marker. Backups that record no tenant in
+   * either count as this tenant's unless the container also holds a backup recorded as another
+   * tenant's, or one whose metadata or marker cannot be read.
    */
   private async applyRetention(job: BackupJob, storage: BlobWriter, current: string, covered: Set<string>, signal: AbortSignal): Promise<number> {
     const days = this.deps.retentionDays?.(job.tenantId) ?? 0
@@ -742,25 +744,36 @@ export class BackupEngine {
     // Who each backup belongs to. Every metadata file is read first, because backups from versions
     // that did not record the tenant count as this tenant's only while no backup names another one.
     const tenant = job.tenantId.toLowerCase()
-    const owners: Array<{ metadata: Record<string, unknown>; owner: "this" | "other" | "untagged" } | null> = Array.from({ length: backups.length }, () => null)
+    const owners: Array<{ metadata: Record<string, unknown> | null; owner: "this" | "other" | "untagged" } | null> = Array.from({ length: backups.length }, () => null)
     const unreadable = new Set<number>()
     let unreadableReason = ""
-    await pool(backups.map((backup, index) => ({ backup, index })), CONCURRENCY, async ({ backup, index }) => {
-      let metadata: Record<string, unknown> | null
+    // Metadata or a marker that cannot be opened (an Azure backup sealed by an earlier version with a
+    // key this device lacks, a local file with a wrong key or damage, JSON that is not an object) or
+    // a local backup made unavailable by damaged files is unreadable: never ours, and it must not
+    // stop the review of the other backups. Any other failure stops retention.
+    const readFile = async (name: string): Promise<OwnershipFile> => {
       try {
-        metadata = await storage.readJson(`${backup.prefix}metadata.json`)
+        const value = await storage.readJson(name)
+        return value === null ? { kind: "missing" } : { kind: "found", value }
       } catch (error) {
-        // Metadata that cannot be decrypted (a wrong or rotated key, damaged ciphertext) or a local
-        // backup made unavailable by damaged files is unreadable: never ours, and it must not stop
-        // the review of the other backups.
         if (!(error instanceof FetchApplicationError) && !(error instanceof InventoryDamagedError)) throw error
+        return { kind: "unreadable", error }
+      }
+    }
+    await pool(backups.map((backup, index) => ({ backup, index })), CONCURRENCY, async ({ backup, index }) => {
+      const { manifest, owner } = await resolveBackupOwnership((file) => readFile(`${backup.prefix}${file}`), tenant)
+      const failure = manifest.kind === "unreadable" ? manifest.error : owner.kind === "unreadable" ? owner.error : null
+      if (failure !== null) {
         unreadable.add(index)
-        unreadableReason ||= error.message
+        unreadableReason ||= failure instanceof Error ? failure.message : String(failure)
         return
       }
-      if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return // Missing or unreadable: never ours.
-      const owner = typeof metadata.TenantId !== "string" ? "untagged" : metadata.TenantId.toLowerCase() === tenant ? "this" : "other"
-      owners[index] = { metadata, owner }
+      // A folder without a manifest (running, stopped or older) is never deleted, but its marker
+      // still says whether another tenant uses the container.
+      owners[index] = {
+        metadata: manifest.kind === "found" ? manifest.metadata : null,
+        owner: owner.kind === "owned" ? "this" : owner.kind === "other" ? "other" : "untagged",
+      }
     }, signal)
     // An unreadable backup may be another tenant's, so while one exists the container counts as
     // shared and untagged backups from earlier versions stay, as they did before.
@@ -775,7 +788,7 @@ export class BackupEngine {
     let partlyRemoved = 0
     for (const [index, backup] of backups.entries()) {
       const entry = owners[index]
-      if (!entry || entry.owner === "other" || (entry.owner === "untagged" && shared)) {
+      if (!entry?.metadata || entry.owner === "other" || (entry.owner === "untagged" && shared)) {
         if (backup.time < cutoff && !unreadable.has(index)) unowned++
         continue
       }

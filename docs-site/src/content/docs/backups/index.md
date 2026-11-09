@@ -1,6 +1,6 @@
 ---
 title: "Intune backup: run a backup"
-description: "Run an Intune backup with TenuVault: back up 40 Microsoft Intune object types with assignments, encrypted on your device or in your own Azure storage."
+description: "Run an Intune backup with TenuVault: back up 40 Microsoft Intune object types with assignments, encrypted on your device or in your own Azure storage account."
 faq:
   - question: "How do I back up Microsoft Intune policies?"
     answer: "In TenuVault, select the tenant, open Backup & Restore and click Run Backup. Keep the saved backup choice or change it, then click Start backup. TenuVault reads the Intune configuration through Microsoft Graph with your own delegated sign-in and saves the objects in your backup choice, with their assignments where Intune has them."
@@ -9,7 +9,7 @@ faq:
   - question: "Does Microsoft Intune have a built-in backup?"
     answer: "No. Intune has no native backup, point-in-time restore or recycle bin for policies, so a deleted or changed policy cannot be recovered from the Intune portal. A backup tool such as TenuVault saves the configuration through Microsoft Graph before something goes wrong."
   - question: "Where are Intune backups stored?"
-    answer: "Backups are encrypted with AES-256-GCM on your device and stored in a local folder or on a network share on every plan, or in your own Azure storage account on Pro and MSP. Backups are never sent to a TenuVault server."
+    answer: "On every plan, backups are encrypted with AES-256-GCM and stored in a local folder or on a network share. On Pro and MSP they can go to your own Azure storage account instead, where Azure encrypts them at rest and your role assignments decide which admins can read them. Backups are never sent to a TenuVault server."
   - question: "How often should I back up Intune?"
     answer: "On a schedule, so a recent backup always exists before you need it. Community includes manual and weekly scheduled backups. Pro and MSP add daily schedules. Also run a manual backup before any large policy change."
 ---
@@ -20,7 +20,7 @@ An Intune backup is a complete, point-in-time copy of your Microsoft Intune conf
 
 TenuVault reads your Intune configuration through Microsoft Graph (beta) with your own delegated sign-in. It saves every object as its own file, together with its assignments, in a new backup folder named after the start time in UTC, for example `backup-2026-09-28-020000`. When all objects are read, it writes a summary with the item counts, the result and a fingerprint of every item, which later lets TenuVault [compare backups](/backups/compare/).
 
-Backups go to the storage you chose for the tenant: encrypted on this device, or encrypted in your own Azure storage account. See [Backup storage and retention](/backups/storage/).
+Backups go to the storage you chose for the tenant: encrypted on this device, or in your own Azure storage account, which every admin with access shares. See [Backup storage and retention](/backups/storage/).
 
 For the full list of object types, see [What gets backed up](/backups/coverage/).
 
@@ -29,7 +29,7 @@ For the full list of object types, see [What gets backed up](/backups/coverage/)
 * You are signed in to the tenant. See [Sign in to your tenant](/getting-started/connect-tenant/).
 * Your license covers the tenant. A tenant that is not licensed is not backed up.
 * The tenant has a storage location. If not, TenuVault asks you to "Choose where backups for this tenant are stored in Settings first."
-* For backups to your Azure storage account: the tenant is on Pro or MSP, and you have saved your recovery key in **Settings**. TenuVault does not upload to Azure until you have. See [Encryption and recovery key](/security/encryption/).
+* For backups to your Azure storage account: the tenant is on Pro or MSP, and your account has the **Storage Blob Data Contributor** role on the storage account. No recovery key is needed. See [Encryption and recovery key](/security/encryption/).
 
 ## Start a backup
 
@@ -123,8 +123,10 @@ A backup ends with one of these results:
 | **Failed** | No item could be saved, or the backup stopped after it started saving, for example because the sign-in expired, Microsoft Graph stopped responding or the 30 minute deadline passed. It holds only the policies it saved and is never used as a complete backup. The timeline shows how it started, and retention removes it like any other backup once it is older than the retention period. |
 | **Cancelled** | You cancelled the backup after it started saving. It is shown in a neutral tone, because you stopped it on purpose. Like a failed backup, it holds only the policies it saved, is never used as a complete backup, and retention removes it once it is older than the retention period. On the Dashboard it counts in the backups in storage, but not as successful or failed and not in **Success Rate**, and it does not change **Tenant Health**. Backups cancelled with an earlier version, which recorded them as failed, are shown as cancelled too. |
 | **Incomplete** | The backup stopped and could not record its result, for example because TenuVault was closed or the storage could not be reached. It holds only part of the tenant. |
-| **Status unknown** | The backup's summary could not be read, so whether it finished is not known. **Backup Details** shows why, for example "Backup authentication failed" when the backup was encrypted with a different recovery key than the one on this device. Import that recovery key, or select **Refresh** when the storage did not answer. Drift detection does not offer it until its summary can be read. |
+| **Status unknown** | The backup's summary could not be read, so whether it finished is not known. **Backup Details** shows why, for example "This backup was encrypted by an earlier TenuVault version. Import the recovery key of the device that made it to open it." for an older encrypted Azure backup, or a damaged file on this device. Import that recovery key, or select **Refresh** when the storage did not answer. Drift detection does not offer it until its summary can be read. |
 | **Running** | The backup has not written its summary yet. A backup without a summary is shown as running while TenuVault runs it, or for six hours after it started, because another device may be running it or TenuVault restarted during it; after that it is shown as incomplete. On the Dashboard, one whose run failed counts as failed. |
+
+When the tenant's Azure storage account holds older backups that an earlier TenuVault version encrypted and no recovery key on this device opens, the backup timeline shows a notice, for example "2 older Azure backups need a recovery key", with **Import recovery key**. The notice is only advice: new backups and the other backups keep working, and a backup that cannot be read is never deleted. In a storage account several tenants share, such backups may belong to another tenant. See [Older encrypted Azure backups](/security/encryption/#older-encrypted-azure-backups).
 
 The **Backup Progress** dialog shows **Failed** with the error for every backup that failed, including the ones the timeline later lists as incomplete. A backup you cancelled shows **Cancelled** with a grey icon instead.
 

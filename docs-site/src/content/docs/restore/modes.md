@@ -49,9 +49,10 @@ Overwritten versions are not kept anywhere by the restore itself. Run a backup f
 
 ### When replace in place is blocked
 
-Some items cannot be replaced, and show **Cannot be restored** with a reason:
+Every backup that records this tenant supports every restore mode, whether it is on this device or in your Azure storage account. Anyone who can write to the Azure backup container is trusted like an Intune admin; see [Who is trusted](/security/encryption/#who-is-trusted). Some items cannot be replaced, and show **Cannot be restored** with a reason:
 
-* **Unverified legacy snapshots.** Backups written in Azure storage before client-side encryption are shown with an `[Unverified legacy]` prefix. They cannot replace live items: "This snapshot is not authenticated. Review its content and restore a copy; replacement is blocked." They also cannot restore assignments, even as a copy. Review the content and restore an unassigned copy instead.
+* **Backups that do not record their tenant.** A backup counts as this tenant's when its `metadata.json` or its ownership marker names the tenant, or when it is in the tenant's backup folder on this device. Backups made by TenuVault always record it. A backup in Azure storage that records no tenant at all, for example one from a very old version, can be viewed, compared, downloaded and restored as an unassigned copy, but it cannot replace live items or restore assignments: "This backup does not record its tenant. Restore it as a copy instead."
+
 * **Changed creation-only app properties.** For web apps and WinGet apps, some properties cannot be changed on an existing app, for example: "appUrl changed since the backup and Intune cannot change it on an existing app. Delete the app and restore it to recreate it."
 * **Administrative templates that cannot be read.** "The current administrative template could not be read, so it cannot be replaced in place."
 * **Reference-only types and masked secrets**, described in [What cannot be restored](/restore/limitations/).

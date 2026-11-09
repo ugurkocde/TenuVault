@@ -20,6 +20,7 @@ import { bridge } from "@desktop/lib/bridge"
 import { backupTypeTrends } from "~/lib/backup-trends"
 import { retentionNote } from "@desktop/lib/plan-notes"
 import { FirstBackupNote } from "@desktop/components/FirstBackupNote"
+import { LegacySealedBackupsNotice } from "@desktop/components/LegacySealedBackupsNotice"
 import { allows } from "../../../../shared/plans"
 import { AREAS } from "../../../../shared/intune/scope"
 import { typeForFolder } from "../../../../shared/intune/registry"
@@ -296,6 +297,7 @@ export default function BackupRestorePage() {
                 {unresolvedNotice(backupList.unresolved)}
               </p>
             )}
+            <LegacySealedBackupsNotice count={backupList.sealed} onImported={() => backupList.refresh({ force: true })} />
             {retentionMessage && (
               <p className="mb-4 text-sm text-gray-500">
                 {retentionMessage}{" "}

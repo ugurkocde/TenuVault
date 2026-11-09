@@ -43,7 +43,7 @@ export function RecoveryKeyImport({ onImported, onError, onBusyChange }: Recover
         spellCheck={false}
       />
       <p className="text-xs text-gray-500">
-        The imported key encrypts new backups. Backups made with the previous key stay readable.
+        The imported key encrypts new backups on this device. Backups made with the previous key stay readable.
       </p>
       <Button type="button" size="sm" disabled={!recoveryKey.trim() || busy} onClick={() => void submit()}>
         {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}

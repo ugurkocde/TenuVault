@@ -27,6 +27,6 @@ export function weeklyScheduleNote(plan: Plan | null, weeklyEnabled: boolean): s
 
 export function firstBackupNote(plan: Plan | null, firstBackupNoteSeen: boolean | null): string | null {
   return plan === "community" && firstBackupNoteSeen === false
-    ? "Backed up on this device. Pro can also store encrypted copies in your own Azure storage account and keep them longer."
+    ? "Backed up on this device. Pro can also store backups in your own Azure storage account, where every admin with access sees them, and keep them longer."
     : null
 }

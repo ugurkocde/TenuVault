@@ -5,6 +5,7 @@ import { POST as listBackups } from "../src/portal/app/api/list-backups/route"
 import { POST as backupChanges } from "../src/portal/app/api/backup-changes/route"
 import { POST as restorePreview } from "../src/portal/app/api/restore-preview/route"
 import { BACKUP_OWNER_FILE } from "../src/shared/constants"
+import { endlessBody } from "./helpers"
 
 const args = { tenantId: "tenant", appId: "app", clientSecret: "test", storageAccountName: "store", subscriptionId: "local", resourceGroupName: "local" }
 const request = (body: object) => new NextRequest("http://tenuvault.internal/api/test", { method: "POST", body: JSON.stringify({ ...args, ...body }) })
@@ -129,6 +130,56 @@ describe("backups the list cannot place", () => {
     }
   })
 
+  it.each([42, "", null])("trusts only the resolved owner for a manifest whose TenantId is %j, in both list modes (review repro)", async (invalid) => {
+    const placed = "backup-2026-09-27-020000", unplaced = "backup-2026-09-28-020000"
+    storage({
+      ...blobs,
+      [`${placed}/metadata.json`]: { TenantId: invalid, Status: "Success" },
+      [`${placed}/${BACKUP_OWNER_FILE}`]: { TenantId: "other", RunId: "desktop-other" },
+      [`${placed}/DeviceConfigurations/A.json`]: { id: "1" },
+      [`${unplaced}/metadata.json`]: { TenantId: invalid, Status: "Success" },
+      [`${unplaced}/DeviceConfigurations/A.json`]: { id: "1" },
+    })
+    for (const summary of [false, true]) {
+      const listed = await (await listBackups(request({ summary }))).json()
+      const ids = listed.backups.map((backup: { id: string }) => backup.id)
+      // The marker names another tenant, so its row never reaches this tenant.
+      expect(ids).not.toContain(placed)
+      // A tenant the manifest records but nobody can read is not "no tenant": left out and counted.
+      expect(ids).not.toContain(unplaced)
+      expect(listed.unresolved).toBe(1)
+    }
+  })
+
+  it("leaves out a folder whose ownership marker is oversized as unresolved, in both list modes, reading it only to the cap", async () => {
+    const big = "backup-2026-09-27-020000"
+    storage({ ...blobs, [`${big}/${BACKUP_OWNER_FILE}`]: {}, [`${big}/DeviceConfigurations/A.json`]: { id: "1" } })
+    const served = globalThis.fetch as unknown as (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+    const bodies: Array<ReturnType<typeof endlessBody>> = []
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (!String(input).endsWith(`${big}/${BACKUP_OWNER_FILE}`)) return served(input, init)
+      const body = endlessBody(40, new TextEncoder().encode('{"TenantId":"'))
+      bodies.push(body)
+      return new Response(body.body)
+    }))
+    for (const summary of [false, true]) {
+      const listed = await (await listBackups(request({ summary }))).json()
+      expect(listed.unresolved).toBe(1)
+      expect(listed.backups.map((backup: { id: string }) => backup.id)).not.toContain(big)
+    }
+    expect(bodies.length).toBeGreaterThan(0)
+    for (const body of bodies) expect(body.pulled()).toBeLessThan(40)
+  })
+
+  it("lists a backup whose manifest records an invalid tenant only when its marker names this tenant", async () => {
+    const own = "backup-2026-09-27-020000"
+    storage({ ...blobs, [`${own}/metadata.json`]: { TenantId: 42, Status: "Success" }, [`${own}/${BACKUP_OWNER_FILE}`]: { TenantId: "tenant" }, [`${own}/DeviceConfigurations/A.json`]: { id: "1" } })
+    for (const summary of [false, true]) {
+      const listed = await (await listBackups(request({ summary }))).json()
+      expect(listed.backups.find((backup: { id: string }) => backup.id === own)).toMatchObject({ status: "unknown", error: expect.stringContaining("records a tenant that is not valid") })
+    }
+  })
+
   it("places a folder whose manifest cannot be read by its ownership marker, in both list modes", async () => {
     const foreignBoth = "backup-2026-09-27-020000"
     const foreignMarker = "backup-2026-09-28-020000"
@@ -172,7 +223,7 @@ describe("restore preview", () => {
       [`${newer}/Apps/Reader.json`]: { id: "9", displayName: "Adobe Reader", "@odata.type": "#microsoft.graph.win32LobApp", assignments: [], relationships: [] },
     }
     const methods: string[] = []
-    storage(preview, (url) => {
+    storage({ ...preview, [`${newer}/metadata.json`]: { TenantId: "tenant", Status: "Success" } }, (url) => {
       methods.push(url.pathname)
       if (url.pathname.endsWith("/1")) return Response.json({ id: "1", displayName: "A", value: 2, version: 7, assignments: [] })
       if (url.pathname.endsWith("/9/relationships")) return Response.json({ value: [] })
@@ -182,9 +233,11 @@ describe("restore preview", () => {
     const response = await restorePreview(request({ backupId: newer, paths: Object.keys(preview), live: true }))
     expect(response.status).toBe(200)
     const { items } = await response.json()
-    expect(items[0]).toMatchObject({ name: "[Unverified legacy] A", live: "same", replaceBlocker: expect.stringContaining("not authenticated") })
-    expect(items[1]).toMatchObject({ name: "[Unverified legacy] Gone", live: "missing" })
-    expect(items[2]).toMatchObject({ name: "[Unverified legacy] Adobe Reader", live: "same", blocker: expect.stringContaining("Upload the installer again") })
+    // Plain backups are trusted like any backup: no name prefix and no replace blocker of their own.
+    expect(items[0]).toMatchObject({ name: "A", live: "same" })
+    expect(items[0].replaceBlocker).toBeUndefined()
+    expect(items[1]).toMatchObject({ name: "Gone", live: "missing" })
+    expect(items[2]).toMatchObject({ name: "Adobe Reader", live: "same", blocker: expect.stringContaining("Upload the installer again") })
     expect(methods.every((path) => path.startsWith("/beta/"))).toBe(true)
   })
 

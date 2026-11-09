@@ -102,8 +102,8 @@ export default defineConfig({
 						'- History: the first versions of TenuVault were a free PowerShell script and a hosted web portal. TenuVault Desktop, released in October 2026, is the current product for new users; the web portal remains available for existing users. This documentation covers TenuVault Desktop only.',
 						'- Sign-in: delegated sign-in with the admin\'s own account through an app registration in the customer\'s tenant (a public client with no secret). MFA and Conditional Access apply, and changes are attributed to the admin in the Intune and Entra audit logs.',
 						'- Coverage: 40 Intune object types in nine areas, with their assignments where Intune has them. App installer files, Apple tokens and private keys cannot be exported by Microsoft Graph and are not in backups.',
-						'- Storage: backups are encrypted on the device (a local folder or a network share) on every plan, or in the customer\'s own Azure storage account on Pro and MSP. Backups are never sent to a TenuVault server.',
-						'- Encryption: AES-256-GCM on the admin\'s machine before backups are written or uploaded, with a key protected by Windows DPAPI or the macOS Keychain. A recovery key lets backups be read on another device.',
+						'- Storage: backups are kept on the device (a local folder or a network share) on every plan, or in the customer\'s own Azure storage account on Pro and MSP. Backups are never sent to a TenuVault server.',
+						'- Encryption: backups on the device are encrypted with AES-256-GCM, with a key protected by Windows DPAPI or the macOS Keychain; a recovery key lets them be read on another device. Backups in Azure are stored as plain JSON, protected by Azure encryption at rest and the customer\'s Azure role assignments, so every admin with access shares the same backups.',
 						'- Plans: Community is free for one tenant and needs no license key (manual and weekly scheduled backups, backup history up to 30 days, restore one item as a copy). Pro covers 2 tenants and adds daily schedules, Azure storage, history from 7 to 365 days or forever, bulk restore, replace in place and assignment restore. MSP covers the subscribed number of tenants (new subscriptions include 5) and adds the cross tenant dashboard and actions across several tenants. Pro and MSP include a 30 day free trial; each tenant can be active on up to 5 installations.',
 						'- Product overview: [Intune backup with TenuVault](https://www.tenuvault.com/intune-backup). Plans and prices: [TenuVault pricing](https://www.tenuvault.com/pricing).',
 						"- Comparisons with doing it by hand or with Microsoft's built-in features, including when TenuVault is not needed: [Manual or automated: Intune comparisons](https://www.tenuvault.com/compare).",
@@ -124,6 +124,7 @@ export default defineConfig({
 						{ label: 'Choose where backups are stored', slug: 'getting-started/choose-storage' },
 						{ label: 'Create a storage account', slug: 'getting-started/create-storage-account' },
 						{ label: 'Run your first backup', slug: 'getting-started/first-backup' },
+						{ label: 'Work with other admins in one tenant', slug: 'getting-started/multiple-admins' },
 					],
 				},
 				{
