@@ -16,6 +16,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) act(() => root.unmount())
   document.body.replaceChildren()
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
 })
 
 // Two configuration profiles in one backup, so selecting several is possible on Pro.
@@ -97,4 +98,38 @@ describe("restore wizard item selection", () => {
     await act(async () => buttonNamed(container, "Clear")!.click())
     expect(selectedCount(container)).toBe("0")
   })
+})
+
+it("reloads the open approval list after consecutive restores with the same result count", async () => {
+  const container = await renderItems(false)
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible")
+  let runs = 0
+  const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    const body = JSON.parse(String(init?.body ?? "{}"))
+    if (url.endsWith("/api/list-backup-contents")) return Response.json(contents)
+    if (url.endsWith("/api/restore-preview")) return Response.json(preview)
+    if (body.approvalAction === "detect") return Response.json({ enabled: true })
+    if (body.approvalAction === "list") return Response.json({ records: Array.from({ length: runs }, (_, index) => ({ id: String(index), label: `Request ${index + 1}`, operation: "create", status: "needsApproval", stepNumber: 1, totalSteps: 1, canComplete: true })) })
+    if (url.endsWith("/api/restore-backup")) {
+      runs++
+      return Response.json({ success: true, details: { results: body.selectedPolicies.map((item: { path: string }) => ({ path: item.path, success: false, approval: { kind: "pending", code: String(runs) }, approvalState: "submitted", error: "Submitted for approval" })) } })
+    }
+    return Response.json({})
+  })
+  vi.stubGlobal("fetch", fetcher)
+  for (let run = 1; run <= 2; run++) {
+    await act(async () => buttonNamed(container, "Select all")!.click())
+    await act(async () => buttonNamed(container, "Next")!.click())
+    await act(async () => buttonNamed(container, "Review")!.click())
+    if (run === 1) await act(async () => buttonNamed(container, "Waiting for approval")!.click())
+    fetcher.mockClear()
+    await act(async () => buttonNamed(container, " Restore 2 items")!.click())
+    expect(runs).toBe(run)
+    expect(container.textContent).toContain(`Request ${run}`)
+    const lists = fetcher.mock.calls.filter(([, init]) => JSON.parse(String(init?.body ?? "{}")).approvalAction === "list")
+    expect(lists).toHaveLength(1)
+    expect(JSON.parse(String(lists[0]![1]?.body)).refresh).toBe(false)
+    if (run === 1) await act(async () => buttonNamed(container, "Restore more items")!.click())
+  }
 })

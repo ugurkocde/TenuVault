@@ -460,7 +460,8 @@ const MAIN_OVERRIDES = `(() => {
       case "/api/restore-preview": return json(200, { items: (body.paths ?? []).map(path => ({ path, name: "WIN - Defender Antivirus - Baseline", snapshot: { name: "WIN - Defender Antivirus - Baseline", settings: [] } })) })
       case "/api/restore-backup": {
         if (body.approvalAction === "detect") return json(200, { enabled: !M.noMaa })
-        if (body.approvalAction === "list") return json(200, { records: M.noMaa ? [] : [{ id: "11111111-1111-4111-8111-111111111111", label: "WIN - Defender Antivirus - Baseline", operation: "create", status: "approved", approverNote: "Reviewed against our change window. Ready to restore.", expiresAt: new Date(Date.now() + 2 * 86400000).toISOString(), stepNumber: 1, totalSteps: 2, canComplete: true, requesterName: "Taylor Morgan" }] })
+        if (body.approvalAction === "list") return json(200, { records: M.noMaa ? [] : [{ id: "11111111-1111-4111-8111-111111111111", label: "WIN - Defender Antivirus - Baseline", operation: "create", status: "approved", approverNote: "Reviewed against our change window. Ready to restore.", expiresAt: new Date(Date.now() + 2 * 86400000).toISOString(), stepNumber: 1, totalSteps: 2, canComplete: true, requesterName: "Taylor Morgan" },
+          ...[["completed", "WIN - Firewall - Baseline"], ["cancelled", "WIN - Disk Encryption - Baseline"]].map(([status, label]) => ({ id: status, label, operation: "create", status, expiresAt: new Date(Date.now() + 2 * 86400000).toISOString(), stepNumber: 1, totalSteps: 1, canComplete: true, requesterName: "Taylor Morgan" }))] })
         return json(200, { success: true, details: { results: (body.selectedPolicies ?? []).map(item => ({ path: item.path, success: false, retryable: false, approvalId: "11111111-1111-4111-8111-111111111111", approvalState: "submitted", approval: { kind: "pending", code: "11111111-1111-4111-8111-111111111111" }, error: "Submitted for approval" })) } })
       }
       case "/api/restore-backup/progress": return json(200, { done: 1, total: 1, current: null, results: [] })
@@ -664,6 +665,11 @@ try {
     await click("Waiting for approval")
     await assertText("Reviewed against our change window")
     await scrollAll(0)
+    await assertText("WIN - Firewall - Baseline")
+    await assertText("Withdrawn")
+    await evaluate(`document.querySelector("#restore-approval-list").scrollIntoView({ block: "start" })`)
+    const approvalRows = await evaluate(`[...document.querySelectorAll("#restore-approval-list li")].map(row => row.innerText)`)
+    if (approvalRows.length !== 3 || !approvalRows[0].includes("hours left") || approvalRows.slice(1).some(row => row.includes("hours left"))) throw new Error("Approval list expiry display is incorrect")
     await screenshot("maa-approved")
     await main.evaluate(`globalThis.__marketingMock.noMaa = true`)
     await go("#/portal/overview", "All tenants")

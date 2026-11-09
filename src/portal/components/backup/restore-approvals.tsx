@@ -55,7 +55,6 @@ export function RestoreApprovals({ tenant, revision = 0, openRevision = 0, enabl
     return () => { active = false; clearInterval(timer) }
   }, [open, tenant.credentials.tenantId])
   useEffect(() => {
-    if (open) return
     let active = true
     void call("list").then(data => { if (active) setRecords(data.records ?? []) }).catch(() => {})
     return () => { active = false }
@@ -81,7 +80,7 @@ export function RestoreApprovals({ tenant, revision = 0, openRevision = 0, enabl
         <p className="font-medium">{record.label}</p>
         <p>{OPERATION_LABELS[record.operation] ?? record.operation}, Step {record.stepNumber} of {record.totalSteps}: {STATUS_LABELS[record.status] ?? record.status}</p>
         {record.approverNote && <p>Approver note: {record.approverNote}</p>}
-        {record.expiresAt && <p title={record.expiresAt}>{Math.max(0, Math.ceil((Date.parse(record.expiresAt) - Date.now()) / 3_600_000))} hours left</p>}
+        {record.expiresAt && ["needsApproval", "approved"].includes(record.status) && <p title={record.expiresAt}>{Math.max(0, Math.ceil((Date.parse(record.expiresAt) - Date.now()) / 3_600_000))} hours left</p>}
         {record.requesterName && <p>Requester: {record.requesterName}</p>}
         {!record.canComplete && <p>The original requester ({record.requesterName ?? "signed-in requester"}) must complete or withdraw this request.</p>}
         <div className="flex flex-wrap gap-2">
