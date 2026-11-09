@@ -51,6 +51,8 @@ interface Scenario {
   statusError?: Record<string, string>
   /** Targets whose first apply is refused before it claims the change set (a tenant write conflict). */
   conflictApply?: string[]
+  /** Holds the next plan until the test releases it. */
+  holdPlan?: Promise<void>
   /** Holds the first apply of a target until the test releases it. */
   hold?: { tenantId: string; released: Promise<void> }
 }
@@ -168,6 +170,11 @@ beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn(async (path: string, init: { body: string }) => {
     expect(path).toBe("/api/sync")
     const { tenantId, action, ...body } = JSON.parse(init.body) as Record<string, unknown>
+    if (action === "plan" && scenario.holdPlan) {
+      const held = scenario.holdPlan
+      scenario.holdPlan = undefined
+      await held
+    }
     const hold = scenario.hold
     if (hold && action === "apply" && tenantId === hold.tenantId) {
       scenario.hold = undefined
@@ -568,6 +575,48 @@ describe("Sync review round 3", () => {
     const applies = calls.filter((call) => call.action === "apply")
     expect(applies.at(-1)!.body).not.toHaveProperty("backup")
     expect(node(container, "Contoso Germany").getAttribute("aria-label")).toBe("Contoso Germany: 1 change verified. No backup taken.")
+  })
+})
+
+describe("CodeRabbit comments", () => {
+  it("says on a target without backup storage that skipping the backup leaves no rollback", async () => {
+    const container = await render()
+    await toReview(container, ["Contoso Germany", "Contoso Japan"])
+    const NOTE = "Rollback needs backup storage in this tenant. Without it, this sync cannot be rolled back from TenuVault."
+    expect(container.textContent).not.toContain(NOTE)
+    await click(container.querySelector<HTMLInputElement>('section[aria-label="Review"] input[value="none"]')!)
+    const blocks = [...container.querySelectorAll('section[aria-label="Review"] .rounded-2xl.bg-gray-50')]
+    expect(blocks.find((block) => block.textContent?.includes("Contoso Japan"))!.textContent).toContain(NOTE)
+    expect(blocks.find((block) => block.textContent?.includes("Contoso Germany"))!.textContent).not.toContain(NOTE)
+    expect(container.textContent).toContain("A rollback always backs up first, so it needs backup storage in the target tenant.")
+  })
+
+  it("keeps an opened recent sync when an abandoned plan finishes later", async () => {
+    const container = await render()
+    await toReview(container, ["Contoso Germany"])
+    await click(button(container, "Approve and sync to 1 tenant"))
+    await until(() => node(container, "Contoso Germany")?.className.includes("border-green-600") === true, "first run applied")
+    await click(button(container, "Start a new sync"))
+    await until(() => !!container.querySelector('section[aria-label="Choose settings"] input[type="checkbox"]'), "policies")
+    await click(container.querySelector<HTMLInputElement>('section[aria-label="Choose settings"] input[type="checkbox"]')!)
+    await click(button(container, "Sync 1 policy"))
+    await until(() => !!container.querySelector('section[aria-label="Choose targets"] button[aria-pressed]'), "target cards")
+    await click(card(container, "Contoso Germany"))
+    let release!: () => void
+    scenario.holdPlan = new Promise<void>((resolve) => { release = resolve })
+    await click(button(container, "Review 1 tenant"))
+    // While a plan runs, a recent sync cannot be opened.
+    expect(container.querySelector<HTMLButtonElement>('section[aria-label="Recent syncs"] button')!.disabled).toBe(true)
+    await click(button(container, "Back"))
+    await click(container.querySelector<HTMLButtonElement>('section[aria-label="Recent syncs"] button')!)
+    await until(() => node(container, "Contoso Germany")?.className.includes("border-green-600") === true, "opened run")
+    release()
+    await until(() => calls.filter((call) => call.action === "plan").length === 2, "late plan")
+    await settle()
+    await settle()
+    expect(container.querySelector('section[aria-label="Sync result"]')).not.toBeNull()
+    expect(node(container, "Contoso Germany").className).toContain("border-green-600")
+    expect(container.querySelector('section[aria-label="Review"]')).toBeNull()
   })
 })
 

@@ -37,7 +37,7 @@ The page leads you through four steps: **Choose settings**, **Choose targets**, 
 
 ### 1. Choose settings
 
-1. Choose the **Source tenant**. It starts as the tenant selected in the tenant switcher; you can choose any connected tenant.
+1. Choose the **Source tenant**. It starts as the tenant selected in the tenant switcher; you can choose any connected tenant whose plan includes Sync (Pro or MSP).
 2. Choose a policy type: **Settings Catalog**, **Compliance**, **Endpoint security** or **Device configuration**. Policies are read live from the source tenant.
 3. Tick the policies to sync. You can select policies of several types; the type buttons show how many you selected of each. Each policy shows its status:
    * **Not synced yet**: no earlier sync wrote this policy to a target you can choose.
@@ -87,7 +87,7 @@ When a selected policy holds secrets, tick **I understand that secrets in these 
 Choose what happens before anything is written:
 
 * **Back up the affected policy types now** (the default): each target backs up only the policy types this sync changes before anything else happens. If the backup fails, nothing is changed in that tenant. A target without backup storage cannot be backed up, so it is left out unless you choose **Skip the backup**.
-* **Skip the backup**: no backup is taken. Rollback still works: TenuVault saves the current version of every policy it changes before writing. Those saved versions are kept on this device only; without a backup they are the only copy.
+* **Skip the backup**: no backup is taken. Rollback still works from the saved versions in a target tenant that has backup storage: TenuVault saves the current version of every policy it changes before writing, and a rollback always takes a backup first. Those saved versions are kept on this device only; without a backup they are the only copy. In a target tenant without backup storage a rollback cannot run, so the review says on that target: "Rollback needs backup storage in this tenant. Without it, this sync cannot be rolled back from TenuVault."
 
 Click **Approve and sync to N tenants**. Every ready target is approved and applied on its own, with the backup you chose. The backup choice is stored with each target's approval, so its apply, any retry and an apply from **Details** use the same choice, also when you open the sync again later. Sync records no reviewer name or decision note; the approval is recorded with the signed-in admin in the [audit log](/audit-log/).
 
@@ -115,7 +115,7 @@ When every target finished and at least one target was written, the summary show
 
 1. Open the sync under **Recent syncs** and click **Details** on the target.
 2. Click **Preview rollback**, check what it would change, then click **Create rollback change set for review**.
-3. Review the rollback against the live tenant, approve it and apply it. A rollback always backs up the target first.
+3. Review the rollback against the live tenant, approve it and apply it. A rollback always backs up the target first, so it needs backup storage in that tenant.
 
 A rollback writes only to its target. It keeps working after the source tenant's license ends.
 

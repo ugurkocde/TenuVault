@@ -52,6 +52,19 @@ const approvedBackup = (body: Body): "new" | "none" => {
 }
 
 /**
+ * The backup choice an apply already bound the target's change set to, as the change-set engine
+ * decides it: the stored choice, else what the pre-change capture shows, else "new" once an apply
+ * was claimed. Null while no apply claimed it, when an approval may still change the choice.
+ */
+function claimedBackup(deps: FeatureDeps, tenantId: string, target: Stored<PromotionRecord>): "new" | "none" | null {
+  const changeSet = target.changeSetId ? deps.records.get<ChangeSetRecord>(DOMAINS.changeSets, tenantId, target.changeSetId) : null
+  if (!changeSet) return null
+  if (changeSet.backupChoice) return changeSet.backupChoice
+  if (changeSet.preChange) return changeSet.preChange.backupFolder === null ? "none" : "new"
+  return changeSet.attempts > 0 ? "new" : null
+}
+
+/**
  * The backup choice of an apply or retry: the one the target was approved with, which a request
  * naming the other one cannot change (409). A target approved before choices were stored keeps
  * the request's choice, and the change set's first claimed apply binds it.
@@ -187,6 +200,9 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
       const target = syncTarget(deps, tenantId, body)
       await requireRunTenants(deps, tenantId, target)
       const backup = approvedBackup(body)
+      // Once an apply started, the approval keeps the choice it bound, so the target stays retryable.
+      const claimed = claimedBackup(deps, tenantId, target)
+      if (claimed && claimed !== backup) throw new FeatureError(`This sync was already started ${claimed === "none" ? "without a backup" : "with a backup"}. Approve it with the same choice.`, 409)
       const changeSet = await approvePromotion(deps, tenantId, target.id, { contentHash: hashField(body, "contentHash"), targetFingerprint: hashField(body, "targetFingerprint"), reviewer: null, note: null, check: syncCheck(deps, tenantId, target.id) }, actor)
       // Stored with the approval, so the apply and every retry use it whoever sends them later.
       deps.records.update<PromotionRecord>(DOMAINS.promotions, tenantId, target.id, (current) => ({ ...current, sync: { ...current.sync!, backup } }), { actor, reason: backup === "none" ? "Approved to apply without a pre-change backup" : "Approved to apply after a pre-change backup" })

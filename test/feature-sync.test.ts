@@ -780,6 +780,33 @@ describe("Sync keeps the backup choice of the first apply", () => {
     expect(context.backups).toEqual([TENANT_B])
   })
 
+  it("refuses to approve again with the other choice once an apply claimed the change set", async () => {
+    const context = setup()
+    const id = (await planned(context)).targets[0]!.promotion!.id
+    const contentHash = await approved(context, TENANT_B, id, "new")
+    failNextBackup(context)
+    expect((await context.post({ tenantId: TENANT_B, action: "apply", id, contentHash, confirm: true })).status).toBe(502)
+    const preview = await context.post({ tenantId: TENANT_B, action: "preview", id })
+    const again = { tenantId: TENANT_B, action: "approve", id, contentHash: preview.body.changeSet.contentHash, targetFingerprint: preview.body.changeSet.targetFingerprint }
+    const refused = await context.post({ ...again, backup: "none" })
+    expect(refused.status).toBe(409)
+    expect(refused.body.error).toBe("This sync was already started with a backup. Approve it with the same choice.")
+    expect(context.deps.records.get<PromotionRecord>(DOMAINS.promotions, TENANT_B, id)!.sync!.backup).toBe("new")
+    expect((await context.post({ ...again, backup: "new" })).status).toBe(200)
+    expect((await context.post({ tenantId: TENANT_B, action: "retry", id, contentHash, confirm: true })).body.changeSet).toMatchObject({ status: "applied", backupChoice: "new" })
+    expect(context.backups).toEqual([TENANT_B])
+  })
+
+  it("lets an approval change the choice before any apply claimed the change set", async () => {
+    const context = setup()
+    const id = (await planned(context)).targets[0]!.promotion!.id
+    await approved(context, TENANT_B, id, "new")
+    const contentHash = await approved(context, TENANT_B, id, "none")
+    expect(context.deps.records.get<PromotionRecord>(DOMAINS.promotions, TENANT_B, id)!.sync!.backup).toBe("none")
+    expect((await context.post({ tenantId: TENANT_B, action: "apply", id, contentHash, confirm: true })).body.changeSet).toMatchObject({ status: "applied", backupChoice: "none" })
+    expect(context.backups).toEqual([])
+  })
+
   it("never takes a backup on the retry of a sync first applied without one", async () => {
     const context = setup()
     const id = (await planned(context)).targets[0]!.promotion!.id

@@ -91,6 +91,7 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
   const [active, setActive] = useState<ReadonlySet<string>>(new Set())
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [notes, setNotes] = useState<Record<string, string>>({})
+  const planRequest = useRef(0)
   const shownRun = useRef(runId)
   shownRun.current = runId
   const source = tenantOf(sourceId) ?? selected
@@ -167,6 +168,10 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
 
   /** Plans the run, then reads every planned target live. Nothing is written. */
   const review = async (acknowledgeRedacted: boolean) => {
+    // Only the latest plan request may show its result; leaving the review or opening a recent
+    // sync abandons it, and a late answer of an abandoned request is ignored.
+    const token = ++planRequest.current
+    const current = () => token === planRequest.current
     setPlanning(true)
     setPlanError(null)
     setReviews({})
@@ -174,9 +179,11 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
     try {
       const items = Object.values(chosen)
       const planned = await planSync(source, { title: `Sync ${plural(items.length, "policy", "policies")} from ${source.name}`.slice(0, 200), targets, items: items.map(({ folder: type, sourceId: id }) => ({ folder: type, sourceId: id })), acknowledgeRedacted })
-      setRunId(planned.run.id)
       void runs.refetch()
+      if (!current()) return
+      setRunId(planned.run.id)
       const detail = await fetchRun(planned.run.id)
+      if (!current()) return
       await Promise.all(detail.targets.map(async (target) => {
         if (!target.promotionId || target.changeSet?.status !== "in-review") return
         const tenant = tenantOf(target.targetTenantId)
@@ -187,14 +194,21 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
         } catch (error) {
           state = { preview: null, error: message(error, "This tenant could not be read.") }
         }
-        setReviews((current) => ({ ...current, [target.targetTenantId]: state }))
+        if (current()) setReviews((shown) => ({ ...shown, [target.targetTenantId]: state }))
       }))
     } catch (error) {
+      if (!current()) return
       showFeaturePlanError(error)
       setPlanError(message(error, "The sync could not be planned."))
     } finally {
-      setPlanning(false)
+      if (current()) setPlanning(false)
     }
+  }
+
+  /** Abandons a plan request still running, so its answer never replaces what is shown. */
+  const abandonPlan = () => {
+    planRequest.current++
+    setPlanning(false)
   }
 
   /**
@@ -251,6 +265,7 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
   }
 
   const openRun = (entry: SyncRun) => {
+    abandonPlan()
     setRunId(entry.id)
     setNotes({})
     setErrors({})
@@ -326,7 +341,7 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
             // Secrets block a plan until they are acknowledged, so the acknowledgement plans again.
             if (checked && run.data?.run.options.acknowledgeRedacted !== true) void review(true)
           }}
-          onBack={() => setStep(2)}
+          onBack={() => { abandonPlan(); setStep(2) }}
           onApprove={approveAndSync}
           busy={pending(runId)}
         />
@@ -365,7 +380,7 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
           <ul className="max-h-80 divide-y divide-gray-100 overflow-y-auto">
             {runs.data.runs.map((entry) => (
               <li key={entry.id}>
-                <button type="button" aria-pressed={runId === entry.id && step === 4} onClick={() => openRun(entry)} className="flex w-full flex-wrap items-center gap-3 rounded-2xl px-2 py-3 text-left hover:bg-gray-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
+                <button type="button" aria-pressed={runId === entry.id && step === 4} disabled={planning} onClick={() => openRun(entry)} className="flex w-full flex-wrap items-center gap-3 rounded-2xl px-2 py-3 text-left hover:bg-gray-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-60">
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-medium text-gray-900">{entry.title}</span>
                     <span className="block text-xs text-gray-500">{formatDate(entry.createdAt)}. To {entry.targets.map((target) => tenantOf(target.targetTenantId)?.name ?? target.targetTenantId).join(", ")}. {entry.summary}</span>

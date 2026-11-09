@@ -260,6 +260,7 @@ export function ReviewStep({ targets, reviews, planning, planError, tenantOf, ba
                 {state.state === "ready" ? <Chip tone="success">Ready: {plural(writes, "change", "changes")}</Chip> : state.state === "in-sync" ? <Chip tone="success">Already in sync</Chip> : state.state === "checking" ? <Chip>Checking</Chip> : <Chip tone="danger">Left out</Chip>}
               </header>
               {state.reason && <p className="border-t border-gray-200 px-4 py-2.5 text-sm text-red-700">{state.reason}</p>}
+              {backup === "none" && !tenant?.resources?.storageAccountName && state.state === "ready" && <p className="border-t border-gray-200 px-4 py-2.5 text-sm text-amber-800">Rollback needs backup storage in this tenant. Without it, this sync cannot be rolled back from TenuVault.</p>}
               <ul>
                 {rows.map((row) => (
                   <li key={row.key} className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-2 border-t border-gray-200 px-4 py-2.5 text-sm">
@@ -295,7 +296,7 @@ export function ReviewStep({ targets, reviews, planning, planError, tenantOf, ba
           <legend className="text-sm font-medium text-gray-800">Backup before changes</legend>
           <div className="mt-2 grid gap-2 md:grid-cols-2">
             {option("new", "Back up the affected policy types now", "Backs up only the policy types this sync changes before anything else happens. If the backup fails, nothing is changed.")}
-            {option("none", "Skip the backup", "Rollback still works: TenuVault saves the current version of every policy it changes before writing. Those saved versions are kept on this device only; without a backup they are the only copy.")}
+            {option("none", "Skip the backup", "Rollback still works from the saved versions: TenuVault saves the current version of every policy it changes before writing. A rollback always backs up first, so it needs backup storage in the target tenant. Those saved versions are kept on this device only; without a backup they are the only copy.")}
           </div>
           {backup === "new" && targets.some((target) => !tenantOf(target.targetTenantId)?.resources?.storageAccountName) && (
             <p className="mt-2 text-xs text-gray-500">A tenant without backup storage cannot be backed up. <Link to={settingsHref("signin")} className="text-blue-700 underline">Choose backup storage in Settings</Link>.</p>
