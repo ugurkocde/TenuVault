@@ -157,3 +157,13 @@ To upgrade from Community, start the free trial or click **Buy now** on the **Li
 * [Start TenuVault for the first time](/getting-started/first-launch/)
 * [Manage tenants](/tenants/)
 * [Network connections and data flows](/security/data-flows/)
+
+## When paid coverage ends
+
+A saved daily schedule runs weekly on Community at its saved time. The weekday comes from the first slot after coverage ended. The daily schedule stays saved and resumes daily when Pro returns. New daily schedules need Pro.
+
+Azure storage schedules pause with **Paused: Azure storage needs Pro**. Choose **Switch to weekly local backups** to save future weekly backups on this computer. Existing Azure backups stay in Azure, where listing and single-item restore continue to work for the covered tenant.
+
+Configured alerts, scheduled health reviews and automatic change reports pause on Community. Their pages say **Paused on Community** and link to License. Their configuration stays saved.
+
+If more than one connected tenant is without coverage and Community has no tenant yet, choose which tenant continues on Community. Other tenants stay locked: backups of those tenants are kept. Add a license to use them again.

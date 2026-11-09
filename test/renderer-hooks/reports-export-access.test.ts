@@ -106,7 +106,7 @@ async function render(allowed = true): Promise<HTMLDivElement> {
     root.render(createElement(
       QueryClientProvider,
       { client },
-      createElement(MemoryRouter, null, createElement(ChangeReportsTab, { tenant, plan: allowed ? "pro" : null, allowed })),
+      createElement(MemoryRouter, null, createElement(ChangeReportsTab, { tenant, plan: allowed ? "pro" : "community", allowed })),
     ))
   })
   await flush()
@@ -216,3 +216,12 @@ describe("change report export access", () => {
     expect(actions?.textContent).not.toContain("Regenerate this report")
   })
 })
+
+ it("announces paused automatic reports only when configured", async () => {
+   api.status.mockResolvedValue({ licensed: false, runtimeNote: "", settings: { ...settings, afterScheduledBackup: true }, reports: [] })
+   const configured = await render(false)
+   expect(configured.textContent).toContain("Paused on Community")
+   expect(configured.querySelector('a[href="/license"]')).not.toBeNull()
+   api.status.mockResolvedValue({ licensed: false, runtimeNote: "", settings: { ...settings, afterScheduledBackup: false }, reports: [] })
+   expect((await render(false)).textContent).not.toContain("Paused on Community")
+ })

@@ -1,3 +1,4 @@
+import { BackupScheduler } from "../src/main/backup/scheduler"
 import { generateKeyPairSync, sign } from "node:crypto"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
@@ -2001,5 +2002,50 @@ describe("LicenseService after a trial", () => {
     await license.setKey("TENU-TRIAL-0001", [TENANT])
     expect(license.isSavedKey(" TENU-TRIAL-0001 ")).toBe(true)
     expect(license.isSavedKey("TENU-PAID-KEY-0001")).toBe(false)
+  })
+})
+
+describe("Community choice after coverage ends", () => {
+  beforeEach(() => { vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(T0) })
+  afterEach(() => vi.useRealTimers())
+
+  it.each([true, false])("keeps background callers from choosing after a trial=%s key ends", async (trial) => {
+    const end = Math.floor(T0 / 1000) + 86400
+    store.set("license.state", JSON.stringify({ key: "TEST-LICENSE-KEY", activations: {
+      [TENANT]: { activationId: "act-1", token: token({ v: 2, ...(trial ? { trial: true } : {}), keyExp: end, exp: trial ? end : end + 86400 }) },
+      [TENANT_B]: { activationId: "act-2", token: token({ tenantId: TENANT_B, act: "act-2", v: 2, ...(trial ? { trial: true } : {}), keyExp: end, exp: trial ? end : end + 86400 }) },
+    } }))
+    const license = service({ connectedTenantIds: () => [TENANT, TENANT_B] })
+    const run = vi.fn(async () => ({ status: "Completed" as const, message: "Done" }))
+    const scheduler = new BackupScheduler(store, run, undefined, undefined, (id) => ({ plan: license.plan(id), azure: id === TENANT_B, endedAt: license.coverageEndedAt(id) }))
+    for (const tenantId of [TENANT, TENANT_B]) scheduler.set({ tenantId, enabled: true, frequency: "daily", time: "02:00" })
+    expect(license.communityChoices()).toEqual([])
+    expect(license.coverageEndedAt(TENANT)).toBe(end * 1000)
+    vi.setSystemTime(T0 + 2 * 86400_000 + 1)
+    expect(license.status([TENANT, TENANT_B]).communityChoiceTenantIds).toEqual([TENANT, TENANT_B])
+    answer = () => denied("expired")
+    await Promise.all([TENANT, TENANT_B].map(async (id) => {
+      await expect(license.requireEntitlement(id)).rejects.toThrow("Choose which tenant")
+    }))
+    expect(store.get("license.communityTenant")).toBeNull()
+    await scheduler.tick()
+    expect(run).not.toHaveBeenCalled()
+    expect(license.plan(TENANT)).toBeNull()
+    expect(() => license.chooseCommunity("unknown")).toThrow("Choose a connected tenant")
+    license.chooseCommunity(TENANT_B)
+    expect(license.plan(TENANT_B)).toBe("community")
+    await scheduler.tick()
+    expect(run).not.toHaveBeenCalled()
+    expect(scheduler.list().find((schedule) => schedule.tenantId === TENANT_B)).toMatchObject({ frequency: "daily", pausedReason: "Paused: Azure storage needs Pro", attempts: 0 })
+    await expect(license.requireEntitlement(TENANT)).rejects.toThrow("Backups of this tenant are kept")
+    expect(service({ connectedTenantIds: () => [TENANT, TENANT_B] }).plan(TENANT_B)).toBe("community")
+    expect(license.coverageEndedAt(TENANT)).toBe(end * 1000)
+  })
+
+  it("keeps the single tenant automatic path and excludes covered tenants", async () => {
+    const license = service({ connectedTenantIds: () => [TENANT] })
+    await expect(license.requireEntitlement(TENANT)).resolves.toBe("community")
+    expect(license.communityChoices()).toEqual([])
+    expect(license.coverageEndedAt(TENANT)).toBeUndefined()
   })
 })

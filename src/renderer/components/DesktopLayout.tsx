@@ -240,7 +240,7 @@ function LicenseBanner() {
     return (
       <BannerLink tone="amber" icon={<AlertTriangle className="h-4 w-4" />} action={buy}>
         {inactive.length === 1 ? "A signed-in tenant is" : `${inactive.length} signed-in tenants are`} not covered by your
-        license. Open License for details.
+        license. Backups of this tenant are kept. Add a license to use it again.
       </BannerLink>
     )
   }

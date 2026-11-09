@@ -108,6 +108,7 @@ export interface LicenseServiceOptions {
   clientId?: ClientIdProvider
   /** Whether the tenant is still saved or has a new sign-in being added. */
   tenantPresent?: (tenantId: string) => boolean
+  connectedTenantIds?: () => string[]
   fetch?: typeof fetch
   /** Called after the stored license or a tenant's license message changed. */
   onChange?: () => void
@@ -148,7 +149,7 @@ export const COMMUNITY_RECHECK_MS = 6 * 60 * 60_000
 const LAPSED = new Set(["not_found", "revoked", "disabled", "expired", "tenant_not_licensed", "activation_mismatch"])
 
 export const communityLimit = (tenantId: string) =>
-  `TenuVault Community covers one tenant, and it is used for tenant ${tenantId}. Add a Pro or MSP license on the License page to use more tenants.`
+  `TenuVault Community covers one tenant, and it is used for tenant ${tenantId}. Add a Pro or MSP license on the License page to use more tenants. Backups of this tenant are kept. Add a license to use it again.`
 
 export const LICENSE_REQUIRED =
   "A TenuVault license is required for this tenant. Add your license key on the License page, or start a 30 day free trial."
@@ -810,6 +811,7 @@ export class LicenseService {
   /** Refreshes every cached activation. Network failures keep the cached token until it expires; a confirmed refusal drops it. */
   async refreshAll(): Promise<void> {
     this.load()
+    for (const tenantId of Object.keys(this.state?.activations ?? {})) this.coverageEndedAt(tenantId)
     const key = this.state?.key
     const entries = Object.entries(this.state?.activations ?? {})
     for (const [tenantId, entry] of entries) {
@@ -1172,6 +1174,7 @@ export class LicenseService {
       this.community.delete(tenant)
     }
     if ((this.community.get(tenant) ?? 0) > Date.now()) return "community"
+    this.coverageEndedAt(tenant)
     const key = this.state?.key
     const current = () => key === this.state?.key && this.tenantPresent(tenant)
     try {
@@ -1201,9 +1204,41 @@ export class LicenseService {
     return !this.state?.key && !this.state?.activations[tenant]
   }
 
+  coverageEndedAt(tenantId: string): number | undefined {
+    this.load()
+    const entry = this.state?.activations[tenantId.toLowerCase()]
+    const payload = entry ? decodeToken(entry.token, this.publicKeys) : null
+    if (!payload) {
+      const saved = Number(this.options.store.get(`license.coverageEnd.${tenantId.toLowerCase()}`))
+      return saved > 0 ? saved : undefined
+    }
+    const endedAt = (payload.v === 2 && typeof payload.keyExp === "number" ? Math.min(payload.exp, payload.keyExp) : payload.exp) * 1000
+    this.options.store.set(`license.coverageEnd.${tenantId.toLowerCase()}`, String(endedAt))
+    return endedAt
+  }
+
+  communityChoices(): string[] {
+    this.load()
+    if (this.options.store.get(COMMUNITY_KEY)) return []
+    const candidates = [...new Set((this.options.connectedTenantIds?.() ?? []).map((id) => id.toLowerCase()))]
+      .filter((id) => this.tenantPresent(id) && !this.valid(id))
+    return candidates.length > 1 ? candidates : []
+  }
+
+  chooseCommunity(tenantId: string): void {
+    const tenant = tenantId.toLowerCase()
+    if (!this.communityChoices().includes(tenant)) throw new Error("Choose a connected tenant without license coverage.")
+    this.options.store.set(COMMUNITY_KEY, tenant)
+    this.useCommunity(tenant)
+    this.options.onChange?.()
+  }
+
   private useCommunity(tenant: string): Plan {
     this.assertCurrent(() => this.tenantPresent(tenant))
     const owner = this.options.store.get(COMMUNITY_KEY)
+    if (!owner && this.communityChoices().length > 1) {
+      throw new CommunityLimitError(tenant, "Choose which tenant continues on Community on the License page. Backups of this tenant are kept. Add a license to use it again.")
+    }
     if (owner && owner !== tenant) throw new CommunityLimitError(owner, communityLimit(owner))
     if (owner !== tenant) this.options.store.set(COMMUNITY_KEY, tenant)
     const first = !this.community.has(tenant)
@@ -1440,6 +1475,7 @@ export class LicenseService {
     let validUntil: string | null = null
     const tenants = tenantIds.map((tenantId): TenantLicenseStatus => {
       const entry = this.state?.activations[tenantId]
+      this.coverageEndedAt(tenantId)
       const payload = this.valid(tenantId)
       const source = payload && entry ? (entry.source ?? "key") : null
       if (payload && source === "key" && (!keyToken || payload.iat > keyToken.iat)) keyToken = payload
@@ -1498,6 +1534,7 @@ export class LicenseService {
       trialEndedAt: this.trialEndedAt(latest !== null || tenants.some((tenant) => tenant.entitled)),
       validUntil,
       communityTenantId: communityTenant ?? null,
+      communityChoiceTenantIds: this.communityChoices(),
       tenants,
     }
   }

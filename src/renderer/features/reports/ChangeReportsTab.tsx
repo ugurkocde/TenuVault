@@ -1,3 +1,4 @@
+import { PausedOnCommunity } from "../../components/PausedOnCommunity"
 import { useEffect, useState } from "react"
 import { Link } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
@@ -22,7 +23,7 @@ const NO_BACKUPS: never[] = []
  * the audit log, as PDF, Markdown or JSON, sent by email on demand or after every scheduled backup.
  * Without the feature it shows only reports stored earlier, read-only and exportable.
  */
-export default function ChangeReportsTab({ tenant, allowed }: FeatureTabProps) {
+export default function ChangeReportsTab({ tenant, plan, allowed }: FeatureTabProps) {
   const tenantId = tenant.credentials?.tenantId
   const client = useQueryClient()
   const status = useQuery({ queryKey: ["reports-status", tenantId], queryFn: () => reportsApi.status(tenant), enabled: !!tenantId })
@@ -31,10 +32,11 @@ export default function ChangeReportsTab({ tenant, allowed }: FeatureTabProps) {
   const reports = data?.reports ?? []
   const [open, setOpen] = useState<string | null>(null)
 
-  if (!allowed && reports.length === 0) return null
+  if (!allowed && !data?.settings.afterScheduledBackup && reports.length === 0) return null
 
   return (
     <div className="space-y-4">
+      {plan === "community" && data?.settings.afterScheduledBackup && <PausedOnCommunity />}
       {status.error && <p className="text-sm text-red-700" role="alert">{status.error instanceof Error ? status.error.message : "Reports could not be loaded."}</p>}
       {allowed && <NewReport tenant={tenant} reports={reports} onCreated={(id) => { refresh(); setOpen(id) }} onOpen={setOpen} />}
       <Tile aria-labelledby="reports-list-heading" className="gap-4">

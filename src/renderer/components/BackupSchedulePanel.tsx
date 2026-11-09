@@ -126,9 +126,11 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
   const weeklyMessage = weeklyScheduleNote(plan, !!(current?.enabled && current.frequency === "weekly") || (enabled && frequency === "weekly"))
   const select = "h-10 rounded-full border border-gray-300 bg-white px-4 text-sm"
   const localTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
+  const azurePaused = !!(current?.enabled && community && tenant?.resources?.storageAccountName && !tenant.resources.storageAccountName.startsWith(LOCAL_STORAGE_PREFIX))
+  const fallbackWeekday = community && current?.frequency === "daily" ? current.fallbackWeekday : undefined
   const nextComputerRuns = useMemo(
-    () => (enabled ? nextRunsInZone({ frequency, time, weekday }, localTimeZone, new Date(), 4) : []),
-    [enabled, frequency, time, weekday, localTimeZone],
+    () => (enabled && !azurePaused ? nextRunsInZone({ frequency: fallbackWeekday === undefined ? frequency : "weekly", time, weekday: fallbackWeekday ?? weekday }, localTimeZone, new Date(), 4) : []),
+    [enabled, frequency, time, weekday, localTimeZone, azurePaused, fallbackWeekday],
   )
   const bothRunners = !!(current?.enabled && cloud.config?.linked)
 
@@ -196,6 +198,23 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
         ) : (
         <>
 
+        {current?.enabled && community && !azurePaused && current.frequency === "daily" && <p role="status" className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">Runs weekly on Community (daily needs Pro)</p>}
+        {current?.enabled && community && tenant?.resources?.storageAccountName && !tenant.resources.storageAccountName.startsWith(LOCAL_STORAGE_PREFIX) && (
+          <div role="status" className="space-y-3 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            <p>Paused: Azure storage needs Pro</p>
+            <Button disabled={saving || !onStorageChange} onClick={async () => {
+              setSaving(true)
+              try {
+                await bridge.schedules.set({ tenantId, enabled: true, frequency: "weekly", time: current.time, weekday: current.fallbackWeekday ?? new Date().getDay() })
+                onStorageChange?.(tenant, { kind: "local" })
+                drafts.delete(tenantId)
+                reloadSchedules()
+                toast("Weekly local backups enabled", "success")
+              } catch (error) { toast(error instanceof Error ? error.message : String(error), "error") }
+              finally { setSaving(false) }
+            }}>Switch to weekly local backups</Button>
+          </div>
+        )}
         {schedulesError && (
           <div className="flex flex-wrap items-center gap-3 rounded-3xl bg-red-50 px-5 py-4">
             <p role="alert" className="text-sm text-red-700">Could not load the saved schedule: {schedulesError} Saving is paused so the saved schedule is not overwritten.</p>
@@ -382,7 +401,7 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
           </div>
           <div>
             <dt className="text-xs text-gray-500">Next backup</dt>
-            <dd className="mt-0.5 text-base text-gray-900">{formatWhen(current?.nextRunAt)}</dd>
+            <dd className="mt-0.5 text-base text-gray-900">{azurePaused ? "Paused: Azure storage needs Pro" : formatWhen(current?.nextRunAt)}</dd>
           </div>
           <div>
             <dt className="text-xs text-gray-500">{current?.lastStatus === "Cancelled" ? "Last automatic backup cancelled" : current?.lastStatus === "Failed" ? "Last automatic backup attempt failed" : "Last automatic backup"}</dt>

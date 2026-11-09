@@ -24,7 +24,7 @@ export function PlanDialogs() {
         <DialogHeader className="pr-10">
           <DialogTitle>Community covers one tenant</DialogTitle>
           <DialogDescription>
-            The tenant was not added. Community covers one tenant, and it is used for {owner}. Pro covers two tenants, for example production and test. New MSP subscriptions include five.
+            Backups of this tenant are kept. Add a license to use it again. Community covers one tenant, and it is used for {owner}. Pro covers two tenants, for example production and test. New MSP subscriptions include five.
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-wrap justify-end gap-2">

@@ -1,3 +1,4 @@
+import { CommunityTenantPicker } from "./components/CommunityTenantPicker"
 import "./lib/appearance"
 import { lazy, Suspense, useState, type ReactNode } from "react"
 import { QueryClientProvider } from "@tanstack/react-query"
@@ -126,6 +127,7 @@ export function App() {
                 </Routes>
               </Suspense>
               <PlanDialogs />
+              <CommunityTenantPicker />
             </HashRouter>
             </LicenseGate>
             </ErrorBoundary>

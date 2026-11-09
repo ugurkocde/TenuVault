@@ -1,3 +1,4 @@
+import { PausedOnCommunity } from "../../components/PausedOnCommunity"
 import { useEffect, useState, type ReactNode } from "react"
 import { Link, useSearchParams } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
@@ -126,6 +127,7 @@ export function AlertsTab({ tenant, plan, allowed }: FeatureTabProps) {
     <WithStatus tenant={tenant}>
       {(data, refresh) => !allowed && !hasStored(data) ? null : (
         <div className="space-y-4">
+          {plan === "community" && (data.rules.some((rule) => rule.enabled) || data.auditWatch?.enabled || data.auditWatch?.conditionalAccess?.enabled) && <PausedOnCommunity />}
           <SetupStatusCard tenant={tenant} data={data} onChanged={refresh} />
           <p className="text-sm text-gray-700" role="note">{data.runtimeNote} <DocsLink section="alerts-while-this-computer-is-off-the-azure-watcher">Set up the Azure watcher</DocsLink></p>
           <WatcherSyncCard tenant={tenant} data={data} onChanged={refresh} />

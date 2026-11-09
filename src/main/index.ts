@@ -262,6 +262,7 @@ async function bootstrap(): Promise<void> {
     // Keep licensing outside the local API/storage bridge below.
     fetch: chromiumFetch,
     onChange: pushLicense,
+    connectedTenantIds: () => connectedTenantIds(),
   })
   // License check of the fetch bridge and the backup engine; a rollback in progress may use a
   // tenant whose license ended, and its backup keeps every older backup (features/recovery.ts).
@@ -723,11 +724,9 @@ async function bootstrap(): Promise<void> {
     // A tenant the license does not cover is not backed up. Its audit log lives in the
     // tenant's own storage, which is closed without a license too, so the refusal is
     // recorded in the refusal log on this device, notified and shown on the schedule.
-    // The plan must also include how the backup runs: daily schedules and Azure storage are paid.
-    const daily = trigger === "scheduled" && scheduler.list().some((s) => s.tenantId.toLowerCase() === tenantId.toLowerCase() && s.frequency === "daily")
+    // Scheduled downgrades are reconciled before a slot; Azure writes still require Pro.
     const requirePlan = async (id: string) => {
       const plan = await license.requireEntitlement(id)
-      if (daily && !allows(plan, "dailySchedule")) throw new PlanRequired("dailySchedule")
       if (!isLocalAccount(profile.storageAccountName) && !allows(plan, "azureStorage")) throw new PlanRequired("azureStorage")
     }
     const refused = await refuseUnlicensedBackup(
@@ -811,6 +810,15 @@ async function bootstrap(): Promise<void> {
   const scheduler = new BackupScheduler(appStore, (tenantId, afterFailure, slot) => runScheduledBackup(tenantId, "scheduled", afterFailure, slot), () => {
     mainWindow?.webContents.send("schedules:changed", scheduler.list())
     tray.refresh()
+  }, () => new Date(), (tenantId) => ({ plan: license.plan(tenantId), azure: !isLocalAccount(tenantProfile(tenantId)?.storageAccountName ?? ""), endedAt: license.coverageEndedAt(tenantId) }), async () => {
+    if (license.communityChoices().length > 1) return
+    for (const schedule of scheduler.list()) {
+      if (!license.plan(schedule.tenantId) && scheduler.isDue({ ...schedule, pausedReason: undefined })) {
+        await license.requireEntitlement(schedule.tenantId).catch(() => undefined)
+      }
+    }
+  }, (tenantId) => {
+    if (Notification.isSupported()) new Notification({ title: "Backup schedule now weekly", body: `${tenantProfile(tenantId)?.name ?? "This tenant"}: Runs weekly on Community (daily needs Pro).` }).show()
   })
 
   const tray = new AppTray({
@@ -1122,6 +1130,10 @@ async function bootstrap(): Promise<void> {
       pushLicense()
     }
   }
+  handleTrusted("license:chooseCommunity", (_event, tenantId: unknown) => withStatus(async () => {
+    if (!isTenantId(tenantId)) throw new Error("Unknown tenant.")
+    license.chooseCommunity(tenantId)
+  }))
   handleTrusted("license:status", () => license.status(signedInTenants()))
   handleTrusted("license:refresh", () => withStatus(() => license.refreshAll()))
   handleTrusted("license:setKey", (_event, key: unknown) => {

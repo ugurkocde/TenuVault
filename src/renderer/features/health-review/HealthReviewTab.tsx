@@ -1,3 +1,4 @@
+import { PausedOnCommunity } from "../../components/PausedOnCommunity"
 import { Link } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Clock, Play } from "lucide-react"
@@ -55,9 +56,10 @@ export default function HealthReviewTab({ tenant, plan, allowed }: FeatureTabPro
   const data = status.data
   const stored = findings.data ?? []
   if (!allowed) {
-    if (!data?.lastRun && stored.length === 0) return null
+    if (!data?.schedule?.enabled && !data?.lastRun && stored.length === 0) return null
     return (
       <div className="space-y-4">
+        {plan === "community" && data?.schedule?.enabled && <PausedOnCommunity />}
         {data && <StatusTiles status={data} findings={stored} />}
         <FindingsList tenant={tenant} findings={stored} lastRun={data?.lastRun} load={findings} readOnly onChanged={refresh} />
       </div>
