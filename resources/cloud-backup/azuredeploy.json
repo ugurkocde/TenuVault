@@ -104,10 +104,8 @@
       { "name": "[concat('TenuVaultAppOnlyExcluded-', variables('tenantKey'))]", "value": "[variables('appOnlyExcluded')]" },
       { "name": "[concat('TenuVaultChangeReport-', variables('tenantKey'))]", "value": "[parameters('changeReport')]" },
       { "name": "[concat('TenuVaultTenantName-', variables('tenantKey'))]", "value": "[parameters('tenantName')]" },
-      { "name": "[concat('TenuVaultChangeReportActors-', variables('tenantKey'))]", "value": "[if(parameters('changeReportActors'), 'true', 'false')]" },
-      { "name": "[concat('TenuVaultAutomationAccountId-', variables('tenantKey'))]", "value": "[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]" }
+      { "name": "[concat('TenuVaultChangeReportActors-', variables('tenantKey'))]", "value": "[if(parameters('changeReportActors'), 'true', 'false')]" }
     ],
-    "readerRoleId": "acdd72a7-3385-48ef-bd42-f606fba81ae7",
     "writerRoleName": "TenuVault Backup Writer"
   },
   "resources": [
@@ -179,19 +177,6 @@
       ],
       "properties": {
         "roleDefinitionId": "[resourceId('Microsoft.Authorization/roleDefinitions', guid(variables('writerRoleName'), resourceGroup().id))]",
-        "principalId": "[reference(resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName')), '2023-11-01', 'full').identity.principalId]",
-        "principalType": "ServicePrincipal"
-      }
-    },
-    {
-      "type": "Microsoft.Authorization/roleAssignments",
-      "apiVersion": "2022-04-01",
-      "name": "[guid(resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName')), variables('readerRoleId'))]",
-      "scope": "[concat('Microsoft.Automation/automationAccounts/', parameters('automationAccountName'))]",
-      "dependsOn": ["[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]"],
-      "properties": {
-        "description": "Read only, on this Automation account only: each TenuVault backup run reads its own job to record whether the schedule or a person started it.",
-        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('readerRoleId'))]",
         "principalId": "[reference(resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName')), '2023-11-01', 'full').identity.principalId]",
         "principalType": "ServicePrincipal"
       }

@@ -93,3 +93,16 @@ $output = @()
 try { $output = @(Invoke-TvBackup) } catch { $errorText = $_.Exception.Message }
 [Environment]::SetEnvironmentVariable("TenuVaultChangeReport", $null)
 Write-Output (@{ calls = @($script:calls.ToArray()); output = @($output | ForEach-Object { [string]$_ }); error = $errorText } | ConvertTo-Json -Compress -Depth 5)
+
+# 6. and 7. Started by hand with TRIGGER Manual, and with a value that is neither Manual nor
+#    Scheduled: the backup records manual, or scheduled with a warning line in the job output.
+foreach ($value in @("Manual", "Nightly")) {
+    $script:calls.Clear()
+    $script:OutcomeSent = $false
+    $script:failCompliance = $false
+    $Trigger = $value
+    $errorText = $null
+    $output = @()
+    try { $output = @(Invoke-TvBackup) } catch { $errorText = $_.Exception.Message }
+    Write-Output (@{ calls = @($script:calls.ToArray()); output = @($output | ForEach-Object { [string]$_ }); error = $errorText } | ConvertTo-Json -Compress -Depth 5)
+}

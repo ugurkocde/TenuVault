@@ -46,9 +46,6 @@
                                  backup, leave a change report for the notification watcher.
       TenuVaultChangeReportActors "false" leaves out who made each change.
       TenuVaultTenantName        The tenant's name in change reports; the tenant id without it.
-      TenuVaultAutomationAccountId Resource ID of this Automation account. With it and the Reader
-                                 role on the account (setups from runbook 1.4.0 on), the run reads
-                                 its own job to record whether its schedule or a person started it.
     TenuVaultKeyVault, set by setups before 1.2.0, is no longer read.
 
     Dot source the file with -LibraryOnly to load the library functions without running a backup.
@@ -59,7 +56,11 @@ param(
     # Which tenant's Automation variables to read: variables are read with this suffix first
     # (TenuVaultTenantId-<key>), then plain. One account serves the Entra tenant its managed
     # identity belongs to; the suffix keeps that tenant's variable set distinctly named.
-    [string]$TenantKey = ""
+    [string]$TenantKey = "",
+    # How the run started, recorded as the backup's Trigger and in its change report. The
+    # schedule link does not pass it, so a run without it counts as scheduled. A run started by
+    # hand passes "Manual" (TRIGGER in the portal's Start pane) to be recorded as manual.
+    [string]$Trigger = ""
 )
 
 $script:RunbookVersion = "1.4.0"
@@ -283,7 +284,7 @@ function Get-TvKeys {
 # ---------------------------------------------------------------------------
 
 function Get-TvManagedIdentityToken {
-    param([Parameter(Mandatory)][string]$Resource, [ValidateRange(1, 3)][int]$Attempts = 3, [ValidateRange(1, 30)][int]$TimeoutSec = 30)
+    param([Parameter(Mandatory)][string]$Resource)
     $identityEndpoint = [Environment]::GetEnvironmentVariable("IDENTITY_ENDPOINT")
     $headers = @{ Metadata = "true" }
     if ($identityEndpoint) {
@@ -295,14 +296,14 @@ function Get-TvManagedIdentityToken {
         $uri = "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=$([uri]::EscapeDataString($Resource))"
     }
     $lastError = $null
-    foreach ($attempt in 1..$Attempts) {
+    foreach ($attempt in 1..3) {
         try {
-            $response = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get -TimeoutSec $TimeoutSec
+            $response = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get -TimeoutSec 30
             if (-not $response.access_token) { throw "The identity endpoint returned no access token." }
             return [string]$response.access_token
         } catch {
             $lastError = $_
-            if ($attempt -lt $Attempts) { Start-Sleep -Seconds (2 * $attempt) }
+            if ($attempt -lt 3) { Start-Sleep -Seconds (2 * $attempt) }
         }
     }
     throw "Could not get a managed identity token for $Resource. $(Get-TvSafeError $lastError.Exception.Message)"
@@ -324,64 +325,18 @@ function Get-TvAutomationVariable {
     return $null
 }
 
-# How this run started, from its own job in Azure: Automation records "{scheduler}" as the job's
-# properties.startedBy when a schedule started it, and who started it otherwise. Reading the job
-# needs the account's resource ID (TenuVaultAutomationAccountId) and the Reader role on the
-# account, which setups from runbook 1.4.0 on grant. Whenever the answer is not certain (an older
-# setup without them, no job id outside Azure, a refused or slow read) the run counts as
-# scheduled, as every cloud run did before. One token request and one GET, each within
-# $script:JobLookupSeconds, so the lookup never holds the backup up.
-$script:JobLookupSeconds = 5
-$script:JobApiVersion = "2023-11-01"
-$script:ArmEndpoint = "https://management.azure.com"
-
-# The job's properties.startedBy, or $null. A separate client, so the lookup has its own short timeout.
-function Get-TvJobStartedBy {
-    param([Parameter(Mandatory)][string]$Uri, [Parameter(Mandatory)][string]$Token)
-    $client = [System.Net.Http.HttpClient]::new()
-    try {
-        $client.Timeout = [TimeSpan]::FromSeconds($script:JobLookupSeconds)
-        $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Get, $Uri)
-        $request.Headers.Authorization = [System.Net.Http.Headers.AuthenticationHeaderValue]::new("Bearer", $Token)
-        try { $response = $client.SendAsync($request).GetAwaiter().GetResult() }
-        catch {
-            # HttpClient reports its timeout as a cancellation somewhere in the exception chain.
-            $inner = $_.Exception
-            $timedOut = $false
-            while ($inner) {
-                if ($inner -is [OperationCanceledException] -or $inner -is [TimeoutException]) { $timedOut = $true }
-                if (-not $inner.InnerException) { break }
-                $inner = $inner.InnerException
-            }
-            if ($timedOut) { throw "no answer within $($script:JobLookupSeconds) seconds" }
-            throw $inner.Message
-        }
-        try {
-            $status = [int]$response.StatusCode
-            if ($status -ne 200) { throw "HTTP $status" }
-            $job = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult() | ConvertFrom-Json -ErrorAction Stop
-            return Get-TvProp (Get-TvProp $job "properties") "startedBy"
-        } finally { $response.Dispose() }
-    } finally { $client.Dispose() }
-}
-
-# @{ Trigger = "scheduled" | "manual"; Note = the job output line }.
+# How this run started: @{ Trigger = "scheduled" | "manual"; Warning = a job output line or $null }.
+# Omitted or empty is scheduled: schedule links pass only TENANTKEY, so every link keeps working
+# unchanged. "Manual" in any case is manual, "Scheduled" scheduled. Any other value is scheduled
+# with a warning in the job output; it never fails the backup.
 function Get-TvRunTrigger {
-    param([AllowNull()][AllowEmptyString()][string]$JobId, [AllowNull()][AllowEmptyString()][string]$AccountId)
-    $unsure = { param($why) @{ Trigger = "scheduled"; Note = "Could not tell how this run started ($why), so it is recorded as scheduled." } }
-    if ($JobId -notmatch '^[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$') { return & $unsure "no job id" }
-    if ($AccountId -notmatch '^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\.Automation/automationAccounts/[^/]+$') {
-        return & $unsure "TenuVaultAutomationAccountId is not set; run the setup script again"
-    }
-    try {
-        $token = Get-TvManagedIdentityToken "https://management.azure.com/" -Attempts 1 -TimeoutSec $script:JobLookupSeconds
-        $startedBy = Get-TvJobStartedBy -Uri "$script:ArmEndpoint$AccountId/jobs/$($JobId)?api-version=$script:JobApiVersion" -Token $token
-    } catch {
-        return & $unsure "the job could not be read: $(Get-TvSafeError $_.Exception.Message)"
-    }
-    if ($startedBy -isnot [string] -or -not $startedBy.Trim()) { return & $unsure "the job names no starter" }
-    if ($startedBy.Trim() -eq "{scheduler}") { return @{ Trigger = "scheduled"; Note = "Started by the schedule." } }
-    return @{ Trigger = "manual"; Note = "Started by hand, not by the schedule." }
+    param([AllowNull()][AllowEmptyString()][string]$Value)
+    $text = ([string]$Value).Trim()
+    if (-not $text) { return @{ Trigger = "scheduled"; Warning = $null } }
+    if ($text -ieq "manual") { return @{ Trigger = "manual"; Warning = $null } }
+    if ($text -ieq "scheduled") { return @{ Trigger = "scheduled"; Warning = $null } }
+    $shown = if ($text.Length -gt 40) { $text.Substring(0, 40) + "..." } else { $text }
+    return @{ Trigger = "scheduled"; Warning = "Warning: TRIGGER '$shown' is neither Manual nor Scheduled, so this run is recorded as scheduled. Set TRIGGER to Manual for a run started by hand, or leave it empty." }
 }
 
 function Get-TvRequiredVariable {
@@ -2620,9 +2575,7 @@ function Set-TvCloudStatus {
 function Invoke-TvBackup {
     $started = [DateTime]::UtcNow
     $runId = [guid]::NewGuid().ToString()
-    # $PSPrivateMetadata.JobId is this job's id inside Azure Automation; outside it there is none.
-    $jobMetadata = Get-Variable -Name PSPrivateMetadata -ValueOnly -ErrorAction SilentlyContinue
-    $startedBy = Get-TvRunTrigger -JobId $(if ($jobMetadata) { [string]$jobMetadata.JobId } else { "" }) -AccountId (Get-TvAutomationVariable "TenuVaultAutomationAccountId")
+    $startedBy = Get-TvRunTrigger $Trigger
     $runTrigger = $startedBy.Trigger
     $tenantId = Get-TvRequiredVariable "TenuVaultTenantId"
     if ($tenantId -notmatch '^[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$') { throw "TenuVaultTenantId is not a tenant id (GUID)." }
@@ -2636,7 +2589,7 @@ function Invoke-TvBackup {
     $appOnlyExcluded = Get-TvFolderList (Get-TvAutomationVariable "TenuVaultAppOnlyExcluded")
 
     Write-Output "Backing up tenant $tenantId to storage account $storageAccount (runbook $script:RunbookVersion, run $runId)."
-    Write-Output $startedBy.Note
+    if ($startedBy.Warning) { Write-Output $startedBy.Warning }
     # The storage token comes first: the status blob and the result note need only it, so
     # every later failure (Graph token, a scope that leaves nothing) is still recorded and
     # reaches the notification watcher as Failed. A run that cannot even get a storage token

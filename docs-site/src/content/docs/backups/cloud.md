@@ -31,7 +31,6 @@ Setup creates or reuses, in your subscription:
 | Runbook `Invoke-TenuVaultBackup` (PowerShell 7.2) | Reads Intune and writes one backup per run, in the desktop backup format. 7.2 is required: the default 5.1 runtime lacks the .NET JSON parser the runbook uses. |
 | Automation variables with a per-tenant suffix | Tenant id, storage account, scope. No secrets in variables. Set `TenuVaultIncludeConditionalAccess` to `true` (and grant the managed identity `Policy.Read.All`) to include [Conditional Access](/backups/conditional-access/). |
 | Custom role **TenuVault Backup Writer** on the `intune-backups` container | Read and write blobs, no delete. The runbook cannot remove backups. |
-| Built-in role **Reader** on the Automation account only | Lets each run read its own job, to record whether the schedule or a person started it. Read only: Azure has no built-in role that reads jobs without also starting them. `-Remove` takes it away with the last tenant setup in the account. |
 | Schedule `TenuVaultBackup-<tenant>` and its runbook link | Daily or weekly, in the timezone you choose. |
 | Optional Azure Monitor action group and metric alert | Emails you when Automation jobs fail. Setup refuses to finish without an explicit choice. |
 
@@ -85,13 +84,17 @@ The **Deploy to Azure** button in the app opens the template `resources/cloud-ba
 
 ### Test it now
 
-Do not wait for the first night. In the portal, open the Automation account, **Runbooks > Invoke-TenuVaultBackup > Start**, set `TENANTKEY` to the value from the setup output, and watch the job. A successful run prints one "Found" and one "Backed up" line per type and ends with "Backup completed". The backup then appears in **Backup History** in TenuVault, marked **Manual**, with `Source: TenuVault Cloud Backup` in its details. The runs the schedule starts are marked **Scheduled**.
+Do not wait for the first night. In the portal, open the Automation account, **Runbooks > Invoke-TenuVaultBackup > Start**, set `TENANTKEY` to the value from the setup output and `TRIGGER` to `Manual`, and watch the job. A successful run prints one "Found" and one "Backed up" line per type and ends with "Backup completed". The backup then appears in **Backup History** in TenuVault, marked **Manual**, with `Source: TenuVault Cloud Backup` in its details. Without `TRIGGER` it is marked **Scheduled**, like the runs the schedule starts.
 
 ### Manual and scheduled runs
 
-From runbook 1.4.0 on, each cloud backup records how it started, and Backup History shows it as **Manual** or **Scheduled**. At the start of a run, the runbook reads its own job from Azure (`properties.startedBy` of the Automation job). Azure names the schedule there for a run the schedule started, and the person or app otherwise, so a run started with **Start** in the portal counts as manual. Its change report then leaves out "after a scheduled backup". The job output says which it was.
+From runbook 1.4.0 on, the runbook has an optional `TRIGGER` parameter, and Backup History shows each cloud backup as **Manual** or **Scheduled**. An older runbook has no `TRIGGER` field in the Start pane; run the setup script again to update it.
 
-Reading the job needs the built-in **Reader** role on the Automation account (see [What gets created](#what-gets-created)) and the variable `TenuVaultAutomationAccountId-<tenant>` that names the account. Setup and the template add both; the schedule link stays as it was. Whenever the runbook cannot tell, for example in a setup made before 1.4.0 without the role, or when Azure does not answer within 5 seconds, it records the run as scheduled, as every cloud run was recorded before, and the backup carries on. So a setup made before 1.4.0 shows every run as **Scheduled**, also runs started by hand, until you run the setup script once more; that also works for a setup made with the template, as described in [Upgrade from an earlier setup](#upgrade-from-an-earlier-setup). Backups made before keep the trigger they recorded.
+* To record a run you start by hand as **Manual**, start it with `TENANTKEY` and `TRIGGER` set to `Manual` (any case). Its change report then leaves out "after a scheduled backup".
+* A run without `TRIGGER`, or with it empty, is recorded as **Scheduled**. The schedule link passes only `TENANTKEY`, so every scheduled run counts as scheduled, in setups made before 1.4.0 too, and nothing about the schedule changes. A run started by hand without `TRIGGER` also shows as **Scheduled**.
+* Any other value is recorded as **Scheduled**, and the job output names the value in a warning. The backup itself is not affected.
+
+Azure Automation does not tell a runbook who started its job (the job's `startedBy` stays empty for scheduled and portal starts alike), so the parameter is how a run started by hand says so. Backups made before keep the trigger they recorded.
 
 ## How cloud backups show up in TenuVault
 
