@@ -35,6 +35,7 @@ const MAIN_OVERRIDES = `(() => {
   handle("auth:accounts", () => M.accounts)
   handle("license:status", () => M.license)
   handle("license:tenantTrialAction", (tenantId, action, email) => {
+    if (M.trialActionError) throw new Error(M.trialActionError)
     const tenant = M.license.tenants.find(t => t.tenantId === tenantId)
     if (action === "extend_trial") {
       tenant.trialEndsAt = tenant.validUntil = tenant.expiresAt = new Date(${NOW} + 23 * ${DAY}).toISOString()
@@ -198,7 +199,7 @@ try {
   const base = { hasKey: false, keyState: "none", keyHint: null, keyMessage: null, persisted: true, offline: false, message: null, plan: null, tenantLimit: null, communityTenantId: TENANTS[0].guid, communityChoiceTenantIds: [], communityChoicePendingTenantIds: [], validUntil: null, tenantTrialsEnabled: true, trial: false, trialEndsAt: null, trialEndedAt: null }
   const trialTenant = (index, days, extra = {}) => ({ tenantId: TENANTS[index].guid, signedIn: true, activated: true, entitled: true, source: "trial", plan: "pro", tenants: 2, expiresAt: new Date(NOW + days * DAY).toISOString(), validUntil: new Date(NOW + days * DAY).toISOString(), trialEndsAt: new Date(NOW + days * DAY).toISOString(), trial: true, canEnd: true, trialAcknowledged: true, trialCanExtend: days <= 5, shared: null, shareNeedsSignIn: false, displayKey: null, message: null, ...extra, ...(extra.entitled === false ? { expiresAt: null, validUntil: null } : {}) })
   const scene = async (name, license, profiles, hash, text, form = false) => {
-    await main.evaluate(`globalThis.__marketingMock.license = ${JSON.stringify(license)}; globalThis.__marketingMock.accounts = ${JSON.stringify(profiles.length ? MOCK.accounts : [])}; globalThis.__marketingMock.preferences.retentionDays = 90; globalThis.__marketingMock.schedules.forEach(schedule => { const tenant = globalThis.__marketingMock.license.tenants.find(t => t.tenantId === schedule.tenantId); const ended = tenant?.trialEndsAt && !tenant.entitled; const local = globalThis.__marketingMock.tenants.find(t => t.credentials.tenantId === schedule.tenantId)?.resources.subscriptionId === "local"; schedule.fallbackWeekday = ended && local ? 1 : undefined; schedule.pausedReason = globalThis.__marketingMock.license.communityChoicePendingTenantIds?.includes(schedule.tenantId) ? "Paused: choose a Community tenant or add a license" : ended && !local ? "Paused: Azure storage needs Pro" : undefined })`)
+    await main.evaluate(`globalThis.__marketingMock.trialActionError = null; globalThis.__marketingMock.license = ${JSON.stringify(license)}; globalThis.__marketingMock.accounts = ${JSON.stringify(profiles.length ? MOCK.accounts : [])}; globalThis.__marketingMock.preferences.retentionDays = 90; globalThis.__marketingMock.schedules.forEach(schedule => { const tenant = globalThis.__marketingMock.license.tenants.find(t => t.tenantId === schedule.tenantId); const ended = tenant?.trialEndsAt && !tenant.entitled; const local = globalThis.__marketingMock.tenants.find(t => t.credentials.tenantId === schedule.tenantId)?.resources.subscriptionId === "local"; schedule.fallbackWeekday = ended && local ? 1 : undefined; schedule.pausedReason = globalThis.__marketingMock.license.communityChoicePendingTenantIds?.includes(schedule.tenantId) ? "Paused: choose a Community tenant or add a license" : ended && !local ? "Paused: Azure storage needs Pro" : undefined })`)
     await evaluate(`window.tenuvault.storage.setItem("tenuvault_tenants", ${JSON.stringify(JSON.stringify(profiles))})`)
     await evaluate(`location.hash = ${JSON.stringify(hash)}; location.reload()`)
     await sleep(1200)
@@ -223,6 +224,10 @@ try {
   await evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent === "Need more time? Extend your trial").click()`)
   await assertText("Trial extended. Ends on")
   await screenshot("trial-extension-saved", true)
+  await main.evaluate(`globalThis.__marketingMock.trialActionError = "The email address could not be saved. Try again."`)
+  await evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent === "Email me setup tips and a reminder before the trial ends").click()`)
+  await assertText("The email address could not be saved. Try again.")
+  await screenshot("trial-contact-error", true)
   await scene("trial-dashboard", active(9), MOCK.tenants.slice(0, 1), "#/portal/dashboard", "Pro trial")
   await evaluate(`document.querySelector('a[href="#/license"] .text-4xl')?.closest('a')?.scrollIntoView({ block: "center" })`)
   await evaluate(`document.querySelector('main a[href="#/license"]')?.scrollIntoView({ block: "center" })`)
@@ -244,6 +249,10 @@ try {
     const endedTenants = Array.from({ length: count }, (_, i) => trialTenant(i, -1, { entitled: false, activated: false, source: null, plan: count > 1 || i ? null : "community", validUntil: null, trial: false, trialAcknowledged: false, coverageEnded: true }))
     await scene(`trial-ended-${count}`, { ...base, communityTenantId: count > 1 ? null : TENANTS[0].guid, communityChoiceTenantIds: count > 1 ? TENANTS.map(t => t.guid) : [], communityChoicePendingTenantIds: count > 1 ? TENANTS.map(t => t.guid) : [], trialEndedAt: new Date(NOW - DAY).toISOString(), tenants: endedTenants }, MOCK.tenants.slice(0, count), "#/portal/overview", "Continue on Community")
   }
+  await main.evaluate(`globalThis.__marketingMock.trialActionError = "The trial acknowledgement could not be saved. Try again."`)
+  await evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent === "Continue on Community").click()`)
+  await assertText("The trial acknowledgement could not be saved. Try again.")
+  await screenshot("trial-end-action-error", true)
   await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1800, deviceScaleFactor: 1, mobile: false })
   await scene("trial-mixed-notices", { ...active(9), communityTenantId: TENANTS[1].guid, tenants: [trialTenant(0, 9, { trialAcknowledged: false }), trialTenant(1, -1, { entitled: false, activated: false, source: null, plan: "community", validUntil: null, trial: false, trialAcknowledged: false, coverageEnded: true })] }, MOCK.tenants, "#/portal/overview", "Continue on Community")
   await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1380, deviceScaleFactor: 1, mobile: false })

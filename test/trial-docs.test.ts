@@ -2,6 +2,12 @@ import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 const read = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8")
 describe("tenant trial guidance", () => {
+  it("distinguishes signed trial claims from response fields and server authorization", () => {
+    const network = read("docs/license-network-checks.md")
+    expect(network).toContain("The signed v2 token carries the tenant, installation, activation, plan, `trial` and `keyExp`.")
+    expect(network).toContain("`source` and `canEnd` are plain response fields, not signed claims.")
+    expect(network).toContain("the server enforces who may end the trial")
+  })
   it("explains the installation limit and removal from a joining installation", () => {
     const index = read("docs-site/src/content/docs/licensing/index.md")
     expect(index).toContain("An installation has a limited number of trials")

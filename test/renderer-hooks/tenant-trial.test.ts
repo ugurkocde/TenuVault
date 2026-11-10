@@ -4,9 +4,9 @@ import { MemoryRouter } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { LicenseStatus, TenantLicenseStatus } from "../../src/shared/ipc"
 import { licenseChipState, trialReminder } from "../../src/renderer/lib/license"
-const state = vi.hoisted(() => ({ status: null as LicenseStatus | null, action: vi.fn(async () => undefined), start: vi.fn(async () => undefined), emailTrial: vi.fn(async () => undefined), update: vi.fn() }))
-vi.mock("../../src/renderer/lib/license", async original => ({ ...(await original<typeof import("../../src/renderer/lib/license")>()), useLicense: () => ({ status: state.status, refresh: async () => {} }) }))
-vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { auth: { accounts: async () => [{ tenantId: "tenant", username: "admin@contoso.example" }] }, license: { tenantTrialAction: state.action, startTenantTrial: state.start, startTrial: state.emailTrial }, schedules: { list: async () => [{ tenantId: "tenant", enabled: true, frequency: "daily" }] }, preferences: { get: async () => ({ retentionDays: 90 }) } } }))
+const state = vi.hoisted(() => ({ status: null as LicenseStatus | null, action: vi.fn(async () => undefined), start: vi.fn(async () => undefined), emailTrial: vi.fn(async () => undefined), update: vi.fn(), open: vi.fn(async () => undefined), refresh: vi.fn(async () => undefined) }))
+vi.mock("../../src/renderer/lib/license", async original => ({ ...(await original<typeof import("../../src/renderer/lib/license")>()), useLicense: () => ({ status: state.status, refresh: state.refresh }) }))
+vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { auth: { accounts: async () => [{ tenantId: "tenant", username: "admin@contoso.example" }] }, license: { tenantTrialAction: state.action, startTenantTrial: state.start, startTrial: state.emailTrial, open: state.open }, schedules: { list: async () => [{ tenantId: "tenant", enabled: true, frequency: "daily" }] }, preferences: { get: async () => ({ retentionDays: 90 }) } } }))
 vi.mock("~/contexts/TenantContext", () => ({ useTenantOperations: () => ({ updateTenant: state.update }), useTenants: () => [{ id: 1, name: "Contoso", credentials: { tenantId: "tenant" }, resources: { storageAccountName: "contosobackups" } }, { id: 2, name: "Fabrikam", credentials: { tenantId: "ended" } }] }))
 import { TenantTrialCard, TenantTrialNotices, TenantTrialOptions, TrialChanges } from "../../src/renderer/components/TenantTrial"
 import { TrialOrKey } from "../../src/renderer/components/PlanChoice"
@@ -16,6 +16,11 @@ let container: HTMLDivElement
 const day = 86400_000
 let tenant: TenantLicenseStatus
 beforeEach(() => {
+  state.action.mockReset().mockResolvedValue(undefined)
+  state.start.mockReset().mockResolvedValue(undefined)
+  state.open.mockReset().mockResolvedValue(undefined)
+  state.refresh.mockReset().mockResolvedValue(undefined)
+  state.update.mockReset()
   tenant = { tenantId: "tenant", signedIn: true, entitled: true, activated: true, plan: "pro", source: "trial", tenants: 2, expiresAt: null, validUntil: null, shared: null, shareNeedsSignIn: false, displayKey: null, message: null, trial: true, trialEndsAt: new Date(Date.now() + 5 * day).toISOString(), canEnd: true, trialCanExtend: true }
   state.status = { hasKey: false, keyState: "none", keyMessage: null, keyHint: null, persisted: true, offline: false, message: null, plan: "pro", tenantLimit: 2, validUntil: null, communityTenantId: null, tenants: [tenant], tenantTrialsEnabled: true, trial: true, trialEndsAt: tenant.trialEndsAt }
   container = document.createElement("div"); document.body.append(container); root = createRoot(container)
@@ -24,6 +29,64 @@ afterEach(() => { act(() => root.unmount()); container.remove(); vi.clearAllMock
 async function render(element: ReturnType<typeof createElement>) { await act(async () => root.render(createElement(MemoryRouter, null, element))) }
 async function click(text: string) { const button = [...container.querySelectorAll("button")].find(b => b.textContent === text); expect(button).toBeTruthy(); await act(async () => button!.click()) }
 describe("tenant trial UI", () => {
+  it.each(["Continue on Community", "Buy Pro"])("shows a rejecting %s action and refreshes without losing the error", async label => {
+    tenant.entitled = false; tenant.trial = false; tenant.source = null; tenant.trialEndsAt = new Date(Date.now() - day).toISOString()
+    const failure = new Error(`${label} failed`)
+    if (label === "Buy Pro") state.open.mockRejectedValueOnce(failure)
+    else state.action.mockRejectedValueOnce(failure)
+    state.refresh.mockRejectedValueOnce(new Error("Status refresh failed"))
+    await render(createElement(TenantTrialNotices))
+    await click(label)
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(failure.message)
+    expect(container.textContent).toContain("Pro trial ended")
+    expect(state.refresh).toHaveBeenCalledTimes(1)
+    expect([...container.querySelectorAll("button")].find(b => b.textContent === label)?.disabled).toBe(false)
+  })
+  it.each([
+    ["Got it", "acknowledge"], ["Use Community instead", "end_trial"], ["Need more time? Extend your trial", "extend_trial"],
+  ] as const)("handles a rejected %s action and a rejected refresh", async (label, action) => {
+    state.action.mockRejectedValueOnce(new Error("Trial action failed"))
+    state.refresh.mockRejectedValueOnce(new Error("Status refresh failed"))
+    await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+    await click(label)
+    expect(state.action).toHaveBeenCalledWith("tenant", action)
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Trial action failed")
+    expect(state.refresh).toHaveBeenCalledTimes(1)
+  })
+  it.each(["save", "remove"])("handles a rejected contact %s and refreshes", async action => {
+    state.action.mockRejectedValueOnce(new Error("Contact action failed"))
+    state.refresh.mockRejectedValueOnce(new Error("Status refresh failed"))
+    await render(createElement(TenantTrialCard, { tenant, allowUnknownContactRemoval: true }))
+    await click(action === "save" ? "Email me setup tips and a reminder before the trial ends" : "Remove the saved email address for this trial")
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Contact action failed")
+    expect(state.refresh).toHaveBeenCalledTimes(1)
+  })
+  it("handles a rejected opt-in and refresh", async () => {
+    tenant.entitled = false; tenant.activated = false; tenant.source = null; tenant.trial = false; tenant.plan = "community"
+    state.start.mockRejectedValueOnce(new Error("Trial start failed"))
+    state.refresh.mockRejectedValueOnce(new Error("Status refresh failed"))
+    await render(createElement(TenantTrialOptions))
+    await click("Try Pro free")
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Trial start failed")
+    expect(state.refresh).toHaveBeenCalledTimes(1)
+  })
+  it("handles a rejected Azure switch after real confirmation", async () => {
+    tenant.entitled = false; tenant.trial = false; tenant.source = null; tenant.trialEndsAt = new Date(Date.now() - day).toISOString()
+    state.update.mockImplementationOnce(async () => { throw new Error("Storage switch failed") })
+    state.refresh.mockRejectedValueOnce(new Error("Status refresh failed"))
+    await render(createElement(TenantTrialNotices))
+    await click("Switch Contoso to weekly local backups")
+    await act(async () => [...document.body.querySelectorAll("button")].find(b => b.textContent === "Switch to local backups")!.click())
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Storage switch failed")
+    expect(state.refresh).toHaveBeenCalledTimes(1)
+  })
+  it("shows a refresh failure without retrying or rejecting the handler", async () => {
+    state.refresh.mockRejectedValueOnce(new Error("Status refresh failed"))
+    await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+    await click("Got it")
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Status refresh failed")
+    expect(state.refresh).toHaveBeenCalledTimes(1)
+  })
   it.each([true, false])("shows the start card, correct days and starter controls (%s)", async starter => {
     tenant.canEnd = starter
     await render(createElement(TenantTrialCard, { tenant, welcome: true }))

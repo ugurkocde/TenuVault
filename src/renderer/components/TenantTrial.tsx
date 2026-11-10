@@ -7,39 +7,36 @@ import type { TenantLicenseStatus } from "../../shared/ipc"
 import { bridge } from "../lib/bridge"
 import { formatDate, useLicense } from "../lib/license"
 import { openCheckout } from "../lib/purchase"
+import { useTrialAction } from "../lib/trial-action"
 import { LOCAL_STORAGE_PREFIX } from "../../shared/constants"
 import { changeTenantStorage, LOCAL_SWITCH_CONFIRMATION } from "../lib/storage"
 import { useConfirm } from "~/components/ConfirmDialog"
 import { CommunityTenantChoiceButton } from "./CommunityTenantPicker"
 
 export function TenantTrialOptions({ onStarted, tenantId, compact = false, variant, size }: { onStarted?: () => void; tenantId?: string; compact?: boolean; variant?: "default" | "outline"; size?: "default" | "sm" } = {}) {
-  const { status, refresh } = useLicense()
-  const [error, setError] = useState("")
-  const [busy, setBusy] = useState(false)
+  const { status } = useLicense()
+  const { busy, error, run } = useTrialAction()
   if (!status || status.hasKey) return null
   const Container = compact ? "span" : "div"
   const Text = compact ? "span" : "p"
   return <Container className={compact ? "inline-flex flex-wrap items-center gap-3" : "space-y-3"}>
     {status.tenants.filter(t => (!tenantId || t.tenantId === tenantId) && t.signedIn && !t.entitled && (status.tenantTrialsEnabled || t.trialRefusal)).map(tenant => <Container key={tenant.tenantId} className={compact ? "inline-flex flex-wrap items-center gap-3" : "flex flex-wrap items-center gap-3"}>
       {!compact && tenant.trialRefusal && <Text role="status">{tenant.trialRefusal}</Text>}
-      {tenant.activated ? <Text className="text-sm text-gray-600">Check the saved activation before starting a trial.</Text> : status.tenantTrialsEnabled && !(tenant.trialRefusalPermanent ?? Boolean(tenant.trialRefusal)) && <><Button variant={variant} size={size} disabled={busy} onClick={async () => {
-        setBusy(true); setError("")
-        try { await bridge.license.startTenantTrial(tenant.tenantId); await refresh(); onStarted?.() }
-        catch (error) { setError(error instanceof Error ? error.message : String(error)); await refresh() }
-        finally { setBusy(false) }
-      }}>Try Pro free</Button><Text className="text-sm text-gray-600">No card, no email. Starts right away, for this tenant.</Text></>}
+      {tenant.activated ? <Text className="text-sm text-gray-600">Check the saved activation before starting a trial.</Text> : status.tenantTrialsEnabled && !(tenant.trialRefusalPermanent ?? Boolean(tenant.trialRefusal)) && <><Button variant={variant} size={size} disabled={busy} onClick={() => void run(async () => {
+        await bridge.license.startTenantTrial(tenant.tenantId)
+        await onStarted?.()
+      })}>Try Pro free</Button><Text className="text-sm text-gray-600">No card, no email. Starts right away, for this tenant.</Text></>}
     </Container>)}
     {error && <Text role="alert">{error}</Text>}
   </Container>
 }
 
 export function TrialContact({ tenant, initialEmail, allowUnknownRemoval = false }: { tenant: TenantLicenseStatus; initialEmail?: string; allowUnknownRemoval?: boolean }) {
-  const { refresh } = useLicense()
+  const { busy, error, run } = useTrialAction()
   const [email, setEmail] = useState(tenant.trialEmail ?? initialEmail ?? "")
   const [saved, setSaved] = useState(Boolean(tenant.trialEmail))
   useEffect(() => setSaved(Boolean(tenant.trialEmail)), [tenant.trialEmail])
   const [message, setMessage] = useState("")
-  const [busy, setBusy] = useState(false)
   useEffect(() => {
     if (tenant.trialEmail || initialEmail) return
     let current = true
@@ -49,16 +46,12 @@ export function TrialContact({ tenant, initialEmail, allowUnknownRemoval = false
     }).catch(() => {})
     return () => { current = false }
   }, [tenant.tenantId, tenant.trialEmail, initialEmail])
-  const save = async (address?: string) => {
-    setBusy(true); setMessage("")
-    try {
-      await bridge.license.tenantTrialAction(tenant.tenantId, "trial_contact", address)
-      setSaved(Boolean(address))
-      setMessage(address ? "Email address saved." : "Email address removed.")
-      await refresh()
-    } catch (error) { setMessage(error instanceof Error ? error.message : String(error)) }
-    finally { setBusy(false) }
-  }
+  const save = (address?: string) => run(async () => {
+    setMessage("")
+    await bridge.license.tenantTrialAction(tenant.tenantId, "trial_contact", address)
+    setSaved(Boolean(address))
+    setMessage(address ? "Email address saved." : "Email address removed.")
+  })
   return <div className="space-y-2">
     <div className="flex flex-col items-start gap-2 xl:flex-row xl:items-end">
       <label className="w-full min-w-0 flex-1 text-sm">Optional email
@@ -69,28 +62,23 @@ export function TrialContact({ tenant, initialEmail, allowUnknownRemoval = false
     {(saved || allowUnknownRemoval) && <Button variant="ghost" disabled={busy} onClick={() => void save()}>Remove the saved email address for this trial</Button>}
     <p className="text-xs text-gray-600">Your address is sent only when you press the button. <a href="https://www.tenuvault.com/privacy" target="_blank" rel="noreferrer">Privacy policy</a></p>
     {(message || tenant.trialEmail) && <p role="status">{message || "Email address saved."}</p>}
+    {error && <p role="alert">{error}</p>}
   </div>
 }
 
 export function TenantTrialCard({ tenant, initialEmail, welcome = false, allowUnknownContactRemoval = false, children }: { tenant: TenantLicenseStatus; initialEmail?: string; welcome?: boolean; allowUnknownContactRemoval?: boolean; children?: ReactNode }) {
-  const { status, refresh } = useLicense()
+  const { status } = useLicense()
+  const { busy, error, run: perform } = useTrialAction()
   const name = useTenants().find(t => t.credentials?.tenantId?.toLowerCase() === tenant.tenantId)?.name
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState("")
   const [notice, setNotice] = useState("")
-  const run = async (action: "acknowledge" | "end_trial" | "extend_trial") => {
-    setBusy(true); setError(""); setNotice("")
-    try {
-      const updated = await bridge.license.tenantTrialAction(tenant.tenantId, action)
-      if (action === "extend_trial") {
-        const end = updated?.tenants.find(t => t.tenantId === tenant.tenantId)?.trialEndsAt
-        setNotice(end ? `Trial extended. Ends on ${formatDate(end)}.` : "Trial extended.")
-      }
-      await refresh()
+  const run = (action: "acknowledge" | "end_trial" | "extend_trial") => perform(async () => {
+    setNotice("")
+    const updated = await bridge.license.tenantTrialAction(tenant.tenantId, action)
+    if (action === "extend_trial") {
+      const end = updated?.tenants.find(t => t.tenantId === tenant.tenantId)?.trialEndsAt
+      setNotice(end ? `Trial extended. Ends on ${formatDate(end)}.` : "Trial extended.")
     }
-    catch (error) { setError(error instanceof Error ? error.message : String(error)); await refresh() }
-    finally { setBusy(false) }
-  }
+  })
   const days = Math.max(0, Math.ceil((Date.parse(tenant.trialEndsAt ?? "") - Date.now()) / 86400_000))
   return <section className="space-y-3 rounded-3xl bg-blue-50 p-6">
     <h2 className="text-xl font-medium">{welcome ? "Pro trial started" : tenant.trial ? "Pro trial" : "Pro trial ended"}{name && <span className="ml-2 text-sm font-normal text-gray-600">{name}</span>}</h2>
@@ -122,10 +110,11 @@ function TrialAzureChoice() {
   const tenants = useTenants()
   const { updateTenant } = useTenantOperations()
   const { confirm, confirmDialog } = useConfirm()
+  const { busy, error, run } = useTrialAction()
   const { status } = useLicense()
-  return <>{confirmDialog}{tenants.filter(t => t.credentials && t.resources?.storageAccountName && !t.resources.storageAccountName.startsWith(LOCAL_STORAGE_PREFIX) && status?.tenants.some(licensed => licensed.trialEndsAt && !licensed.entitled && licensed.tenantId === t.credentials?.tenantId?.toLowerCase())).map(t => <Button key={t.credentials!.tenantId} variant="outline" onClick={async () => {
-    if (await confirm(LOCAL_SWITCH_CONFIRMATION)) updateTenant(t.id, changeTenantStorage(t, { kind: "local" }))
-  }}>Switch {t.name} to weekly local backups</Button>)}</>
+  return <>{confirmDialog}{tenants.filter(t => t.credentials && t.resources?.storageAccountName && !t.resources.storageAccountName.startsWith(LOCAL_STORAGE_PREFIX) && status?.tenants.some(licensed => licensed.trialEndsAt && !licensed.entitled && licensed.tenantId === t.credentials?.tenantId?.toLowerCase())).map(t => <Button key={t.credentials!.tenantId} variant="outline" disabled={busy} onClick={() => void run(async () => {
+    if (await confirm(LOCAL_SWITCH_CONFIRMATION)) await updateTenant(t.id, changeTenantStorage(t, { kind: "local" }))
+  })}>Switch {t.name} to weekly local backups</Button>)}{error && <p role="alert" className="basis-full text-sm">{error}</p>}</>
 }
 
 export function TrialChanges() {
@@ -152,7 +141,8 @@ export function trialEndVisible(status: ReturnType<typeof useLicense>["status"])
 }
 
 export function TenantTrialNotices({ showWelcome = true }: { showWelcome?: boolean }) {
-  const { status, refresh } = useLicense()
+  const { status } = useLicense()
+  const { busy, error, run } = useTrialAction()
   if (!status) return null
   const welcome = showWelcome && status.tenants.find(t => t.entitled && t.source === "trial" && !t.trialAcknowledged)
   const ended = status.tenants.find(t => t.trialEndsAt && !t.entitled && Date.parse(t.trialEndsAt) <= Date.now() && !t.trialAcknowledged)
@@ -162,11 +152,12 @@ export function TenantTrialNotices({ showWelcome = true }: { showWelcome?: boole
     {ended && <TenantTrialCard key={`ended-${ended.tenantId}`} tenant={ended}>
       <TrialChanges />
       <div className="flex flex-wrap items-center gap-2">
-        <Button className="bg-coral-500 text-white hover:bg-coral-600" onClick={() => void openCheckout("trial-end")}>Buy Pro</Button>
-        <Button variant="outline" onClick={async () => { await bridge.license.tenantTrialAction(ended.tenantId, "acknowledge"); await refresh() }}>Continue on Community</Button>
+        <Button className="bg-coral-500 text-white hover:bg-coral-600" disabled={busy} onClick={() => void run(() => openCheckout("trial-end"))}>Buy Pro</Button>
+        <Button variant="outline" disabled={busy} onClick={() => void run(() => bridge.license.tenantTrialAction(ended.tenantId, "acknowledge"))}>Continue on Community</Button>
         <CommunityTenantChoiceButton />
         <TrialAzureChoice />
       </div>
+      {error && <p role="alert">{error}</p>}
     </TenantTrialCard>}
   </div>
 }
