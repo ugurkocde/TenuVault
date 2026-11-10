@@ -100,8 +100,8 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
 
   it("carries a plain runbook version, which the app does not flag for upgrade", () => {
     const version = RUNBOOK_VERSION
-    // 1.3.0 adds change reports on top of the first plain runbook, 1.2.0.
-    expect(version).toBe("1.3.0")
+    // 1.3.0 adds change reports on top of the first plain runbook, 1.2.0; 1.4.0 records how a run started.
+    expect(version).toBe("1.4.0")
     expect(PLAIN_CLOUD_RUNBOOK).toBe("1.2.0")
     expect(cloudRunbookNeedsUpgrade(version!)).toBe(false)
     expect(cloudRunbookNeedsUpgrade("1.1.0")).toBe(true)
@@ -112,6 +112,50 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     expect(cloudRunbookNeedsUpgrade("")).toBe(false)
     expect(cloudRunbookNeedsUpgrade("desktop")).toBe(false)
   })
+
+  it.runIf(Boolean(pwsh))("records a run as manual only with TRIGGER Manual, and every other run as scheduled", () => {
+    const path = fileURLToPath(new URL("../resources/runbooks/Invoke-TenuVaultBackup.ps1", import.meta.url))
+    // The value is passed as the runbook's own TRIGGER parameter, as the portal's Start pane does.
+    const trigger = (value: string | null) => JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-Command", [
+      `. '${path.replace(/'/g, "''")}' -LibraryOnly${value === null ? "" : ` -Trigger '${value}'`}`,
+      "[Console]::Out.Write((ConvertTo-Json -Compress (Get-TvRunTrigger $Trigger)))",
+    ].join("\n")], { encoding: "utf8", timeout: 60_000 })) as { Trigger: string; Warning: string | null }
+    // Omitted or empty, as every schedule link starts it: scheduled, exactly as before.
+    expect(trigger(null)).toEqual({ Trigger: "scheduled", Warning: null })
+    expect(trigger("")).toEqual({ Trigger: "scheduled", Warning: null })
+    expect(trigger("Manual")).toEqual({ Trigger: "manual", Warning: null })
+    expect(trigger("manual")).toEqual({ Trigger: "manual", Warning: null })
+    expect(trigger("Scheduled")).toEqual({ Trigger: "scheduled", Warning: null })
+    expect(trigger("Nightly")).toEqual({ Trigger: "scheduled", Warning: "Warning: TRIGGER 'Nightly' is neither Manual nor Scheduled, so this run is recorded as scheduled. Set TRIGGER to Manual for a run started by hand, or leave it empty." })
+    // The schedule link passes only TENANTKEY; TRIGGER is optional with an empty default.
+    expect(runbook).toContain('    [string]$TenantKey = "",')
+    expect(runbook).toContain('    [string]$Trigger = ""\n)')
+    expect(runbook).toContain("$runInfo = Get-TvRunTrigger $Trigger")
+    expect(runbook.match(/Trigger += \$runTrigger|Trigger = \$runTrigger/g)).toHaveLength(2)
+    expect(runbook).toContain("-RunTrigger $runTrigger")
+    expect(runbook).not.toContain('Trigger        = "scheduled"')
+    expect(runbook).not.toMatch(/startedBy"|TenuVaultAutomationAccountId|management\.azure\.com/)
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("writes the trigger into the backup's metadata, with a warning line for an invalid value, and never fails the backup", () => {
+    const runs = runPlainFixture()
+    const trigger = (run: Run) => JSON.parse(run.calls.find((call) => call.method === "Put" && call.uri.endsWith("/metadata.json"))!.body!).Trigger
+    expect(trigger(runs[0]!)).toBe("scheduled")
+    const [manual, invalid] = [runs[5]!, runs[6]!]
+    expect(manual.error).toBeNull()
+    expect(trigger(manual)).toBe("manual")
+    expect(manual.output!.some((line) => line.startsWith("Warning: TRIGGER"))).toBe(false)
+    expect(invalid.error).toBeNull()
+    expect(trigger(invalid)).toBe("scheduled")
+    expect(invalid.output!.filter((line) => line.startsWith("Warning: TRIGGER 'Nightly'"))).toHaveLength(1)
+    // The result note for the watcher carries the same trigger, so its alert names a run started by hand.
+    const note = (run: Run) => JSON.parse(run.calls.find((call) => call.method === "Put" && call.uri.includes("/cloud-backup-outcomes/"))!.body!).trigger
+    expect(note(runs[0]!)).toBe("scheduled")
+    expect(note(manual)).toBe("manual")
+    expect(note(invalid)).toBe("scheduled")
+    // Every path that ends a run passes it on.
+    expect(runbook.match(/Send-TvBackupOutcome -Account [^\n]*-Trigger \$runTrigger\n/g)).toHaveLength(4)
+  }, 60_000)
 
   it.runIf(Boolean(pwsh))("never lets the optional change report fail a backup, and says when a backup with warnings gets none", () => {
     const [, , , reportFails, warnings] = runPlainFixture()
@@ -252,6 +296,17 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
     expect(setup).toContain("DeviceCategories,DeviceCleanupRules")
   })
 
+  it("links the schedule with TENANTKEY only and grants no role on the Automation account", () => {
+    // The link is registered as on main: only TENANTKEY, which every runbook version accepts.
+    expect(setup).toContain("-ScheduleName $scheduleName -Parameters @{ TenantKey = $tenantKey } | Out-Null")
+    expect(setup.match(/Register-AzAutomationScheduledRunbook/g)).toHaveLength(1)
+    expect(setup).not.toMatch(/Trigger\s*=|TenuVaultScheduleSetsTrigger|TenuVaultAutomationAccountId|acdd72a7-3385-48ef-bd42-f606fba81ae7|RoleName "Reader"|automationAccountId/)
+    // The test run it prints is started by hand; the hint depends on the published runbook (tested below).
+    expect(setup).toContain("Write-TenuVaultTestRunHint -Runbook $runbook")
+    expect(setup).toContain('$plainRunbookVersion = "1.2.0"')
+    expect(setup).toContain('$triggerRunbookVersion = "1.4.0"')
+  })
+
   it("creates no Key Vault, asks for no recovery key and refuses to guess about alerting", () => {
     for (const keyVault of ["Read-Host", "-AsSecureString", "Az.KeyVault", "New-AzKeyVault", "Set-AzKeyVaultSecret", "Get-AzKeyVaultSecret", "Key Vault Secrets", "tenuvault-recovery-key", "$KeyVaultName", "keyVault="]) {
       expect(setup, keyVault).not.toContain(keyVault)
@@ -304,6 +359,22 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
     expect(setupRun("rerun-sets-report")).toMatchObject({ error: null, changeReport: "full", changeReportActors: "true", tenantName: "11111111-2222-3333-4444-555555555555" })
     expect(setup).toContain('$changeReportPassed = $PSBoundParameters.ContainsKey("ChangeReport")')
     expect(setup).toContain('$changeReportActorsPassed = $PSBoundParameters.ContainsKey("ChangeReportWithoutActors")')
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("recommends TRIGGER Manual for the test run only when the published runbook has it", () => {
+    const manual = "TRIGGER to Manual, and watch the job output. The backup then appears in TenuVault under"
+    // Published and read back as this runbook (1.4.0 or later): start it with TRIGGER set to Manual.
+    const approved = setupRun("approved").output
+    expect(approved).toContain(manual)
+    expect(approved).toContain("Automation account, Runbooks > Invoke-TenuVaultBackup > Start, set TENANTKEY to 11111111 and")
+    // The publish left 1.1.0 published, was declined, or threw before a read back: no TRIGGER in its Start pane.
+    const older = setupRun("published-older").output
+    expect(older).not.toContain(manual)
+    expect(older).toContain("Scheduled: the published runbook is version 1.1.0, older than 1.4.0, so it has no TRIGGER to record a run started by hand.")
+    expect(older).toContain("Run this script again and let it publish the runbook; then a run started with TRIGGER set")
+    const declined = setupRun("outer-declined").output
+    expect(declined).not.toContain(manual)
+    expect(declined).toContain("Scheduled: the published runbook could not be read back as 1.4.0 or later, so it has no TRIGGER to record a run started by hand.")
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("removes the Key Vault variable only when the published runbook reads back as plain", () => {
@@ -466,6 +537,15 @@ describe("azuredeploy.json", () => {
     }
     // The vault assignment is gone; the two writer assignments on the containers remain.
     expect(template.resources.filter((resource) => resource.type === "Microsoft.Authorization/roleAssignments")).toHaveLength(2)
+  })
+
+  it("links the schedule with TENANTKEY only, writes no account id and grants nothing on the Automation account", () => {
+    const resources = template.resources as unknown as Array<{ type: string; scope?: string; properties: Record<string, unknown> }>
+    const jobSchedule = resources.find((resource) => resource.type === "Microsoft.Automation/automationAccounts/jobSchedules")!
+    expect(jobSchedule.properties.parameters).toEqual({ TenantKey: "[variables('tenantKey')]" })
+    expect(resources.filter((resource) => resource.type === "Microsoft.Authorization/roleAssignments").every((resource) => resource.scope?.startsWith("[concat('Microsoft.Storage/storageAccounts/"))).toBe(true)
+    const text = JSON.stringify(template)
+    for (const absent of ["TenuVaultAutomationAccountId", "TenuVaultScheduleSetsTrigger", "acdd72a7-3385-48ef-bd42-f606fba81ae7", "readerRoleId", "Trigger"]) expect(text, absent).not.toContain(absent)
   })
 
   it("lets the identity leave result notes in the watcher's container with the same write-only role", () => {

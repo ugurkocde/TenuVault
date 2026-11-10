@@ -55,7 +55,7 @@ TenuVault reads the audit events between the times the two backups started and m
 * Intune and Entra keep audit events for a limited time, so reports of older backups can have fewer matching events.
 * A change made during a backup can appear in the audit events of one report and in the item changes of the next.
 
-When the audit log cannot be read at all, the report is still made and says that who made the changes is unknown.
+When the audit log cannot be read at all, the report is still made and says that who made the changes is unknown, and why. In the app, a throttled read (429) suggests generating the report again in a few minutes. [Cloud backup reports](/backups/cloud/#change-reports-by-email) arrive by email instead, so they only name the reason, for example "Microsoft Graph throttled the Intune audit log request."
 
 ## Save a report
 
@@ -97,7 +97,7 @@ Like the scheduled backups themselves, this runs only while TenuVault is running
 
 ## Reports for cloud backups
 
-[Cloud backups](/backups/cloud/) that run in Azure can produce the same report with no computer on: the backup runbook builds it and the [Azure watcher](/notifications/#alerts-while-this-computer-is-off-the-azure-watcher) emails it, with the report attached as HTML and Markdown. The content and wording are the same as in the app. Those reports are emailed only; they do not appear in the **Reports** list. See [Change reports by email](/backups/cloud/#change-reports-by-email) for how to turn them on and what to know first.
+[Cloud backups](/backups/cloud/) that run in Azure can produce the same report with no computer on: the backup runbook builds it and the [Azure watcher](/notifications/#alerts-while-this-computer-is-off-the-azure-watcher) emails it, with the report attached as HTML and Markdown. The content is the same as in the app, apart from the wording of the audit log note described above. Those reports are emailed only; they do not appear in the **Reports** list. See [Change reports by email](/backups/cloud/#change-reports-by-email) for how to turn them on and what to know first.
 
 ## Related pages
 

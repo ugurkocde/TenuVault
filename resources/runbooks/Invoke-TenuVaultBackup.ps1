@@ -56,10 +56,14 @@ param(
     # Which tenant's Automation variables to read: variables are read with this suffix first
     # (TenuVaultTenantId-<key>), then plain. One account serves the Entra tenant its managed
     # identity belongs to; the suffix keeps that tenant's variable set distinctly named.
-    [string]$TenantKey = ""
+    [string]$TenantKey = "",
+    # How the run started, recorded as the backup's Trigger and in its change report. The
+    # schedule link does not pass it, so a run without it counts as scheduled. A run started by
+    # hand passes "Manual" (TRIGGER in the portal's Start pane) to be recorded as manual.
+    [string]$Trigger = ""
 )
 
-$script:RunbookVersion = "1.3.0"
+$script:RunbookVersion = "1.4.0"
 $script:GraphBeta = "https://graph.microsoft.com/beta"
 $script:Container = "intune-backups"
 # One status blob per tenant, so status blobs never collide when tenants share tooling.
@@ -321,6 +325,20 @@ function Get-TvAutomationVariable {
     return $null
 }
 
+# How this run started: @{ Trigger = "scheduled" | "manual"; Warning = a job output line or $null }.
+# Omitted or empty is scheduled: schedule links pass only TENANTKEY, so every link keeps working
+# unchanged. "Manual" in any case is manual, "Scheduled" scheduled. Any other value is scheduled
+# with a warning in the job output; it never fails the backup.
+function Get-TvRunTrigger {
+    param([AllowNull()][AllowEmptyString()][string]$Value)
+    $text = ([string]$Value).Trim()
+    if (-not $text) { return @{ Trigger = "scheduled"; Warning = $null } }
+    if ($text -ieq "manual") { return @{ Trigger = "manual"; Warning = $null } }
+    if ($text -ieq "scheduled") { return @{ Trigger = "scheduled"; Warning = $null } }
+    $shown = if ($text.Length -gt 40) { $text.Substring(0, 40) + "..." } else { $text }
+    return @{ Trigger = "scheduled"; Warning = "Warning: TRIGGER '$shown' is neither Manual nor Scheduled, so this run is recorded as scheduled. Set TRIGGER to Manual for a run started by hand, or leave it empty." }
+}
+
 function Get-TvRequiredVariable {
     param([Parameter(Mandatory)][string]$Name)
     $value = Get-TvAutomationVariable $Name
@@ -534,7 +552,9 @@ function Send-TvBackupOutcome {
         [AllowNull()][string]$BackupFolder,
         [AllowNull()][object]$TotalPolicies,
         [int]$Failures = 0,
-        [string[]]$FailedTypes = @()
+        [string[]]$FailedTypes = @(),
+        # How the run started (Get-TvRunTrigger), so the watcher's alert names a run started by hand.
+        [ValidateSet("scheduled", "manual")][string]$Trigger = "scheduled"
     )
     # One note per run: the failure path can follow a Failed result that was already noted.
     if ($script:OutcomeSent) { return }
@@ -549,6 +569,7 @@ function Send-TvBackupOutcome {
         totalPolicies = if ($null -ne $TotalPolicies) { [int]$TotalPolicies } else { $null }
         failures      = [int]$Failures
         failedTypes   = @($FailedTypes | Where-Object { $_ } | Select-Object -First 10 | ForEach-Object { [string]$_ })
+        trigger       = $Trigger
     }
     $name = if ($BackupFolder) { $BackupFolder } else { "run-$RunId" }
     $uri = "https://$Account.blob.core.windows.net/$script:OutcomeContainer/cloud-backup-outcomes/$([uri]::EscapeDataString($name)).json"
@@ -1690,6 +1711,8 @@ function Get-TvBackupDrifts {
 # publicAuditNote: an audit note fit to show and send. Reports are emailed outside the
 # organization, so a raw Microsoft Graph error (URLs, tenant IDs, the request filter) is replaced
 # by what it means. Plain sentences pass through. ECMAScript regex options keep \b, \d and \w ASCII.
+# Every report this runbook makes is a cloud report (publicAuditNote with cloud set): it arrives by
+# email, so a throttled read is named without advising to generate the report again.
 function Get-TvPublicAuditNote {
     param([AllowNull()][object]$Note)
     if ($Note -isnot [string] -or -not $Note) { return $null }
@@ -1698,16 +1721,18 @@ function Get-TvPublicAuditNote {
     $space = '[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+'
     $text = ([regex]::Replace($Note, $space, " ")).Trim(" ")
     if (-not $text) { return $null }
+    if ([regex]::IsMatch($text, '\b429\b|throttl', $jsCase)) { return $script:CloudThrottledNote }
     $payload = [regex]::IsMatch($text, '[{[]|Operation ID|"_version"|\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b', $jsCase)
     $raw = $payload -or $text.Length -gt 280 -or [regex]::IsMatch($text, 'https?://', $js)
     if (-not $raw) { return $text }
-    if ([regex]::IsMatch($text, '\b429\b|throttl', $jsCase)) { return "Microsoft Graph throttled the audit log request (429). Generate the report again in a few minutes." }
     $status = [regex]::Match($text, '\breturned (\d{3})\b', $js)
     if ($payload) { if ($status.Success) { return "Microsoft Graph returned $($status.Groups[1].Value)." } else { return "The audit log could not be read." } }
     $cleaned = [regex]::Replace([regex]::Replace($text, 'https?://[^ ]+', "", $js), ' +', " ").Trim(" ")
     if ($cleaned.Length -gt 240) { return $cleaned.Substring(0, 237).TrimEnd(" ") + "..." }
     return $cleaned
 }
+
+$script:CloudThrottledNote = "Microsoft Graph throttled the Intune audit log request."
 
 function Get-TvReportTime {
     param([Parameter(Mandatory)][string]$Iso)
@@ -1727,7 +1752,7 @@ function Get-TvReportTitle {
 }
 
 function Get-TvSummaryLine {
-    param([Parameter(Mandatory)][object]$Report)
+    param([Parameter(Mandatory)][object]$Report, [switch]$Reason)
     $s = $Report.summary
     $total = $s.added + $s.modified + $s.deleted
     if ($total -eq 0) { return "No changes between the two backups." }
@@ -1736,7 +1761,11 @@ function Get-TvSummaryLine {
     if ($s.added) { $parts += "$($s.added) added" }
     if ($s.deleted) { $parts += "$($s.deleted) deleted" }
     $text = $parts -join ", "
-    if ($Report.audit.status -ne "included") { return "$text. Who made them is unknown: the audit log could not be read." }
+    if ($Report.audit.status -ne "included") {
+        $why = if ($Reason) { Get-TvPublicAuditNote $Report.audit.note } else { $null }
+        if ($why) { return "$text. Who made them is unknown. $why" }
+        return "$text. Who made them is unknown: the audit log could not be read."
+    }
     return "$text; $($s.attributed) of $total with matching audit events."
 }
 
@@ -1845,7 +1874,8 @@ function New-TvChangeReport {
         tenantId = $Options.TenantId.ToLowerInvariant()
         tenantName = $Options.TenantName
         generatedAt = $Options.GeneratedAt
-        trigger = "scheduled"
+        trigger = if ($Options.Trigger -eq "manual") { "manual" } else { "scheduled" }
+        cloud = $true
         from = $Drift.baseline
         to = $Drift.comparison
         summary = [ordered]@{
@@ -2157,7 +2187,8 @@ function Get-TvReportEmail {
     return [ordered]@{
         severity = if ($s.deleted -gt 0 -or $s.critical -gt 0) { "warning" } else { "info" }
         title = Get-TvEmailText (Get-TvReportTitle $Report) 400
-        summary = Get-TvEmailText (Get-TvSummaryLine $Report) 1000
+        # The email says why no one is named: its reader cannot open the report in the app.
+        summary = Get-TvEmailText (Get-TvSummaryLine $Report -Reason) 1000
         naturalKey = Get-TvEmailText "report:$($Report.from.id):$($Report.to.id):$($Report.generatedAt)" 300
         occurredAt = $Report.generatedAt
         details = @(
@@ -2433,7 +2464,7 @@ function Read-TvReportAudit {
         }
     } catch [TvHttpError] {
         if ($_.Exception.Status -eq 403) { return @{ Error = "Microsoft Graph returned 403 for the Intune audit log. The cloud backup identity needs DeviceManagementApps.Read.All." } }
-        if ($_.Exception.Status -eq 429) { return @{ Error = "The Intune audit log could not be read: Microsoft Graph throttled the request (429). Generate the report again in a few minutes." } }
+        if ($_.Exception.Status -eq 429) { return @{ Error = $script:CloudThrottledNote } }
         return @{ Error = "The Intune audit log could not be read: $(Get-TvSafeError $_.Exception.Message)" }
     }
     $note = $null
@@ -2454,7 +2485,7 @@ function Get-TvChangeReportLevel {
 }
 
 function Invoke-TvChangeReport {
-    param([Parameter(Mandatory)][hashtable]$Context, [Parameter(Mandatory)][string]$BackupFolder, [Parameter(Mandatory)][object]$Metadata, [Parameter(Mandatory)][object[]]$Types, [Parameter(Mandatory)][string]$GraphToken, [Parameter(Mandatory)][string]$RunId)
+    param([Parameter(Mandatory)][hashtable]$Context, [Parameter(Mandatory)][string]$BackupFolder, [Parameter(Mandatory)][object]$Metadata, [Parameter(Mandatory)][object[]]$Types, [Parameter(Mandatory)][string]$GraphToken, [Parameter(Mandatory)][string]$RunId, [string]$RunTrigger = "scheduled")
     $level = Get-TvChangeReportLevel
     if ($level -eq "off") { return }
     try {
@@ -2482,6 +2513,7 @@ function Invoke-TvChangeReport {
         $options = @{
             TenantId = $Context.TenantId; TenantName = $(if ($tenantName) { [string]$tenantName } else { $Context.TenantId })
             GeneratedAt = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", [Globalization.CultureInfo]::InvariantCulture)
+            Trigger = $RunTrigger
             IncludeValues = $level -eq "full"; IncludeActors = ([string](Get-TvAutomationVariable "TenuVaultChangeReportActors")).Trim().ToLowerInvariant() -ne "false"
         }
         $report = New-TvChangeReport -Drift $drift -Audit $audit -Options $options
@@ -2546,6 +2578,8 @@ function Set-TvCloudStatus {
 function Invoke-TvBackup {
     $started = [DateTime]::UtcNow
     $runId = [guid]::NewGuid().ToString()
+    $runInfo = Get-TvRunTrigger $Trigger
+    $runTrigger = $runInfo.Trigger
     $tenantId = Get-TvRequiredVariable "TenuVaultTenantId"
     if ($tenantId -notmatch '^[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$') { throw "TenuVaultTenantId is not a tenant id (GUID)." }
     $storageAccount = Get-TvRequiredVariable "TenuVaultStorageAccount"
@@ -2558,6 +2592,7 @@ function Invoke-TvBackup {
     $appOnlyExcluded = Get-TvFolderList (Get-TvAutomationVariable "TenuVaultAppOnlyExcluded")
 
     Write-Output "Backing up tenant $tenantId to storage account $storageAccount (runbook $script:RunbookVersion, run $runId)."
+    if ($runInfo.Warning) { Write-Output $runInfo.Warning }
     # The storage token comes first: the status blob and the result note need only it, so
     # every later failure (Graph token, a scope that leaves nothing) is still recorded and
     # reaches the notification watcher as Failed. A run that cannot even get a storage token
@@ -2575,7 +2610,7 @@ function Invoke-TvBackup {
         if (-not $types.Count) { throw "The configured scope leaves nothing to back up." }
     } catch {
         Set-TvCloudStatus $context "Failed" (Get-TvSafeError $_.Exception.Message) $null
-        Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status "Failed" -BackupFolder $null -TotalPolicies $null
+        Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status "Failed" -BackupFolder $null -TotalPolicies $null -Trigger $runTrigger
         throw
     }
     if ($excluded.Count) { Write-Output "Leaving out $($excluded.Count) of $($known.Count) types: $($excluded -join ', ')." }
@@ -2642,7 +2677,7 @@ function Invoke-TvBackup {
     }
     } catch {
         Set-TvCloudStatus $context "Failed" (Get-TvSafeError $_.Exception.Message) $null
-        Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status "Failed" -BackupFolder $null -TotalPolicies $null -Failures $failures -FailedTypes @($failedTypes)
+        Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status "Failed" -BackupFolder $null -TotalPolicies $null -Failures $failures -FailedTypes @($failedTypes) -Trigger $runTrigger
         throw
     }
 
@@ -2721,7 +2756,7 @@ function Invoke-TvBackup {
             BackupFormat   = "Individual policy files with Intune-compatible JSON"
             Source         = "TenuVault Cloud Backup"
             TenantId       = $tenantId.ToLowerInvariant()
-            Trigger        = "scheduled"
+            Trigger        = $runTrigger
             RunId          = $runId
             Scope          = [ordered]@{ Excluded = $excluded; Included = @($types | ForEach-Object { $_.Folder }) }
             Failures       = $failures
@@ -2735,13 +2770,13 @@ function Invoke-TvBackup {
         Set-TvBlob $storageAccount "$backupFolder/metadata.json" ($metadata | ConvertTo-Json -Depth 100) $storageToken
         Write-Output "Backup completed: $totalPolicies policies in $($metadata.Duration) ($status). Older backups were kept: the cloud identity cannot delete. The next desktop backup made with an admin's sign-in applies retention."
         Set-TvCloudStatus $context $status "Backup $status, $totalPolicies policies." $backupFolder
-        Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status $status -BackupFolder $backupFolder -TotalPolicies $totalPolicies -Failures $failures -FailedTypes @($failedTypes)
+        Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status $status -BackupFolder $backupFolder -TotalPolicies $totalPolicies -Failures $failures -FailedTypes @($failedTypes) -Trigger $runTrigger
         if ($status -eq "Failed") { throw "The backup saved no policies. See the runbook output above." }
         # Only a complete backup is compared, like the desktop app's report after a scheduled backup:
         # items a backup with warnings could not read would show up as deleted.
         # The report is optional: nothing it does may change the backup's result.
         if ($status -eq "Success") {
-            try { Invoke-TvChangeReport -Context $context -BackupFolder $backupFolder -Metadata $metadata -Types $types -GraphToken $graphToken -RunId $runId }
+            try { Invoke-TvChangeReport -Context $context -BackupFolder $backupFolder -Metadata $metadata -Types $types -GraphToken $graphToken -RunId $runId -RunTrigger $runTrigger }
             catch { Write-Output "No change report was made: $(Get-TvSafeError $_.Exception.Message)" }
         } else {
             try { if ((Get-TvChangeReportLevel) -ne "off") { Write-Output "No change report: the backup completed with warnings." } } catch { }
@@ -2765,7 +2800,7 @@ function Invoke-TvBackup {
                 Duration = if ($seconds -lt 60) { "${seconds}s" } else { "{0}m {1}s" -f [Math]::Floor($seconds / 60), ($seconds % 60) }
                 DurationSeconds = $seconds; ItemCounts = $itemCounts; Status = "Failed"
                 RunbookVersion = $script:RunbookVersion; BackupFormat = "Individual policy files with Intune-compatible JSON"
-                Source = "TenuVault Cloud Backup"; TenantId = $tenantId.ToLowerInvariant(); Trigger = "scheduled"; RunId = $runId
+                Source = "TenuVault Cloud Backup"; TenantId = $tenantId.ToLowerInvariant(); Trigger = $runTrigger; RunId = $runId
                 Scope = [ordered]@{ Excluded = $excluded; Included = @($types | ForEach-Object { $_.Folder }) }
                 Failures = [Math]::Max(1, $failures); SkippedTypes = @($skippedTypes); FailedTypes = @($failedTypes)
                 AuthMode = "app-only"; Items = $sortedItems; Error = $reason
@@ -2775,7 +2810,7 @@ function Invoke-TvBackup {
             Set-TvBlob $storageAccount "$backupFolder/metadata.json" ($failed | ConvertTo-Json -Depth 100) $storageToken -CreateOnly
         } catch { Write-Output "Could not record this backup as Failed: $(Get-TvSafeError $_.Exception.Message). It is listed as incomplete." }
         Set-TvCloudStatus $context "Failed" $reason $backupFolder
-        Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status "Failed" -BackupFolder $backupFolder -TotalPolicies $totalPolicies -Failures ([Math]::Max(1, $failures)) -FailedTypes @($failedTypes)
+        Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status "Failed" -BackupFolder $backupFolder -TotalPolicies $totalPolicies -Failures ([Math]::Max(1, $failures)) -FailedTypes @($failedTypes) -Trigger $runTrigger
         throw
     }
 }

@@ -80,6 +80,8 @@ export interface ChangeReport {
   generatedAt: string
   /** How the report was started. */
   trigger: "manual" | "scheduled"
+  /** Made by the cloud backup runbook and sent by email, where nobody can generate it again. */
+  cloud?: true
   from: DriftBackupRef
   to: DriftBackupRef
   summary: ReportSummary
@@ -105,6 +107,8 @@ export interface ReportOptions {
   tenantName: string
   generatedAt: string
   trigger: ChangeReport["trigger"]
+  /** A cloud report: its audit notes are worded for an email (see publicAuditNote). */
+  cloud?: boolean
   includeValues: boolean
   includeActors: boolean
 }
@@ -157,6 +161,7 @@ export function buildChangeReport(drift: DriftResult, audit: ReportAudit, option
     tenantName: options.tenantName,
     generatedAt: options.generatedAt,
     trigger: options.trigger,
+    ...(options.cloud ? { cloud: true as const } : {}),
     from: drift.baseline,
     to: drift.comparison,
     summary: {
@@ -169,7 +174,7 @@ export function buildChangeReport(drift: DriftResult, audit: ReportAudit, option
     items,
     otherActivity: other.slice(-MAX_OTHER_ACTIVITY),
     moreActivity: Math.max(0, other.length - MAX_OTHER_ACTIVITY),
-    audit: { status: "changes" in audit ? "included" : "unavailable", note: publicAuditNote("error" in audit ? audit.error : audit.note), actors: options.includeActors },
+    audit: { status: "changes" in audit ? "included" : "unavailable", note: publicAuditNote("error" in audit ? audit.error : audit.note, options.cloud), actors: options.includeActors },
     values: options.includeValues,
     warnings: drift.warnings.slice(0, 50).map((warning) => `${warning.file} (${warning.backup}): ${warning.message}`),
   }
@@ -245,12 +250,14 @@ const clip = (text: string) => (text.length > MAX_VALUE_LENGTH ? `${text.slice(0
  * An audit note fit to show and send: reports are emailed outside the organization, so a raw
  * Microsoft Graph error (proxy URLs, tenant IDs, the request filter) never belongs in one.
  * Notes written by current code are already plain sentences and pass through; a stored raw
- * error is replaced by what it means and what to do about it.
+ * error is replaced by what it means and what to do about it. A cloud report arrives by email,
+ * where nobody can generate it again: a throttled read is named without that advice.
  */
-export function publicAuditNote(note: string | null | undefined): string | null {
+export function publicAuditNote(note: string | null | undefined, cloud = false): string | null {
   if (!note) return null
   const text = note.replace(/\s+/g, " ").trim()
   if (!text) return null
+  if (cloud && /\b429\b|throttl/i.test(text)) return CLOUD_THROTTLED_NOTE
   const payload = /[{[]|Operation ID|"_version"|\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i.test(text)
   const raw = payload || text.length > 280 || /https?:\/\//.test(text)
   if (!raw) return text
@@ -260,6 +267,9 @@ export function publicAuditNote(note: string | null | undefined): string | null 
   const cleaned = text.replace(/https?:\/\/\S+/g, "").replace(/\s+/g, " ").trim()
   return cleaned.length > 240 ? `${cleaned.slice(0, 237).trimEnd()}...` : cleaned
 }
+
+/** Why a cloud report names no one when Graph throttled its audit log read. */
+export const CLOUD_THROTTLED_NOTE = "Microsoft Graph throttled the Intune audit log request."
 
 const CHANGE_LABELS: Record<ReportChange, string> = { added: "Added", modified: "Changed", deleted: "Deleted" }
 export const changeLabel = (change: ReportChange) => CHANGE_LABELS[change]
@@ -281,13 +291,19 @@ export function reportTitle(report: Pick<ChangeReport, "tenantName" | "from" | "
   return `Changes in ${report.tenantName}, ${from === to ? from : `${from} to ${to}`}`
 }
 
-/** One sentence: "3 changed, 1 added, 1 deleted; 4 of 5 with who made them." */
-export function summaryLine(report: Pick<ChangeReport, "summary" | "audit" | "items">): string {
+/**
+ * One sentence: "3 changed, 1 added, 1 deleted; 4 of 5 with who made them." With `reason`, as in
+ * the body of a cloud report's email, an unread audit log also says why, from the audit note.
+ */
+export function summaryLine(report: Pick<ChangeReport, "summary" | "audit" | "items" | "cloud">, options: { reason?: boolean } = {}): string {
   const { added, modified, deleted, attributed } = report.summary
   const total = added + modified + deleted
   if (total === 0) return "No changes between the two backups."
   const parts = [modified && `${modified} changed`, added && `${added} added`, deleted && `${deleted} deleted`].filter(Boolean).join(", ")
-  if (report.audit.status !== "included") return `${parts}. Who made them is unknown: the audit log could not be read.`
+  if (report.audit.status !== "included") {
+    const why = options.reason ? publicAuditNote(report.audit.note, report.cloud) : null
+    return why ? `${parts}. Who made them is unknown. ${why}` : `${parts}. Who made them is unknown: the audit log could not be read.`
+  }
   return `${parts}; ${attributed} of ${total} with matching audit events.`
 }
 
@@ -316,7 +332,7 @@ export function changeReportMarkdown(report: ChangeReport): string {
   lines.push(`- To backup: ${report.to.id} (${reportTime(report.to.timestamp)})`)
   lines.push(`- Generated: ${reportTime(report.generatedAt)}${report.trigger === "scheduled" ? " after a scheduled backup" : ""}`)
   lines.push(`- Summary: ${md(summaryLine(report))}`)
-  const auditNote = publicAuditNote(report.audit.note)
+  const auditNote = publicAuditNote(report.audit.note, report.cloud)
   if (auditNote) lines.push(`- Audit log: ${md(auditNote)}`)
   if (!report.values) lines.push("- Setting values are left out of this report.")
   lines.push("")
@@ -371,5 +387,5 @@ export function activityLine(event: ReportActivity): string {
 
 /** The report as JSON, with the audit note cleaned like every other export. */
 export function changeReportJson(report: ChangeReport): string {
-  return JSON.stringify({ ...report, audit: { ...report.audit, note: publicAuditNote(report.audit.note) } }, null, 2)
+  return JSON.stringify({ ...report, audit: { ...report.audit, note: publicAuditNote(report.audit.note, report.cloud) } }, null, 2)
 }

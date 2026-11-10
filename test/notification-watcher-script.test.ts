@@ -208,7 +208,7 @@ describe("Azure notification watcher scripts", () => {
     }
     // alerts.json wins over the variable, written by the app as pretty JSON with a byte order mark.
     const fromFile = run(`\ufeff${JSON.stringify(document, null, 2)}\n`, JSON.stringify(older))
-    expect(fromFile.heartbeat).toMatchObject({ alertsSource: "storage", alertsHash: watcherAlertsHash(document), runbookVersion: "1.4.0", lastError: null, identityPrincipalId: "33333333-3333-4333-8333-333333333333", jobId: "55555555-5555-4555-8555-555555555555" })
+    expect(fromFile.heartbeat).toMatchObject({ alertsSource: "storage", alertsHash: watcherAlertsHash(document), runbookVersion: "1.5.0", lastError: null, identityPrincipalId: "33333333-3333-4333-8333-333333333333", jobId: "55555555-5555-4555-8555-555555555555" })
     expect(fromFile.posts.map((post) => post.host)).toEqual(["hooks.example.test", "hooks.example.test"])
     expect(fromFile.posts.map((post) => post.title)).toEqual(["Intune change: TV-ALERTS-TEST compliance created", "Intune change: TV-ALERTS-TEST compliance updated"])
     // Without the file, a watcher set up earlier keeps the alerts of its setup.

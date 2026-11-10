@@ -1509,6 +1509,9 @@ function ConvertFrom-TenuVaultBackupOutcome {
     if (-not [DateTimeOffset]::TryParseExact($finishedRaw, $formats, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$finishedAt)) { return $null }
     $finished = $finishedAt.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", [Globalization.CultureInfo]::InvariantCulture)
     $failures = Get-TvNoteCount (Get-TvNoteField $Note "failures").Value
+    # Runbooks from 1.4.0 on say how the run started; a note without it, or with anything but
+    # "manual", counts as scheduled, as every note did before.
+    $trigger = (Get-TvNoteField $Note "trigger").Value
     $typeList = (Get-TvNoteField $Note "failedTypes").Value
     $failedTypes = @(@(if ($typeList -is [array]) { $typeList }) | Where-Object { $_ -is [string] -and $_ -cmatch '^[A-Za-z]{1,64}\z' } | Select-Object -First 10)
     return [pscustomobject][ordered]@{
@@ -1519,6 +1522,7 @@ function ConvertFrom-TenuVaultBackupOutcome {
         totalPolicies = Get-TvNoteCount (Get-TvNoteField $Note "totalPolicies").Value
         failures = if ($null -ne $failures) { $failures } else { 0 }
         failedTypes = $failedTypes
+        trigger = if ($trigger -is [string] -and $trigger -ceq "manual") { "manual" } else { "scheduled" }
     }
 }
 
@@ -1603,6 +1607,9 @@ function Read-TvBackupOutcomes {
     return [pscustomobject]@{ Envelopes = $envelopes; FailedFolders = $failedFolders; Processed = $processed; Ignored = $ignored; Expired = $expired; Error = $readError }
 }
 
+# Mirrors CLOUD_OUTCOME_TRIGGER: the Trigger detail of the alert.
+$script:TvOutcomeTrigger = @{ scheduled = "Cloud backup schedule"; manual = "Cloud backup, started by hand" }
+
 # Mirrors cloudOutcomeEvent.
 function New-TenuVaultCloudOutcomeEvent {
     param([Parameter(Mandatory)][object]$Outcome, [Parameter(Mandatory)][string]$TenantId, [object]$TenantName)
@@ -1610,7 +1617,7 @@ function New-TenuVaultCloudOutcomeEvent {
     return New-TenuVaultBackupEvent -TenantId $TenantId -TenantName $TenantName -Status $Outcome.status `
         -BackupFolder $Outcome.backupFolder -NaturalKey $key -OccurredAt $Outcome.finishedAt `
         -TotalPolicies $Outcome.totalPolicies -Failures $Outcome.failures -FailedTypes @($Outcome.failedTypes) `
-        -Trigger "Cloud backup schedule" -Message $script:TvOutcomeSummary[[string]$Outcome.status]
+        -Trigger $script:TvOutcomeTrigger[[string]$Outcome.trigger] -Message $script:TvOutcomeSummary[[string]$Outcome.status]
 }
 
 # ---------------------------------------------------------------------------
@@ -2809,7 +2816,7 @@ if ($LibraryOnly) { return }
 # ---------------------------------------------------------------------------
 
 $ErrorActionPreference = "Stop"
-$runbookVersion = "1.4.0"
+$runbookVersion = "1.5.0"
 $runAt = [DateTime]::UtcNow
 $runAtIso = ConvertTo-TvIso $runAt
 $eventsSent = 0

@@ -52,6 +52,7 @@ $variableNames = @(
 )
 $legacyKeyVaultVariable = "TenuVaultKeyVault-$tenantKey"
 $plainRunbookVersion = "1.2.0"
+$triggerRunbookVersion = "1.4.0"
 $oldRunbook = '$script:RunbookVersion = "1.1.0"'
 
 # Az.Automation reports a missing resource as this exception type, written as a non-terminating error.
@@ -215,6 +216,8 @@ foreach ($scenario in "approved", "outer-declined", "import-declined", "publish-
     try {
         $output = @(. $upgradeStep 6>&1)
         $output += @(Write-TenuVaultLegacyKeyVaultNote $legacyKeyVaults -KeptBecause $runbook.Reason 6>&1)
+        # The test run hint the summary prints once the schedule is linked.
+        $output += @(Write-TenuVaultTestRunHint -Runbook $runbook 6>&1)
     } catch { $errorText = $_.Exception.Message }
     $PSDefaultParameterValues = @{}
     Write-Scenario -Name $scenario -Runbook $runbook -ErrorText $errorText -Output $output

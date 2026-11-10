@@ -181,6 +181,8 @@ $variableNames = @(
 $legacyKeyVaultVariable = "TenuVaultKeyVault-$tenantKey"
 # The first runbook that writes plain backups and reads no Key Vault.
 $plainRunbookVersion = "1.2.0"
+# The first runbook with the TRIGGER parameter that records a run started by hand as Manual.
+$triggerRunbookVersion = "1.4.0"
 # A rerun without -ChangeReport or -ChangeReportWithoutActors keeps what an earlier setup chose,
 # so an upgrade with an older command never turns a report off or its actors back on.
 $changeReportPassed = $PSBoundParameters.ContainsKey("ChangeReport")
@@ -387,6 +389,26 @@ function Get-TenuVaultPublishedRunbookVersion {
         return $null
     } finally {
         Remove-Item -Path $folder -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# How to test the linked schedule now. TRIGGER exists from runbook $triggerRunbookVersion on: an older
+# published runbook (a declined or failed publish) has no such field in the portal's Start pane.
+function Write-TenuVaultTestRunHint {
+    param([Parameter(Mandatory)][object]$Runbook)
+    Write-Host ""
+    Write-Host "Test it now instead of waiting for the first night: in the Azure portal open the"
+    if ($Runbook.Version -and [version]$Runbook.Version -ge [version]$triggerRunbookVersion) {
+        Write-Host "Automation account, Runbooks > $runbookName > Start, set TENANTKEY to $tenantKey and"
+        Write-Host "TRIGGER to Manual, and watch the job output. The backup then appears in TenuVault under"
+        Write-Host "Backup History, marked Manual; without TRIGGER it is marked Scheduled like nightly runs."
+    } else {
+        $why = if ($Runbook.Version) { "the published runbook is version $($Runbook.Version), older than $triggerRunbookVersion" } else { "the published runbook could not be read back as $triggerRunbookVersion or later" }
+        Write-Host "Automation account, Runbooks > $runbookName > Start, set TENANTKEY to $tenantKey, and"
+        Write-Host "watch the job output. The backup then appears in TenuVault under Backup History, marked"
+        Write-Host "Scheduled: $why, so it has no TRIGGER to record a run started by hand."
+        Write-Host "Run this script again and let it publish the runbook; then a run started with TRIGGER set"
+        Write-Host "to Manual is recorded as Manual."
     }
 }
 
@@ -943,10 +965,7 @@ if (-not $linked) {
     Write-Host "or run it with -GrantGraphRoles as a Global Administrator:" -ForegroundColor Yellow
     foreach ($role in $graphRoleNames) { Write-Host "  * $role" -ForegroundColor Yellow }
 } else {
-    Write-Host ""
-    Write-Host "Test it now instead of waiting for the first night: in the Azure portal open the"
-    Write-Host "Automation account, Runbooks > $runbookName > Start, set TENANTKEY to $tenantKey, and"
-    Write-Host "watch the job output. The backup then appears in TenuVault under Backup History."
+    Write-TenuVaultTestRunHint -Runbook $runbook
 }
 
 Write-TenuVaultLegacyKeyVaultNote $legacyKeyVaults -KeptBecause $runbook.Reason
