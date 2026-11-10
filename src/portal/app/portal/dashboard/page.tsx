@@ -36,7 +36,7 @@ import DashboardEmptyState from "~/components/dashboard/empty-state/dashboard-em
 import { BarList, BigValue, Chip, Fact, RoundIconButton, Ring, Tile, TileIcon, TileLabel } from "~/components/dashboard/tiles"
 import { Alert, AlertDescription } from "~/components/ui/alert"
 import { bridge } from "@desktop/lib/bridge"
-import { planName, tenantLicense, tenantPlan, useLicense, formatDateTime } from "@desktop/lib/license"
+import { tenantPlanName, tenantLicense, tenantPlan, useLicense, formatDateTime } from "@desktop/lib/license"
 import { PlanBadge } from "@desktop/components/UpgradeNote"
 import type { Tenant } from "~/contexts/TenantContext"
 import { allows, type Plan } from "../../../../shared/plans"
@@ -570,7 +570,7 @@ function DashboardContent() {
           <Tile className="flex-1">
             <div className="flex items-start justify-between gap-3">
               <TileIcon icon={BadgeCheck} />
-              {license?.entitled ? <Chip tone="success">Licensed</Chip>
+              {license?.entitled ? <Chip tone="success">{license.trial ? "Pro trial" : "Licensed"}</Chip>
                 : license?.plan === "community" ? <Chip>Free plan</Chip>
                 : license ? <Chip tone="warning">Not licensed</Chip>
                 : <Chip>Not checked</Chip>}
@@ -578,11 +578,11 @@ function DashboardContent() {
             <TileLabel className="mt-6">License</TileLabel>
             {license?.entitled ? (
               <>
-                <BigValue className="mt-1">{planName(license.plan)}</BigValue>
+                <BigValue className="mt-1">{tenantPlanName(license)}</BigValue>
                 <p className="mt-1 text-sm text-gray-500">
-                  {license.source === "tenant" ? "Licensed through your organization" : "Licensed with this device's key"}
+                  {license.trial ? "Trial ends " + formatDateTime(license.trialEndsAt ?? license.validUntil ?? license.expiresAt!) : license.source === "tenant" ? "Licensed through your organization" : "Licensed with this device's key"}
                 </p>
-                {license.expiresAt && <p className="text-xs text-gray-500">Token valid until {formatDateTime(license.expiresAt)}</p>}
+                {license.expiresAt && !license.trial && <p className="text-xs text-gray-500">Token valid until {formatDateTime(license.expiresAt)}</p>}
               </>
             ) : license?.plan === "community" ? (
               <>

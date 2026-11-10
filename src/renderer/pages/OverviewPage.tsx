@@ -12,7 +12,7 @@ import { RunBackupDialog } from "../components/RunBackupDialog"
 import { UnreadableBackupsNotice } from "../components/UnreadableBackupsNotice"
 import { RecoveryKeyNotice } from "../components/RecoveryKeyNotice"
 import { bridge } from "../lib/bridge"
-import { formatDate, planName, tenantLicense, tenantPlan, useLicense } from "../lib/license"
+import { formatDate, planName, tenantPlanName, tenantLicense, tenantPlan, useLicense } from "../lib/license"
 import { localTenantIds, useBackupSettings, useLocalInventoryProblems } from "../lib/local-inventory"
 import { describeSchedule, formatWhen, useSchedules } from "../lib/schedules"
 import { toast } from "../lib/toast"
@@ -88,7 +88,7 @@ export default function OverviewPage() {
           <div>
             <p className="mt-3 text-4xl font-light tabular-nums">{tenants.length}</p>
             {status?.plan && status.tenantLimit !== null && (
-              <p className="mt-1 text-sm text-white/70">{`${planName(status.plan)} covers ${status.tenantLimit} tenant${status.tenantLimit === 1 ? "" : "s"}`}</p>
+              <p className="mt-1 text-sm text-white/70">{`${status.trial ? "Pro trial" : planName(status.plan)} covers ${status.tenantLimit} tenant${status.tenantLimit === 1 ? "" : "s"}`}</p>
             )}
           </div>
         </Tile>
@@ -138,7 +138,7 @@ export default function OverviewPage() {
                       <>
                         <BadgeCheck className="h-4 w-4 shrink-0 text-green-600" />
                         <span className="truncate">
-                          {license.source === "tenant" ? `Licensed through your organization (${planName(license.plan)})` : `Licensed, ${planName(license.plan)}`}
+                          {license.trial ? tenantPlanName(license) : license.source === "tenant" ? `Licensed through your organization (${planName(license.plan)})` : `Licensed, ${planName(license.plan)}`}
                         </span>
                       </>
                     ) : license?.plan === "community" ? (
@@ -163,8 +163,8 @@ export default function OverviewPage() {
                       </>
                     )}
                   </span>
-                  {license?.validUntil && (
-                    <p className="mt-1 text-xs text-gray-500">Valid until {formatDate(license.validUntil)}</p>
+                  {license?.entitled && license.validUntil && (
+                    <p className="mt-1 text-xs text-gray-500">{license.trial ? "Trial ends" : "Valid until"} {formatDate(license.validUntil)}</p>
                   )}
                 </Fact>
                 <Fact label="Storage">

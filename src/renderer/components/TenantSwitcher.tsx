@@ -9,7 +9,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "~/components/ui/dropdown-menu"
-import { tenantLicense, tenantPlan, useLicense } from "../lib/license"
+import { tenantLicense, tenantPlan, tenantPlanName, useLicense } from "../lib/license"
 
 /**
  * Picks the tenant every page works on, like the directory switcher in the Azure portal.
@@ -24,6 +24,9 @@ export function TenantSwitcher() {
     const license = tenantLicense(status, tenantId)
     return license !== undefined && tenantPlan(license) === null
   }
+
+  const currentLicense = tenantLicense(status, selectedTenant?.credentials?.tenantId)
+  const trialLabel = currentLicense?.entitled && currentLicense.trial ? tenantPlanName(currentLicense) : ""
 
   if (tenants.length === 0) {
     return (
@@ -43,8 +46,8 @@ export function TenantSwitcher() {
         <button
           type="button"
           className="flex w-full items-center gap-3 rounded-full bg-secondary py-1.5 pl-1.5 pr-3 text-left transition-colors hover:bg-accent"
-          aria-label={`Switch tenant. Current: ${selectedTenant?.name ?? "None"}, ${selectedTenant?.domain ?? ""}`}
-          title={`${selectedTenant?.name ?? "Choose a tenant"} ${selectedTenant?.domain ?? ""}`}
+          aria-label={`Switch tenant. Current: ${selectedTenant?.name ?? "None"}, ${selectedTenant?.domain ?? ""}${trialLabel ? `, ${trialLabel}` : ""}`}
+          title={`${selectedTenant?.name ?? "Choose a tenant"} ${selectedTenant?.domain ?? ""}${trialLabel ? `, ${trialLabel}` : ""}`}
         >
           <span className="flex size-9 flex-shrink-0 items-center justify-center rounded-full bg-card text-foreground">
             <Building2 className="h-4 w-4" />
@@ -54,7 +57,7 @@ export function TenantSwitcher() {
             {unlicensed(selectedTenant?.credentials?.tenantId) ? (
               <span className="block truncate text-xs text-amber-700">Not licensed</span>
             ) : (
-              <span className="block truncate text-xs text-gray-500">{selectedTenant?.domain || "Active tenant"}</span>
+              <span className="block truncate text-xs text-gray-500">{trialLabel || selectedTenant?.domain || "Active tenant"}</span>
             )}
           </span>
           <ChevronsUpDown className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
@@ -66,7 +69,7 @@ export function TenantSwitcher() {
           <DropdownMenuItem key={tenant.id} onSelect={() => setSelectedTenantId(tenant.id)}>
             <span className="min-w-0 flex-1">
               <span className="block truncate">{tenant.name}</span>
-              {tenant.domain && <span className="block truncate text-xs text-gray-500">{tenant.domain}</span>}
+              {tenant.domain && <span className="block truncate text-xs text-gray-500">{tenantLicense(status, tenant.credentials?.tenantId)?.trial ? "Pro trial" : tenant.domain}</span>}
             </span>
             {unlicensed(tenant.credentials?.tenantId) && (
               <AlertTriangle className="h-4 w-4 text-amber-600" aria-label="Not licensed" />

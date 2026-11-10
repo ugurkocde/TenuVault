@@ -42,7 +42,7 @@ function service() {
     idToken: async () => "header.payload.signature",
     clientId: () => "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
     fetch: (async (url: string | URL | Request, init?: RequestInit) => {
-      if (!init?.body) return Response.json({ tenantTrials: { enabled: true } })
+      if (!init?.body) return Response.json({ tenantTrials: { enabled: true, ok: true } })
       const call = { action: String(url).split("/").pop() ?? "", body: JSON.parse(String(init?.body)) as Record<string, unknown> }
       calls.push(call)
       return answer(call)

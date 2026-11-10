@@ -1,3 +1,4 @@
+import { licenseStatusHandler } from "./license/status"
 import { CommunityChoicePendingError, CommunityLimitError, withPlanError } from "../shared/plan-errors"
 import { licenseBuyUrl, licenseCheckoutUrl, trialCheckoutUrl } from "./license/buy-url"
 import { requestTrialKey } from "./license/trial"
@@ -1157,7 +1158,7 @@ async function bootstrap(): Promise<void> {
     if (email !== undefined && (typeof email !== "string" || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) throw new Error("Enter a valid email address.")
     return withStatus(() => license.tenantTrialAction(tenant, action, email as string | undefined))
   })
-  handleTrusted("license:status", async () => { await license.checkTrialHealth(); return currentLicenseStatus() })
+  handleTrusted("license:status", licenseStatusHandler(license, currentLicenseStatus))
   handleTrusted("license:refresh", () => withStatus(() => license.refreshAll()))
   handleTrusted("license:setKey", (_event, key: unknown) => {
     if (typeof key !== "string" || key.length > 256) throw new Error("Enter a valid license key.")

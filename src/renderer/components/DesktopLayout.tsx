@@ -1,4 +1,4 @@
-import { TenantTrialNotices, TrialChanges } from "./TenantTrial"
+import { TenantTrialNotices, TrialChanges, trialEndVisible } from "./TenantTrial"
 import { CommunityChoiceBanner } from "./CommunityTenantPicker"
 import { useEffect, useRef, useState, type ComponentType, type ReactNode, type RefObject } from "react"
 import { Link, Outlet, useLocation } from "react-router-dom"
@@ -128,12 +128,12 @@ function TrialBanner({ urgent, source, onDismiss, dismissing, children }: {
 }) {
   return (
     <div className="px-6 pt-5 lg:px-8">
-      <div role="status" className={cn("flex flex-wrap items-center gap-3 rounded-3xl py-2 pl-2 pr-2 text-sm font-medium", urgent ? "bg-amber-50 text-amber-900" : "bg-blue-50 text-gray-900")}>
+      <div role="status" className={cn("flex flex-wrap items-start gap-3 rounded-3xl p-3 text-sm font-medium", urgent ? "bg-amber-50 text-amber-900" : "bg-blue-50 text-gray-900")}>
         <span className={cn("flex size-9 flex-shrink-0 items-center justify-center rounded-full", urgent ? "bg-card text-amber-700" : "bg-coral-500 text-white")} aria-hidden="true">
           <Clock className="h-4 w-4" />
         </span>
-        <span className="min-w-0 flex-1">{children}</span>
-        <Button type="button" size="sm" onClick={() => void openCheckout(source)}>
+        <div className="min-w-0 basis-full sm:basis-72 flex-1">{children}</div>
+        <Button className="bg-coral-500 text-white hover:bg-coral-600" type="button" size="sm" onClick={() => void openCheckout(source)}>
           <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />
           Buy Pro
         </Button>
@@ -152,13 +152,12 @@ function TrialReminderBanner({ reminder, onDismiss, dismissing }: {
   onDismiss: () => void
   dismissing: boolean
 }) {
-  const { status } = useLicense()
   const final = reminder.stage === "day-27"
   const when = reminder.daysLeft === 1 ? "tomorrow" : `in ${reminder.daysLeft} days`
   return (
     <TrialBanner urgent={final} source={`trial-${reminder.stage}`} onDismiss={onDismiss} dismissing={dismissing}>
-      Your Pro trial ends {when}, on {formatDate(reminder.endsAt)}.{" "}
-      {status?.tenants.some(t => t.source === "trial") ? <TrialChanges /> : final
+      <p>Your Pro trial ends {when}, on {formatDate(reminder.endsAt)}.</p>
+      {reminder.tenantTrial ? <TrialChanges /> : final
         ? "Buy Pro now to keep daily backups, full restore and drift revert for both tenants."
         : "Buy Pro to keep daily backups, full restore and drift revert after the trial."}
     </TrialBanner>
@@ -335,6 +334,7 @@ function useOverflowing(ref: RefObject<HTMLElement | null>): boolean {
 }
 
 export function DesktopLayout() {
+  const { status: licenseStatus } = useLicense()
   const { pathname } = useLocation()
   const tenants = useTenants()
   useScoreInvalidation()
@@ -479,7 +479,7 @@ export function DesktopLayout() {
 
       <div className={focus ? undefined : "pl-64"}>
         <TenantTrialNotices />
-        <CommunityChoiceBanner />
+        {!trialEndVisible(licenseStatus) && <CommunityChoiceBanner />}
         {!focus && <LicenseBanner />}
         {!focus && <SignInBanner />}
         {[/portal\/backup/, /portal\/drift/, /portal\/audit/, /portal\/(governance|changes|operations|reports|alerts|sync)/].some(pattern => pattern.test(pathname)) && <TenantAccessNotice />}

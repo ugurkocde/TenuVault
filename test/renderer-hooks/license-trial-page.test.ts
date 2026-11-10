@@ -143,6 +143,10 @@ describe("License page trial", () => {
       tenants: [{ tenantId: "11111111-2222-4333-8444-555555555555", signedIn: true, activated: true, entitled: true, source: "trial", plan: "pro", tenants: 2, expiresAt: trialEndsAt, validUntil: trialEndsAt, trial: true, trialEndsAt, trialAcknowledged: true, shared: null, shareNeedsSignIn: false, displayKey: null, message: null }],
     })
     expect(container.textContent).toContain("1 is active on this machine")
+    expect(container.textContent).toContain("Pro trial")
+    expect(container.textContent).toContain("Trial ends")
+    expect(container.textContent).not.toContain("Active, Pro")
+    expect(container.textContent).not.toContain("Valid until")
     expect(container.textContent).toContain("Pro trial active")
     expect(container.textContent).not.toContain("Try Pro free for 30 days")
   })

@@ -39,7 +39,7 @@ import { TagManagementModal } from "~/components/tenants/tag-management-modal"
 import { useTenants, useTenantOperations, useTenantAzureSync, type Tenant } from "~/contexts/TenantContext"
 import { nameAfterRefresh } from "~/lib/tenant-refresh"
 import { useSchedules, formatWhen } from "@desktop/lib/schedules"
-import { planName, tenantLicense, tenantPlan, useLicense } from "@desktop/lib/license"
+import { tenantPlanName, tenantLicense, tenantPlan, useLicense } from "@desktop/lib/license"
 import { GatedButton } from "@desktop/components/PlanGate"
 import { PlanBadge } from "@desktop/components/UpgradeNote"
 import { allows, type Plan } from "../../../../shared/plans"
@@ -1351,8 +1351,9 @@ function TenantsPageContent() {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
                       {(() => {
-                        const plan = tenantPlan(tenantLicense(licenseStatus, tenant.credentials?.tenantId))
-                        return plan ? planName(plan) : <span className="text-gray-400">Not licensed</span>
+                        const license = tenantLicense(licenseStatus, tenant.credentials?.tenantId)
+                        const plan = tenantPlan(license)
+                        return plan && license ? tenantPlanName(license) : <span className="text-gray-400">Not licensed</span>
                       })()}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm">

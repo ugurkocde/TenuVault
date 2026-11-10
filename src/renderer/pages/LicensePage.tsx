@@ -31,7 +31,7 @@ import { useClipboardLicenseKey } from "../lib/clipboard-key"
 import { openCheckout } from "../lib/purchase"
 import { bridge } from "../lib/bridge"
 import { useConfirm } from "~/components/ConfirmDialog"
-import { formatDate, formatDateTime, hasPaidLicense, isUnlicensed, licensePageTitle, planName, trialDaysLeft, useLicense } from "../lib/license"
+import { formatDate, formatDateTime, hasPaidLicense, isUnlicensed, licensePageTitle, planName, tenantPlanName, trialDaysLeft, useLicense } from "../lib/license"
 
 type Busy = "activate" | "replace" | "deactivate" | `retry:${string}` | `share:${string}` | null
 
@@ -253,8 +253,8 @@ function TenantRow({
           <p className="truncate font-mono text-xs text-gray-500">{tenant.tenantId}</p>
         </div>
         {tenant.entitled ? (
-          <Badge variant="green">{organization ? `Active through your organization (${planName(tenant.plan)})` : `Active, ${planName(tenant.plan)}`}</Badge>
-        ) : tenant.plan === "community" ? (
+          <Badge variant="green">{tenant.trial ? tenantPlanName(tenant) : organization ? `Active through your organization (${planName(tenant.plan)})` : `Active, ${planName(tenant.plan)}`}</Badge>
+        ) : tenant.plan === "community" && !choicePending ? (
           <Badge variant="gray">Community (free)</Badge>
         ) : tenant.signedIn ? (
           <Badge variant="orange">Not active</Badge>
@@ -270,7 +270,7 @@ function TenantRow({
       </div>
       {tenant.entitled && tenant.expiresAt && (
         <p className="text-xs text-gray-500">
-          {tenant.validUntil ? `Valid until ${formatDate(tenant.validUntil)} · ` : ""}
+          {tenant.validUntil ? `${tenant.trial ? "Trial ends" : "Valid until"} ${formatDate(tenant.validUntil)} · ` : ""}
           Works offline until {formatDateTime(tenant.expiresAt)}
           {organization && tenant.displayKey ? ` · Organization license ${tenant.displayKey}` : ""}
         </p>
@@ -466,7 +466,7 @@ export default function LicensePage() {
                           : "Your organization license is not currently active. Sign in again and retry the license check below."}
               </CardDescription>
             </div>
-            {status.plan && <Badge variant="secondary">{planName(status.plan)}</Badge>}
+            {status.plan && <Badge variant="secondary">{status.trial ? "Pro trial" : planName(status.plan)}</Badge>}
           </div>
         </CardHeader>
         <CardContent className="space-y-5 px-7 pb-7">

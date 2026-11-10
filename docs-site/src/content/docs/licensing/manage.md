@@ -131,9 +131,9 @@ To use a different key while one is active, click **Use a different key** next t
 
 When enabled, a new connection starts a Pro trial without a card or email. Existing Community tenants can opt in on the License page. Joining from another installation keeps the tenant's original end date. Days remaining and the end date appear on the License page.
 
-Choose **Need more time? Extend 14 days** during the last five days or within fourteen days after expiry. You can extend once. Only the installation that started the trial offers **Use Community instead**; ending early uses up the trial.
+Choose **Need more time? Extend your trial** during the last five days or within fourteen days after expiry. You can extend once. Only the installation that started the trial offers **Use Community instead**; ending early uses up the trial.
 
-The optional email field sends nothing until you press **Email me setup tips and a reminder before the trial ends**. You can replace or remove the saved address. See the [privacy policy](https://www.tenuvault.com/privacy).
+The optional email field sends nothing until you press **Email me setup tips and a reminder before the trial ends**. You can change or remove the saved address in the app during the trial, or unsubscribe at any time using the link in each email. See the [privacy policy](https://www.tenuvault.com/privacy).
 
 At the end, backups and settings are kept. Community keeps thirty days of history, daily schedules run weekly, and Azure backups, alerts, health review and change reports pause. One tenant continues on Community. With several trial tenants, choose which, or decide later. Buy Pro and enter the purchase key to restore paid features and the saved daily schedule.
 

@@ -158,10 +158,10 @@ export function PlanContext({ tenantId, username }: { tenantId: string; username
   const name = plan === "msp" ? "MSP" : "Pro"
   return (
     <p className="flex items-center gap-3 rounded-3xl bg-green-50 px-5 py-3 text-sm text-green-900">
-      {status?.trial ? <Sparkles className="h-4 w-4 flex-shrink-0" aria-hidden="true" /> : <CheckCircle2 className="h-4 w-4 flex-shrink-0" aria-hidden="true" />}
+      {tenant?.trial ? <Sparkles className="h-4 w-4 flex-shrink-0" aria-hidden="true" /> : <CheckCircle2 className="h-4 w-4 flex-shrink-0" aria-hidden="true" />}
       {tenant?.source === "tenant"
         ? `This tenant uses ${name}, through the license your organization shares with it.`
-        : status?.trial ? `This tenant uses your ${name} trial.` : `This tenant uses ${name}.`}
+        : tenant?.trial ? `This tenant uses your ${name} trial.` : `This tenant uses ${name}.`}
     </p>
   )
 }

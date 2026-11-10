@@ -91,6 +91,7 @@ export interface SignedInAccount {
 export interface TenantLicenseStatus {
   trialEndsAt?: string | null
   canEnd?: boolean
+  trialRefusalPermanent?: boolean
   trialRefusal?: string
   trialAcknowledged?: boolean
   trialEmail?: string

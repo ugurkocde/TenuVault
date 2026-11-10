@@ -123,6 +123,7 @@ export class LicenseDenied extends Error {
   constructor(
     message: string,
     readonly reason: string,
+    readonly trialUnavailable = false,
   ) {
     super(message)
     this.name = "LicenseDenied"
@@ -317,8 +318,10 @@ function retryAfterMs(value: string | null): number | null {
 export class LicenseService {
   private state: StoredLicense | null = null
   private trialsEnabled = false
-  private trialsDisabled = false
   private healthCheckedAt = 0
+  private healthCheck: Promise<void> | null = null
+  private healthRetryAt = 0
+  private healthFailures = 0
   private trialRecords: Record<string, StoredTenantTrial> = {}
   private keyMutation: Promise<void> | null = null
   private readonly tenantMutations = new Map<string, Promise<void>>()
@@ -347,23 +350,81 @@ export class LicenseService {
     this.idToken = options.idToken ?? (async () => null)
     this.clientId = options.clientId ?? (() => null)
     this.trialRecords = readTenantTrials(options.store, options.initialTenantIds ?? options.connectedTenantIds?.() ?? [])
-    if (Object.keys(this.trialRecords).length) this.saveTrials()
+    if (options.initialTenantIds) {
+      const existing = new Set(options.initialTenantIds.map(id => id.toLowerCase()))
+      for (const id of Object.keys(this.trialRecords)) if (!existing.has(id)) delete this.trialRecords[id]
+    }
+    this.saveTrials()
   }
 
   private saveTrials(): void {
-    if (this.options.persist) this.options.store.set(TENANT_TRIAL_STATE_KEY, JSON.stringify(this.trialRecords))
+    if (!this.options.persist) return
+    if (Object.keys(this.trialRecords).length) this.options.store.set(TENANT_TRIAL_STATE_KEY, JSON.stringify(this.trialRecords))
+    else this.options.store.delete(TENANT_TRIAL_STATE_KEY)
   }
 
   async checkTrialHealth(): Promise<void> {
-    if (this.state?.key) return
-    if (this.healthCheckedAt && Date.now() - this.healthCheckedAt < COMMUNITY_RECHECK_MS) return
-    this.healthCheckedAt = Date.now()
-    try {
-      const response = await this.fetchImpl(`${this.options.apiBase}/api/desktop-license/health`, { signal: AbortSignal.timeout(10_000), redirect: "error" })
-      const data = await response.json()
-      this.trialsEnabled = response.ok && data?.tenantTrials?.enabled === true
-      this.trialsDisabled = response.ok && data?.tenantTrials?.enabled === false
-    } catch { this.trialsEnabled = false }
+    this.load()
+    if (this.state?.key || Object.values(this.state?.activations ?? {}).some(entry => entry.source !== "trial")) return
+    if (this.healthCheck) return this.healthCheck
+    if (Date.now() < this.healthRetryAt || (this.healthCheckedAt && Date.now() - this.healthCheckedAt < COMMUNITY_RECHECK_MS)) return
+    this.healthCheck = (async () => {
+      try {
+        const response = await this.fetchImpl(`${this.options.apiBase}/api/desktop-license/health`, { signal: AbortSignal.timeout(10_000), redirect: "error" })
+        const data = await response.json()
+        if (!response.ok || data?.tenantTrials?.ok !== true || typeof data.tenantTrials.enabled !== "boolean") throw new Error("Trial health is unavailable.")
+        this.trialsEnabled = data.tenantTrials.enabled === true
+        this.healthCheckedAt = Date.now()
+        this.healthRetryAt = 0
+        this.healthFailures = 0
+      } catch {
+        this.trialsEnabled = false
+        this.healthCheckedAt = 0
+        this.healthFailures++
+        this.healthRetryAt = Date.now() + Math.min(30 * 60_000, 2 * 60_000 * 2 ** Math.min(this.healthFailures - 1, 4))
+      }
+      this.options.onChange?.()
+      if (this.trialsEnabled) void this.retryPendingTrials()
+    })().finally(() => { this.healthCheck = null })
+    return this.healthCheck
+  }
+
+  private async retryPendingTrials(): Promise<void> {
+    for (const tenant of Object.keys(this.trialRecords)) {
+      if (this.tenantPresent(tenant) && this.trialRecords[tenant]?.firstConnectedAt && !this.trialRecords[tenant]?.stopped) {
+        await this.mutate([tenant], true, () => this.tryAutomaticTrial(tenant)).catch(() => undefined)
+      }
+    }
+  }
+
+  private clearTrialRefusal(tenant: string): void {
+    const record = this.trialRecords[tenant]
+    if (!record || ["used", "install_limit"].includes(record.refusalReason ?? "")) return
+    delete record.refusal
+    delete record.refusalReason
+    delete record.refusalAt
+    delete record.refusalVersion
+  }
+
+  private trialRefusal(tenant: string): string | undefined {
+    const record = this.trialRecords[tenant]
+    if (!record?.refusal) return undefined
+    if (!["used", "install_limit"].includes(record.refusalReason ?? "") &&
+      (record.refusalVersion !== this.options.appVersion || Date.now() - (record.refusalAt ?? 0) >= COMMUNITY_RECHECK_MS)) {
+      this.clearTrialRefusal(tenant)
+      this.saveTrials()
+    }
+    return record.refusal
+  }
+
+  private pruneTrialContacts(): void {
+    let changed = false
+    for (const record of Object.values(this.trialRecords)) {
+      const payload = record.token ? decodeToken(record.token, this.publicKeys) : null
+      const end = record.endedAt ?? record.trialEndsAt ?? (payload?.keyExp ? payload.keyExp * 1000 : undefined)
+      if (record.email && end !== undefined && Date.now() > end + 14 * 86400_000) { delete record.email; changed = true }
+    }
+    if (changed) this.saveTrials()
   }
 
   private trialEnd(tenant: string): string | null {
@@ -376,21 +437,21 @@ export class LicenseService {
     const record = this.trialRecords[tenant]
     const end = this.trialEnd(tenant)
     const remaining = end ? Date.parse(end) - Date.now() : NaN
-    return Boolean(record?.activationId && !record.extended && !record.endedAt && !this.state?.key &&
+    return Boolean(record?.activationId && !record.extended && !record.endedAt &&
       (!this.state?.activations[tenant] || this.state.activations[tenant]?.source === "trial") && remaining <= 5 * 86400_000 && remaining >= -14 * 86400_000)
   }
 
   private rememberTrial(tenant: string, data: Record<string, unknown>): void {
-    this.trialRecords[tenant] = { ...this.trialRecords[tenant], stopped: true, activationId: String(data.activationId), token: String(data.token), canEnd: data.canEnd === true }
+    this.trialRecords[tenant] = { ...this.trialRecords[tenant], stopped: true, trialEndsAt: Number(data.keyExp) * 1000, activationId: String(data.activationId), token: String(data.token), canEnd: data.canEnd === true }
     this.saveTrials()
     this.community.delete(tenant)
   }
 
   private async tryAutomaticTrial(tenant: string): Promise<void> {
     const record = this.trialRecords[tenant]
-    if (!record?.firstConnectedAt || record.stopped || Date.now() - record.firstConnectedAt > 72 * 3600_000) return
+    if (!record?.firstConnectedAt || record.stopped) return
+    if (Date.now() - record.firstConnectedAt > 72 * 3600_000) { record.stopped = true; this.saveTrials(); return }
     if (this.state?.key || this.state?.activations[tenant]) { record.stopped = true; this.saveTrials(); return }
-    if (this.trialsDisabled) { record.stopped = true; this.saveTrials(); return }
     if (record.lastAttemptAt && Date.now() - record.lastAttemptAt < FAILURE_COOLDOWN_MS) return
     if (this.trialsEnabled) {
       record.lastAttemptAt = Date.now()
@@ -412,8 +473,8 @@ export class LicenseService {
     const tenant = tenantId.toLowerCase()
     return this.mutate([tenant], true, async () => {
       await this.checkTrialHealth()
-      if (!this.trialsEnabled) return
-      if (this.state?.key || this.state?.activations[tenant]) return
+      if (!this.trialsEnabled) throw new Error("Tenant trials are currently unavailable. Try again later.")
+      if (this.state?.key || this.state?.activations[tenant]) throw new Error("Check the saved license before starting a trial.")
       try { await this.activateTenant(tenant); return } catch (error) {
         if (!(error instanceof LicenseDenied) || error.reason !== "tenant_not_licensed") throw error
       }
@@ -434,8 +495,12 @@ export class LicenseService {
       this.rememberTrial(tenant, data)
     } catch (error) {
       if (error instanceof LicenseDenied) {
-        this.trialRecords[tenant] = { ...this.trialRecords[tenant], stopped: true, refusal: error.message }
-        if (["disabled", "app_update_required", "unknown_action"].includes(error.reason)) this.trialsEnabled = false
+        this.trialRecords[tenant] = { ...this.trialRecords[tenant], stopped: ["used", "licensed", "install_limit"].includes(error.reason), refusal: error.message, refusalReason: error.reason, refusalAt: Date.now(), refusalVersion: this.options.appVersion }
+        if (["disabled", "app_update_required", "unknown_action"].includes(error.reason)) {
+          this.trialsEnabled = false
+          this.healthCheckedAt = 0
+          this.healthRetryAt = Date.now() + 2 * 60_000
+        }
         this.saveTrials()
       }
       if (source === "opt-in") throw error
@@ -453,11 +518,10 @@ export class LicenseService {
       if (action === "extend_trial" && !this.canExtendTrial(tenant)) throw new Error("This trial cannot be extended now.")
       const current = this.requestGuard(tenant)
       try {
-        const data = await this.tenantCall(tenant, action, current, { activationId: record.activationId, token: record.token ?? "" }, undefined, email === undefined ? {} : { email })
+        const data = await this.tenantCall(tenant, action, current, { activationId: record.activationId }, undefined, email === undefined ? {} : { email })
         if (action === "extend_trial") {
           this.accept(tenant, data, "trial")
           this.rememberTrial(tenant, data)
-          record.extended = true
           this.trialRecords[tenant]!.extended = true
         } else if (action === "end_trial") {
           this.confirmCommunity(tenant)
@@ -470,7 +534,11 @@ export class LicenseService {
           try { this.useCommunity(tenant) } catch (error) { if (!(error instanceof CommunityChoicePendingError) && !(error instanceof CommunityLimitError)) throw error }
         } else record.email = email
       } catch (error) {
-        if (action === "extend_trial" && error instanceof LicenseDenied) { record.extended = true; this.saveTrials() }
+        if (action === "extend_trial" && error instanceof LicenseDenied && error.trialUnavailable) {
+          record.extended = true
+          this.saveTrials()
+          throw new Error("This trial cannot be extended.")
+        }
         throw error
       } finally { this.saveTrials(); this.options.onChange?.() }
     })
@@ -745,7 +813,7 @@ export class LicenseService {
     }
     if (trialAction && response.status === 403 && result.error === "trial_unavailable") {
       const reason = typeof result.reason === "string" ? result.reason : "unavailable"
-      throw new LicenseDenied(TRIAL_REASONS[reason] ?? "A Pro trial is unavailable for this tenant.", reason)
+      throw new LicenseDenied(TRIAL_REASONS[reason] ?? "A Pro trial is unavailable for this tenant.", reason, true)
     }
     const deactivating = action === "deactivate" || (action === "tenant" && ["deactivate", "end_trial", "trial_contact"].includes(String((body as Record<string, unknown>).action)))
     const validSuccess = deactivating
@@ -840,11 +908,14 @@ export class LicenseService {
       throw new Error(this.problemOf(tenantId, data.token, data.activationId))
     }
     this.message = null
+    this.clearTrialRefusal(tenantId)
     const previousTrial = this.trialRecords[tenantId]
     if (source !== "trial" && previousTrial?.activationId) {
+      previousTrial.trialEndsAt ??= previousTrial.token ? (decodeToken(previousTrial.token, this.publicKeys)?.keyExp ?? 0) * 1000 : undefined
       delete previousTrial.token
       delete previousTrial.activationId
       previousTrial.refusal = TRIAL_REASONS.used
+      previousTrial.refusalReason = "used"
       previousTrial.stopped = true
       this.saveTrials()
     }
@@ -887,7 +958,7 @@ export class LicenseService {
     tenantId: string,
     action: "activate" | "refresh" | "deactivate" | "start_trial" | "extend_trial" | "end_trial" | "trial_contact",
     current: () => boolean,
-    entry?: StoredActivation,
+    entry?: Pick<StoredActivation, "activationId" | "licenseKeyId">,
     token?: string,
     extra: Record<string, unknown> = {},
   ): Promise<Record<string, unknown>> {
@@ -948,12 +1019,24 @@ export class LicenseService {
   // stop; otherwise the last confirmed choice is sent again, or nothing so the service
   // applies the plan's default. A tenant activation without an ID token keeps its cached
   // token until it expires.
+  private async replaceTrialWithKey(tenant: string): Promise<boolean> {
+    if (!this.state?.key || this.state.activations[tenant]?.source !== "trial") return false
+    const keyTokens = Object.entries(this.state.activations).filter(([, entry]) => !entry.source).map(([id]) => this.valid(id)).filter((payload): payload is Entitlement => payload !== null)
+    const latest = keyTokens.sort((a, b) => b.iat - a.iat)[0]
+    if (latest && keyTokens.length >= latest.tenants) return false
+    try { await this.activate(tenant); return true } catch (error) {
+      if (error instanceof StaleLicenseRequest) throw error
+      return false
+    }
+  }
+
   private async refreshCurrent(tenantId: string, share?: boolean): Promise<void> {
     const entry = this.state?.activations[tenantId]
     if (!this.state || !entry) return
     const current = this.requestGuard(tenantId)
     const key = this.state.key
     try {
+      if (entry.source === "trial" && await this.replaceTrialWithKey(tenantId)) return
       if (entry.source === "tenant" || entry.source === "trial") {
         const idToken = await this.idToken(tenantId)
         this.assertCurrent(current)
@@ -989,6 +1072,8 @@ export class LicenseService {
         if (LAPSED.has(error.reason)) this.confirmCommunity(tenantId)
         if (!entry.source) this.state.keyFailure = error.reason
         delete this.state.activations[tenantId]
+        this.clearTrialRefusal(tenantId)
+        this.saveTrials()
         this.save()
       }
       this.messages.set(tenantId, errorText(error))
@@ -1001,7 +1086,7 @@ export class LicenseService {
     this.load()
     for (const tenantId of Object.keys(this.state?.activations ?? {})) this.coverageEndedAt(tenantId)
     const key = this.state?.key
-    const entries = Object.entries(this.state?.activations ?? {})
+    const entries = Object.entries(this.state?.activations ?? {}).sort(([, a], [, b]) => Number(a.source === "trial") - Number(b.source === "trial"))
     for (const [tenantId, entry] of entries) {
       await this.mutate([tenantId], Boolean(key) || entry.source !== "tenant", async () => {
         this.assertCurrent(() => key === this.state?.key && this.tenantPresent(tenantId))
@@ -1017,9 +1102,11 @@ export class LicenseService {
     // After the refreshes, and outside the key mutation: releasing a replaced key's activations
     // must never hold up license checks of the tenants in use.
     await this.releasePrevious()
-    await this.checkTrialHealth()
-    for (const tenant of Object.keys(this.trialRecords)) {
-      if (this.tenantPresent(tenant)) await this.mutate([tenant], true, () => this.tryAutomaticTrial(tenant)).catch(() => undefined)
+    this.pruneTrialContacts()
+    const pendingTrials = Object.keys(this.trialRecords).filter(tenant => this.trialRecords[tenant]?.firstConnectedAt && !this.trialRecords[tenant]?.stopped && this.tenantPresent(tenant))
+    if (pendingTrials.length) {
+      void this.checkTrialHealth().catch(() => undefined)
+      await this.retryPendingTrials()
     }
     this.options.onChange?.()
   }
@@ -1089,6 +1176,9 @@ export class LicenseService {
           }
         }
       }
+      for (const tenant of Object.keys(this.state.activations).filter(id => this.state?.activations[id]?.source === "trial" && !targets.includes(id))) {
+        if (await this.replaceTrialWithKey(tenant)) activated++
+      }
       if (targets.length > 0 && activated === 0) {
         const keyFailure = this.state.keyFailure
         this.assertCurrent(() => this.state?.key === trimmed)
@@ -1101,7 +1191,7 @@ export class LicenseService {
         throw firstError
       }
       this.assertCurrent(() => this.state?.key === trimmed)
-      this.message = tenantIds.length === 0 ? "Sign in to a tenant to activate the license for it." : null
+      this.message = tenantIds.length === 0 && activated === 0 ? "Sign in to a tenant to activate the license for it." : null
       this.save()
     })
   }
@@ -1194,7 +1284,7 @@ export class LicenseService {
       // failed write before the save leaves the previous key and all of its activations in
       // place; after it, the new key is saved and the release is retried on the next refresh.
       // Organization license activations do not depend on the key and stay.
-      const activations = Object.fromEntries(Object.entries(previous.activations).filter(([, entry]) => entry.source === "tenant"))
+      const activations = Object.fromEntries(Object.entries(previous.activations).filter(([, entry]) => (entry.source === "tenant" || entry.source === "trial")))
       // Releases still pending from earlier replacements are kept, so a key replaced twice before
       // its activations could be released is still released later.
       const release = [
@@ -1238,6 +1328,7 @@ export class LicenseService {
         })
       }
       await this.releasePrevious()
+      for (const tenant of Object.keys(this.state?.activations ?? {})) await this.replaceTrialWithKey(tenant)
     })
   }
 
@@ -1354,7 +1445,7 @@ export class LicenseService {
         this.trialRecords[tenant] = { firstConnectedAt: Date.now(), stopped: Boolean(this.state?.key || this.state?.activations[tenant] || this.options.store.get(COMMUNITY_KEY) === tenant) }
         this.saveTrials()
       }
-      await this.checkTrialHealth()
+      void this.checkTrialHealth().catch(() => undefined)
       await this.tryAutomaticTrial(tenant)
       return this.requireCurrent(tenant, options)
     })
@@ -1372,7 +1463,7 @@ export class LicenseService {
       this.community.delete(tenant)
     }
     if (this.trialRecords[tenant]?.firstConnectedAt && !this.trialRecords[tenant]?.stopped) {
-      await this.checkTrialHealth()
+      void this.checkTrialHealth().catch(() => undefined)
       await this.tryAutomaticTrial(tenant)
       const started = this.valid(tenant)
       if (started) return started.plan
@@ -1588,6 +1679,8 @@ export class LicenseService {
     return this.mutate([tenant], false, async () => {
       this.messages.delete(tenant)
       this.failures.delete(tenant)
+      delete this.trialRecords[tenant]
+      this.saveTrials()
       this.community.delete(tenant)
       if (this.communityEligibility.delete(tenant)) this.persistCommunityEligibility()
       // Removing the Community tenant frees the free plan for another tenant.
@@ -1623,7 +1716,7 @@ export class LicenseService {
   async deactivate(): Promise<void> {
     this.load()
     return this.mutate([...this.tenantMutations.keys(), ...Object.keys(this.state?.activations ?? {})], true, async () => {
-      if (!this.state) return
+      if (!this.state) { this.trialRecords = {}; this.saveTrials(); this.options.onChange?.(); return }
       // A replaced key's activations are released first. One that cannot be released keeps the
       // machine's state, its record included, so the release is not forgotten.
       await this.releasePrevious()
@@ -1656,6 +1749,8 @@ export class LicenseService {
         throw failure
       }
       this.state = null
+      this.trialRecords = {}
+      this.saveTrials()
       this.message = null
       this.messages.clear()
       this.failures.clear()
@@ -1733,6 +1828,7 @@ export class LicenseService {
   /** The license state for the signed-in tenants plus every tenant with a stored activation. */
   status(signedInTenantIds: string[]): LicenseStatus {
     this.load()
+    this.pruneTrialContacts()
     const signedIn = new Set(signedInTenantIds.map((id) => id.toLowerCase()))
     const tenantIds = [...new Set([...signedIn, ...Object.keys(this.state?.activations ?? {})])]
     const communityTenant = this.options.store.get(COMMUNITY_KEY)
@@ -1767,7 +1863,8 @@ export class LicenseService {
         trial: tenantTrial,
         trialEndsAt: tenantTrial ? tenantValidUntil : !payload ? this.trialEnd(tenantId) : null,
         canEnd: entry?.source === "trial" && entry.canEnd === true,
-        trialRefusal: this.trialRecords[tenantId]?.refusal ?? (!payload && this.trialRecords[tenantId]?.activationId && Date.parse(this.trialEnd(tenantId) ?? "") <= Date.now() ? TRIAL_REASONS.used : undefined),
+        trialRefusalPermanent: ["used", "install_limit"].includes(this.trialRecords[tenantId]?.refusalReason ?? "") || Boolean(!payload && this.trialRecords[tenantId]?.activationId && Date.parse(this.trialEnd(tenantId) ?? "") <= Date.now()),
+        trialRefusal: this.trialRefusal(tenantId) ?? (!payload && this.trialRecords[tenantId]?.activationId && Date.parse(this.trialEnd(tenantId) ?? "") <= Date.now() ? TRIAL_REASONS.used : undefined),
         trialAcknowledged: tenantTrial ? this.trialRecords[tenantId]?.acknowledged : this.trialRecords[tenantId]?.endedAcknowledged,
         trialEmail: this.trialRecords[tenantId]?.email,
         trialCanExtend: this.canExtendTrial(tenantId),
