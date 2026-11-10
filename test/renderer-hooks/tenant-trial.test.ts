@@ -4,11 +4,12 @@ import { MemoryRouter } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { LicenseStatus, TenantLicenseStatus } from "../../src/shared/ipc"
 import { licenseChipState, trialReminder } from "../../src/renderer/lib/license"
-const state = vi.hoisted(() => ({ status: null as LicenseStatus | null, action: vi.fn(async () => undefined), start: vi.fn(async () => undefined), emailTrial: vi.fn(async () => undefined), update: vi.fn(), open: vi.fn(async () => undefined), refresh: vi.fn(async () => undefined) }))
+const state = vi.hoisted(() => ({ status: null as LicenseStatus | null, action: vi.fn(async () => undefined), start: vi.fn(async () => undefined), emailTrial: vi.fn(async () => undefined), update: vi.fn(), open: vi.fn(async () => undefined), configured: vi.fn(async () => true), usage: vi.fn(async (): Promise<string | null> => null), refresh: vi.fn(async () => undefined) }))
 vi.mock("../../src/renderer/lib/license", async original => ({ ...(await original<typeof import("../../src/renderer/lib/license")>()), useLicense: () => ({ status: state.status, refresh: state.refresh }) }))
-vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { auth: { accounts: async () => [{ tenantId: "tenant", username: "admin@contoso.example" }] }, license: { tenantTrialAction: state.action, startTenantTrial: state.start, startTrial: state.emailTrial, open: state.open }, schedules: { list: async () => [{ tenantId: "tenant", enabled: true, frequency: "daily" }] }, preferences: { get: async () => ({ retentionDays: 90 }) } } }))
+vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { app: { openExternal: state.open }, auth: { accounts: async () => [{ tenantId: "tenant", username: "admin@contoso.example" }] }, license: { trialWorkflowsConfigured: state.configured, trialUsage: state.usage, tenantTrialAction: state.action, startTenantTrial: state.start, startTrial: state.emailTrial, open: state.open }, schedules: { list: async () => [{ tenantId: "tenant", enabled: true, frequency: "daily" }] }, preferences: { get: async () => ({ retentionDays: 90 }) } } }))
 vi.mock("~/contexts/TenantContext", () => ({ useTenantOperations: () => ({ updateTenant: state.update }), useTenants: () => [{ id: 1, name: "Contoso", credentials: { tenantId: "tenant" }, resources: { storageAccountName: "contosobackups" } }, { id: 2, name: "Fabrikam", credentials: { tenantId: "ended" } }] }))
-import { TenantTrialCard, TenantTrialNotices, TenantTrialOptions, TrialChanges } from "../../src/renderer/components/TenantTrial"
+import { TenantTrialCard, TenantTrialNotices, TenantTrialOptions, TrialActions, TrialChanges } from "../../src/renderer/components/TenantTrial"
+import { TrialReminderBanner } from "../../src/renderer/components/DesktopLayout"
 import { TrialOrKey } from "../../src/renderer/components/PlanChoice"
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 let root: Root
@@ -16,6 +17,8 @@ let container: HTMLDivElement
 const day = 86400_000
 let tenant: TenantLicenseStatus
 beforeEach(() => {
+  state.configured.mockReset().mockResolvedValue(true)
+  state.usage.mockReset().mockResolvedValue(null)
   state.action.mockReset().mockResolvedValue(undefined)
   state.start.mockReset().mockResolvedValue(undefined)
   state.open.mockReset().mockResolvedValue(undefined)
@@ -43,11 +46,11 @@ describe("tenant trial UI", () => {
     expect([...container.querySelectorAll("button")].find(b => b.textContent === label)?.disabled).toBe(false)
   })
   it.each([
-    ["Got it", "acknowledge"], ["Use Community instead", "end_trial"], ["Need more time? Extend your trial", "extend_trial"],
+    ["Got it", "acknowledge"], ["Use Community instead", "end_trial"], ["Extend your trial", "extend_trial"],
   ] as const)("handles a rejected %s action and a rejected refresh", async (label, action) => {
     state.action.mockRejectedValueOnce(new Error("Trial action failed"))
     state.refresh.mockRejectedValueOnce(new Error("Status refresh failed"))
-    await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+    await render(createElement(TenantTrialCard, { tenant, welcome: action !== "extend_trial" }))
     await click(label)
     expect(state.action).toHaveBeenCalledWith("tenant", action)
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("Trial action failed")
@@ -144,7 +147,7 @@ describe("tenant trial UI", () => {
   })
   it("extends explicitly", async () => {
     await render(createElement(TenantTrialCard, { tenant }))
-    await click("Need more time? Extend your trial")
+    await click("Extend your trial")
     expect(state.action).toHaveBeenCalledWith("tenant", "extend_trial")
   })
   it.each([5, 1])("has the %s-day reminder and computed changes", async days => {
@@ -253,7 +256,7 @@ describe("tenant trial UI", () => {
     const nextEnd = new Date(Date.now() + 23 * day).toISOString()
     state.action.mockResolvedValueOnce({ ...state.status, tenants: [{ ...tenant, trialEndsAt: nextEnd }] } as never)
     await render(createElement(TenantTrialCard, { tenant }))
-    await click("Need more time? Extend your trial")
+    await click("Extend your trial")
     expect(container.textContent).toContain("Trial extended. Ends on")
     expect(container.textContent).toContain(new Date(nextEnd).toLocaleDateString(undefined, { dateStyle: "medium" }))
   })
@@ -264,4 +267,140 @@ describe("tenant trial UI", () => {
     expect(licenseChipState(state.status).label).toBe("Pro trial · 4 days")
   })
 
+})
+
+describe("shared trial actions", () => {
+  it.each([undefined, 12])("orders purchase, extension and contact with length %s", async length => {
+    state.status!.tenantTrialPolicy = { extensionDays: length }
+    await render(createElement(TrialActions, { tenant, source: "trial-test" }))
+    const text = container.textContent!
+    const label = length ? `Extend trial by ${length} days` : "Extend your trial"
+    expect(text.indexOf("Buy Pro")).toBeLessThan(text.indexOf(label))
+    expect(text.indexOf(label)).toBeLessThan(text.indexOf("Questions,"))
+    const link = container.querySelector<HTMLAnchorElement>('a[href^="mailto:"]')!
+    expect(link.getAttribute("href")).toBe("mailto:support@tenuvault.com?subject=TenuVault%20Pro%3A%20quote%20or%20invoice")
+    expect(link.href).not.toContain("body=")
+    expect(link.href).not.toContain("contoso")
+    await act(async () => link.click())
+    expect(state.open).toHaveBeenCalledWith(link.getAttribute("href"))
+  })
+  it("shows availability before the window, and hides it once used or refused", async () => {
+    tenant.trialCanExtend = false
+    tenant.trialExtensionAvailableAt = new Date(Date.now() + day).toISOString()
+    await render(createElement(TrialActions, { tenant, source: "trial-test" }))
+    expect(container.textContent).toContain("You can extend once, from")
+    expect(container.textContent).not.toContain("Extend your trial")
+    delete tenant.trialExtensionAvailableAt
+    tenant.trialExtensionUnavailable = true
+    await render(createElement(TrialActions, { tenant, source: "trial-test" }))
+    expect(container.textContent).not.toContain("extend")
+    expect(container.textContent).toContain("Buy Pro")
+    expect(container.textContent).toContain("Questions,")
+  })
+  it("keeps the start card focused on Got it with contact and availability", async () => {
+    tenant.trialCanExtend = false
+    tenant.trialExtensionAvailableAt = new Date(Date.now() + day).toISOString()
+    await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+    expect(container.textContent).toContain("Got it")
+    expect(container.textContent).toContain("Questions,")
+    expect(container.textContent).toContain("You can extend once, from")
+    expect(container.textContent).not.toContain("Buy Pro")
+  })
+})
+
+it.each([5, 1])("offers ordered actions in the %s day banner", async days => {
+  tenant.trialEndsAt = new Date(Date.now() + days * day).toISOString()
+  const reminder = trialReminder(state.status!, undefined)!
+  await render(createElement(TrialReminderBanner, { reminder, onDismiss: vi.fn(), dismissing: false }))
+  const text = container.textContent!
+  expect(text.indexOf("Buy Pro")).toBeLessThan(text.indexOf("Extend your trial"))
+  expect(text.indexOf("Extend your trial")).toBeLessThan(text.indexOf("Questions,"))
+  expect(text).toContain("Details")
+  expect(text).toContain("Dismiss")
+})
+
+it.each(["reminder", "ended", "license", "welcome", "empty", "unreadable"])("shows local usage only on the %s notice when available", async place => {
+  state.usage.mockResolvedValue("During your trial: 2 CIS Benchmarks assessments.")
+  if (place === "empty") state.usage.mockResolvedValue(null)
+  if (place === "unreadable") state.usage.mockRejectedValue(new Error("Unreadable"))
+  if (place === "ended") { tenant.trial = false; tenant.entitled = false; tenant.source = null; tenant.trialEndsAt = new Date(Date.now() - day).toISOString() }
+  if (place === "reminder") await render(createElement(TrialReminderBanner, { reminder: trialReminder(state.status!, undefined)!, onDismiss: vi.fn(), dismissing: false }))
+  else if (place === "ended") await render(createElement(TenantTrialNotices))
+  else await render(createElement(TenantTrialCard, { tenant, welcome: place === "welcome" }))
+  expect(container.textContent!.includes("During your trial:")).toBe(!["welcome", "empty", "unreadable"].includes(place))
+  if (place === "welcome") expect(state.usage).not.toHaveBeenCalled()
+})
+
+it.each(["license", "welcome", "ended", "reminder"])("keeps the existing %s interface while tenant trials are off", async place => {
+  state.status!.tenantTrialsEnabled = false
+  if (place === "ended") { tenant.trial = false; tenant.entitled = false; tenant.source = null; tenant.trialEndsAt = new Date(Date.now() - day).toISOString() }
+  if (place === "reminder") await render(createElement(TrialReminderBanner, { reminder: trialReminder(state.status!, undefined)!, onDismiss: vi.fn(), dismissing: false }))
+  else if (place === "ended") await render(createElement(TenantTrialNotices))
+  else await render(createElement(TenantTrialCard, { tenant, welcome: place === "welcome" }))
+  expect(container.textContent).not.toContain("Questions, or need a quote")
+  expect(state.usage).not.toHaveBeenCalled()
+  if (place !== "reminder") expect(container.textContent).toContain("Need more time? Extend your trial")
+})
+
+
+it("keeps the next tenant's reminder extension available after extending the first", async () => {
+  const props = () => ({ reminder: trialReminder(state.status!, undefined)!, onDismiss: vi.fn(), dismissing: false })
+  await render(createElement(TrialReminderBanner, props()))
+  await click("Extend your trial")
+  expect(container.textContent).toContain("Trial extended.")
+  tenant = { ...tenant, tenantId: "second" }
+  state.status!.tenants = [tenant]
+  await render(createElement(TrialReminderBanner, props()))
+  expect(container.textContent).toContain("Extend your trial")
+  expect(container.textContent).not.toContain("Trial extended.")
+  await click("Extend your trial")
+  expect(state.action).toHaveBeenLastCalledWith("second", "extend_trial")
+})
+
+it.each([true, false])("shows configured workflow changes with trials enabled %s", async enabled => {
+  state.status!.tenantTrialsEnabled = enabled
+  await render(createElement(TrialChanges, { tenantId: tenant.tenantId }))
+  expect(container.textContent).toContain("Alerts, health review and change reports pause.")
+  state.configured.mockResolvedValue(false)
+  state.status = { ...state.status! }
+  await render(createElement(TrialChanges, { tenantId: tenant.tenantId }))
+  expect(state.configured).toHaveBeenCalledTimes(1)
+  expect(container.textContent).toContain("Alerts, health review and change reports pause.")
+  state.status.tenants = [{ ...tenant, tenantId: "second" }]
+  await render(createElement(TrialChanges, { tenantId: "second" }))
+  expect(state.configured).toHaveBeenCalledTimes(2)
+  expect(state.configured).toHaveBeenLastCalledWith("second")
+  expect(container.textContent).not.toContain("Alerts, health review and change reports pause.")
+})
+it("hides unreadable workflow configuration", async () => {
+  state.configured.mockRejectedValue(new Error("Store unavailable"))
+  await render(createElement(TrialChanges, { tenantId: tenant.tenantId }))
+  expect(container.textContent).not.toContain("Alerts, health review and change reports pause.")
+})
+it("only shows extension progress for the extension action", async () => {
+  let finish!: () => void
+  state.open.mockImplementationOnce(() => new Promise<undefined>(resolve => { finish = () => resolve(undefined) }))
+  await render(createElement(TrialActions, { tenant, source: "trial-test" }))
+  await act(async () => [...container.querySelectorAll("button")].find(b => b.textContent === "Buy Pro")!.click())
+  expect(container.textContent).not.toContain("Extending trial...")
+  expect(container.textContent).toContain("Extend your trial")
+  await act(async () => finish())
+})
+it("lets the banner extend after a network failure", async () => {
+  state.action.mockRejectedValueOnce(new Error("Network unavailable"))
+  await render(createElement(TrialReminderBanner, { reminder: trialReminder(state.status!, undefined)!, onDismiss: vi.fn(), dismissing: false }))
+  await click("Extend your trial")
+  expect(container.textContent).toContain("Network unavailable")
+  await click("Extend your trial")
+  expect(state.action).toHaveBeenCalledTimes(2)
+  expect(container.textContent).toContain("Trial extended.")
+})
+it("uses today for a one-day reminder that ends on the local calendar date", async () => {
+  const now = new Date(2026, 10, 10, 9)
+  vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(now)
+  try {
+    tenant.trialEndsAt = new Date(2026, 10, 10, 17).toISOString()
+    await render(createElement(TrialReminderBanner, { reminder: trialReminder(state.status!, undefined)!, onDismiss: vi.fn(), dismissing: false }))
+    expect(container.textContent).toContain("Your Pro trial ends today")
+  } finally { vi.useRealTimers() }
 })

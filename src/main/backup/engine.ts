@@ -72,6 +72,7 @@ export interface RunTokens {
 }
 
 export interface BackupRequest {
+  scheduleFrequency?: "daily" | "weekly"
   tenantId: string
   clientId: string
   storageAccountName: string

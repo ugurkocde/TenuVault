@@ -37,7 +37,7 @@ function service() {
     persist: true,
     publicKey: contract.publicKey,
     apiBase: "https://www.tenuvault.com",
-    appVersion: "0.4.3",
+    appVersion: "0.5.0",
     platform: "win32",
     idToken: async () => "header.payload.signature",
     clientId: () => "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
@@ -124,13 +124,28 @@ describe("licensing contract, client side", () => {
   })
 
   it("drops a cached entitlement only for a contract refusal", async () => {
-    for (const reason of contract.refusalReasons) {
+    for (const reason of contract.refusalReasons.filter(reason => reason !== "trial_used")) {
       storeToken("v1 pro")
       answer = () => Response.json({ error: "The license was not accepted.", reason }, { status: 403 })
       const license = service()
       await license.refreshAll()
       expect(license.status([TENANT]).tenants[0]!.entitled, reason).toBe(false)
     }
+  })
+
+  it("treats trial_used as a tenant-specific activation refusal, preserving the key and coverage", async () => {
+    const license = service()
+    await license.setKey("TENU-CONTRACT-KEY-0001", [])
+    answer = () => Response.json({ reason: "trial_used", error: "This tenant already had a Pro trial. Buy Pro to continue, or write to support@tenuvault.com." }, { status: 403 })
+    await expect(license.setKey("TENU-CONTRACT-KEY-0001", [TENANT])).rejects.toMatchObject({ reason: "trial_used" })
+    expect(license.status([TENANT])).toMatchObject({ hasKey: true, keyState: "pending", keyMessage: null, communityTenantId: null })
+    expect(license.status([TENANT]).tenants[0]).toMatchObject({ entitled: false, coverageEnded: false, message: "This tenant already had a Pro trial. Buy Pro to continue, or write to support@tenuvault.com for a quote or an invoice." })
+    expect(calls[0]!.action).toBe("activate")
+    expectFields(calls[0]!.body, contract.requests.activate)
+    storeToken("v1 pro")
+    const covered = service()
+    await covered.refreshAll()
+    expect(covered.status([TENANT]).tenants[0]!.entitled).toBe(true)
   })
 
   it("keeps a cached entitlement for every other answer the contract names", async () => {

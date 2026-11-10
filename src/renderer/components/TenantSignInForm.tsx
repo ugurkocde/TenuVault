@@ -1,4 +1,6 @@
+import { trialKeyRefusalText } from "../../shared/trial-notices"
 import { showCommunityLimitError } from "../lib/plan-dialog"
+import { TrialKeyRefusalActions } from "./TenantTrial"
 import { useEffect, useRef, useState, type ClipboardEvent, type ReactNode } from "react"
 import { AlertCircle, Check, ChevronDown, ClipboardPaste, Copy, Download, ExternalLink, KeyRound, Loader2, Send, ShieldCheck, X } from "lucide-react"
 import { Alert, AlertDescription } from "~/components/ui/alert"
@@ -355,7 +357,9 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
       {errors.form && (
         <Alert variant="destructive" role="alert">
           <AlertCircle className="h-4 w-4" />
-          <AlertDescription>{errors.form}</AlertDescription>
+          <AlertDescription>{trialKeyRefusalText(errors.form)}
+            <TrialKeyRefusalActions message={errors.form} source="sign-in-trial-key-refused" />
+          </AlertDescription>
         </Alert>
       )}
       <Button onClick={() => void submit()} disabled={busy || !tenant || !clientId} className="w-full bg-blue-600 hover:bg-blue-700">

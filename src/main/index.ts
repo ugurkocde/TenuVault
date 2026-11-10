@@ -1,3 +1,6 @@
+import { trialBackupObserver } from "./license/usage-actions"
+import { cachedTrialUsage, trialWorkflowsConfigured } from "./license/usage"
+import { notifyTenantTrial, runTrialNotificationCheck } from "./license/notifications"
 import { licenseStatusHandler } from "./license/status"
 import { CommunityChoicePendingError, CommunityLimitError, withPlanError } from "../shared/plan-errors"
 import { licenseBuyUrl, licenseCheckoutUrl, trialCheckoutUrl } from "./license/buy-url"
@@ -280,6 +283,9 @@ async function bootstrap(): Promise<void> {
     })(),
     connectedTenantIds: () => connectedTenantIds(),
   })
+  const checkTrialNotifications = () => runTrialNotificationCheck(() => license.notifyTrials((tenantId, ended, end, canExtend) => notifyTenantTrial(tenantProfile(tenantId)?.name ?? "this tenant", ended, () => { showWindow(); return mainWindow }, end, canExtend)))
+  setInterval(checkTrialNotifications, 60_000)
+  const tallyBackup = trialBackupObserver((tenant, feature) => license.recordTrialUsage(tenant, feature))
   const prepareCoverage = prepareScheduledCoverage(license)
   // License check of the fetch bridge and the backup engine; a rollback in progress may use a
   // tenant whose license ended, and its backup keeps every older backup (features/recovery.ts).
@@ -410,8 +416,8 @@ async function bootstrap(): Promise<void> {
       failedAttempts.finished(job, request)
       // Manual backup outcomes notify here; scheduled and tray outcomes notify from the
       // scheduler path, which already suppresses repeated unreachable failures.
-      if ((request.trigger ?? "manual") !== "manual") return
-      void notifyBackupOutcome(job, "manual")
+      if ((request.trigger ?? "manual") === "manual") void notifyBackupOutcome(job, "manual")
+      tallyBackup(job, request)
     },
   })
 
@@ -603,7 +609,7 @@ async function bootstrap(): Promise<void> {
         partial: notice.partial,
         message: notice.message,
       }).catch(() => undefined)
-    }),
+    }, (tenant, feature) => license.recordTrialUsage(tenant, feature)),
   })
 
   // Tenant profiles are kept by the renderer; scheduled backups read them from the store.
@@ -765,7 +771,7 @@ async function bootstrap(): Promise<void> {
     // folder, an unattended one through the shared origin. Only a job this scheduled call started
     // is keyed by its slot, so the retries of one failing slot send one alert.
     const liveBefore = new Set(engine.liveRuns(tenantId))
-    const job = await runUnattended(engine, { tenantId, clientId: profile.clientId, storageAccountName: profile.storageAccountName, scope: scopes.get(tenantId).scope, trigger, slot }, (started) => {
+    const job = await runUnattended(engine, { tenantId, clientId: profile.clientId, storageAccountName: profile.storageAccountName, scope: scopes.get(tenantId).scope, trigger, slot, scheduleFrequency: scheduler.list().find(s => s.tenantId === tenantId)?.frequency }, (started) => {
       origin = unattendedBackupTriggers.get(started) ?? { trigger, notified: false, audited: false }
       unattendedBackupTriggers.set(started, origin)
       return waitForJob(started)
@@ -1157,6 +1163,13 @@ async function bootstrap(): Promise<void> {
     if (action !== "extend_trial" && action !== "end_trial" && action !== "trial_contact" && action !== "acknowledge") throw new Error("Unknown trial action.")
     if (email !== undefined && (typeof email !== "string" || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) throw new Error("Enter a valid email address.")
     return withStatus(() => license.tenantTrialAction(tenant, action, email as string | undefined))
+  })
+  const trialUsage = cachedTrialUsage(appStore, workspaceStore)
+  handleTrusted("license:trialWorkflowsConfigured", (_event, tenant: unknown) => isTenantId(tenant) && trialWorkflowsConfigured(workspaceStore, tenant.toLowerCase()))
+  handleTrusted("license:trialUsage", (_event, tenant: unknown) => {
+    if (!isTenantId(tenant)) return null
+    const period = license.trialUsagePeriod(tenant.toLowerCase())
+    return period ? trialUsage(tenant.toLowerCase(), period.since, period.until, license.trialUsageTally(tenant.toLowerCase())) : null
   })
   handleTrusted("license:status", licenseStatusHandler(license, currentLicenseStatus))
   handleTrusted("license:refresh", () => withStatus(() => license.refreshAll()))

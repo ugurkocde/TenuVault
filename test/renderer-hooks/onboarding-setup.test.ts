@@ -247,3 +247,35 @@ describe("Connect tenant on the desktop", () => {
     expect(path).toBe("/portal/onboarding")
   })
 })
+
+it.each(["", "The tenant was not added. "])("offers Pro and support when signing in refuses an emailed trial key (%s)", async prefix => {
+  const message = `${prefix}This tenant already had a Pro trial. Buy Pro to continue, or write to support@tenuvault.com for a quote or an invoice.`
+  state.signIn.mockRejectedValueOnce(new Error(message))
+  const container = await render(createElement(TenantSignInForm, { onSignedIn: vi.fn() }))
+  type(container.querySelector<HTMLInputElement>("#tenant")!, TENANT)
+  type(container.querySelector<HTMLInputElement>("#clientId")!, CLIENT)
+  await act(async () => { button(container, "Sign in")!.click() })
+  const alert = container.querySelector('[role="alert"]')!
+  expect(alert.textContent).toContain("This tenant already had a Pro trial.")
+  expect(alert.textContent).not.toContain(message)
+  expect(button(alert as HTMLElement, "Buy Pro")).toBeTruthy()
+  expect(alert.querySelector('a[href^="mailto:support@tenuvault.com?subject=TenuVault%20Pro"]')).toBeTruthy()
+  expect(button(alert as HTMLElement, "Extend your trial")).toBeUndefined()
+})
+
+it("offers purchasing help when saving a connected tenant refuses its trial key", async () => {
+  const account = { tenantId: TENANT, clientId: CLIENT, username: "admin@contoso.com" }
+  state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "", account }))
+  state.accounts.mockResolvedValueOnce([account])
+  state.storageChoice = { kind: "local" }
+  state.checkNewTenant.mockRejectedValueOnce(new Error("This tenant already had a Pro trial. Buy Pro to continue, or write to support@tenuvault.com for a quote or an invoice."))
+  const container = await render(createElement(OnboardingPage))
+  await act(async () => button(container, "Continue")!.click())
+  await flush()
+  const alert = container.querySelector('[role="alert"]')!
+  expect(alert.textContent).toContain("This tenant already had a Pro trial.")
+  expect(button(alert as HTMLElement, "Buy Pro")).toBeTruthy()
+  expect(alert.querySelector('a[href^="mailto:support@tenuvault.com"]')).toBeTruthy()
+  expect(button(alert as HTMLElement, "Try Pro free")).toBeUndefined()
+  expect(alert.querySelector('a[href="/license"]')).toBeTruthy()
+})

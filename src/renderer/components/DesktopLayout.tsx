@@ -1,4 +1,7 @@
-import { TenantTrialNotices, TrialChanges, trialEndVisible } from "./TenantTrial"
+import { trialEndWhen } from "../../shared/trial-notices"
+import { Button } from "~/components/ui/button"
+import { openCheckout } from "../lib/purchase"
+import { TenantTrialNotices, TrialActions, TrialUsage, TrialChanges, trialEndVisible } from "./TenantTrial"
 import { CommunityChoiceBanner } from "./CommunityTenantPicker"
 import { useEffect, useRef, useState, type ComponentType, type ReactNode, type RefObject } from "react"
 import { Link, Outlet, useLocation } from "react-router-dom"
@@ -33,10 +36,8 @@ import { cn } from "~/lib/utils"
 import { BrandMark } from "./BrandMark"
 import { ErrorBoundary } from "./ErrorBoundary"
 import { communityBannerVisible, earliestExpiringTenant, formatDate, formatDateTime, hasPaidLicense, inactiveTenantNotice, isUnlicensed, licenseChipState, licenseExpiryWarning, offlineDeadline, trialEndedNotice, trialReminder, unlicensedTenants, useLicense } from "../lib/license"
-import { openCheckout } from "../lib/purchase"
 import { PlanPromptButton } from "./PlanPromptButton"
 import { PurchaseKeyWatcher } from "./PurchaseKeyWatcher"
-import { Button } from "~/components/ui/button"
 import { toast, Toaster } from "../lib/toast"
 import { bridge } from "../lib/bridge"
 import { FrameworkJobNotifier } from "../lib/framework-jobs"
@@ -120,13 +121,17 @@ function BannerLink({ tone, icon, children, action, onDismiss, dismissing }: { t
 }
 
 /** A trial notice: what it says, Buy Pro, Details and Dismiss. */
-function TrialBanner({ urgent, source, onDismiss, dismissing, children }: {
+function TrialBanner({ urgent, source, onDismiss, dismissing, children, endsAt, tenantId }: {
+  tenantId?: string
+  endsAt?: string
   urgent: boolean
   source: string
   onDismiss: () => void
   dismissing: boolean
   children: ReactNode
 }) {
+  const { status } = useLicense()
+  const tenant = status?.tenants.find(t => (!tenantId || t.tenantId === tenantId) && t.trialEndsAt === endsAt && (t.source === "trial" || !t.entitled))
   return (
     <div className="px-6 pt-5 lg:px-8">
       <div role="status" className={cn("flex flex-wrap items-start gap-3 rounded-3xl p-3 text-sm font-medium", urgent ? "bg-amber-50 text-amber-900" : "bg-blue-50 text-gray-900")}>
@@ -134,10 +139,9 @@ function TrialBanner({ urgent, source, onDismiss, dismissing, children }: {
           <Clock className="h-4 w-4" />
         </span>
         <div className="min-w-0 basis-full sm:basis-72 flex-1">{children}</div>
-        <Button className="bg-coral-500 text-white hover:bg-coral-600" type="button" size="sm" onClick={() => void openCheckout(source)}>
-          <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />
-          Buy Pro
-        </Button>
+        {status?.tenantTrialsEnabled ? <div className="min-w-0 basis-full"><TrialActions key={tenant?.tenantId ?? source} tenant={tenant} source={source} /></div> : <Button className="bg-coral-500 text-white hover:bg-coral-600" type="button" size="sm" onClick={() => void openCheckout(source)}>
+          <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />Buy Pro
+        </Button>}
         <Link to="/license" className="rounded-full px-3 py-2 text-sm font-medium hover:bg-white/70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
           Details
         </Link>
@@ -148,17 +152,20 @@ function TrialBanner({ urgent, source, onDismiss, dismissing, children }: {
 }
 
 /** Day 20 and day 27 of the no-card trial: when it ends, and the checkout that keeps Pro. */
-function TrialReminderBanner({ reminder, onDismiss, dismissing }: {
+export function TrialReminderBanner({ reminder, onDismiss, dismissing }: {
   reminder: NonNullable<ReturnType<typeof trialReminder>>
   onDismiss: () => void
   dismissing: boolean
 }) {
+  const { status } = useLicense()
+  const tenant = status?.tenants.find(t => t.source === "trial" && t.tenantId === reminder.tenantId)
   const final = reminder.stage === "day-27"
-  const when = reminder.daysLeft === 1 ? "tomorrow" : `in ${reminder.daysLeft} days`
+  const when = reminder.daysLeft === 1 ? trialEndWhen(Date.parse(reminder.endsAt)) : `in ${reminder.daysLeft} days`
   return (
-    <TrialBanner urgent={final} source={`trial-${reminder.stage}`} onDismiss={onDismiss} dismissing={dismissing}>
-      <p>Your Pro trial ends {when}, on {formatDate(reminder.endsAt)}.</p>
-      {reminder.tenantTrial ? <TrialChanges /> : final
+    <TrialBanner tenantId={reminder.tenantId} endsAt={reminder.endsAt} urgent={final} source={`trial-${reminder.stage}`} onDismiss={onDismiss} dismissing={dismissing}>
+      <p>Your Pro trial ends {when}{when.startsWith("on ") ? "" : `, on ${formatDate(reminder.endsAt)}`}.</p>
+      {tenant && status?.tenantTrialsEnabled && <TrialUsage tenant={tenant} />}
+      {reminder.tenantTrial ? <TrialChanges tenantId={tenant?.tenantId} /> : final
         ? "Buy Pro now to keep daily backups, full restore and drift revert for both tenants."
         : "Buy Pro to keep daily backups, full restore and drift revert after the trial."}
     </TrialBanner>

@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { createAuditRecorder } from "../src/main/api/audit"
+import { memoryStore } from "./helpers"
+import { setRestoreApprovalStore } from "../src/main/storage/restore-approvals"
 import { ApiHost } from "../src/main/api/host"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
@@ -114,4 +116,89 @@ it.each(["submit", "complete", "withdraw"])("audits approval %s and notifies onl
   expect(entries[0]!.logEntry.action).toBe(({ submit: "Restore submitted for approval", complete: "Complete approved restore item", withdraw: "Approval request withdrawn" })[approvalAction])
   expect(notice).toHaveBeenCalledTimes(approvalAction === "complete" ? 1 : 0)
   if (approvalAction === "complete") expect(notice).toHaveBeenCalledWith(expect.objectContaining({ restored: 1, failed: 0, status: "Completed" }))
+})
+
+it.each([
+  ["/api/restore-backup", { restoreType: "full" }, true, "fullRestore"],
+  ["/api/restore-backup", { restoreType: "full", mode: "replace", assignments: true }, true, "fullRestore"],
+  ["/api/restore-backup", { restoreType: "selective", selectedPolicies: [{}, {}] }, true, "fullRestore"],
+  ["/api/restore-backup", { restoreType: "selective", selectedPolicies: [{}], mode: "replace" }, true, "replaceRestore"],
+  ["/api/restore-backup", { restoreType: "selective", selectedPolicies: [{}], assignments: true }, true, "restoreAssignments"],
+  ["/api/restore-backup", { restoreType: "selective", selectedPolicies: [{}] }, true, null],
+  ["/api/restore-backup", { restoreType: "full" }, false, null],
+  ["/api/revert-policy", { action: "revert" }, true, "driftRevert"],
+  ["/api/revert-policy", { action: "revert" }, false, null],
+  ["/api/revert-policy", { action: "restore" }, true, null],
+] as const)("tallies one successful Pro action for %s %j", async (path, mode, success, feature) => {
+  const tally = vi.fn()
+  const network = vi.fn(() => { throw new Error("Network forbidden") })
+  vi.stubGlobal("fetch", network)
+  try {
+    const dispatch = vi.fn(async () => Response.json({ success: true }))
+    const recorder = createAuditRecorder(dispatch, () => null, undefined, tally)
+    recorder(new Request(`http://tenuvault.internal${path}`, { method: "POST" }), JSON.stringify({ ...credentials, ...mode }), Response.json({ success, status: success ? "Completed" : "Failed", details: { restoredCount: success ? 2 : 0, failedCount: success ? 0 : 2, results: [] } }))
+    await new Promise<void>(resolve => setTimeout(resolve, 0))
+    expect(tally.mock.calls).toEqual(feature ? [[TENANT, feature]] : [])
+    expect(network).not.toHaveBeenCalled()
+    expect(dispatch).toHaveBeenCalledOnce()
+  } finally { vi.unstubAllGlobals() }
+})
+
+it("does not tally a partially completed restore", async () => {
+  const tally = vi.fn()
+  const dispatch = vi.fn(async () => Response.json({ success: true }))
+  createAuditRecorder(dispatch, () => null, undefined, tally)(new Request("http://tenuvault.internal/api/restore-backup", { method: "POST" }), JSON.stringify({ ...credentials, restoreType: "full" }), Response.json({ success: true, status: "PartiallyCompleted", details: { restoredCount: 1, partialCount: 1, failedCount: 0, results: [] } }))
+  await new Promise<void>(resolve => setTimeout(resolve, 0))
+  expect(tally).not.toHaveBeenCalled()
+  expect(dispatch).toHaveBeenCalledOnce()
+})
+
+it.each([["replace", false], ["replace", true], ["copy", false], ["copy", true]] as const)("does not tally completed approval items in %s mode (assignments %s)", async (mode, assignments) => {
+  const store = memoryStore()
+  store.set("restore.approvals", JSON.stringify(Array.from({ length: 10 }, (_, index) => ({ id: `approval-${index}`, tenantId: TENANT, mode, assignments, status: "completed" }))))
+  setRestoreApprovalStore(store)
+  const tally = vi.fn()
+  const dispatch = vi.fn(async () => Response.json({ success: true }))
+  const record = createAuditRecorder(dispatch, () => null, undefined, tally)
+  for (let index = 0; index < 10; index++) record(new Request("http://tenuvault.internal/api/restore-backup", { method: "POST" }), JSON.stringify({ ...credentials, approvalAction: "complete", approvalId: `approval-${index}` }), Response.json({ outcome: { success: true, path: "backup/example.json", policyId: `item-${index}` } }))
+  await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(10))
+  expect(tally).not.toHaveBeenCalled()
+})
+
+it.each([[], [TENANT], null])("does not credit bulk restore requests to their source (%j)", async targetTenants => {
+  const tally = vi.fn()
+  const dispatch = vi.fn(async () => Response.json({ success: true }))
+  createAuditRecorder(dispatch, () => null, undefined, tally)(new Request("http://tenuvault.internal/api/restore-backup", { method: "POST" }), JSON.stringify({ ...credentials, targetTenants, restoreType: "full" }), Response.json({ success: true, status: "Completed", details: { restoredCount: 10, failedCount: 0, results: [] } }))
+  await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce())
+  expect(tally).not.toHaveBeenCalled()
+})
+
+it.each([
+  ["oib-fix", 200, 2, 0, false, undefined, true],
+  ["oib-fix", 500, 2, 0, false, undefined, false],
+  ["oib-fix", 200, 2, 1, false, undefined, false],
+  ["oib-fix", 200, 0, 0, false, undefined, false],
+  ["oib-fix", 200, 2, 0, true, undefined, false],
+  ["oib-fix", 200, 2, 0, false, "Failed", false],
+  ["oib-deploy", 200, 2, 0, false, undefined, false],
+  ["oib-undo", 200, 2, 0, false, undefined, false],
+] as const)("tallies OIB drift fixes once only on success (%s, %s, %s, %s, %s, %s)", async (action, status, updated, failed, bulk, error, counted) => {
+  const tally = vi.fn()
+  const dispatch = vi.fn(async () => Response.json({ success: true }))
+  const network = vi.fn(() => { throw new Error("Network forbidden") })
+  vi.stubGlobal("fetch", network)
+  try {
+    createAuditRecorder(dispatch, () => null, undefined, tally)(new Request("http://tenuvault.internal/api/oib", { method: "POST" }), JSON.stringify({ ...credentials, action, bulk }), Response.json({ updated: Array(updated).fill({}), failed: Array(failed).fill({}), error }, { status }))
+    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce())
+    expect(tally.mock.calls).toEqual(counted ? [[TENANT, "driftRevert"]] : [])
+    expect(network).not.toHaveBeenCalled()
+  } finally { vi.unstubAllGlobals() }
+})
+
+it("keeps the OIB audit after a tally recorder throws", async () => {
+  const tally = vi.fn(() => { throw new Error("Store unavailable") })
+  const dispatch = vi.fn(async () => Response.json({ success: true }))
+  createAuditRecorder(dispatch, () => null, undefined, tally)(new Request("http://tenuvault.internal/api/oib", { method: "POST" }), JSON.stringify({ ...credentials, action: "oib-fix" }), Response.json({ updated: [{}, {}], failed: [] }))
+  await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce())
+  expect(tally).toHaveBeenCalledOnce()
 })

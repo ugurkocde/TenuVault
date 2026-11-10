@@ -1,3 +1,5 @@
+import { requiredFeatures } from "./plan-gates"
+import type { Feature } from "../../shared/plans"
 import { randomUUID } from "node:crypto"
 import { AuditEventType, AuditResult, AuditSeverity, type CreateAuditLogInput } from "~/lib/audit/types"
 import type { SignedInAccount } from "../../shared/ipc"
@@ -40,6 +42,7 @@ export function createAuditRecorder(
   dispatch: (request: Request) => Promise<Response>,
   accountFor: (tenantId: string) => SignedInAccount | null,
   onRestore?: (notice: RestoreNotice) => void,
+  onTrialUsage?: (tenant: string, feature: Feature) => void,
 ) {
   return (request: Request, requestBody: string, response: Response): void => {
     const path = new URL(request.url).pathname
@@ -50,13 +53,13 @@ export function createAuditRecorder(
       return
     }
     if (path === "/api/oib") {
-      void recordOib(requestBody, response.clone(), dispatch, accountFor)
+      void recordOib(requestBody, response.clone(), dispatch, accountFor, onTrialUsage)
         .catch((error: unknown) => console.error("[audit] Failed to record OpenIntuneBaseline change:", error))
       return
     }
 
     if (["/api/restore-backup", "/api/revert-policy"].includes(path) && request.method === "POST") {
-      void recordRestore(requestBody, response.clone(), dispatch, accountFor, path === "/api/revert-policy", onRestore)
+      void recordRestore(requestBody, response.clone(), dispatch, accountFor, path === "/api/revert-policy", onRestore, onTrialUsage)
         .catch((error: unknown) => console.error("[audit] Failed to record restore:", error))
       return
     }
@@ -116,8 +119,8 @@ export function createAuditRecorder(
 }
 
 /** Restore runs synchronously and can partially fail despite returning HTTP 200. */
-async function recordRestore(bodyText: string, response: Response, dispatch: (request: Request) => Promise<Response>, accountFor: (id: string) => SignedInAccount | null, policyCopy = false, onRestore?: (notice: RestoreNotice) => void) {
-  const body = JSON.parse(bodyText) as AuditBody & { backupId?: string; originalName?: string; action?: string; mode?: string; approvalAction?: string; approvalId?: string }
+async function recordRestore(bodyText: string, response: Response, dispatch: (request: Request) => Promise<Response>, accountFor: (id: string) => SignedInAccount | null, policyCopy = false, onRestore?: (notice: RestoreNotice) => void, onTrialUsage?: (tenant: string, feature: Feature) => void) {
+  const body = JSON.parse(bodyText) as AuditBody & { backupId?: string; originalName?: string; action?: string; mode?: string; approvalAction?: string; approvalId?: string; restoreType?: string; selectedPolicies?: unknown[]; assignments?: boolean }
   if (typeof body?.tenantId !== "string" || !body.tenantId || !body.appId || !body.clientSecret || !body.storageAccountName) return
   if (["detect", "list", "dismiss"].includes(body.approvalAction ?? "")) return
   const data = await response.json().catch(() => ({})) as {
@@ -149,6 +152,12 @@ async function recordRestore(bodyText: string, response: Response, dispatch: (re
         message: null,
       })
     } catch { /* Notifications are best effort and never block the audit record. */ }
+  }
+  if (onTrialUsage && ok && !partial && !data.partial && data.status !== "PartiallyCompleted" && !(data.details?.failedCount) && !(data.details?.partialCount) && !("approvalAction" in body) && !("targetTenants" in body)) {
+    try {
+      const feature = requiredFeatures(policyCopy ? "/api/revert-policy" : "/api/restore-backup", { ...body }).find(feature => ["fullRestore", "replaceRestore", "restoreAssignments", "driftRevert"].includes(feature))
+      if (feature) onTrialUsage(body.tenantId, feature)
+    } catch { /* A tally never changes the action's outcome. */ }
   }
   const account = accountFor(body.tenantId)
   const logEntry: CreateAuditLogInput = {
@@ -204,8 +213,9 @@ async function recordOib(
   response: Response,
   dispatch: (request: Request) => Promise<Response>,
   accountFor: (id: string) => SignedInAccount | null,
+  onTrialUsage?: (tenant: string, feature: Feature) => void,
 ) {
-  const body = JSON.parse(bodyText) as { action?: string; tenantId?: string; appId?: string; runId?: string; storageAccountName?: string }
+  const body = JSON.parse(bodyText) as { action?: string; tenantId?: string; appId?: string; runId?: string; storageAccountName?: string; bulk?: boolean }
   if (typeof body?.tenantId !== "string" || !body.tenantId || !["oib-deploy", "oib-fix", "oib-undo"].includes(body.action ?? "") || !body.appId) return
   const data = await response.json().catch(() => ({})) as {
     runId?: string; reference?: string; backupFolder?: string; pilotGroupId?: string; error?: string
@@ -214,6 +224,12 @@ async function recordOib(
   const undo = body.action === "oib-undo"
   const failed = undo ? (data.results ?? []).filter((r) => !r.done).length : (data.failed?.length ?? 0)
   const ok = response.ok && failed === 0
+  if (onTrialUsage && body.action === "oib-fix" && !body.bulk && ok && !data.error && (data.updated?.length ?? 0) > 0) {
+    try {
+      const feature = requiredFeatures("/api/oib", { ...body }).find(feature => feature === "driftRevert")
+      if (feature) onTrialUsage(body.tenantId, feature)
+    } catch { /* A tally never changes the action's outcome. */ }
+  }
   const account = accountFor(body.tenantId)
   const action = undo ? "Undo OpenIntuneBaseline run" : body.action === "oib-fix" ? "Reset OpenIntuneBaseline policy drift" : "Deploy OpenIntuneBaseline policies"
   const logEntry: CreateAuditLogInput = {

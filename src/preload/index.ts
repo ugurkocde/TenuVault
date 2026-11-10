@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron"
+import { TRIAL_USED_MESSAGE } from "../shared/constants"
 import type { BackupSchedule, LicenseStatus, ProxySignInPrompt, SignInRequiredEvent, TenuVaultPreloadBridge, UpdateStatus } from "../shared/ipc"
 
 /** Strips Electron's "Error invoking remote method 'x': Error: " prefix from IPC errors. */
@@ -7,7 +8,8 @@ async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
     return (await ipcRenderer.invoke(channel, ...args)) as T
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    throw new Error(message.replace(/^Error invoking remote method '[^']+': (?:\w*Error: )?/, ""))
+    const cleaned = message.replace(/^Error invoking remote method '[^']+': (?:\w*Error: )?/, "")
+    throw new Error(cleaned === `LicenseDenied: ${TRIAL_USED_MESSAGE}` ? TRIAL_USED_MESSAGE : cleaned)
   }
 }
 
@@ -64,6 +66,8 @@ const bridge: TenuVaultPreloadBridge = {
     setEnabled: (tenantId, clientId, id, enabled) => invoke("services:setEnabled", tenantId, clientId, id, enabled),
   },
   license: {
+    trialWorkflowsConfigured: (tenantId) => invoke("license:trialWorkflowsConfigured", tenantId),
+    trialUsage: (tenantId) => invoke("license:trialUsage", tenantId),
     startTenantTrial: (tenantId) => invoke("license:startTenantTrial", tenantId),
     tenantTrialAction: (tenantId, action, email) => invoke("license:tenantTrialAction", tenantId, action, email),
     chooseCommunity: (tenantId) => invoke("license:chooseCommunity", tenantId),

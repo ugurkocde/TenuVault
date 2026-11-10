@@ -2263,3 +2263,124 @@ it("does not claim Community for restored profiles before a schedule is due", as
     expect(store.get("license.communityTenant")).toBe(TENANT)
   } finally { vi.useRealTimers() }
 })
+
+describe("emailed trial keys refused for a tenant", () => {
+  beforeEach(() => { vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(T0) })
+  afterEach(() => vi.useRealTimers())
+
+  it.each([false, true])("keeps the key and the tenant's previous state (Community %s)", async community => {
+    if (community) store.set("license.communityTenant", TENANT)
+    answer = () => denied("trial_used")
+    const license = service()
+    await expect(license.setKey("TEST-TRIAL-KEY", [TENANT])).rejects.toMatchObject({ reason: "trial_used" })
+    expect(JSON.parse(store.get("license.state")!).key).toBe("TEST-TRIAL-KEY")
+    expect(JSON.parse(store.get("license.state")!)).not.toHaveProperty("keyFailure")
+    expect(license.status([TENANT])).toMatchObject({ hasKey: true, keyState: "pending", keyMessage: null, communityTenantId: community ? TENANT : null })
+    expect(license.status([TENANT]).tenants[0]).toMatchObject({ entitled: false, plan: community ? "community" : null, coverageEnded: false, message: "This tenant already had a Pro trial. Buy Pro to continue, or write to support@tenuvault.com for a quote or an invoice." })
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (community) await expect(license.requireEntitlement(TENANT)).resolves.toBe("community")
+      else await expect(license.requireEntitlement(TENANT)).rejects.toMatchObject({ reason: "trial_used" })
+    }
+    expect(calls).toHaveLength(1)
+    expect(store.get(`license.coverageEnd.${TENANT}`)).toBeNull()
+    expect(store.get("license.communityEligibility")).toBeNull()
+    expect(license.communityChoices()).toEqual([])
+  })
+
+  it("can activate the same key for another tenant after a refused activation", async () => {
+    answer = ({ action, body }) => action === "tenant" ? denied("tenant_not_licensed") : body.tenantId === TENANT ? denied("trial_used") : granted("act-b", {}, { tenantId: TENANT_B, tenants: 2 })
+    const license = service()
+    await license.setKey("TEST-TRIAL-KEY", [])
+    await expect(license.requireEntitlement(TENANT)).rejects.toMatchObject({ reason: "trial_used" })
+    expect(license.status([TENANT]).keyState).toBe("pending")
+    await expect(license.requireEntitlement(TENANT_B)).resolves.toBe("pro")
+    expect(license.status([TENANT, TENANT_B])).toMatchObject({ keyState: "active", keyMessage: null, communityTenantId: null })
+    expect(JSON.parse(store.get("license.state")!)).not.toHaveProperty("keyFailure")
+    expect(entitled(license, TENANT_B)).toBe(true)
+    await expect(license.requireEntitlement(TENANT)).rejects.toMatchObject({ reason: "trial_used" })
+    expect(calls.filter(call => call.action === "activate" && call.body.tenantId === TENANT)).toHaveLength(1)
+  })
+
+  it.each([undefined, "tenant"])("preserves another tenant's %s activation", async source => {
+    const entry = { activationId: "act-b", token: fresh("act-b", { tenantId: TENANT_B }), ...(source ? { source } : {}) }
+    store.set("license.state", JSON.stringify({ key: "TEST-TRIAL-KEY", activations: { [TENANT_B]: entry } }))
+    answer = () => denied("trial_used")
+    const license = service()
+    await expect(license.setKey("TEST-TRIAL-KEY", [TENANT, TENANT_B])).rejects.toMatchObject({ reason: "trial_used" })
+    expect(JSON.parse(store.get("license.state")!).activations[TENANT_B]).toEqual(entry)
+    expect(entitled(license, TENANT_B)).toBe(true)
+    expect(license.status([TENANT]).tenants[0]?.coverageEnded).toBe(false)
+    expect(store.get(`license.coverageEnd.${TENANT}`)).toBeNull()
+  })
+
+  it("retries only on request, after the normal cooldown, or with a new key", async () => {
+    answer = ({ action }) => denied(action === "activate" ? "trial_used" : "tenant_not_licensed")
+    const license = service()
+    await expect(license.setKey("TEST-TRIAL-KEY", [TENANT])).rejects.toMatchObject({ reason: "trial_used" })
+    await license.retry([TENANT])
+    expect(calls.filter(call => call.action === "activate")).toHaveLength(2)
+    await expect(license.requireEntitlement(TENANT)).rejects.toMatchObject({ reason: "trial_used" })
+    expect(calls.filter(call => call.action === "activate")).toHaveLength(2)
+    vi.setSystemTime(T0 + FAILURE_COOLDOWN_MS + 1)
+    await expect(license.requireEntitlement(TENANT)).rejects.toMatchObject({ reason: "trial_used" })
+    expect(calls.filter(call => call.action === "activate")).toHaveLength(3)
+    await license.setKey("NEW-TRIAL-KEY", [])
+    answer = () => granted("new-act")
+    await expect(license.requireEntitlement(TENANT)).resolves.toBe("pro")
+    expect(calls.filter(call => call.action === "activate")).toHaveLength(4)
+  })
+
+  it("keeps valid cached coverage if a refresh returns trial_used", async () => {
+    storeLicense(token())
+    const license = service()
+    const activation = JSON.parse(store.get("license.state")!).activations[TENANT]
+    answer = () => denied("trial_used")
+    await license.refreshAll()
+    expect(entitled(license)).toBe(true)
+    expect(JSON.parse(store.get("license.state")!).activations[TENANT]).toEqual(activation)
+    expect(JSON.parse(store.get("license.state")!)).not.toHaveProperty("keyFailure")
+    expect(store.get("license.communityEligibility")).toBeNull()
+  })
+})
+
+describe("trial key refusal cooldown with existing coverage", () => {
+  beforeEach(() => { vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(T0) })
+  afterEach(() => vi.useRealTimers())
+
+  it("does not repeatedly try a refused key while refreshing an active tenant trial", async () => {
+    const claims = { v: 2, trial: true, keyExp: Math.floor(T0 / 1000) + 14 * 86400 }
+    store.set("license.state", JSON.stringify({ key: "TEST-TRIAL-KEY", activations: { [TENANT]: { activationId: "act-1", token: token(claims), source: "trial" } } }))
+    answer = ({ action, body }) => action === "activate" ? denied("trial_used") : body.action === "activate" ? denied("tenant_not_licensed") : granted("act-1", { source: "trial", trial: true, keyExp: claims.keyExp }, claims)
+    const license = service()
+    await license.refreshAll()
+    await license.refreshAll()
+    expect(calls.filter(call => call.action === "activate")).toHaveLength(1)
+    expect(license.status([TENANT]).tenants[0]).toMatchObject({ source: "trial", entitled: true })
+    expect(JSON.parse(store.get("license.state")!)).not.toHaveProperty("keyFailure")
+  })
+
+  it("clears tenant-specific refusals when replacing the saved key", async () => {
+    store.set("license.state", JSON.stringify({ key: "TEST-TRIAL-KEY", activations: { [TENANT_B]: { activationId: "act-b", token: fresh("act-b", { tenantId: TENANT_B, tenants: 2 }) } } }))
+    const license = service()
+    answer = () => denied("trial_used")
+    await expect(license.setKey("TEST-TRIAL-KEY", [TENANT])).rejects.toMatchObject({ reason: "trial_used" })
+    answer = ({ action, body }) => action === "deactivate" ? Response.json({ success: true }) : granted("new-act", {}, { tenantId: body.tenantId, tenants: 2 })
+    await license.replaceKey("NEW-TRIAL-KEY", [TENANT_B])
+    await expect(license.requireEntitlement(TENANT)).resolves.toBe("pro")
+    expect(calls.filter(call => call.action === "activate" && call.body.tenantId === TENANT)).toHaveLength(2)
+  })
+})
+
+it("does not apply a refused candidate key's cooldown to the saved key after rollback", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(T0)
+  try {
+    const license = service()
+    await license.setKey("PREVIOUS-TRIAL-KEY", [])
+    answer = ({ body }) => body.tenantId === TENANT ? denied("trial_used") : Response.json({ error: "Unavailable" }, { status: 500 })
+    await expect(license.setKey("CANDIDATE-TRIAL-KEY", [TENANT, TENANT_B])).rejects.toMatchObject({ reason: "trial_used" })
+    expect(JSON.parse(store.get("license.state")!).key).toBe("PREVIOUS-TRIAL-KEY")
+    answer = () => granted("act-previous")
+    await expect(license.requireEntitlement(TENANT)).resolves.toBe("pro")
+    expect(calls.at(-1)?.body.key).toBe("PREVIOUS-TRIAL-KEY")
+  } finally { vi.useRealTimers() }
+})

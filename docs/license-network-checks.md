@@ -1,5 +1,7 @@
 # Licensing checks outside the app
 
+The activation refusal `trial_used` (HTTP 403) means this tenant already had a Pro trial. It is specific to the tenant: the app keeps the saved key and existing coverage, leaves other tenants untouched, and does not treat it as a lapse or move the tenant to Community. Refused activations use the normal failure cooldown; the admin can retry sooner or enter a different key. Older app versions receive `invalid_key` from the service. The shared contract fixture lists the supported reasons and signed token examples.
+
 Two checks of the buyer path that run against production rather than tests, and their records.
 The plan behind them is
 [`tasks/license-activation-reliability-2026-11-06.md`](../tasks/license-activation-reliability-2026-11-06.md)
@@ -88,3 +90,10 @@ All trial actions POST to `/api/desktop-license/tenant`, with `idToken`, `instal
 The signed v2 token carries the tenant, installation, activation, plan, `trial` and `keyExp`. `source` and `canEnd` are plain response fields, not signed claims. `canEnd` only decides whether the app offers **Use Community instead**; the server enforces who may end the trial. Trial expiry is enforced offline at `keyExp`. A confirmed expired refresh drops coverage through the Community path. Network errors and 5xx, including `storage_unavailable`, preserve cached tokens. A failed automatic start retries at subsequent license checks for up to seventy-two hours from first connection. `used`, `licensed` and `install_limit` end automatic retries. `disabled`, `app_update_required` and unsupported actions keep the retry window open. Existing connected tenants never start automatically.
 
 The server stores a keyed tenant hash for trial eligibility. The optional contact is stored only when submitted. See the shared contract fixture for exact action fields, refusal reasons and signed token examples.
+
+The health response may include `tenantTrials.days`, `tenantTrials.extensionDays`,
+`tenantTrials.extensionWindowDays` and `tenantTrials.extensionGraceDays`. The desktop caches
+these alongside the health result and exposes them in license status as `tenantTrialPolicy`.
+Each value must be an integer from 1 through 365; invalid or absent fields are ignored.
+Extension copy uses generic wording when its length is absent. Existing extension eligibility
+rules remain the fallback until the server supplies the window and grace periods.

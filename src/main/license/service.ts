@@ -1,8 +1,9 @@
-import { readTenantTrials, TENANT_TRIAL_STATE_KEY, type StoredTenantTrial } from "./tenant-trial-state"
+import { readTenantTrials, TENANT_TRIAL_STATE_KEY, type StoredTenantTrial, type TrialTally } from "./tenant-trial-state"
 import { CommunityChoicePendingError, CommunityLimitError } from "../../shared/plan-errors"
 import { createHash, createPublicKey, randomUUID, verify, type KeyObject } from "node:crypto"
 import type { LicenseStatus, TenantLicenseStatus } from "../../shared/ipc"
-import type { Plan } from "../../shared/plans"
+import { TRIAL_USED_MESSAGE } from "../../shared/constants"
+import { FEATURE_PLAN, type Feature, type Plan } from "../../shared/plans"
 import { networkFailure } from "../api/network-error"
 import type { KeyValueStore } from "../storage/secure-store"
 
@@ -170,6 +171,7 @@ const TRIAL_REASONS: Record<string, string> = {
 
 const REASONS: Record<string, string> = {
   invalid_key: "This license key is not valid for TenuVault.",
+  trial_used: TRIAL_USED_MESSAGE,
   not_found:
     "This license key is not valid, or it has been revoked or has expired. Check your subscription in the customer portal.",
   revoked: "This license has been revoked. Check your subscription.",
@@ -315,8 +317,11 @@ function retryAfterMs(value: string | null): number | null {
   return Number.isFinite(at) ? Math.max(0, at - Date.now()) : null
 }
 
+export const TRIAL_END_NOTICE_DAYS = 60
+
 export class LicenseService {
   private state: StoredLicense | null = null
+  private trialPolicy: NonNullable<LicenseStatus["tenantTrialPolicy"]> = {}
   private trialsEnabled = false
   private healthCheckedAt = 0
   private healthCheck: Promise<void> | null = null
@@ -332,7 +337,7 @@ export class LicenseService {
   private message: string | null = null
   private offline = false
   private readonly messages = new Map<string, string>()
-  private readonly failures = new Map<string, { error: unknown; until: number }>()
+  private readonly failures = new Map<string, { error: unknown; until: number; key?: string }>()
   // Community tenants, until their next check for a license.
   private readonly community = new Map<string, number>()
   private readonly communityEligibility = new Map<string, string>()
@@ -369,6 +374,11 @@ export class LicenseService {
         const response = await this.fetchImpl(`${this.options.apiBase}/api/desktop-license/health`, { signal: AbortSignal.timeout(10_000), redirect: "error" })
         const data = await response.json()
         if (!response.ok || data?.tenantTrials?.ok !== true || typeof data.tenantTrials.enabled !== "boolean") throw new Error("Trial health is unavailable.")
+        this.trialPolicy = {}
+        for (const field of ["days", "extensionDays", "extensionWindowDays", "extensionGraceDays"] as const) {
+          const value = data.tenantTrials[field]
+          if (Number.isInteger(value) && value > 0 && value <= 365) this.trialPolicy[field] = value
+        }
         this.trialsEnabled = data.tenantTrials.enabled === true
         this.healthCheckedAt = Date.now()
         this.healthRetryAt = 0
@@ -433,12 +443,70 @@ export class LicenseService {
     const record = this.trialRecords[tenant]
     const end = this.trialEnd(tenant)
     const remaining = end ? Date.parse(end) - Date.now() : NaN
-    return Boolean(record?.activationId && !record.extended && !record.endedAt &&
-      (!this.state?.activations[tenant] || this.state.activations[tenant]?.source === "trial") && remaining <= 5 * 86400_000 && remaining >= -14 * 86400_000)
+    return Boolean(!this.state?.key && record?.activationId && !record.extended && !record.endedAt &&
+      (!this.state?.activations[tenant] || this.state.activations[tenant]?.source === "trial") && remaining <= (this.trialsEnabled ? this.trialPolicy.extensionWindowDays ?? 5 : 5) * 86400_000 && remaining >= -(this.trialsEnabled ? this.trialPolicy.extensionGraceDays ?? 14 : 14) * 86400_000)
+  }
+
+  trialUsagePeriod(tenant: string): { since: number; until: number } | null {
+    this.load()
+    if (!this.trialsEnabled || this.state?.key) return null
+    const record = this.trialRecords[tenant]
+    const entry = this.state?.activations[tenant]
+    if (entry && entry.source !== "trial") return null
+    const payload = record?.token ? decodeToken(record.token, this.publicKeys) : null
+    if (!record || !payload?.keyExp) return null
+    if (record.trialFirstSeenAt === undefined) {
+      record.trialFirstSeenAt = Date.now()
+      try { this.saveTrials() } catch { /* Keep the local boundary in memory if persistence is unavailable. */ }
+    }
+    const serverStart = this.trialPolicy.days && (!record.extended || this.trialPolicy.extensionDays)
+      ? payload.keyExp * 1000 - (this.trialPolicy.days + (record.extended ? this.trialPolicy.extensionDays! : 0)) * 86400_000 : record.trialFirstSeenAt
+    return { since: Math.max(record.trialFirstSeenAt, serverStart), until: record.endedAt ?? payload.keyExp * 1000 }
+  }
+
+  trialUsageTally(tenant: string): TrialTally {
+    return this.trialUsagePeriod(tenant) ? { ...this.trialRecords[tenant]?.tally } : {}
+  }
+
+  /** TenuVault keeps a short tally of Pro features used during the trial on this computer to show it in the trial notices. It is never sent. */
+  recordTrialUsage(tenantId: string, feature: Feature): void {
+    try {
+      this.load()
+      const tenant = tenantId.toLowerCase()
+      if (!this.trialsEnabled || this.state?.key || FEATURE_PLAN[feature] !== "pro" || this.state?.activations[tenant]?.source !== "trial" || !this.valid(tenant) || !this.tenantPresent(tenant)) return
+      const record = this.trialRecords[tenant]
+      if (!record) return
+      const fields: Partial<Record<Feature, keyof TrialTally>> = { dailySchedule: "dailyBackups", azureStorage: "azureBackups", fullRestore: "fullRestores", replaceRestore: "fullRestores", restoreAssignments: "fullRestores", driftRevert: "driftReverts" }
+      const field = fields[feature]
+      if (!field) return
+      record.tally ??= {}
+      record.tally[field] = Math.min(Number.MAX_SAFE_INTEGER, (record.tally[field] ?? 0) + 1)
+      this.saveTrials()
+    } catch { /* A tally never changes a completed action. */ }
+  }
+
+  notifyTrials(notify: (tenantId: string, ended: boolean, end: number, canExtend: boolean) => boolean): void {
+    this.load()
+    if (!this.trialsEnabled || this.state?.key) return
+    for (const [tenant, record] of Object.entries(this.trialRecords)) {
+      if (!this.tenantPresent(tenant) || record.endedAt) continue
+      const entry = this.state?.activations[tenant]
+      if (entry && entry.source !== "trial") continue
+      const end = Date.parse(this.trialEnd(tenant) ?? "")
+      if (!Number.isFinite(end) || end - Date.now() > 86400_000) continue
+      const ended = end <= Date.now()
+      if (ended && Date.now() - end > TRIAL_END_NOTICE_DAYS * 86400_000) continue
+      const field = ended ? "endedNoticeEnd" : "dayNoticeEnd"
+      if (record[field] === end) continue
+      if (notify(tenant, ended, end, this.canExtendTrial(tenant))) {
+        record[field] = end
+        this.saveTrials()
+      }
+    }
   }
 
   private rememberTrial(tenant: string, data: Record<string, unknown>): void {
-    this.trialRecords[tenant] = { ...this.trialRecords[tenant], stopped: true, trialEndsAt: Number(data.keyExp) * 1000, activationId: String(data.activationId), token: String(data.token), canEnd: data.canEnd === true }
+    this.trialRecords[tenant] = { ...this.trialRecords[tenant], stopped: true, trialFirstSeenAt: this.trialRecords[tenant]?.trialFirstSeenAt ?? Date.now(), trialEndsAt: Number(data.keyExp) * 1000, activationId: String(data.activationId), token: String(data.token), canEnd: data.canEnd === true }
     this.saveTrials()
     this.community.delete(tenant)
   }
@@ -530,7 +598,7 @@ export class LicenseService {
           try { this.useCommunity(tenant) } catch (error) { if (!(error instanceof CommunityChoicePendingError) && !(error instanceof CommunityLimitError)) throw error }
         } else record.email = email
       } catch (error) {
-        if (action === "extend_trial" && error instanceof LicenseDenied && error.trialUnavailable) {
+        if (action === "extend_trial" && error instanceof LicenseDenied && error.trialUnavailable && error.reason === "used") {
           record.extended = true
           this.saveTrials()
           throw new Error("This trial cannot be extended.")
@@ -932,8 +1000,17 @@ export class LicenseService {
     if (persist) this.save()
   }
 
+  private clearTrialKeyRefusals(): void {
+    for (const [tenant, failure] of this.failures) if (failure.error instanceof LicenseDenied && failure.error.reason === "trial_used") {
+      this.failures.delete(tenant)
+      this.messages.delete(tenant)
+    }
+  }
+
   private async activate(tenantId: string): Promise<void> {
     if (!this.state?.key) throw new Error("Enter a license key first.")
+    const refusal = this.failures.get(tenantId)
+    if (refusal?.error instanceof LicenseDenied && refusal.error.reason === "trial_used" && refusal.key === this.state.key && refusal.until > Date.now()) throw refusal.error
     const current = this.requestGuard(tenantId)
     const key = this.state.key
     const data = await this.call("activate", {
@@ -943,7 +1020,10 @@ export class LicenseService {
       os: this.platform,
       appVersion: this.options.appVersion,
       ...(await this.sharingFields(tenantId)),
-    }, current)
+    }, current).catch((error: unknown) => {
+      if (error instanceof LicenseDenied && error.reason === "trial_used" && current()) this.failures.set(tenantId, { error, until: Date.now() + FAILURE_COOLDOWN_MS, key })
+      throw error
+    })
     this.assertCurrent(current)
     this.accept(tenantId, data, "key")
   }
@@ -998,7 +1078,7 @@ export class LicenseService {
     } catch (keyError) {
       this.assertCurrent(current)
       if (!(keyError instanceof LicenseDenied)) throw keyError
-      if (this.state?.key) {
+      if (this.state?.key && keyError.reason !== "trial_used") {
         this.state.keyFailure = keyError.reason
         this.save()
       }
@@ -1064,7 +1144,7 @@ export class LicenseService {
       this.accept(tenantId, data, "key")
     } catch (error) {
       this.assertCurrent(current)
-      if (error instanceof LicenseDenied) {
+      if (error instanceof LicenseDenied && error.reason !== "trial_used") {
         if (LAPSED.has(error.reason)) this.confirmCommunity(tenantId)
         if (!entry.source) this.state.keyFailure = error.reason
         delete this.state.activations[tenantId]
@@ -1129,7 +1209,8 @@ export class LicenseService {
   /**
    * Saves the key and activates it for the given signed-in tenants that are not licensed
    * yet. Without such tenants the key is only saved and activates when a tenant is used.
-   * When every activation fails the key is not kept and the first error is thrown.
+   * When every activation fails the first error is thrown. Tenant-specific trial_used
+   * refusals keep the key for another tenant; other failures restore the previous state.
    */
   async setKey(key: string, tenantIds: string[]): Promise<void> {
     this.load()
@@ -1146,6 +1227,7 @@ export class LicenseService {
       ) {
         throw new Error("Deactivate this machine before entering a different license key.")
       }
+      if (previous?.key !== trimmed) this.clearTrialKeyRefusals()
       this.state = {
         key: trimmed,
         ...(previous?.key === trimmed && previous.keyFailure ? { keyFailure: previous.keyFailure } : {}),
@@ -1167,7 +1249,7 @@ export class LicenseService {
           this.assertCurrent(() => this.state?.key === trimmed)
           firstError ??= error
           if (this.tenantPresent(tenant) && !(error instanceof StaleLicenseRequest)) {
-            if (error instanceof LicenseDenied) this.state.keyFailure = error.reason
+            if (error instanceof LicenseDenied && error.reason !== "trial_used") this.state.keyFailure = error.reason
             this.messages.set(tenant, errorText(error))
           }
         }
@@ -1176,6 +1258,13 @@ export class LicenseService {
         if (await this.replaceTrialWithKey(tenant)) activated++
       }
       if (targets.length > 0 && activated === 0) {
+        if (targets.every(tenant => {
+          const error = this.failures.get(tenant)?.error
+          return error instanceof LicenseDenied && error.reason === "trial_used"
+        })) {
+          this.save()
+          throw firstError
+        }
         const keyFailure = this.state.keyFailure
         this.assertCurrent(() => this.state?.key === trimmed)
         this.state = previous
@@ -1313,6 +1402,7 @@ export class LicenseService {
         throw new Error(`The new license key could not be saved. Your current license is unchanged. ${errorText(error)}`)
       }
       this.message = null
+      this.clearTrialKeyRefusals()
       // Publish the carried sharing choice for the new key. A tenant that shared moves its
       // organization license to the new key here; until this succeeds (it is retried with every
       // refresh) the tenant's admins keep the previous key's sharing.
@@ -1470,7 +1560,7 @@ export class LicenseService {
     const current = () => key === this.state?.key && this.tenantPresent(tenant)
     try {
       const failure = this.failures.get(tenant)
-      if (failure && failure.until > Date.now()) throw failure.error
+      if (failure && failure.until > Date.now() && (!(failure.error instanceof LicenseDenied) || failure.error.reason !== "trial_used" || failure.key === key)) throw failure.error
       await this.entitle(tenant)
       this.assertCurrent(current)
       const plan = this.valid(tenant)?.plan
@@ -1478,6 +1568,7 @@ export class LicenseService {
       throw new Error("The license is not valid for this tenant.")
     } catch (error) {
       this.assertCurrent(current)
+      if (error instanceof LicenseDenied && error.reason === "trial_used" && this.options.store.get(COMMUNITY_KEY) === tenant) return "community"
       if (error instanceof StaleLicenseRequest || !this.lapsedOrUnlicensed(tenant, error)) throw error
       this.confirmCommunity(tenant)
       return this.useCommunity(tenant)
@@ -1642,7 +1733,7 @@ export class LicenseService {
         caught instanceof LicenseDenied && caught.reason === "tenant_not_licensed" ? new Error(LICENSE_REQUIRED) : caught
       if (error === caught) this.messages.set(tenant, errorText(error))
       else this.messages.delete(tenant)
-      this.failures.set(tenant, { error, until: Date.now() + FAILURE_COOLDOWN_MS })
+      this.failures.set(tenant, { error, until: Date.now() + FAILURE_COOLDOWN_MS, ...(error instanceof LicenseDenied && error.reason === "trial_used" ? { key } : {}) })
       this.options.onChange?.()
       throw error
     }
@@ -1863,6 +1954,10 @@ export class LicenseService {
         trialRefusal: this.trialRefusal(tenantId) ?? (!payload && this.trialRecords[tenantId]?.activationId && Date.parse(this.trialEnd(tenantId) ?? "") <= Date.now() ? TRIAL_REASONS.used : undefined),
         trialAcknowledged: tenantTrial ? this.trialRecords[tenantId]?.acknowledged : this.trialRecords[tenantId]?.endedAcknowledged,
         trialEmail: this.trialRecords[tenantId]?.email,
+        trialUsageRevision: Object.values(this.trialRecords[tenantId]?.tally ?? {}).reduce((sum, value) => sum + value, 0),
+        trialExtensionUnavailable: Boolean(this.trialRecords[tenantId]?.extended || this.trialRecords[tenantId]?.endedAt),
+        trialExtensionAvailableAt: !this.state?.key && (!entry || entry.source === "trial") && this.trialsEnabled && this.trialRecords[tenantId]?.activationId && !this.trialRecords[tenantId]?.extended && !this.trialRecords[tenantId]?.endedAt && this.trialEnd(tenantId)
+          ? new Date(Date.parse(this.trialEnd(tenantId)!) - (this.trialPolicy.extensionWindowDays ?? 5) * 86400_000).toISOString() : undefined,
         trialCanExtend: this.canExtendTrial(tenantId),
         shared: source === "key" ? (entry?.shared ?? null) : null,
         shareNeedsSignIn: source === "key" && Boolean(entry?.shareNeedsSignIn),
@@ -1885,6 +1980,7 @@ export class LicenseService {
           : null
     const keyState: LicenseStatus["keyState"] = !key ? "none" : keyToken ? "active" : keyMessage ? "failed" : "pending"
     return {
+      tenantTrialPolicy: this.trialPolicy,
       tenantTrialsEnabled: this.trialsEnabled,
       hasKey: Boolean(key),
       keyState,

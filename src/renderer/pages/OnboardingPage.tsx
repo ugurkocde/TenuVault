@@ -1,3 +1,4 @@
+import { trialKeyRefusalText } from "../../shared/trial-notices"
 import { showCommunityLimitError } from "../lib/plan-dialog"
 import { useEffect, useRef, useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
@@ -8,7 +9,8 @@ import { Button } from "~/components/ui/button"
 import { Progress } from "~/components/ui/progress"
 import { cn } from "~/lib/utils"
 import type { SignedInAccount } from "../../shared/ipc"
-import { LOCAL_STORAGE_PREFIX } from "../../shared/constants"
+import { LOCAL_STORAGE_PREFIX, TRIAL_USED_MESSAGE } from "../../shared/constants"
+import { TrialKeyRefusalActions } from "../components/TenantTrial"
 import { StorageChooser } from "../components/StorageChooser"
 import { FirstBackupNote } from "../components/FirstBackupNote"
 import { FirstBackupNextSteps } from "../components/FirstBackupNextSteps"
@@ -332,8 +334,11 @@ export default function OnboardingPage() {
             {status?.tenantTrialsEnabled && <p className="text-sm text-gray-600">New tenants start with a Pro trial. No card and no email needed.</p>}
             {addError && (
               <div role="alert" className="space-y-3 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700">
-                <p className="flex items-start gap-2"><XCircle className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" /> {addError.message}</p>
-                {addError.license && <div className="text-gray-700"><TrialOrKey source="setup-license-error" /></div>}
+                <p className="flex items-start gap-2"><XCircle className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" /> {addError.license ? trialKeyRefusalText(addError.message) : addError.message}</p>
+                {addError.license && <div className="space-y-2 text-gray-700">
+                  <TrialKeyRefusalActions message={addError.message} source="setup-trial-key-refused" />
+                  {addError.message.includes(TRIAL_USED_MESSAGE) ? <Link className="text-blue-600 underline" to="/license">Enter a Pro license key</Link> : <TrialOrKey source="setup-license-error" />}
+                </div>}
               </div>
             )}
             {account ? (

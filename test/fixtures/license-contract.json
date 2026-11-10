@@ -1,8 +1,8 @@
 {
-  "description": "Licensing contract between the TenuVault desktop app and the licensing service at /api/desktop-license. Keep byte-identical in both repositories. Add-only: never remove or rename a reason, field or token version.",
+  "description": "Licensing contract between the TenuVault desktop app and the licensing service at /api/desktop-license. Keep byte-identical in both repositories. Add-only: never remove or rename a reason, field or token version. trial_used is a tenant-specific key activation refusal: keep the saved key, do not trigger Community fallback, and leave other tenants and valid coverage untouched, just as for invalid_key. Its message is: This tenant already had a Pro trial. Buy Pro to continue, or write to support@tenuvault.com. The service sends trial_used only at or above its configured minimum app version (default 0.5.0, prerelease at that core excluded); older, missing or malformed versions receive invalid_key.",
   "installId": "0f9e8d7c-6b5a-4c3d-8e2f-1a0b9c8d7e6f",
   "tenantId": "11111111-2222-4333-8444-555555555555",
-  "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAnsL+bTafLcaBMIuaruTqSyf6ebwFZK08cMVcWtbYyeo=\n-----END PUBLIC KEY-----\n",
+  "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAbwok6RINBZiJXvPclucgwuw+PmEe6km0g4c6DtPGkFI=\n-----END PUBLIC KEY-----\n",
   "refusalReasons": [
     "invalid_key",
     "not_found",
@@ -13,7 +13,8 @@
     "install_limit",
     "activation_limit",
     "activation_mismatch",
-    "tenant_not_licensed"
+    "tenant_not_licensed",
+    "trial_used"
   ],
   "otherReasons": {
     "400": [
@@ -63,14 +64,14 @@
         "window": "inclusive: ends_at minus 5 days through ends_at plus 14 days; once only; new end is greatest(ends_at, request time) plus 14 days"
       },
       "end_trial": {
+        "missingTrial": "Returns success true when the tenant has no trial row; activationId must still match the tenant and install.",
         "required": {
           "activationId": "trial activation ID"
         },
         "response": {
           "success": true
         },
-        "authorization": "Only the starting install; another install receives 403 trial_unavailable with reason not_starter",
-        "missingTrial": "Returns success true when the tenant has no trial row; activationId must still match the tenant and install."
+        "authorization": "Only the starting install; another install receives 403 trial_unavailable with reason not_starter"
       },
       "trial_contact": {
         "required": {
@@ -152,7 +153,7 @@
         "iat": 1793000000,
         "exp": 1794209600
       },
-      "token": "eyJ2IjoxLCJzdWIiOiI1YTBlMmY2Yy04YTQxLTRhOGUtOWIzMy0wYzZlMmQxZjdhMTAiLCJhY3QiOiI3YzFkOWUyYS00YjVmLTRjNmQtOGU3Zi05YTBiMWMyZDNlNGYiLCJwbGFuIjoicHJvIiwidGVuYW50SWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJpbnN0YWxsSWQiOiIwZjllOGQ3Yy02YjVhLTRjM2QtOGUyZi0xYTBiOWM4ZDdlNmYiLCJ0ZW5hbnRzIjoyLCJzdGF0dXMiOiJncmFudGVkIiwiaWF0IjoxNzkzMDAwMDAwLCJleHAiOjE3OTQyMDk2MDB9.4SykSuehcJG0qzRzvXLNm_UNBWKtIOC3HKrjciSNJ1bozvX38hn5F9cEDY-ZKwIZr65eMq1ddypDp5C2OKlUAg"
+      "token": "eyJ2IjoxLCJzdWIiOiI1YTBlMmY2Yy04YTQxLTRhOGUtOWIzMy0wYzZlMmQxZjdhMTAiLCJhY3QiOiI3YzFkOWUyYS00YjVmLTRjNmQtOGU3Zi05YTBiMWMyZDNlNGYiLCJwbGFuIjoicHJvIiwidGVuYW50SWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJpbnN0YWxsSWQiOiIwZjllOGQ3Yy02YjVhLTRjM2QtOGUyZi0xYTBiOWM4ZDdlNmYiLCJ0ZW5hbnRzIjoyLCJzdGF0dXMiOiJncmFudGVkIiwiaWF0IjoxNzkzMDAwMDAwLCJleHAiOjE3OTQyMDk2MDB9.mzEE1f1vmKEpu4hJavsLJi7RsbIGDbXxl_QbRQTeUV3Gkq_Sp-Pt2AwQQIAjyHicYg-2HMe_jzpKxo1PMSHbDA"
     },
     {
       "name": "v1 msp",
@@ -168,7 +169,7 @@
         "iat": 1793000000,
         "exp": 1794209600
       },
-      "token": "eyJ2IjoxLCJzdWIiOiI1YTBlMmY2Yy04YTQxLTRhOGUtOWIzMy0wYzZlMmQxZjdhMTAiLCJhY3QiOiI3YzFkOWUyYS00YjVmLTRjNmQtOGU3Zi05YTBiMWMyZDNlNGYiLCJwbGFuIjoibXNwIiwidGVuYW50SWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJpbnN0YWxsSWQiOiIwZjllOGQ3Yy02YjVhLTRjM2QtOGUyZi0xYTBiOWM4ZDdlNmYiLCJ0ZW5hbnRzIjoyNSwic3RhdHVzIjoiZ3JhbnRlZCIsImlhdCI6MTc5MzAwMDAwMCwiZXhwIjoxNzk0MjA5NjAwfQ.nS_aEqcQuzDQSTrY2-dnDYAKlYvH30CrpdGCs6o0gzOP9TAxe6MLGtwLmDfTlH3yWvqywZtIvK8gNIm8TFggDg"
+      "token": "eyJ2IjoxLCJzdWIiOiI1YTBlMmY2Yy04YTQxLTRhOGUtOWIzMy0wYzZlMmQxZjdhMTAiLCJhY3QiOiI3YzFkOWUyYS00YjVmLTRjNmQtOGU3Zi05YTBiMWMyZDNlNGYiLCJwbGFuIjoibXNwIiwidGVuYW50SWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJpbnN0YWxsSWQiOiIwZjllOGQ3Yy02YjVhLTRjM2QtOGUyZi0xYTBiOWM4ZDdlNmYiLCJ0ZW5hbnRzIjoyNSwic3RhdHVzIjoiZ3JhbnRlZCIsImlhdCI6MTc5MzAwMDAwMCwiZXhwIjoxNzk0MjA5NjAwfQ.AMi1qKFoVZ98XcdLkpPCCWDtwoEQkJLrLIuglsuc10qIroATyeF33-jGH_i97KFzD1vmyQEGfur6lu07nzENCg"
     },
     {
       "name": "v2 expiring paid key",
@@ -185,7 +186,7 @@
         "exp": 1794209600,
         "keyExp": 1810280000
       },
-      "token": "eyJ2IjoyLCJzdWIiOiI1YTBlMmY2Yy04YTQxLTRhOGUtOWIzMy0wYzZlMmQxZjdhMTAiLCJhY3QiOiI3YzFkOWUyYS00YjVmLTRjNmQtOGU3Zi05YTBiMWMyZDNlNGYiLCJwbGFuIjoicHJvIiwidGVuYW50SWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJpbnN0YWxsSWQiOiIwZjllOGQ3Yy02YjVhLTRjM2QtOGUyZi0xYTBiOWM4ZDdlNmYiLCJ0ZW5hbnRzIjoyLCJzdGF0dXMiOiJncmFudGVkIiwiaWF0IjoxNzkzMDAwMDAwLCJleHAiOjE3OTQyMDk2MDAsImtleUV4cCI6MTgxMDI4MDAwMH0.hX_kG9EPx1-HLZcYvlNafEdlqVBXaQ9qyxpjKqwTjs7Ex50J_hwJJ_L89BadiouChNxBtMe7zfjvjzdPwV5DCw"
+      "token": "eyJ2IjoyLCJzdWIiOiI1YTBlMmY2Yy04YTQxLTRhOGUtOWIzMy0wYzZlMmQxZjdhMTAiLCJhY3QiOiI3YzFkOWUyYS00YjVmLTRjNmQtOGU3Zi05YTBiMWMyZDNlNGYiLCJwbGFuIjoicHJvIiwidGVuYW50SWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJpbnN0YWxsSWQiOiIwZjllOGQ3Yy02YjVhLTRjM2QtOGUyZi0xYTBiOWM4ZDdlNmYiLCJ0ZW5hbnRzIjoyLCJzdGF0dXMiOiJncmFudGVkIiwiaWF0IjoxNzkzMDAwMDAwLCJleHAiOjE3OTQyMDk2MDAsImtleUV4cCI6MTgxMDI4MDAwMH0.MFjD_JRbFqDXAIxuCZyzbZ2PUdxgvhkyhaSTGToBDTlzXEb3RPfUNqxwHUw0wmeEn3sqAK3MeWqoSrn4TDJ3DA"
     },
     {
       "name": "v2 trial",
@@ -203,7 +204,7 @@
         "keyExp": 1794728000,
         "trial": true
       },
-      "token": "eyJ2IjoyLCJzdWIiOiI1YTBlMmY2Yy04YTQxLTRhOGUtOWIzMy0wYzZlMmQxZjdhMTAiLCJhY3QiOiI3YzFkOWUyYS00YjVmLTRjNmQtOGU3Zi05YTBiMWMyZDNlNGYiLCJwbGFuIjoicHJvIiwidGVuYW50SWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJpbnN0YWxsSWQiOiIwZjllOGQ3Yy02YjVhLTRjM2QtOGUyZi0xYTBiOWM4ZDdlNmYiLCJ0ZW5hbnRzIjoyLCJzdGF0dXMiOiJncmFudGVkIiwiaWF0IjoxNzkzMDAwMDAwLCJleHAiOjE3OTQyMDk2MDAsImtleUV4cCI6MTc5NDcyODAwMCwidHJpYWwiOnRydWV9.3Ismd01pzPZWJOOBIU1sd5oOCEmInd8qrRXHK3BDZnw8ck8v1DyhEgwHaay5GIZY5w6mNOiY4NsReQXOxtzPCg"
+      "token": "eyJ2IjoyLCJzdWIiOiI1YTBlMmY2Yy04YTQxLTRhOGUtOWIzMy0wYzZlMmQxZjdhMTAiLCJhY3QiOiI3YzFkOWUyYS00YjVmLTRjNmQtOGU3Zi05YTBiMWMyZDNlNGYiLCJwbGFuIjoicHJvIiwidGVuYW50SWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJpbnN0YWxsSWQiOiIwZjllOGQ3Yy02YjVhLTRjM2QtOGUyZi0xYTBiOWM4ZDdlNmYiLCJ0ZW5hbnRzIjoyLCJzdGF0dXMiOiJncmFudGVkIiwiaWF0IjoxNzkzMDAwMDAwLCJleHAiOjE3OTQyMDk2MDAsImtleUV4cCI6MTc5NDcyODAwMCwidHJpYWwiOnRydWV9.aKmP6L7pQ6H0hNv5dneT2w2mhdAHKTD70b5PkraQg20W60fQvROhNB2Vs1W1BnLVtRL7V9oGoB-Zb0OTwF-WAQ"
     },
     {
       "name": "v2 tenant trial",
@@ -221,7 +222,7 @@
         "trial": true,
         "keyExp": 1794209600
       },
-      "token": "eyJ2IjoyLCJzdWIiOiJ0cmlhbDowMTIzNDU2Nzg5YWJjZGVmIiwiYWN0IjoidHJpYWwtMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYiLCJwbGFuIjoicHJvIiwidGVuYW50SWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJpbnN0YWxsSWQiOiIwZjllOGQ3Yy02YjVhLTRjM2QtOGUyZi0xYTBiOWM4ZDdlNmYiLCJ0ZW5hbnRzIjoyLCJzdGF0dXMiOiJncmFudGVkIiwiaWF0IjoxNzkzMDAwMDAwLCJleHAiOjE3OTQyMDk2MDAsInRyaWFsIjp0cnVlLCJrZXlFeHAiOjE3OTQyMDk2MDB9.A8bSm_X1_2rkLhzCL726CEhlT445U4axUaVgysrvY_WOztopAYmYd5fybRUFxe-gJPIH6KlO3j_MIC18UY2yDw"
+      "token": "eyJ2IjoyLCJzdWIiOiJ0cmlhbDowMTIzNDU2Nzg5YWJjZGVmIiwiYWN0IjoidHJpYWwtMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYiLCJwbGFuIjoicHJvIiwidGVuYW50SWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJpbnN0YWxsSWQiOiIwZjllOGQ3Yy02YjVhLTRjM2QtOGUyZi0xYTBiOWM4ZDdlNmYiLCJ0ZW5hbnRzIjoyLCJzdGF0dXMiOiJncmFudGVkIiwiaWF0IjoxNzkzMDAwMDAwLCJleHAiOjE3OTQyMDk2MDAsInRyaWFsIjp0cnVlLCJrZXlFeHAiOjE3OTQyMDk2MDB9.6PqHleZ8-arTNnahQnA7iDSLJa7jKmfNFyms0943Xk-YV_qb_7BwudnjTBZGdOY6zPXEP_-rT9vMaENd8tfKDg"
     },
     {
       "name": "v1 internal cis",
@@ -238,7 +239,7 @@
         "exp": 1794209600,
         "cis": "internal"
       },
-      "token": "eyJ2IjoxLCJzdWIiOiI1YTBlMmY2Yy04YTQxLTRhOGUtOWIzMy0wYzZlMmQxZjdhMTAiLCJhY3QiOiI3YzFkOWUyYS00YjVmLTRjNmQtOGU3Zi05YTBiMWMyZDNlNGYiLCJwbGFuIjoicHJvIiwidGVuYW50SWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJpbnN0YWxsSWQiOiIwZjllOGQ3Yy02YjVhLTRjM2QtOGUyZi0xYTBiOWM4ZDdlNmYiLCJ0ZW5hbnRzIjoyLCJzdGF0dXMiOiJncmFudGVkIiwiaWF0IjoxNzkzMDAwMDAwLCJleHAiOjE3OTQyMDk2MDAsImNpcyI6ImludGVybmFsIn0.QJ_AlzrTMHjaj2tKi2Zlwg6mMpEz5JokgGAOsO5Jc3jDIBgqQ45_fGECNcYAXeiI9FFGJiiYZVbh_WnAVWCBDQ"
+      "token": "eyJ2IjoxLCJzdWIiOiI1YTBlMmY2Yy04YTQxLTRhOGUtOWIzMy0wYzZlMmQxZjdhMTAiLCJhY3QiOiI3YzFkOWUyYS00YjVmLTRjNmQtOGU3Zi05YTBiMWMyZDNlNGYiLCJwbGFuIjoicHJvIiwidGVuYW50SWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJpbnN0YWxsSWQiOiIwZjllOGQ3Yy02YjVhLTRjM2QtOGUyZi0xYTBiOWM4ZDdlNmYiLCJ0ZW5hbnRzIjoyLCJzdGF0dXMiOiJncmFudGVkIiwiaWF0IjoxNzkzMDAwMDAwLCJleHAiOjE3OTQyMDk2MDAsImNpcyI6ImludGVybmFsIn0.egFCjh6CVySenB4qi5OkLwHxNtkeGziD5X6zvVSh0HlOsxLEhO7XCPbkrLPQ9-pM5OhP_PdDG-U-4krJNZ7yCA"
     },
     {
       "name": "v2 renewing, keyExp null",
@@ -255,7 +256,7 @@
         "exp": 1794209600,
         "keyExp": null
       },
-      "token": "eyJ2IjoyLCJzdWIiOiI1YTBlMmY2Yy04YTQxLTRhOGUtOWIzMy0wYzZlMmQxZjdhMTAiLCJhY3QiOiI3YzFkOWUyYS00YjVmLTRjNmQtOGU3Zi05YTBiMWMyZDNlNGYiLCJwbGFuIjoicHJvIiwidGVuYW50SWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJpbnN0YWxsSWQiOiIwZjllOGQ3Yy02YjVhLTRjM2QtOGUyZi0xYTBiOWM4ZDdlNmYiLCJ0ZW5hbnRzIjoyLCJzdGF0dXMiOiJncmFudGVkIiwiaWF0IjoxNzkzMDAwMDAwLCJleHAiOjE3OTQyMDk2MDAsImtleUV4cCI6bnVsbH0.coWECX2oCO20lWjvmwqCMvWb0Ztg6FFEjmV2Z8cC2IO-C6PBGV5qGvwm5B4rtOdh7cTEoyhI-f6rrIRRYyDICw"
+      "token": "eyJ2IjoyLCJzdWIiOiI1YTBlMmY2Yy04YTQxLTRhOGUtOWIzMy0wYzZlMmQxZjdhMTAiLCJhY3QiOiI3YzFkOWUyYS00YjVmLTRjNmQtOGU3Zi05YTBiMWMyZDNlNGYiLCJwbGFuIjoicHJvIiwidGVuYW50SWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJpbnN0YWxsSWQiOiIwZjllOGQ3Yy02YjVhLTRjM2QtOGUyZi0xYTBiOWM4ZDdlNmYiLCJ0ZW5hbnRzIjoyLCJzdGF0dXMiOiJncmFudGVkIiwiaWF0IjoxNzkzMDAwMDAwLCJleHAiOjE3OTQyMDk2MDAsImtleUV4cCI6bnVsbH0.qc5auHzJsqOfqn01lBRcDaihUbIJ-mgXcuDtrndup1f71OwyiWXKq-SsItphKzLCJOdnhttMlsTWjbb6y15dDg"
     }
   ],
   "requests": {

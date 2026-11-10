@@ -132,3 +132,18 @@ After coverage is known to have ended, if more than one connected tenant lacks c
 The Community choice is final. Other tenants stay locked, and their backups are kept. Add a license to use them again. Fresh installations without coverage history still assign Community to the first tenant used.
 
 You can close the picker with **Decide later** without choosing. A notice and **Choose tenant** buttons let you return during the same session. The picker opens again after restarting the app. **Add a license instead** opens License so you can buy Pro or enter a key.
+
+### More time and purchasing help
+
+Trial notices offer Buy Pro, a self-service extension when available, and a way to contact us.
+Use **Extend trial** in a notice or on the License page. The button shows the extension length
+reported by the licensing service. Before the extension window, the notice shows when it opens
+when the service supplies that date. You can extend once; after extending, the new end date appears.
+
+Need a quote or an invoice for your purchasing team? Write to [support@tenuvault.com](mailto:support@tenuvault.com?subject=TenuVault%20Pro%3A%20quote%20or%20invoice).
+You can ask questions there too. The link does not send tenant or account details.
+
+While TenuVault runs in the tray, a system notification reminds you when a tenant trial has
+one day left and when it ends. Clicking opens the License page. Each notice appears at most once
+per trial end date, including across restarts. Extending re-arms the reminder for the new date.
+Paid tenants and tenants covered by an organization license do not receive these notices.
