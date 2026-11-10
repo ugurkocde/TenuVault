@@ -132,7 +132,7 @@ export function RevertProgressModal({
           <DialogTitle className="text-2xl font-medium tracking-tight text-gray-900 mb-2">
             {action === "revert" ? "Reverting Policy" : "Restoring Policy"}
           </DialogTitle>
-          <DialogDescription className="text-gray-600">
+          <DialogDescription className="break-words text-gray-600">
             {policyName}
           </DialogDescription>
         </div>
@@ -172,10 +172,10 @@ export function RevertProgressModal({
         {error && (
           <div className="mb-6 rounded-2xl bg-red-50 p-4">
             <div className="flex items-start gap-3">
-              <AlertCircle className="h-5 w-5 text-red-600 mt-0.5" />
-              <div>
+              <AlertCircle className="h-5 w-5 shrink-0 text-red-600 mt-0.5" />
+              <div className="min-w-0">
                 <p className="font-medium text-red-800">Operation Failed</p>
-                <p className="text-sm text-red-700 mt-1"><LinkedMessage text={error} /></p>
+                <p className="break-words text-sm text-red-700 mt-1"><LinkedMessage text={error} /></p>
               </div>
             </div>
           </div>
