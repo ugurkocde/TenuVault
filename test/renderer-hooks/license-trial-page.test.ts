@@ -324,15 +324,38 @@ describe("License page after a used tenant trial", () => {
   })
 
   it("shows one Buy Pro when a trial key is refused for the tenant", async () => {
-    state.setKey.mockRejectedValueOnce(new Error("This tenant already had a Pro trial. Buy Pro to continue, or write to support@tenuvault.com for a quote or an invoice."))
-    const container = await render({ ...community, tenantTrialsEnabled: true, tenants: [used()] })
+    const refused = "This tenant already had a Pro trial. Buy Pro to continue, or write to support@tenuvault.com for a quote or an invoice."
+    const before: LicenseStatus = { ...community, tenantTrialsEnabled: true, tenants: [used()] }
+    // The main process keeps the refused key and records the refusal on the tenant before it rejects.
+    state.setKey.mockImplementationOnce(async () => {
+      state.status = { ...before, hasKey: true, keyState: "pending", keyHint: "****0001", tenants: [used({ message: refused })] }
+      throw new Error(refused)
+    })
+    const container = await render(before)
     expect(buyButtons(container)).toHaveLength(1)
     type(container.querySelector<HTMLInputElement>("#license-key")!, "TENU-TRIAL-KEY-0001")
     await act(async () => button(container, "Activate")!.click())
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("This tenant already had a Pro trial.")
+    expect(container.textContent).not.toContain(refused)
     expect(buyButtons(container)).toHaveLength(1)
+    expect(container.querySelectorAll('a[href^="mailto:support@tenuvault.com"]')).toHaveLength(1)
     await act(async () => { buyButtons(container)[0]!.click() })
     expect(state.open).toHaveBeenCalledWith("checkout", { source: "license-page-trial-key-refused" })
+  })
+
+  it("shows one Buy Pro when a refusal is recorded on the tenant without a saved key", async () => {
+    const refused = "This tenant already had a Pro trial. Buy Pro to continue, or write to support@tenuvault.com for a quote or an invoice."
+    const container = await render({ ...community, tenantTrialsEnabled: true, tenants: [used({ message: refused })] })
+    expect(buyButtons(container)).toHaveLength(1)
+  })
+
+  it("offers Buy Pro while a trial that ran out still has its saved activation", async () => {
+    // Before the next online check drops it, the main process still reports the expired trial's activation.
+    const container = await render({ ...community, tenantTrialsEnabled: true, tenants: [used({ activated: true, trialEndsAt: new Date(Date.now() - 20 * DAY).toISOString() })] })
+    expect(container.textContent).not.toMatch(/start a free trial/i)
+    expect(buyButtons(container)).toHaveLength(1)
+    await act(async () => { buyButtons(container)[0]!.click() })
+    expect(state.open).toHaveBeenCalledWith("checkout", { source: "license-page-trial-used" })
   })
 
   it("still offers the trial to a tenant that can start one", async () => {

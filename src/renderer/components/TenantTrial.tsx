@@ -175,12 +175,12 @@ export function TenantTrialCard({ tenant, initialEmail, welcome = false, allowUn
       {!status?.tenantTrialsEnabled && tenant.trialCanExtend && <Button variant="outline" disabled={busy} onClick={() => void run("extend_trial")}>Need more time? Extend your trial</Button>}
     </footer>}
     <Dialog open={confirmEnd} onOpenChange={open => { if (!open && !busy) setConfirmEnd(false) }}>
-      <DialogContent>
+      <DialogContent hideClose={busy}>
         <DialogHeader>
           <DialogTitle>End the Pro trial now?</DialogTitle>
           <DialogDescription>This tenant moves to Community Free right away. The trial cannot be started again for this tenant. Backups and settings are kept. Community keeps 30 days of backup history.</DialogDescription>
         </DialogHeader>
-        {endError && <p role="alert" className="text-sm text-red-700">{endError} The trial is still running.</p>}
+        {(endError || error) && <p role="alert" className="text-sm text-red-700">{endError ? `${endError} The trial is still running.` : error}</p>}
         <div className="flex flex-wrap justify-end gap-2">
           <Button type="button" variant="outline" disabled={busy} onClick={() => setConfirmEnd(false)}>Keep the trial</Button>
           <Button type="button" variant="destructive" disabled={busy} onClick={() => void endTrial()}>{busy ? "Ending trial..." : "End trial and use Community"}</Button>
