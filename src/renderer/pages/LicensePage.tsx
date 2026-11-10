@@ -1,4 +1,4 @@
-import { TenantTrialCard, TenantTrialOptions, TrialActions } from "../components/TenantTrial"
+import { TenantTrialCard, TenantTrialOptions, TrialActions, TrialKeyRefusalActions } from "../components/TenantTrial"
 import { CommunityTenantChoiceButton } from "../components/CommunityTenantPicker"
 import { useEffect, useRef, useState, type MouseEvent, type Ref } from "react"
 import { Link, useLocation } from "react-router-dom"
@@ -24,7 +24,7 @@ import { Checkbox } from "~/components/ui/checkbox"
 import { Input } from "~/components/ui/input"
 import { Label } from "~/components/ui/label"
 import type { LicenseStatus, TenantLicenseStatus } from "../../shared/ipc"
-import { INVOICE_REQUEST_EMAIL, INVOICE_REQUEST_URL } from "../../shared/constants"
+import { INVOICE_REQUEST_EMAIL, INVOICE_REQUEST_URL, TRIAL_USED_MESSAGE } from "../../shared/constants"
 import { LicenseAgreementLink } from "../components/LicenseAgreementDialog"
 import { TrialSignupForm } from "../components/TrialSignupForm"
 import { useClipboardLicenseKey } from "../lib/clipboard-key"
@@ -164,6 +164,7 @@ function ReplaceKeyForm({ busy, onReplace }: { busy: Busy; onReplace: (key: stri
  */
 function InactiveKeyReplacement({ status, busy, onReplace }: { status: LicenseStatus; busy: Busy; onReplace: (key: string) => void }) {
   const [replacing, setReplacing] = useState(false)
+  const showPurchase = (!status.trialEndedAt || !status.tenantTrialsEnabled) && !status.tenants.some(tenant => tenant.message === TRIAL_USED_MESSAGE)
   return (
     <div className="space-y-3 rounded-3xl bg-gray-50 p-5">
       <p className="text-sm text-gray-700">
@@ -173,7 +174,7 @@ function InactiveKeyReplacement({ status, busy, onReplace }: { status: LicenseSt
       </p>
       {status.trialEndedAt && status.tenantTrialsEnabled && <TrialActions source="license-page-trial-ended" />}
       <div className="flex flex-wrap gap-2">
-        {(!status.trialEndedAt || !status.tenantTrialsEnabled) && <Button type="button" onClick={() => void openCheckout(status.trialEndedAt ? "license-page-trial-ended" : "license-page-inactive")}>
+        {showPurchase && <Button type="button" onClick={() => void openCheckout(status.trialEndedAt ? "license-page-trial-ended" : "license-page-inactive")}>
           <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />
           Buy Pro
         </Button>}
@@ -185,7 +186,7 @@ function InactiveKeyReplacement({ status, busy, onReplace }: { status: LicenseSt
         )}
       </div>
       {replacing && <ReplaceKeyForm busy={busy} onReplace={onReplace} />}
-      {(!status.trialEndedAt || !status.tenantTrialsEnabled) && <InvoiceNote />}
+      {showPurchase && <InvoiceNote />}
     </div>
   )
 }
@@ -276,7 +277,10 @@ function TenantRow({
           {organization && tenant.displayKey ? ` · Organization license ${tenant.displayKey}` : ""}
         </p>
       )}
-      {!tenant.entitled && tenant.message && <p className="text-xs text-orange-700">{tenant.message}</p>}
+      {!tenant.entitled && tenant.message && <>
+        <p className="text-xs text-orange-700">{tenant.message}</p>
+        <TrialKeyRefusalActions message={tenant.message} tenant={tenant} source="license-page-trial-key-refused" />
+      </>}
       {!tenant.entitled && tenant.plan !== "community" && tenant.signedIn && tenant.coverageEnded && !choicePending && <p className="text-xs text-gray-600">Backups of this tenant are kept. Add a license to use it again.</p>}
       {keyHolder && (
         <div className="rounded-2xl bg-gray-50 p-4">
@@ -483,7 +487,9 @@ export default function LicensePage() {
           {(status.keyMessage || (status.message && signedIn > 0)) && (
             <Alert>
               <AlertTriangle className="h-4 w-4 text-amber-600" />
-              <AlertDescription>{status.keyMessage ?? status.message}</AlertDescription>
+              <AlertDescription>{status.keyMessage ?? status.message}
+                <TrialKeyRefusalActions message={status.keyMessage ?? status.message ?? ""} source="license-page-trial-key-refused" />
+              </AlertDescription>
             </Alert>
           )}
 
@@ -548,7 +554,9 @@ export default function LicensePage() {
           {error && (
             <Alert variant="destructive">
               <AlertCircle className="h-4 w-4" />
-              <AlertDescription>{error}</AlertDescription>
+              <AlertDescription>{error}
+                <TrialKeyRefusalActions message={error} tenant={status.tenants.find(tenant => tenant.message === error)} source="license-page-trial-key-refused" />
+              </AlertDescription>
             </Alert>
           )}
           {notice && (

@@ -26,6 +26,7 @@ export const TERMS_URL = "https://tenuvault.com/terms"
 
 /** Email support is part of the paid plans; Community users open a GitHub issue instead. */
 export const SUPPORT_EMAIL = "support@tenuvault.com"
+export const TRIAL_USED_MESSAGE = "This tenant already had a Pro trial. Buy Pro to continue, or write to support@tenuvault.com for a quote or an invoice."
 /** Quotes, purchase orders and invoices for yearly plans, for buyers who cannot pay by card. */
 export const INVOICE_REQUEST_EMAIL = SUPPORT_EMAIL
 export const INVOICE_REQUEST_URL = `mailto:${INVOICE_REQUEST_EMAIL}?subject=${encodeURIComponent("TenuVault invoice or quote request")}`

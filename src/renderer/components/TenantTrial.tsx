@@ -8,7 +8,7 @@ import { bridge } from "../lib/bridge"
 import { formatDate, useLicense } from "../lib/license"
 import { openCheckout } from "../lib/purchase"
 import { useTrialAction } from "../lib/trial-action"
-import { SUPPORT_EMAIL, LOCAL_STORAGE_PREFIX } from "../../shared/constants"
+import { SUPPORT_EMAIL, TRIAL_USED_MESSAGE, LOCAL_STORAGE_PREFIX } from "../../shared/constants"
 import { changeTenantStorage, LOCAL_SWITCH_CONFIRMATION } from "../lib/storage"
 import { useConfirm } from "~/components/ConfirmDialog"
 import { CommunityTenantChoiceButton } from "./CommunityTenantPicker"
@@ -24,6 +24,10 @@ export function TrialUsage({ tenant }: { tenant: TenantLicenseStatus }) {
   return summary ? <p className="text-sm">{summary}</p> : null
 }
 
+export function TrialKeyRefusalActions({ message, tenant, source }: { message: string; tenant?: TenantLicenseStatus; source: string }) {
+  return message.includes(TRIAL_USED_MESSAGE) ? <TrialActions tenant={tenant} source={source} /> : null
+}
+
 export function TrialActions({ tenant, source, welcome = false }: { tenant?: TenantLicenseStatus; source: string; welcome?: boolean }) {
   const { status } = useLicense()
   const { busy, error, run } = useTrialAction()
@@ -34,8 +38,8 @@ export function TrialActions({ tenant, source, welcome = false }: { tenant?: Ten
   const mailto = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent("TenuVault Pro: quote or invoice")}`
   return <div className="min-w-0 space-y-2 text-sm font-normal">
     <div className="flex flex-wrap items-center gap-2">
-      {!welcome && <Button size="sm" disabled={busy} onClick={() => { setAction("buy"); void run(() => openCheckout(source)).finally(() => setAction(null)) }}>Buy Pro</Button>}
-      {!welcome && tenant?.trialCanExtend && !extended && <Button size="sm" variant="outline" disabled={busy} onClick={() => { setAction("extend"); void run(async () => {
+      {!welcome && <Button type="button" size="sm" disabled={busy} onClick={() => { setAction("buy"); void run(() => openCheckout(source)).finally(() => setAction(null)) }}>Buy Pro</Button>}
+      {!welcome && tenant?.trialCanExtend && !extended && <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => { setAction("extend"); void run(async () => {
         const updated = await bridge.license.tenantTrialAction(tenant.tenantId, "extend_trial")
         const end = updated?.tenants.find(t => t.tenantId === tenant.tenantId)?.trialEndsAt
         setExtended(true)
@@ -58,7 +62,7 @@ export function TenantTrialOptions({ onStarted, tenantId, compact = false, varia
   const Container = compact ? "span" : "div"
   const Text = compact ? "span" : "p"
   return <Container className={compact ? "inline-flex flex-wrap items-center gap-3" : "space-y-3"}>
-    {status.tenants.filter(t => (!status?.tenantTrialsEnabled || !tenantId || t.tenantId === tenantId) && t.signedIn && !t.entitled && (status.tenantTrialsEnabled || t.trialRefusal)).map(tenant => <Container key={tenant.tenantId} className={compact ? "inline-flex flex-wrap items-center gap-3" : "flex flex-wrap items-center gap-3"}>
+    {status.tenants.filter(t => (!status?.tenantTrialsEnabled || !tenantId || t.tenantId === tenantId) && t.signedIn && !t.entitled && t.message !== TRIAL_USED_MESSAGE && (status.tenantTrialsEnabled || t.trialRefusal)).map(tenant => <Container key={tenant.tenantId} className={compact ? "inline-flex flex-wrap items-center gap-3" : "flex flex-wrap items-center gap-3"}>
       {!compact && tenant.trialRefusal && <Text role="status">{tenant.trialRefusal}</Text>}
       {tenant.activated ? <Text className="text-sm text-gray-600">Check the saved activation before starting a trial.</Text> : status.tenantTrialsEnabled && !(tenant.trialRefusalPermanent ?? Boolean(tenant.trialRefusal)) && <><Button variant={variant} size={size} disabled={busy} onClick={() => void run(async () => {
         await bridge.license.startTenantTrial(tenant.tenantId)

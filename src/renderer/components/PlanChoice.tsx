@@ -8,7 +8,7 @@ import type { LicenseStatus } from "../../shared/ipc"
 import { bridge } from "../lib/bridge"
 import { useClipboardLicenseKey } from "../lib/clipboard-key"
 import { tenantLicense, tenantPlan, useLicense } from "../lib/license"
-import { TenantTrialCard, TenantTrialOptions } from "./TenantTrial"
+import { TenantTrialCard, TenantTrialOptions, TrialKeyRefusalActions } from "./TenantTrial"
 import { TrialSignupForm } from "./TrialSignupForm"
 
 /**
@@ -81,7 +81,9 @@ export function LicenseKeyEntry({ watchClipboard = false, onSaved, label = "Lice
       {error ? (
         <Alert variant="destructive" id={`${id}-error`} role="alert">
           <AlertCircle className="h-4 w-4" />
-          <AlertDescription>{error}</AlertDescription>
+          <AlertDescription>{error}
+            <TrialKeyRefusalActions message={error} source="key-entry-trial-key-refused" />
+          </AlertDescription>
         </Alert>
       ) : (
         <p id={`${id}-help`} role="status" className="text-xs text-gray-600">

@@ -188,6 +188,8 @@ You can close the picker with **Decide later** without choosing. A notice and **
 
 ### More time and purchasing help
 
+A trial key works for a tenant that has not had a Pro trial yet. If the tenant already used a tenant trial or another emailed trial key, TenuVault keeps the saved key and any existing coverage. The key can still work for another eligible tenant. Buy Pro to continue, or write to [support@tenuvault.com](mailto:support@tenuvault.com?subject=TenuVault%20Pro%3A%20quote%20or%20invoice) for a quote or an invoice.
+
 Trial notices offer Buy Pro, a self-service extension when available, and a way to contact us.
 Use **Extend trial** in a notice or on the License page. The button shows the extension length
 reported by the licensing service. Before the extension window, the notice shows when it opens

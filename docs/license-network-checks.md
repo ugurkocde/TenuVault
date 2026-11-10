@@ -1,5 +1,7 @@
 # Licensing checks outside the app
 
+The activation refusal `trial_used` (HTTP 403) means this tenant already had a Pro trial. It is specific to the tenant: the app keeps the saved key and existing coverage, leaves other tenants untouched, and does not treat it as a lapse or move the tenant to Community. Refused activations use the normal failure cooldown; the admin can retry sooner or enter a different key. Older app versions receive `invalid_key` from the service. The shared contract fixture lists the supported reasons and signed token examples.
+
 Two checks of the buyer path that run against production rather than tests, and their records.
 The plan behind them is
 [`tasks/license-activation-reliability-2026-11-06.md`](../tasks/license-activation-reliability-2026-11-06.md)

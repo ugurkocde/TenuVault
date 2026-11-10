@@ -2,6 +2,7 @@ import { readTenantTrials, TENANT_TRIAL_STATE_KEY, type StoredTenantTrial, type 
 import { CommunityChoicePendingError, CommunityLimitError } from "../../shared/plan-errors"
 import { createHash, createPublicKey, randomUUID, verify, type KeyObject } from "node:crypto"
 import type { LicenseStatus, TenantLicenseStatus } from "../../shared/ipc"
+import { TRIAL_USED_MESSAGE } from "../../shared/constants"
 import { FEATURE_PLAN, type Feature, type Plan } from "../../shared/plans"
 import { networkFailure } from "../api/network-error"
 import type { KeyValueStore } from "../storage/secure-store"
@@ -170,6 +171,7 @@ const TRIAL_REASONS: Record<string, string> = {
 
 const REASONS: Record<string, string> = {
   invalid_key: "This license key is not valid for TenuVault.",
+  trial_used: TRIAL_USED_MESSAGE,
   not_found:
     "This license key is not valid, or it has been revoked or has expired. Check your subscription in the customer portal.",
   revoked: "This license has been revoked. Check your subscription.",
@@ -335,7 +337,7 @@ export class LicenseService {
   private message: string | null = null
   private offline = false
   private readonly messages = new Map<string, string>()
-  private readonly failures = new Map<string, { error: unknown; until: number }>()
+  private readonly failures = new Map<string, { error: unknown; until: number; key?: string }>()
   // Community tenants, until their next check for a license.
   private readonly community = new Map<string, number>()
   private readonly communityEligibility = new Map<string, string>()
@@ -993,8 +995,17 @@ export class LicenseService {
     if (persist) this.save()
   }
 
+  private clearTrialKeyRefusals(): void {
+    for (const [tenant, failure] of this.failures) if (failure.error instanceof LicenseDenied && failure.error.reason === "trial_used") {
+      this.failures.delete(tenant)
+      this.messages.delete(tenant)
+    }
+  }
+
   private async activate(tenantId: string): Promise<void> {
     if (!this.state?.key) throw new Error("Enter a license key first.")
+    const refusal = this.failures.get(tenantId)
+    if (refusal?.error instanceof LicenseDenied && refusal.error.reason === "trial_used" && refusal.key === this.state.key && refusal.until > Date.now()) throw refusal.error
     const current = this.requestGuard(tenantId)
     const key = this.state.key
     const data = await this.call("activate", {
@@ -1004,7 +1015,10 @@ export class LicenseService {
       os: this.platform,
       appVersion: this.options.appVersion,
       ...(await this.sharingFields(tenantId)),
-    }, current)
+    }, current).catch((error: unknown) => {
+      if (error instanceof LicenseDenied && error.reason === "trial_used" && current()) this.failures.set(tenantId, { error, until: Date.now() + FAILURE_COOLDOWN_MS, key })
+      throw error
+    })
     this.assertCurrent(current)
     this.accept(tenantId, data, "key")
   }
@@ -1059,7 +1073,7 @@ export class LicenseService {
     } catch (keyError) {
       this.assertCurrent(current)
       if (!(keyError instanceof LicenseDenied)) throw keyError
-      if (this.state?.key) {
+      if (this.state?.key && keyError.reason !== "trial_used") {
         this.state.keyFailure = keyError.reason
         this.save()
       }
@@ -1125,7 +1139,7 @@ export class LicenseService {
       this.accept(tenantId, data, "key")
     } catch (error) {
       this.assertCurrent(current)
-      if (error instanceof LicenseDenied) {
+      if (error instanceof LicenseDenied && error.reason !== "trial_used") {
         if (LAPSED.has(error.reason)) this.confirmCommunity(tenantId)
         if (!entry.source) this.state.keyFailure = error.reason
         delete this.state.activations[tenantId]
@@ -1190,7 +1204,8 @@ export class LicenseService {
   /**
    * Saves the key and activates it for the given signed-in tenants that are not licensed
    * yet. Without such tenants the key is only saved and activates when a tenant is used.
-   * When every activation fails the key is not kept and the first error is thrown.
+   * When every activation fails the first error is thrown. Tenant-specific trial_used
+   * refusals keep the key for another tenant; other failures restore the previous state.
    */
   async setKey(key: string, tenantIds: string[]): Promise<void> {
     this.load()
@@ -1207,6 +1222,7 @@ export class LicenseService {
       ) {
         throw new Error("Deactivate this machine before entering a different license key.")
       }
+      if (previous?.key !== trimmed) this.clearTrialKeyRefusals()
       this.state = {
         key: trimmed,
         ...(previous?.key === trimmed && previous.keyFailure ? { keyFailure: previous.keyFailure } : {}),
@@ -1228,7 +1244,7 @@ export class LicenseService {
           this.assertCurrent(() => this.state?.key === trimmed)
           firstError ??= error
           if (this.tenantPresent(tenant) && !(error instanceof StaleLicenseRequest)) {
-            if (error instanceof LicenseDenied) this.state.keyFailure = error.reason
+            if (error instanceof LicenseDenied && error.reason !== "trial_used") this.state.keyFailure = error.reason
             this.messages.set(tenant, errorText(error))
           }
         }
@@ -1237,6 +1253,13 @@ export class LicenseService {
         if (await this.replaceTrialWithKey(tenant)) activated++
       }
       if (targets.length > 0 && activated === 0) {
+        if (targets.every(tenant => {
+          const error = this.failures.get(tenant)?.error
+          return error instanceof LicenseDenied && error.reason === "trial_used"
+        })) {
+          this.save()
+          throw firstError
+        }
         const keyFailure = this.state.keyFailure
         this.assertCurrent(() => this.state?.key === trimmed)
         this.state = previous
@@ -1374,6 +1397,7 @@ export class LicenseService {
         throw new Error(`The new license key could not be saved. Your current license is unchanged. ${errorText(error)}`)
       }
       this.message = null
+      this.clearTrialKeyRefusals()
       // Publish the carried sharing choice for the new key. A tenant that shared moves its
       // organization license to the new key here; until this succeeds (it is retried with every
       // refresh) the tenant's admins keep the previous key's sharing.
@@ -1531,7 +1555,7 @@ export class LicenseService {
     const current = () => key === this.state?.key && this.tenantPresent(tenant)
     try {
       const failure = this.failures.get(tenant)
-      if (failure && failure.until > Date.now()) throw failure.error
+      if (failure && failure.until > Date.now() && (!(failure.error instanceof LicenseDenied) || failure.error.reason !== "trial_used" || failure.key === key)) throw failure.error
       await this.entitle(tenant)
       this.assertCurrent(current)
       const plan = this.valid(tenant)?.plan
@@ -1539,6 +1563,7 @@ export class LicenseService {
       throw new Error("The license is not valid for this tenant.")
     } catch (error) {
       this.assertCurrent(current)
+      if (error instanceof LicenseDenied && error.reason === "trial_used" && this.options.store.get(COMMUNITY_KEY) === tenant) return "community"
       if (error instanceof StaleLicenseRequest || !this.lapsedOrUnlicensed(tenant, error)) throw error
       this.confirmCommunity(tenant)
       return this.useCommunity(tenant)
@@ -1703,7 +1728,7 @@ export class LicenseService {
         caught instanceof LicenseDenied && caught.reason === "tenant_not_licensed" ? new Error(LICENSE_REQUIRED) : caught
       if (error === caught) this.messages.set(tenant, errorText(error))
       else this.messages.delete(tenant)
-      this.failures.set(tenant, { error, until: Date.now() + FAILURE_COOLDOWN_MS })
+      this.failures.set(tenant, { error, until: Date.now() + FAILURE_COOLDOWN_MS, ...(error instanceof LicenseDenied && error.reason === "trial_used" ? { key } : {}) })
       this.options.onChange?.()
       throw error
     }

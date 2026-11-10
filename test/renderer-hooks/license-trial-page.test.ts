@@ -175,3 +175,37 @@ describe("License page trial", () => {
     expect(state.setKey).not.toHaveBeenCalled()
   })
 })
+
+it.each([false, true])("shows a tenant trial key refusal with purchasing actions (extension %s)", async canExtend => {
+  const message = "This tenant already had a Pro trial. Buy Pro to continue, or write to support@tenuvault.com for a quote or an invoice."
+  const tenant = { tenantId: "11111111-2222-4333-8444-555555555555", signedIn: true, activated: false, entitled: false, source: null, plan: null, tenants: null, expiresAt: null, validUntil: null, shared: null, shareNeedsSignIn: false, displayKey: null, message, trialCanExtend: canExtend }
+  const container = await render({ ...community, tenantTrialsEnabled: true, hasKey: true, keyState: "pending", tenants: [tenant] })
+  expect(container.textContent).toContain(message)
+  expect(container.textContent).not.toContain("Need an invoice instead of a card?")
+  expect(button(container, "Try Pro free")).toBeUndefined()
+  expect(Boolean(button(container, "Extend your trial"))).toBe(canExtend)
+  const buy = button(container, "Buy Pro")!
+  const mailto = container.querySelector<HTMLAnchorElement>('a[href^="mailto:support@tenuvault.com?subject=TenuVault%20Pro"]')!
+  expect(buy).toBeTruthy()
+  expect(mailto).toBeTruthy()
+  expect(buy.compareDocumentPosition(mailto) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  expect(new URL(mailto.href).searchParams.get("subject")).toBe("TenuVault Pro: quote or invoice")
+  expect(new URL(mailto.href).searchParams.has("body")).toBe(false)
+  expect(mailto.href).not.toContain(tenant.tenantId)
+  await act(async () => { buy.click(); mailto.click() })
+  expect(state.open).toHaveBeenCalledWith("checkout", { source: "license-page-trial-key-refused" })
+  expect(state.openExternal).toHaveBeenCalledWith(mailto.href)
+})
+
+it("shows the shared purchasing actions for a thrown trial key activation error", async () => {
+  const message = "This tenant already had a Pro trial. Buy Pro to continue, or write to support@tenuvault.com for a quote or an invoice."
+  state.setKey.mockRejectedValueOnce(new Error(message))
+  const container = await render(community)
+  type(container.querySelector<HTMLInputElement>('#license-key')!, "TENU-TRIAL-KEY-0001")
+  await act(async () => button(container, "Activate")!.click())
+  const alert = [...container.querySelectorAll('[role="alert"]')].find(node => node.textContent?.includes(message))!
+  expect(alert.textContent).toContain(message)
+  expect(button(alert as HTMLElement, "Buy Pro")).toBeTruthy()
+  expect(alert.querySelector('a[href^="mailto:support@tenuvault.com"]')).toBeTruthy()
+  expect(button(alert as HTMLElement, "Extend your trial")).toBeUndefined()
+})
