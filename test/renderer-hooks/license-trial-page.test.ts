@@ -10,8 +10,8 @@ const state = vi.hoisted(() => ({
   open: vi.fn(async () => undefined),
   startTrial: vi.fn(async () => undefined),
   deactivate: vi.fn(async () => undefined),
-  setKey: vi.fn(async () => undefined),
-  replaceKey: vi.fn(async () => undefined),
+  setKey: vi.fn(async (): Promise<LicenseStatus | undefined> => undefined),
+  replaceKey: vi.fn(async (): Promise<LicenseStatus | undefined> => undefined),
   openExternal: vi.fn(async () => undefined),
   clipboardKey: vi.fn(async (): Promise<string | null> => null),
   status: null as LicenseStatus | null,
@@ -130,6 +130,7 @@ describe("License page trial", () => {
   it("shows when the trial ends and buys Pro without another trial", async () => {
     const validUntil = new Date(Date.now() + 9.5 * 24 * 60 * 60_000).toISOString()
     const container = await render({ ...community, hasKey: true, keyState: "active", keyHint: "****ABCD", plan: "pro", tenantLimit: 2, trialEndsAt: validUntil, trial: true })
+    expect(container.textContent).not.toContain("so this key is not needed on this computer")
     expect(container.textContent).toContain("Pro trial active")
     expect(container.textContent).toContain("in 10 days")
     expect(container.querySelector('input[type="email"]')).toBeNull()
@@ -147,6 +148,7 @@ describe("License page trial", () => {
     expect(container.textContent).toContain("Trial ends")
     expect(container.textContent).not.toContain("Active, Pro")
     expect(container.textContent).not.toContain("Valid until")
+    expect(container.textContent).not.toContain("so this key is not needed on this computer")
     expect(container.textContent).toContain("Pro trial active")
     expect(container.textContent).not.toContain("Try Pro free for 30 days")
   })
@@ -211,4 +213,66 @@ it("shows the shared purchasing actions for a thrown trial key activation error"
   expect(button(alert as HTMLElement, "Buy Pro")).toBeTruthy()
   expect(alert.querySelector('a[href^="mailto:support@tenuvault.com"]')).toBeTruthy()
   expect(button(alert as HTMLElement, "Extend your trial")).toBeUndefined()
+})
+
+const organizationCovered: LicenseStatus = {
+  ...community, hasKey: true, keyState: "pending", keyHint: "****TEST",
+  tenants: ["contoso", "fabrikam"].map(tenantId => ({
+    tenantId, signedIn: true, activated: true, entitled: true, source: "tenant", plan: "msp",
+    tenants: 10, expiresAt: null, validUntil: null, shared: null, shareNeedsSignIn: false,
+    displayKey: null, message: null,
+  })),
+}
+const neutralSavedKeyNote = "Your signed-in tenants are licensed through your organization, so this key is not needed on this computer. It stays saved and activates for a tenant that is not covered yet."
+const organizationSaveConfirmation = "License key saved. Your signed-in tenants are already licensed through your organization."
+
+it("explains a saved key is not needed when signed-in tenants have organization coverage", async () => {
+  const container = await render(organizationCovered)
+  expect(container.textContent).toContain(neutralSavedKeyNote)
+  expect(container.textContent).toContain("Licensed through your organization")
+  expect(container.textContent).not.toContain("not active")
+  expect(container.textContent).not.toContain("Buy Pro")
+  expect(container.textContent).not.toContain("Need an invoice instead of a card?")
+  const { licenseChipState } = await import("../../src/renderer/lib/license")
+  expect(licenseChipState(organizationCovered)).toEqual({ label: "Organization", tone: "neutral" })
+})
+
+it.each(["failed", "uncovered", "signed-out"])("keeps the saved key replacement for %s", async scenario => {
+  const status: LicenseStatus = {
+    ...organizationCovered,
+    keyState: scenario === "failed" ? "failed" : "pending",
+    tenants: organizationCovered.tenants.map(tenant => ({ ...tenant,
+      entitled: scenario === "uncovered" && tenant.tenantId === "fabrikam" ? false : tenant.entitled,
+      signedIn: scenario === "signed-out" ? false : tenant.signedIn,
+    })),
+  }
+  const container = await render(status)
+  expect(container.textContent).toContain("Your saved key is not active")
+  expect(container.textContent).toContain("Buy Pro")
+  expect(container.textContent).toContain("Need an invoice instead of a card?")
+  expect(container.textContent).not.toContain(neutralSavedKeyNote)
+})
+
+it.each(["activate", "replace"])("confirms organization coverage after %s", async action => {
+  const container = await render(action === "activate" ? community : { ...organizationCovered, keyState: "failed" })
+  if (action === "activate") {
+    state.setKey.mockResolvedValueOnce(organizationCovered)
+    type(container.querySelector<HTMLInputElement>("#license-key")!, "TENU-CONTOSO-TEST")
+    await act(async () => { button(container, "Activate")!.click() })
+  } else {
+    state.replaceKey.mockResolvedValueOnce(organizationCovered)
+    await act(async () => { button(container, "Enter a new key")!.click() })
+    type(container.querySelector<HTMLInputElement>("#replacement-key")!, "TENU-CONTOSO-TEST")
+    await act(async () => { button(container, "Use this key")!.click() })
+  }
+  expect(container.textContent).toContain(organizationSaveConfirmation)
+  expect(container.textContent).not.toContain("It activates for a tenant when you sign in to it.")
+})
+
+it("keeps the save confirmation when a signed-in tenant is uncovered", async () => {
+  state.setKey.mockResolvedValueOnce({ ...organizationCovered, tenants: organizationCovered.tenants.map(t => ({ ...t, entitled: t.tenantId === "contoso" })) })
+  const container = await render(community)
+  type(container.querySelector<HTMLInputElement>("#license-key")!, "TENU-CONTOSO-TEST")
+  await act(async () => { button(container, "Activate")!.click() })
+  expect(container.textContent).toContain("License key saved. It activates for a tenant when you sign in to it.")
 })

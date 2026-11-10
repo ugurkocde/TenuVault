@@ -127,6 +127,13 @@ export function unlicensedTenants(status: LicenseStatus): TenantLicenseStatus[] 
   return status.tenants.filter((tenant) => tenant.signedIn && !tenantPlan(tenant))
 }
 
+export function savedKeyNotNeededHere(status: LicenseStatus): boolean {
+  const signedIn = status.tenants.filter(tenant => tenant.signedIn)
+  return status.hasKey && !status.trial && status.keyState === "pending"
+    && signedIn.some(tenant => tenant.entitled && tenant.source === "tenant")
+    && signedIn.every(tenant => tenant.entitled)
+}
+
 /** Community is a plan state; only a failed key or uncovered signed-in tenant is inactive. */
 export function licenseChipState(status: LicenseStatus): { label: string; tone: "neutral" | "inactive" } {
   const trial = status.tenants.filter(t => t.entitled && t.source === "trial").sort((a, b) => Date.parse(a.trialEndsAt ?? a.validUntil ?? "") - Date.parse(b.trialEndsAt ?? b.validUntil ?? ""))[0]

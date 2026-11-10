@@ -32,7 +32,7 @@ import { useClipboardLicenseKey } from "../lib/clipboard-key"
 import { openCheckout } from "../lib/purchase"
 import { bridge } from "../lib/bridge"
 import { useConfirm } from "~/components/ConfirmDialog"
-import { formatDate, formatDateTime, hasPaidLicense, isUnlicensed, licensePageTitle, planName, tenantPlanName, trialDaysLeft, useLicense } from "../lib/license"
+import { formatDate, formatDateTime, hasPaidLicense, isUnlicensed, licensePageTitle, planName, savedKeyNotNeededHere, tenantPlanName, trialDaysLeft, useLicense } from "../lib/license"
 
 type Busy = "activate" | "replace" | "deactivate" | `retry:${string}` | `share:${string}` | null
 
@@ -329,7 +329,9 @@ export default function LicensePage() {
       (result) =>
         result && result.tenants.some((t) => t.entitled && t.source === "key")
           ? "License activated."
-          : "License key saved. It activates for a tenant when you sign in to it.",
+          : result && savedKeyNotNeededHere(result)
+            ? "License key saved. Your signed-in tenants are already licensed through your organization."
+            : "License key saved. It activates for a tenant when you sign in to it.",
     )
   // The trial key arrives by email: once it is copied there, it activates when TenuVault gets focus.
   useClipboardLicenseKey(trialKeyHint && status?.hasKey === false && busy === null, (found) => {
@@ -403,7 +405,9 @@ export default function LicensePage() {
       (result) =>
         result && result.tenants.some((t) => t.entitled && t.source === "key")
           ? "Your new license is active."
-          : "Your new license key is saved. It activates for a tenant when you sign in to it.",
+          : result && savedKeyNotNeededHere(result)
+            ? "License key saved. Your signed-in tenants are already licensed through your organization."
+            : "Your new license key is saved. It activates for a tenant when you sign in to it.",
     )
   const deactivate = async () => {
     if (!(await confirm({ title: "Deactivate this machine?", description: "Backups that require this license will stop. Your existing backups remain available. Save your license key so you can activate again.", confirmLabel: "Deactivate", destructive: true }))) return
@@ -461,15 +465,17 @@ export default function LicensePage() {
                   ? "Paste the license key from your email, or start a free trial."
                   : status.plan
                     ? `Your license covers ${status.tenantLimit ?? 1} tenant${status.tenantLimit === 1 ? "" : "s"}. ${activeKeyTenants} ${activeKeyTenants === 1 ? "is" : "are"} active on this machine.`
-                    : hasPaidLicense(status)
-                      ? "A tenant admin shared their TenuVault license with your tenant."
-                      : status.keyState === "failed"
-                        ? "Your saved key is not active. Check the license message and the tenants below."
-                        : status.keyState === "pending"
-                          ? signedIn === 0
-                            ? "Your key is saved. It activates for a tenant when you sign in to it."
-                            : "Your key is saved but not active for your signed-in tenants. Check the tenants below."
-                          : "Your organization license is not currently active. Sign in again and retry the license check below."}
+                    : savedKeyNotNeededHere(status)
+                      ? "Your signed-in tenants are already licensed through your organization."
+                      : hasPaidLicense(status)
+                        ? "A tenant admin shared their TenuVault license with your tenant."
+                        : status.keyState === "failed"
+                          ? "Your saved key is not active. Check the license message and the tenants below."
+                          : status.keyState === "pending"
+                            ? signedIn === 0
+                              ? "Your key is saved. It activates for a tenant when you sign in to it."
+                              : "Your key is saved but not active for your signed-in tenants. Check the tenants below."
+                            : "Your organization license is not currently active. Sign in again and retry the license check below."}
               </CardDescription>
             </div>
             {status.plan && <Badge variant="secondary">{status.trial ? "Pro trial" : planName(status.plan)}</Badge>}
@@ -498,7 +504,11 @@ export default function LicensePage() {
           {<TenantTrialOptions />}
           {status.tenants.filter(t => t.source === "trial" || t.trialCanExtend && t.trialAcknowledged).map(t => <TenantTrialCard key={t.tenantId} tenant={t} welcome={t.entitled && !t.trialAcknowledged} allowUnknownContactRemoval />)}
           {status.trial && !status.tenants.some(t => t.source === "trial") && <TrialStatus status={status} busy={busy} onReplace={replaceKey} />}
-          {status.hasKey && !status.trial && status.keyState !== "active" && <InactiveKeyReplacement status={status} busy={busy} onReplace={replaceKey} />}
+          {savedKeyNotNeededHere(status) ? (
+            <p className="text-sm text-gray-600">
+              Your signed-in tenants are licensed through your organization, so this key is not needed on this computer. It stays saved and activates for a tenant that is not covered yet.
+            </p>
+          ) : status.hasKey && !status.trial && status.keyState !== "active" && <InactiveKeyReplacement status={status} busy={busy} onReplace={replaceKey} />}
 
           {status.hasKey ? (
             <div className="space-y-3">
