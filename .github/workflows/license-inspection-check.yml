@@ -1,0 +1,73 @@
+name: License HTTPS inspection check
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: App ref to check (empty uses the default branch, or enter a release tag).
+        type: string
+        default: ''
+  pull_request:
+    paths:
+      - .github/workflows/license-inspection-check.yml
+      - scripts/license-mitm-check.ts
+      - scripts/license-mitm-block.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: license-inspection-check
+  cancel-in-progress: false
+
+jobs:
+  inspection:
+    name: Trusted, untrusted and blocked HTTPS
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check availability
+        id: available
+        env:
+          KEY: ${{ secrets.LICENSING_CANARY_KEY }}
+        run: |
+          if [ -n "$KEY" ]; then
+            echo 'enabled=true' >> "$GITHUB_OUTPUT"
+          else
+            echo '::notice::Live inspection checks skipped because repository credentials are unavailable for this run.'
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.available.outputs.enabled == 'true'
+        with:
+          persist-credentials: false
+
+      # Keep the harness from this workflow while testing the requested app code, including older tags.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.available.outputs.enabled == 'true'
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.sha || inputs.ref || github.event.repository.default_branch }}
+          path: checked-code
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.available.outputs.enabled == 'true'
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: checked-code/package-lock.json
+
+      - name: Install dependencies
+        if: steps.available.outputs.enabled == 'true'
+        working-directory: checked-code
+        run: npm ci
+
+      - name: Install inspection proxy
+        if: steps.available.outputs.enabled == 'true'
+        run: pipx install 'mitmproxy==12.2.1'
+
+      - name: Check all three modes
+        if: steps.available.outputs.enabled == 'true'
+        env:
+          KEY: ${{ secrets.LICENSING_CANARY_KEY }}
+        run: node .github/scripts/license-inspection-check.mjs checked-code

@@ -187,7 +187,13 @@ await check("first run shows the welcome screen", async () => {
   await disableAnimations()
   assert(!(await evaluate(`document.body.innerText.includes("Backup & Restore")`)), "welcome screen missing, app shown instead")
   assert(await waitForText("Connect your tenant"), "setup call to action missing")
-  assert(await waitForText("Try Pro free for 30 days, no card"), "trial link missing")
+  const settled = await waitForTrialHealth()
+  if (settled.tenantTrialsEnabled) {
+    assert(await waitForText("New tenants start with a Pro trial, no card and no email needed."), "tenant trial welcome guidance missing")
+    assert(!(await evaluate(`document.body.innerText.includes("Try Pro free for 30 days, no card")`)), "emailed trial link visible with tenant trials enabled")
+  } else {
+    assert(await waitForText("Try Pro free for 30 days, no card"), "trial link missing")
+  }
   assert(await waitForText("I have a license key"), "license key link missing")
   await screenshot("00-welcome")
 })
