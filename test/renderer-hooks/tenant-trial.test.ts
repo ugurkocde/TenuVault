@@ -340,3 +340,18 @@ it.each(["license", "welcome", "ended", "reminder"])("keeps the existing %s inte
   expect(state.usage).not.toHaveBeenCalled()
   if (place !== "reminder") expect(container.textContent).toContain("Need more time? Extend your trial")
 })
+
+
+it("keeps the next tenant's reminder extension available after extending the first", async () => {
+  const props = () => ({ reminder: trialReminder(state.status!, undefined)!, onDismiss: vi.fn(), dismissing: false })
+  await render(createElement(TrialReminderBanner, props()))
+  await click("Extend your trial")
+  expect(container.textContent).toContain("Trial extended.")
+  tenant = { ...tenant, tenantId: "second" }
+  state.status!.tenants = [tenant]
+  await render(createElement(TrialReminderBanner, props()))
+  expect(container.textContent).toContain("Extend your trial")
+  expect(container.textContent).not.toContain("Trial extended.")
+  await click("Extend your trial")
+  expect(state.action).toHaveBeenLastCalledWith("second", "extend_trial")
+})

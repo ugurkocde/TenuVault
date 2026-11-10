@@ -138,7 +138,7 @@ function TrialBanner({ urgent, source, onDismiss, dismissing, children, endsAt, 
           <Clock className="h-4 w-4" />
         </span>
         <div className="min-w-0 basis-full sm:basis-72 flex-1">{children}</div>
-        {status?.tenantTrialsEnabled ? <div className="min-w-0 basis-full"><TrialActions tenant={tenant} source={source} /></div> : <Button className="bg-coral-500 text-white hover:bg-coral-600" type="button" size="sm" onClick={() => void openCheckout(source)}>
+        {status?.tenantTrialsEnabled ? <div className="min-w-0 basis-full"><TrialActions key={tenant?.tenantId ?? source} tenant={tenant} source={source} /></div> : <Button className="bg-coral-500 text-white hover:bg-coral-600" type="button" size="sm" onClick={() => void openCheckout(source)}>
           <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />Buy Pro
         </Button>}
         <Link to="/license" className="rounded-full px-3 py-2 text-sm font-medium hover:bg-white/70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
