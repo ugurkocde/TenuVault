@@ -38,12 +38,16 @@ describe("tenant trial UI", () => {
     expect(state.action).toHaveBeenCalledWith("tenant", "acknowledge")
   })
   it("prefills contact without sending and submits only on click", async () => {
-    await render(createElement(TenantTrialCard, { tenant }))
+    await render(createElement(TenantTrialCard, { tenant, welcome: true }))
     expect(container.querySelector("input")?.value).toBe("admin@contoso.example")
     expect(state.action).not.toHaveBeenCalled()
+    expect(container.textContent).not.toContain("Remove the saved email address for this trial")
     await click("Email me setup tips and a reminder before the trial ends")
     expect(state.action).toHaveBeenCalledWith("tenant", "trial_contact", "admin@contoso.example")
     expect(container.textContent).toContain("Email address saved")
+    await click("Remove the saved email address for this trial")
+    expect(state.action).toHaveBeenLastCalledWith("tenant", "trial_contact", undefined)
+    expect(container.textContent).not.toContain("Remove the saved email address for this trial")
   })
   it("allows removing a saved contact", async () => {
     tenant.trialEmail = "admin@contoso.example"
@@ -53,7 +57,7 @@ describe("tenant trial UI", () => {
   })
   it("removes the tenant contact from a joining installation without a locally saved address", async () => {
     tenant.canEnd = false
-    await render(createElement(TenantTrialCard, { tenant }))
+    await render(createElement(TenantTrialCard, { tenant, allowUnknownContactRemoval: true }))
     await click("Remove the saved email address for this trial")
     expect(state.action).toHaveBeenCalledWith("tenant", "trial_contact", undefined)
     expect(container.textContent).toContain("Email address removed.")
@@ -93,6 +97,8 @@ describe("tenant trial UI", () => {
     state.status!.tenants = Array.from({ length: count }, (_, i) => ({ ...tenant, tenantId: i ? "second" : "tenant" }))
     await render(createElement(TenantTrialNotices))
     expect(container.textContent).toContain("Pro trial ended")
+    expect(container.textContent).toContain("Community keeps 30 days of backup history.")
+    expect(container.textContent).not.toMatch(/\b30[- ]days? (?:free )?(?:Pro )?trial\b/i)
     expect(container.querySelectorAll("section")).toHaveLength(1)
     expect([...container.querySelectorAll("button")][0]?.textContent).toBe("Buy Pro")
     expect(container.textContent).toContain(count === 2 ? "You choose which" : "This tenant continues")
@@ -142,6 +148,33 @@ describe("tenant trial UI", () => {
     expect(container.textContent).toContain(tenant.trialRefusal)
     await click("Try Pro free")
     expect(state.start).toHaveBeenCalledWith("tenant")
+  })
+  it.each([
+    ["trial", 8, null], ["trial", 5, "day-20"], ["trial", 1, "day-27"], ["key", 8, "day-20"],
+  ] as const)("distinguishes the %s reminder at %s days (%s)", (source, days, stage) => {
+    const now = Date.now()
+    const end = new Date(now + days * day).toISOString()
+    state.status!.trialEndsAt = end
+    state.status!.tenants = [{ ...tenant, source, trialEndsAt: end, validUntil: end }]
+    const reminder = trialReminder(state.status!, undefined, now)
+    if (stage === null) expect(reminder).toBeNull()
+    else expect(reminder).toMatchObject({ stage, daysLeft: days, endsAt: end, ...(source === "trial" ? { tenantTrial: true } : {}) })
+  })
+  it("hides removal on a joined start card without a known saved contact", async () => {
+    tenant.canEnd = false
+    await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+    expect(container.textContent).not.toContain("Remove the saved email address for this trial")
+    expect(state.action).not.toHaveBeenCalled()
+  })
+  it("hides unknown contact removal on a welcome even on the License page", async () => {
+    await render(createElement(TenantTrialCard, { tenant, welcome: true, allowUnknownContactRemoval: true }))
+    expect(container.textContent).not.toContain("Remove the saved email address for this trial")
+  })
+  it("shows a known saved contact on the start card", async () => {
+    tenant.trialEmail = "admin@contoso.example"
+    await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+    await click("Remove the saved email address for this trial")
+    expect(state.action).toHaveBeenCalledWith("tenant", "trial_contact", undefined)
   })
   it.each(["email", "tenant"])("uses the %s trial's own reminder days and end", kind => {
     const emailEnd = new Date(Date.now() + (kind === "email" ? 8 : 20) * day).toISOString()

@@ -46,7 +46,6 @@ export function PlanPromptButton({
   const inRouter = useInRouterContext()
   const selectedTenantId = useTenantIfProvided()
   const tenantId = contextTenantId === undefined ? selectedTenantId : contextTenantId?.toLowerCase()
-  const tenant = status?.tenants.find(t => t.tenantId === tenantId)
   const eligible = status?.tenantTrialsEnabled && !status.hasKey && plan === "pro" ? status.tenants.find(t =>
     (tenantId && t.tenantId === tenantId) && t.signedIn && !t.entitled && !t.activated && !(t.trialRefusalPermanent ?? Boolean(t.trialRefusal)),
   ) : undefined
@@ -74,8 +73,8 @@ export function PlanPromptButton({
       See plans
     </Button>
   )
-  return eligible || tenant?.trialRefusal ? <span className="inline-flex flex-wrap items-center gap-3">
+  return eligible ? <span className="inline-flex flex-wrap items-center gap-3">
     {purchase}
-    {eligible ? <TenantTrialOptions tenantId={eligible.tenantId} compact variant={variant} size={size} onStarted={onLeave} /> : <span role="status" className="text-sm text-gray-600">{tenant?.trialRefusal}</span>}
+    <TenantTrialOptions tenantId={eligible.tenantId} compact variant={variant} size={size} onStarted={onLeave} />
   </span> : purchase
 }

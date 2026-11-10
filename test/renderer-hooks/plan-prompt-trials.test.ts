@@ -41,10 +41,21 @@ describe("plan prompt trial and purchase actions", () => {
         await act(async () => trial.click())
         expect(state.start).toHaveBeenLastCalledWith("tenant")
       }
+      if (mode === "ended") expect(container.textContent).not.toContain("This tenant already had a Pro trial.")
       expect(container.querySelector("div, p")).toBeNull()
       await act(async () => purchase!.click())
       expect(state.open).toHaveBeenLastCalledWith(purchase!.textContent?.trim() === "See plans" ? "buy" : "checkout", expect.objectContaining({ source }))
     }
+  })
+  it("keeps a temporary refusal out of plan prompts", async () => {
+    state.status = status("never")
+    state.status.tenants[0]!.trialRefusal = "Update TenuVault to start a tenant trial."
+    state.status.tenants[0]!.trialRefusalPermanent = false
+    container = document.body.appendChild(document.createElement("div")); root = createRoot(container)
+    await act(async () => root!.render(createElement(MemoryRouter, null, createElement(PlanPromptButton, { plan: "pro", source: "locked-fullrestore" }))))
+    expect(container.textContent).not.toContain(state.status.tenants[0]!.trialRefusal)
+    expect(container.textContent).toContain("Buy Pro")
+    expect(container.textContent).toContain("Try Pro free")
   })
   it("uses the explicitly uncovered tenant in a banner rather than the selected tenant", async () => {
     state.status = status("running")

@@ -22,7 +22,7 @@ In the last five days, or up to fourteen days after expiry, choose **Need more t
 
 The app reminds you five days and one day before the end, with the changes that apply to your setup. Afterwards, one tenant continues on Community Free. Backups and settings are kept, and Community keeps thirty days of backup history. Saved daily schedules run weekly, Azure backups pause, and paid automation pauses. With several trial tenants, you choose which continues on Community and can defer that choice. See [When paid coverage ends](#when-paid-coverage-ends).
 
-You can optionally submit an email address on the trial card or License page for setup tips and a reminder. The address is sent only when you press the button. Change it in the app during the trial, or choose **Remove the saved email address for this trial** on any installation that joined it, or use the unsubscribe link in each email at any time. See the [privacy policy](https://www.tenuvault.com/privacy).
+You can optionally submit an email address on the trial card or License page for setup tips and a reminder. The address is sent only when you press the button. Change it in the app during the trial, or choose **Remove the saved email address for this trial** on the License page of any installation that joined it, or use the unsubscribe link in each email at any time. See the [privacy policy](https://www.tenuvault.com/privacy).
 
 When tenant trials are unavailable, the existing email form remains available. It emails a thirty-day trial key. Existing email trial keys retain their original end dates and reminders.
 

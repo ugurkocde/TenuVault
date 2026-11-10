@@ -21,7 +21,7 @@ export function TenantTrialOptions({ onStarted, tenantId, compact = false, varia
   const Text = compact ? "span" : "p"
   return <Container className={compact ? "inline-flex flex-wrap items-center gap-3" : "space-y-3"}>
     {status.tenants.filter(t => (!tenantId || t.tenantId === tenantId) && t.signedIn && !t.entitled && (status.tenantTrialsEnabled || t.trialRefusal)).map(tenant => <Container key={tenant.tenantId} className={compact ? "inline-flex flex-wrap items-center gap-3" : "flex flex-wrap items-center gap-3"}>
-      {tenant.trialRefusal && <Text role="status">{tenant.trialRefusal}</Text>}
+      {!compact && tenant.trialRefusal && <Text role="status">{tenant.trialRefusal}</Text>}
       {tenant.activated ? <Text className="text-sm text-gray-600">Check the saved activation before starting a trial.</Text> : status.tenantTrialsEnabled && !(tenant.trialRefusalPermanent ?? Boolean(tenant.trialRefusal)) && <><Button variant={variant} size={size} disabled={busy} onClick={async () => {
         setBusy(true); setError("")
         try { await bridge.license.startTenantTrial(tenant.tenantId); await refresh(); onStarted?.() }
@@ -33,9 +33,11 @@ export function TenantTrialOptions({ onStarted, tenantId, compact = false, varia
   </Container>
 }
 
-export function TrialContact({ tenant, initialEmail }: { tenant: TenantLicenseStatus; initialEmail?: string }) {
+export function TrialContact({ tenant, initialEmail, allowUnknownRemoval = false }: { tenant: TenantLicenseStatus; initialEmail?: string; allowUnknownRemoval?: boolean }) {
   const { refresh } = useLicense()
   const [email, setEmail] = useState(tenant.trialEmail ?? initialEmail ?? "")
+  const [saved, setSaved] = useState(Boolean(tenant.trialEmail))
+  useEffect(() => setSaved(Boolean(tenant.trialEmail)), [tenant.trialEmail])
   const [message, setMessage] = useState("")
   const [busy, setBusy] = useState(false)
   useEffect(() => {
@@ -51,6 +53,7 @@ export function TrialContact({ tenant, initialEmail }: { tenant: TenantLicenseSt
     setBusy(true); setMessage("")
     try {
       await bridge.license.tenantTrialAction(tenant.tenantId, "trial_contact", address)
+      setSaved(Boolean(address))
       setMessage(address ? "Email address saved." : "Email address removed.")
       await refresh()
     } catch (error) { setMessage(error instanceof Error ? error.message : String(error)) }
@@ -63,13 +66,13 @@ export function TrialContact({ tenant, initialEmail }: { tenant: TenantLicenseSt
       </label>
       <Button variant="outline" className="h-auto max-w-full whitespace-normal text-left" disabled={busy || !email.trim()} onClick={() => void save(email.trim())}>Email me setup tips and a reminder before the trial ends</Button>
     </div>
-    <Button variant="ghost" disabled={busy} onClick={() => void save()}>Remove the saved email address for this trial</Button>
+    {(saved || allowUnknownRemoval) && <Button variant="ghost" disabled={busy} onClick={() => void save()}>Remove the saved email address for this trial</Button>}
     <p className="text-xs text-gray-600">Your address is sent only when you press the button. <a href="https://www.tenuvault.com/privacy" target="_blank" rel="noreferrer">Privacy policy</a></p>
     {(message || tenant.trialEmail) && <p role="status">{message || "Email address saved."}</p>}
   </div>
 }
 
-export function TenantTrialCard({ tenant, initialEmail, welcome = false, children }: { tenant: TenantLicenseStatus; initialEmail?: string; welcome?: boolean; children?: ReactNode }) {
+export function TenantTrialCard({ tenant, initialEmail, welcome = false, allowUnknownContactRemoval = false, children }: { tenant: TenantLicenseStatus; initialEmail?: string; welcome?: boolean; allowUnknownContactRemoval?: boolean; children?: ReactNode }) {
   const { status, refresh } = useLicense()
   const name = useTenants().find(t => t.credentials?.tenantId?.toLowerCase() === tenant.tenantId)?.name
   const [busy, setBusy] = useState(false)
@@ -92,7 +95,7 @@ export function TenantTrialCard({ tenant, initialEmail, welcome = false, childre
   return <section className="space-y-3 rounded-3xl bg-blue-50 p-6">
     <h2 className="text-xl font-medium">{welcome ? "Pro trial started" : tenant.trial ? "Pro trial" : "Pro trial ended"}{name && <span className="ml-2 text-sm font-normal text-gray-600">{name}</span>}</h2>
     <p>{days > 0 ? `${days} days left. Ends on ${formatDate(tenant.trialEndsAt!)}.` : `Ended on ${formatDate(tenant.trialEndsAt!)}.`}</p>
-    {!tenant.trial && <p className="text-sm">{(status?.tenants.filter(t => !t.entitled && t.trialEndsAt).length ?? 0) > 1 ? "One tenant continues on Community Free. You choose which." : "This tenant continues on Community Free."} Backups and settings are kept. Community keeps thirty days of backup history.</p>}
+    {!tenant.trial && <p className="text-sm">{(status?.tenants.filter(t => !t.entitled && t.trialEndsAt).length ?? 0) > 1 ? "One tenant continues on Community Free. You choose which." : "This tenant continues on Community Free."} Backups and settings are kept. Community keeps 30 days of backup history.</p>}
     {welcome && <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
       <span className="font-medium">Try these first</span>
       <Link className="text-blue-700 underline-offset-4 hover:underline" to="/portal/backup?tab=schedule">Daily backup schedule</Link>
@@ -103,7 +106,7 @@ export function TenantTrialCard({ tenant, initialEmail, welcome = false, childre
     {tenant.trial && <p className="text-sm">{(status?.tenants.filter(t => t.source === "trial" || t.trialEndsAt || t.plan === "community").length ?? 0) > 1
       ? `${tenant.trial ? "Afterwards, one" : "One"} tenant continues on Community Free. You choose which.`
       : `${tenant.trial ? "Afterwards, this" : "This"} tenant continues on Community Free.`} Backups and settings are kept. Community keeps 30 days of backup history. No payment is needed.</p>}
-    {tenant.trial && <TrialContact tenant={tenant} initialEmail={initialEmail} />}
+    {tenant.trial && <TrialContact tenant={tenant} initialEmail={initialEmail} allowUnknownRemoval={allowUnknownContactRemoval && !welcome} />}
     {children}
     <div className="flex flex-wrap gap-2">
       {welcome && <Button disabled={busy} onClick={() => void run("acknowledge")}>Got it</Button>}

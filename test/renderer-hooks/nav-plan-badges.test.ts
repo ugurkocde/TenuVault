@@ -10,13 +10,14 @@ const licenseStatus = vi.hoisted(() => ({ current: null as unknown }))
 const signedInIds = vi.hoisted(() => ({ current: new Set(["t-1"]) as ReadonlySet<string> | undefined }))
 const selectedTenantState = vi.hoisted(() => ({ current: null as unknown }))
 const routerPush = vi.hoisted(() => vi.fn())
+const trialAction = vi.hoisted(() => vi.fn(async () => undefined))
 
 vi.mock("../../src/renderer/lib/bridge", () => ({
   bridge: {
     app: { info: async () => ({}) },
     auth: { accounts: async () => [] },
     schedules: { list: async () => [] },
-    license: { open: async () => undefined },
+    license: { open: async () => undefined, tenantTrialAction: trialAction },
     preferences: { get: async () => ({}), set: async () => ({}) },
   },
 }))
@@ -323,6 +324,21 @@ describe("View All Activity on the dashboard", () => {
 
 
 describe("license banners after tenant trials", () => {
+  it("suppresses the uncovered banner until the end notice is acknowledged", async () => {
+    const end = new Date(Date.now() - 86400_000).toISOString()
+    const ended = { ...tenantEntry("t-1", "community"), trialEndsAt: end, trialAcknowledged: false }
+    licenseStatus.current = { ...statusFor("community"), tenantTrialsEnabled: true, trialEndedAt: end, tenants: [ended, { ...tenantEntry("uncovered", "community"), plan: null }] }
+    selectTenant()
+    const container = await render(createElement(DesktopLayout))
+    expect(container.textContent).toContain("Pro trial ended")
+    expect(container.textContent).not.toContain("not covered by your")
+    trialAction.mockImplementationOnce(async () => { ended.trialAcknowledged = true; return undefined })
+    await act(async () => [...container.querySelectorAll("button")].find(b => b.textContent === "Continue on Community")!.click())
+    expect(trialAction).toHaveBeenCalledWith("t-1", "acknowledge")
+    await act(async () => roots[roots.length - 1]!.render(createElement(MemoryRouter, null, createElement(DesktopLayout))))
+    expect(container.textContent).not.toContain("Pro trial ended")
+    expect(container.textContent).toContain("not covered by your")
+  })
   it.each(["community", "not-covered", "offline", "organization-expiry"])("keeps the %s warning after the end notice is acknowledged", async mode => {
     const end = new Date(Date.now() - 86400_000).toISOString()
     const past = { ...tenantEntry("ended", "community", mode === "not-covered"), plan: null, trialEndsAt: end, trialAcknowledged: true }
