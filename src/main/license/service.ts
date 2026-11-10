@@ -455,7 +455,10 @@ export class LicenseService {
     if (entry && entry.source !== "trial") return null
     const payload = record?.token ? decodeToken(record.token, this.publicKeys) : null
     if (!record || !payload?.keyExp) return null
-    if (record.trialFirstSeenAt === undefined) { record.trialFirstSeenAt = Date.now(); this.saveTrials() }
+    if (record.trialFirstSeenAt === undefined) {
+      record.trialFirstSeenAt = Date.now()
+      try { this.saveTrials() } catch { /* Keep the local boundary in memory if persistence is unavailable. */ }
+    }
     const serverStart = this.trialPolicy.days && (!record.extended || this.trialPolicy.extensionDays)
       ? payload.keyExp * 1000 - (this.trialPolicy.days + (record.extended ? this.trialPolicy.extensionDays! : 0)) * 86400_000 : record.trialFirstSeenAt
     return { since: Math.max(record.trialFirstSeenAt, serverStart), until: record.endedAt ?? payload.keyExp * 1000 }
@@ -467,17 +470,19 @@ export class LicenseService {
 
   /** TenuVault keeps a short tally of Pro features used during the trial on this computer to show it in the trial notices. It is never sent. */
   recordTrialUsage(tenantId: string, feature: Feature): void {
-    this.load()
-    const tenant = tenantId.toLowerCase()
-    if (!this.trialsEnabled || this.state?.key || FEATURE_PLAN[feature] !== "pro" || this.state?.activations[tenant]?.source !== "trial" || !this.valid(tenant) || !this.tenantPresent(tenant)) return
-    const record = this.trialRecords[tenant]
-    if (!record) return
-    const fields: Partial<Record<Feature, keyof TrialTally>> = { dailySchedule: "dailyBackups", azureStorage: "azureBackups", fullRestore: "fullRestores", replaceRestore: "fullRestores", restoreAssignments: "fullRestores", driftRevert: "driftReverts" }
-    const field = fields[feature]
-    if (!field) return
-    record.tally ??= {}
-    record.tally[field] = Math.min(Number.MAX_SAFE_INTEGER, (record.tally[field] ?? 0) + 1)
-    try { this.saveTrials() } catch { /* A tally never changes a completed action. */ }
+    try {
+      this.load()
+      const tenant = tenantId.toLowerCase()
+      if (!this.trialsEnabled || this.state?.key || FEATURE_PLAN[feature] !== "pro" || this.state?.activations[tenant]?.source !== "trial" || !this.valid(tenant) || !this.tenantPresent(tenant)) return
+      const record = this.trialRecords[tenant]
+      if (!record) return
+      const fields: Partial<Record<Feature, keyof TrialTally>> = { dailySchedule: "dailyBackups", azureStorage: "azureBackups", fullRestore: "fullRestores", replaceRestore: "fullRestores", restoreAssignments: "fullRestores", driftRevert: "driftReverts" }
+      const field = fields[feature]
+      if (!field) return
+      record.tally ??= {}
+      record.tally[field] = Math.min(Number.MAX_SAFE_INTEGER, (record.tally[field] ?? 0) + 1)
+      this.saveTrials()
+    } catch { /* A tally never changes a completed action. */ }
   }
 
   notifyTrials(notify: (tenantId: string, ended: boolean, end: number, canExtend: boolean) => boolean): void {

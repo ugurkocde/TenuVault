@@ -256,7 +256,8 @@ it.each(["", "The tenant was not added. "])("offers Pro and support when signing
   type(container.querySelector<HTMLInputElement>("#clientId")!, CLIENT)
   await act(async () => { button(container, "Sign in")!.click() })
   const alert = container.querySelector('[role="alert"]')!
-  expect(alert.textContent).toContain(message)
+  expect(alert.textContent).toContain("This tenant already had a Pro trial.")
+  expect(alert.textContent).not.toContain(message)
   expect(button(alert as HTMLElement, "Buy Pro")).toBeTruthy()
   expect(alert.querySelector('a[href^="mailto:support@tenuvault.com?subject=TenuVault%20Pro"]')).toBeTruthy()
   expect(button(alert as HTMLElement, "Extend your trial")).toBeUndefined()

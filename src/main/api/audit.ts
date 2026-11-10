@@ -53,7 +53,7 @@ export function createAuditRecorder(
       return
     }
     if (path === "/api/oib") {
-      void recordOib(requestBody, response.clone(), dispatch, accountFor)
+      void recordOib(requestBody, response.clone(), dispatch, accountFor, onTrialUsage)
         .catch((error: unknown) => console.error("[audit] Failed to record OpenIntuneBaseline change:", error))
       return
     }
@@ -153,7 +153,7 @@ async function recordRestore(bodyText: string, response: Response, dispatch: (re
       })
     } catch { /* Notifications are best effort and never block the audit record. */ }
   }
-  if (onTrialUsage && ok && !partial && !data.partial && data.status !== "PartiallyCompleted" && !(data.details?.failedCount) && !(data.details?.partialCount) && (!approvalAction || approvalAction === "complete")) {
+  if (onTrialUsage && ok && !partial && !data.partial && data.status !== "PartiallyCompleted" && !(data.details?.failedCount) && !(data.details?.partialCount) && !("approvalAction" in body) && !("targetTenants" in body)) {
     try {
       const feature = requiredFeatures(policyCopy ? "/api/revert-policy" : "/api/restore-backup", { ...body }).find(feature => ["fullRestore", "replaceRestore", "restoreAssignments", "driftRevert"].includes(feature))
       if (feature) onTrialUsage(body.tenantId, feature)
@@ -213,8 +213,9 @@ async function recordOib(
   response: Response,
   dispatch: (request: Request) => Promise<Response>,
   accountFor: (id: string) => SignedInAccount | null,
+  onTrialUsage?: (tenant: string, feature: Feature) => void,
 ) {
-  const body = JSON.parse(bodyText) as { action?: string; tenantId?: string; appId?: string; runId?: string; storageAccountName?: string }
+  const body = JSON.parse(bodyText) as { action?: string; tenantId?: string; appId?: string; runId?: string; storageAccountName?: string; bulk?: boolean }
   if (typeof body?.tenantId !== "string" || !body.tenantId || !["oib-deploy", "oib-fix", "oib-undo"].includes(body.action ?? "") || !body.appId) return
   const data = await response.json().catch(() => ({})) as {
     runId?: string; reference?: string; backupFolder?: string; pilotGroupId?: string; error?: string
@@ -223,6 +224,12 @@ async function recordOib(
   const undo = body.action === "oib-undo"
   const failed = undo ? (data.results ?? []).filter((r) => !r.done).length : (data.failed?.length ?? 0)
   const ok = response.ok && failed === 0
+  if (onTrialUsage && body.action === "oib-fix" && !body.bulk && ok && !data.error && (data.updated?.length ?? 0) > 0) {
+    try {
+      const feature = requiredFeatures("/api/oib", { ...body }).find(feature => feature === "driftRevert")
+      if (feature) onTrialUsage(body.tenantId, feature)
+    } catch { /* A tally never changes the action's outcome. */ }
+  }
   const account = accountFor(body.tenantId)
   const action = undo ? "Undo OpenIntuneBaseline run" : body.action === "oib-fix" ? "Reset OpenIntuneBaseline policy drift" : "Deploy OpenIntuneBaseline policies"
   const logEntry: CreateAuditLogInput = {

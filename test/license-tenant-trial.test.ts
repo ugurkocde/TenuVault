@@ -470,3 +470,36 @@ it("uses the local first-seen time without policy fields after extension", async
   await license.tenantTrialAction(tenant, "extend_trial")
   expect(license.trialUsagePeriod(tenant)).toEqual({ since: start, until: end })
 })
+
+it("contains a throwing store while loading for a tally", () => {
+  const license = service()
+  vi.spyOn(store, "get").mockImplementation(() => { throw new Error("Store unavailable") })
+  expect(() => license.recordTrialUsage(tenant, "fullRestore")).not.toThrow()
+})
+it("contains validation errors before a tally", async () => {
+  const license = service()
+  await connect(license)
+  vi.spyOn(license as unknown as { valid: () => never }, "valid").mockImplementation(() => { throw new Error("Validation unavailable") })
+  expect(() => license.recordTrialUsage(tenant, "fullRestore")).not.toThrow()
+})
+it("contains a throwing store while saving a tally", async () => {
+  const license = service()
+  await connect(license)
+  vi.spyOn(store, "set").mockImplementation(() => { throw new Error("Store unavailable") })
+  expect(() => license.recordTrialUsage(tenant, "fullRestore")).not.toThrow()
+  expect(license.trialUsageTally(tenant)).toEqual({ fullRestores: 1 })
+})
+it("keeps a backfilled usage boundary in memory when its store write fails", async () => {
+  const license = service()
+  await connect(license)
+  const saved = JSON.parse(store.get("license.tenantTrials")!)
+  delete saved[tenant].trialFirstSeenAt
+  store.set("license.tenantTrials", JSON.stringify(saved))
+  const restarted = service()
+  await restarted.checkTrialHealth()
+  const write = vi.spyOn(store, "set").mockImplementation(() => { throw new Error("Store unavailable") })
+  expect(restarted.trialUsagePeriod(tenant)).toEqual({ since: start, until: end })
+  vi.setSystemTime(start + day)
+  expect(restarted.trialUsagePeriod(tenant)).toEqual({ since: start, until: end })
+  expect(write).toHaveBeenCalledOnce()
+})

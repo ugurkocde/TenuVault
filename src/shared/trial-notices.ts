@@ -1,3 +1,9 @@
+import { TRIAL_USED_MESSAGE } from "./constants"
+
+export function trialKeyRefusalText(message: string): string {
+  return message.replace(TRIAL_USED_MESSAGE, "This tenant already had a Pro trial.")
+}
+
 export function trialEndWhen(end: number, now = Date.now()): string {
   const date = new Date(end)
   const today = new Date(now)

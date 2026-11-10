@@ -1,3 +1,4 @@
+import { trialKeyRefusalText } from "../../shared/trial-notices"
 import { showCommunityLimitError } from "../lib/plan-dialog"
 import { TrialKeyRefusalActions } from "./TenantTrial"
 import { useEffect, useRef, useState, type ClipboardEvent, type ReactNode } from "react"
@@ -356,7 +357,7 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
       {errors.form && (
         <Alert variant="destructive" role="alert">
           <AlertCircle className="h-4 w-4" />
-          <AlertDescription>{errors.form}
+          <AlertDescription>{trialKeyRefusalText(errors.form)}
             <TrialKeyRefusalActions message={errors.form} source="sign-in-trial-key-refused" />
           </AlertDescription>
         </Alert>

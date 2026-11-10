@@ -1,3 +1,4 @@
+import { trialKeyRefusalText } from "../../shared/trial-notices"
 import { TenantTrialCard, TenantTrialOptions, TrialActions, TrialKeyRefusalActions } from "../components/TenantTrial"
 import { CommunityTenantChoiceButton } from "../components/CommunityTenantPicker"
 import { useEffect, useRef, useState, type MouseEvent, type Ref } from "react"
@@ -278,7 +279,7 @@ function TenantRow({
         </p>
       )}
       {!tenant.entitled && tenant.message && <>
-        <p className="text-xs text-orange-700">{tenant.message}</p>
+        <p className="text-xs text-orange-700">{trialKeyRefusalText(tenant.message)}</p>
         <TrialKeyRefusalActions message={tenant.message} tenant={tenant} source="license-page-trial-key-refused" />
       </>}
       {!tenant.entitled && tenant.plan !== "community" && tenant.signedIn && tenant.coverageEnded && !choicePending && <p className="text-xs text-gray-600">Backups of this tenant are kept. Add a license to use it again.</p>}
@@ -487,7 +488,7 @@ export default function LicensePage() {
           {(status.keyMessage || (status.message && signedIn > 0)) && (
             <Alert>
               <AlertTriangle className="h-4 w-4 text-amber-600" />
-              <AlertDescription>{status.keyMessage ?? status.message}
+              <AlertDescription>{trialKeyRefusalText(status.keyMessage ?? status.message ?? "")}
                 <TrialKeyRefusalActions message={status.keyMessage ?? status.message ?? ""} source="license-page-trial-key-refused" />
               </AlertDescription>
             </Alert>
@@ -554,7 +555,7 @@ export default function LicensePage() {
           {error && (
             <Alert variant="destructive">
               <AlertCircle className="h-4 w-4" />
-              <AlertDescription>{error}
+              <AlertDescription>{trialKeyRefusalText(error)}
                 <TrialKeyRefusalActions message={error} tenant={status.tenants.find(tenant => tenant.message === error)} source="license-page-trial-key-refused" />
               </AlertDescription>
             </Alert>

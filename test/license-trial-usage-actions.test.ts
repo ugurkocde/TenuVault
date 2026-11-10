@@ -27,3 +27,14 @@ it("ignores unsuccessful jobs and makes no network call", () => {
     expect(network).not.toHaveBeenCalled()
   } finally { vi.unstubAllGlobals() }
 })
+
+it("contains throwing store writes and still attempts the other tally", () => {
+  const store = { set: vi.fn(() => { throw new Error("Store unavailable") }) }
+  const observe = trialBackupObserver(() => store.set())
+  const job = { tenantId: "contoso", status: "Completed", failures: 0 } as BackupJob
+  const request = { trigger: "scheduled", scheduleFrequency: "daily", storageAccountName: "azure" } as BackupRequest
+  expect(() => observe(job, request)).not.toThrow()
+  expect(store.set).toHaveBeenCalledTimes(2)
+  observe(job, request)
+  expect(store.set).toHaveBeenCalledTimes(2)
+})

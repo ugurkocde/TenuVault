@@ -1,3 +1,4 @@
+import { trialKeyRefusalText } from "../../shared/trial-notices"
 import { lazy, Suspense, useEffect, useState } from "react"
 import { AlertCircle, CheckCircle2, Info, X } from "lucide-react"
 import { cn } from "~/lib/utils"
@@ -76,7 +77,7 @@ export function Toaster() {
           >
             <Icon className={cn("mt-0.5 h-4 w-4 flex-shrink-0", item.variant === "success" ? "text-green-600" : item.variant === "error" ? "text-red-600" : "text-blue-600")} />
             <div className="flex-1">
-              <p className="whitespace-pre-line">{item.message}</p>
+              <p className="whitespace-pre-line">{trialKeyRefusalText(item.message)}</p>
               {item.message.includes(TRIAL_USED_MESSAGE) && <Suspense fallback={null}><TrialKeyRefusalActions message={item.message} source="notice-trial-key-refused" /></Suspense>}
               {item.action && (
                 <a href={`#${item.action.href}`} onClick={() => dismiss(item.id)} className="mt-1 inline-block font-medium underline underline-offset-2">

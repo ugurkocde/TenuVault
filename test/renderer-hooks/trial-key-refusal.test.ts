@@ -33,7 +33,8 @@ it("offers purchasing help in a key entry error without submitting the key again
     input.dispatchEvent(new Event("input", { bubbles: true }))
   })
   await act(async () => container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })))
-  expect(container.querySelector('[role="alert"]')?.textContent).toContain(TRIAL_USED_MESSAGE)
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("This tenant already had a Pro trial.")
+  expect(container.textContent).not.toContain(TRIAL_USED_MESSAGE)
   expect(buy()).toBeTruthy()
   expect(container.querySelector('a[href^="mailto:support@tenuvault.com"]')).toBeTruthy()
   await act(async () => buy().click())
@@ -45,6 +46,7 @@ it("shows the same actions in a copied-key error toast with surrounding context"
   await render(createElement(Toaster))
   await act(async () => toast(`${TRIAL_USED_MESSAGE} Enter the key on the License page.`, "error"))
   expect(buy()).toBeTruthy()
+  expect(container.textContent).not.toContain(TRIAL_USED_MESSAGE)
   const mailto = container.querySelector<HTMLAnchorElement>('a[href^="mailto:support@tenuvault.com"]')!
   expect(mailto.href).toBe("mailto:support@tenuvault.com?subject=TenuVault%20Pro%3A%20quote%20or%20invoice")
   expect(container.textContent).not.toContain("Extend your trial")

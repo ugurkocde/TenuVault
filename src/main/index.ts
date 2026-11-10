@@ -413,12 +413,11 @@ async function bootstrap(): Promise<void> {
     },
     retentionDays: backupAccess.retentionDays,
     onFinished: (job, request) => {
-      tallyBackup(job, request)
       failedAttempts.finished(job, request)
       // Manual backup outcomes notify here; scheduled and tray outcomes notify from the
       // scheduler path, which already suppresses repeated unreachable failures.
-      if ((request.trigger ?? "manual") !== "manual") return
-      void notifyBackupOutcome(job, "manual")
+      if ((request.trigger ?? "manual") === "manual") void notifyBackupOutcome(job, "manual")
+      tallyBackup(job, request)
     },
   })
 

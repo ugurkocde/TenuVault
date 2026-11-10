@@ -180,7 +180,9 @@ it.each([false, true])("shows a tenant trial key refusal with purchasing actions
   const message = "This tenant already had a Pro trial. Buy Pro to continue, or write to support@tenuvault.com for a quote or an invoice."
   const tenant = { tenantId: "11111111-2222-4333-8444-555555555555", signedIn: true, activated: false, entitled: false, source: null, plan: null, tenants: null, expiresAt: null, validUntil: null, shared: null, shareNeedsSignIn: false, displayKey: null, message, trialCanExtend: canExtend }
   const container = await render({ ...community, tenantTrialsEnabled: true, hasKey: true, keyState: "pending", tenants: [tenant] })
-  expect(container.textContent).toContain(message)
+  expect(container.textContent).toContain("This tenant already had a Pro trial.")
+  expect(container.textContent).not.toContain(message)
+  expect(container.textContent?.match(/support@tenuvault\.com/g)).toHaveLength(1)
   expect(container.textContent).not.toContain("Need an invoice instead of a card?")
   expect(button(container, "Try Pro free")).toBeUndefined()
   expect(Boolean(button(container, "Extend your trial"))).toBe(canExtend)
@@ -203,8 +205,9 @@ it("shows the shared purchasing actions for a thrown trial key activation error"
   const container = await render(community)
   type(container.querySelector<HTMLInputElement>('#license-key')!, "TENU-TRIAL-KEY-0001")
   await act(async () => button(container, "Activate")!.click())
-  const alert = [...container.querySelectorAll('[role="alert"]')].find(node => node.textContent?.includes(message))!
-  expect(alert.textContent).toContain(message)
+  const alert = [...container.querySelectorAll('[role="alert"]')].find(node => node.textContent?.includes("This tenant already had a Pro trial."))!
+  expect(alert.textContent).toContain("This tenant already had a Pro trial.")
+  expect(alert.textContent).not.toContain(message)
   expect(button(alert as HTMLElement, "Buy Pro")).toBeTruthy()
   expect(alert.querySelector('a[href^="mailto:support@tenuvault.com"]')).toBeTruthy()
   expect(button(alert as HTMLElement, "Extend your trial")).toBeUndefined()
