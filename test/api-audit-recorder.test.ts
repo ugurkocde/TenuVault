@@ -115,3 +115,38 @@ it.each(["submit", "complete", "withdraw"])("audits approval %s and notifies onl
   expect(notice).toHaveBeenCalledTimes(approvalAction === "complete" ? 1 : 0)
   if (approvalAction === "complete") expect(notice).toHaveBeenCalledWith(expect.objectContaining({ restored: 1, failed: 0, status: "Completed" }))
 })
+
+it.each([
+  ["/api/restore-backup", { restoreType: "full" }, true, "fullRestore"],
+  ["/api/restore-backup", { restoreType: "full", mode: "replace", assignments: true }, true, "fullRestore"],
+  ["/api/restore-backup", { restoreType: "selective", selectedPolicies: [{}, {}] }, true, "fullRestore"],
+  ["/api/restore-backup", { restoreType: "selective", selectedPolicies: [{}], mode: "replace" }, true, "replaceRestore"],
+  ["/api/restore-backup", { restoreType: "selective", selectedPolicies: [{}], assignments: true }, true, "restoreAssignments"],
+  ["/api/restore-backup", { restoreType: "selective", selectedPolicies: [{}] }, true, null],
+  ["/api/restore-backup", { restoreType: "full" }, false, null],
+  ["/api/revert-policy", { action: "revert" }, true, "driftRevert"],
+  ["/api/revert-policy", { action: "revert" }, false, null],
+  ["/api/revert-policy", { action: "restore" }, true, null],
+] as const)("tallies one successful Pro action for %s %j", async (path, mode, success, feature) => {
+  const tally = vi.fn()
+  const network = vi.fn(() => { throw new Error("Network forbidden") })
+  vi.stubGlobal("fetch", network)
+  try {
+    const dispatch = vi.fn(async () => Response.json({ success: true }))
+    const recorder = createAuditRecorder(dispatch, () => null, undefined, tally)
+    recorder(new Request(`http://tenuvault.internal${path}`, { method: "POST" }), JSON.stringify({ ...credentials, ...mode }), Response.json({ success, status: success ? "Completed" : "Failed", details: { restoredCount: success ? 2 : 0, failedCount: success ? 0 : 2, results: [] } }))
+    await new Promise<void>(resolve => setTimeout(resolve, 0))
+    expect(tally.mock.calls).toEqual(feature ? [[TENANT, feature]] : [])
+    expect(network).not.toHaveBeenCalled()
+    expect(dispatch).toHaveBeenCalledOnce()
+  } finally { vi.unstubAllGlobals() }
+})
+
+it("does not tally a partially completed restore", async () => {
+  const tally = vi.fn()
+  const dispatch = vi.fn(async () => Response.json({ success: true }))
+  createAuditRecorder(dispatch, () => null, undefined, tally)(new Request("http://tenuvault.internal/api/restore-backup", { method: "POST" }), JSON.stringify({ ...credentials, restoreType: "full" }), Response.json({ success: true, status: "PartiallyCompleted", details: { restoredCount: 1, partialCount: 1, failedCount: 0, results: [] } }))
+  await new Promise<void>(resolve => setTimeout(resolve, 0))
+  expect(tally).not.toHaveBeenCalled()
+  expect(dispatch).toHaveBeenCalledOnce()
+})

@@ -1,3 +1,4 @@
+import { trialEndWhen } from "../../shared/trial-notices"
 import { Button } from "~/components/ui/button"
 import { openCheckout } from "../lib/purchase"
 import { TenantTrialNotices, TrialActions, TrialUsage, TrialChanges, trialEndVisible } from "./TenantTrial"
@@ -159,10 +160,10 @@ export function TrialReminderBanner({ reminder, onDismiss, dismissing }: {
   const { status } = useLicense()
   const tenant = status?.tenants.find(t => t.source === "trial" && t.tenantId === reminder.tenantId)
   const final = reminder.stage === "day-27"
-  const when = reminder.daysLeft === 1 ? "tomorrow" : `in ${reminder.daysLeft} days`
+  const when = reminder.daysLeft === 1 ? trialEndWhen(Date.parse(reminder.endsAt)) : `in ${reminder.daysLeft} days`
   return (
     <TrialBanner tenantId={reminder.tenantId} endsAt={reminder.endsAt} urgent={final} source={`trial-${reminder.stage}`} onDismiss={onDismiss} dismissing={dismissing}>
-      <p>Your Pro trial ends {when}, on {formatDate(reminder.endsAt)}.</p>
+      <p>Your Pro trial ends {when}{when.startsWith("on ") ? "" : `, on ${formatDate(reminder.endsAt)}`}.</p>
       {tenant && status?.tenantTrialsEnabled && <TrialUsage tenant={tenant} />}
       {reminder.tenantTrial ? <TrialChanges tenantId={tenant?.tenantId} /> : final
         ? "Buy Pro now to keep daily backups, full restore and drift revert for both tenants."

@@ -64,6 +64,7 @@ const bridge: TenuVaultPreloadBridge = {
     setEnabled: (tenantId, clientId, id, enabled) => invoke("services:setEnabled", tenantId, clientId, id, enabled),
   },
   license: {
+    trialWorkflowsConfigured: (tenantId) => invoke("license:trialWorkflowsConfigured", tenantId),
     trialUsage: (tenantId) => invoke("license:trialUsage", tenantId),
     startTenantTrial: (tenantId) => invoke("license:startTenantTrial", tenantId),
     tenantTrialAction: (tenantId, action, email) => invoke("license:tenantTrialAction", tenantId, action, email),

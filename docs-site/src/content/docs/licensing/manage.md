@@ -201,4 +201,4 @@ one day left and when it ends. Clicking opens the License page. Each notice appe
 per trial end date, including across restarts. Extending re-arms the reminder for the new date.
 Paid tenants and tenants covered by an organization license do not receive these notices.
 
-The trial usage summary is computed from records on this computer and is never sent to the server.
+TenuVault keeps a short tally of Pro features used during the trial on this computer to show it in the trial notices. It is never sent.

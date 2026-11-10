@@ -1,6 +1,7 @@
 import type { BrowserWindow } from "electron"
 import { beforeEach, expect, it, vi } from "vitest"
 import { notifyTenantTrial } from "../src/main/license/notifications"
+const noticeEnd = new Date(2026, 10, 10, 17).getTime()
 const state = vi.hoisted(() => ({ supported: true, options: {} as { title: string; body: string }, click: () => {}, show: vi.fn() }))
 vi.mock("electron", () => ({ Notification: class {
   static isSupported() { return state.supported }
@@ -12,8 +13,8 @@ beforeEach(() => { vi.clearAllMocks(); state.supported = true })
 it.each([false, true])("shows the %s notice and opens License", ended => {
   const executeJavaScript = vi.fn(async () => undefined)
   const window = { isDestroyed: () => false, webContents: { executeJavaScript, isLoadingMainFrame: () => false } } as unknown as BrowserWindow
-  expect(notifyTenantTrial("Contoso", ended, () => window)).toBe(true)
-  expect(state.options.body).toBe(`Your Pro trial for Contoso ${ended ? "has ended" : "ends tomorrow"}. Open TenuVault to get Pro, extend the trial or ask for an invoice.`)
+  expect(notifyTenantTrial("Contoso", ended, () => window, noticeEnd)).toBe(true)
+  expect(state.options.body).toContain(ended ? `ended on ${new Date(noticeEnd).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })}` : "Your Pro trial for Contoso ends")
   expect(state.show).toHaveBeenCalledOnce()
   state.click()
   expect(executeJavaScript).toHaveBeenCalledWith('location.hash = "/license"')
@@ -45,4 +46,20 @@ it("handles unsupported notifications, missing windows and navigation errors", a
   await Promise.resolve()
   expect(warn).toHaveBeenCalledWith("Error: closed")
   warn.mockRestore()
+})
+
+it.each([0, 1])("uses the local calendar for a notice ending in %s calendar days", offset => {
+  vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date(2026, 10, 10, 9))
+  try {
+    notifyTenantTrial("Contoso", false, () => null, new Date(2026, 10, 10 + offset, offset ? 8 : 17).getTime())
+    expect(state.options.body).toContain(`ends ${offset ? "tomorrow" : "today"}`)
+    expect(state.options.title).toBe(`Your Pro trial ends ${offset ? "tomorrow" : "today"}`)
+  } finally { vi.useRealTimers() }
+})
+
+it("does not offer an extension when the ended trial cannot be extended", () => {
+  notifyTenantTrial("Contoso", true, () => null, noticeEnd, false)
+  expect(state.options.body).toContain("ended on")
+  expect(state.options.body).not.toContain("extend the trial")
+  expect(state.options.body).toContain("get Pro or ask for an invoice")
 })

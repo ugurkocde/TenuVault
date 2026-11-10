@@ -10,17 +10,19 @@ const start = Date.UTC(2026, 10, 10)
 let store: ReturnType<typeof memoryStore>
 let calls: Record<string, unknown>[]
 let healthFields: Record<string, unknown>
+let requests: number
 let enabled: boolean
 let canEnd: boolean
 let end: number
 let response: ((body: Record<string, unknown>) => Response) | undefined
-function entitlement(source = "trial") {
-  const payload = { v: 2, sub: source === "trial" ? "trial:0123456789abcdef" : "paid", act: source === "trial" ? "trial-0123456789abcdef0123456789abcdef" : "paid-1", plan: "pro", tenants: 2, tenantId: tenant, installId: install, status: "granted", iat: Date.now() / 1000, exp: end / 1000, ...(source === "trial" ? { trial: true, keyExp: end / 1000 } : {}) }
+function entitlement(source = "trial", tenantId = tenant) {
+  const payload = { v: 2, sub: source === "trial" ? "trial:0123456789abcdef" : "paid", act: source === "trial" ? "trial-0123456789abcdef0123456789abcdef" : "paid-1", plan: "pro", tenants: 2, tenantId, installId: install, status: "granted", iat: Date.now() / 1000, exp: end / 1000, ...(source === "trial" ? { trial: true, keyExp: end / 1000 } : {}) }
   const body = Buffer.from(JSON.stringify(payload)).toString("base64url")
   return Response.json({ token: `${body}.${sign(null, Buffer.from(body), privateKey).toString("base64url")}`, activationId: payload.act, source, trial: source === "trial", keyExp: end / 1000, canEnd })
 }
 function service(existing: string[] = []) {
   return new LicenseService({ store, persist: true, publicKey: publicKey.export({ type: "spki", format: "pem" }).toString(), apiBase: "https://www.tenuvault.com", appVersion: "0.5.0", initialTenantIds: store.get("license.tenantTrials") ? [...new Set([tenant, ...existing])] : existing, connectedTenantIds: () => [tenant], idToken: async () => "signed.id.token", fetch: (async (_url, init) => {
+    requests++
     if (!init?.body) return Response.json({ tenantTrials: { enabled, ok: true, ...healthFields } })
     const body = JSON.parse(String(init.body)) as Record<string, unknown>
     calls.push(body)
@@ -34,8 +36,8 @@ async function connect(license: LicenseService) {
   await license.checkTrialHealth()
   return license.checkNewTenant(tenant)
 }
-beforeEach(() => { vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(start); store = memoryStore(); store.set("license.installId", install); calls = []; healthFields = {}; enabled = true; canEnd = true; end = start + 14 * day; response = undefined; vi.spyOn(console, "warn").mockImplementation(() => {}) })
-afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
+beforeEach(() => { vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(start); store = memoryStore(); store.set("license.installId", install); calls = []; requests = 0; healthFields = {}; enabled = true; canEnd = true; end = start + 14 * day; response = undefined; vi.spyOn(console, "warn").mockImplementation(() => {}) })
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 describe("tenant trials", () => {
   it.each([true, false])("starts or joins and keeps canEnd %s", async starter => {
     canEnd = starter
@@ -153,13 +155,13 @@ describe("tenant trials", () => {
       expect(license.status([tenant]).trial).toBe(true)
     }
   })
-  it.each(["used", "not_starter"])("shows mutation refusal %s and stops refused extensions", async reason => {
+  it.each(["used", "not_starter"])("shows mutation refusal %s and only retires used extensions", async reason => {
     const license = service()
     await connect(license)
     vi.setSystemTime(start + 10 * day)
     response = () => Response.json({ error: "trial_unavailable", reason }, { status: 403 })
     await expect(license.tenantTrialAction(tenant, "extend_trial")).rejects.toThrow()
-    expect(license.status([tenant]).tenants[0]?.trialCanExtend).toBe(false)
+    expect(license.status([tenant]).tenants[0]?.trialCanExtend).toBe(reason !== "used")
     expect(license.status([tenant]).trial).toBe(true)
   })
   it("does not accept a malformed trial answer", async () => {
@@ -235,7 +237,7 @@ describe("trial policy and tray reminders", () => {
     vi.setSystemTime(end - day)
     license.notifyTrials(notify)
     license.notifyTrials(notify)
-    expect(notify).toHaveBeenCalledExactlyOnceWith(tenant, false)
+    expect(notify).toHaveBeenCalledExactlyOnceWith(tenant, false, end, expect.any(Boolean))
     const restarted = service()
     await restarted.checkTrialHealth()
     restarted.notifyTrials(notify)
@@ -243,7 +245,7 @@ describe("trial policy and tray reminders", () => {
     vi.setSystemTime(end)
     restarted.notifyTrials(notify)
     restarted.notifyTrials(notify)
-    expect(notify).toHaveBeenLastCalledWith(tenant, true)
+    expect(notify).toHaveBeenLastCalledWith(tenant, true, end, expect.any(Boolean))
     const again = service()
     await again.checkTrialHealth()
     again.notifyTrials(notify)
@@ -298,7 +300,7 @@ it("bounds local usage by verified trial dates without changing the trial record
   vi.setSystemTime(end - day)
   end += 10 * day
   await restarted.tenantTrialAction(tenant, "extend_trial")
-  expect(restarted.trialUsagePeriod(tenant)).toEqual({ since: Date.now(), until: end })
+  expect(restarted.trialUsagePeriod(tenant)).toEqual({ since: start, until: end })
   enabled = false
   vi.setSystemTime(end - day)
   await restarted.checkTrialHealth()
@@ -307,8 +309,8 @@ it("bounds local usage by verified trial dates without changing the trial record
 
 
 it.each([
-  [undefined, 14, true], [undefined, 15, false], [7, 7, true], [7, 8, false],
-] as const)("limits end notifications to the grace window (%s, %s)", async (grace, age, expected) => {
+  [undefined, 60, true], [undefined, 61, false], [7, 21, true], [7, 61, false],
+] as const)("limits end notifications independently to the recent-expiry window (%s, %s)", async (grace, age, expected) => {
   healthFields = grace === undefined ? {} : { extensionGraceDays: grace }
   const license = service()
   await connect(license)
@@ -316,5 +318,155 @@ it.each([
   const notify = vi.fn(() => true)
   license.notifyTrials(notify)
   expect(notify).toHaveBeenCalledTimes(expected ? 1 : 0)
-  if (expected) expect(notify).toHaveBeenCalledWith(tenant, true)
+  if (expected) expect(notify).toHaveBeenCalledWith(tenant, true, end, expect.any(Boolean))
+})
+
+it.each([false, true])("keeps the first-seen usage boundary through refresh and extension (grace %s)", async grace => {
+  healthFields = { days: 14, extensionDays: 10 }
+  const license = service()
+  await connect(license)
+  const original = license.trialUsagePeriod(tenant)
+  vi.setSystemTime(start + day)
+  await license.refreshAll()
+  expect(license.trialUsagePeriod(tenant)).toEqual(original)
+  vi.setSystemTime(end + (grace ? day : -day))
+  end = Math.max(end, Date.now()) + 10 * day
+  await license.tenantTrialAction(tenant, "extend_trial")
+  expect(license.trialUsagePeriod(tenant)?.since).toBe(grace ? start + day : start)
+  expect(JSON.parse(store.get("license.tenantTrials")!)[tenant].trialFirstSeenAt).toBe(start)
+})
+it.each([false, true])("starts the local usage window at join, with policy %s", async policy => {
+  if (policy) healthFields = { days: 14, extensionDays: 10 }
+  canEnd = false
+  vi.setSystemTime(start + 5 * day)
+  const license = service()
+  await connect(license)
+  expect(license.trialUsagePeriod(tenant)?.since).toBe(start + 5 * day)
+  vi.setSystemTime(start + 6 * day)
+  await license.refreshAll()
+  const restarted = service()
+  await restarted.checkTrialHealth()
+  expect(restarted.trialUsagePeriod(tenant)?.since).toBe(start + 5 * day)
+  expect(license.trialUsagePeriod(tenant)?.since).toBe(start + 5 * day)
+})
+it("keeps a temporarily refused extension available", async () => {
+  const license = service()
+  await connect(license)
+  vi.setSystemTime(end - day)
+  for (const reason of ["disabled", "app_update_required"]) {
+    response = () => Response.json({ error: "trial_unavailable", reason }, { status: 403 })
+    await expect(license.tenantTrialAction(tenant, "extend_trial")).rejects.toThrow()
+    expect(license.status([tenant]).tenants[0]?.trialCanExtend).toBe(true)
+  }
+  response = undefined
+  end += 10 * day
+  await license.tenantTrialAction(tenant, "extend_trial")
+  expect(license.status([tenant]).tenants[0]?.trialCanExtend).toBe(false)
+})
+it("does not notify a removed tenant", async () => {
+  const license = service()
+  await connect(license)
+  await license.releaseTenant(tenant)
+  vi.setSystemTime(end - day)
+  const notify = vi.fn(() => true)
+  license.notifyTrials(notify)
+  expect(notify).not.toHaveBeenCalled()
+})
+it("notifies two tenants in one pass", async () => {
+  const license = service()
+  await connect(license)
+  const other = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+  const saved = JSON.parse(store.get("license.tenantTrials")!)
+  saved[other] = { ...saved[tenant], token: (await entitlement("trial", other).json()).token }
+  store.set("license.tenantTrials", JSON.stringify(saved))
+  const restarted = service()
+  await restarted.checkTrialHealth()
+  vi.setSystemTime(end - day)
+  const notify = vi.fn(() => true)
+  restarted.notifyTrials(notify)
+  expect(notify).toHaveBeenCalledTimes(2)
+  expect(notify).toHaveBeenCalledWith(other, false, end, expect.any(Boolean))
+})
+it("tallies Pro actions only during an enabled tenant trial, then deletes them", async () => {
+  const license = service()
+  license.recordTrialUsage(tenant, "dailySchedule")
+  expect(store.get("license.tenantTrials")).toBeNull()
+  await connect(license)
+  const beforeRequests = requests
+  const network = vi.fn(() => { throw new Error("Network forbidden") })
+  vi.stubGlobal("fetch", network)
+  for (const feature of ["dailySchedule", "azureStorage", "fullRestore", "replaceRestore", "restoreAssignments", "driftRevert"] as const) license.recordTrialUsage(tenant, feature)
+  license.recordTrialUsage(tenant, "bulkActions")
+  license.recordTrialUsage(tenant, "notifications")
+  expect(license.trialUsageTally(tenant)).toEqual({ dailyBackups: 1, azureBackups: 1, fullRestores: 3, driftReverts: 1 })
+  expect(service().status([tenant]).tenants[0]?.trial).toBe(true)
+  expect(network).not.toHaveBeenCalled()
+  expect(requests).toBe(beforeRequests)
+  vi.unstubAllGlobals()
+  await license.releaseTenant(tenant)
+  expect(JSON.parse(store.get("license.tenantTrials") ?? "{}")[tenant]).toBeUndefined()
+})
+it.each(["off", "expired", "key", "organization", "other"])("does not tally for %s", async state => {
+  const license = service()
+  await connect(license)
+  if (state === "off") { enabled = false; vi.setSystemTime(start + day); await license.checkTrialHealth() }
+  if (state === "expired") vi.setSystemTime(end)
+  if (state === "other") { license.recordTrialUsage("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "fullRestore"); expect(JSON.parse(store.get("license.tenantTrials")!)).not.toHaveProperty("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"); return }
+  if (state === "key" || state === "organization") {
+    const saved = JSON.parse(store.get("license.state")!)
+    if (state === "key") saved.key = "PAID-KEY"
+    else saved.activations[tenant].source = "tenant"
+    store.set("license.state", JSON.stringify(saved))
+  }
+  const subject = ["key", "organization"].includes(state) ? service() : license
+  subject.recordTrialUsage(tenant, "fullRestore")
+  expect(JSON.parse(store.get("license.tenantTrials")!)[tenant].tally).toBeUndefined()
+})
+it("deactivation deletes the tally", async () => {
+  const license = service()
+  await connect(license)
+  license.recordTrialUsage(tenant, "fullRestore")
+  await license.deactivate()
+  expect(store.get("license.tenantTrials")).toBeNull()
+})
+
+it.each(["key", "tenant"])("hides extension availability for %s coverage", async coverage => {
+  const license = service()
+  await connect(license)
+  const saved = JSON.parse(store.get("license.state")!)
+  if (coverage === "key") saved.key = "PAID-KEY"
+  else saved.activations[tenant].source = "tenant"
+  store.set("license.state", JSON.stringify(saved))
+  const covered = service()
+  expect(covered.status([tenant]).tenants[0]?.trialExtensionAvailableAt).toBeUndefined()
+  expect(covered.status([tenant]).tenants[0]?.trialCanExtend).toBe(false)
+})
+it("keeps tallies separate for two live tenant trials", async () => {
+  const license = service()
+  await connect(license)
+  const other = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+  const data = await entitlement("trial", other).json()
+  const saved = JSON.parse(store.get("license.state")!)
+  saved.activations[other] = { ...saved.activations[tenant], token: data.token }
+  store.set("license.state", JSON.stringify(saved))
+  const trials = JSON.parse(store.get("license.tenantTrials")!)
+  trials[other] = { ...trials[tenant], token: data.token }
+  store.set("license.tenantTrials", JSON.stringify(trials))
+  const both = service()
+  await both.checkTrialHealth()
+  both.recordTrialUsage(tenant, "dailySchedule")
+  both.recordTrialUsage(other, "driftRevert")
+  expect(both.trialUsageTally(tenant)).toEqual({ dailyBackups: 1 })
+  expect(both.trialUsageTally(other)).toEqual({ driftReverts: 1 })
+})
+
+it("uses the local first-seen time without policy fields after extension", async () => {
+  const license = service()
+  await connect(license)
+  vi.setSystemTime(start + day)
+  await license.refreshAll()
+  vi.setSystemTime(end - day)
+  end += 10 * day
+  await license.tenantTrialAction(tenant, "extend_trial")
+  expect(license.trialUsagePeriod(tenant)).toEqual({ since: start, until: end })
 })

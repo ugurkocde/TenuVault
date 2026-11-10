@@ -4,9 +4,9 @@ import { MemoryRouter } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { LicenseStatus, TenantLicenseStatus } from "../../src/shared/ipc"
 import { licenseChipState, trialReminder } from "../../src/renderer/lib/license"
-const state = vi.hoisted(() => ({ status: null as LicenseStatus | null, action: vi.fn(async () => undefined), start: vi.fn(async () => undefined), emailTrial: vi.fn(async () => undefined), update: vi.fn(), open: vi.fn(async () => undefined), usage: vi.fn(async (): Promise<string | null> => null), refresh: vi.fn(async () => undefined) }))
+const state = vi.hoisted(() => ({ status: null as LicenseStatus | null, action: vi.fn(async () => undefined), start: vi.fn(async () => undefined), emailTrial: vi.fn(async () => undefined), update: vi.fn(), open: vi.fn(async () => undefined), configured: vi.fn(async () => true), usage: vi.fn(async (): Promise<string | null> => null), refresh: vi.fn(async () => undefined) }))
 vi.mock("../../src/renderer/lib/license", async original => ({ ...(await original<typeof import("../../src/renderer/lib/license")>()), useLicense: () => ({ status: state.status, refresh: state.refresh }) }))
-vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { app: { openExternal: state.open }, auth: { accounts: async () => [{ tenantId: "tenant", username: "admin@contoso.example" }] }, license: { trialUsage: state.usage, tenantTrialAction: state.action, startTenantTrial: state.start, startTrial: state.emailTrial, open: state.open }, schedules: { list: async () => [{ tenantId: "tenant", enabled: true, frequency: "daily" }] }, preferences: { get: async () => ({ retentionDays: 90 }) } } }))
+vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { app: { openExternal: state.open }, auth: { accounts: async () => [{ tenantId: "tenant", username: "admin@contoso.example" }] }, license: { trialWorkflowsConfigured: state.configured, trialUsage: state.usage, tenantTrialAction: state.action, startTenantTrial: state.start, startTrial: state.emailTrial, open: state.open }, schedules: { list: async () => [{ tenantId: "tenant", enabled: true, frequency: "daily" }] }, preferences: { get: async () => ({ retentionDays: 90 }) } } }))
 vi.mock("~/contexts/TenantContext", () => ({ useTenantOperations: () => ({ updateTenant: state.update }), useTenants: () => [{ id: 1, name: "Contoso", credentials: { tenantId: "tenant" }, resources: { storageAccountName: "contosobackups" } }, { id: 2, name: "Fabrikam", credentials: { tenantId: "ended" } }] }))
 import { TenantTrialCard, TenantTrialNotices, TenantTrialOptions, TrialActions, TrialChanges } from "../../src/renderer/components/TenantTrial"
 import { TrialReminderBanner } from "../../src/renderer/components/DesktopLayout"
@@ -17,6 +17,7 @@ let container: HTMLDivElement
 const day = 86400_000
 let tenant: TenantLicenseStatus
 beforeEach(() => {
+  state.configured.mockReset().mockResolvedValue(true)
   state.usage.mockReset().mockResolvedValue(null)
   state.action.mockReset().mockResolvedValue(undefined)
   state.start.mockReset().mockResolvedValue(undefined)
@@ -154,7 +155,7 @@ describe("tenant trial UI", () => {
     tenant.trialEndsAt = state.status!.trialEndsAt
     expect(trialReminder(state.status!, undefined)?.daysLeft).toBe(days)
     await render(createElement(TrialChanges))
-    for (const text of ["runs weekly", "Azure storage backups pause", "history returns to 30 days"]) expect(container.textContent).toContain(text)
+    for (const text of ["runs weekly", "Azure storage backups pause", "health review", "history returns to 30 days"]) expect(container.textContent).toContain(text)
     expect(licenseChipState(state.status!).label).toBe(`Pro trial · ${days} ${days === 1 ? "day" : "days"}`)
   })
   it.each([1, 2])("shows the end screen for %s tenants", async count => {
@@ -354,4 +355,41 @@ it("keeps the next tenant's reminder extension available after extending the fir
   expect(container.textContent).not.toContain("Trial extended.")
   await click("Extend your trial")
   expect(state.action).toHaveBeenLastCalledWith("second", "extend_trial")
+})
+
+it.each([true, false])("shows configured workflow changes with trials enabled %s", async enabled => {
+  state.status!.tenantTrialsEnabled = enabled
+  await render(createElement(TrialChanges, { tenantId: tenant.tenantId }))
+  expect(container.textContent).toContain("Alerts, health review and change reports pause.")
+  state.configured.mockResolvedValue(false)
+  state.status = { ...state.status! }
+  await render(createElement(TrialChanges, { tenantId: tenant.tenantId }))
+  expect(container.textContent).not.toContain("Alerts, health review and change reports pause.")
+})
+it("only shows extension progress for the extension action", async () => {
+  let finish!: () => void
+  state.open.mockImplementationOnce(() => new Promise<undefined>(resolve => { finish = () => resolve(undefined) }))
+  await render(createElement(TrialActions, { tenant, source: "trial-test" }))
+  await act(async () => [...container.querySelectorAll("button")].find(b => b.textContent === "Buy Pro")!.click())
+  expect(container.textContent).not.toContain("Extending trial...")
+  expect(container.textContent).toContain("Extend your trial")
+  await act(async () => finish())
+})
+it("lets the banner extend after a network failure", async () => {
+  state.action.mockRejectedValueOnce(new Error("Network unavailable"))
+  await render(createElement(TrialReminderBanner, { reminder: trialReminder(state.status!, undefined)!, onDismiss: vi.fn(), dismissing: false }))
+  await click("Extend your trial")
+  expect(container.textContent).toContain("Network unavailable")
+  await click("Extend your trial")
+  expect(state.action).toHaveBeenCalledTimes(2)
+  expect(container.textContent).toContain("Trial extended.")
+})
+it("uses today for a one-day reminder that ends on the local calendar date", async () => {
+  const now = new Date(2026, 10, 10, 9)
+  vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(now)
+  try {
+    tenant.trialEndsAt = new Date(2026, 10, 10, 17).toISOString()
+    await render(createElement(TrialReminderBanner, { reminder: trialReminder(state.status!, undefined)!, onDismiss: vi.fn(), dismissing: false }))
+    expect(container.textContent).toContain("Your Pro trial ends today")
+  } finally { vi.useRealTimers() }
 })

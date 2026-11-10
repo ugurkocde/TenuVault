@@ -2,7 +2,11 @@ import type { KeyValueStore } from "../storage/secure-store"
 
 export const TENANT_TRIAL_STATE_KEY = "license.tenantTrials"
 
+export type TrialTally = Partial<Record<"dailyBackups" | "azureBackups" | "fullRestores" | "driftReverts", number>>
+
 export interface StoredTenantTrial {
+  trialFirstSeenAt?: number
+  tally?: TrialTally
   dayNoticeEnd?: number
   endedNoticeEnd?: number
   firstConnectedAt?: number
@@ -33,9 +37,12 @@ export function readTenantTrials(store: KeyValueStore, existing: string[]): Reco
       /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(id) && record && typeof record === "object" && !Array.isArray(record),
     ).map(([id, record]) => {
       const clean: Record<string, unknown> = {}
-      for (const field of ["dayNoticeEnd", "endedNoticeEnd", "firstConnectedAt", "lastAttemptAt", "endedAt", "trialEndsAt", "refusalAt"]) if (typeof record[field] === "number" && Number.isFinite(record[field])) clean[field] = record[field]
+      for (const field of ["trialFirstSeenAt", "dayNoticeEnd", "endedNoticeEnd", "firstConnectedAt", "lastAttemptAt", "endedAt", "trialEndsAt", "refusalAt"]) if (typeof record[field] === "number" && Number.isFinite(record[field])) clean[field] = record[field]
       for (const field of ["stopped", "canEnd", "extended", "acknowledged", "endedAcknowledged"]) if (typeof record[field] === "boolean") clean[field] = record[field]
       for (const field of ["refusal", "refusalReason", "refusalVersion", "activationId", "token", "email"]) if (typeof record[field] === "string") clean[field] = record[field]
+      if (record.tally && typeof record.tally === "object" && !Array.isArray(record.tally)) {
+        clean.tally = Object.fromEntries(["dailyBackups", "azureBackups", "fullRestores", "driftReverts"].filter(field => Number.isSafeInteger(record.tally[field]) && record.tally[field] >= 0).map(field => [field, record.tally[field]]))
+      }
       return [id, clean]
     }))
   } catch {

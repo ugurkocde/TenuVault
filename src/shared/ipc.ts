@@ -95,6 +95,7 @@ export interface TenantLicenseStatus {
   trialRefusal?: string
   trialAcknowledged?: boolean
   trialEmail?: string
+  trialUsageRevision?: number
   trialExtensionUnavailable?: boolean
   trialExtensionAvailableAt?: string
   trialCanExtend?: boolean
@@ -443,6 +444,7 @@ export interface TenuVaultBridge {
     setEnabled: (tenantId: string, clientId: string, id: ModuleId, enabled: boolean) => Promise<ServicesStatus>
   }
   license: {
+    trialWorkflowsConfigured: (tenantId: string) => Promise<boolean>
     trialUsage: (tenantId: string) => Promise<string | null>
     startTenantTrial: (tenantId: string) => Promise<LicenseStatus>
     tenantTrialAction: (tenantId: string, action: "extend_trial" | "end_trial" | "trial_contact" | "acknowledge", email?: string) => Promise<LicenseStatus>

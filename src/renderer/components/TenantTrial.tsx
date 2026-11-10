@@ -20,7 +20,7 @@ export function TrialUsage({ tenant }: { tenant: TenantLicenseStatus }) {
     setSummary(null)
     void Promise.resolve().then(() => bridge.license.trialUsage(tenant.tenantId)).then(value => { if (current) setSummary(value) }).catch(() => {})
     return () => { current = false }
-  }, [tenant.tenantId, tenant.trialEndsAt])
+  }, [tenant.tenantId, tenant.trialEndsAt, tenant.trialUsageRevision])
   return summary ? <p className="text-sm">{summary}</p> : null
 }
 
@@ -28,18 +28,19 @@ export function TrialActions({ tenant, source, welcome = false }: { tenant?: Ten
   const { status } = useLicense()
   const { busy, error, run } = useTrialAction()
   const [notice, setNotice] = useState("")
+  const [action, setAction] = useState<"buy" | "extend" | null>(null)
   const [extended, setExtended] = useState(false)
   const days = status?.tenantTrialPolicy?.extensionDays
   const mailto = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent("TenuVault Pro: quote or invoice")}`
   return <div className="min-w-0 space-y-2 text-sm font-normal">
     <div className="flex flex-wrap items-center gap-2">
-      {!welcome && <Button size="sm" disabled={busy} onClick={() => void run(() => openCheckout(source))}>Buy Pro</Button>}
-      {!welcome && tenant?.trialCanExtend && !extended && <Button size="sm" variant="outline" disabled={busy} onClick={() => void run(async () => {
+      {!welcome && <Button size="sm" disabled={busy} onClick={() => { setAction("buy"); void run(() => openCheckout(source)).finally(() => setAction(null)) }}>Buy Pro</Button>}
+      {!welcome && tenant?.trialCanExtend && !extended && <Button size="sm" variant="outline" disabled={busy} onClick={() => { setAction("extend"); void run(async () => {
         const updated = await bridge.license.tenantTrialAction(tenant.tenantId, "extend_trial")
         const end = updated?.tenants.find(t => t.tenantId === tenant.tenantId)?.trialEndsAt
         setExtended(true)
         setNotice(end ? `Trial extended. Ends on ${formatDate(end)}.` : "Trial extended.")
-      })}>{busy ? "Extending trial..." : days ? `Extend trial by ${days} days` : "Extend your trial"}</Button>}
+      }).finally(() => setAction(null)) }}>{busy && action === "extend" ? "Extending trial..." : days ? `Extend trial by ${days} days` : "Extend your trial"}</Button>}
       {tenant?.trialExtensionAvailableAt && Date.parse(tenant.trialExtensionAvailableAt) > Date.now() && !extended && <p>You can extend once, from {formatDate(tenant.trialExtensionAvailableAt)}.</p>}
       {tenant && !tenant.trialCanExtend && !tenant.trialExtensionAvailableAt && !tenant.trialExtensionUnavailable && tenant.source === "trial" && !extended && <p>Check the License page for trial extension availability.</p>}
       {welcome && tenant?.trialCanExtend && <p>You can extend your trial once, from the License page.</p>}
@@ -155,20 +156,23 @@ function TrialAzureChoice() {
   })}>Switch {t.name} to weekly local backups</Button>)}{error && <p role="alert" className="basis-full text-sm">{error}</p>}</>
 }
 
-export function TrialChanges({ tenantId }: { tenantId?: string } = {}) {
+export function TrialChanges({ tenantId }: { tenantId?: string }) {
   const { status } = useLicense()
   const tenants = useTenants()
   const [daily, setDaily] = useState(false)
+  const [workflows, setWorkflows] = useState(false)
   const [longHistory, setLongHistory] = useState(false)
   useEffect(() => {
     void bridge.schedules.list().then(schedules => setDaily(schedules.some(s => s.enabled && s.frequency === "daily" && status?.tenants.some(t => t.trialEndsAt && (!status?.tenantTrialsEnabled || !tenantId || t.tenantId === tenantId) && t.tenantId === s.tenantId)))).catch(() => {})
+    const ids = status?.tenants.filter(t => t.trialEndsAt && (!tenantId || t.tenantId === tenantId)).map(t => t.tenantId) ?? []
+    void Promise.resolve().then(() => Promise.all(ids.map(id => bridge.license.trialWorkflowsConfigured(id)))).then(values => setWorkflows(values.some(Boolean))).catch(() => setWorkflows(false))
     void bridge.preferences.get().then(prefs => setLongHistory(prefs.retentionDays > 30)).catch(() => {})
   }, [status, tenantId])
   const azure = tenants.some(t => t.resources?.storageAccountName && !t.resources.storageAccountName.startsWith(LOCAL_STORAGE_PREFIX) && status?.tenants.some(licensed => licensed.trialEndsAt && (!status?.tenantTrialsEnabled || !tenantId || licensed.tenantId === tenantId) && licensed.tenantId === t.credentials?.tenantId?.toLowerCase()))
   return <ul className="list-disc space-y-1 pl-5 text-sm">
     {daily && <li>Your saved daily schedule runs weekly on Community.</li>}
     {azure && <li>Azure storage backups pause. <Link to="/portal/backup?tab=schedule">Switch to weekly local backups in Backup & Restore.</Link></li>}
-    {!status?.tenantTrialsEnabled && <li>Alerts, health review and change reports pause.</li>}
+    {workflows && <li>Alerts, health review and change reports pause.</li>}
     {longHistory && <li>Backup history returns to 30 days.</li>}
     {(status?.tenants.filter(t => t.trialEndsAt).length ?? 0) > 1 && <li>You choose which tenant continues on Community.</li>}
   </ul>
