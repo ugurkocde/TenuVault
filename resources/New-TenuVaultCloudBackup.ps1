@@ -22,6 +22,9 @@
         counts, failed type names, time; never policy content) for the notification watcher to
         alert on. A container of its own: the identity never gets write access to the
         watcher's state
+      * gives the identity the built-in Reader role on this Automation account only, so each run
+        can read its own job and record whether the schedule or a person started it. No
+        built-in role reads jobs without also starting them; Reader cannot change anything
       * links the runbook to a daily or weekly schedule in the timezone you choose
       * with -AlertEmail, creates an Azure Monitor action group and a metric alert on failed
         Automation jobs, before the schedule is linked. Without it, -NoFailureAlert is the
@@ -175,8 +178,11 @@ $variableNames = @(
     "TenuVaultTenantId-$tenantKey", "TenuVaultStorageAccount-$tenantKey",
     "TenuVaultScope-$tenantKey", "TenuVaultExcludedFolders-$tenantKey", "TenuVaultAppOnlyExcluded-$tenantKey",
     "TenuVaultChangeReport-$tenantKey", "TenuVaultChangeReportActors-$tenantKey", "TenuVaultTenantName-$tenantKey",
-    "TenuVaultScheduleSetsTrigger-$tenantKey"
+    "TenuVaultAutomationAccountId-$tenantKey"
 )
+# Reader, assigned on the Automation account only: the runbook reads its own job to tell a run the
+# schedule started from one started by hand.
+$readerRoleId = "acdd72a7-3385-48ef-bd42-f606fba81ae7"
 # Setups before runbook 1.2.0 also wrote the Key Vault that held the recovery key. The runbook
 # no longer reads it; a rerun or -Remove deletes that variable.
 $legacyKeyVaultVariable = "TenuVaultKeyVault-$tenantKey"
@@ -228,6 +234,7 @@ $context = Get-AzContext
 Write-Host "Subscription: $($context.Subscription.Name) ($($context.Subscription.Id))"
 
 $contextTenantId = [string]$context.Tenant.Id
+$automationAccountId = "/subscriptions/$($context.Subscription.Id)/resourceGroups/$ResourceGroupName/providers/Microsoft.Automation/automationAccounts/$AutomationAccountName"
 if ($contextTenantId.ToLowerInvariant() -ne $TenantId.ToLowerInvariant()) {
     throw "The current Az context tenant is '$(if ($contextTenantId) { $contextTenantId } else { '<empty>' })', but -TenantId is $TenantId. Run Connect-AzAccount -Tenant $TenantId (and select the right subscription), then run this script again. Nothing was written."
 }
@@ -464,6 +471,34 @@ function Get-TenuVaultTenantSetupLeft {
     return @{ Left = @($left); Unknown = @($unknown) }
 }
 
+# The Reader role on the Automation account goes with the last tenant setup in the account: the
+# other tenants' runs read their jobs with the same identity. $Listed is the variable list read
+# before this tenant's variables were removed; when it failed, the role stays.
+function Remove-TenuVaultJobReaderRole {
+    [CmdletBinding(SupportsShouldProcess)]
+    param([AllowNull()][string]$PrincipalId, [Parameter(Mandatory)][object]$Listed)
+    if (-not $PrincipalId) { return }
+    if ($Listed.Error) {
+        Write-Host "Kept the Reader role of the cloud backup identity on '$AutomationAccountName': the variable list could not be read, so other tenants' setups could not be ruled out."
+        return
+    }
+    $others = @($Listed.Variables.Keys | Where-Object { $_ -like "TenuVaultTenantId-*" -and $_ -ne "TenuVaultTenantId-$tenantKey" })
+    if ($others.Count) {
+        Write-Host "Kept the Reader role of the cloud backup identity on '$AutomationAccountName': $($others.Count) other tenant setup(s) in this account still use it."
+        return
+    }
+    try {
+        $assigned = @(Get-AzRoleAssignment -ObjectId $PrincipalId -Scope $automationAccountId -ErrorAction Stop |
+            Where-Object { $_.Scope -eq $automationAccountId -and [string]$_.RoleDefinitionId -match "$readerRoleId$" })
+        if ($assigned.Count -and $PSCmdlet.ShouldProcess($automationAccountId, "Remove role 'Reader' from the cloud backup identity")) {
+            Remove-AzRoleAssignment -ObjectId $PrincipalId -RoleDefinitionId $readerRoleId -Scope $automationAccountId -ErrorAction Stop | Out-Null
+            Write-Host "Removed the Reader role of the cloud backup identity on '$AutomationAccountName'."
+        }
+    } catch {
+        Write-Host "Could not remove the Reader role of the cloud backup identity on '$AutomationAccountName': $($_.Exception.Message)"
+    }
+}
+
 # -Remove: this tenant's schedule link, schedule and variables go away, then what is left is read back.
 function Remove-TenuVaultCloudBackupSetup {
     [CmdletBinding(SupportsShouldProcess)]
@@ -501,6 +536,7 @@ function Remove-TenuVaultCloudBackupSetup {
             }
         }
     }
+    Remove-TenuVaultJobReaderRole -PrincipalId $principalId -Listed $listed
     # Read back instead of trusting the prompts: a declined or failed step leaves the setup running.
     $state = Get-TenuVaultTenantSetupLeft
     Write-Host ""
@@ -517,7 +553,7 @@ function Remove-TenuVaultCloudBackupSetup {
     }
     Write-Host "Left in place on purpose: Automation account '$AutomationAccountName' and runbook '$runbookName'"
     Write-Host "(other tenants may use them), storage account '$StorageAccountName' with every backup,"
-    Write-Host "and the role assignments."
+    Write-Host "and the storage role assignments."
     Write-Host "When the Automation account is no longer used by any tenant, revoke these Graph roles"
     Write-Host "from its managed identity (Entra ID > Enterprise applications > Permissions):"
     foreach ($role in $graphRoleNames) { Write-Host "  * $role" }
@@ -721,6 +757,10 @@ if ($principalId) {
             -RoleDefinitionId ([string]$role.Id) `
             -Scope "$($storageAccount.Id)/blobServices/default/containers/$outcomeContainer" -Target "the cloud backup identity (result notes)"
     }
+    # Read only, on this Automation account only: each run reads its own job to tell a run the
+    # schedule started from one started by hand. Without it, every run is recorded as scheduled.
+    Add-TenuVaultRoleAssignment -ObjectId $principalId -RoleName "Reader" -RoleDefinitionId $readerRoleId `
+        -Scope $automationAccountId -Target "the cloud backup identity (its own jobs)"
 }
 
 # ---------------------------------------------------------------------------
@@ -735,6 +775,7 @@ Set-TenuVaultAutomationVariable -Name "TenuVaultStorageAccount-$tenantKey" -Valu
 Set-TenuVaultAutomationVariable -Name "TenuVaultScope-$tenantKey" -Value $Scope
 Set-TenuVaultAutomationVariable -Name "TenuVaultExcludedFolders-$tenantKey" -Value $ExcludedFolders
 Set-TenuVaultAutomationVariable -Name "TenuVaultAppOnlyExcluded-$tenantKey" -Value $appOnlyExcluded
+Set-TenuVaultAutomationVariable -Name "TenuVaultAutomationAccountId-$tenantKey" -Value $automationAccountId
 if ($changeReportPassed) { Set-TenuVaultAutomationVariable -Name "TenuVaultChangeReport-$tenantKey" -Value $ChangeReport.ToLowerInvariant() }
 if ($tenantNamePassed) {
     # Cleared to the tenant id, never to an empty value, which the runbook would skip for an
@@ -897,12 +938,8 @@ if ($GrantGraphRoles -or $GraphRolesGranted) {
     if ($PSCmdlet.ShouldProcess($runbookName, "Link runbook to schedule '$scheduleName'")) {
         Register-AzAutomationScheduledRunbook -ResourceGroupName $ResourceGroupName `
             -AutomationAccountName $AutomationAccountName -RunbookName $runbookName `
-            -ScheduleName $scheduleName -Parameters @{ TenantKey = $tenantKey; Trigger = "Scheduled" } -ErrorAction Stop | Out-Null
+            -ScheduleName $scheduleName -Parameters @{ TenantKey = $tenantKey } | Out-Null
         $linked = $true
-        # Written only once the link passes TRIGGER: the runbook then records a run without it as
-        # started by hand. Older links pass only TENANTKEY, and without this variable every run
-        # still counts as scheduled.
-        Set-TenuVaultAutomationVariable -Name "TenuVaultScheduleSetsTrigger-$tenantKey" -Value "true"
     }
 }
 
@@ -921,6 +958,7 @@ Write-Host "  Automation account:  $AutomationAccountName (resource group $Resou
 Write-Host "  Runbook:             $runbookName ($(if ($runbook.Plain) { "published, version $($runbook.Version)" } else { $runbook.Reason }))"
 Write-Host "  Storage account:     $StorageAccountName (container '$backupContainer', writer role has no delete)"
 Write-Host "  Backup results:      '$outcomeContainer' (result notes for the notification watcher, same writer role)"
+Write-Host "  Job reader:          Reader on '$AutomationAccountName' only, so runs record Manual or Scheduled"
 Write-Host "  Encryption:          Azure encryption at rest; backups are plain JSON, readable by whoever your role assignments allow"
 $changeReportSummary = if (-not $changeReportPassed) { "unchanged (as an earlier setup chose; off when none did)" } else { switch ($ChangeReport) { 'Off' { 'off' } 'Names' { 'names only, sent by the notification watcher' } default { 'with setting values, sent by the notification watcher' } } }
 if ($changeReportActorsPassed) { $changeReportSummary += $(if ($ChangeReportWithoutActors) { ', without who made each change' } else { ', naming who made each change' }) }

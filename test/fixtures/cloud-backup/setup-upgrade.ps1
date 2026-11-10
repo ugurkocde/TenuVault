@@ -48,8 +48,11 @@ $tenantNamePassed = $false
 $variableNames = @(
     "TenuVaultTenantId-$tenantKey", "TenuVaultStorageAccount-$tenantKey",
     "TenuVaultScope-$tenantKey", "TenuVaultExcludedFolders-$tenantKey", "TenuVaultAppOnlyExcluded-$tenantKey",
-    "TenuVaultChangeReport-$tenantKey", "TenuVaultChangeReportActors-$tenantKey", "TenuVaultTenantName-$tenantKey"
+    "TenuVaultChangeReport-$tenantKey", "TenuVaultChangeReportActors-$tenantKey", "TenuVaultTenantName-$tenantKey",
+    "TenuVaultAutomationAccountId-$tenantKey"
 )
+$automationAccountId = "/subscriptions/sub-1/resourceGroups/$ResourceGroupName/providers/Microsoft.Automation/automationAccounts/$AutomationAccountName"
+$readerRoleId = "acdd72a7-3385-48ef-bd42-f606fba81ae7"
 $legacyKeyVaultVariable = "TenuVaultKeyVault-$tenantKey"
 $plainRunbookVersion = "1.2.0"
 $oldRunbook = '$script:RunbookVersion = "1.1.0"'
@@ -78,6 +81,20 @@ $script:declineVariable = $null
 $script:failLookups = $false
 $script:failList = $false
 $script:translatedVariable = $null
+$script:readerAssigned = $false
+
+# The identity's role assignments on the Automation account: the Reader role setup grants.
+function Get-AzRoleAssignment {
+    [CmdletBinding()]
+    param($ObjectId, $Scope, $RoleDefinitionName)
+    if ($script:readerAssigned) { return [pscustomobject]@{ ObjectId = $ObjectId; Scope = $automationAccountId; RoleDefinitionId = $readerRoleId; RoleDefinitionName = "Reader" } }
+}
+function Remove-AzRoleAssignment {
+    [CmdletBinding(SupportsShouldProcess)]
+    param($ObjectId, $RoleDefinitionId, $Scope)
+    $script:actions.Add("remove role $RoleDefinitionId at $Scope")
+    $script:readerAssigned = $false
+}
 
 function Import-AzAutomationRunbook {
     [CmdletBinding(SupportsShouldProcess)]
@@ -173,6 +190,7 @@ function Reset-OldSetup {
     $script:failLookups = $false
     $script:failList = $false
     $script:translatedVariable = $null
+    $script:readerAssigned = $true
 }
 # Tenant B (22222222) shares the Automation account and still has its vault variable.
 function Add-TenantB { $script:variables["TenuVaultKeyVault-22222222"] = "kv-tenuvault-abc123" }
@@ -192,6 +210,7 @@ function Write-Scenario {
         variables = @($script:variables.Keys | Sort-Object)
         schedule = $script:schedule
         link = $script:link
+        readerAssigned = $script:readerAssigned
         output = @($Output | ForEach-Object { [string]$_ })
     } | ConvertTo-Json -Compress -Depth 5)
 }
@@ -247,12 +266,14 @@ foreach ($scenario in "rerun-keeps-report", "rerun-sets-report") {
 
 # -Remove runs: complete, -WhatIf, one variable's own confirmation declined, -WhatIf while every
 # lookup fails, a complete removal whose variable list fails, and tenant B still on the vault.
-foreach ($scenario in "remove-complete", "remove-whatif", "remove-variable-declined", "remove-whatif-lookups-fail", "remove-list-fails", "remove-tenant-b-remains", "remove-scope-read-403-declined", "remove-scope-read-500") {
+foreach ($scenario in "remove-complete", "remove-whatif", "remove-variable-declined", "remove-whatif-lookups-fail", "remove-list-fails", "remove-tenant-b-remains", "remove-scope-read-403-declined", "remove-scope-read-500", "remove-other-tenant-remains") {
     Reset-OldSetup
     if ($scenario -eq "remove-variable-declined") { $script:declineVariable = "TenuVaultScope-$tenantKey" }
     if ($scenario -eq "remove-whatif-lookups-fail") { $script:failLookups = $true }
     if ($scenario -eq "remove-list-fails") { $script:failList = $true }
     if ($scenario -eq "remove-tenant-b-remains") { Add-TenantB }
+    # Another tenant's cloud backup in the same Automation account still reads its jobs with this identity.
+    if ($scenario -eq "remove-other-tenant-remains") { $script:variables["TenuVaultTenantId-22222222"] = "22222222-0000-0000-0000-000000000000" }
     # The by-name read of TenuVaultScope fails with 403 or 500 and comes back as "not found", while the list still shows it.
     if ($scenario -like "remove-scope-read-*") { $script:translatedVariable = "TenuVaultScope-$tenantKey" }
     if ($scenario -eq "remove-scope-read-403-declined") { $script:declineVariable = "TenuVaultScope-$tenantKey" }

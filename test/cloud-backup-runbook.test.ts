@@ -113,44 +113,41 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     expect(cloudRunbookNeedsUpgrade("desktop")).toBe(false)
   })
 
-  it.runIf(Boolean(pwsh))("records a run started by hand as manual, keeps scheduled runs and older schedule links scheduled", () => {
-    const path = fileURLToPath(new URL("../resources/runbooks/Invoke-TenuVaultBackup.ps1", import.meta.url))
-    const trigger = (passed: string, marker: string | null) => execFileSync(pwsh!, ["-NoProfile", "-Command", [
-      `. '${path.replace(/'/g, "''")}' -LibraryOnly -TenantKey 11111111`,
-      marker === null ? "" : `[Environment]::SetEnvironmentVariable('TenuVaultScheduleSetsTrigger-11111111', '${marker}')`,
-      `[Console]::Out.Write((Get-TvRunTrigger '${passed}'))`,
-    ].join("\n")], { encoding: "utf8", timeout: 60_000 })
-    // A setup from 1.4.0 on: its schedule link passes Scheduled, and a start by hand passes nothing.
-    expect(trigger("Scheduled", "true")).toBe("scheduled")
-    expect(trigger("", "true")).toBe("manual")
-    expect(trigger("Manual", "true")).toBe("manual")
-    // An older setup's link passes only TENANTKEY and no marker exists: every run stays scheduled.
-    expect(trigger("", null)).toBe("scheduled")
-    expect(trigger("manual", null)).toBe("manual")
-    expect(trigger("bogus", "true")).toBe("manual")
-    // The run records it as the backup's Trigger and passes it to the change report.
-    expect(runbook).toContain("$runTrigger = Get-TvRunTrigger $Trigger")
+  it.runIf(Boolean(pwsh))("asks Azure who started its own job, and counts every doubt as scheduled without holding the run up", () => {
+    const script = fileURLToPath(new URL("./fixtures/cloud-backup/run-trigger.ps1", import.meta.url))
+    const out = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8", timeout: 60_000 })) as { results: Record<string, { Trigger: string; Note: string }>; stallSeconds: number; skippedCalls: number; tokenCalls: string[] }
+    const trigger = (name: string) => out.results[name]!.Trigger
+    // Azure records "{scheduler}" as properties.startedBy for a job its schedule started.
+    expect(trigger("scheduler")).toBe("scheduled")
+    expect(out.results.scheduler!.Note).toBe("Started by the schedule.")
+    // Anyone else, such as an admin with Start in the portal, is a run by hand.
+    expect(trigger("user")).toBe("manual")
+    // A refused read (an older setup without the Reader role), a job naming no starter, no answer
+    // in time, no job id, no account id or no ARM token: recorded as scheduled, as before 1.4.0.
+    for (const name of ["denied", "nostarter", "stall", "nojob", "noaccount", "notoken"]) {
+      expect(trigger(name), name).toBe("scheduled")
+      expect(out.results[name]!.Note, name).toMatch(/^Could not tell how this run started \(.+\), so it is recorded as scheduled\.$/)
+    }
+    expect(out.results.denied!.Note).toContain("HTTP 403")
+    expect(out.results.stall!.Note).toContain("no answer within 1 seconds")
+    expect(out.stallSeconds).toBeLessThan(3)
+    // Without a job id or an account id nothing is requested at all.
+    expect(out.skippedCalls).toBe(0)
+    // One token request each, with the lookup's short timeout, never the backup's three retries.
+    expect(new Set(out.tokenCalls)).toEqual(new Set(["https://management.azure.com/ attempts=1 timeout=1"]))
+    expect(runbook).toContain("$script:JobLookupSeconds = 5")
+    // The run records the result as the backup's Trigger and passes it to the change report.
+    expect(runbook).toContain('-AccountId (Get-TvAutomationVariable "TenuVaultAutomationAccountId")')
+    expect(runbook).toContain("Get-Variable -Name PSPrivateMetadata -ValueOnly -ErrorAction SilentlyContinue")
     expect(runbook.match(/Trigger += \$runTrigger|Trigger = \$runTrigger/g)).toHaveLength(2)
     expect(runbook).toContain("-RunTrigger $runTrigger")
     expect(runbook).not.toContain('Trigger        = "scheduled"')
     expect(runbook).not.toContain('Trigger = "scheduled"; RunId')
+    // No TRIGGER parameter: the schedule link stays exactly as older setups made it.
+    const params = runbook.slice(runbook.indexOf("[CmdletBinding()]\nparam("), runbook.indexOf('$script:RunbookVersion'))
+    expect(params).not.toMatch(/Trigger/)
+    expect(runbook).not.toContain("TenuVaultScheduleSetsTrigger")
   }, 60_000)
-
-  it("links the schedule with TRIGGER and marks the link only once it is made", () => {
-    expect(setup).toContain('-Parameters @{ TenantKey = $tenantKey; Trigger = "Scheduled" }')
-    const link = setup.indexOf('Trigger = "Scheduled"')
-    const marker = setup.indexOf('Set-TenuVaultAutomationVariable -Name "TenuVaultScheduleSetsTrigger-$tenantKey" -Value "true"')
-    expect(marker).toBeGreaterThan(link)
-    // -Remove deletes the marker with the tenant's other variables.
-    expect(setup).toContain('"TenuVaultScheduleSetsTrigger-$tenantKey"\n)')
-    const resources = template.resources as unknown as Array<{ type: string; name: string; dependsOn?: string[]; properties: Record<string, unknown> }>
-    const jobSchedule = resources.find((resource) => resource.type === "Microsoft.Automation/automationAccounts/jobSchedules")!
-    expect(jobSchedule.properties.parameters).toEqual({ TenantKey: "[variables('tenantKey')]", Trigger: "Scheduled" })
-    const markerVariable = resources.find((resource) => resource.type === "Microsoft.Automation/automationAccounts/variables" && resource.name.includes("TenuVaultScheduleSetsTrigger-"))!
-    expect(markerVariable.properties.value).toBe('"true"')
-    // Never without the link: a redeploy whose link fails (Azure refuses to reuse a job schedule) writes no marker.
-    expect(markerVariable.dependsOn).toEqual(["[resourceId('Microsoft.Automation/automationAccounts/jobSchedules', parameters('automationAccountName'), guid(variables('scheduleName'), variables('runbookName')))]"])
-  })
 
   it.runIf(Boolean(pwsh))("never lets the optional change report fail a backup, and says when a backup with warnings gets none", () => {
     const [, , , reportFails, warnings] = runPlainFixture()
@@ -290,6 +287,37 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
     expect(setup).not.toMatch(/DeviceManagement\w*\.ReadWrite/)
     expect(setup).toContain("DeviceCategories,DeviceCleanupRules")
   })
+
+  it("gives the identity Reader on its own Automation account only, and leaves the schedule link as it was", () => {
+    expect(setup).toContain('$readerRoleId = "acdd72a7-3385-48ef-bd42-f606fba81ae7"')
+    expect(setup).toContain('$automationAccountId = "/subscriptions/$($context.Subscription.Id)/resourceGroups/$ResourceGroupName/providers/Microsoft.Automation/automationAccounts/$AutomationAccountName"')
+    expect(setup).toContain('Add-TenuVaultRoleAssignment -ObjectId $principalId -RoleName "Reader" -RoleDefinitionId $readerRoleId `\n        -Scope $automationAccountId')
+    expect(setup).toContain('Set-TenuVaultAutomationVariable -Name "TenuVaultAutomationAccountId-$tenantKey" -Value $automationAccountId')
+    expect(setup).toContain('"TenuVaultAutomationAccountId-$tenantKey"\n)')
+    // No role that can start, stop or change jobs.
+    expect(setup).not.toMatch(/Automation (Job )?Operator|Automation Contributor|4fe576fe-1146-4730-92eb-48519fa6bf9f|d3881f73-407a-4167-8283-e981cbba0404/)
+    // The link is registered exactly as before: only TENANTKEY, which every runbook version accepts.
+    expect(setup).toContain("-ScheduleName $scheduleName -Parameters @{ TenantKey = $tenantKey } | Out-Null")
+    expect(setup).not.toMatch(/Trigger\s*=\s*"Scheduled"|TenuVaultScheduleSetsTrigger/)
+    expect(setup.match(/Register-AzAutomationScheduledRunbook/g)).toHaveLength(1)
+  })
+
+  it.runIf(Boolean(pwsh))("removes the Reader role with the last tenant setup in the Automation account", () => {
+    const script = fileURLToPath(new URL("./fixtures/cloud-backup/setup-upgrade.ps1", import.meta.url))
+    const runs = execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8", timeout: 60_000 }).split(/\r?\n/).filter((line) => line.startsWith("{")).map((line) => JSON.parse(line) as { scenario: string; actions: string[]; readerAssigned: boolean; output: string[]; variables: string[] })
+    const run = (name: string) => runs.find((entry) => entry.scenario === name)!
+    const removal = "remove role acdd72a7-3385-48ef-bd42-f606fba81ae7 at /subscriptions/sub-1/resourceGroups/rg-tenuvault-backups/providers/Microsoft.Automation/automationAccounts/aa-tenuvault"
+    expect(run("remove-complete").actions).toContain(removal)
+    expect(run("remove-complete").readerAssigned).toBe(false)
+    expect(run("remove-complete").variables).not.toContain("TenuVaultAutomationAccountId-11111111")
+    // Another tenant's setup in the account still reads its jobs with the same identity.
+    expect(run("remove-other-tenant-remains").actions).not.toContain(removal)
+    expect(run("remove-other-tenant-remains").readerAssigned).toBe(true)
+    expect(run("remove-other-tenant-remains").output.join(" ")).toContain("1 other tenant setup(s) in this account still use it")
+    // A failed variable list cannot rule other tenants out, and -WhatIf removes nothing.
+    expect(run("remove-list-fails").readerAssigned).toBe(true)
+    expect(run("remove-whatif").readerAssigned).toBe(true)
+  }, 60_000)
 
   it("creates no Key Vault, asks for no recovery key and refuses to guess about alerting", () => {
     for (const keyVault of ["Read-Host", "-AsSecureString", "Az.KeyVault", "New-AzKeyVault", "Set-AzKeyVaultSecret", "Get-AzKeyVaultSecret", "Key Vault Secrets", "tenuvault-recovery-key", "$KeyVaultName", "keyVault="]) {
@@ -503,8 +531,22 @@ describe("azuredeploy.json", () => {
     for (const keyVault of ["keyVault", "TenuVaultKeyVault", "tenuvault-recovery-key", "keyVaultSecretsUserRoleId", "4633458b-17de-408a-b874-0445c86b69e6"]) {
       expect(text, keyVault).not.toContain(keyVault)
     }
-    // The vault assignment is gone; the two writer assignments on the containers remain.
-    expect(template.resources.filter((resource) => resource.type === "Microsoft.Authorization/roleAssignments")).toHaveLength(2)
+    // The vault assignment is gone; the two writer assignments on the containers remain, plus Reader on the account.
+    expect(template.resources.filter((resource) => resource.type === "Microsoft.Authorization/roleAssignments")).toHaveLength(3)
+  })
+
+  it("gives the identity Reader on its own Automation account and the account id, and links the schedule as before", () => {
+    const resources = template.resources as unknown as Array<{ type: string; name: string; scope?: string; properties: Record<string, unknown> }>
+    const variables = (template as unknown as { variables: { readerRoleId: string; variableValues: Array<{ name: string; value: string }> } }).variables
+    expect(variables.readerRoleId).toBe("acdd72a7-3385-48ef-bd42-f606fba81ae7")
+    const reader = resources.find((resource) => resource.type === "Microsoft.Authorization/roleAssignments" && String(resource.properties.roleDefinitionId).includes("readerRoleId"))!
+    expect(reader.scope).toBe("[concat('Microsoft.Automation/automationAccounts/', parameters('automationAccountName'))]")
+    expect(reader.properties.roleDefinitionId).toBe("[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('readerRoleId'))]")
+    expect(reader.properties.principalType).toBe("ServicePrincipal")
+    expect(variables.variableValues).toContainEqual({ name: "[concat('TenuVaultAutomationAccountId-', variables('tenantKey'))]", value: "[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]" })
+    const jobSchedule = resources.find((resource) => resource.type === "Microsoft.Automation/automationAccounts/jobSchedules")!
+    expect(jobSchedule.properties.parameters).toEqual({ TenantKey: "[variables('tenantKey')]" })
+    expect(JSON.stringify(template)).not.toContain("TenuVaultScheduleSetsTrigger")
   })
 
   it("lets the identity leave result notes in the watcher's container with the same write-only role", () => {

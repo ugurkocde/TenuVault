@@ -31,6 +31,7 @@ Setup creates or reuses, in your subscription:
 | Runbook `Invoke-TenuVaultBackup` (PowerShell 7.2) | Reads Intune and writes one backup per run, in the desktop backup format. 7.2 is required: the default 5.1 runtime lacks the .NET JSON parser the runbook uses. |
 | Automation variables with a per-tenant suffix | Tenant id, storage account, scope. No secrets in variables. Set `TenuVaultIncludeConditionalAccess` to `true` (and grant the managed identity `Policy.Read.All`) to include [Conditional Access](/backups/conditional-access/). |
 | Custom role **TenuVault Backup Writer** on the `intune-backups` container | Read and write blobs, no delete. The runbook cannot remove backups. |
+| Built-in role **Reader** on the Automation account only | Lets each run read its own job, to record whether the schedule or a person started it. Read only: Azure has no built-in role that reads jobs without also starting them. `-Remove` takes it away with the last tenant setup in the account. |
 | Schedule `TenuVaultBackup-<tenant>` and its runbook link | Daily or weekly, in the timezone you choose. |
 | Optional Azure Monitor action group and metric alert | Emails you when Automation jobs fail. Setup refuses to finish without an explicit choice. |
 
@@ -88,9 +89,9 @@ Do not wait for the first night. In the portal, open the Automation account, **R
 
 ### Manual and scheduled runs
 
-From runbook 1.4.0 on, each cloud backup records how it started, and Backup History shows it as **Manual** or **Scheduled**. Setup links the schedule to the runbook with `TRIGGER` set to `Scheduled` and then writes the Automation variable `TenuVaultScheduleSetsTrigger-<tenant>`. A run started with **Start** in the portal leaves `TRIGGER` empty (or you set it to `Manual`), so it counts as manual. Its change report then leaves out "after a scheduled backup".
+From runbook 1.4.0 on, each cloud backup records how it started, and Backup History shows it as **Manual** or **Scheduled**. At the start of a run, the runbook reads its own job from Azure (`properties.startedBy` of the Automation job). Azure names the schedule there for a run the schedule started, and the person or app otherwise, so a run started with **Start** in the portal counts as manual. Its change report then leaves out "after a scheduled backup". The job output says which it was.
 
-A schedule link made by an older setup passes only `TENANTKEY`. As long as that variable is missing, a run without `TRIGGER` counts as scheduled, as every cloud run did before, so a runbook upgrade alone never marks your nightly runs as manual. Hand started runs of such a setup show as scheduled until the schedule is linked again: run the setup script once more with `-GraphRolesGranted` (or `-GrantGraphRoles`), which replaces the schedule link and writes the variable. That also works for a setup made with the template; a template redeploy cannot replace an existing schedule link, and it writes the variable only together with a new link. Backups made before the upgrade keep the trigger they recorded.
+Reading the job needs the built-in **Reader** role on the Automation account (see [What gets created](#what-gets-created)) and the variable `TenuVaultAutomationAccountId-<tenant>` that names the account. Setup and the template add both; the schedule link stays as it was. Whenever the runbook cannot tell, for example in a setup made before 1.4.0 without the role, or when Azure does not answer within 5 seconds, it records the run as scheduled, as every cloud run was recorded before, and the backup carries on. So a setup made before 1.4.0 shows every run as **Scheduled**, also runs started by hand, until you run the setup script once more; that also works for a setup made with the template, as described in [Upgrade from an earlier setup](#upgrade-from-an-earlier-setup). Backups made before keep the trigger they recorded.
 
 ## How cloud backups show up in TenuVault
 
