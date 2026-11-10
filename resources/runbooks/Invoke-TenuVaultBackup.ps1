@@ -2578,8 +2578,8 @@ function Set-TvCloudStatus {
 function Invoke-TvBackup {
     $started = [DateTime]::UtcNow
     $runId = [guid]::NewGuid().ToString()
-    $startedBy = Get-TvRunTrigger $Trigger
-    $runTrigger = $startedBy.Trigger
+    $runInfo = Get-TvRunTrigger $Trigger
+    $runTrigger = $runInfo.Trigger
     $tenantId = Get-TvRequiredVariable "TenuVaultTenantId"
     if ($tenantId -notmatch '^[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$') { throw "TenuVaultTenantId is not a tenant id (GUID)." }
     $storageAccount = Get-TvRequiredVariable "TenuVaultStorageAccount"
@@ -2592,7 +2592,7 @@ function Invoke-TvBackup {
     $appOnlyExcluded = Get-TvFolderList (Get-TvAutomationVariable "TenuVaultAppOnlyExcluded")
 
     Write-Output "Backing up tenant $tenantId to storage account $storageAccount (runbook $script:RunbookVersion, run $runId)."
-    if ($startedBy.Warning) { Write-Output $startedBy.Warning }
+    if ($runInfo.Warning) { Write-Output $runInfo.Warning }
     # The storage token comes first: the status blob and the result note need only it, so
     # every later failure (Graph token, a scope that leaves nothing) is still recorded and
     # reaches the notification watcher as Failed. A run that cannot even get a storage token

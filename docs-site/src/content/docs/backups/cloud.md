@@ -95,7 +95,7 @@ From runbook 1.4.0 on, the runbook has an optional `TRIGGER` parameter, and Back
 * Any other value is recorded as **Scheduled**, and the job output names the value in a warning. The backup itself is not affected.
 * The setup script's "Test it now" hint says to set `TRIGGER` only when it read the published runbook back as 1.4.0 or later. Otherwise it says the run will show as **Scheduled** and to run the script again so the runbook is published.
 
-Azure Automation does not tell a runbook who started its job (the job's `startedBy` stays empty for scheduled and portal starts alike), so the parameter is how a run started by hand says so. Backups made before keep the trigger they recorded.
+Azure Automation does not tell a runbook whether its schedule or a person started it, so the parameter is how a run started by hand says so. Backups made before keep the trigger they recorded.
 
 ## How cloud backups show up in TenuVault
 

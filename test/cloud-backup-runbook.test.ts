@@ -130,7 +130,7 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     // The schedule link passes only TENANTKEY; TRIGGER is optional with an empty default.
     expect(runbook).toContain('    [string]$TenantKey = "",')
     expect(runbook).toContain('    [string]$Trigger = ""\n)')
-    expect(runbook).toContain("$startedBy = Get-TvRunTrigger $Trigger")
+    expect(runbook).toContain("$runInfo = Get-TvRunTrigger $Trigger")
     expect(runbook.match(/Trigger += \$runTrigger|Trigger = \$runTrigger/g)).toHaveLength(2)
     expect(runbook).toContain("-RunTrigger $runTrigger")
     expect(runbook).not.toContain('Trigger        = "scheduled"')
