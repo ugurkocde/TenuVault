@@ -156,6 +156,9 @@ input[type="checkbox"], input[type="radio"], progress { accent-color: var(--colo
 
 /* Dashboard bento tiles (src/portal/components/dashboard/tiles.tsx). The focal tile is charcoal in
    light mode; on dark surfaces a deep coral keeps it the brightest accent of the grid. */
+/* Tenant trial card header: a soft coral wash that fades into the card surface. */
+.tv-trial-header { background: linear-gradient(120deg, var(--color-coral-50) 0%, #fff 75%); }
+.dark .tv-trial-header { background: linear-gradient(120deg, #3a2019 0%, #1c1b19 75%); }
 .dark .tv-focal-tile { background: linear-gradient(150deg, #8c3320 0%, #5c2216 100%); color: #fff; }
 .dark .tv-focal-tile .tv-ring-value { stroke: #f7cbbe; }
 .dark .tv-bar-track { background-color: #2a2826; }

@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react"
 import { Link } from "react-router-dom"
+import { CalendarClock, GitCompareArrows, History, Hourglass, Info, Mail, ShieldCheck, Sparkles } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
 import { useTenantOperations, useTenants } from "~/contexts/TenantContext"
@@ -45,11 +46,11 @@ export function TrialActions({ tenant, source, welcome = false }: { tenant?: Ten
         setExtended(true)
         setNotice(end ? `Trial extended. Ends on ${formatDate(end)}.` : "Trial extended.")
       }).finally(() => setAction(null)) }}>{busy && action === "extend" ? "Extending trial..." : days ? `Extend trial by ${days} days` : "Extend your trial"}</Button>}
-      {tenant?.trialExtensionAvailableAt && Date.parse(tenant.trialExtensionAvailableAt) > Date.now() && !extended && <p>You can extend once, from {formatDate(tenant.trialExtensionAvailableAt)}.</p>}
-      {tenant && !tenant.trialCanExtend && !tenant.trialExtensionAvailableAt && !tenant.trialExtensionUnavailable && tenant.source === "trial" && !extended && <p>Check the License page for trial extension availability.</p>}
-      {welcome && tenant?.trialCanExtend && <p>You can extend your trial once, from the License page.</p>}
+      {tenant?.trialExtensionAvailableAt && Date.parse(tenant.trialExtensionAvailableAt) > Date.now() && !extended && <p className="text-gray-600">You can extend once, from {formatDate(tenant.trialExtensionAvailableAt)}.</p>}
+      {tenant && !tenant.trialCanExtend && !tenant.trialExtensionAvailableAt && !tenant.trialExtensionUnavailable && tenant.source === "trial" && !extended && <p className="text-gray-600">Check the License page for trial extension availability.</p>}
+      {welcome && tenant?.trialCanExtend && <p className="text-gray-600">You can extend your trial once, from the License page.</p>}
     </div>
-    <p>Questions, or need a quote or an invoice for your purchasing team? Write to <a className="text-blue-700 underline" href={mailto} onClick={event => { event.preventDefault(); void bridge.app.openExternal(mailto) }}>{SUPPORT_EMAIL}</a>.</p>
+    <p className="text-gray-600">Questions, or need a quote or an invoice for your purchasing team? Write to <a className="font-medium text-blue-700 underline underline-offset-2" href={mailto} onClick={event => { event.preventDefault(); void bridge.app.openExternal(mailto) }}>{SUPPORT_EMAIL}</a>.</p>
     {notice && <p role="status">{notice}</p>}
     {error && <p role="alert">{error}</p>}
   </div>
@@ -94,15 +95,15 @@ export function TrialContact({ tenant, initialEmail, allowUnknownRemoval = false
     setSaved(Boolean(address))
     setMessage(address ? "Email address saved." : "Email address removed.")
   })
-  return <div className="space-y-2">
-    <div className="flex flex-col items-start gap-2 xl:flex-row xl:items-end">
-      <label className="w-full min-w-0 flex-1 text-sm">Optional email
-        <Input type="email" value={email} maxLength={254} onChange={event => setEmail(event.target.value)} />
+  return <div className="space-y-3 rounded-2xl bg-gray-50 p-4">
+    <div className="flex flex-col items-stretch gap-2 xl:flex-row xl:items-end">
+      <label className="flex w-full min-w-0 flex-1 flex-col gap-1.5 text-sm font-medium">Optional email
+        <Input type="email" className="font-normal" value={email} maxLength={254} onChange={event => setEmail(event.target.value)} />
       </label>
-      <Button variant="outline" className="h-auto max-w-full whitespace-normal text-left" disabled={busy || !email.trim()} onClick={() => void save(email.trim())}>Email me setup tips and a reminder before the trial ends</Button>
+      <Button variant="outline" className="h-auto min-h-10 max-w-full whitespace-normal text-left" disabled={busy || !email.trim()} onClick={() => void save(email.trim())}><Mail />Email me setup tips and a reminder before the trial ends</Button>
     </div>
-    {(saved || allowUnknownRemoval) && <Button variant="ghost" disabled={busy} onClick={() => void save()}>Remove the saved email address for this trial</Button>}
-    <p className="text-xs text-gray-600">Your address is sent only when you press the button. <a href="https://www.tenuvault.com/privacy" target="_blank" rel="noreferrer">Privacy policy</a></p>
+    {(saved || allowUnknownRemoval) && <Button variant="ghost" size="sm" className="h-auto px-0 text-gray-600 underline-offset-4 hover:bg-transparent hover:underline dark:hover:bg-transparent" disabled={busy} onClick={() => void save()}>Remove the saved email address for this trial</Button>}
+    <p className="text-xs text-gray-500">Your address is sent only when you press the button. <a className="underline underline-offset-2" href="https://www.tenuvault.com/privacy" target="_blank" rel="noreferrer">Privacy policy</a></p>
     {(message || tenant.trialEmail) && <p role="status">{message || "Email address saved."}</p>}
     {error && <p role="alert">{error}</p>}
   </div>
@@ -121,31 +122,45 @@ export function TenantTrialCard({ tenant, initialEmail, welcome = false, allowUn
     }
   })
   const days = Math.max(0, Math.ceil((Date.parse(tenant.trialEndsAt ?? "") - Date.now()) / 86400_000))
-  return <section className="space-y-3 rounded-3xl bg-blue-50 p-6">
-    <h2 className="text-xl font-medium">{welcome ? "Pro trial started" : tenant.trial ? "Pro trial" : "Pro trial ended"}{name && <span className="ml-2 text-sm font-normal text-gray-600">{name}</span>}</h2>
-    <p>{days > 0 ? `${days} days left. Ends on ${formatDate(tenant.trialEndsAt!)}.` : `Ended on ${formatDate(tenant.trialEndsAt!)}.`}</p>
-    {!welcome && status?.tenantTrialsEnabled && <TrialUsage tenant={tenant} />}
-    {!tenant.trial && <p className="text-sm">{(status?.tenants.filter(t => !t.entitled && t.trialEndsAt).length ?? 0) > 1 ? "One tenant continues on Community Free. You choose which." : "This tenant continues on Community Free."} Backups and settings are kept. Community keeps 30 days of backup history.</p>}
-    {welcome && <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
-      <span className="font-medium">Try these first</span>
-      <Link className="text-blue-700 underline-offset-4 hover:underline" to="/portal/backup?tab=schedule">Daily backup schedule</Link>
-      <Link className="text-blue-700 underline-offset-4 hover:underline" to="/portal/backup?tab=restore">Full restore</Link>
-      <Link className="text-blue-700 underline-offset-4 hover:underline" to="/portal/drift">Drift revert</Link>
-      <Link className="text-blue-700 underline-offset-4 hover:underline" to="/portal/frameworks/cis-benchmarks">CIS Benchmarks</Link>
-    </div>}
-    {tenant.trial && <p className="text-sm">{(status?.tenants.filter(t => t.source === "trial" || t.trialEndsAt || t.plan === "community").length ?? 0) > 1
-      ? `${tenant.trial ? "Afterwards, one" : "One"} tenant continues on Community Free. You choose which.`
-      : `${tenant.trial ? "Afterwards, this" : "This"} tenant continues on Community Free.`} Backups and settings are kept. Community keeps 30 days of backup history. No payment is needed.</p>}
-    {tenant.trial && <TrialContact tenant={tenant} initialEmail={initialEmail} allowUnknownRemoval={allowUnknownContactRemoval && !welcome} />}
-    {status?.tenantTrialsEnabled && <TrialActions tenant={tenant} source={tenant.trial ? "license-page-trial" : "trial-end"} welcome={welcome} />}
-    {children}
-    <div className="flex flex-wrap gap-2">
+  const footer = welcome || (!status?.tenantTrialsEnabled && tenant.trialCanExtend)
+  const shortcut = "inline-flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 [&_svg]:size-4 [&_svg]:text-blue-700"
+  return <section className="overflow-hidden rounded-3xl border border-gray-200 bg-white">
+    <header className="tv-trial-header flex flex-wrap items-center justify-between gap-4 px-6 py-5">
+      <div className="flex min-w-0 items-center gap-4">
+        <span className="flex size-11 shrink-0 items-center justify-center rounded-2xl border border-blue-100 bg-white text-blue-700">{days > 0 ? <Sparkles className="size-5" /> : <Hourglass className="size-5" />}</span>
+        <div className="min-w-0">
+          <h2 className="text-xl font-medium">{welcome ? "Pro trial started" : tenant.trial ? "Pro trial" : "Pro trial ended"}{name && <span className="ml-2 text-sm font-normal text-gray-600">{name}</span>}</h2>
+          <p className="text-sm text-gray-600">{days > 0 ? `Ends on ${formatDate(tenant.trialEndsAt!)}.` : `Ended on ${formatDate(tenant.trialEndsAt!)}.`}</p>
+        </div>
+      </div>
+      {days > 0 && <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-blue-100 bg-white px-3 py-1 text-sm font-medium text-blue-700"><CalendarClock className="size-4" /><span><span className="tabular-nums">{days}</span> {days === 1 ? "day" : "days"} left</span></span>}
+    </header>
+    <div className="space-y-5 px-6 py-5">
+      {!welcome && status?.tenantTrialsEnabled && <TrialUsage tenant={tenant} />}
+      {!tenant.trial && <p className="text-sm text-gray-600">{(status?.tenants.filter(t => !t.entitled && t.trialEndsAt).length ?? 0) > 1 ? "One tenant continues on Community Free. You choose which." : "This tenant continues on Community Free."} Backups and settings are kept. Community keeps 30 days of backup history.</p>}
+      {welcome && <div className="space-y-2">
+        <div className="text-xs font-medium uppercase tracking-wide text-gray-500">Try these first</div>
+        <div className="flex flex-wrap gap-2">
+          <Link className={shortcut} to="/portal/backup?tab=schedule"><CalendarClock />Daily backup schedule</Link>
+          <Link className={shortcut} to="/portal/backup?tab=restore"><History />Full restore</Link>
+          <Link className={shortcut} to="/portal/drift"><GitCompareArrows />Drift revert</Link>
+          <Link className={shortcut} to="/portal/frameworks/cis-benchmarks"><ShieldCheck />CIS Benchmarks</Link>
+        </div>
+      </div>}
+      {tenant.trial && <p className="flex gap-2 text-sm text-gray-600"><Info className="mt-0.5 size-4 shrink-0 text-gray-500" /><span>{(status?.tenants.filter(t => t.source === "trial" || t.trialEndsAt || t.plan === "community").length ?? 0) > 1
+        ? "Afterwards, one tenant continues on Community Free. You choose which."
+        : "Afterwards, this tenant continues on Community Free."} Backups and settings are kept. Community keeps 30 days of backup history. No payment is needed.</span></p>}
+      {tenant.trial && <TrialContact tenant={tenant} initialEmail={initialEmail} allowUnknownRemoval={allowUnknownContactRemoval && !welcome} />}
+      {status?.tenantTrialsEnabled && <TrialActions tenant={tenant} source={tenant.trial ? "license-page-trial" : "trial-end"} welcome={welcome} />}
+      {children}
+      {notice && <p role="status" className="text-sm">{notice}</p>}
+      {error && <p role="alert" className="text-sm">{error}</p>}
+    </div>
+    {footer && <footer className="flex flex-wrap items-center gap-2 border-t border-gray-100 px-6 py-4">
       {welcome && <Button disabled={busy} onClick={() => void run("acknowledge")}>Got it</Button>}
       {welcome && tenant.canEnd && <Button variant="ghost" disabled={busy} onClick={() => void run("end_trial")}>Use Community instead</Button>}
-    </div>
-    {!status?.tenantTrialsEnabled && tenant.trialCanExtend && <Button variant="outline" disabled={busy} onClick={() => void run("extend_trial")}>Need more time? Extend your trial</Button>}
-    {notice && <p role="status">{notice}</p>}
-    {error && <p role="alert">{error}</p>}
+      {!status?.tenantTrialsEnabled && tenant.trialCanExtend && <Button variant="outline" disabled={busy} onClick={() => void run("extend_trial")}>Need more time? Extend your trial</Button>}
+    </footer>}
   </section>
 }
 

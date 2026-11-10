@@ -68,7 +68,7 @@ const inspectPort = port + 400
 const profile = mkdtempSync(join(tmpdir(), "tenuvault-trial-shots-"))
 mkdirSync(shotsDir, { recursive: true })
 
-const args = [desktopDir, `--remote-debugging-port=${port}`, `--inspect=${inspectPort}`, `--user-data-dir=${profile}`]
+const args = [desktopDir, `--remote-debugging-port=${port}`, `--inspect=${inspectPort}`, `--user-data-dir=${profile}`, "--password-store=basic"]
 if (process.platform === "linux") args.push("--no-sandbox")
 const env = { ...process.env }
 delete env.ELECTRON_RUN_AS_NODE
