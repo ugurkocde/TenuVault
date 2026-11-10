@@ -125,20 +125,21 @@ export function RevertProgressModal({
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => { if (!open && !running) close() }}>
-      <DialogContent className={cn("max-w-md p-8", running && "[&>button:last-child]:hidden")}>
+      {/* overflow-hidden clips the bottom progress bar to the dialog's rounded corners. */}
+      <DialogContent className={cn("max-w-md overflow-hidden p-8", running && "[&>button:last-child]:hidden")}>
         {/* Header */}
         <div className="text-center mb-8">
           <DialogTitle className="text-2xl font-medium tracking-tight text-gray-900 mb-2">
             {action === "revert" ? "Reverting Policy" : "Restoring Policy"}
           </DialogTitle>
-          <DialogDescription className="text-gray-600">
+          <DialogDescription className="break-words text-gray-600">
             {policyName}
           </DialogDescription>
         </div>
 
         {/* Progress Steps */}
         <div className="space-y-2 mb-8">
-          {displaySteps.map((step, index) => (
+          {displaySteps.map((step) => (
             <div 
               key={step.id}
               className={cn(
@@ -163,12 +164,6 @@ export function RevertProgressModal({
                   <p className="text-xs text-blue-700 mt-1">Processing...</p>
                 )}
               </div>
-              {index < displaySteps.length - 1 && (
-                <div className={cn(
-                  "absolute left-7 top-12 w-0.5 h-8",
-                  step.status === "completed" ? "bg-green-100" : "bg-gray-200"
-                )} />
-              )}
             </div>
           ))}
         </div>
@@ -177,10 +172,10 @@ export function RevertProgressModal({
         {error && (
           <div className="mb-6 rounded-2xl bg-red-50 p-4">
             <div className="flex items-start gap-3">
-              <AlertCircle className="h-5 w-5 text-red-600 mt-0.5" />
-              <div>
+              <AlertCircle className="h-5 w-5 shrink-0 text-red-600 mt-0.5" />
+              <div className="min-w-0">
                 <p className="font-medium text-red-800">Operation Failed</p>
-                <p className="text-sm text-red-700 mt-1"><LinkedMessage text={error} /></p>
+                <p className="break-words text-sm text-red-700 mt-1"><LinkedMessage text={error} /></p>
               </div>
             </div>
           </div>
@@ -274,9 +269,9 @@ export function RevertProgressModal({
 
         {/* Progress indicator at bottom */}
         {!isComplete && !error && (
-          <div className="absolute bottom-0 left-0 right-0 h-1 bg-gray-100 rounded-b-3xl overflow-hidden">
-            <div 
-              className="h-full rounded-full bg-coral-500 transition-all duration-1000 ease-out"
+          <div className="absolute bottom-0 left-0 right-0 h-1 bg-gray-100">
+            <div
+              className="h-full rounded-r-full bg-coral-500 transition-all duration-1000 ease-out"
               style={{ width: `${(currentStep / steps.length) * 100}%` }}
             />
           </div>
