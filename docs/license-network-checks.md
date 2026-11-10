@@ -74,7 +74,7 @@ The workflow run history is the record from now on. Earlier local results remain
 
 | Date | App code | Result |
 |---|---|---|
-| 2026-11-10 | v0.5.0 (`main` at 4a5000f) | All three modes as expected. Electron 44.10.0, mitmproxy 12.2.1, GitHub Actions ([run](https://github.com/ugurkocde/TenuVault/actions/runs/42862071364)). |
+| 2026-11-10 | `main` at 4a5000f (licensing code identical to v0.5.0) | All three modes as expected. Electron 44.10.0, mitmproxy 12.2.1, GitHub Actions ([run](https://github.com/ugurkocde/TenuVault/actions/runs/42862071364)). |
 | 2026-11-07 | `main` at bf6de2b (after 0.4.2, before 0.4.3) | All three modes as expected. Electron 44.10.0, mitmproxy via `uvx`, production licensing service. |
 
 ## Web filters
