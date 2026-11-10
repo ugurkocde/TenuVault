@@ -75,4 +75,22 @@ describe("LicenseProvider signed-in tenants", () => {
     await flush()
     expect(result.current?.size).toBe(0)
   })
+  it("keeps the initial status error until Retry despite a background health notification", async () => {
+    licenseStatus.mockRejectedValueOnce(new Error("Startup status failed"))
+    let current: ReturnType<typeof useLicense> | undefined
+    function Probe() { current = useLicense(); return null }
+    const root = createRoot(document.body.appendChild(document.createElement("div"))); roots.push(root)
+    act(() => root.render(createElement(LicenseProvider, null, createElement(Probe))))
+    await flush()
+    expect(current?.error).toBe("Startup status failed")
+    expect(current?.status).toBeNull()
+    act(() => licenseChanged.current?.({ marker: "health ready", tenants: [] }))
+    await flush()
+    expect(current?.status).toBeNull()
+    expect(current?.error).toBe("Startup status failed")
+    await act(async () => { await current!.refresh() })
+    expect(current?.error).toBeNull()
+    expect(current?.status).not.toBeNull()
+  })
+
 })

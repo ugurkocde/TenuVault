@@ -12,7 +12,7 @@ import { useLicense } from "../lib/license"
 export function CommunityTenantChoiceButton() {
   const { status } = useLicense()
   if ((status?.communityChoicePendingTenantIds?.length ?? 0) <= 1) return null
-  return <Button type="button" size="sm" onClick={openCommunityTenantPicker}>Choose tenant</Button>
+  return <Button type="button" variant="outline" size="sm" onClick={openCommunityTenantPicker}>Choose tenant</Button>
 }
 
 export function CommunityChoiceBanner() {

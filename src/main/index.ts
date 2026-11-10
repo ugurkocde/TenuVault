@@ -1,3 +1,4 @@
+import { licenseStatusHandler } from "./license/status"
 import { CommunityChoicePendingError, CommunityLimitError, withPlanError } from "../shared/plan-errors"
 import { licenseBuyUrl, licenseCheckoutUrl, trialCheckoutUrl } from "./license/buy-url"
 import { requestTrialKey } from "./license/trial"
@@ -273,6 +274,10 @@ async function bootstrap(): Promise<void> {
     // Keep licensing outside the local API/storage bridge below.
     fetch: chromiumFetch,
     onChange: pushLicense,
+    initialTenantIds: (() => {
+      try { return (JSON.parse(appStore.get(`${RENDERER_STORAGE_PREFIX}tenuvault_tenants`) ?? "[]") as Array<{ credentials?: { tenantId?: string } }>).flatMap(t => t.credentials?.tenantId ? [t.credentials.tenantId] : []) }
+      catch { return [] }
+    })(),
     connectedTenantIds: () => connectedTenantIds(),
   })
   const prepareCoverage = prepareScheduledCoverage(license)
@@ -1143,7 +1148,17 @@ async function bootstrap(): Promise<void> {
     if (!isTenantId(tenantId)) throw new Error("Unknown tenant.")
     license.chooseCommunity(tenantId)
   }))
-  handleTrusted("license:status", currentLicenseStatus)
+  handleTrusted("license:startTenantTrial", (_event, tenant: unknown) => {
+    if (!isTenantId(tenant)) throw new Error("Unknown tenant.")
+    return withStatus(() => license.startTenantTrial(tenant))
+  })
+  handleTrusted("license:tenantTrialAction", (_event, tenant: unknown, action: unknown, email: unknown) => {
+    if (!isTenantId(tenant)) throw new Error("Unknown tenant.")
+    if (action !== "extend_trial" && action !== "end_trial" && action !== "trial_contact" && action !== "acknowledge") throw new Error("Unknown trial action.")
+    if (email !== undefined && (typeof email !== "string" || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) throw new Error("Enter a valid email address.")
+    return withStatus(() => license.tenantTrialAction(tenant, action, email as string | undefined))
+  })
+  handleTrusted("license:status", licenseStatusHandler(license, currentLicenseStatus))
   handleTrusted("license:refresh", () => withStatus(() => license.refreshAll()))
   handleTrusted("license:setKey", (_event, key: unknown) => {
     if (typeof key !== "string" || key.length > 256) throw new Error("Enter a valid license key.")

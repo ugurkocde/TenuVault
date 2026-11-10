@@ -19,6 +19,7 @@ const state = vi.hoisted(() => ({
 
 vi.mock("../../src/renderer/lib/bridge", () => ({
   bridge: {
+    auth: { accounts: async () => [] },
     license: {
       refresh: async () => undefined,
       open: state.open,
@@ -134,6 +135,20 @@ describe("License page trial", () => {
     expect(container.querySelector('input[type="email"]')).toBeNull()
     await act(async () => { button(container, "Buy Pro")!.click() })
     expect(state.open).toHaveBeenCalledWith("checkout", { source: "license-page-trial" })
+  })
+
+  it("counts an active tenant trial without a saved key", async () => {
+    const trialEndsAt = new Date(Date.now() + 5 * 86_400_000).toISOString()
+    const container = await render({ ...community, tenantTrialsEnabled: true, plan: "pro", tenantLimit: 2, trial: true, trialEndsAt,
+      tenants: [{ tenantId: "11111111-2222-4333-8444-555555555555", signedIn: true, activated: true, entitled: true, source: "trial", plan: "pro", tenants: 2, expiresAt: trialEndsAt, validUntil: trialEndsAt, trial: true, trialEndsAt, trialAcknowledged: true, shared: null, shareNeedsSignIn: false, displayKey: null, message: null }],
+    })
+    expect(container.textContent).toContain("1 is active on this machine")
+    expect(container.textContent).toContain("Pro trial")
+    expect(container.textContent).toContain("Trial ends")
+    expect(container.textContent).not.toContain("Active, Pro")
+    expect(container.textContent).not.toContain("Valid until")
+    expect(container.textContent).toContain("Pro trial active")
+    expect(container.textContent).not.toContain("Try Pro free for 30 days")
   })
 
   it("offers the key swap for a saved key that is no longer active", async () => {

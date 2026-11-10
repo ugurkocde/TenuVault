@@ -8,6 +8,7 @@ import type { LicenseStatus } from "../../shared/ipc"
 import { bridge } from "../lib/bridge"
 import { useClipboardLicenseKey } from "../lib/clipboard-key"
 import { tenantLicense, tenantPlan, useLicense } from "../lib/license"
+import { TenantTrialCard, TenantTrialOptions } from "./TenantTrial"
 import { TrialSignupForm } from "./TrialSignupForm"
 
 /**
@@ -98,19 +99,21 @@ export function LicenseKeyEntry({ watchClipboard = false, onSaved, label = "Lice
 /** The trial and license key options, collapsed behind quiet links until one is chosen. */
 export function TrialOrKey({ source, initialEmail, onSaved }: { source: string; initialEmail?: string; onSaved?: (status: LicenseStatus) => void }) {
   const [open, setOpen] = useState<"trial" | "key" | null>(null)
+  const { status } = useLicense()
   const [trialSent, setTrialSent] = useState(false)
   const link = "rounded-full px-1 text-sm font-medium text-blue-600 underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap gap-x-4 gap-y-1">
-        <button type="button" className={link} aria-expanded={open === "trial"} onClick={() => setOpen(open === "trial" ? null : "trial")}>
+        {!status?.tenantTrialsEnabled && <button type="button" className={link} aria-expanded={open === "trial"} onClick={() => setOpen(open === "trial" ? null : "trial")}>
           Try Pro free for 30 days, no card
-        </button>
+        </button>}
         <button type="button" className={link} aria-expanded={open === "key"} onClick={() => setOpen(open === "key" ? null : "key")}>
           I have a license key
         </button>
       </div>
-      {open === "trial" && (
+      <TenantTrialOptions />
+      {open === "trial" && !status?.tenantTrialsEnabled && (
         <div className="space-y-4 rounded-2xl bg-blue-50/60 p-4">
           <TrialSignupForm source={source} initialEmail={initialEmail} onSent={() => setTrialSent(true)} />
           {trialSent && <LicenseKeyEntry watchClipboard onSaved={onSaved} label="Your trial key" />}
@@ -151,13 +154,14 @@ export function PlanContext({ tenantId, username }: { tenantId: string; username
       </div>
     )
   }
+  if (tenant?.source === "trial" && !tenant.trialAcknowledged) return <TenantTrialCard tenant={tenant} initialEmail={emailLike(username)} welcome />
   const name = plan === "msp" ? "MSP" : "Pro"
   return (
     <p className="flex items-center gap-3 rounded-3xl bg-green-50 px-5 py-3 text-sm text-green-900">
-      {status?.trial ? <Sparkles className="h-4 w-4 flex-shrink-0" aria-hidden="true" /> : <CheckCircle2 className="h-4 w-4 flex-shrink-0" aria-hidden="true" />}
+      {tenant?.trial ? <Sparkles className="h-4 w-4 flex-shrink-0" aria-hidden="true" /> : <CheckCircle2 className="h-4 w-4 flex-shrink-0" aria-hidden="true" />}
       {tenant?.source === "tenant"
         ? `This tenant uses ${name}, through the license your organization shares with it.`
-        : status?.trial ? `This tenant uses your ${name} trial.` : `This tenant uses ${name}.`}
+        : tenant?.trial ? `This tenant uses your ${name} trial.` : `This tenant uses ${name}.`}
     </p>
   )
 }

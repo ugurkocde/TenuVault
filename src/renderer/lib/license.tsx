@@ -24,11 +24,14 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null)
   const [signedInTenantIds, setSignedInTenantIds] = useState<ReadonlySet<string> | undefined>(undefined)
   const refreshing = useRef(false)
+  const hasLoaded = useRef(false)
+  const pendingStatus = useRef<LicenseStatus | null>(null)
   const attempt = useRef(0)
 
   const refresh = useCallback(async () => {
     if (refreshing.current) return
     refreshing.current = true
+    pendingStatus.current = null
     const currentAttempt = ++attempt.current
     setError(null)
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -40,7 +43,9 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
         }),
       ])
       if (attempt.current === currentAttempt) {
-        setStatus(nextStatus)
+        hasLoaded.current = true
+        setStatus(pendingStatus.current ?? nextStatus)
+        pendingStatus.current = null
         void refreshInternalCisBenchmarks()
       }
     } catch (error) {
@@ -56,6 +61,7 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void refresh().catch(() => {})
     const unsubscribe = bridge.license.onChanged((nextStatus) => {
+      if (!hasLoaded.current) { pendingStatus.current = nextStatus; return }
       setStatus(nextStatus)
       void refreshInternalCisBenchmarks()
     })
@@ -95,6 +101,10 @@ export function planName(plan: Plan | null): string {
   return planLabel(plan ?? "pro")
 }
 
+export function tenantPlanName(tenant: TenantLicenseStatus): string {
+  return tenant.entitled && tenant.trial ? "Pro trial" : planName(tenant.plan)
+}
+
 /** The plan a tenant works under right now: its license, Community, or null when it cannot be used. */
 export function tenantPlan(tenant: TenantLicenseStatus | undefined): Plan | null {
   if (!tenant) return null
@@ -119,6 +129,11 @@ export function unlicensedTenants(status: LicenseStatus): TenantLicenseStatus[] 
 
 /** Community is a plan state; only a failed key or uncovered signed-in tenant is inactive. */
 export function licenseChipState(status: LicenseStatus): { label: string; tone: "neutral" | "inactive" } {
+  const trial = status.tenants.filter(t => t.entitled && t.source === "trial").sort((a, b) => Date.parse(a.trialEndsAt ?? a.validUntil ?? "") - Date.parse(b.trialEndsAt ?? b.validUntil ?? ""))[0]
+  if (trial) {
+    const days = trialDaysLeft({ trial: true, trialEndsAt: trial.trialEndsAt ?? trial.validUntil ?? status.trialEndsAt }) ?? 0
+    return { label: `Pro trial · ${days} ${days === 1 ? "day" : "days"}`, tone: "neutral" }
+  }
   if (status.plan) return { label: planName(status.plan), tone: "neutral" }
   if (status.tenants.some((tenant) => tenant.entitled && tenant.plan !== "community")) {
     return { label: "Organization", tone: "neutral" }
@@ -190,7 +205,10 @@ export function earliestExpiringTenant(status: Pick<LicenseStatus, "validUntil" 
  */
 export function tenantLicense(status: LicenseStatus | null, tenantId: string | undefined): TenantLicenseStatus | undefined {
   const id = tenantId?.toLowerCase()
-  return id ? status?.tenants.find((tenant) => tenant.tenantId === id) : undefined
+  const tenant = id ? status?.tenants.find((tenant) => tenant.tenantId === id) : undefined
+  return tenant?.plan === "community" && status?.communityChoicePendingTenantIds?.includes(tenant.tenantId)
+    ? { ...tenant, plan: null }
+    : tenant
 }
 
 /** The plan of one tenant, or null while the license is loading or does not cover it. */
@@ -217,19 +235,28 @@ export function trialDaysLeft(status: Pick<LicenseStatus, "trial" | "trialEndsAt
  * the admin dismisses it; a dismissal before the day-27 reminder does not hide that one.
  */
 export function trialReminder(
-  status: Pick<LicenseStatus, "trial" | "trialEndsAt">,
+  status: Pick<LicenseStatus, "trial" | "trialEndsAt"> & Partial<Pick<LicenseStatus, "tenants">>,
   dismissedAt: string | undefined,
   now = Date.now(),
-): { stage: "day-20" | "day-27"; daysLeft: number; endsAt: string } | null {
-  const daysLeft = trialDaysLeft(status, now)
-  if (daysLeft === null || !status.trialEndsAt) return null
-  const end = Date.parse(status.trialEndsAt)
-  const started = TRIAL_REMINDER_DAYS_LEFT.filter((days) => end - days * DAY_MS <= now)
-  const days = started[started.length - 1]
-  if (days === undefined) return null
-  const dismissed = dismissedAt ? Date.parse(dismissedAt) : NaN
-  if (Number.isFinite(dismissed) && dismissed >= end - days * DAY_MS && dismissed <= now) return null
-  return { stage: days === 3 ? "day-27" : "day-20", daysLeft, endsAt: status.trialEndsAt }
+): { stage: "day-20" | "day-27"; daysLeft: number; endsAt: string; tenantTrial?: boolean } | null {
+  const candidates = status.tenants?.filter(tenant => tenant.entitled && tenant.trial).map(tenant => ({
+    endsAt: tenant.trialEndsAt ?? tenant.validUntil,
+    tenantTrial: tenant.source === "trial",
+  })) ?? []
+  if (!candidates.length && status.trial && status.trialEndsAt) candidates.push({ endsAt: status.trialEndsAt, tenantTrial: false })
+  for (const candidate of candidates.sort((a, b) => Date.parse(a.endsAt ?? "") - Date.parse(b.endsAt ?? ""))) {
+    if (!candidate.endsAt) continue
+    const daysLeft = trialDaysLeft({ trial: true, trialEndsAt: candidate.endsAt }, now)
+    if (daysLeft === null) continue
+    const end = Date.parse(candidate.endsAt)
+    const started = (candidate.tenantTrial ? [5, 1] : TRIAL_REMINDER_DAYS_LEFT).filter(days => end - days * DAY_MS <= now)
+    const days = started[started.length - 1]
+    if (days === undefined) continue
+    const dismissed = dismissedAt ? Date.parse(dismissedAt) : NaN
+    if (Number.isFinite(dismissed) && dismissed >= end - days * DAY_MS && dismissed <= now) continue
+    return { stage: days === 3 || days === 1 ? "day-27" : "day-20", daysLeft, endsAt: candidate.endsAt, ...(candidate.tenantTrial ? { tenantTrial: true } : {}) }
+  }
+  return null
 }
 
 /**

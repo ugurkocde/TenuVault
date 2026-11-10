@@ -1,3 +1,4 @@
+import { TenantTrialNotices, TrialChanges, trialEndVisible } from "./TenantTrial"
 import { CommunityChoiceBanner } from "./CommunityTenantPicker"
 import { useEffect, useRef, useState, type ComponentType, type ReactNode, type RefObject } from "react"
 import { Link, Outlet, useLocation } from "react-router-dom"
@@ -85,11 +86,12 @@ const allNavigation: NavItem[] = [
 function BannerLink({ tone, icon, children, action, onDismiss, dismissing }: { tone: "coral" | "amber" | "neutral"; icon: ReactNode; children: ReactNode; action?: ReactNode; onDismiss?: () => void; dismissing?: boolean }) {
   return (
     <div className="px-6 pt-5 lg:px-8">
-      <div className={cn("flex items-center gap-2 rounded-3xl", tone === "neutral" ? "bg-gray-100 text-gray-700" : tone === "amber" ? "bg-amber-50" : "bg-blue-50")}>
+      <div className={cn("flex items-center gap-2 rounded-3xl", action && "flex-wrap", tone === "neutral" ? "bg-gray-100 text-gray-700" : tone === "amber" ? "bg-amber-50" : "bg-blue-50")}>
         <Link
           to="/license"
           className={cn(
             "group flex min-w-0 flex-1 items-center gap-3 rounded-3xl py-2 pl-2 pr-2 text-sm font-medium transition-shadow hover:shadow-[0_6px_20px_-8px_rgba(22,21,20,0.25)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring",
+            action && "basis-72",
             tone === "neutral" ? "bg-gray-100 text-gray-700" : tone === "coral" ? "bg-blue-50 text-gray-900" : "bg-amber-50 text-amber-900",
           )}
         >
@@ -110,7 +112,7 @@ function BannerLink({ tone, icon, children, action, onDismiss, dismissing }: { t
             <ArrowRight className="h-4 w-4" />
           </span>
         </Link>
-        {action && <span className={cn("shrink-0", !onDismiss && "mr-2")}>{action}</span>}
+        {action && <span className={cn("min-w-0 max-w-full", !onDismiss && "mr-2")}>{action}</span>}
         {onDismiss && <button type="button" onClick={onDismiss} disabled={dismissing} className="mr-2 shrink-0 rounded-full px-3 py-2 text-sm font-medium hover:bg-gray-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50">Dismiss</button>}
       </div>
     </div>
@@ -127,12 +129,12 @@ function TrialBanner({ urgent, source, onDismiss, dismissing, children }: {
 }) {
   return (
     <div className="px-6 pt-5 lg:px-8">
-      <div role="status" className={cn("flex flex-wrap items-center gap-3 rounded-3xl py-2 pl-2 pr-2 text-sm font-medium", urgent ? "bg-amber-50 text-amber-900" : "bg-blue-50 text-gray-900")}>
+      <div role="status" className={cn("flex flex-wrap items-start gap-3 rounded-3xl p-3 text-sm font-medium", urgent ? "bg-amber-50 text-amber-900" : "bg-blue-50 text-gray-900")}>
         <span className={cn("flex size-9 flex-shrink-0 items-center justify-center rounded-full", urgent ? "bg-card text-amber-700" : "bg-coral-500 text-white")} aria-hidden="true">
           <Clock className="h-4 w-4" />
         </span>
-        <span className="min-w-0 flex-1">{children}</span>
-        <Button type="button" size="sm" onClick={() => void openCheckout(source)}>
+        <div className="min-w-0 basis-full sm:basis-72 flex-1">{children}</div>
+        <Button className="bg-coral-500 text-white hover:bg-coral-600" type="button" size="sm" onClick={() => void openCheckout(source)}>
           <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />
           Buy Pro
         </Button>
@@ -155,8 +157,8 @@ function TrialReminderBanner({ reminder, onDismiss, dismissing }: {
   const when = reminder.daysLeft === 1 ? "tomorrow" : `in ${reminder.daysLeft} days`
   return (
     <TrialBanner urgent={final} source={`trial-${reminder.stage}`} onDismiss={onDismiss} dismissing={dismissing}>
-      Your Pro trial ends {when}, on {formatDate(reminder.endsAt)}.{" "}
-      {final
+      <p>Your Pro trial ends {when}, on {formatDate(reminder.endsAt)}.</p>
+      {reminder.tenantTrial ? <TrialChanges /> : final
         ? "Buy Pro now to keep daily backups, full restore and drift revert for both tenants."
         : "Buy Pro to keep daily backups, full restore and drift revert after the trial."}
     </TrialBanner>
@@ -220,24 +222,26 @@ function LicenseBanner() {
     }
   }
   if (!status || (status.communityChoicePendingTenantIds?.length ?? 0) > 1) return null
+  if (trialEndVisible(status) || status.tenants.some(t => t.entitled && t.source === "trial" && !t.trialAcknowledged)) return null
   if (isUnlicensed(status) && unlicensedTenants(status).length === 0) {
     // The start pages only: the all-tenants overview, or the dashboard for a single tenant.
     const startPage = pathname === "/portal/overview" || pathname === "/portal/dashboard"
     if (!startPage || !preferencesLoaded || !communityBannerVisible(dismissedAt)) return null
     return (
       <BannerLink tone="neutral" icon={<Sparkles className="h-4 w-4" />} onDismiss={() => void dismiss()} dismissing={dismissing}>
-        You are on Community, the free plan. Try Pro free for 30 days with no card, or add your license key.
+        You are on Community, the free plan. {status.tenantTrialsEnabled ? "Try Pro free with no card or email" : "Try Pro free for 30 days with no card"}, or add your license key.
       </BannerLink>
     )
   }
   const inactive = unlicensedTenants(status)
-  const ended = preferencesLoaded ? trialEndedNotice(status, trialDismissedAt) : null
+  const tenantTrialHistory = status.tenants.some(t => t.trialEndsAt && (t.source === "trial" || !t.entitled))
+  const ended = preferencesLoaded && !tenantTrialHistory ? trialEndedNotice(status, trialDismissedAt) : null
   if (ended) {
     return <TrialEndedBanner endedAt={ended.endedAt} onDismiss={() => void dismissTrial()} dismissing={dismissing} />
   }
   if (inactive.length > 0) {
     // Without a paid license, Pro is what covers the tenant: the trial, Buy Pro after it, or the plans.
-    const buy = hasPaidLicense(status) ? undefined : <PlanPromptButton plan="pro" source="not-covered" size="sm" />
+    const buy = hasPaidLicense(status) ? undefined : <PlanPromptButton plan="pro" source="not-covered" tenantId={inactive.length === 1 ? inactive[0]!.tenantId : null} size="sm" />
     return (
       <BannerLink tone="amber" icon={<AlertTriangle className="h-4 w-4" />} action={buy}>
         {inactive.length === 1 ? "A signed-in tenant is" : `${inactive.length} signed-in tenants are`} not covered by your
@@ -332,6 +336,7 @@ function useOverflowing(ref: RefObject<HTMLElement | null>): boolean {
 }
 
 export function DesktopLayout() {
+  const { status: licenseStatus } = useLicense()
   const { pathname } = useLocation()
   const tenants = useTenants()
   useScoreInvalidation()
@@ -475,7 +480,8 @@ export function DesktopLayout() {
       )}
 
       <div className={focus ? undefined : "pl-64"}>
-        <CommunityChoiceBanner />
+        <TenantTrialNotices showWelcome={pathname !== "/portal/onboarding" && pathname !== "/license"} />
+        {!trialEndVisible(licenseStatus) && <CommunityChoiceBanner />}
         {!focus && <LicenseBanner />}
         {!focus && <SignInBanner />}
         {[/portal\/backup/, /portal\/drift/, /portal\/audit/, /portal\/(governance|changes|operations|reports|alerts|sync)/].some(pattern => pattern.test(pathname)) && <TenantAccessNotice />}

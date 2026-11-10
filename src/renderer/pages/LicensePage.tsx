@@ -1,3 +1,4 @@
+import { TenantTrialCard, TenantTrialOptions } from "../components/TenantTrial"
 import { CommunityTenantChoiceButton } from "../components/CommunityTenantPicker"
 import { useEffect, useRef, useState, type MouseEvent, type Ref } from "react"
 import { Link, useLocation } from "react-router-dom"
@@ -30,7 +31,7 @@ import { useClipboardLicenseKey } from "../lib/clipboard-key"
 import { openCheckout } from "../lib/purchase"
 import { bridge } from "../lib/bridge"
 import { useConfirm } from "~/components/ConfirmDialog"
-import { formatDate, formatDateTime, hasPaidLicense, isUnlicensed, licensePageTitle, planName, trialDaysLeft, useLicense } from "../lib/license"
+import { formatDate, formatDateTime, hasPaidLicense, isUnlicensed, licensePageTitle, planName, tenantPlanName, trialDaysLeft, useLicense } from "../lib/license"
 
 type Busy = "activate" | "replace" | "deactivate" | `retry:${string}` | `share:${string}` | null
 
@@ -252,8 +253,8 @@ function TenantRow({
           <p className="truncate font-mono text-xs text-gray-500">{tenant.tenantId}</p>
         </div>
         {tenant.entitled ? (
-          <Badge variant="green">{organization ? `Active through your organization (${planName(tenant.plan)})` : `Active, ${planName(tenant.plan)}`}</Badge>
-        ) : tenant.plan === "community" ? (
+          <Badge variant="green">{tenant.trial ? tenantPlanName(tenant) : organization ? `Active through your organization (${planName(tenant.plan)})` : `Active, ${planName(tenant.plan)}`}</Badge>
+        ) : tenant.plan === "community" && !choicePending ? (
           <Badge variant="gray">Community (free)</Badge>
         ) : tenant.signedIn ? (
           <Badge variant="orange">Not active</Badge>
@@ -269,7 +270,7 @@ function TenantRow({
       </div>
       {tenant.entitled && tenant.expiresAt && (
         <p className="text-xs text-gray-500">
-          {tenant.validUntil ? `Valid until ${formatDate(tenant.validUntil)} · ` : ""}
+          {tenant.validUntil ? `${tenant.trial ? "Trial ends" : "Valid until"} ${formatDate(tenant.validUntil)} · ` : ""}
           Works offline until {formatDateTime(tenant.expiresAt)}
           {organization && tenant.displayKey ? ` · Organization license ${tenant.displayKey}` : ""}
         </p>
@@ -385,7 +386,7 @@ export default function LicensePage() {
       })
     }
   }
-  const activeKeyTenants = status.tenants.filter((t) => t.entitled && t.source === "key").length
+  const activeKeyTenants = status.tenants.filter((t) => t.entitled && (t.source === "key" || !status.hasKey && t.source === "trial")).length
   const signedIn = status.tenants.filter((t) => t.signedIn).length
 
   const activate = () => activateKey(key.trim())
@@ -465,7 +466,7 @@ export default function LicensePage() {
                           : "Your organization license is not currently active. Sign in again and retry the license check below."}
               </CardDescription>
             </div>
-            {status.plan && <Badge variant="secondary">{planName(status.plan)}</Badge>}
+            {status.plan && <Badge variant="secondary">{status.trial ? "Pro trial" : planName(status.plan)}</Badge>}
           </div>
         </CardHeader>
         <CardContent className="space-y-5 px-7 pb-7">
@@ -485,8 +486,10 @@ export default function LicensePage() {
             </Alert>
           )}
 
-          {isUnlicensed(status) && <TrialCallToAction emailRef={trialEmail} onSent={() => setTrialKeyHint(true)} />}
-          {status.trial && <TrialStatus status={status} busy={busy} onReplace={replaceKey} />}
+          {isUnlicensed(status) && !status.tenantTrialsEnabled && <TrialCallToAction emailRef={trialEmail} onSent={() => setTrialKeyHint(true)} />}
+          {<TenantTrialOptions />}
+          {status.tenants.filter(t => t.source === "trial" || t.trialCanExtend && t.trialAcknowledged).map(t => <TenantTrialCard key={t.tenantId} tenant={t} welcome={t.entitled && !t.trialAcknowledged} allowUnknownContactRemoval />)}
+          {status.trial && !status.tenants.some(t => t.source === "trial") && <TrialStatus status={status} busy={busy} onReplace={replaceKey} />}
           {status.hasKey && !status.trial && status.keyState !== "active" && <InactiveKeyReplacement status={status} busy={busy} onReplace={replaceKey} />}
 
           {status.hasKey ? (
@@ -599,8 +602,8 @@ export default function LicensePage() {
       )}
 
       <p className="text-xs text-gray-500">
-        License checks send the license key, your Microsoft sign-in (ID) token or both: the token proves the tenant for an
-        organization license or for sharing the license with it, is verified and only its tenant ID used, never stored. They also send a random installation ID, the tenant ID, the app
+        Tenant trials store a keyed hash of the tenant ID. An optional trial email is sent only when you submit it. License checks send the license key, your Microsoft sign-in (ID) token or both: the token proves the tenant for an
+        organization license, a tenant trial or for sharing the license with it, is verified and only its tenant ID used, never stored. They also send a random installation ID, the tenant ID, the app
         registration client ID and the app version. Tenant configuration and backups are never sent.
         {!status.persisted &&
           " Secure storage is not available on this system, so the license is kept in memory only and must be entered again after a restart."}
