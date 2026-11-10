@@ -16,4 +16,5 @@ Each folder holds:
 The fixtures were captured by running that version's own `LicenseService` and `SecureStore`
 from a checkout of its release tag against a scripted licensing service: a paid key on several
 tenants with an organization license and a removed tenant (`paid`), a no-card trial key
-(`trial`), and the free Community tenant (`community`).
+(`trial`), and the free Community tenant (`community`). From v0.5.0, captures also include
+automatic tenant trial activation, one extension and a local usage tally (`tenant-trial`).
