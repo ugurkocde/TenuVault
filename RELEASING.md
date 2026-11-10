@@ -77,28 +77,7 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 Put these in the next stable release's notes, then remove them here.
 
-- Damaged files in a local backup folder no longer block the whole folder (#277). Backups they
-  belong to show as Unavailable in Backup History; other backups stay usable and new backups are
-  saved. While any file is damaged, retention deletes nothing and logs "Retention is paused." No
-  file format, recovery key or file on disk changes.
-- New **Share feedback** entry in the sidebar, on every plan. It sends the two answers, an
-  optional reply-to email, app version, OS, plan, section name and a random message ID to
-  `https://www.tenuvault.com/api/desktop-feedback`, only when the admin clicks Send feedback. A
-  window screenshot is attached only when ticked. Networks that filter by path need that path
-  allowed. When sending fails, Copy as email copies the full feedback to the clipboard and opens an
-  email to support; that draft may be shortened, so admins paste the copied text if anything is cut.
-- Azure backups are now plain JSON (Azure encryption at rest and role assignments protect them);
-  backups on the device stay encrypted. Every admin with access to the storage account sees,
-  compares and restores the same backups, and the Azure storage choice no longer asks for the
-  recovery key. Older encrypted Azure backups stay readable with the key of the device that made
-  them, and Backup & Restore offers Import recovery key for them. Admins still on an older version
-  treat the new plain backups as unverified legacy backups: they can view and compare them and
-  restore unassigned copies, but replace restore, assignment restore and revert are blocked there.
-  Ask all admins of a tenant to update. Cloud backups (runbook 1.2.0) write plain JSON too and no
-  longer use Key Vault: run the cloud backup setup script once more with the same values to update
-  the runbook. Delete the old Key Vault (kv-tenuvault-<suffix>) once no TenuVault setup in any
-  Automation account still has a TenuVaultKeyVault variable; the script checks its own account.
-  Older sealed cloud backups stay readable with the recovery key.
+None yet.
 
 ## Cutting a stable release
 

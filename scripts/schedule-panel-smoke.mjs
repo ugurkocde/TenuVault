@@ -1,5 +1,5 @@
 /** Exercise the built schedule editor with controlled license and runner responses. */
-export async function checkSchedulePanel({ check, evaluate, waitForCondition, screenshot, assert }) {
+export async function checkSchedulePanel({ check, evaluate, waitForCondition, waitForTrialHealth, screenshot, assert }) {
   const tenantId = "11111111-1111-1111-1111-111111111111"
   const weeklyNote = "A weekly schedule can leave up to six days of changes unprotected. Daily backups are included in Pro."
   const doc = "window.__scheduleFrame.contentDocument"
@@ -10,8 +10,9 @@ export async function checkSchedulePanel({ check, evaluate, waitForCondition, sc
   const automatic = `[...${body}.querySelectorAll("label")].find(label => label.textContent.includes("automatically"))?.querySelector('input[type="checkbox"]')`
 
   async function open(current = null, installed = false) {
+    await waitForTrialHealth()
     await evaluate(`(async () => {
-      const status = await window.tenuvault.license.status()
+      const status = window.__smokeTrialStatus
       window.__scheduleFixture = { calls: [], links: [], runnerChecks: 0, status: { ...status, tenants: [] } }
       const frame = document.createElement("iframe")
       frame.style.cssText = "position: fixed; inset: 0; width: 100%; height: 100%; border: 0; z-index: 9999;"
@@ -165,7 +166,10 @@ export async function checkSchedulePanel({ check, evaluate, waitForCondition, sc
   })
 
   await check("Community can pause an existing daily schedule with its saved summary intact", async () => {
-    const originalCommunityTenant = (await evaluate(`window.tenuvault.license.status()`)).communityTenantId
+    const settled = await waitForTrialHealth()
+    const tenantTrialsEnabled = settled.tenantTrialsEnabled
+    console.log(`     trial switch: ${tenantTrialsEnabled ? "enabled, Buy Pro in plan dialogs" : "disabled, emailed trial link in plan dialogs"}`)
+    const originalCommunityTenant = settled.communityTenantId
     try {
       const schedules = await evaluate(`window.tenuvault.schedules.set({ tenantId: ${JSON.stringify(tenantId)}, enabled: true, frequency: 'daily', time: '07:45' })`)
       const current = schedules.find(schedule => schedule.tenantId === tenantId)
@@ -204,8 +208,13 @@ export async function checkSchedulePanel({ check, evaluate, waitForCondition, sc
       await setValue("schedule-time", "09:00")
       await evaluate(`${save}.click()`)
       assert(await waitForCondition(`${body}.querySelector('[role="dialog"]')?.innerText.includes('Included in TenuVault Pro and MSP')`), "schedule refusal did not open the plan dialog")
-      // Without a license on this machine, the plan dialog offers the no-card trial on the License page.
-      assert(await evaluate(`[...${body}.querySelectorAll('[role="dialog"] a')].some(link => link.textContent.trim() === 'Start 30 day free trial' && link.getAttribute('href')?.endsWith('/license'))`), "plan dialog does not offer the trial")
+      if (tenantTrialsEnabled) {
+        assert(await evaluate(`[...${body}.querySelectorAll('[role="dialog"] button')].some(button => button.textContent.trim() === 'Buy Pro')`), "plan dialog does not offer Buy Pro")
+        assert(await evaluate(`!${body}.querySelector('[role="dialog"] input[type="email"]') && ![...${body}.querySelectorAll('[role="dialog"] a, [role="dialog"] button')].some(item => ['Start free trial', 'Start 30 day free trial'].includes(item.textContent.trim()))`), "plan dialog offers emailed trials with tenant trials enabled")
+      } else {
+        // Without a license on this machine, the plan dialog offers the no-card trial on the License page.
+        assert(await evaluate(`[...${body}.querySelectorAll('[role="dialog"] a')].some(link => link.textContent.trim() === 'Start 30 day free trial' && link.getAttribute('href')?.endsWith('/license'))`), "plan dialog does not offer the trial")
+      }
       assert(await evaluate(`![...${body}.querySelectorAll('[role="dialog"] button')].some(button => button.textContent.trim() === 'See plans')`), "plan dialog offers the plans instead of the trial")
       await screenshot("09c-schedule-plan-dialog")
       await evaluate(`[...${body}.querySelectorAll('[role="dialog"] button')].find(button => button.textContent.trim() === 'Close').click()`)
@@ -221,11 +230,20 @@ export async function checkSchedulePanel({ check, evaluate, waitForCondition, sc
       }
       await openSecondTenantDialog()
       await screenshot("09d-community-tenant-dialog")
-      // The trial starts on the License page, in the app, without a browser.
-      const linksBefore = await evaluate(`window.__scheduleFixture.links.length`)
-      await evaluate(`[...${body}.querySelectorAll('[role="dialog"] a, [role="dialog"] button')].find(item => item.textContent.trim() === 'Start 30 day free trial').click()`)
-      assert(await waitForCondition(`${body}.innerText.includes('Try Pro free for 30 days, no card needed.') && !${body}.querySelector('[role="dialog"]')`), "second tenant trial did not open the trial form on the License page")
-      assert(await evaluate(`window.__scheduleFixture.links.length === ${linksBefore}`), "second tenant trial opened a browser page")
+      if (tenantTrialsEnabled) {
+        const linksBefore = await evaluate(`window.__scheduleFixture.links.length`)
+        assert(await evaluate(`![...${body}.querySelectorAll('[role="dialog"] a')].some(link => link.textContent.trim() === 'Start 30 day free trial')`), "second tenant dialog offers an emailed trial")
+        await evaluate(`[...${body}.querySelectorAll('[role="dialog"] button')].find(button => button.textContent.trim() === 'Buy Pro').click()`)
+        assert(await waitForCondition(`window.__scheduleFixture.links.length === ${linksBefore + 1}`), "second tenant Buy Pro did not open the checkout")
+        assert(await evaluate(`window.__scheduleFixture.links.at(-1).target === 'checkout' && window.__scheduleFixture.links.at(-1).source === 'second-tenant'`), "second tenant Buy Pro used the wrong destination or source")
+        await evaluate(`[...${body}.querySelectorAll('[role="dialog"] button')].find(button => button.textContent.trim() === 'Not now').click()`)
+      } else {
+        // The trial starts on the License page, in the app, without a browser.
+        const linksBefore = await evaluate(`window.__scheduleFixture.links.length`)
+        await evaluate(`[...${body}.querySelectorAll('[role="dialog"] a, [role="dialog"] button')].find(item => item.textContent.trim() === 'Start 30 day free trial').click()`)
+        assert(await waitForCondition(`${body}.innerText.includes('Try Pro free for 30 days, no card needed.') && !${body}.querySelector('[role="dialog"]')`), "second tenant trial did not open the trial form on the License page")
+        assert(await evaluate(`window.__scheduleFixture.links.length === ${linksBefore}`), "second tenant trial opened a browser page")
+      }
       await openSecondTenantDialog()
       await evaluate(`[...${body}.querySelectorAll('[role="dialog"] button')].find(button => button.textContent.trim() === 'Add a license key').click()`)
       assert(await waitForCondition(`${body}.innerText.includes('License key') && !${body}.querySelector('[role="dialog"]')`), "Add a license key did not open the License page")
