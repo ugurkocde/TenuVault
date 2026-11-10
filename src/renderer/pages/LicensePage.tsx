@@ -466,7 +466,7 @@ export default function LicensePage() {
                   : status.plan
                     ? `Your license covers ${status.tenantLimit ?? 1} tenant${status.tenantLimit === 1 ? "" : "s"}. ${activeKeyTenants} ${activeKeyTenants === 1 ? "is" : "are"} active on this machine.`
                     : savedKeyNotNeededHere(status)
-                      ? "Your signed-in tenants are already licensed through your organization."
+                      ? "A tenant admin shared their TenuVault license with your tenant."
                       : hasPaidLicense(status)
                         ? "A tenant admin shared their TenuVault license with your tenant."
                         : status.keyState === "failed"
