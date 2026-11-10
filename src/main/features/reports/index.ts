@@ -420,7 +420,8 @@ export function reportEmail(record: Pick<ReportRecord, "report">, attachmentNote
     occurredAt: report.generatedAt,
     naturalKey: `report:${report.from.id}:${report.to.id}:${report.generatedAt}`,
     title: reportTitle(report),
-    summary: `${summaryLine(report)}${attachmentNote ? ` ${attachmentNote}` : ""}`,
+    // A cloud report's email says why no one is named: its reader cannot open the report in the app.
+    summary: `${summaryLine(report, { reason: report.cloud })}${attachmentNote ? ` ${attachmentNote}` : ""}`,
     details: [
       { label: "From backup", value: report.from.id },
       { label: "To backup", value: report.to.id },

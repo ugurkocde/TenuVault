@@ -174,7 +174,8 @@ $appOnlyExcluded = if ($IncludeDeviceCategories) { "" } else { "DeviceCategories
 $variableNames = @(
     "TenuVaultTenantId-$tenantKey", "TenuVaultStorageAccount-$tenantKey",
     "TenuVaultScope-$tenantKey", "TenuVaultExcludedFolders-$tenantKey", "TenuVaultAppOnlyExcluded-$tenantKey",
-    "TenuVaultChangeReport-$tenantKey", "TenuVaultChangeReportActors-$tenantKey", "TenuVaultTenantName-$tenantKey"
+    "TenuVaultChangeReport-$tenantKey", "TenuVaultChangeReportActors-$tenantKey", "TenuVaultTenantName-$tenantKey",
+    "TenuVaultScheduleSetsTrigger-$tenantKey"
 )
 # Setups before runbook 1.2.0 also wrote the Key Vault that held the recovery key. The runbook
 # no longer reads it; a rerun or -Remove deletes that variable.
@@ -896,8 +897,12 @@ if ($GrantGraphRoles -or $GraphRolesGranted) {
     if ($PSCmdlet.ShouldProcess($runbookName, "Link runbook to schedule '$scheduleName'")) {
         Register-AzAutomationScheduledRunbook -ResourceGroupName $ResourceGroupName `
             -AutomationAccountName $AutomationAccountName -RunbookName $runbookName `
-            -ScheduleName $scheduleName -Parameters @{ TenantKey = $tenantKey } | Out-Null
+            -ScheduleName $scheduleName -Parameters @{ TenantKey = $tenantKey; Trigger = "Scheduled" } -ErrorAction Stop | Out-Null
         $linked = $true
+        # Written only once the link passes TRIGGER: the runbook then records a run without it as
+        # started by hand. Older links pass only TENANTKEY, and without this variable every run
+        # still counts as scheduled.
+        Set-TenuVaultAutomationVariable -Name "TenuVaultScheduleSetsTrigger-$tenantKey" -Value "true"
     }
 }
 
@@ -946,7 +951,8 @@ if (-not $linked) {
     Write-Host ""
     Write-Host "Test it now instead of waiting for the first night: in the Azure portal open the"
     Write-Host "Automation account, Runbooks > $runbookName > Start, set TENANTKEY to $tenantKey, and"
-    Write-Host "watch the job output. The backup then appears in TenuVault under Backup History."
+    Write-Host "watch the job output. The backup then appears in TenuVault under Backup History,"
+    Write-Host "marked Manual; the runs the schedule starts are marked Scheduled."
 }
 
 Write-TenuVaultLegacyKeyVaultNote $legacyKeyVaults -KeptBecause $runbook.Reason

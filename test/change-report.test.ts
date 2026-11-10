@@ -110,6 +110,26 @@ describe("change report model", () => {
     }
   })
 
+  it("words a throttled audit read for email in a cloud report, and keeps the in-app advice on the desktop", () => {
+    const throttled = "The Intune audit log could not be read: Microsoft Graph throttled the request (429). Generate the report again in a few minutes."
+    const desktop = buildChangeReport(result(drifts), { error: throttled }, options)
+    expect(desktop.audit.note).toBe(throttled)
+    expect(desktop).not.toHaveProperty("cloud")
+    expect(summaryLine(desktop)).toBe("1 changed, 1 added, 1 deleted. Who made them is unknown: the audit log could not be read.")
+    const cloud = buildChangeReport(result(drifts), { error: throttled }, { ...options, cloud: true })
+    expect(cloud.cloud).toBe(true)
+    expect(cloud.audit.note).toBe("Microsoft Graph throttled the Intune audit log request.")
+    expect(summaryLine(cloud)).toBe("1 changed, 1 added, 1 deleted. Who made them is unknown: the audit log could not be read.")
+    expect(summaryLine(cloud, { reason: true })).toBe("1 changed, 1 added, 1 deleted. Who made them is unknown. Microsoft Graph throttled the Intune audit log request.")
+    // A stored cloud report with a raw throttled error is cleaned the same way in every export.
+    const stored = { ...cloud, audit: { ...cloud.audit, note: `Microsoft Graph returned 429: {"_version":3,"Message":"Operation ID: 1"}` } }
+    for (const exported of [changeReportJson(stored), changeReportMarkdown(stored), buildChangeReportDocument(stored).html]) {
+      expect(exported).toContain("Microsoft Graph throttled the Intune audit log request.")
+      expect(exported).not.toMatch(/again/i)
+    }
+    expect(publicAuditNote(stored.audit.note)).toBe("Microsoft Graph throttled the audit log request (429). Generate the report again in a few minutes.")
+  })
+
   it("names the report after the tenant and the backup days", () => {
     const report = buildChangeReport(result([]), { changes: [] }, options)
     expect(reportTitle(report)).toBe("Changes in Contoso, 5 Nov 2026 to 6 Nov 2026")

@@ -1,7 +1,9 @@
 # Builds the change report of test/fixtures/reports/cloud-backups.json with the cloud backup runbook,
 # for test/cloud-change-report.test.ts. Prints the report, its Markdown and HTML, and the email fields.
-param([Parameter(Mandatory)][string]$FixturePath, [string]$Level = "full", [string]$Actors = "true", [string]$AuditError = "", [string]$LongNames = "false")
+param([Parameter(Mandatory)][string]$FixturePath, [string]$Level = "full", [string]$Actors = "true", [string]$AuditError = "", [string]$LongNames = "false", [string]$Trigger = "scheduled")
 $ErrorActionPreference = "Stop"
+# Dot sourcing the runbook sets its own $Trigger parameter here, so the report's is kept first.
+$reportTrigger = $Trigger
 . (Join-Path $PSScriptRoot "../../../resources/runbooks/Invoke-TenuVaultBackup.ps1") -LibraryOnly
 $fixture = ConvertFrom-TvJson ([IO.File]::ReadAllText($FixturePath))
 $backups = @{}
@@ -23,7 +25,7 @@ foreach ($id in $ids) { if ($fixture.definitions.Contains($id)) { $definitions[$
 $names = ConvertTo-TvSettingNames $ids $definitions
 $drift = @{ drifts = $compared.Drifts; warnings = $compared.Warnings; settingNames = $names; baseline = (Get-TvBackupRef $older.Name $older.Metadata); comparison = (Get-TvBackupRef $newer.Name $newer.Metadata) }
 $changes = @($fixture.audit | ForEach-Object { ConvertFrom-TvAuditEvent $_ } | Where-Object { $_ })
-$options = @{ TenantId = $fixture.tenantId; TenantName = $fixture.tenantName; GeneratedAt = $fixture.generatedAt; IncludeValues = $Level -eq "full"; IncludeActors = $Actors -eq "true" }
+$options = @{ TenantId = $fixture.tenantId; TenantName = $fixture.tenantName; GeneratedAt = $fixture.generatedAt; Trigger = $reportTrigger; IncludeValues = $Level -eq "full"; IncludeActors = $Actors -eq "true" }
 $audit = if ($AuditError) { @{ Error = $AuditError } } else { @{ Changes = $changes; Note = $null } }
 $report = New-TvChangeReport -Drift $drift -Audit $audit -Options $options
 # With -LongNames, a tenant and a policy name far over what one email line takes.

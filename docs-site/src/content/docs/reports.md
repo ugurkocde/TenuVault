@@ -55,7 +55,7 @@ TenuVault reads the audit events between the times the two backups started and m
 * Intune and Entra keep audit events for a limited time, so reports of older backups can have fewer matching events.
 * A change made during a backup can appear in the audit events of one report and in the item changes of the next.
 
-When the audit log cannot be read at all, the report is still made and says that who made the changes is unknown.
+When the audit log cannot be read at all, the report is still made and says that who made the changes is unknown, and why. In the app, a throttled read (429) suggests generating the report again in a few minutes. [Cloud backup reports](/backups/cloud/#change-reports-by-email) arrive by email instead, so they only name the reason, for example "Microsoft Graph throttled the Intune audit log request."
 
 ## Save a report
 

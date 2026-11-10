@@ -116,7 +116,7 @@ export function buildChangeReportDocument(report: ChangeReport, options: { brand
   const { summary } = report
   const tile = (label: string, value: number | string) => `<div class="tile"><div class="key">${text(label)}</div><div class="value">${text(String(value))}</div></div>`
   const tiles = `<div class="tiles">${tile("Changed", summary.modified)}${tile("Added", summary.added)}${tile("Deleted", summary.deleted)}${tile("Critical", summary.critical)}${tile("With audit events", report.audit.status === "included" ? summary.attributed : "Unknown")}</div>`
-  const auditNote = publicAuditNote(report.audit.note)
+  const auditNote = publicAuditNote(report.audit.note, report.cloud)
   const callouts = [
     report.audit.status !== "included" ? `<div class="callout"><b>Who made the changes is unknown.</b> ${text(auditNote ?? "The audit log could not be read.")}</div>` : auditNote ? `<div class="callout"><b>Part of the audit log was not read.</b> ${text(auditNote)}</div>` : "",
     !report.values ? `<div class="callout"><b>Setting values are left out.</b> This report lists which settings changed, not their values.</div>` : "",

@@ -84,7 +84,13 @@ The **Deploy to Azure** button in the app opens the template `resources/cloud-ba
 
 ### Test it now
 
-Do not wait for the first night. In the portal, open the Automation account, **Runbooks > Invoke-TenuVaultBackup > Start**, set `TENANTKEY` to the value from the setup output, and watch the job. A successful run prints one "Found" and one "Backed up" line per type and ends with "Backup completed". The backup then appears in **Backup History** in TenuVault, marked as scheduled, with `Source: TenuVault Cloud Backup` in its details.
+Do not wait for the first night. In the portal, open the Automation account, **Runbooks > Invoke-TenuVaultBackup > Start**, set `TENANTKEY` to the value from the setup output, and watch the job. A successful run prints one "Found" and one "Backed up" line per type and ends with "Backup completed". The backup then appears in **Backup History** in TenuVault, marked **Manual**, with `Source: TenuVault Cloud Backup` in its details. The runs the schedule starts are marked **Scheduled**.
+
+### Manual and scheduled runs
+
+From runbook 1.4.0 on, each cloud backup records how it started, and Backup History shows it as **Manual** or **Scheduled**. Setup links the schedule to the runbook with `TRIGGER` set to `Scheduled` and then writes the Automation variable `TenuVaultScheduleSetsTrigger-<tenant>`. A run started with **Start** in the portal leaves `TRIGGER` empty (or you set it to `Manual`), so it counts as manual. Its change report then leaves out "after a scheduled backup".
+
+A schedule link made by an older setup passes only `TENANTKEY`. As long as that variable is missing, a run without `TRIGGER` counts as scheduled, as every cloud run did before, so a runbook upgrade alone never marks your nightly runs as manual. Hand started runs of such a setup show as scheduled until the schedule is linked again: run the setup script once more with `-GraphRolesGranted` (or `-GrantGraphRoles`), which replaces the schedule link and writes the variable. That also works for a setup made with the template; a template redeploy cannot replace an existing schedule link, and it writes the variable only together with a new link. Backups made before the upgrade keep the trigger they recorded.
 
 ## How cloud backups show up in TenuVault
 
@@ -105,7 +111,7 @@ Setup creates the `tenuvault-backup-results` container when it is missing and gi
 A cloud backup can also produce a [change report](/reports/): what changed since the previous complete backup, setting by setting, with who made each change from the Intune audit log. The [Azure watcher](/notifications/#alerts-while-this-computer-is-off-the-azure-watcher) emails it, so the report arrives with no computer on. It is off unless you turn it on.
 
 1. In the app, under **Change report by email** next to the schedule, choose **Which settings changed** or **With setting values**, and tick **Leave out who made each change** if you want user names out. The setup command then carries `-ChangeReport Names` or `-ChangeReport Full`, `-ChangeReportWithoutActors` (or `-ChangeReportWithoutActors:$false`), and `-TenantName` with the tenant's name as reports show it. In the template, set `changeReport` to `names` or `full`, `changeReportActors`, and `tenantName`.
-2. Run the setup script (or redeploy the template) so the runbook (1.3.0 or later) and its settings are updated.
+2. Run the setup script (or redeploy the template) so the runbook (1.3.0 or later, 1.4.0 for the email wording below) and its settings are updated.
 3. Set up the Azure watcher with verified mail, if you have not, or run its setup again so it has the version that sends reports (watcher runbook 1.4.0 or later). Reports go to the watcher's `-ReportRecipients` (template: `reportRecipients`), or to its `-MailRecipients` when you set none. Any address works, inside or outside your organization.
 
 The setup script keeps an earlier choice: a rerun without `-ChangeReport` leaves the report level as it was, a rerun without `-ChangeReportWithoutActors` leaves the actors as they were, and a rerun without `-TenantName` keeps the saved name (`-TenantName ''` names the tenant by its id again). The name is kept to 200 characters, and very long policy or tenant names are shortened in the email so the report is still sent. The app's command carries them only when you pick a level in that hand-off (**Keep the current choice** is the default), so pasting a newer command to upgrade the runbook never turns a report off. To turn reports off, choose **Off** (`-ChangeReport Off`). The template always writes both settings, so a template redeploy sets them to its parameters, off by default.
@@ -121,6 +127,7 @@ What to know before you turn it on:
 * Reports wait while the watcher's mail is not verified, and are deleted unsent after 7 days. If the watcher sent a report but could not delete it, it records the report in its state, never sends it again, retries the delete on later runs and shows the failure as its last error. Once 200 sent reports wait for their delete, new reports wait too, and the heartbeat says so, until the watcher can delete again (run its setup once more to restore its access). Waiting reports keep their original 7 day expiry: one that expires while it waits is deleted unsent, and the heartbeat says how many. A report the watcher refuses (larger than 4 MB, not valid JSON, for another tenant, or with a field it does not accept) is deleted unsent too, and the job output and heartbeat say how many and why. Delivery is at least once: in the rare case that the watcher can neither record nor delete a sent report, the next run may send it once more.
 * The report HTML uses the TenuVault design; [PDF branding](/settings/#pdf-branding) applies to desktop reports only.
 * Each report adds a few Graph reads per changed Settings Catalog setting and a few seconds to the run.
+* When the Intune audit log cannot be read, the report is still sent and names no one. The email and the attached report say why in words that fit an email, for example "Who made them is unknown. Microsoft Graph throttled the Intune audit log request." There is nothing to generate again: the next cloud backup's report covers the following period as usual.
 
 ## License note
 

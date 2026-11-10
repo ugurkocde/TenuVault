@@ -35,7 +35,7 @@ const definitions = fixture.definitions as Record<string, unknown>
 afterEach(() => vi.unstubAllGlobals())
 
 /** The desktop app's report of the fixture: the drift route over storage and Graph fakes, then the report code. */
-async function desktopReport(options: { values: boolean; actors: boolean; auditError?: string }) {
+async function desktopReport(options: { values: boolean; actors: boolean; auditError?: string; trigger?: "manual" | "scheduled" }) {
   clearSettingNames()
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input))
@@ -64,29 +64,67 @@ async function desktopReport(options: { values: boolean; actors: boolean; auditE
   const drift = (await response.json()) as DriftResult
   expect(response.status, JSON.stringify(drift)).toBe(200)
   const changes = fixture.audit.flatMap((raw) => { const change = mapAuditEvent(raw as AuditEventRaw); return change ? [{ ...change, source: "Intune" }] : [] })
-  const report = buildChangeReport(drift, options.auditError ? { error: options.auditError } : { changes, note: null }, { tenantId: fixture.tenantId, tenantName: fixture.tenantName, generatedAt: fixture.generatedAt, trigger: "scheduled", includeValues: options.values, includeActors: options.actors })
+  const report = buildChangeReport(drift, options.auditError ? { error: options.auditError } : { changes, note: null }, { tenantId: fixture.tenantId, tenantName: fixture.tenantName, generatedAt: fixture.generatedAt, trigger: options.trigger ?? "scheduled", cloud: true, includeValues: options.values, includeActors: options.actors })
   return { report, markdown: changeReportMarkdown(report), html: buildChangeReportDocument(report).html, email: reportEmail({ report }, null, "azure-watcher"), fileName: reportFileName(report) }
 }
 
-function cloudReport(options: { values: boolean; actors: boolean; auditError?: string }) {
-  const output = execFileSync(pwsh!, ["-NoProfile", "-File", script, "-FixturePath", fixturePath, "-Level", options.values ? "full" : "names", "-Actors", String(options.actors), ...(options.auditError ? ["-AuditError", options.auditError] : [])], { encoding: "utf8", maxBuffer: 20_000_000 })
+function cloudReport(options: { values: boolean; actors: boolean; auditError?: string; trigger?: "manual" | "scheduled" }) {
+  const output = execFileSync(pwsh!, ["-NoProfile", "-File", script, "-FixturePath", fixturePath, "-Level", options.values ? "full" : "names", "-Actors", String(options.actors), ...(options.auditError ? ["-AuditError", options.auditError] : []), ...(options.trigger ? ["-Trigger", options.trigger] : [])], { encoding: "utf8", maxBuffer: 20_000_000 })
   return JSON.parse(output) as { report: unknown; markdown: string; html: string; email: Record<string, unknown>; fileName: string }
 }
 
 describe.runIf(Boolean(pwsh))("cloud change reports match the desktop app", () => {
   // A raw Graph error as the audit note: both clean it the same way before it is shown or sent.
   const rawAuditError = 'The Intune audit log could not be read: Microsoft Graph returned 400: {"error":{"code":"BadRequest","message":"https://proxy.example/x tenant 8c6f2b1e-4d3a-4f7b-9e21-6a5d0c3b7f14 Operation ID: 1"}}'
-  for (const options of [{ values: true, actors: true }, { values: false, actors: false }, { values: true, actors: true, auditError: rawAuditError }]) {
-    it(`builds the same report, Markdown and HTML (${options.values ? "with values" : "names only"}${options.auditError ? ", audit error" : ""})`, async () => {
+  // The throttled read as the desktop app words it, and as the cloud runbook leaves it.
+  const throttledDesktop = "The Intune audit log could not be read: Microsoft Graph throttled the request (429). Generate the report again in a few minutes."
+  const throttledRaw = 'The Intune audit log could not be read: Microsoft Graph returned 429: {"_version":3,"Message":"Operation ID: 1 https://proxy.example/x"}'
+  const cases: Array<{ values: boolean; actors: boolean; auditError?: string; trigger?: "manual" | "scheduled" }> = [
+    { values: true, actors: true },
+    { values: false, actors: false },
+    { values: true, actors: true, auditError: rawAuditError },
+    { values: true, actors: true, auditError: "Microsoft Graph throttled the Intune audit log request." },
+    { values: true, actors: true, auditError: throttledDesktop },
+    { values: false, actors: true, auditError: throttledRaw },
+    { values: true, actors: true, trigger: "manual" },
+  ]
+  for (const options of cases) {
+    it(`builds the same report, Markdown and HTML (${options.values ? "with values" : "names only"}${options.auditError ? `, audit error ${options.auditError.slice(0, 40)}` : ""}${options.trigger ? `, ${options.trigger}` : ""})`, async () => {
       const desktop = await desktopReport(options)
       const cloud = cloudReport(options)
       expect(cloud.report).toEqual(JSON.parse(JSON.stringify(desktop.report)))
       expect(cloud.markdown).toBe(desktop.markdown)
       expect(cloud.html).toBe(desktop.html)
       expect(cloud.fileName).toBe(desktop.fileName)
-      if (options.auditError) expect(cloud.markdown).toContain("- Audit log: Microsoft Graph returned 400.")
+      expect((cloud.report as { cloud?: boolean }).cloud).toBe(true)
+      if (options.auditError === rawAuditError) expect(cloud.markdown).toContain("- Audit log: Microsoft Graph returned 400.")
+      // An emailed report never advises generating it again: a throttled read says who is unknown and why.
+      for (const text of [cloud.markdown, cloud.html, JSON.stringify(cloud.email)]) expect(text).not.toMatch(/again/i)
+      if (options.auditError && /429|throttl/.test(options.auditError)) {
+        expect(cloud.markdown).toContain("- Audit log: Microsoft Graph throttled the Intune audit log request.")
+        expect(cloud.html).toContain("<b>Who made the changes is unknown.</b> Microsoft Graph throttled the Intune audit log request.")
+        expect(cloud.email.summary).toBe("8 changed, 2 added, 1 deleted. Who made them is unknown. Microsoft Graph throttled the Intune audit log request.")
+      }
+      // The report says it followed a scheduled backup only when the schedule started it.
+      expect(cloud.markdown.includes(" after a scheduled backup")).toBe(options.trigger !== "manual")
     }, 60_000)
   }
+
+  it("sends the same email as the desktop app when the audit log was throttled, saying who is unknown and why", async () => {
+    const desktop = await desktopReport({ values: true, actors: true, auditError: throttledDesktop })
+    const cloud = cloudReport({ values: true, actors: true, auditError: throttledDesktop })
+    const folder = mkdtempSync(join(tmpdir(), "tenuvault-report-throttled-"))
+    try {
+      const notePath = join(folder, "note.json")
+      writeFileSync(notePath, JSON.stringify({ schema: "tenuvault.cloud-change-report/v1", tenantId: fixture.tenantId, runId: "run-1", backupFolder: fixture.newer.name, createdAt: fixture.generatedAt, changes: 11, email: cloud.email, files: [] }))
+      const mail = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", mailScript, "-NotePath", notePath, "-TenantId", fixture.tenantId, "-TenantName", fixture.tenantName], { encoding: "utf8", maxBuffer: 20_000_000 }))
+      expect(mail.html).toBe(desktop.email.html)
+      expect(mail.html).toContain("Who made them is unknown. Microsoft Graph throttled the Intune audit log request.")
+      expect(mail.html).not.toMatch(/again/i)
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  }, 60_000)
 
   it("sends the same email as the desktop app, from the note the backup leaves", async () => {
     const desktop = await desktopReport({ values: true, actors: true })

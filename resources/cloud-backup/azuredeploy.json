@@ -238,7 +238,18 @@
       "properties": {
         "runbook": { "name": "[variables('runbookName')]" },
         "schedule": { "name": "[variables('scheduleName')]" },
-        "parameters": { "TenantKey": "[variables('tenantKey')]" }
+        "parameters": { "TenantKey": "[variables('tenantKey')]", "Trigger": "Scheduled" }
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(parameters('automationAccountName'), '/TenuVaultScheduleSetsTrigger-', variables('tenantKey'))]",
+      "dependsOn": ["[resourceId('Microsoft.Automation/automationAccounts/jobSchedules', parameters('automationAccountName'), guid(variables('scheduleName'), variables('runbookName')))]"],
+      "properties": {
+        "description": "The schedule link passes TRIGGER, so the runbook records a run without it as started by hand.",
+        "value": "\"true\"",
+        "isEncrypted": false
       }
     }
   ],

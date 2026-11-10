@@ -100,8 +100,8 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
 
   it("carries a plain runbook version, which the app does not flag for upgrade", () => {
     const version = RUNBOOK_VERSION
-    // 1.3.0 adds change reports on top of the first plain runbook, 1.2.0.
-    expect(version).toBe("1.3.0")
+    // 1.3.0 adds change reports on top of the first plain runbook, 1.2.0; 1.4.0 records how a run started.
+    expect(version).toBe("1.4.0")
     expect(PLAIN_CLOUD_RUNBOOK).toBe("1.2.0")
     expect(cloudRunbookNeedsUpgrade(version!)).toBe(false)
     expect(cloudRunbookNeedsUpgrade("1.1.0")).toBe(true)
@@ -111,6 +111,45 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     expect(cloudRunbookNeedsUpgrade("2.0.0")).toBe(false)
     expect(cloudRunbookNeedsUpgrade("")).toBe(false)
     expect(cloudRunbookNeedsUpgrade("desktop")).toBe(false)
+  })
+
+  it.runIf(Boolean(pwsh))("records a run started by hand as manual, keeps scheduled runs and older schedule links scheduled", () => {
+    const path = fileURLToPath(new URL("../resources/runbooks/Invoke-TenuVaultBackup.ps1", import.meta.url))
+    const trigger = (passed: string, marker: string | null) => execFileSync(pwsh!, ["-NoProfile", "-Command", [
+      `. '${path.replace(/'/g, "''")}' -LibraryOnly -TenantKey 11111111`,
+      marker === null ? "" : `[Environment]::SetEnvironmentVariable('TenuVaultScheduleSetsTrigger-11111111', '${marker}')`,
+      `[Console]::Out.Write((Get-TvRunTrigger '${passed}'))`,
+    ].join("\n")], { encoding: "utf8", timeout: 60_000 })
+    // A setup from 1.4.0 on: its schedule link passes Scheduled, and a start by hand passes nothing.
+    expect(trigger("Scheduled", "true")).toBe("scheduled")
+    expect(trigger("", "true")).toBe("manual")
+    expect(trigger("Manual", "true")).toBe("manual")
+    // An older setup's link passes only TENANTKEY and no marker exists: every run stays scheduled.
+    expect(trigger("", null)).toBe("scheduled")
+    expect(trigger("manual", null)).toBe("manual")
+    expect(trigger("bogus", "true")).toBe("manual")
+    // The run records it as the backup's Trigger and passes it to the change report.
+    expect(runbook).toContain("$runTrigger = Get-TvRunTrigger $Trigger")
+    expect(runbook.match(/Trigger += \$runTrigger|Trigger = \$runTrigger/g)).toHaveLength(2)
+    expect(runbook).toContain("-RunTrigger $runTrigger")
+    expect(runbook).not.toContain('Trigger        = "scheduled"')
+    expect(runbook).not.toContain('Trigger = "scheduled"; RunId')
+  }, 60_000)
+
+  it("links the schedule with TRIGGER and marks the link only once it is made", () => {
+    expect(setup).toContain('-Parameters @{ TenantKey = $tenantKey; Trigger = "Scheduled" }')
+    const link = setup.indexOf('Trigger = "Scheduled"')
+    const marker = setup.indexOf('Set-TenuVaultAutomationVariable -Name "TenuVaultScheduleSetsTrigger-$tenantKey" -Value "true"')
+    expect(marker).toBeGreaterThan(link)
+    // -Remove deletes the marker with the tenant's other variables.
+    expect(setup).toContain('"TenuVaultScheduleSetsTrigger-$tenantKey"\n)')
+    const resources = template.resources as unknown as Array<{ type: string; name: string; dependsOn?: string[]; properties: Record<string, unknown> }>
+    const jobSchedule = resources.find((resource) => resource.type === "Microsoft.Automation/automationAccounts/jobSchedules")!
+    expect(jobSchedule.properties.parameters).toEqual({ TenantKey: "[variables('tenantKey')]", Trigger: "Scheduled" })
+    const markerVariable = resources.find((resource) => resource.type === "Microsoft.Automation/automationAccounts/variables" && resource.name.includes("TenuVaultScheduleSetsTrigger-"))!
+    expect(markerVariable.properties.value).toBe('"true"')
+    // Never without the link: a redeploy whose link fails (Azure refuses to reuse a job schedule) writes no marker.
+    expect(markerVariable.dependsOn).toEqual(["[resourceId('Microsoft.Automation/automationAccounts/jobSchedules', parameters('automationAccountName'), guid(variables('scheduleName'), variables('runbookName')))]"])
   })
 
   it.runIf(Boolean(pwsh))("never lets the optional change report fail a backup, and says when a backup with warnings gets none", () => {
