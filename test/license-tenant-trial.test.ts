@@ -304,3 +304,17 @@ it("bounds local usage by verified trial dates without changing the trial record
   await restarted.checkTrialHealth()
   expect(restarted.trialUsagePeriod(tenant)).toBeNull()
 })
+
+
+it.each([
+  [undefined, 14, true], [undefined, 15, false], [7, 7, true], [7, 8, false],
+] as const)("limits end notifications to the grace window (%s, %s)", async (grace, age, expected) => {
+  healthFields = grace === undefined ? {} : { extensionGraceDays: grace }
+  const license = service()
+  await connect(license)
+  vi.setSystemTime(end + age * day)
+  const notify = vi.fn(() => true)
+  license.notifyTrials(notify)
+  expect(notify).toHaveBeenCalledTimes(expected ? 1 : 0)
+  if (expected) expect(notify).toHaveBeenCalledWith(tenant, true)
+})

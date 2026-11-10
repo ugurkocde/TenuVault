@@ -465,6 +465,7 @@ export class LicenseService {
       const end = Date.parse(this.trialEnd(tenant) ?? "")
       if (!Number.isFinite(end) || end - Date.now() > 86400_000) continue
       const ended = end <= Date.now()
+      if (ended && Date.now() - end > (this.trialPolicy.extensionGraceDays ?? 14) * 86400_000) continue
       const field = ended ? "endedNoticeEnd" : "dayNoticeEnd"
       if (record[field] === end) continue
       if (notify(tenant, ended)) {

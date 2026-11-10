@@ -144,6 +144,6 @@ Need a quote or an invoice for your purchasing team? Write to [support@tenuvault
 You can ask questions there too. The link does not send tenant or account details.
 
 While TenuVault runs in the tray, a system notification reminds you when a tenant trial has
-one day left and when it ends. Clicking opens the License page. Each notice appears once
+one day left and when it ends. Clicking opens the License page. Each notice appears at most once
 per trial end date, including across restarts. Extending re-arms the reminder for the new date.
 Paid tenants and tenants covered by an organization license do not receive these notices.
