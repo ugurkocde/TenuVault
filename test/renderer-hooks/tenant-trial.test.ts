@@ -4,11 +4,10 @@ import { MemoryRouter } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { LicenseStatus, TenantLicenseStatus } from "../../src/shared/ipc"
 import { licenseChipState, trialReminder } from "../../src/renderer/lib/license"
-const state = vi.hoisted(() => ({ status: null as LicenseStatus | null, action: vi.fn(async () => undefined), start: vi.fn(async () => undefined), emailTrial: vi.fn(async () => undefined) }))
+const state = vi.hoisted(() => ({ status: null as LicenseStatus | null, action: vi.fn(async () => undefined), start: vi.fn(async () => undefined), emailTrial: vi.fn(async () => undefined), update: vi.fn() }))
 vi.mock("../../src/renderer/lib/license", async original => ({ ...(await original<typeof import("../../src/renderer/lib/license")>()), useLicense: () => ({ status: state.status, refresh: async () => {} }) }))
 vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { auth: { accounts: async () => [{ tenantId: "tenant", username: "admin@contoso.example" }] }, license: { tenantTrialAction: state.action, startTenantTrial: state.start, startTrial: state.emailTrial }, schedules: { list: async () => [{ tenantId: "tenant", enabled: true, frequency: "daily" }] }, preferences: { get: async () => ({ retentionDays: 90 }) } } }))
-vi.mock("~/contexts/TenantContext", () => ({ useTenantOperations: () => ({ updateTenant: vi.fn() }), useTenants: () => [{ id: 1, name: "Contoso", credentials: { tenantId: "tenant" }, resources: { storageAccountName: "contosobackups" } }, { id: 2, name: "Fabrikam", credentials: { tenantId: "ended" } }] }))
-vi.mock("~/components/ConfirmDialog", () => ({ useConfirm: () => ({ confirm: async () => false }) }))
+vi.mock("~/contexts/TenantContext", () => ({ useTenantOperations: () => ({ updateTenant: state.update }), useTenants: () => [{ id: 1, name: "Contoso", credentials: { tenantId: "tenant" }, resources: { storageAccountName: "contosobackups" } }, { id: 2, name: "Fabrikam", credentials: { tenantId: "ended" } }] }))
 import { TenantTrialCard, TenantTrialNotices, TenantTrialOptions, TrialChanges } from "../../src/renderer/components/TenantTrial"
 import { TrialOrKey } from "../../src/renderer/components/PlanChoice"
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -49,8 +48,32 @@ describe("tenant trial UI", () => {
   it("allows removing a saved contact", async () => {
     tenant.trialEmail = "admin@contoso.example"
     await render(createElement(TenantTrialCard, { tenant }))
-    await click("Remove email address")
+    await click("Remove the saved email address for this trial")
     expect(state.action).toHaveBeenCalledWith("tenant", "trial_contact", undefined)
+  })
+  it("removes the tenant contact from a joining installation without a locally saved address", async () => {
+    tenant.canEnd = false
+    await render(createElement(TenantTrialCard, { tenant }))
+    await click("Remove the saved email address for this trial")
+    expect(state.action).toHaveBeenCalledWith("tenant", "trial_contact", undefined)
+    expect(container.textContent).toContain("Email address removed.")
+  })
+  it("opens the real storage confirmation and switches only after confirmation", async () => {
+    tenant.entitled = false; tenant.trial = false; tenant.source = null; tenant.trialEndsAt = new Date(Date.now() - day).toISOString()
+    await render(createElement(TenantTrialNotices))
+    await click("Switch Contoso to weekly local backups")
+    expect(document.body.textContent).toContain("Save new backups on this computer?")
+    expect(state.update).not.toHaveBeenCalled()
+    await act(async () => [...document.body.querySelectorAll("button")].find(b => b.textContent === "Switch to local backups")!.click())
+    expect(state.update).toHaveBeenCalledWith(1, expect.objectContaining({ resources: expect.objectContaining({ storageAccountName: "tvlocal-tenant" }) }))
+  })
+  it("lets a page own the welcome card without hiding an independent end notice", async () => {
+    await render(createElement(TenantTrialNotices, { showWelcome: false }))
+    expect(container.textContent).not.toContain("Pro trial started")
+    state.status!.tenants.push({ ...tenant, tenantId: "ended", entitled: false, trial: false, source: null, trialEndsAt: new Date(Date.now() - day).toISOString() })
+    await render(createElement(TenantTrialNotices, { showWelcome: false }))
+    expect(container.textContent).toContain("Pro trial ended")
+    expect(container.textContent).not.toContain("Pro trial started")
   })
   it("extends explicitly", async () => {
     await render(createElement(TenantTrialCard, { tenant }))

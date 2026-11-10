@@ -350,10 +350,6 @@ export class LicenseService {
     this.idToken = options.idToken ?? (async () => null)
     this.clientId = options.clientId ?? (() => null)
     this.trialRecords = readTenantTrials(options.store, options.initialTenantIds ?? options.connectedTenantIds?.() ?? [])
-    if (options.initialTenantIds) {
-      const existing = new Set(options.initialTenantIds.map(id => id.toLowerCase()))
-      for (const id of Object.keys(this.trialRecords)) if (!existing.has(id)) delete this.trialRecords[id]
-    }
     this.saveTrials()
   }
 

@@ -145,12 +145,12 @@ describe("trial review regressions", () => {
     await license.checkNewTenant(A)
     expect(license.status(connected).tenants[0]).toMatchObject({ source: "trial", entitled: true })
   })
-  it("clears expired contact and prunes records absent from the saved tenants", async () => {
+  it("clears expired contact while retaining records when the saved tenant list is empty", async () => {
     const license = service(); await connect(license); await license.tenantTrialAction(A, "trial_contact", "admin@contoso.example")
     vi.setSystemTime(ends[A]! + 15 * DAY); license.status(connected)
     expect(trialRecord().email).toBeUndefined()
     connected = []; service()
-    expect(trialRecord()).toBeUndefined()
+    expect(trialRecord().activationId).toBeTruthy()
   })
   it.each(["licensed", "app_update_required", "disabled"])("expires a temporary %s refusal", async reason => {
     const license = service()
@@ -203,6 +203,20 @@ describe("trial review regressions", () => {
     expect(license.status(connected).tenants[0]?.trialEndsAt).toBe(new Date(NOW + 33 * DAY).toISOString())
   })
 
+  it.each(["acknowledge", "end_trial", "trial_contact", "extend_trial"] as const)("keeps %s working across an onboarding restart", async action => {
+    const license = service(); await connect(license)
+    vi.setSystemTime(NOW + 10 * DAY)
+    const resumed = service("0.5.0", [])
+    expect(trialRecord().activationId).toBeTruthy()
+    await expect(resumed.tenantTrialAction(A, action, action === "trial_contact" ? "admin@contoso.example" : undefined)).resolves.toBeUndefined()
+  })
+  it.each(["used", "install_limit", "disabled"])("retains %s markers and the automatic window with an unreadable tenant list", async reason => {
+    const license = service(); answer = (_path, body) => body.action === "start_trial" ? refusal(reason, true) : undefined
+    await connect(license)
+    const before = trialRecord()
+    connected = []; service("0.5.0", [])
+    expect(trialRecord()).toEqual(before)
+  })
   it("keeps a trial outside a full paid key's local limit", async () => {
     const license = service(); await connect(license); connected.push(B); limit = 1
     await license.setKey("LICENSE-KEY-FIRST", [B]); await license.refreshAll()

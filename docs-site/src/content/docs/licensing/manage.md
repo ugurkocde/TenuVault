@@ -26,7 +26,7 @@ If you have not connected a tenant yet, TenuVault opens on **Welcome to TenuVaul
 2. Paste your key into **License key** and click **Save key**.
 3. TenuVault opens **Set up TenuVault**. Your key is activated for the tenant when you sign in to it. See [Start TenuVault for the first time](/getting-started/first-launch/).
 
-The welcome screen also has **Try Pro free for 30 days, no card**, and the **Storage** step of the setup offers both options for a tenant on Community.
+When tenant trials are on, the welcome screen explains that a new tenant starts with a Pro trial. When they are off, it offers **Try Pro free for 30 days, no card**. The **Storage** step of the setup offers both options for a tenant on Community.
 
 ### On the License page
 
@@ -133,7 +133,7 @@ When enabled, a new connection starts a Pro trial without a card or email. Exist
 
 Choose **Need more time? Extend your trial** during the last five days or within fourteen days after expiry. You can extend once. Only the installation that started the trial offers **Use Community instead**; ending early uses up the trial.
 
-The optional email field sends nothing until you press **Email me setup tips and a reminder before the trial ends**. You can change or remove the saved address in the app during the trial, or unsubscribe at any time using the link in each email. See the [privacy policy](https://www.tenuvault.com/privacy).
+The optional email field sends nothing until you press **Email me setup tips and a reminder before the trial ends**. You can change or remove the saved address in the app during the trial on any installation that joined it, or unsubscribe at any time using the link in each email. See the [privacy policy](https://www.tenuvault.com/privacy).
 
 At the end, backups and settings are kept. Community keeps thirty days of history, daily schedules run weekly, and Azure backups, alerts, health review and change reports pause. One tenant continues on Community. With several trial tenants, choose which, or decide later. Buy Pro and enter the purchase key to restore paid features and the saved daily schedule.
 

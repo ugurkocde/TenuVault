@@ -152,8 +152,9 @@ Not in Phase 0 (see "Follow-ups"): changes to retention, and read-only access to
 1. **When a trial starts:**
    - Automatically, only when a tenant is connected for the first time in this install (it is not in
      the stored `seen` list and holds no Community claim) and has no key or activation.
-   - If the server is unreachable or refuses, the tenant continues on Community as today. There is no
-     silent retry later: the tenant then counts as existing and gets the one-click button.
+   - If the server is unreachable, disabled, requires an app update or does not know the action, the
+     tenant continues on Community and the app retries at license checks for up to 72 hours after
+     first connection. `used`, `licensed` and `install_limit` end these attempts.
    - Existing Community tenants: a one-click "Try Pro for 14 days" on the License page and in plan
      prompts (`start_trial`, source `opt-in`). A refusal shows its reason, for example "This tenant
      already had a Pro trial."
@@ -283,9 +284,9 @@ Decided: 14 days plus one 14-day extension; the website email trial key is retir
 
 ## Follow-ups, not part of this plan
 
-- **Retention for lapsed paid keys.** A customer who kept more than 30 days of history loses the older
-  backups on the next backup after their plan ends (`backup/engine.ts:727-800`). Trials are not
-  affected, because they are shorter than the Community limit. Fix separately.
+- **Retention after paid coverage ends.** Community retention removes backups older than 30 days
+  at the first successful backup after coverage ends (`backup/engine.ts:727-800`). This also affects
+  trials with an extension, or tenants that had older backups before the trial. Fix separately.
 - **Read-only access to locked tenants' backups.** It loosens the entitlement gate in
   `fetch-bridge.ts:62-94`, so it needs its own review.
 - **MSP features in a trial.** The trial is Pro. MSP prospects still ask for a quote.
@@ -312,7 +313,7 @@ Server (Phase 1):
 - Prerelease app versions with a higher version core than the minimum may start a trial.
 - Accepted risk: any signed-in member of a tenant can start or join that tenant's trial. The server
   cannot tell an admin from a member. A trial can be reset by support.
-- The health answer reports whether tenant trials are enabled (`tenantTrials.enabled`).
+- The health answer reports whether tenant trials are healthy and enabled (`tenantTrials.ok` and `tenantTrials.enabled`).
 
 App (Phase 2):
 
@@ -322,7 +323,9 @@ App (Phase 2):
   as the fallback and hidden only while tenant trials are on.
 - Automatic start: at a tenant's first connection in a release that supports tenant trials. If the
   server cannot be reached at that moment, the app retries at its next license checks for up to 72
-  hours, then stops. A refusal or "Use Community instead" ends the attempts at once.
+  hours, then stops. `used`, `licensed`, `install_limit`, a successful start or "Use Community
+  instead" end the attempts at once. `disabled`, `app_update_required` and an unknown action keep
+  the retry window open.
 - Copy must not promise more than is true:
   - not "Nothing is deleted", but: backups and settings are kept, and Community keeps 30 days of
     backup history;

@@ -14,6 +14,8 @@ const routerPush = vi.hoisted(() => vi.fn())
 vi.mock("../../src/renderer/lib/bridge", () => ({
   bridge: {
     app: { info: async () => ({}) },
+    auth: { accounts: async () => [] },
+    schedules: { list: async () => [] },
     license: { open: async () => undefined },
     preferences: { get: async () => ({}), set: async () => ({}) },
   },
@@ -25,6 +27,7 @@ vi.mock("../../src/renderer/lib/license", async (original) => ({
 vi.mock("~/contexts/TenantContext", () => ({
   useSelectedTenant: () => ({ selectedTenant: selectedTenantState.current, selectedTenantId: null, setSelectedTenantId: () => undefined }),
   useTenants: () => [],
+  useTenantOperations: () => ({ updateTenant: () => undefined }),
 }))
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: routerPush }) }))
 // The sidebar's other parts, which these tests do not look at.
@@ -315,5 +318,28 @@ describe("View All Activity on the dashboard", () => {
     expect((await button("pro")).textContent).toBe("View All Activity")
     expect((await button("msp")).textContent).toBe("View All Activity")
     expect((await button(null)).textContent).toBe("View All Activity")
+  })
+})
+
+
+describe("license banners after tenant trials", () => {
+  it.each(["community", "not-covered", "offline", "organization-expiry"])("keeps the %s warning after the end notice is acknowledged", async mode => {
+    const end = new Date(Date.now() - 86400_000).toISOString()
+    const past = { ...tenantEntry("ended", "community", mode === "not-covered"), plan: null, trialEndsAt: end, trialAcknowledged: true }
+    const status = { ...statusFor(mode === "community" || mode === "not-covered" ? "community" : "pro"), hasKey: false, tenantTrialsEnabled: true, validUntil: null as string | null, trialEndedAt: end, offline: mode === "offline", tenants: [] as unknown[] }
+    const active = mode === "community" || mode === "not-covered" ? tenantEntry("t-1", "community") : { ...tenantEntry("t-1", "pro"), source: "tenant", expiresAt: new Date(Date.now() + (mode === "offline" ? 1 : 10) * 86400_000).toISOString(), validUntil: new Date(Date.now() + (mode === "offline" ? 50 : 1) * 86400_000).toISOString() }
+    status.validUntil = active.validUntil
+    status.tenants = [active, past]
+    licenseStatus.current = status; selectTenant()
+    const container = await render(createElement(DesktopLayout))
+    const expected = { community: "You are on Community, the free plan.", "not-covered": "not covered by your", offline: "could not reach the licensing service", "organization-expiry": "The license shared by your organization" }[mode]!
+    expect(container.textContent).toContain(expected)
+  })
+  it.each(["/license", "/portal/onboarding", "/portal/overview"])("renders a global welcome only when the route does not own it (%s)", async route => {
+    const end = new Date(Date.now() + 9 * 86400_000).toISOString()
+    licenseStatus.current = { ...statusFor("pro"), hasKey: false, trial: true, tenantTrialsEnabled: true, trialEndsAt: end, tenants: [{ ...tenantEntry("t-1", "pro"), source: "trial", trial: true, trialEndsAt: end, trialAcknowledged: false }] }
+    selectTenant()
+    const container = await render(createElement(DesktopLayout), route)
+    expect(container.textContent?.includes("Pro trial started")).toBe(route === "/portal/overview")
   })
 })

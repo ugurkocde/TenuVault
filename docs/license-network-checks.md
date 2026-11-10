@@ -81,10 +81,10 @@ result here.
 
 ## Tenant trials
 
-The app reads `GET /api/desktop-license/health`, using `tenantTrials.enabled` to select the tenant trial flow. A failed health check, disabled flag, unsupported action or update requirement keeps the existing email trial form available.
+The app reads `GET /api/desktop-license/health`, requiring both `tenantTrials.ok` and `tenantTrials.enabled` to select the tenant trial flow. A failed health check, disabled flag, unsupported action or update requirement keeps the existing email trial form available.
 
 All trial actions POST to `/api/desktop-license/tenant`, with `idToken`, `installId`, `os`, `appVersion` and `action`. `start_trial` adds `source` (`auto` or `opt-in`). `refresh`, `extend_trial`, `end_trial` and `trial_contact` add the server's trial `activationId`. Contact submission adds an optional email; omitting it deletes the saved contact. No email is sent without the user's explicit submission.
 
-A trial entitlement is signed v2, with `source: trial`, `trial: true`, `keyExp` and `canEnd`. Trial expiry is enforced offline at `keyExp`. A confirmed expired refresh drops coverage through the Community path. Network errors and 5xx, including `storage_unavailable`, preserve cached tokens. A failed automatic start retries at subsequent license checks for up to seventy-two hours from first connection. A refusal ends retries. Existing connected tenants never start automatically.
+A trial entitlement is signed v2, with `source: trial`, `trial: true`, `keyExp` and `canEnd`. Trial expiry is enforced offline at `keyExp`. A confirmed expired refresh drops coverage through the Community path. Network errors and 5xx, including `storage_unavailable`, preserve cached tokens. A failed automatic start retries at subsequent license checks for up to seventy-two hours from first connection. `used`, `licensed` and `install_limit` end automatic retries. `disabled`, `app_update_required` and unsupported actions keep the retry window open. Existing connected tenants never start automatically.
 
 The server stores a keyed tenant hash for trial eligibility. The optional contact is stored only when submitted. See the shared contract fixture for exact action fields, refusal reasons and signed token examples.

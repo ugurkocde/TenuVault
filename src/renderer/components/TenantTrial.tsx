@@ -12,23 +12,25 @@ import { changeTenantStorage, LOCAL_SWITCH_CONFIRMATION } from "../lib/storage"
 import { useConfirm } from "~/components/ConfirmDialog"
 import { CommunityTenantChoiceButton } from "./CommunityTenantPicker"
 
-export function TenantTrialOptions({ onStarted }: { onStarted?: () => void } = {}) {
+export function TenantTrialOptions({ onStarted, tenantId, compact = false, variant, size }: { onStarted?: () => void; tenantId?: string; compact?: boolean; variant?: "default" | "outline"; size?: "default" | "sm" } = {}) {
   const { status, refresh } = useLicense()
   const [error, setError] = useState("")
   const [busy, setBusy] = useState(false)
   if (!status || status.hasKey) return null
-  return <div className="space-y-3">
-    {status.tenants.filter(t => t.signedIn && !t.entitled && (status.tenantTrialsEnabled || t.trialRefusal)).map(tenant => <div key={tenant.tenantId} className="flex flex-wrap items-center gap-3">
-      {tenant.trialRefusal && <p role="status">{tenant.trialRefusal}</p>}
-      {tenant.activated ? <p className="text-sm text-gray-600">Check the saved activation before starting a trial.</p> : status.tenantTrialsEnabled && !(tenant.trialRefusalPermanent ?? Boolean(tenant.trialRefusal)) && <><Button disabled={busy} onClick={async () => {
+  const Container = compact ? "span" : "div"
+  const Text = compact ? "span" : "p"
+  return <Container className={compact ? "inline-flex flex-wrap items-center gap-3" : "space-y-3"}>
+    {status.tenants.filter(t => (!tenantId || t.tenantId === tenantId) && t.signedIn && !t.entitled && (status.tenantTrialsEnabled || t.trialRefusal)).map(tenant => <Container key={tenant.tenantId} className={compact ? "inline-flex flex-wrap items-center gap-3" : "flex flex-wrap items-center gap-3"}>
+      {tenant.trialRefusal && <Text role="status">{tenant.trialRefusal}</Text>}
+      {tenant.activated ? <Text className="text-sm text-gray-600">Check the saved activation before starting a trial.</Text> : status.tenantTrialsEnabled && !(tenant.trialRefusalPermanent ?? Boolean(tenant.trialRefusal)) && <><Button variant={variant} size={size} disabled={busy} onClick={async () => {
         setBusy(true); setError("")
         try { await bridge.license.startTenantTrial(tenant.tenantId); await refresh(); onStarted?.() }
         catch (error) { setError(error instanceof Error ? error.message : String(error)); await refresh() }
         finally { setBusy(false) }
-      }}>Try Pro free</Button><p className="text-sm text-gray-600">No card, no email. Starts right away, for this tenant.</p></>}
-    </div>)}
-    {error && <p role="alert">{error}</p>}
-  </div>
+      }}>Try Pro free</Button><Text className="text-sm text-gray-600">No card, no email. Starts right away, for this tenant.</Text></>}
+    </Container>)}
+    {error && <Text role="alert">{error}</Text>}
+  </Container>
 }
 
 export function TrialContact({ tenant, initialEmail }: { tenant: TenantLicenseStatus; initialEmail?: string }) {
@@ -61,7 +63,7 @@ export function TrialContact({ tenant, initialEmail }: { tenant: TenantLicenseSt
       </label>
       <Button variant="outline" className="h-auto max-w-full whitespace-normal text-left" disabled={busy || !email.trim()} onClick={() => void save(email.trim())}>Email me setup tips and a reminder before the trial ends</Button>
     </div>
-    {tenant.trialEmail && <Button variant="ghost" disabled={busy} onClick={() => void save()}>Remove email address</Button>}
+    <Button variant="ghost" disabled={busy} onClick={() => void save()}>Remove the saved email address for this trial</Button>
     <p className="text-xs text-gray-600">Your address is sent only when you press the button. <a href="https://www.tenuvault.com/privacy" target="_blank" rel="noreferrer">Privacy policy</a></p>
     {(message || tenant.trialEmail) && <p role="status">{message || "Email address saved."}</p>}
   </div>
@@ -116,9 +118,9 @@ export function TenantTrialCard({ tenant, initialEmail, welcome = false, childre
 function TrialAzureChoice() {
   const tenants = useTenants()
   const { updateTenant } = useTenantOperations()
-  const { confirm } = useConfirm()
+  const { confirm, confirmDialog } = useConfirm()
   const { status } = useLicense()
-  return <>{tenants.filter(t => t.credentials && t.resources?.storageAccountName && !t.resources.storageAccountName.startsWith(LOCAL_STORAGE_PREFIX) && status?.tenants.some(licensed => licensed.trialEndsAt && !licensed.entitled && licensed.tenantId === t.credentials?.tenantId?.toLowerCase())).map(t => <Button key={t.credentials!.tenantId} variant="outline" onClick={async () => {
+  return <>{confirmDialog}{tenants.filter(t => t.credentials && t.resources?.storageAccountName && !t.resources.storageAccountName.startsWith(LOCAL_STORAGE_PREFIX) && status?.tenants.some(licensed => licensed.trialEndsAt && !licensed.entitled && licensed.tenantId === t.credentials?.tenantId?.toLowerCase())).map(t => <Button key={t.credentials!.tenantId} variant="outline" onClick={async () => {
     if (await confirm(LOCAL_SWITCH_CONFIRMATION)) updateTenant(t.id, changeTenantStorage(t, { kind: "local" }))
   }}>Switch {t.name} to weekly local backups</Button>)}</>
 }
@@ -146,10 +148,10 @@ export function trialEndVisible(status: ReturnType<typeof useLicense>["status"])
   return Boolean(status?.tenants.some(t => t.trialEndsAt && !t.entitled && Date.parse(t.trialEndsAt) <= Date.now() && !t.trialAcknowledged))
 }
 
-export function TenantTrialNotices() {
+export function TenantTrialNotices({ showWelcome = true }: { showWelcome?: boolean }) {
   const { status, refresh } = useLicense()
   if (!status) return null
-  const welcome = status.tenants.find(t => t.entitled && t.source === "trial" && !t.trialAcknowledged)
+  const welcome = showWelcome && status.tenants.find(t => t.entitled && t.source === "trial" && !t.trialAcknowledged)
   const ended = status.tenants.find(t => t.trialEndsAt && !t.entitled && Date.parse(t.trialEndsAt) <= Date.now() && !t.trialAcknowledged)
   if (!welcome && !ended) return null
   return <div className="space-y-3 px-6 pt-5 lg:px-8">
