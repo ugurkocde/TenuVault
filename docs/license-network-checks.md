@@ -38,6 +38,13 @@ the website's own 15 minute scheduled check, it also notices when that check has
 
 ## HTTPS inspection and block pages (every stable release)
 
+Run this check in Actions, **License HTTPS inspection check**, **Run workflow**
+([workflow](../.github/workflows/license-inspection-check.yml)). Optionally enter a release tag,
+such as `v0.5.0`, as `ref`; leaving it empty checks the default branch. The summary records
+all three outcomes, the commit checked, Electron and mitmproxy versions. Fork pull requests
+without repository credentials skip the live checks with a notice.
+
+The manual commands below remain a local alternative. Run `npm ci` first.
 [`scripts/license-mitm-check.ts`](../scripts/license-mitm-check.ts) runs licensing in real
 Chromium (Electron) with the app's network stack and `LicenseService`, behind
 [mitmproxy](https://mitmproxy.org) on `127.0.0.1:18081`:
@@ -62,6 +69,8 @@ stands in for installing it in the Windows or macOS certificate store. Expected 
 | blocked | cached tenant still entitled (offline); a new activation says "The licensing service returned an unexpected response. Check for a firewall block or network sign-in page and retry." |
 
 ### Record
+
+The workflow run history is the record from now on. Earlier local results remain below.
 
 | Date | App code | Result |
 |---|---|---|

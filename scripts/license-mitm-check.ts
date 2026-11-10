@@ -67,12 +67,15 @@ app.whenReady().then(async () => {
       const outcome = await license.setKey(key, [TENANT]).then(() => "activated", (error: Error) => error.message)
       log(`${mode} activation: ${outcome}; entitled=${license.status([TENANT]).tenants[0]?.entitled}`)
       if (outcome === "activated") {
-        console.log(`STATE ${values.get("license.state")}`)
-        await license.refreshAll()
-        const status = license.status([TENANT])
-        log(`${mode} refresh: entitled=${status.tenants[0]?.entitled} offline=${status.offline}`)
-        await license.deactivate()
-        log(`${mode} release: hasKey=${license.status([TENANT]).hasKey}`)
+        try {
+          console.log(`STATE ${values.get("license.state")}`)
+          await license.refreshAll()
+          const status = license.status([TENANT])
+          log(`${mode} refresh: entitled=${status.tenants[0]?.entitled} offline=${status.offline}`)
+        } finally {
+          await license.deactivate()
+          log(`${mode} release: hasKey=${license.status([TENANT]).hasKey}`)
+        }
       }
     }
   } catch (error) {
