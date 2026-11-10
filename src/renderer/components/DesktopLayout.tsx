@@ -308,8 +308,17 @@ function WhatsNewNav({ linkClass }: { linkClass: (active: boolean) => string }) 
 function LicenseNavBadge() {
   const { status } = useLicense()
   if (!status) return null
-  const chip = "ml-auto rounded-full px-2 py-0.5 text-[11px] font-medium leading-4"
+  const chip = "ml-auto inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-medium leading-4"
   const state = licenseChipState(status)
+  if (state.tone === "trial") {
+    const days = state.daysLeft ?? 0
+    const full = `${state.label}, ${days} ${days === 1 ? "day" : "days"} left`
+    return <span className={cn(chip, "bg-blue-50 text-blue-700")} title={full}>
+      {state.label}
+      <span aria-hidden className="tabular-nums opacity-70">{days}d</span>
+      <span className="sr-only">, {days} {days === 1 ? "day" : "days"} left</span>
+    </span>
+  }
   return <span className={cn(chip, state.tone === "inactive" ? "bg-red-50 text-red-700" : "bg-secondary text-gray-700")}>{state.label}</span>
 }
 

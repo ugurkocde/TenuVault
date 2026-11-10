@@ -135,11 +135,11 @@ export function savedKeyNotNeededHere(status: LicenseStatus): boolean {
 }
 
 /** Community is a plan state; only a failed key or uncovered signed-in tenant is inactive. */
-export function licenseChipState(status: LicenseStatus): { label: string; tone: "neutral" | "inactive" } {
+export function licenseChipState(status: LicenseStatus): { label: string; tone: "neutral" | "inactive" | "trial"; daysLeft?: number } {
   const trial = status.tenants.filter(t => t.entitled && t.source === "trial").sort((a, b) => Date.parse(a.trialEndsAt ?? a.validUntil ?? "") - Date.parse(b.trialEndsAt ?? b.validUntil ?? ""))[0]
   if (trial) {
     const days = trialDaysLeft({ trial: true, trialEndsAt: trial.trialEndsAt ?? trial.validUntil ?? status.trialEndsAt }) ?? 0
-    return { label: `Pro trial · ${days} ${days === 1 ? "day" : "days"}`, tone: "neutral" }
+    return { label: "Pro trial", tone: "trial", daysLeft: days }
   }
   if (status.plan) return { label: planName(status.plan), tone: "neutral" }
   if (status.tenants.some((tenant) => tenant.entitled && tenant.plan !== "community")) {

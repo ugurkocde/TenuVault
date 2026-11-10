@@ -156,7 +156,7 @@ describe("tenant trial UI", () => {
     expect(trialReminder(state.status!, undefined)?.daysLeft).toBe(days)
     await render(createElement(TrialChanges))
     for (const text of ["runs weekly", "Azure storage backups pause", "health review", "history returns to 30 days"]) expect(container.textContent).toContain(text)
-    expect(licenseChipState(state.status!).label).toBe(`Pro trial · ${days} ${days === 1 ? "day" : "days"}`)
+    expect(licenseChipState(state.status!)).toEqual({ label: "Pro trial", tone: "trial", daysLeft: days })
   })
   it.each([1, 2])("shows the end screen for %s tenants", async count => {
     tenant.entitled = false; tenant.source = null; tenant.trial = false; tenant.trialEndsAt = new Date(Date.now() - day).toISOString()
@@ -264,7 +264,7 @@ describe("tenant trial UI", () => {
   it("keeps the trial badge tied to its tenant beside paid coverage", () => {
     tenant.trialEndsAt = new Date(Date.now() + 4 * day).toISOString()
     state.status = { ...state.status!, hasKey: true, trial: false, trialEndsAt: null, tenants: [tenant, { ...tenant, tenantId: "paid", source: "key", trial: false, trialEndsAt: null }] }
-    expect(licenseChipState(state.status).label).toBe("Pro trial · 4 days")
+    expect(licenseChipState(state.status)).toEqual({ label: "Pro trial", tone: "trial", daysLeft: 4 })
   })
 
 })
