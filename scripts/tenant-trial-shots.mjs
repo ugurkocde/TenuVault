@@ -163,7 +163,7 @@ try {
       if (document.getElementById("marketing-no-animations")) return
       const style = document.createElement("style")
       style.id = "marketing-no-animations"
-      style.textContent = "*, *::before, *::after { animation: none !important; transition: none !important; caret-color: transparent !important; }"
+      style.textContent = "*, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; overflow-anchor: none !important; caret-color: transparent !important; }"
       document.head.appendChild(style)
     })()`)
   const setTheme = (theme) =>
