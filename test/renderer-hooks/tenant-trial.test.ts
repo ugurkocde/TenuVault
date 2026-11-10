@@ -46,7 +46,7 @@ describe("tenant trial UI", () => {
     expect([...container.querySelectorAll("button")].find(b => b.textContent === label)?.disabled).toBe(false)
   })
   it.each([
-    ["Got it", "acknowledge"], ["Use Community instead", "end_trial"], ["Extend your trial", "extend_trial"],
+    ["Got it", "acknowledge"], ["Extend your trial", "extend_trial"],
   ] as const)("handles a rejected %s action and a rejected refresh", async (label, action) => {
     state.action.mockRejectedValueOnce(new Error("Trial action failed"))
     state.refresh.mockRejectedValueOnce(new Error("Status refresh failed"))
@@ -55,6 +55,116 @@ describe("tenant trial UI", () => {
     expect(state.action).toHaveBeenCalledWith("tenant", action)
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("Trial action failed")
     expect(state.refresh).toHaveBeenCalledTimes(1)
+  })
+  describe("ending the trial early", () => {
+    const dialog = () => document.body.querySelector<HTMLElement>('[role="dialog"]')
+    const inDialog = async (text: string) => {
+      const button = [...dialog()!.querySelectorAll("button")].find(b => b.textContent === text)
+      expect(button).toBeTruthy()
+      await act(async () => button!.click())
+    }
+    it("asks first and keeps the trial when the admin backs out", async () => {
+      await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+      expect(dialog()).toBeNull()
+      await click("Use Community instead")
+      expect(state.action).not.toHaveBeenCalled()
+      expect(dialog()?.textContent).toContain("End the Pro trial now?")
+      expect(dialog()?.textContent).toContain("The trial cannot be started again for this tenant.")
+      expect(dialog()?.textContent).toContain("Community keeps 30 days of backup history.")
+      // The safe choice comes first, so it takes the focus when the dialog opens.
+      expect([...dialog()!.querySelectorAll("button")].map(b => b.textContent).slice(0, 2)).toEqual(["Keep the trial", "End trial and use Community"])
+      await inDialog("Keep the trial")
+      expect(dialog()).toBeNull()
+      expect(state.action).not.toHaveBeenCalled()
+      expect(state.refresh).not.toHaveBeenCalled()
+      expect(container.textContent).toContain("Pro trial started")
+    })
+    it("closes on Escape without ending the trial", async () => {
+      await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+      await click("Use Community instead")
+      await act(async () => { dialog()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })) })
+      expect(dialog()).toBeNull()
+      expect(state.action).not.toHaveBeenCalled()
+    })
+    it("ends the trial once after confirmation", async () => {
+      await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+      await click("Use Community instead")
+      await inDialog("End trial and use Community")
+      expect(state.action).toHaveBeenCalledTimes(1)
+      expect(state.action).toHaveBeenCalledWith("tenant", "end_trial")
+      expect(state.refresh).toHaveBeenCalledTimes(1)
+      expect(dialog()).toBeNull()
+    })
+    it("keeps the trial and shows the error in the dialog when ending fails", async () => {
+      state.action.mockRejectedValueOnce(new Error("The licensing service could not be reached."))
+      await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+      await click("Use Community instead")
+      await inDialog("End trial and use Community")
+      expect(state.action).toHaveBeenCalledTimes(1)
+      const alert = dialog()?.querySelector('[role="alert"]')
+      expect(alert?.textContent).toContain("The licensing service could not be reached.")
+      expect(alert?.textContent).toContain("The trial is still running.")
+      expect(container.textContent).toContain("Pro trial started")
+      await inDialog("Keep the trial")
+      expect(dialog()).toBeNull()
+      expect(state.action).toHaveBeenCalledTimes(1)
+      // Opening it again starts without the earlier error.
+      await click("Use Community instead")
+      expect(dialog()?.querySelector('[role="alert"]')).toBeNull()
+    })
+    it("keeps the end failure in the dialog when the status refresh fails too", async () => {
+      state.action.mockRejectedValueOnce(new Error("Trial action failed"))
+      state.refresh.mockRejectedValueOnce(new Error("Status refresh failed"))
+      await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+      await click("Use Community instead")
+      await inDialog("End trial and use Community")
+      expect(state.action).toHaveBeenCalledWith("tenant", "end_trial")
+      expect(dialog()?.querySelector('[role="alert"]')?.textContent).toContain("Trial action failed")
+      expect(state.refresh).toHaveBeenCalledTimes(1)
+    })
+    it("shows a failed status refresh in the dialog", async () => {
+      state.refresh.mockRejectedValueOnce(new Error("Status refresh failed"))
+      await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+      await click("Use Community instead")
+      await act(async () => [...container.querySelectorAll("button")].find(b => b.textContent === "Got it")!.click())
+      expect(dialog()?.querySelector('[role="alert"]')?.textContent).toContain("Status refresh failed")
+    })
+    it("ignores a second confirmation that arrives before the first one is handled", async () => {
+      let finish!: () => void
+      state.action.mockImplementationOnce(() => new Promise<undefined>(resolve => { finish = () => resolve(undefined) }))
+      await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+      await click("Use Community instead")
+      const confirm = [...dialog()!.querySelectorAll("button")].find(b => b.textContent === "End trial and use Community")!
+      await act(async () => { confirm.click(); confirm.click() })
+      expect(state.action).toHaveBeenCalledTimes(1)
+      await act(async () => { finish() })
+      expect(state.refresh).toHaveBeenCalledTimes(1)
+    })
+    it("cannot be closed while the trial is ending", async () => {
+      let finish!: () => void
+      state.action.mockImplementationOnce(() => new Promise<undefined>(resolve => { finish = () => resolve(undefined) }))
+      await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+      await click("Use Community instead")
+      expect([...dialog()!.querySelectorAll("button")].some(b => b.textContent === "Close")).toBe(true)
+      await inDialog("End trial and use Community")
+      expect([...dialog()!.querySelectorAll("button")].some(b => b.textContent === "Close")).toBe(false)
+      await act(async () => { dialog()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })) })
+      expect(dialog()?.textContent).toContain("End the Pro trial now?")
+      await act(async () => { finish() })
+      expect(dialog()).toBeNull()
+    })
+    it("shows the busy state while the trial is ending", async () => {
+      let finish!: () => void
+      state.action.mockImplementationOnce(() => new Promise<undefined>(resolve => { finish = () => resolve(undefined) }))
+      await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+      await click("Use Community instead")
+      await inDialog("End trial and use Community")
+      const buttons = [...dialog()!.querySelectorAll("button")]
+      expect(buttons.find(b => b.textContent === "Ending trial...")?.disabled).toBe(true)
+      expect(buttons.find(b => b.textContent === "Keep the trial")?.disabled).toBe(true)
+      await act(async () => { finish() })
+      expect(dialog()).toBeNull()
+    })
   })
   it.each(["save", "remove"])("handles a rejected contact %s and refreshes", async action => {
     state.action.mockRejectedValueOnce(new Error("Contact action failed"))

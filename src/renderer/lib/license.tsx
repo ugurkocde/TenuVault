@@ -122,6 +122,17 @@ export function hasPaidLicense(status: LicenseStatus): boolean {
   return status.plan !== null || status.tenants.some((tenant) => tenant.entitled && tenant.plan !== "community")
 }
 
+/**
+ * Tenant trials are on, no key is saved, and no signed-in tenant without a license can start
+ * a trial any more: each one had its trial, or this computer reached its trial limit. Buying
+ * Pro is then the way forward, not another trial.
+ */
+export function trialUsedUp(status: LicenseStatus): boolean {
+  if (!status.tenantTrialsEnabled || status.hasKey) return false
+  const open = status.tenants.filter((tenant) => tenant.signedIn && !tenant.entitled)
+  return open.length > 0 && open.every((tenant) => tenant.trialRefusalPermanent ?? Boolean(tenant.trialRefusal))
+}
+
 /** Signed-in tenants the license does not cover right now. */
 export function unlicensedTenants(status: LicenseStatus): TenantLicenseStatus[] {
   return status.tenants.filter((tenant) => tenant.signedIn && !tenantPlan(tenant))

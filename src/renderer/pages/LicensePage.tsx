@@ -1,5 +1,5 @@
 import { trialKeyRefusalText } from "../../shared/trial-notices"
-import { TenantTrialCard, TenantTrialOptions, TrialActions, TrialKeyRefusalActions } from "../components/TenantTrial"
+import { TenantTrialCard, TenantTrialOptions, TrialActions, TrialKeyRefusalActions, trialEndVisible } from "../components/TenantTrial"
 import { CommunityTenantChoiceButton } from "../components/CommunityTenantPicker"
 import { useEffect, useRef, useState, type MouseEvent, type Ref } from "react"
 import { Link, useLocation } from "react-router-dom"
@@ -32,7 +32,7 @@ import { useClipboardLicenseKey } from "../lib/clipboard-key"
 import { openCheckout } from "../lib/purchase"
 import { bridge } from "../lib/bridge"
 import { useConfirm } from "~/components/ConfirmDialog"
-import { formatDate, formatDateTime, hasPaidLicense, isUnlicensed, licensePageTitle, planName, savedKeyNotNeededHere, tenantPlanName, trialDaysLeft, useLicense } from "../lib/license"
+import { formatDate, formatDateTime, hasPaidLicense, isUnlicensed, licensePageTitle, planName, savedKeyNotNeededHere, tenantPlanName, trialDaysLeft, trialUsedUp, useLicense } from "../lib/license"
 
 type Busy = "activate" | "replace" | "deactivate" | `retry:${string}` | `share:${string}` | null
 
@@ -429,6 +429,15 @@ export default function LicensePage() {
     )
 
   const title = licensePageTitle(status)
+  // A tenant row below already shows the refused trial key's message with Buy Pro.
+  const trialKeyRefusedInRow = status.tenants.some(t => !t.entitled && t.message?.includes(TRIAL_USED_MESSAGE))
+  // After a used trial the page offers Buy Pro once: not when the ended notice above the page,
+  // a trial card below or a refused trial key's message already carries it.
+  const trialUsed = trialUsedUp(status)
+  const buyAfterTrial = trialUsed && !trialEndVisible(status)
+    && !status.tenants.some(t => (t.source === "trial" || t.trialCanExtend && t.trialAcknowledged) && !(t.entitled && !t.trialAcknowledged))
+    && ![error, status.keyMessage, signedIn > 0 ? status.message : null].some(message => message?.includes(TRIAL_USED_MESSAGE))
+    && !trialKeyRefusedInRow
 
   return (
     <div className="max-w-5xl space-y-6 p-6 lg:p-8">
@@ -462,7 +471,9 @@ export default function LicensePage() {
               )}
               <CardDescription className="mt-2">
                 {isUnlicensed(status)
-                  ? "Paste the license key from your email, or start a free trial."
+                  ? trialUsed
+                    ? "Paste your license key, or buy Pro for daily backups, full restore and drift revert."
+                    : "Paste the license key from your email, or start a free trial."
                   : status.plan
                     ? `Your license covers ${status.tenantLimit ?? 1} tenant${status.tenantLimit === 1 ? "" : "s"}. ${activeKeyTenants} ${activeKeyTenants === 1 ? "is" : "are"} active on this machine.`
                     : savedKeyNotNeededHere(status)
@@ -495,13 +506,14 @@ export default function LicensePage() {
             <Alert>
               <AlertTriangle className="h-4 w-4 text-amber-600" />
               <AlertDescription>{trialKeyRefusalText(status.keyMessage ?? status.message ?? "")}
-                <TrialKeyRefusalActions message={status.keyMessage ?? status.message ?? ""} source="license-page-trial-key-refused" />
+                {!trialKeyRefusedInRow && <TrialKeyRefusalActions message={status.keyMessage ?? status.message ?? ""} source="license-page-trial-key-refused" />}
               </AlertDescription>
             </Alert>
           )}
 
           {isUnlicensed(status) && !status.tenantTrialsEnabled && <TrialCallToAction emailRef={trialEmail} onSent={() => setTrialKeyHint(true)} />}
           {<TenantTrialOptions />}
+          {buyAfterTrial && <TrialActions source="license-page-trial-used" />}
           {status.tenants.filter(t => t.source === "trial" || t.trialCanExtend && t.trialAcknowledged).map(t => <TenantTrialCard key={t.tenantId} tenant={t} welcome={t.entitled && !t.trialAcknowledged} allowUnknownContactRemoval />)}
           {status.trial && !status.tenants.some(t => t.source === "trial") && <TrialStatus status={status} busy={busy} onReplace={replaceKey} />}
           {savedKeyNotNeededHere(status) ? (
@@ -566,7 +578,7 @@ export default function LicensePage() {
             <Alert variant="destructive">
               <AlertCircle className="h-4 w-4" />
               <AlertDescription>{trialKeyRefusalText(error)}
-                <TrialKeyRefusalActions message={error} tenant={status.tenants.find(tenant => tenant.message === error)} source="license-page-trial-key-refused" />
+                {!trialKeyRefusedInRow && <TrialKeyRefusalActions message={error} tenant={status.tenants.find(tenant => tenant.message === error)} source="license-page-trial-key-refused" />}
               </AlertDescription>
             </Alert>
           )}
