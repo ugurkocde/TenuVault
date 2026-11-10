@@ -39,7 +39,7 @@ const MAIN_OVERRIDES = `(() => {
     if (M.trialActionError) throw new Error(M.trialActionError)
     const tenant = M.license.tenants.find(t => t.tenantId === tenantId)
     if (action === "extend_trial") {
-      tenant.trialEndsAt = tenant.validUntil = tenant.expiresAt = new Date(${NOW} + 23 * ${DAY}).toISOString()
+      tenant.trialEndsAt = tenant.validUntil = tenant.expiresAt = new Date(Math.max(Date.parse(tenant.trialEndsAt), Date.now()) + M.license.tenantTrialPolicy.extensionDays * ${DAY}).toISOString()
       tenant.trialCanExtend = false
       tenant.trialExtensionAvailableAt = undefined
       tenant.trialExtensionUnavailable = true
@@ -232,7 +232,7 @@ try {
   await scene("trial-license-before-window", active(9), MOCK.tenants.slice(0, 1), "#/license", "You can extend once, from")
   await scene("trial-license-extension", active(5), MOCK.tenants.slice(0, 1), "#/license", "Extend trial by 12 days")
   await evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent === "Extend trial by 12 days").click()`)
-  await assertText("23 days left")
+  await assertText("17 days left")
   await screenshot("trial-extension-saved", true)
   await main.evaluate(`globalThis.__marketingMock.trialActionError = "The email address could not be saved. Try again."`)
   await evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent === "Email me setup tips and a reminder before the trial ends").click()`)

@@ -171,9 +171,9 @@ function InactiveKeyReplacement({ status, busy, onReplace }: { status: LicenseSt
           ? `Your Pro trial ended on ${formatDate(status.trialEndedAt)}. One tenant continues on Community. Buy Pro, then copy the key from your purchase email and return to TenuVault: it replaces the trial key by itself. Or enter it here.`
           : "Your saved key is not active, for example because your trial ended. Bought a new license? Enter its key here."}
       </p>
-      {status.trialEndedAt && <TrialActions source="license-page-trial-ended" />}
+      {status.trialEndedAt && status.tenantTrialsEnabled && <TrialActions source="license-page-trial-ended" />}
       <div className="flex flex-wrap gap-2">
-        {!status.trialEndedAt && <Button type="button" onClick={() => void openCheckout("license-page-inactive")}>
+        {(!status.trialEndedAt || !status.tenantTrialsEnabled) && <Button type="button" onClick={() => void openCheckout(status.trialEndedAt ? "license-page-trial-ended" : "license-page-inactive")}>
           <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />
           Buy Pro
         </Button>}
@@ -185,7 +185,7 @@ function InactiveKeyReplacement({ status, busy, onReplace }: { status: LicenseSt
         )}
       </div>
       {replacing && <ReplaceKeyForm busy={busy} onReplace={onReplace} />}
-      {!status.trialEndedAt && <InvoiceNote />}
+      {(!status.trialEndedAt || !status.tenantTrialsEnabled) && <InvoiceNote />}
     </div>
   )
 }
@@ -207,8 +207,11 @@ function TrialStatus({ status, busy, onReplace }: { status: LicenseStatus; busy:
         Nothing is charged when it ends. One tenant continues on Community, any other tenant is no longer covered, and
         Pro features turn off. Your backups stay where they are. To keep Pro, buy a plan, then copy the license key from the purchase email and return to TenuVault: it replaces the trial key by itself. Or enter it here.
       </p>
-      <TrialActions source="license-page-trial" />
+      {status.tenantTrialsEnabled && <TrialActions source="license-page-trial" />}
       <div className="flex flex-wrap gap-2">
+        {!status.tenantTrialsEnabled && <Button type="button" onClick={() => void openCheckout("license-page-trial")}>
+          <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />Buy Pro
+        </Button>}
         <Button type="button" variant="outline" onClick={() => void openCheckout("license-page-trial", { plan: "msp" })}>
           <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />
           Buy MSP
@@ -221,6 +224,7 @@ function TrialStatus({ status, busy, onReplace }: { status: LicenseStatus; busy:
         )}
       </div>
       {replacing && <ReplaceKeyForm busy={busy} onReplace={onReplace} />}
+      {!status.tenantTrialsEnabled && <InvoiceNote />}
     </div>
   )
 }

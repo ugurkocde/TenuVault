@@ -17,7 +17,7 @@ it("counts only successful Pro activity for this tenant inside the trial", () =>
     { assessment: { tenantId: "fabrikam", frameworkId: "cis-benchmarks", runId: "2", assessedAt: at } },
     { assessment: { tenantId: tenant, frameworkId: "cis-benchmarks", runId: "3", assessedAt: "2025-01-01" } },
   ] }))
-  records("promotions", [{ status: "applied" }, { status: "blocked" }, { status: "applied", sync: {} }])
+  records("promotions", [{ status: "applied" }, { status: "blocked" }, { status: "applied", sync: {} }, { status: "applied", createdAt: "2025-01-01" }])
   records("health-reviews", [{ kind: "run", status: "completed", finishedAt: at }, { kind: "run", status: "failed", finishedAt: at }])
   records("notification-outbox", [{ state: "sent", sentAt: at, envelope: {} }, { state: "sent", sentAt: at, envelope: { test: true } }, { state: "failed", sentAt: at }, { state: "sent", sentAt: at, envelope: { type: "test" } }])
   expect(trialUsageSummary(app, workspace, tenant, since, until)).toBe("During your trial: 1 CIS Benchmarks assessment, 1 promotion, 1 health review, 1 alert sent.")

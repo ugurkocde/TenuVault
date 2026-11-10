@@ -57,7 +57,7 @@ export function TenantTrialOptions({ onStarted, tenantId, compact = false, varia
   const Container = compact ? "span" : "div"
   const Text = compact ? "span" : "p"
   return <Container className={compact ? "inline-flex flex-wrap items-center gap-3" : "space-y-3"}>
-    {status.tenants.filter(t => (!tenantId || t.tenantId === tenantId) && t.signedIn && !t.entitled && (status.tenantTrialsEnabled || t.trialRefusal)).map(tenant => <Container key={tenant.tenantId} className={compact ? "inline-flex flex-wrap items-center gap-3" : "flex flex-wrap items-center gap-3"}>
+    {status.tenants.filter(t => (!status?.tenantTrialsEnabled || !tenantId || t.tenantId === tenantId) && t.signedIn && !t.entitled && (status.tenantTrialsEnabled || t.trialRefusal)).map(tenant => <Container key={tenant.tenantId} className={compact ? "inline-flex flex-wrap items-center gap-3" : "flex flex-wrap items-center gap-3"}>
       {!compact && tenant.trialRefusal && <Text role="status">{tenant.trialRefusal}</Text>}
       {tenant.activated ? <Text className="text-sm text-gray-600">Check the saved activation before starting a trial.</Text> : status.tenantTrialsEnabled && !(tenant.trialRefusalPermanent ?? Boolean(tenant.trialRefusal)) && <><Button variant={variant} size={size} disabled={busy} onClick={() => void run(async () => {
         await bridge.license.startTenantTrial(tenant.tenantId)
@@ -107,14 +107,19 @@ export function TenantTrialCard({ tenant, initialEmail, welcome = false, allowUn
   const { status } = useLicense()
   const { busy, error, run: perform } = useTrialAction()
   const name = useTenants().find(t => t.credentials?.tenantId?.toLowerCase() === tenant.tenantId)?.name
-  const run = (action: "acknowledge" | "end_trial") => perform(async () => {
-    await bridge.license.tenantTrialAction(tenant.tenantId, action)
+  const [notice, setNotice] = useState("")
+  const run = (action: "acknowledge" | "end_trial" | "extend_trial") => perform(async () => {
+    const updated = await bridge.license.tenantTrialAction(tenant.tenantId, action)
+    if (action === "extend_trial") {
+      const end = updated?.tenants.find(t => t.tenantId === tenant.tenantId)?.trialEndsAt
+      setNotice(end ? `Trial extended. Ends on ${formatDate(end)}.` : "Trial extended.")
+    }
   })
   const days = Math.max(0, Math.ceil((Date.parse(tenant.trialEndsAt ?? "") - Date.now()) / 86400_000))
   return <section className="space-y-3 rounded-3xl bg-blue-50 p-6">
     <h2 className="text-xl font-medium">{welcome ? "Pro trial started" : tenant.trial ? "Pro trial" : "Pro trial ended"}{name && <span className="ml-2 text-sm font-normal text-gray-600">{name}</span>}</h2>
     <p>{days > 0 ? `${days} days left. Ends on ${formatDate(tenant.trialEndsAt!)}.` : `Ended on ${formatDate(tenant.trialEndsAt!)}.`}</p>
-    {!welcome && <TrialUsage tenant={tenant} />}
+    {!welcome && status?.tenantTrialsEnabled && <TrialUsage tenant={tenant} />}
     {!tenant.trial && <p className="text-sm">{(status?.tenants.filter(t => !t.entitled && t.trialEndsAt).length ?? 0) > 1 ? "One tenant continues on Community Free. You choose which." : "This tenant continues on Community Free."} Backups and settings are kept. Community keeps 30 days of backup history.</p>}
     {welcome && <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
       <span className="font-medium">Try these first</span>
@@ -127,12 +132,14 @@ export function TenantTrialCard({ tenant, initialEmail, welcome = false, allowUn
       ? `${tenant.trial ? "Afterwards, one" : "One"} tenant continues on Community Free. You choose which.`
       : `${tenant.trial ? "Afterwards, this" : "This"} tenant continues on Community Free.`} Backups and settings are kept. Community keeps 30 days of backup history. No payment is needed.</p>}
     {tenant.trial && <TrialContact tenant={tenant} initialEmail={initialEmail} allowUnknownRemoval={allowUnknownContactRemoval && !welcome} />}
-    <TrialActions tenant={tenant} source={tenant.trial ? "license-page-trial" : "trial-end"} welcome={welcome} />
+    {status?.tenantTrialsEnabled && <TrialActions tenant={tenant} source={tenant.trial ? "license-page-trial" : "trial-end"} welcome={welcome} />}
     {children}
     <div className="flex flex-wrap gap-2">
       {welcome && <Button disabled={busy} onClick={() => void run("acknowledge")}>Got it</Button>}
       {welcome && tenant.canEnd && <Button variant="ghost" disabled={busy} onClick={() => void run("end_trial")}>Use Community instead</Button>}
     </div>
+    {!status?.tenantTrialsEnabled && tenant.trialCanExtend && <Button variant="outline" disabled={busy} onClick={() => void run("extend_trial")}>Need more time? Extend your trial</Button>}
+    {notice && <p role="status">{notice}</p>}
     {error && <p role="alert">{error}</p>}
   </section>
 }
@@ -154,13 +161,14 @@ export function TrialChanges({ tenantId }: { tenantId?: string } = {}) {
   const [daily, setDaily] = useState(false)
   const [longHistory, setLongHistory] = useState(false)
   useEffect(() => {
-    void bridge.schedules.list().then(schedules => setDaily(schedules.some(s => s.enabled && s.frequency === "daily" && status?.tenants.some(t => t.trialEndsAt && (!tenantId || t.tenantId === tenantId) && t.tenantId === s.tenantId)))).catch(() => {})
+    void bridge.schedules.list().then(schedules => setDaily(schedules.some(s => s.enabled && s.frequency === "daily" && status?.tenants.some(t => t.trialEndsAt && (!status?.tenantTrialsEnabled || !tenantId || t.tenantId === tenantId) && t.tenantId === s.tenantId)))).catch(() => {})
     void bridge.preferences.get().then(prefs => setLongHistory(prefs.retentionDays > 30)).catch(() => {})
   }, [status, tenantId])
-  const azure = tenants.some(t => t.resources?.storageAccountName && !t.resources.storageAccountName.startsWith(LOCAL_STORAGE_PREFIX) && status?.tenants.some(licensed => licensed.trialEndsAt && (!tenantId || licensed.tenantId === tenantId) && licensed.tenantId === t.credentials?.tenantId?.toLowerCase()))
+  const azure = tenants.some(t => t.resources?.storageAccountName && !t.resources.storageAccountName.startsWith(LOCAL_STORAGE_PREFIX) && status?.tenants.some(licensed => licensed.trialEndsAt && (!status?.tenantTrialsEnabled || !tenantId || licensed.tenantId === tenantId) && licensed.tenantId === t.credentials?.tenantId?.toLowerCase()))
   return <ul className="list-disc space-y-1 pl-5 text-sm">
     {daily && <li>Your saved daily schedule runs weekly on Community.</li>}
     {azure && <li>Azure storage backups pause. <Link to="/portal/backup?tab=schedule">Switch to weekly local backups in Backup & Restore.</Link></li>}
+    {!status?.tenantTrialsEnabled && <li>Alerts, health review and change reports pause.</li>}
     {longHistory && <li>Backup history returns to 30 days.</li>}
     {(status?.tenants.filter(t => t.trialEndsAt).length ?? 0) > 1 && <li>You choose which tenant continues on Community.</li>}
   </ul>
@@ -182,6 +190,7 @@ export function TenantTrialNotices({ showWelcome = true }: { showWelcome?: boole
     {ended && <TenantTrialCard key={`ended-${ended.tenantId}`} tenant={ended}>
       <TrialChanges tenantId={ended.tenantId} />
       <div className="flex flex-wrap items-center gap-2">
+        {!status.tenantTrialsEnabled && <Button className="bg-coral-500 text-white hover:bg-coral-600" disabled={busy} onClick={() => void run(() => openCheckout("trial-end"))}>Buy Pro</Button>}
         <Button variant="outline" disabled={busy} onClick={() => void run(() => bridge.license.tenantTrialAction(ended.tenantId, "acknowledge"))}>Continue on Community</Button>
         <CommunityTenantChoiceButton />
         <TrialAzureChoice />

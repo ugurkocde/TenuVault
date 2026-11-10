@@ -440,7 +440,7 @@ export class LicenseService {
     const end = this.trialEnd(tenant)
     const remaining = end ? Date.parse(end) - Date.now() : NaN
     return Boolean(record?.activationId && !record.extended && !record.endedAt &&
-      (!this.state?.activations[tenant] || this.state.activations[tenant]?.source === "trial") && remaining <= (this.trialPolicy.extensionWindowDays ?? 5) * 86400_000 && remaining >= -(this.trialPolicy.extensionGraceDays ?? 14) * 86400_000)
+      (!this.state?.activations[tenant] || this.state.activations[tenant]?.source === "trial") && remaining <= (this.trialsEnabled ? this.trialPolicy.extensionWindowDays ?? 5 : 5) * 86400_000 && remaining >= -(this.trialsEnabled ? this.trialPolicy.extensionGraceDays ?? 14 : 14) * 86400_000)
   }
 
   trialUsagePeriod(tenant: string): { since: number; until: number } | null {
@@ -1903,7 +1903,7 @@ export class LicenseService {
         trialExtensionUnavailable: Boolean(this.trialRecords[tenantId]?.extended || this.trialRecords[tenantId]?.endedAt),
         trialExtensionAvailableAt: this.trialsEnabled && this.trialRecords[tenantId]?.activationId && !this.trialRecords[tenantId]?.extended && !this.trialRecords[tenantId]?.endedAt && this.trialEnd(tenantId)
           ? new Date(Date.parse(this.trialEnd(tenantId)!) - (this.trialPolicy.extensionWindowDays ?? 5) * 86400_000).toISOString() : undefined,
-        trialCanExtend: this.trialsEnabled && this.canExtendTrial(tenantId),
+        trialCanExtend: this.canExtendTrial(tenantId),
         shared: source === "key" ? (entry?.shared ?? null) : null,
         shareNeedsSignIn: source === "key" && Boolean(entry?.shareNeedsSignIn),
         displayKey: source === "tenant" ? (entry?.displayKey ?? null) : null,

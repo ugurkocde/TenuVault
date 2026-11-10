@@ -329,3 +329,14 @@ it.each(["reminder", "ended", "license", "welcome", "empty", "unreadable"])("sho
   expect(container.textContent!.includes("During your trial:")).toBe(!["welcome", "empty", "unreadable"].includes(place))
   if (place === "welcome") expect(state.usage).not.toHaveBeenCalled()
 })
+
+it.each(["license", "welcome", "ended", "reminder"])("keeps the existing %s interface while tenant trials are off", async place => {
+  state.status!.tenantTrialsEnabled = false
+  if (place === "ended") { tenant.trial = false; tenant.entitled = false; tenant.source = null; tenant.trialEndsAt = new Date(Date.now() - day).toISOString() }
+  if (place === "reminder") await render(createElement(TrialReminderBanner, { reminder: trialReminder(state.status!, undefined)!, onDismiss: vi.fn(), dismissing: false }))
+  else if (place === "ended") await render(createElement(TenantTrialNotices))
+  else await render(createElement(TenantTrialCard, { tenant, welcome: place === "welcome" }))
+  expect(container.textContent).not.toContain("Questions, or need a quote")
+  expect(state.usage).not.toHaveBeenCalled()
+  if (place !== "reminder") expect(container.textContent).toContain("Need more time? Extend your trial")
+})

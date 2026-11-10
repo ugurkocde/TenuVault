@@ -32,7 +32,7 @@ export function trialUsageSummary(app: Pick<KeyValueStore, "get">, workspace: Pi
       add("baselineAllPlatforms", runs.size, `${framework === "cis-benchmarks" ? "CIS Benchmarks" : "CIS Controls"} assessment`, `${framework === "cis-benchmarks" ? "CIS Benchmarks" : "CIS Controls"} assessments`)
     }
     const records = (domain: string) => rows(read(workspace, `records.v1.${domain}.${tenant}`)).filter(row => row.tenantId === tenant)
-    add("promotion", records("promotions").filter(row => !row.sync && row.status === "applied" && during(row.updatedAt)).length, "promotion", "promotions")
+    add("promotion", records("promotions").filter(row => !row.sync && row.status === "applied" && during(row.createdAt) && during(row.updatedAt)).length, "promotion", "promotions")
     add("healthReview", records("health-reviews").filter(row => row.kind === "run" && row.status === "completed" && during(row.finishedAt)).length, "health review", "health reviews")
     add("notifications", records("notification-outbox").filter(row => row.state === "sent" && during(row.sentAt) && object(row.envelope).test !== true && object(row.envelope).type !== "test").length, "alert sent", "alerts sent")
     add("changeReports", records("change-reports").filter(row => row.status === "ready" && during(row.createdAt)).length, "change report", "change reports")

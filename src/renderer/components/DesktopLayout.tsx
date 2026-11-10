@@ -1,3 +1,5 @@
+import { Button } from "~/components/ui/button"
+import { openCheckout } from "../lib/purchase"
 import { TenantTrialNotices, TrialActions, TrialUsage, TrialChanges, trialEndVisible } from "./TenantTrial"
 import { CommunityChoiceBanner } from "./CommunityTenantPicker"
 import { useEffect, useRef, useState, type ComponentType, type ReactNode, type RefObject } from "react"
@@ -12,6 +14,7 @@ import {
   ChevronDown,
   Clock,
   Database,
+  ExternalLink,
   FileText,
   GitCompare,
   KeyRound,
@@ -135,7 +138,9 @@ function TrialBanner({ urgent, source, onDismiss, dismissing, children, endsAt, 
           <Clock className="h-4 w-4" />
         </span>
         <div className="min-w-0 basis-full sm:basis-72 flex-1">{children}</div>
-        <div className="min-w-0 basis-full"><TrialActions tenant={tenant} source={source} /></div>
+        {status?.tenantTrialsEnabled ? <div className="min-w-0 basis-full"><TrialActions tenant={tenant} source={source} /></div> : <Button className="bg-coral-500 text-white hover:bg-coral-600" type="button" size="sm" onClick={() => void openCheckout(source)}>
+          <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />Buy Pro
+        </Button>}
         <Link to="/license" className="rounded-full px-3 py-2 text-sm font-medium hover:bg-white/70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
           Details
         </Link>
@@ -158,7 +163,7 @@ export function TrialReminderBanner({ reminder, onDismiss, dismissing }: {
   return (
     <TrialBanner tenantId={reminder.tenantId} endsAt={reminder.endsAt} urgent={final} source={`trial-${reminder.stage}`} onDismiss={onDismiss} dismissing={dismissing}>
       <p>Your Pro trial ends {when}, on {formatDate(reminder.endsAt)}.</p>
-      {tenant && <TrialUsage tenant={tenant} />}
+      {tenant && status?.tenantTrialsEnabled && <TrialUsage tenant={tenant} />}
       {reminder.tenantTrial ? <TrialChanges tenantId={tenant?.tenantId} /> : final
         ? "Buy Pro now to keep daily backups, full restore and drift revert for both tenants."
         : "Buy Pro to keep daily backups, full restore and drift revert after the trial."}
