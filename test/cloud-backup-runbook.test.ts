@@ -148,6 +148,13 @@ describe("Invoke-TenuVaultBackup.ps1 format", () => {
     expect(invalid.error).toBeNull()
     expect(trigger(invalid)).toBe("scheduled")
     expect(invalid.output!.filter((line) => line.startsWith("Warning: TRIGGER 'Nightly'"))).toHaveLength(1)
+    // The result note for the watcher carries the same trigger, so its alert names a run started by hand.
+    const note = (run: Run) => JSON.parse(run.calls.find((call) => call.method === "Put" && call.uri.includes("/cloud-backup-outcomes/"))!.body!).trigger
+    expect(note(runs[0]!)).toBe("scheduled")
+    expect(note(manual)).toBe("manual")
+    expect(note(invalid)).toBe("scheduled")
+    // Every path that ends a run passes it on.
+    expect(runbook.match(/Send-TvBackupOutcome -Account [^\n]*-Trigger \$runTrigger\n/g)).toHaveLength(4)
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("never lets the optional change report fail a backup, and says when a backup with warnings gets none", () => {
@@ -294,9 +301,10 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
     expect(setup).toContain("-ScheduleName $scheduleName -Parameters @{ TenantKey = $tenantKey } | Out-Null")
     expect(setup.match(/Register-AzAutomationScheduledRunbook/g)).toHaveLength(1)
     expect(setup).not.toMatch(/Trigger\s*=|TenuVaultScheduleSetsTrigger|TenuVaultAutomationAccountId|acdd72a7-3385-48ef-bd42-f606fba81ae7|RoleName "Reader"|automationAccountId/)
-    // The test run it prints is started by hand, so it says to set TRIGGER to Manual.
-    expect(setup).toContain('Write-Host "Automation account, Runbooks > $runbookName > Start, set TENANTKEY to $tenantKey and"')
-    expect(setup).toContain('Write-Host "TRIGGER to Manual, and watch the job output.')
+    // The test run it prints is started by hand; the hint depends on the published runbook (tested below).
+    expect(setup).toContain("Write-TenuVaultTestRunHint -Runbook $runbook")
+    expect(setup).toContain('$plainRunbookVersion = "1.2.0"')
+    expect(setup).toContain('$triggerRunbookVersion = "1.4.0"')
   })
 
   it("creates no Key Vault, asks for no recovery key and refuses to guess about alerting", () => {
@@ -351,6 +359,22 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
     expect(setupRun("rerun-sets-report")).toMatchObject({ error: null, changeReport: "full", changeReportActors: "true", tenantName: "11111111-2222-3333-4444-555555555555" })
     expect(setup).toContain('$changeReportPassed = $PSBoundParameters.ContainsKey("ChangeReport")')
     expect(setup).toContain('$changeReportActorsPassed = $PSBoundParameters.ContainsKey("ChangeReportWithoutActors")')
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("recommends TRIGGER Manual for the test run only when the published runbook has it", () => {
+    const manual = "TRIGGER to Manual, and watch the job output. The backup then appears in TenuVault under"
+    // Published and read back as this runbook (1.4.0 or later): start it with TRIGGER set to Manual.
+    const approved = setupRun("approved").output
+    expect(approved).toContain(manual)
+    expect(approved).toContain("Automation account, Runbooks > Invoke-TenuVaultBackup > Start, set TENANTKEY to 11111111 and")
+    // The publish left 1.1.0 published, was declined, or threw before a read back: no TRIGGER in its Start pane.
+    const older = setupRun("published-older").output
+    expect(older).not.toContain(manual)
+    expect(older).toContain("Scheduled: the published runbook is version 1.1.0, older than 1.4.0, so it has no TRIGGER to record a run started by hand.")
+    expect(older).toContain("Run this script again and let it publish the runbook; then a run started with TRIGGER set")
+    const declined = setupRun("outer-declined").output
+    expect(declined).not.toContain(manual)
+    expect(declined).toContain("Scheduled: the published runbook could not be read back as 1.4.0 or later, so it has no TRIGGER to record a run started by hand.")
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("removes the Key Vault variable only when the published runbook reads back as plain", () => {

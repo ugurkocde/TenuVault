@@ -42,6 +42,22 @@ describe("cloud backup result notes", () => {
     expect(events[21]).toBeNull()
   })
 
+  it("name a run started by hand in the alert, and count older notes without a trigger as scheduled", () => {
+    const trigger = (index: number) => events[index]!.details.find((entry) => entry.label === "Trigger")?.value
+    // Notes from backup runbooks before 1.4.0 carry no trigger: their alert reads as it always did.
+    expect(outcomeFixture.notes[0]).not.toHaveProperty("trigger")
+    expect(parseCloudOutcome(outcomeFixture.notes[0], TENANT)!.trigger).toBe("scheduled")
+    expect(trigger(0)).toBe("Cloud backup schedule")
+    expect(parseCloudOutcome(outcomeFixture.notes[22], TENANT)!.trigger).toBe("manual")
+    expect(trigger(22)).toBe("Cloud backup, started by hand")
+    expect(trigger(23)).toBe("Cloud backup schedule")
+    // Only the exact value the runbook writes counts: other casing or a list is scheduled, and the note is still sent.
+    expect(trigger(24)).toBe("Cloud backup schedule")
+    expect(trigger(25)).toBe("Cloud backup schedule")
+    // A different trigger is a different alert detail, but the same backup: the event key is the folder.
+    expect(events[22]!.details).toContainEqual({ label: "Backup", value: "backup-2026-11-13-101500" })
+  })
+
   it("is the only write outside the backup container, to the watcher's container and with fixed fields", () => {
     expect(backupRunbook.match(/Invoke-TvHttp -Uri \$target\.Uri -Token \$Token -Method "Put"/g)).toHaveLength(1)
     const plain = backupRunbook.match(/Invoke-TvHttp -Uri \$uri -Token \$Token -Method "Put"/g)
@@ -76,8 +92,8 @@ describe("cloud backup result notes", () => {
     expect(calls).toHaveLength(1)
     expect(calls[0]).toMatchObject({ method: "Put", ifNoneMatch: "*", contentType: "application/json", uri: "https://stcontoso.blob.core.windows.net/tenuvault-backup-results/cloud-backup-outcomes/backup-2026-11-05-020000.json" })
     const note = JSON.parse(calls[0].body)
-    expect(Object.keys(note).sort()).toEqual(["backupFolder", "failedTypes", "failures", "finishedAt", "runId", "schema", "status", "tenantId", "totalPolicies"])
-    expect(parseCloudOutcome(note, TENANT)).toMatchObject({ status: "CompletedWithWarnings", totalPolicies: 398, failures: 3, failedTypes: ["Apps", "Remediations"] })
+    expect(Object.keys(note).sort()).toEqual(["backupFolder", "failedTypes", "failures", "finishedAt", "runId", "schema", "status", "tenantId", "totalPolicies", "trigger"])
+    expect(parseCloudOutcome(note, TENANT)).toMatchObject({ status: "CompletedWithWarnings", totalPolicies: 398, failures: 3, failedTypes: ["Apps", "Remediations"], trigger: "scheduled" })
     const missing = Array.isArray(second.calls) ? second.calls : [second.calls]
     expect(missing[0].uri).toContain("/cloud-backup-outcomes/run-a1b2c3d4-0000-4000-8000-000000000009.json")
     expect(JSON.stringify(second.output)).toContain("No tenuvault-backup-results container")
