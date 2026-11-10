@@ -117,11 +117,11 @@ describe("License page trial", () => {
       { ...community, hasKey: true, keyState: "failed" as const },
     ]) {
       const container = await render(status)
-      expect(container.textContent).toContain("Need an invoice instead of a card?")
+      expect(container.textContent).toContain(status.trial ? "Questions, or need a quote or an invoice for your purchasing team?" : "Need an invoice instead of a card?")
       const link = container.querySelector<HTMLAnchorElement>('a[href^="mailto:support@tenuvault.com"]')!
       expect(link.textContent).toBe("support@tenuvault.com")
       await act(async () => { link.click() })
-      expect(state.openExternal).toHaveBeenLastCalledWith("mailto:support@tenuvault.com?subject=TenuVault%20invoice%20or%20quote%20request")
+      expect(state.openExternal).toHaveBeenLastCalledWith(status.trial ? "mailto:support@tenuvault.com?subject=TenuVault%20Pro%3A%20quote%20or%20invoice" : "mailto:support@tenuvault.com?subject=TenuVault%20invoice%20or%20quote%20request")
       for (const root of roots.splice(0)) act(() => root.unmount())
       document.body.innerHTML = ""
     }

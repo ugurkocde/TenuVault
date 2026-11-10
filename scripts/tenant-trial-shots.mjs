@@ -33,6 +33,7 @@ const MAIN_OVERRIDES = `(() => {
   const json = value => ({ status: 200, statusText: "OK", headers: { "content-type": "application/json" }, body: new TextEncoder().encode(JSON.stringify(value)) })
   handle("api", request => request.path === "/api/notifications" ? json({ licensed: false, runtimeNote: "Runs while TenuVault is running.", channels: [{ id: "local", kind: "local", title: "This computer", enabled: true, recipients: [], lastDelivery: null }], rules: [], auditWatch: { enabled: true, intervalMinutes: 15, categories: [], ignoreOwnChanges: true, includeActor: false, externalWatcher: false, lastPollAt: null, lastError: null, watermark: null, conditionalAccess: { enabled: false, watermark: null, lastPollAt: null, lastError: null } }, deliveries: [] }) : request.path === "/api/reports" ? json({ licensed: false, runtimeNote: "Runs while TenuVault is running.", reports: [], settings: { afterScheduledBackup: true, recipients: [], includeValues: true } }) : json({ backups: [], data: [], entries: [], records: [], tenants: [], jobs: [], exists: true }))
   handle("auth:accounts", () => M.accounts)
+  handle("license:trialUsage", tenantId => M.usage?.[tenantId] ?? null)
   handle("license:status", () => M.license)
   handle("license:tenantTrialAction", (tenantId, action, email) => {
     if (M.trialActionError) throw new Error(M.trialActionError)
@@ -40,6 +41,8 @@ const MAIN_OVERRIDES = `(() => {
     if (action === "extend_trial") {
       tenant.trialEndsAt = tenant.validUntil = tenant.expiresAt = new Date(${NOW} + 23 * ${DAY}).toISOString()
       tenant.trialCanExtend = false
+      tenant.trialExtensionAvailableAt = undefined
+      tenant.trialExtensionUnavailable = true
       M.license.trialEndsAt = tenant.trialEndsAt
     } else if (action === "trial_contact") tenant.trialEmail = email
     else if (action === "acknowledge") tenant.trialAcknowledged = true
@@ -173,6 +176,12 @@ try {
     evaluate(`[document.scrollingElement, ...document.querySelectorAll("*")].filter(e => e && (e === document.scrollingElement || (e.scrollHeight > e.clientHeight + 4 && getComputedStyle(e).overflowY !== "visible"))).forEach(e => { e.scrollTop = ${to} })`)
   const shots = []
   const screenshot = async (name, expectedVerificationFailure = false) => {
+    if (name.startsWith("trial-reminder")) {
+      const layout = await evaluate(`(() => { const banner = [...document.querySelectorAll('[role="status"]')].find(e => e.textContent.includes("Your Pro trial ends")); return banner && { width: banner.clientWidth, content: banner.scrollWidth, text: banner.innerText, pageWidth: document.documentElement.clientWidth, pageContent: document.documentElement.scrollWidth } })()`)
+      if (!layout || layout.content > layout.width || layout.pageContent > layout.pageWidth) throw new Error(`Reminder overflow: ${JSON.stringify(layout)}`)
+      for (const label of ["Buy Pro", "Extend trial by 12 days", "Questions,", "Details", "Dismiss"]) if (!layout.text.includes(label)) throw new Error(`Missing reminder action: ${label}`)
+      if (!(layout.text.indexOf("Buy Pro") < layout.text.indexOf("Extend trial by") && layout.text.indexOf("Extend trial by") < layout.text.indexOf("Questions,"))) throw new Error("Reminder action order")
+    }
     await evaluate(`document.activeElement?.blur?.()`)
     await sleep(400)
     const toast = await evaluate(`[...document.querySelectorAll('[role="status"], [role="alert"]')].map(e => e.innerText).join(" | ")`)
@@ -196,8 +205,8 @@ try {
   await disableAnimations()
 
   await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1120, deviceScaleFactor: 1, mobile: false })
-  const base = { hasKey: false, keyState: "none", keyHint: null, keyMessage: null, persisted: true, offline: false, message: null, plan: null, tenantLimit: null, communityTenantId: TENANTS[0].guid, communityChoiceTenantIds: [], communityChoicePendingTenantIds: [], validUntil: null, tenantTrialsEnabled: true, trial: false, trialEndsAt: null, trialEndedAt: null }
-  const trialTenant = (index, days, extra = {}) => ({ tenantId: TENANTS[index].guid, signedIn: true, activated: true, entitled: true, source: "trial", plan: "pro", tenants: 2, expiresAt: new Date(NOW + days * DAY).toISOString(), validUntil: new Date(NOW + days * DAY).toISOString(), trialEndsAt: new Date(NOW + days * DAY).toISOString(), trial: true, canEnd: true, trialAcknowledged: true, trialCanExtend: days <= 5, shared: null, shareNeedsSignIn: false, displayKey: null, message: null, ...extra, ...(extra.entitled === false ? { expiresAt: null, validUntil: null } : {}) })
+  const base = { hasKey: false, keyState: "none", keyHint: null, keyMessage: null, persisted: true, offline: false, message: null, plan: null, tenantLimit: null, communityTenantId: TENANTS[0].guid, communityChoiceTenantIds: [], communityChoicePendingTenantIds: [], validUntil: null, tenantTrialsEnabled: true, tenantTrialPolicy: { days: 10, extensionDays: 12, extensionWindowDays: 5, extensionGraceDays: 10 }, trial: false, trialEndsAt: null, trialEndedAt: null }
+  const trialTenant = (index, days, extra = {}) => ({ tenantId: TENANTS[index].guid, signedIn: true, activated: true, entitled: true, source: "trial", plan: "pro", tenants: 2, expiresAt: new Date(NOW + days * DAY).toISOString(), validUntil: new Date(NOW + days * DAY).toISOString(), trialEndsAt: new Date(NOW + days * DAY).toISOString(), trial: true, canEnd: true, trialAcknowledged: true, trialCanExtend: days <= 5, trialExtensionAvailableAt: new Date(NOW + (days - 5) * DAY).toISOString(), shared: null, shareNeedsSignIn: false, displayKey: null, message: null, ...extra, ...(extra.entitled === false ? { expiresAt: null, validUntil: null } : {}) })
   const scene = async (name, license, profiles, hash, text, form = false) => {
     await main.evaluate(`globalThis.__marketingMock.trialActionError = null; globalThis.__marketingMock.license = ${JSON.stringify(license)}; globalThis.__marketingMock.accounts = ${JSON.stringify(profiles.length ? MOCK.accounts : [])}; globalThis.__marketingMock.preferences.retentionDays = 90; globalThis.__marketingMock.schedules.forEach(schedule => { const tenant = globalThis.__marketingMock.license.tenants.find(t => t.tenantId === schedule.tenantId); const ended = tenant?.trialEndsAt && !tenant.entitled; const local = globalThis.__marketingMock.tenants.find(t => t.credentials.tenantId === schedule.tenantId)?.resources.subscriptionId === "local"; schedule.fallbackWeekday = ended && local ? 1 : undefined; schedule.pausedReason = globalThis.__marketingMock.license.communityChoicePendingTenantIds?.includes(schedule.tenantId) ? "Paused: choose a Community tenant or add a license" : ended && !local ? "Paused: Azure storage needs Pro" : undefined })`)
     await evaluate(`window.tenuvault.storage.setItem("tenuvault_tenants", ${JSON.stringify(JSON.stringify(profiles))})`)
@@ -220,9 +229,10 @@ try {
   await scene("trial-joined", { ...active(9), tenants: [trialTenant(0, 9, { trialAcknowledged: false, canEnd: false })] }, MOCK.tenants.slice(0, 1), "#/portal/overview", "Pro trial started")
   await scene("trial-license-welcome", { ...active(9), tenants: [trialTenant(0, 9, { trialAcknowledged: false })] }, MOCK.tenants.slice(0, 1), "#/license", "Pro trial started")
   if (await evaluate(`document.querySelectorAll('h2').length && [...document.querySelectorAll('h2')].filter(e => e.textContent.startsWith("Pro trial started")).length !== 1`)) throw new Error("Duplicate License welcome")
-  await scene("trial-license-extension", active(5), MOCK.tenants.slice(0, 1), "#/license", "Need more time? Extend your trial")
-  await evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent === "Need more time? Extend your trial").click()`)
-  await assertText("Trial extended. Ends on")
+  await scene("trial-license-before-window", active(9), MOCK.tenants.slice(0, 1), "#/license", "You can extend once, from")
+  await scene("trial-license-extension", active(5), MOCK.tenants.slice(0, 1), "#/license", "Extend trial by 12 days")
+  await evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent === "Extend trial by 12 days").click()`)
+  await assertText("23 days left")
   await screenshot("trial-extension-saved", true)
   await main.evaluate(`globalThis.__marketingMock.trialActionError = "The email address could not be saved. Try again."`)
   await evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent === "Email me setup tips and a reminder before the trial ends").click()`)
@@ -243,12 +253,19 @@ try {
   await screenshot("trial-switcher", true)
   await evaluate(`document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))`)
   await send("Emulation.setDeviceMetricsOverride", { width: 1100, height: 1100, deviceScaleFactor: 1, mobile: false })
-  for (const days of [5, 1]) await scene(`trial-reminder-${days}`, { ...active(days), tenants: [trialTenant(0, days), trialTenant(1, days)] }, MOCK.tenants, "#/portal/overview", days === 1 ? "Your Pro trial ends tomorrow" : "Your Pro trial ends in 5 days")
+  for (const width of [1100, 1440]) {
+  await send("Emulation.setDeviceMetricsOverride", { width, height: 1100, deviceScaleFactor: 1, mobile: false })
+  for (const days of [5, 1]) await scene(`trial-reminder-${days}-${width}`, { ...active(days), tenants: [trialTenant(0, days), trialTenant(1, days)] }, MOCK.tenants, "#/portal/overview", days === 1 ? "Your Pro trial ends tomorrow" : "Your Pro trial ends in 5 days")
+  }
   await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1380, deviceScaleFactor: 1, mobile: false })
   for (const count of [1, 2]) {
     const endedTenants = Array.from({ length: count }, (_, i) => trialTenant(i, -1, { entitled: false, activated: false, source: null, plan: count > 1 || i ? null : "community", validUntil: null, trial: false, trialAcknowledged: false, coverageEnded: true }))
     await scene(`trial-ended-${count}`, { ...base, communityTenantId: count > 1 ? null : TENANTS[0].guid, communityChoiceTenantIds: count > 1 ? TENANTS.map(t => t.guid) : [], communityChoicePendingTenantIds: count > 1 ? TENANTS.map(t => t.guid) : [], trialEndedAt: new Date(NOW - DAY).toISOString(), tenants: endedTenants }, MOCK.tenants.slice(0, count), "#/portal/overview", "Continue on Community")
   }
+  await main.evaluate(`globalThis.__marketingMock.usage = { [${JSON.stringify(TENANTS[0].guid)}]: "During your trial: 3 CIS Benchmarks assessments, 2 health reviews, 1 promotion." }`)
+  await scene("trial-reminder-with-usage", active(1), MOCK.tenants.slice(0, 1), "#/portal/overview", "During your trial:")
+  await scene("trial-ended-with-usage", { ...base, trialEndedAt: new Date(NOW - DAY).toISOString(), tenants: [trialTenant(0, -1, { entitled: false, activated: false, source: null, trial: false, trialAcknowledged: false })] }, MOCK.tenants.slice(0, 1), "#/portal/overview", "During your trial:")
+  await main.evaluate(`globalThis.__marketingMock.usage = {}`)
   await main.evaluate(`globalThis.__marketingMock.trialActionError = "The trial acknowledgement could not be saved. Try again."`)
   await evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent === "Continue on Community").click()`)
   await assertText("The trial acknowledgement could not be saved. Try again.")

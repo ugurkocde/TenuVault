@@ -317,6 +317,7 @@ function retryAfterMs(value: string | null): number | null {
 
 export class LicenseService {
   private state: StoredLicense | null = null
+  private trialPolicy: NonNullable<LicenseStatus["tenantTrialPolicy"]> = {}
   private trialsEnabled = false
   private healthCheckedAt = 0
   private healthCheck: Promise<void> | null = null
@@ -369,6 +370,11 @@ export class LicenseService {
         const response = await this.fetchImpl(`${this.options.apiBase}/api/desktop-license/health`, { signal: AbortSignal.timeout(10_000), redirect: "error" })
         const data = await response.json()
         if (!response.ok || data?.tenantTrials?.ok !== true || typeof data.tenantTrials.enabled !== "boolean") throw new Error("Trial health is unavailable.")
+        this.trialPolicy = {}
+        for (const field of ["days", "extensionDays", "extensionWindowDays", "extensionGraceDays"] as const) {
+          const value = data.tenantTrials[field]
+          if (Number.isInteger(value) && value > 0 && value <= 365) this.trialPolicy[field] = value
+        }
         this.trialsEnabled = data.tenantTrials.enabled === true
         this.healthCheckedAt = Date.now()
         this.healthRetryAt = 0
@@ -434,7 +440,38 @@ export class LicenseService {
     const end = this.trialEnd(tenant)
     const remaining = end ? Date.parse(end) - Date.now() : NaN
     return Boolean(record?.activationId && !record.extended && !record.endedAt &&
-      (!this.state?.activations[tenant] || this.state.activations[tenant]?.source === "trial") && remaining <= 5 * 86400_000 && remaining >= -14 * 86400_000)
+      (!this.state?.activations[tenant] || this.state.activations[tenant]?.source === "trial") && remaining <= (this.trialPolicy.extensionWindowDays ?? 5) * 86400_000 && remaining >= -(this.trialPolicy.extensionGraceDays ?? 14) * 86400_000)
+  }
+
+  trialUsagePeriod(tenant: string): { since: number; until: number } | null {
+    this.load()
+    if (!this.trialsEnabled || this.state?.key) return null
+    const record = this.trialRecords[tenant]
+    const entry = this.state?.activations[tenant]
+    if (entry && entry.source !== "trial") return null
+    const payload = record?.token ? decodeToken(record.token, this.publicKeys) : null
+    if (!payload?.keyExp) return null
+    // A refreshed token can be newer than the trial. This conservative bound never includes pre-trial activity.
+    return { since: !record?.extended && this.trialPolicy.days ? (payload.keyExp * 1000 - this.trialPolicy.days * 86400_000) : payload.iat * 1000, until: record?.endedAt ?? payload.keyExp * 1000 }
+  }
+
+  notifyTrials(notify: (tenantId: string, ended: boolean) => boolean): void {
+    this.load()
+    if (!this.trialsEnabled || this.state?.key) return
+    for (const [tenant, record] of Object.entries(this.trialRecords)) {
+      if (!this.tenantPresent(tenant) || record.endedAt) continue
+      const entry = this.state?.activations[tenant]
+      if (entry && entry.source !== "trial") continue
+      const end = Date.parse(this.trialEnd(tenant) ?? "")
+      if (!Number.isFinite(end) || end - Date.now() > 86400_000) continue
+      const ended = end <= Date.now()
+      const field = ended ? "endedNoticeEnd" : "dayNoticeEnd"
+      if (record[field] === end) continue
+      if (notify(tenant, ended)) {
+        record[field] = end
+        this.saveTrials()
+      }
+    }
   }
 
   private rememberTrial(tenant: string, data: Record<string, unknown>): void {
@@ -1863,7 +1900,10 @@ export class LicenseService {
         trialRefusal: this.trialRefusal(tenantId) ?? (!payload && this.trialRecords[tenantId]?.activationId && Date.parse(this.trialEnd(tenantId) ?? "") <= Date.now() ? TRIAL_REASONS.used : undefined),
         trialAcknowledged: tenantTrial ? this.trialRecords[tenantId]?.acknowledged : this.trialRecords[tenantId]?.endedAcknowledged,
         trialEmail: this.trialRecords[tenantId]?.email,
-        trialCanExtend: this.canExtendTrial(tenantId),
+        trialExtensionUnavailable: Boolean(this.trialRecords[tenantId]?.extended || this.trialRecords[tenantId]?.endedAt),
+        trialExtensionAvailableAt: this.trialsEnabled && this.trialRecords[tenantId]?.activationId && !this.trialRecords[tenantId]?.extended && !this.trialRecords[tenantId]?.endedAt && this.trialEnd(tenantId)
+          ? new Date(Date.parse(this.trialEnd(tenantId)!) - (this.trialPolicy.extensionWindowDays ?? 5) * 86400_000).toISOString() : undefined,
+        trialCanExtend: this.trialsEnabled && this.canExtendTrial(tenantId),
         shared: source === "key" ? (entry?.shared ?? null) : null,
         shareNeedsSignIn: source === "key" && Boolean(entry?.shareNeedsSignIn),
         displayKey: source === "tenant" ? (entry?.displayKey ?? null) : null,
@@ -1885,6 +1925,7 @@ export class LicenseService {
           : null
     const keyState: LicenseStatus["keyState"] = !key ? "none" : keyToken ? "active" : keyMessage ? "failed" : "pending"
     return {
+      tenantTrialPolicy: this.trialPolicy,
       tenantTrialsEnabled: this.trialsEnabled,
       hasKey: Boolean(key),
       keyState,

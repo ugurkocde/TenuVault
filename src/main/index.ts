@@ -1,3 +1,5 @@
+import { cachedTrialUsage } from "./license/usage"
+import { notifyTenantTrial } from "./license/notifications"
 import { licenseStatusHandler } from "./license/status"
 import { CommunityChoicePendingError, CommunityLimitError, withPlanError } from "../shared/plan-errors"
 import { licenseBuyUrl, licenseCheckoutUrl, trialCheckoutUrl } from "./license/buy-url"
@@ -280,6 +282,8 @@ async function bootstrap(): Promise<void> {
     })(),
     connectedTenantIds: () => connectedTenantIds(),
   })
+  const checkTrialNotifications = () => license.notifyTrials((tenantId, ended) => notifyTenantTrial(tenantProfile(tenantId)?.name ?? "this tenant", ended, () => { showWindow(); return mainWindow }))
+  setInterval(checkTrialNotifications, 60_000)
   const prepareCoverage = prepareScheduledCoverage(license)
   // License check of the fetch bridge and the backup engine; a rollback in progress may use a
   // tenant whose license ended, and its backup keeps every older backup (features/recovery.ts).
@@ -1157,6 +1161,12 @@ async function bootstrap(): Promise<void> {
     if (action !== "extend_trial" && action !== "end_trial" && action !== "trial_contact" && action !== "acknowledge") throw new Error("Unknown trial action.")
     if (email !== undefined && (typeof email !== "string" || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) throw new Error("Enter a valid email address.")
     return withStatus(() => license.tenantTrialAction(tenant, action, email as string | undefined))
+  })
+  const trialUsage = cachedTrialUsage(appStore, workspaceStore)
+  handleTrusted("license:trialUsage", (_event, tenant: unknown) => {
+    if (!isTenantId(tenant)) return null
+    const period = license.trialUsagePeriod(tenant.toLowerCase())
+    return period ? trialUsage(tenant.toLowerCase(), period.since, period.until) : null
   })
   handleTrusted("license:status", licenseStatusHandler(license, currentLicenseStatus))
   handleTrusted("license:refresh", () => withStatus(() => license.refreshAll()))

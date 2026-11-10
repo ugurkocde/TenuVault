@@ -9,6 +9,7 @@ const day = 86400_000
 const start = Date.UTC(2026, 10, 10)
 let store: ReturnType<typeof memoryStore>
 let calls: Record<string, unknown>[]
+let healthFields: Record<string, unknown>
 let enabled: boolean
 let canEnd: boolean
 let end: number
@@ -20,7 +21,7 @@ function entitlement(source = "trial") {
 }
 function service(existing: string[] = []) {
   return new LicenseService({ store, persist: true, publicKey: publicKey.export({ type: "spki", format: "pem" }).toString(), apiBase: "https://www.tenuvault.com", appVersion: "0.5.0", initialTenantIds: store.get("license.tenantTrials") ? [...new Set([tenant, ...existing])] : existing, connectedTenantIds: () => [tenant], idToken: async () => "signed.id.token", fetch: (async (_url, init) => {
-    if (!init?.body) return Response.json({ tenantTrials: { enabled, ok: true } })
+    if (!init?.body) return Response.json({ tenantTrials: { enabled, ok: true, ...healthFields } })
     const body = JSON.parse(String(init.body)) as Record<string, unknown>
     calls.push(body)
     if (response) return response(body)
@@ -33,7 +34,7 @@ async function connect(license: LicenseService) {
   await license.checkTrialHealth()
   return license.checkNewTenant(tenant)
 }
-beforeEach(() => { vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(start); store = memoryStore(); store.set("license.installId", install); calls = []; enabled = true; canEnd = true; end = start + 14 * day; response = undefined; vi.spyOn(console, "warn").mockImplementation(() => {}) })
+beforeEach(() => { vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(start); store = memoryStore(); store.set("license.installId", install); calls = []; healthFields = {}; enabled = true; canEnd = true; end = start + 14 * day; response = undefined; vi.spyOn(console, "warn").mockImplementation(() => {}) })
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 describe("tenant trials", () => {
   it.each([true, false])("starts or joins and keeps canEnd %s", async starter => {
@@ -197,4 +198,109 @@ describe("tenant trials", () => {
     expect(license.status([tenant]).trial).toBe(true)
   })
 
+})
+
+describe("trial policy and tray reminders", () => {
+  it.each([
+    [{}, {}],
+    [{ days: 10, extensionDays: 12, extensionWindowDays: 3, extensionGraceDays: 7 }, { days: 10, extensionDays: 12, extensionWindowDays: 3, extensionGraceDays: 7 }],
+    [{ days: 0, extensionDays: 1.5, extensionWindowDays: "5", extensionGraceDays: 366 }, {}],
+    [{ days: -1, extensionDays: null, extensionWindowDays: true, extensionGraceDays: [] }, {}],
+  ])("validates optional health lengths %j", async (fields, expected) => {
+    healthFields = fields
+    const license = service()
+    await license.checkTrialHealth()
+    expect(license.status([]).tenantTrialPolicy).toEqual(expected)
+    await license.checkTrialHealth()
+    expect(license.status([]).tenantTrialPolicy).toEqual(expected)
+  })
+  it("uses the reported extension window and grace", async () => {
+    healthFields = { extensionWindowDays: 3, extensionGraceDays: 7 }
+    const license = service()
+    await connect(license)
+    vi.setSystemTime(end - 4 * day)
+    expect(license.status([tenant]).tenants[0]!.trialCanExtend).toBe(false)
+    expect(license.status([tenant]).tenants[0]!.trialExtensionAvailableAt).toBe(new Date(end - 3 * day).toISOString())
+    vi.setSystemTime(end - 3 * day)
+    expect(license.status([tenant]).tenants[0]!.trialCanExtend).toBe(true)
+    vi.setSystemTime(end + 8 * day)
+    expect(license.status([tenant]).tenants[0]!.trialCanExtend).toBe(false)
+  })
+  it("sends each reminder once per end and persists across restart", async () => {
+    const license = service()
+    await connect(license)
+    const notify = vi.fn(() => true)
+    license.notifyTrials(notify)
+    expect(notify).not.toHaveBeenCalled()
+    vi.setSystemTime(end - day)
+    license.notifyTrials(notify)
+    license.notifyTrials(notify)
+    expect(notify).toHaveBeenCalledExactlyOnceWith(tenant, false)
+    const restarted = service()
+    await restarted.checkTrialHealth()
+    restarted.notifyTrials(notify)
+    expect(notify).toHaveBeenCalledTimes(1)
+    vi.setSystemTime(end)
+    restarted.notifyTrials(notify)
+    restarted.notifyTrials(notify)
+    expect(notify).toHaveBeenLastCalledWith(tenant, true)
+    const again = service()
+    await again.checkTrialHealth()
+    again.notifyTrials(notify)
+    expect(notify).toHaveBeenCalledTimes(2)
+  })
+  it("re-arms at the extended end and retries unsupported notifications", async () => {
+    const license = service()
+    await connect(license)
+    vi.setSystemTime(end - day)
+    license.notifyTrials(() => false)
+    const notify = vi.fn(() => true)
+    license.notifyTrials(notify)
+    end += 10 * day
+    await license.tenantTrialAction(tenant, "extend_trial")
+    license.notifyTrials(notify)
+    expect(notify).toHaveBeenCalledTimes(1)
+    vi.setSystemTime(end - day)
+    license.notifyTrials(notify)
+    expect(notify).toHaveBeenCalledTimes(2)
+  })
+  it.each(["disabled", "key", "organization", "ended-early"])("does not notify for %s", async kind => {
+    const license = service()
+    await connect(license)
+    if (kind === "ended-early") await license.tenantTrialAction(tenant, "end_trial")
+    if (kind === "disabled") { enabled = false; vi.setSystemTime(start + day); await license.checkTrialHealth() }
+    if (kind === "key" || kind === "organization") {
+      const saved = JSON.parse(store.get("license.state")!)
+      if (kind === "key") saved.key = "PAID-KEY"
+      else saved.activations[tenant].source = "tenant"
+      store.set("license.state", JSON.stringify(saved))
+    }
+    vi.setSystemTime(end - day)
+    const subject = kind === "key" || kind === "organization" ? service() : license
+    if (subject !== license) await subject.checkTrialHealth()
+    const notify = vi.fn(() => true)
+    subject.notifyTrials(notify)
+    expect(notify).not.toHaveBeenCalled()
+  })
+})
+
+it("bounds local usage by verified trial dates without changing the trial record", async () => {
+  const license = service()
+  expect(license.trialUsagePeriod(tenant)).toBeNull()
+  await connect(license)
+  const stored = store.get("license.tenantTrials")
+  expect(license.trialUsagePeriod(tenant)).toEqual({ since: start, until: end })
+  expect(store.get("license.tenantTrials")).toBe(stored)
+  healthFields = { days: 10 }
+  const restarted = service()
+  await restarted.checkTrialHealth()
+  expect(restarted.trialUsagePeriod(tenant)).toEqual({ since: end - 10 * day, until: end })
+  vi.setSystemTime(end - day)
+  end += 10 * day
+  await restarted.tenantTrialAction(tenant, "extend_trial")
+  expect(restarted.trialUsagePeriod(tenant)).toEqual({ since: Date.now(), until: end })
+  enabled = false
+  vi.setSystemTime(end - day)
+  await restarted.checkTrialHealth()
+  expect(restarted.trialUsagePeriod(tenant)).toBeNull()
 })

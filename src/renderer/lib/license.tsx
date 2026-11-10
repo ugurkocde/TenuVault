@@ -238,12 +238,13 @@ export function trialReminder(
   status: Pick<LicenseStatus, "trial" | "trialEndsAt"> & Partial<Pick<LicenseStatus, "tenants">>,
   dismissedAt: string | undefined,
   now = Date.now(),
-): { stage: "day-20" | "day-27"; daysLeft: number; endsAt: string; tenantTrial?: boolean } | null {
+): { stage: "day-20" | "day-27"; daysLeft: number; endsAt: string; tenantTrial?: boolean; tenantId?: string } | null {
   const candidates = status.tenants?.filter(tenant => tenant.entitled && tenant.trial).map(tenant => ({
     endsAt: tenant.trialEndsAt ?? tenant.validUntil,
+    tenantId: tenant.source === "trial" ? tenant.tenantId : undefined,
     tenantTrial: tenant.source === "trial",
   })) ?? []
-  if (!candidates.length && status.trial && status.trialEndsAt) candidates.push({ endsAt: status.trialEndsAt, tenantTrial: false })
+  if (!candidates.length && status.trial && status.trialEndsAt) candidates.push({ endsAt: status.trialEndsAt, tenantTrial: false, tenantId: undefined })
   for (const candidate of candidates.sort((a, b) => Date.parse(a.endsAt ?? "") - Date.parse(b.endsAt ?? ""))) {
     if (!candidate.endsAt) continue
     const daysLeft = trialDaysLeft({ trial: true, trialEndsAt: candidate.endsAt }, now)
@@ -254,7 +255,7 @@ export function trialReminder(
     if (days === undefined) continue
     const dismissed = dismissedAt ? Date.parse(dismissedAt) : NaN
     if (Number.isFinite(dismissed) && dismissed >= end - days * DAY_MS && dismissed <= now) continue
-    return { stage: days === 3 || days === 1 ? "day-27" : "day-20", daysLeft, endsAt: candidate.endsAt, ...(candidate.tenantTrial ? { tenantTrial: true } : {}) }
+    return { stage: days === 3 || days === 1 ? "day-27" : "day-20", daysLeft, endsAt: candidate.endsAt, ...(candidate.tenantTrial ? { tenantTrial: true, tenantId: candidate.tenantId } : {}) }
   }
   return null
 }
