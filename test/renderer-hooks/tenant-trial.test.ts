@@ -364,6 +364,17 @@ it.each([true, false])("shows configured workflow changes with trials enabled %s
   state.configured.mockResolvedValue(false)
   state.status = { ...state.status! }
   await render(createElement(TrialChanges, { tenantId: tenant.tenantId }))
+  expect(state.configured).toHaveBeenCalledTimes(1)
+  expect(container.textContent).toContain("Alerts, health review and change reports pause.")
+  state.status.tenants = [{ ...tenant, tenantId: "second" }]
+  await render(createElement(TrialChanges, { tenantId: "second" }))
+  expect(state.configured).toHaveBeenCalledTimes(2)
+  expect(state.configured).toHaveBeenLastCalledWith("second")
+  expect(container.textContent).not.toContain("Alerts, health review and change reports pause.")
+})
+it("hides unreadable workflow configuration", async () => {
+  state.configured.mockRejectedValue(new Error("Store unavailable"))
+  await render(createElement(TrialChanges, { tenantId: tenant.tenantId }))
   expect(container.textContent).not.toContain("Alerts, health review and change reports pause.")
 })
 it("only shows extension progress for the extension action", async () => {

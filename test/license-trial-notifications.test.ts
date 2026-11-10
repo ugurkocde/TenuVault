@@ -1,6 +1,6 @@
 import type { BrowserWindow } from "electron"
 import { beforeEach, expect, it, vi } from "vitest"
-import { notifyTenantTrial } from "../src/main/license/notifications"
+import { notifyTenantTrial, runTrialNotificationCheck } from "../src/main/license/notifications"
 const noticeEnd = new Date(2026, 10, 10, 17).getTime()
 const state = vi.hoisted(() => ({ supported: true, options: {} as { title: string; body: string }, click: () => {}, show: vi.fn() }))
 vi.mock("electron", () => ({ Notification: class {
@@ -10,6 +10,17 @@ vi.mock("electron", () => ({ Notification: class {
   show() { state.show() }
 } }))
 beforeEach(() => { vi.clearAllMocks(); state.supported = true })
+it("contains timer failures and allows the next notification check", () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+  const failure = new Error("Store unavailable")
+  const check = vi.fn().mockImplementationOnce(() => { throw failure })
+  try {
+    expect(() => runTrialNotificationCheck(check)).not.toThrow()
+    expect(warn).toHaveBeenCalledWith("[license] Trial notification check failed:", failure)
+    runTrialNotificationCheck(check)
+    expect(check).toHaveBeenCalledTimes(2)
+  } finally { warn.mockRestore() }
+})
 it.each([false, true])("shows the %s notice and opens License", ended => {
   const executeJavaScript = vi.fn(async () => undefined)
   const window = { isDestroyed: () => false, webContents: { executeJavaScript, isLoadingMainFrame: () => false } } as unknown as BrowserWindow

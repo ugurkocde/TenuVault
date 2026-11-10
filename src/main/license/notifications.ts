@@ -1,6 +1,10 @@
 import { trialEndWhen } from "../../shared/trial-notices"
 import { Notification, type BrowserWindow } from "electron"
 
+export function runTrialNotificationCheck(check: () => void): void {
+  try { check() } catch (error) { console.warn("[license] Trial notification check failed:", error) }
+}
+
 export function notifyTenantTrial(name: string, ended: boolean, openWindow: () => BrowserWindow | null, end = Date.now() + 86400_000, canExtend = true): boolean {
   if (!Notification.isSupported()) return false
   const when = trialEndWhen(end)

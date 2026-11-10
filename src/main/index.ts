@@ -1,6 +1,6 @@
 import { trialBackupObserver } from "./license/usage-actions"
 import { cachedTrialUsage, trialWorkflowsConfigured } from "./license/usage"
-import { notifyTenantTrial } from "./license/notifications"
+import { notifyTenantTrial, runTrialNotificationCheck } from "./license/notifications"
 import { licenseStatusHandler } from "./license/status"
 import { CommunityChoicePendingError, CommunityLimitError, withPlanError } from "../shared/plan-errors"
 import { licenseBuyUrl, licenseCheckoutUrl, trialCheckoutUrl } from "./license/buy-url"
@@ -283,7 +283,7 @@ async function bootstrap(): Promise<void> {
     })(),
     connectedTenantIds: () => connectedTenantIds(),
   })
-  const checkTrialNotifications = () => license.notifyTrials((tenantId, ended, end, canExtend) => notifyTenantTrial(tenantProfile(tenantId)?.name ?? "this tenant", ended, () => { showWindow(); return mainWindow }, end, canExtend))
+  const checkTrialNotifications = () => runTrialNotificationCheck(() => license.notifyTrials((tenantId, ended, end, canExtend) => notifyTenantTrial(tenantProfile(tenantId)?.name ?? "this tenant", ended, () => { showWindow(); return mainWindow }, end, canExtend)))
   setInterval(checkTrialNotifications, 60_000)
   const tallyBackup = trialBackupObserver((tenant, feature) => license.recordTrialUsage(tenant, feature))
   const prepareCoverage = prepareScheduledCoverage(license)

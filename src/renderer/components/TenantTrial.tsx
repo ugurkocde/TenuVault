@@ -162,10 +162,16 @@ export function TrialChanges({ tenantId }: { tenantId?: string }) {
   const [daily, setDaily] = useState(false)
   const [workflows, setWorkflows] = useState(false)
   const [longHistory, setLongHistory] = useState(false)
+  const trialIds = (status?.tenants.filter(t => t.trialEndsAt && (!tenantId || t.tenantId === tenantId)).map(t => t.tenantId) ?? []).sort().join(",")
+  useEffect(() => {
+    let active = true
+    const ids = trialIds ? trialIds.split(",") : []
+    setWorkflows(false)
+    void Promise.resolve().then(() => Promise.all(ids.map(id => bridge.license.trialWorkflowsConfigured(id)))).then(values => { if (active) setWorkflows(values.some(Boolean)) }).catch(() => { if (active) setWorkflows(false) })
+    return () => { active = false }
+  }, [trialIds])
   useEffect(() => {
     void bridge.schedules.list().then(schedules => setDaily(schedules.some(s => s.enabled && s.frequency === "daily" && status?.tenants.some(t => t.trialEndsAt && (!status?.tenantTrialsEnabled || !tenantId || t.tenantId === tenantId) && t.tenantId === s.tenantId)))).catch(() => {})
-    const ids = status?.tenants.filter(t => t.trialEndsAt && (!tenantId || t.tenantId === tenantId)).map(t => t.tenantId) ?? []
-    void Promise.resolve().then(() => Promise.all(ids.map(id => bridge.license.trialWorkflowsConfigured(id)))).then(values => setWorkflows(values.some(Boolean))).catch(() => setWorkflows(false))
     void bridge.preferences.get().then(prefs => setLongHistory(prefs.retentionDays > 30)).catch(() => {})
   }, [status, tenantId])
   const azure = tenants.some(t => t.resources?.storageAccountName && !t.resources.storageAccountName.startsWith(LOCAL_STORAGE_PREFIX) && status?.tenants.some(licensed => licensed.trialEndsAt && (!status?.tenantTrialsEnabled || !tenantId || licensed.tenantId === tenantId) && licensed.tenantId === t.credentials?.tenantId?.toLowerCase()))
