@@ -429,11 +429,12 @@ export default function LicensePage() {
     )
 
   const title = licensePageTitle(status)
-  // After a used trial the page offers Buy Pro once: not when the ended notice above the page
-  // or a trial card below already carries it.
+  // After a used trial the page offers Buy Pro once: not when the ended notice above the page,
+  // a trial card below or a refused trial key's message already carries it.
   const trialUsed = trialUsedUp(status)
   const buyAfterTrial = trialUsed && !trialEndVisible(status)
     && !status.tenants.some(t => (t.source === "trial" || t.trialCanExtend && t.trialAcknowledged) && !(t.entitled && !t.trialAcknowledged))
+    && ![error, status.keyMessage, signedIn > 0 ? status.message : null].some(message => message?.includes(TRIAL_USED_MESSAGE))
 
   return (
     <div className="max-w-5xl space-y-6 p-6 lg:p-8">

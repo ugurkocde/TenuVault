@@ -323,6 +323,18 @@ describe("License page after a used tenant trial", () => {
     expect(buyButtons(container)).toHaveLength(0)
   })
 
+  it("shows one Buy Pro when a trial key is refused for the tenant", async () => {
+    state.setKey.mockRejectedValueOnce(new Error("This tenant already had a Pro trial. Buy Pro to continue, or write to support@tenuvault.com for a quote or an invoice."))
+    const container = await render({ ...community, tenantTrialsEnabled: true, tenants: [used()] })
+    expect(buyButtons(container)).toHaveLength(1)
+    type(container.querySelector<HTMLInputElement>("#license-key")!, "TENU-TRIAL-KEY-0001")
+    await act(async () => button(container, "Activate")!.click())
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("This tenant already had a Pro trial.")
+    expect(buyButtons(container)).toHaveLength(1)
+    await act(async () => { buyButtons(container)[0]!.click() })
+    expect(state.open).toHaveBeenCalledWith("checkout", { source: "license-page-trial-key-refused" })
+  })
+
   it("still offers the trial to a tenant that can start one", async () => {
     const container = await render({ ...community, tenantTrialsEnabled: true, tenants: [used(), used({ tenantId: "99999999-2222-4333-8444-555555555555", trialEndsAt: null, trialAcknowledged: undefined, trialRefusalPermanent: false, trialRefusal: undefined, trialExtensionUnavailable: false })] })
     expect(container.textContent).toContain("Paste the license key from your email, or start a free trial.")
