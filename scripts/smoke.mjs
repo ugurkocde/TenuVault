@@ -117,6 +117,18 @@ async function waitForCondition(expression, timeout = 20000) {
   return false
 }
 
+// trialsEnabled starts false before the asynchronous health response. A populated policy
+// is written only after health is parsed, even when the production kill switch is off.
+async function waitForTrialHealth() {
+  assert(await waitForCondition(`(async () => {
+    const status = await window.tenuvault.license.status()
+    if (!Number.isInteger(status.tenantTrialPolicy?.days)) return false
+    window.__smokeTrialStatus = status
+    return true
+  })()`), "license health did not settle with a trial policy")
+  return evaluate(`window.__smokeTrialStatus`)
+}
+
 async function waitForText(text, timeout = 20000) {
   return waitForCondition(`document.body?.innerText.includes(${JSON.stringify(text)})`, timeout)
 }
@@ -413,10 +425,18 @@ await check("platform sign-in support", async () => {
 })
 
 await check("license page asks for a license and offers the free trial", async () => {
+  const settled = await waitForTrialHealth()
+  console.log(`     trial switch: ${settled.tenantTrialsEnabled ? "enabled, tenant trial UI" : "disabled, emailed trial UI"}`)
   await go("#/license", "Add your license")
   assert(await waitForText("Official TenuVault builds are licensed under the license agreement"), "license agreement link missing on the license page")
-  assert(await waitForText("Try Pro free for 30 days, no card needed."), "trial call to action missing")
-  assert(await waitForText("Start free trial"), "trial button missing")
+  if (settled.tenantTrialsEnabled) {
+    assert(await waitForText("Tenant trials store a keyed hash of the tenant ID."), "tenant trial explanation missing")
+    assert(await waitForCondition(`Boolean(document.querySelector('input[name="license-key"]')) && [...document.querySelectorAll('a')].some(link => link.textContent.trim() === 'Sign in to your tenant')`), "tenant sign-in or license key entry missing")
+    assert(await evaluate(`!document.querySelector('#trial, input[type="email"]') && ![...document.querySelectorAll('button, a')].some(item => ['Start free trial', 'Start 30 day free trial'].includes(item.textContent.trim()))`), "emailed trial controls visible with tenant trials enabled")
+  } else {
+    assert(await waitForText("Try Pro free for 30 days, no card needed."), "trial call to action missing")
+    assert(await waitForText("Start free trial"), "trial button missing")
+  }
   const status = await evaluate(`window.tenuvault.license.status()`)
   assert(!status.hasKey && status.tenants.length === 0, `unexpected license state ${JSON.stringify(status)}`)
   await screenshot("02-license-none")
@@ -911,9 +931,17 @@ await check("Community is a neutral plan state and its Overview notice remembers
 })
 
 await check("Community trial is requested in the app, Buy now opens the checkout and the invoice and nonprofit links use the external bridge", async () => {
+  const settled = await waitForTrialHealth()
+  console.log(`     trial switch: ${settled.tenantTrialsEnabled ? "enabled, emailed trial request unavailable; legacy purchase and link controls use a disabled renderer fixture" : "disabled, emailed trial request exercised"}`)
   try {
     await evaluate(`(() => {
-      window.__communityTrial = { opened: [], docs: [], trials: [] }
+      window.__communityTrial = { opened: [], docs: [], trials: [], status: window.__smokeTrialStatus }
+      if (window.__communityTrial.status.tenantTrialsEnabled) {
+        window.__communityTrial.status = { ...window.__communityTrial.status, tenants: [{
+          tenantId: "11111111-2222-3333-4444-555555555555", signedIn: true,
+          entitled: false, activated: false, plan: null, source: null,
+        }] }
+      }
       const frame = document.createElement("iframe")
       frame.style.cssText = "position: fixed; inset: 0; width: 100%; height: 100%; border: 0; z-index: 9999;"
       document.body.appendChild(frame)
@@ -926,6 +954,8 @@ await check("Community trial is requested in the app, Buy now opens the checkout
         ...window.tenuvault,
         license: {
           ...window.tenuvault.license,
+          status: () => Promise.resolve(window.__communityTrial.status),
+          onChanged: listener => { window.__communityTrial.changed = listener; return () => {} },
           open: (destination, context) => { window.__communityTrial.opened.push({ destination, context }); return Promise.resolve() },
           startTrial: (email, context) => { window.__communityTrial.trials.push({ email, context }); return Promise.resolve() },
         },
@@ -938,18 +968,33 @@ await check("Community trial is requested in the app, Buy now opens the checkout
       frame.contentDocument.head.appendChild(script)
     })()`)
     const body = "window.__communityTrialFrame.contentDocument.body"
-    assert(await waitForCondition(`${body}.innerText.includes("Try Pro free for 30 days, no card needed.")`), "Community trial form missing")
-    await evaluate(`(() => {
-      const input = ${body}.querySelector('input[type="email"]')
-      Object.getOwnPropertyDescriptor(window.__communityTrialFrame.contentWindow.HTMLInputElement.prototype, "value").set.call(input, "admin@contoso.com")
-      input.dispatchEvent(new window.__communityTrialFrame.contentWindow.Event("input", { bubbles: true }))
-    })()`)
-    assert(await waitForCondition(`!![...${body}.querySelectorAll('button')].find(button => button.textContent.trim() === 'Start free trial' && !button.disabled)`), "trial button did not enable")
-    await evaluate(`[...${body}.querySelectorAll('button')].find(button => button.textContent.trim() === 'Start free trial').click()`)
-    assert(await waitForCondition(`${body}.innerText.includes("Check your inbox at admin@contoso.com")`), "trial confirmation missing")
-    assert(await waitForCondition(`${body}.innerText.includes("Copy the key from your email and return to TenuVault: it activates by itself.")`), "trial key hint missing")
-    assert(await evaluate(`window.__communityTrial.trials.length === 1 && window.__communityTrial.trials[0].email === "admin@contoso.com" && window.__communityTrial.trials[0].context?.source === "license-page"`), "trial was not requested with the license-page source")
+    if (settled.tenantTrialsEnabled) {
+      assert(await waitForCondition(`${body}.innerText.includes('No card, no email. Starts right away, for this tenant.') && [...${body}.querySelectorAll('button')].some(button => button.textContent.trim() === 'Try Pro free') && [...${body}.querySelectorAll('button')].some(button => button.textContent.trim() === 'Buy Pro')`), "tenant trial and Buy Pro controls missing")
+      assert(await evaluate(`!${body}.querySelector('#trial, input[type="email"]') && ![...${body}.querySelectorAll('button, a')].some(item => ['Start free trial', 'Start 30 day free trial'].includes(item.textContent.trim()))`), "emailed trial controls visible with tenant trials enabled")
+      assert(await evaluate(`window.__communityTrial.trials.length === 0`), "enabled tenant trials requested an emailed key")
+      // These controls belong to the legacy block, hidden by the enabled switch.
+      // Keep testing their real handlers with an explicit renderer-only disabled fixture.
+      await evaluate(`(() => {
+        window.__communityTrial.status = { ...window.__communityTrial.status, tenantTrialsEnabled: false, tenants: [] }
+        window.__communityTrial.changed(window.__communityTrial.status)
+      })()`)
+      assert(await waitForCondition(`${body}.innerText.includes('Try Pro free for 30 days, no card needed.')`), "legacy purchase fixture did not render")
+    } else {
+      assert(await waitForCondition(`${body}.innerText.includes("Try Pro free for 30 days, no card needed.")`), "Community trial form missing")
+      await evaluate(`(() => {
+        const input = ${body}.querySelector('input[type="email"]')
+        Object.getOwnPropertyDescriptor(window.__communityTrialFrame.contentWindow.HTMLInputElement.prototype, "value").set.call(input, "admin@contoso.com")
+        input.dispatchEvent(new window.__communityTrialFrame.contentWindow.Event("input", { bubbles: true }))
+      })()`)
+      assert(await waitForCondition(`!![...${body}.querySelectorAll('button')].find(button => button.textContent.trim() === 'Start free trial' && !button.disabled)`), "trial button did not enable")
+      await evaluate(`[...${body}.querySelectorAll('button')].find(button => button.textContent.trim() === 'Start free trial').click()`)
+      assert(await waitForCondition(`${body}.innerText.includes("Check your inbox at admin@contoso.com")`), "trial confirmation missing")
+      assert(await waitForCondition(`${body}.innerText.includes("Copy the key from your email and return to TenuVault: it activates by itself.")`), "trial key hint missing")
+      assert(await evaluate(`window.__communityTrial.trials.length === 1 && window.__communityTrial.trials[0].email === "admin@contoso.com" && window.__communityTrial.trials[0].context?.source === "license-page"`), "trial was not requested with the license-page source")
+      assert(await evaluate(`window.__communityTrial.opened.length === 0`), "the trial opened a browser page")
+    }
     assert(await evaluate(`window.__communityTrial.opened.length === 0`), "the trial opened a browser page")
+    assert(await waitForCondition(`[...${body}.querySelectorAll('button')].some(button => button.textContent.trim() === 'Buy now')`), "Buy now missing")
     await evaluate(`[...${body}.querySelectorAll('button')].find(button => button.textContent.trim() === 'Buy now').click()`)
     assert(await evaluate(`window.__communityTrial.opened.length === 1 && window.__communityTrial.opened[0].destination === "checkout" && window.__communityTrial.opened[0].context?.source === "license-page"`), "Buy now did not open the checkout with the license-page source")
     assert(await evaluate(`${body}.innerText.includes("Need an invoice instead of a card?") && ${body}.innerText.includes("support@tenuvault.com") && !${body}.innerText.includes("on request") && ${body}.innerText.includes("Eligible nonprofits can use Pro at no cost.")`), "invoice or nonprofit copy missing")
@@ -1765,7 +1810,7 @@ await check("tenant changes wait for the disclaimer, once per tenant", async () 
   assert(again[0] !== 428 && !(await evaluate(`!!document.querySelector("[role=dialog]")`)), "disclaimer asked twice for one tenant")
 })
 
-await checkSchedulePanel({ check, evaluate, waitForCondition, screenshot, assert })
+await checkSchedulePanel({ check, evaluate, waitForCondition, waitForTrialHealth, screenshot, assert })
 
 await check("a saved key before tenant sign-in stays neutral with activation guidance", async () => {
   const chip = `document.querySelector('aside a[href="#/license"] span.ml-auto')`

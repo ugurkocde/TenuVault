@@ -30,6 +30,7 @@ const STATE_KEYS = ["license.state", "license.installId", "license.removedTenant
 describe.each(releases)("license state written by %s", (release) => {
   const folder = join(FIXTURES, release)
   const capture = JSON.parse(readFileSync(join(folder, "capture.json"), "utf8")) as Capture
+  const hasTenantTrial = release !== "v0.4.2"
   const signer = readFileSync(join(folder, "signer-public-key.txt"), "utf8")
   const { TENANT_A, TENANT_B, TENANT_ORG, TENANT_REMOVED, TENANT_COMMUNITY } = capture.tenants
   let fetchMock: ReturnType<typeof vi.fn>
@@ -61,11 +62,10 @@ describe.each(releases)("license state written by %s", (release) => {
 
   it("keeps the store keys the license is saved under", () => {
     const keys = new Set<string>()
-    for (const name of ["paid", "trial", "community"]) {
+    for (const name of ["paid", "trial", "community", ...(hasTenantTrial ? ["tenant-trial"] : [])]) {
       for (const key of Object.keys(JSON.parse(readFileSync(join(folder, `${name}.app-state.bin`), "utf8")) as object)) keys.add(key)
     }
-    expect([...keys].every((key) => STATE_KEYS.includes(key))).toBe(true)
-    expect([...keys].sort()).toEqual([...STATE_KEYS].sort())
+    expect([...keys].sort()).toEqual([...STATE_KEYS, ...(hasTenantTrial ? ["license.tenantTrials"] : [])].sort())
   })
 
   it("keeps a paid key entitled offline, with the same installation", async () => {
@@ -103,6 +103,28 @@ describe.each(releases)("license state written by %s", (release) => {
     expect(service.plan(TENANT_COMMUNITY)).toBe("community")
     await expect(service.requireEntitlement(TENANT_COMMUNITY)).resolves.toBe("community")
     expect(service.status([TENANT_COMMUNITY]).communityTenantId).toBe(TENANT_COMMUNITY)
+  })
+
+  it.skipIf(!hasTenantTrial)("keeps an extended tenant trial and its local usage tally", async () => {
+    const { store, service } = open("tenant-trial")
+    expect(store.get("license.installId")).toBe(capture.installId)
+    const end = (capture.capturedAt + 18 * 86400) * 1000
+    const tally = { dailyBackups: 2, azureBackups: 1, fullRestores: 1, driftReverts: 1 }
+    expect(service.status([TENANT_A]).tenants[0]).toMatchObject({
+      entitled: true, plan: "pro", source: "trial", trial: true,
+      trialEndsAt: new Date(end).toISOString(), trialExtensionUnavailable: true,
+      trialCanExtend: false, trialUsageRevision: 5,
+    })
+    await expect(service.requireEntitlement(TENANT_A)).resolves.toBe("pro")
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(JSON.parse(store.get("license.tenantTrials")!)[TENANT_A]).toMatchObject({
+      extended: true, trialEndsAt: end, tally,
+    })
+    // Usage is exposed once the service confirms tenant trials are enabled again.
+    fetchMock.mockResolvedValueOnce(Response.json({ tenantTrials: { enabled: true, ok: true, days: 14, extensionDays: 14 } }))
+    await service.checkTrialHealth()
+    expect(service.trialUsageTally(TENANT_A)).toEqual(tally)
+    expect(service.trialUsagePeriod(TENANT_A)).toEqual({ since: (capture.capturedAt - 10 * 86400) * 1000, until: end })
   })
 
   it("writes state the next start reads the same way", async () => {
