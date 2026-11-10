@@ -276,3 +276,67 @@ it("keeps the save confirmation when a signed-in tenant is uncovered", async () 
   await act(async () => { button(container, "Activate")!.click() })
   expect(container.textContent).toContain("License key saved. It activates for a tenant when you sign in to it.")
 })
+
+describe("License page after a used tenant trial", () => {
+  const DAY = 86_400_000
+  const used = (overrides: Record<string, unknown> = {}) => ({
+    tenantId: "11111111-2222-4333-8444-555555555555", signedIn: true, activated: false, entitled: false, source: null, plan: "community" as const,
+    tenants: null, expiresAt: null, validUntil: null, trial: false, shared: null, shareNeedsSignIn: false, displayKey: null, message: null,
+    trialEndsAt: new Date(Date.now() - DAY).toISOString(), trialAcknowledged: true, trialRefusalPermanent: true,
+    trialRefusal: "This tenant already had a Pro trial.", trialCanExtend: false, trialExtensionUnavailable: true, ...overrides,
+  })
+  const buyButtons = (container: HTMLElement) => [...container.querySelectorAll("button")].filter(item => item.textContent?.trim() === "Buy Pro")
+
+  it.each([
+    ["ended early by the admin", { trialEndsAt: new Date(Date.now() - 60_000).toISOString() }],
+    ["ran out with the extension used", { trialEndsAt: new Date(Date.now() - 3 * DAY).toISOString() }],
+    ["ran out past the extension window", { trialEndsAt: new Date(Date.now() - 30 * DAY).toISOString(), trialExtensionUnavailable: false }],
+    ["was refused because this installation reached its trial limit", { trialEndsAt: null, trialAcknowledged: undefined, trialRefusal: "This installation has already started its available tenant trials.", trialExtensionUnavailable: false }],
+  ])("offers Buy Pro and no further trial when the trial %s", async (_name, overrides) => {
+    const container = await render({ ...community, tenantTrialsEnabled: true, communityTenantId: used().tenantId, tenants: [used(overrides)] })
+    expect(container.textContent).toContain("Add your license")
+    expect(container.textContent).toContain("Paste your license key, or buy Pro for daily backups, full restore and drift revert.")
+    expect(container.textContent).not.toMatch(/start a free trial/i)
+    expect(button(container, "Try Pro free")).toBeUndefined()
+    expect(button(container, "Start free trial")).toBeUndefined()
+    expect(buyButtons(container)).toHaveLength(1)
+    const mailto = container.querySelector<HTMLAnchorElement>('a[href^="mailto:support@tenuvault.com?subject=TenuVault%20Pro"]')
+    expect(mailto).toBeTruthy()
+    await act(async () => { buyButtons(container)[0]!.click() })
+    expect(state.open).toHaveBeenCalledTimes(1)
+    expect(state.open).toHaveBeenCalledWith("checkout", { source: "license-page-trial-used" })
+  })
+
+  it("keeps the extension offer and shows one Buy Pro when the trial ran out with the extension available", async () => {
+    const container = await render({ ...community, tenantTrialsEnabled: true, tenantTrialPolicy: { days: 14, extensionDays: 14 }, tenants: [used({ trialCanExtend: true, trialExtensionUnavailable: false })] })
+    expect(container.textContent).toContain("Pro trial ended")
+    expect(container.textContent).not.toMatch(/start a free trial/i)
+    expect(button(container, "Extend trial by 14 days")).toBeTruthy()
+    expect(buyButtons(container)).toHaveLength(1)
+    await act(async () => { buyButtons(container)[0]!.click() })
+    expect(state.open).toHaveBeenCalledWith("checkout", { source: "trial-end" })
+  })
+
+  it("leaves Buy Pro to the ended notice above the page until it is acknowledged", async () => {
+    const container = await render({ ...community, tenantTrialsEnabled: true, tenants: [used({ trialAcknowledged: false, trialCanExtend: true, trialExtensionUnavailable: false })] })
+    expect(container.textContent).not.toMatch(/start a free trial/i)
+    expect(buyButtons(container)).toHaveLength(0)
+  })
+
+  it("still offers the trial to a tenant that can start one", async () => {
+    const container = await render({ ...community, tenantTrialsEnabled: true, tenants: [used(), used({ tenantId: "99999999-2222-4333-8444-555555555555", trialEndsAt: null, trialAcknowledged: undefined, trialRefusalPermanent: false, trialRefusal: undefined, trialExtensionUnavailable: false })] })
+    expect(container.textContent).toContain("Paste the license key from your email, or start a free trial.")
+    expect(button(container, "Try Pro free")).toBeTruthy()
+    expect(buyButtons(container)).toHaveLength(0)
+  })
+
+  it("is unchanged when tenant trials are switched off", async () => {
+    const container = await render({ ...community, tenantTrialsEnabled: false, tenants: [used()] })
+    expect(container.textContent).toContain("Paste the license key from your email, or start a free trial.")
+    expect(container.textContent).not.toContain("Paste your license key, or buy Pro")
+    expect(button(container, "Start free trial")).toBeTruthy()
+    expect(buyButtons(container)).toHaveLength(0)
+    await act(async () => { button(container, "Buy now")!.click() })
+    expect(state.open).toHaveBeenCalledWith("checkout", { source: "license-page" })
+  })
+})

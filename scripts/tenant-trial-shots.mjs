@@ -47,6 +47,10 @@ const MAIN_OVERRIDES = `(() => {
       M.license.trialEndsAt = tenant.trialEndsAt
     } else if (action === "trial_contact") tenant.trialEmail = email
     else if (action === "acknowledge") tenant.trialAcknowledged = true
+    else if (action === "end_trial") {
+      Object.assign(tenant, { entitled: false, activated: false, source: null, plan: "community", tenants: null, expiresAt: null, validUntil: null, trial: false, canEnd: false, trialEndsAt: new Date().toISOString(), trialAcknowledged: true, trialCanExtend: false, trialExtensionAvailableAt: undefined, trialExtensionUnavailable: true, trialRefusal: "This tenant already had a Pro trial.", trialRefusalPermanent: true })
+      Object.assign(M.license, { plan: null, tenantLimit: null, trial: false, trialEndsAt: null, communityTenantId: tenantId })
+    }
     return M.license
   })
   handle("schedules:list", () => M.schedules)
@@ -230,6 +234,32 @@ try {
   await scene("trial-joined", { ...active(9), tenants: [trialTenant(0, 9, { trialAcknowledged: false, canEnd: false })] }, MOCK.tenants.slice(0, 1), "#/portal/overview", "Pro trial started")
   await scene("trial-license-welcome", { ...active(9), tenants: [trialTenant(0, 9, { trialAcknowledged: false })] }, MOCK.tenants.slice(0, 1), "#/license", "Pro trial started")
   if (await evaluate(`document.querySelectorAll('h2').length && [...document.querySelectorAll('h2')].filter(e => e.textContent.startsWith("Pro trial started")).length !== 1`)) throw new Error("Duplicate License welcome")
+  // Ending the trial early asks first. Afterwards the License page offers Buy Pro, not another trial.
+  const inDialog = label => `[...document.querySelectorAll('[role="dialog"] button')].find(b => b.textContent === ${JSON.stringify(label)}).click()`
+  const themed = async (name) => {
+    await screenshot(name, true)
+    await setTheme("dark")
+    await screenshot(`${name}-dark`, true)
+    await setTheme("light")
+  }
+  await evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent === "Use Community instead").click()`)
+  await assertText("End the Pro trial now?")
+  if (await evaluate(`document.activeElement?.textContent !== "Keep the trial"`)) throw new Error("The safe choice does not have the focus")
+  await themed("trial-end-confirm")
+  await main.evaluate(`globalThis.__marketingMock.trialActionError = "The licensing service could not be reached. Check your connection and try again."`)
+  await evaluate(inDialog("End trial and use Community"))
+  await assertText("The trial is still running.")
+  await screenshot("trial-end-confirm-error", true)
+  await evaluate(inDialog("Keep the trial"))
+  await assertText("Pro trial started")
+  await main.evaluate(`globalThis.__marketingMock.trialActionError = null`)
+  await evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent === "Use Community instead").click()`)
+  await assertText("End the Pro trial now?")
+  await evaluate(inDialog("End trial and use Community"))
+  await assertText("Paste your license key, or buy Pro for daily backups, full restore and drift revert.")
+  if (await evaluate(`document.body.innerText.includes("start a free trial") || [...document.querySelectorAll('button')].filter(b => b.textContent === "Buy Pro").length !== 1 || Boolean(document.querySelector('[role="dialog"]'))`)) throw new Error("License page after an ended trial")
+  await scrollAll(0)
+  await themed("trial-ended-early-license")
   await scene("trial-license-before-window", active(9), MOCK.tenants.slice(0, 1), "#/license", "You can extend once, from")
   await scene("trial-license-extension", active(5), MOCK.tenants.slice(0, 1), "#/license", "Extend trial by 12 days")
   await evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent === "Extend trial by 12 days").click()`)
@@ -287,7 +317,7 @@ try {
   await scene("banner-after-trial", { ...endedPrompt, tenants: [...endedPrompt.tenants, trialTenant(1, -1, { entitled: false, activated: false, source: null, plan: null, trial: false, trialAcknowledged: true, trialRefusal: "This tenant already had a Pro trial.", trialRefusalPermanent: true })] }, MOCK.tenants, "#/portal/overview", "not covered by your")
   await scene("trial-opt-in", existing, MOCK.tenants.slice(0, 1), "#/license", "Try Pro free")
   await scene("trial-refusal", { ...existing, tenants: [{ ...existing.tenants[0], trialRefusal: "This tenant already had a Pro trial." }] }, MOCK.tenants.slice(0, 1), "#/license", "This tenant already had a Pro trial.")
-  await scene("trial-key-used", { ...existing, hasKey: true, keyState: "pending", keyHint: "****TEST", tenants: [{ ...existing.tenants[0], message: "This tenant already had a Pro trial. Buy Pro to continue, or write to support@tenuvault.com for a quote or an invoice." }] }, MOCK.tenants.slice(0, 1), "#/license", "for a quote or an invoice.")
+  await scene("trial-key-used", { ...existing, hasKey: true, keyState: "pending", keyHint: "****TEST", tenants: [{ ...existing.tenants[0], message: "This tenant already had a Pro trial. Buy Pro to continue, or write to support@tenuvault.com for a quote or an invoice." }] }, MOCK.tenants.slice(0, 1), "#/license", "need a quote or an invoice")
   await scene("trial-activation-stored", { ...existing, tenants: [{ ...existing.tenants[0], activated: true, source: "tenant" }] }, MOCK.tenants.slice(0, 1), "#/license", "Check the saved activation")
   await scene("trial-refusal-retry", { ...existing, tenants: [{ ...existing.tenants[0], trialRefusal: "Update TenuVault to start a Pro trial.", trialRefusalPermanent: false }] }, MOCK.tenants.slice(0, 1), "#/license", "Try Pro free")
   await scene("email-trial-fallback", { ...existing, tenantTrialsEnabled: false }, MOCK.tenants.slice(0, 1), "#/license", "We email you a Pro license key for 30 days")
