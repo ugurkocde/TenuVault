@@ -342,7 +342,9 @@ describe("in-app tenant setup", () => {
 
   it("explains the setup before it starts", async () => {
     const container = await render(createElement(OnboardingPage))
-    for (const text of ["One Microsoft sign-in, about two minutes.", "It lives in your tenant", "It acts only as you", "Backups stay with you", "Microsoft Graph Command Line Tools", "because the setup grants admin consent", "Application.ReadWrite.All", "kept in memory only"]) expect(container.textContent).toContain(text)
+    for (const text of ["One Microsoft sign-in.", "It lives in your tenant", "It acts only as you", "No secret to protect", "Backups stay with you", "Microsoft will ask you to approve Microsoft Graph Command Line Tools", "because the setup grants admin consent", "Your administrator approves once", "Application.ReadWrite.All", "kept in memory only"]) expect(container.textContent).toContain(text)
+    // Claims the app cannot stand behind are not made: no time promise, and no "everything stays in your tenant".
+    expect(container.textContent).not.toMatch(/about (a|one|two) minutes?|stays in your tenant|no background access/i)
     expect(container.querySelector("#setup-tenant")).not.toBeNull()
     expect(container.querySelector('[role="alert"]')).toBeNull()
   })

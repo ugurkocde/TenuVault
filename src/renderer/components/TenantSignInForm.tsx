@@ -138,7 +138,7 @@ export function SetupScriptCard() {
         </span>
         <div>
           <h2 className="text-base font-medium text-gray-900">Create the app registration</h2>
-          <p className="text-gray-600">Once per tenant, in about two minutes. Skip this if it already exists.</p>
+          <p className="text-gray-600">Once per tenant, in a few minutes. Skip this if it already exists.</p>
         </div>
       </div>
       <p>

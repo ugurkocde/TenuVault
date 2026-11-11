@@ -61,7 +61,7 @@ export function parseSetupOutput(text: string): { tenantId?: string; clientId?: 
 export function setupHandoffText(): string {
   const permissions = DESKTOP_APP_PERMISSIONS.map((entry) => `  ${entry.api}: ${entry.permissions.join(", ")}`).join("\n")
   return [
-    "Could you create the app registration TenuVault Desktop signs in with? It takes about two minutes.",
+    "Could you create the app registration TenuVault Desktop signs in with? It takes a few minutes.",
     "",
     "TenuVault Desktop backs up and restores our Intune configuration from an admin's computer. It signs in",
     "as the admin through a public client app registration in our own tenant: no secret, no certificate and",

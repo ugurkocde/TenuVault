@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import { AlertCircle, Building2, Check, ChevronDown, Circle, HardDrive, KeyRound, Loader2, Send, ShieldCheck, Sparkles, UserCheck, X } from "lucide-react"
+import { AlertCircle, Building2, Check, ChevronDown, Circle, HardDrive, Info, KeyRound, Loader2, Send, ShieldCheck, Sparkles, UserCheck, X } from "lucide-react"
 import { Alert, AlertDescription } from "~/components/ui/alert"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
@@ -11,12 +11,12 @@ import { PermissionList, SetupScriptCard } from "./TenantSignInForm"
 
 const CANCELLED = "Sign-in cancelled."
 
-/** Why the admin can agree to the setup, in the order they ask themselves these questions. */
+/** What the admin lets in, answered before the button: where it lives, what it may do, what it keeps. */
 const REASONS = [
-  { icon: Building2, title: "It lives in your tenant", text: "Setup creates one app registration in your own tenant. You can delete it in Entra at any time." },
-  { icon: UserCheck, title: "It acts only as you", text: "Delegated permissions, no secret and no background access. Your roles, MFA and Conditional Access apply to every call." },
-  { icon: HardDrive, title: "Backups stay with you", text: "On this computer or in your own Azure storage." },
-  { icon: ShieldCheck, title: "Microsoft asks for one approval", text: "The prompt names Microsoft Graph Command Line Tools. That is Microsoft's own sign-in app, used here once to create the app registration." },
+  { icon: Building2, title: "It lives in your tenant", text: "Setup creates one app registration in your own tenant. You can review or delete it in Entra at any time." },
+  { icon: UserCheck, title: "It acts only as you", text: "Delegated permissions only. TenuVault acts as you, never on its own, so your roles, MFA and Conditional Access apply." },
+  { icon: ShieldCheck, title: "No secret to protect", text: "No client secret and no certificate are created." },
+  { icon: HardDrive, title: "Backups stay with you", text: "On this computer, or in Azure storage you own." },
 ] as const
 
 const PHASES: readonly SetupProgress["phase"][] = ["signingIn", "registration", "consent", "publishing"]
@@ -100,7 +100,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
 
   return (
     <div data-tenant-connect className="space-y-6 text-sm text-gray-700">
-      <p className="text-base text-gray-600">One Microsoft sign-in, about two minutes.</p>
+      <p className="text-base text-gray-600">One Microsoft sign-in. TenuVault creates its app registration in your tenant and signs you in.</p>
 
       <ul className="grid gap-3 sm:grid-cols-2">
         {REASONS.map(({ icon: Icon, title, text }) => (
@@ -157,6 +157,15 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
         </div>
       ) : (
         <div className="space-y-3">
+          {/* An app name the admin does not expect in a consent prompt looks like phishing, so it is announced here. */}
+          <p className="flex items-start gap-2.5 rounded-2xl bg-gray-50 px-4 py-3 text-gray-700">
+            <Info className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" />
+            <span>
+              Microsoft will ask you to approve <span className="font-medium text-gray-900">Microsoft Graph Command Line Tools</span>.
+              That is Microsoft&apos;s own sign-in app. TenuVault uses it once to create the app registration; after that you
+              sign in to TenuVault directly.
+            </span>
+          </p>
           <Button type="button" size="lg" className="w-full bg-blue-600 text-white hover:bg-blue-700 sm:w-auto" onClick={() => void start()}>
             <KeyRound className="mr-2 h-4 w-4" aria-hidden="true" />
             {error ? "Try again" : "Set up with Microsoft sign-in"}
@@ -215,7 +224,10 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
       </details>
 
       <div className="space-y-3 border-t border-gray-100 pt-5">
-        <p className="font-medium text-gray-900">Other ways to connect</p>
+        <div>
+          <p className="font-medium text-gray-900">Other ways to connect</p>
+          <p className="text-gray-600">Not an administrator with one of these roles? Your administrator approves once, and you do the rest.</p>
+        </div>
         <div className="flex flex-wrap gap-2">
           <Button type="button" variant="outline" size="sm" disabled={running} onClick={() => void copyHandoff()}>
             {copied ? <Check className="mr-2 h-4 w-4" aria-hidden="true" /> : <Send className="mr-2 h-4 w-4" aria-hidden="true" />}
