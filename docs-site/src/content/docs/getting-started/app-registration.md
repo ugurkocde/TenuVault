@@ -19,7 +19,7 @@ You need an account with **Global Administrator**, **Privileged Role Administrat
    * **Create the app registration**: the app registration **TenuVault Desktop**, as described in [What the setup creates](#what-the-setup-creates). If the tenant already has a TenuVault app registration from an earlier setup, TenuVault uses that one and the list says **Use the app registration this tenant already has**.
    * **Grant admin consent**: tenant-wide consent for the [delegated permissions](#delegated-permissions) below, and nothing else.
    * **Wait until Microsoft accepts sign-ins to it**: Microsoft needs a few seconds before a new app registration can be used.
-4. Your browser opens once more and signs you in to TenuVault through the new app registration. There is nothing to enter this time. TenuVault continues with [Storage](/getting-started/connect-tenant/#step-3-storage).
+4. Your browser opens once more and signs you in to TenuVault through the new app registration. There is nothing to enter this time. TenuVault continues with the **Storage** step: [Choose where backups are stored](/getting-started/choose-storage/).
 
 **Cancel** stops waiting for the browser. Nothing is created before you are signed in.
 
