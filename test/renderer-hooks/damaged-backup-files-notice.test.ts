@@ -255,6 +255,23 @@ describe("damaged backup files notice", () => {
     expect(container.textContent).toContain("This device still cannot read 7 of these files.")
   })
 
+  it("drops a replaced import's check when the newer request finds no damage", async () => {
+    backups.importRecoveryKey.mockResolvedValue(settings)
+    const { container, draw } = render({ count: 129, kinds: kinds({ key: 129 }), listLoading: true }, async () => "superseded")
+    await importKey(container)
+    expect(container.textContent).toContain("Checking the backups again...")
+    // The newer request finds the folder clean, so the card goes away.
+    draw({ count: 0, kinds: null, listLoading: false })
+    await flush()
+    expect(container.textContent).toBe("")
+    // A file damaged later is new damage: no line from the earlier import.
+    draw({ count: 1, kinds: kinds({ key: 1 }) })
+    await flush()
+    expect(container.textContent).toContain("TenuVault cannot read 1 file")
+    expect(container.textContent).not.toContain("still cannot read")
+    expect(container.textContent).not.toContain("could not be checked again")
+  })
+
   it("takes the answer of a newer request that already finished when the import's refresh was replaced", async () => {
     backups.importRecoveryKey.mockResolvedValue(settings)
     const replaced = render({ count: 129, kinds: kinds({ key: 129 }), listError: "Storage unavailable" }, async () => "superseded")

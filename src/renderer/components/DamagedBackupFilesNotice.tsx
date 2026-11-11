@@ -124,6 +124,11 @@ export function DamagedBackupFilesNotice({ count, kinds, names, unavailable, ten
   useEffect(() => {
     if (!(count > 0) || keyFiles <= 0) setCheck("")
   }, [count, keyFiles])
+  // Whether the list as of this render still has files a key may open. A check that ends after the
+  // damage was resolved says nothing about damage found later, so it is dropped.
+  const keyDamage = useRef(false)
+  keyDamage.current = count > 0 && keyFiles > 0
+  const endCheck = (result: "checked" | "failed") => setCheck(keyDamage.current ? result : "")
   // The list request as of this render, for the end of an import's refresh.
   const list = useRef({ loading: listLoading, error: listError })
   list.current = { loading: listLoading, error: listError }
@@ -138,7 +143,7 @@ export function DamagedBackupFilesNotice({ count, kinds, names, unavailable, ten
     if (waitingForList.current) {
       waitingForList.current = false
       setRefreshing(false)
-      setCheck(listError ? "failed" : "checked")
+      endCheck(listError ? "failed" : "checked")
       return
     }
     // A later request that succeeded, such as the timeline's Refresh, did check the backups again.
@@ -219,13 +224,13 @@ export function DamagedBackupFilesNotice({ count, kinds, names, unavailable, ten
                   waitingForList.current = true
                   return
                 }
-                setCheck(list.current.error ? "failed" : "checked")
+                endCheck(list.current.error ? "failed" : "checked")
               } else {
-                setCheck(outcome === "updated" ? "checked" : "failed")
+                endCheck(outcome === "updated" ? "checked" : "failed")
               }
               setRefreshing(false)
             }, () => {
-              setCheck("failed")
+              endCheck("failed")
               setRefreshing(false)
             })
           }}
