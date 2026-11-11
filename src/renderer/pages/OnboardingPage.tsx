@@ -58,6 +58,7 @@ export default function OnboardingPage() {
   const { addTenant, updateTenant } = useTenantOperations()
   const { setSelectedTenantId } = useSelectedTenant()
   const [initial] = useState(loadOnboardingDraft)
+  const [attemptId] = useState(() => crypto.randomUUID())
   const [step, setStep] = useState<Step>(initial?.step ?? 0)
   const [fields, setFields] = useState<SignInFields>({ tenant: initial?.tenant ?? "", clientId: initial?.clientId ?? "", displayName: initial?.displayName ?? "" })
   const [account, setAccount] = useState<SignedInAccount | null>(initial?.account ?? null)
@@ -121,9 +122,8 @@ export default function OnboardingPage() {
   }, [initial])
 
   useEffect(() => {
-    if (step === 3) clearOnboardingDraft()
-    else saveOnboardingDraft({ step, ...fields, account, ...(storageDraft ? { storage: storageDraft } : {}) })
-  }, [step, fields, account, storageDraft])
+    if (step !== 3) saveOnboardingDraft({ step, ...fields, account, attemptId, ...(storageDraft ? { storage: storageDraft } : {}) })
+  }, [step, fields, account, storageDraft, attemptId])
 
   // Each step starts at its heading, for keyboard and screen reader users too.
   useEffect(() => {
@@ -183,7 +183,7 @@ export default function OnboardingPage() {
   const registered = async (result: RegistrationResult) => {
     const next = { ...fields, tenant: result.tenantId, clientId: result.clientId }
     setFields(next)
-    saveOnboardingDraft({ step: 1, ...next, account: null })
+    saveOnboardingDraft({ step: 1, ...next, account: null, attemptId })
     setAddError(null)
     if (account) {
       setReleasing(true)
@@ -206,6 +206,11 @@ export default function OnboardingPage() {
   // process, so the admin signs in again with the same IDs once the license is sorted.
   const createTenant = async () => {
     if (!account || !choice || creating) return
+    if (connected(account.tenantId)) {
+      clearOnboardingDraft(attemptId)
+      setAddError({ message: "This tenant is already connected. Use Back to dashboard to open it, or choose a different tenant.", license: false })
+      return
+    }
     setCreating(true)
     setAddError(null)
     let community = false
@@ -236,6 +241,9 @@ export default function OnboardingPage() {
       const creds = desktopTenantCredentials(account, fields.displayName, choice)
       const tenant = await buildTenantProfile(creds)
       await addTenant(tenant)
+      // A completed save owns its cleanup even if the admin navigated away while it was pending.
+      clearOnboardingDraft(attemptId)
+      if (!mounted.current) return
       setSelectedTenantId(tenant.id)
       setCredentials(creds)
       setTenantProfileId(tenant.id)

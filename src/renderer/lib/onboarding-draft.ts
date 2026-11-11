@@ -17,6 +17,8 @@ export interface OnboardingDraft {
   account: SignedInAccount | null
   /** Selection survives restarts; access is checked again before Azure can be used. */
   storage?: StorageChooserDraft
+  /** Identifies the mounted setup that owns this draft, including a resumed setup. */
+  attemptId?: string
 }
 
 const KEY = "tenuvault.onboarding.draft"
@@ -52,6 +54,7 @@ export function loadOnboardingDraft(): OnboardingDraft | null {
       clientId: text(value.clientId),
       displayName: text(value.displayName),
       account,
+      ...(typeof value.attemptId === "string" ? { attemptId: text(value.attemptId, 64) } : {}),
       ...(account && storage && (storage.kind === "local" || storage.kind === "azure") ? {
         storage: { kind: storage.kind, selectedAccount: text(storage.selectedAccount), verifiedAccount: "" },
       } : {}),
@@ -75,8 +78,12 @@ export function saveOnboardingDraft(draft: OnboardingDraft): void {
   pending = pending.then(write).catch((error: unknown) => console.error("Could not save the setup progress:", error))
 }
 
-export function clearOnboardingDraft(): void {
-  saveOnboardingDraft(EMPTY_DRAFT)
+/** A late save must not erase a draft now owned by another mounted setup. */
+export function clearOnboardingDraft(attemptId?: string): void {
+  pending = pending.then(() => {
+    if (attemptId && loadOnboardingDraft()?.attemptId !== attemptId) return
+    return bridge.storage.removeItem(KEY)
+  }).catch((error: unknown) => console.error("Could not clear the setup progress:", error))
 }
 
 /** Whether setup was started on this computer and not finished. */

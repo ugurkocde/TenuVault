@@ -145,6 +145,10 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
   const addTenant = useCallback((tenant: Tenant): Promise<void> => {
     const added = { createdAt: new Date().toISOString(), ...tenant }
     const save = async () => {
+      const id = added.credentials?.tenantId?.toLowerCase()
+      if (id && tenantsRef.current.some(tenant => tenant.credentials?.tenantId?.toLowerCase() === id)) {
+        throw new Error("This tenant is already connected. Open it from the dashboard.")
+      }
       let previous: Tenant[]
       let next: Tenant[]
       // Include edits made while a save was pending, without publishing an unsaved profile.

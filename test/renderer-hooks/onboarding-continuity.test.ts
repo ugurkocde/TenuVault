@@ -1,6 +1,6 @@
 import { act, createElement } from "react"
 import { createRoot, type Root } from "react-dom/client"
-import { MemoryRouter, Route, Routes } from "react-router-dom"
+import { Link, MemoryRouter, Route, Routes } from "react-router-dom"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import type { BackupSettings, LicenseStatus, SignedInAccount } from "../../src/shared/ipc"
 import type { Tenant } from "../../src/portal/contexts/TenantContext"
@@ -25,6 +25,7 @@ vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: {
   },
   license: { status: async () => state.status, checkNewTenant: async () => state.status, releaseTenant: state.releaseTenant, trialWorkflowsConfigured: async () => false },
   auth: { accounts: async () => state.accounts },
+  setup: { onProgress: () => () => undefined, clipboardIds: async () => null },
   backups: {
     settings: async (): Promise<BackupSettings> => ({ localFolder: "/backups", keyFingerprint: "fixture", recoveryExported: true, hasLocalBackups: false }),
     inventoryProblem: async () => null, verifyAzureStorage: state.verifyAzureStorage,
@@ -91,7 +92,7 @@ async function render() {
   await act(async () => root!.render(createElement(MemoryRouter, { initialEntries: ["/portal/onboarding"] },
     createElement(TenantProvider, null, createElement(TenantCount), createElement(Routes, null,
       createElement(Route, { path: "/portal/onboarding", element: createElement(OnboardingPage) }),
-      createElement(Route, { path: "/portal/dashboard", element: createElement("p", null, "Dashboard") }),
+      createElement(Route, { path: "/portal/dashboard", element: createElement("div", null, createElement("p", null, "Dashboard"), createElement(Link, { to: "/portal/onboarding" }, "Connect another tenant")) }),
     )),
   )))
   await flush()
@@ -291,4 +292,62 @@ it("does not sign out an unsaved addition if persisting a merged edit fails", as
   state.setItem.mockImplementation(async (key, value) => { state.store.set(key, value) })
   await act(async () => { await operations.addTenant(profile(2)) })
   expect((JSON.parse(state.store.get(TENANTS)!) as Tenant[]).map(tenant => [tenant.id, tenant.name])).toEqual([[1, "Updated tenant"], [2, "Tenant 2"]])
+})
+
+
+it.each([false, true])("cleans up a save after navigation without clearing a newer setup: %s", async newerAttempt => {
+  state.store.set(TENANTS, JSON.stringify([{ id: 2, name: "Other tenant", credentials: { tenantId: SECOND_TENANT, appId: CLIENT } }]))
+  await render()
+  const oldAttempt = loadOnboardingDraft()?.attemptId
+  let acknowledge!: () => void
+  let waiting = true
+  state.setItem.mockImplementation(async (key, value) => {
+    if (key === TENANTS && JSON.parse(value).length === 2 && waiting) {
+      waiting = false
+      await new Promise<void>(resolve => { acknowledge = resolve })
+    }
+    state.store.set(key, value)
+  })
+  await click("Continue")
+  await act(async () => (container.querySelector('a[href="/portal/dashboard"]') as HTMLAnchorElement).click())
+  const reopen = async () => {
+    await act(async () => (container.querySelector('a[href="/portal/onboarding"]') as HTMLAnchorElement).click())
+    await flush()
+  }
+  if (newerAttempt) {
+    await reopen()
+    expect(loadOnboardingDraft()?.attemptId).not.toBe(oldAttempt)
+  }
+  const newAttempt = loadOnboardingDraft()?.attemptId
+  await act(async () => acknowledge())
+  await flush()
+  if (newerAttempt) {
+    expect(loadOnboardingDraft()?.attemptId).toBe(newAttempt)
+    await click("Continue")
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("already connected")
+  } else {
+    expect(loadOnboardingDraft()).toBeNull()
+    await reopen()
+    expect(container.textContent).toContain("Connect your tenant")
+  }
+  expect(container.querySelector('[data-testid="tenants"]')?.textContent).toBe("2")
+  expect((JSON.parse(state.store.get(TENANTS)!) as Tenant[]).filter(tenant => tenant.credentials?.tenantId === TENANT)).toHaveLength(1)
+})
+
+it("refuses a stale draft for a tenant already saved instead of creating a duplicate", async () => {
+  state.store.set(TENANTS, JSON.stringify([{ id: 7, name: "Contoso", credentials: { tenantId: TENANT, appId: CLIENT } }]))
+  await render()
+  await click("Continue")
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("already connected")
+  expect((JSON.parse(state.store.get(TENANTS)!) as Tenant[]).map(tenant => tenant.id)).toEqual([7])
+  expect(loadOnboardingDraft()).toBeNull()
+})
+
+it("rejects a second queued addition of the same tenant", async () => {
+  await render()
+  const profile = (id: number) => ({ id, name: "Contoso", credentials: { tenantId: TENANT, appId: CLIENT } }) as Tenant
+  let results!: PromiseSettledResult<void>[]
+  await act(async () => { results = await Promise.allSettled([operations.addTenant(profile(1)), operations.addTenant(profile(2))]) })
+  expect(results.map(result => result.status)).toEqual(["fulfilled", "rejected"])
+  expect((JSON.parse(state.store.get(TENANTS)!) as Tenant[]).map(tenant => tenant.id)).toEqual([1])
 })
