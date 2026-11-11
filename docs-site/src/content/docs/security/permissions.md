@@ -27,7 +27,7 @@ While it grants admin consent, the script lists the delegated permissions per AP
 
 ### Who can run the script
 
-You need the `Microsoft.Graph.Applications` and `Microsoft.Graph.Identity.SignIns` PowerShell modules (the script installs missing modules for the current user at the version of your installed `Microsoft.Graph.Authentication` module, so all Graph modules load at one version) and one of these roles:
+The desktop setup script needs no modules and installs nothing. It signs in through your browser. You need one of these roles:
 
 * Global Administrator
 * Privileged Role Administrator

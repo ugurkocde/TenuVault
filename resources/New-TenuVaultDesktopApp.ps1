@@ -14,11 +14,9 @@
       * grants tenant-wide admin consent for those permissions
       * optionally limits sign-in to members of one group
 
-    Requires the Microsoft.Graph.Applications and Microsoft.Graph.Identity.SignIns modules
-    and a Global Administrator, Privileged Role Administrator or Cloud Application
-    Administrator (plus consent rights) account. The script installs missing modules for
-    the current user at the version of the installed Microsoft.Graph.Authentication
-    module, so all Graph modules load at one version.
+    No modules are needed and nothing is installed. Sign in through your system browser.
+    Requires a Global Administrator, Privileged Role Administrator or Cloud Application Administrator
+    (plus consent rights) account.
 
 .PARAMETER TenantId
     Tenant to create the app registration in. Defaults to the tenant of the account you sign in with.
@@ -57,8 +55,11 @@
     role, and restored policies start in report-only mode. Off by default, so the default
     permission set cannot change Conditional Access.
 
+.PARAMETER UseDeviceCode
+    Use device code sign-in for remote shells. Conditional Access often blocks this flow.
+
 .EXAMPLE
-    ./New-TenuVaultDesktopApp.ps1 -TenantId contoso.onmicrosoft.com -AllowedGroupId 5f0c...
+    ./New-TenuVaultDesktopApp.ps1 -UseDeviceCode
 
 .EXAMPLE
     ./New-TenuVaultDesktopApp.ps1 -TenantId contoso.onmicrosoft.com -IncludeGroupRead
@@ -71,56 +72,203 @@ param(
     [switch]$IncludeGroupRead,
     [switch]$IncludeNotifications,
     [switch]$IncludeAuditLog,
-    [switch]$IncludeConditionalAccessRestore
+    [switch]$IncludeConditionalAccessRestore,
+    [switch]$UseDeviceCode
 )
 
 $ErrorActionPreference = "Stop"
+if ($ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage') {
+    throw "This script needs FullLanguage mode. Use the manual route: https://docs.tenuvault.com/getting-started/app-registration/#create-the-app-registration-manually"
+}
+if ($AllowedGroupId) {
+    $groupGuid = [Guid]::Empty
+    if (-not [Guid]::TryParse($AllowedGroupId, [ref]$groupGuid)) { throw "AllowedGroupId must be a GUID." }
+}
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+try { [Net.WebRequest]::DefaultWebProxy.Credentials = [Net.CredentialCache]::DefaultNetworkCredentials } catch { }
 
-# The Graph modules only load together at one version: a module built for another
-# Microsoft.Graph.Authentication version fails with an assembly conflict. Use the newest
-# installed Authentication version and install the other modules at that same version.
-$graphModules = "Microsoft.Graph.Applications", "Microsoft.Graph.Identity.SignIns"
-$loaded = Get-Module -Name Microsoft.Graph.Authentication
-if ($loaded) {
-    $graphVersion = $loaded.Version
+# Both PowerShell editions expose HTTP error bodies, but in different places.
+function Get-HttpFailure($Record) {
+    $body = $Record.ErrorDetails.Message
+    $response = $Record.Exception.Response
+    if (-not $body -and $response) {
+        try {
+            $reader = New-Object IO.StreamReader($response.GetResponseStream())
+            try { $body = $reader.ReadToEnd() } finally { $reader.Dispose() }
+        } catch { }
+    }
+    $detail = $null
+    try { $detail = $body | ConvertFrom-Json } catch { }
+    $status = 0
+    $retryAfter = 0
+    if ($response) {
+        $status = [int]$response.StatusCode
+        try { $retryAfter = [int]($response.Headers['Retry-After'] | Select-Object -First 1) } catch { }
+        if (-not $retryAfter) {
+            try { $retryAfter = [int]$response.Headers.RetryAfter.Delta.TotalSeconds } catch { }
+        }
+        if (-not $retryAfter) {
+            try { $retryAfter = [int][Math]::Ceiling(($response.Headers.RetryAfter.Date - [DateTimeOffset]::UtcNow).TotalSeconds) } catch { }
+        }
+        if (-not $retryAfter) {
+            try { $retryAfter = [int][Math]::Ceiling(([DateTimeOffset]::Parse($response.Headers['Retry-After']) - [DateTimeOffset]::UtcNow).TotalSeconds) } catch { }
+        }
+    }
+    $message = $Record.Exception.Message
+    $code = ''
+    if ($detail.error_description) { $message = $detail.error_description; $code = $detail.error }
+    elseif ($detail.error.message) { $message = $detail.error.message; $code = $detail.error.code }
+    elseif ($detail.error) { $code = [string]$detail.error }
+    [pscustomobject]@{ Status = $status; Code = $code; Message = $message; RetryAfter = $retryAfter }
+}
+function ConvertTo-Base64Url([byte[]]$Bytes) {
+    [Convert]::ToBase64String($Bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+}
+function New-RandomToken {
+    $bytes = New-Object byte[] 32
+    $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
+    ConvertTo-Base64Url $bytes
+}
+function Send-BrowserResponse($Response, [string]$Message) {
+    $html = '<!doctype html><html><head><meta charset="utf-8"><title>TenuVault setup</title></head><body><h1>TenuVault setup</h1><p>' + [Net.WebUtility]::HtmlEncode($Message) + '</p></body></html>'
+    $bytes = [Text.Encoding]::UTF8.GetBytes($html)
+    $Response.ContentType = 'text/html; charset=utf-8'
+    $Response.ContentLength64 = $bytes.Length
+    try { $Response.OutputStream.Write($bytes, 0, $bytes.Length); $Response.OutputStream.Flush() }
+    finally { $Response.Close() }
+}
+$clientId = '14d82eec-204b-4c2f-b7e8-296a70dab67e'
+$authorityTenant = 'organizations'
+if ($TenantId) { $authorityTenant = [uri]::EscapeDataString($TenantId) }
+$authority = "https://login.microsoftonline.com/$authorityTenant/oauth2/v2.0"
+$scope = 'https://graph.microsoft.com/Application.ReadWrite.All https://graph.microsoft.com/DelegatedPermissionGrant.ReadWrite.All openid profile'
+if ($AllowedGroupId) { $scope += ' https://graph.microsoft.com/AppRoleAssignment.ReadWrite.All' }
+Write-Host 'Run as a Global Administrator, Privileged Role Administrator or Cloud Application Administrator (with consent rights).'
+if ($UseDeviceCode) {
+    $device = Invoke-RestMethod -Method Post -Uri "$authority/devicecode" -Body @{ client_id = $clientId; scope = $scope }
+    Write-Host "Open $($device.verification_uri) and enter code $($device.user_code)."
+    $deadline = [DateTime]::UtcNow.AddSeconds($device.expires_in)
+    $interval = [Math]::Max(1, [int]$device.interval)
+    $token = $null
+    while ([DateTime]::UtcNow -lt $deadline) {
+        Start-Sleep -Seconds $interval
+        try {
+            $token = Invoke-RestMethod -Method Post -Uri "$authority/token" -Body @{ grant_type = 'urn:ietf:params:oauth:grant-type:device_code'; client_id = $clientId; device_code = $device.device_code }
+            break
+        } catch {
+            $failure = Get-HttpFailure $_
+            switch ($failure.Code) {
+                'authorization_pending' { continue }
+                'slow_down' { $interval += 5; continue }
+                'authorization_declined' { throw 'Device code sign-in was declined. Nothing was changed.' }
+                'expired_token' { throw 'Device code expired. Nothing was changed. Run the script again.' }
+                default { throw "Device code sign-in failed. Conditional Access may block device code flow. $($failure.Message)" }
+            }
+        }
+    }
+    if (-not $token) { throw 'Device code expired. Nothing was changed. Run the script again.' }
 } else {
-    $graphVersion = (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication | Sort-Object Version -Descending | Select-Object -First 1).Version
-    if (-not $graphVersion) {
-        # Without an installed Authentication module no Graph module can be loaded, so nothing conflicts.
-        Write-Host "Installing Microsoft.Graph.Authentication for the current user..."
-        try {
-            Install-Module Microsoft.Graph.Authentication -Scope CurrentUser -Force -AllowClobber
-        } catch {
-            throw "Could not install Microsoft.Graph.Authentication. Check that the PowerShell Gallery is reachable, then run the script again. $($_.Exception.Message)"
+    $listener = $null
+    try {
+        for ($attempt = 0; $attempt -lt 5; $attempt++) {
+            $probe = New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback, 0)
+            $probe.Start()
+            $port = $probe.LocalEndpoint.Port
+            $probe.Stop()
+            $listener = New-Object Net.HttpListener
+            $listener.Prefixes.Add("http://localhost:$port/")
+            try { $listener.Start(); break } catch { $listener.Close(); $listener = $null }
         }
-        $graphVersion = (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication | Sort-Object Version -Descending | Select-Object -First 1).Version
-    }
-}
-# Any Graph module of another version already loaded in this session would conflict.
-$other = Get-Module -Name "Microsoft.Graph.*" | Where-Object Version -ne $graphVersion | Select-Object -First 1
-if ($other) {
-    throw "$($other.Name) $($other.Version) is already loaded in this PowerShell session, but the script needs version $graphVersion. Open a new PowerShell window and run the script again."
-}
-foreach ($module in $graphModules) {
-    if (-not (Get-Module -ListAvailable -Name $module | Where-Object Version -eq $graphVersion)) {
-        Write-Host "Installing $module $graphVersion for the current user..."
-        try {
-            Install-Module $module -RequiredVersion $graphVersion -Scope CurrentUser -Force -AllowClobber
-        } catch {
-            throw "Could not install $module $graphVersion, the version that matches Microsoft.Graph.Authentication $graphVersion. Check that the PowerShell Gallery is reachable, or update the installed Microsoft Graph modules to one version with 'Get-InstalledModule Microsoft.Graph* | Update-Module', then run the script again. $($_.Exception.Message)"
+        if (-not $listener) { throw 'Could not start browser sign-in. Try -UseDeviceCode or the manual app registration guide.' }
+        $redirectUri = "http://localhost:$port"
+        $state = New-RandomToken
+        $verifier = New-RandomToken
+        $sha = [Security.Cryptography.SHA256]::Create()
+        try { $challenge = ConvertTo-Base64Url ($sha.ComputeHash([Text.Encoding]::ASCII.GetBytes($verifier))) } finally { $sha.Dispose() }
+        $query = [ordered]@{ client_id = $clientId; response_type = 'code'; redirect_uri = $redirectUri; response_mode = 'query'; scope = $scope; state = $state; code_challenge = $challenge; code_challenge_method = 'S256'; prompt = 'select_account' }
+        $parts = foreach ($key in $query.Keys) { [uri]::EscapeDataString($key) + '=' + [uri]::EscapeDataString($query[$key]) }
+        $url = "$authority/authorize?" + ($parts -join '&')
+        Write-Host 'Your browser opens now. Choose your admin account.'
+        Write-Host 'You can open this address by hand in another browser or browser profile:'
+        Write-Host $url
+        Write-Host 'Waiting up to 15 minutes. Ctrl+C cancels.'
+        try { Start-Process $url } catch { Write-Host 'The browser did not open. Open the address above by hand, or run with -UseDeviceCode.' }
+        $deadline = [DateTime]::UtcNow.AddMinutes(15)
+        $pending = $listener.GetContextAsync()
+        $code = $null
+        while ([DateTime]::UtcNow -lt $deadline) {
+            if (-not $pending.IsCompleted) { Start-Sleep -Milliseconds 100; continue }
+            $answer = $pending.GetAwaiter().GetResult()
+            $values = $answer.Request.QueryString
+            if ($values['state'] -cne $state -or (-not $values['code'] -and -not $values['error'])) {
+                Send-BrowserResponse $answer.Response 'Waiting for the sign-in answer.'
+                $pending = $listener.GetContextAsync()
+                continue
+            }
+            if ($values['error']) {
+                $message = $values['error_description']
+                if (-not $message) { $message = $values['error'] }
+                Send-BrowserResponse $answer.Response $message
+                throw "Browser sign-in failed: $message"
+            }
+            $code = $values['code']
+            Send-BrowserResponse $answer.Response 'Signed in. Go back to PowerShell. You can close this tab.'
+            break
         }
+        if (-not $code) { throw 'Sign-in was not completed within 15 minutes. Nothing was changed. Run the script again.' }
+    } finally {
+        if ($listener) { $listener.Stop(); $listener.Close() }
     }
+    try {
+        $token = Invoke-RestMethod -Method Post -Uri "$authority/token" -Body @{ grant_type = 'authorization_code'; client_id = $clientId; code = $code; redirect_uri = $redirectUri; code_verifier = $verifier }
+    } catch { $failure = Get-HttpFailure $_; throw "Token exchange failed: $($failure.Message)" }
 }
-if (-not $loaded) { Import-Module Microsoft.Graph.Authentication -RequiredVersion $graphVersion }
-foreach ($module in $graphModules) { Import-Module $module -RequiredVersion $graphVersion }
+$payload = $token.id_token.Split('.')[1].Replace('-', '+').Replace('_', '/')
+$payload = $payload.PadRight($payload.Length + ((4 - $payload.Length % 4) % 4), '=')
+$identity = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($payload)) | ConvertFrom-Json
+$username = $identity.preferred_username
+if (-not $username) { $username = $identity.upn }
+if (-not $username) { $username = $identity.email }
+if (-not $identity.tid -or -not $username -or -not $token.access_token) { throw 'Sign-in did not return the tenant, user name and access token. Nothing was changed.' }
+$context = @{ TenantId = $identity.tid }
+Write-Host "Signed in as $username (tenant $($context.TenantId))."
 
-$connectParams = @{
-    Scopes    = "Application.ReadWrite.All", "DelegatedPermissionGrant.ReadWrite.All", "AppRoleAssignment.ReadWrite.All"
-    NoWelcome = $true
+function Invoke-Graph([string]$Method, [string]$Path, $Body, [switch]$ReplicationRetry) {
+    for ($attempt = 0; $attempt -lt 6; $attempt++) {
+        try {
+            $parameters = @{ Method = $Method; Uri = "https://graph.microsoft.com/v1.0$Path"; Headers = @{ Authorization = "Bearer $($token.access_token)" } }
+            if ($null -ne $Body) {
+                $parameters.ContentType = 'application/json; charset=utf-8'
+                $parameters.Body = [Text.Encoding]::UTF8.GetBytes(($Body | ConvertTo-Json -Depth 20))
+            }
+            return Invoke-RestMethod @parameters
+        } catch {
+            $failure = Get-HttpFailure $_
+            $replication = $ReplicationRetry -and ($failure.Status -eq 404 -or ($failure.Status -eq 400 -and $failure.Message -match 'appId.*(valid application|application object)'))
+            if ($attempt -lt 5 -and ($replication -or $failure.Status -eq 429 -or $failure.Status -ge 500)) {
+                Start-Sleep -Seconds ([Math]::Max(2, $failure.RetryAfter))
+                continue
+            }
+            if ($failure.Status -eq 403 -or $failure.Code -eq 'Authorization_RequestDenied') {
+                throw "The signed-in account $username lacks a role that can create app registrations and grant admin consent. Use a Global Administrator, Privileged Role Administrator or Cloud Application Administrator (with consent rights). $($failure.Message)"
+            }
+            throw "Graph $Method $Path failed: $($failure.Message)"
+        }
+    }
 }
-if ($TenantId) { $connectParams.TenantId = $TenantId }
-Connect-MgGraph @connectParams
-$context = Get-MgContext
+function Get-GraphItems([string]$Path) {
+    do {
+        $page = Invoke-Graph GET $Path
+        $page.value
+        $Path = $null
+        if ($page.'@odata.nextLink') {
+            $next = [uri]$page.'@odata.nextLink'
+            if ($next.Host -ne 'graph.microsoft.com' -or $next.Scheme -ne 'https') { throw 'Unexpected Graph paging address.' }
+            $Path = $next.PathAndQuery -replace '^/v1.0', ''
+        }
+    } while ($Path)
+}
 
 # Delegated permissions per resource. TenuVault only uses what is listed here.
 $resources = @(
@@ -178,50 +326,65 @@ if ($IncludeNotifications) {
 
 $requiredResourceAccess = @()
 foreach ($resource in $resources) {
-    $sp = Get-MgServicePrincipal -Filter "appId eq '$($resource.AppId)'"
+    $filter = [uri]::EscapeDataString("appId eq '$($resource.AppId)'")
+    $sp = Get-GraphItems "/servicePrincipals?`$filter=$filter"
     if (-not $sp) {
         Write-Host "Adding the $($resource.Name) service principal to the tenant..."
-        $sp = New-MgServicePrincipal -AppId $resource.AppId
+        $sp = Invoke-Graph POST '/servicePrincipals' @{ appId = $resource.AppId } -ReplicationRetry
     }
-    $resource.ServicePrincipalId = $sp.Id
-    $access = foreach ($scope in $resource.Scopes) {
-        $permission = $sp.Oauth2PermissionScopes | Where-Object Value -eq $scope
-        if (-not $permission) { throw "Delegated permission $scope was not found on $($resource.Name)." }
-        @{ Id = $permission.Id; Type = "Scope" }
+    $resource.ServicePrincipalId = $sp.id
+    $access = foreach ($scopeName in $resource.Scopes) {
+        $permission = $sp.oauth2PermissionScopes | Where-Object Value -eq $scopeName
+        if (-not $permission) { throw "Delegated permission $scopeName was not found on $($resource.Name)." }
+        @{ id = $permission.id; type = 'Scope' }
     }
-    $requiredResourceAccess += @{ ResourceAppId = $resource.AppId; ResourceAccess = @($access) }
+    $requiredResourceAccess += @{ resourceAppId = $resource.AppId; resourceAccess = @($access) }
 }
-
-Write-Host "Creating app registration '$DisplayName'..."
-$app = New-MgApplication -DisplayName $DisplayName `
-    -SignInAudience "AzureADMyOrg" `
-    -RequiredResourceAccess $requiredResourceAccess `
-    -Notes "Used by the TenuVault desktop app. Delegated permissions only, no credentials."
-
-Update-MgApplication -ApplicationId $app.Id -PublicClient @{
-    RedirectUris = @("http://localhost")
+$filter = [uri]::EscapeDataString("displayName eq '$($DisplayName.Replace("'", "''"))'")
+foreach ($existing in (Get-GraphItems "/applications?`$filter=$filter")) {
+    Write-Host "An app registration named '$DisplayName' already exists (client id $($existing.appId)). This run creates another one. Delete the unused registration." -ForegroundColor Yellow
 }
-
-$appSp = New-MgServicePrincipal -AppId $app.AppId -Tags "HideApp", "WindowsAzureActiveDirectoryIntegratedApp"
-
-Write-Host "Granting admin consent for these delegated permissions..."
-foreach ($resource in $resources) {
-    Write-Host "  $($resource.Name): $($resource.Scopes -join ', ')"
-    New-MgOauth2PermissionGrant -ClientId $appSp.Id -ConsentType "AllPrincipals" `
-        -ResourceId $resource.ServicePrincipalId -Scope ($resource.Scopes -join " ") | Out-Null
-}
-
-if ($AllowedGroupId) {
-    Write-Host "Limiting sign-in to members of group $AllowedGroupId..."
-    Update-MgServicePrincipal -ServicePrincipalId $appSp.Id -AppRoleAssignmentRequired:$true
-    New-MgServicePrincipalAppRoleAssignedTo -ServicePrincipalId $appSp.Id -PrincipalId $AllowedGroupId `
-        -ResourceId $appSp.Id -AppRoleId ([Guid]::Empty) | Out-Null
+$app = $null
+try {
+    Write-Host "Creating app registration '$DisplayName'..."
+    $app = Invoke-Graph POST '/applications' @{
+        displayName = $DisplayName
+        signInAudience = 'AzureADMyOrg'
+        requiredResourceAccess = $requiredResourceAccess
+        notes = 'Used by the TenuVault desktop app. Delegated permissions only, no credentials.'
+        publicClient = @{ redirectUris = @('http://localhost') }
+    }
+    $appSp = Invoke-Graph POST '/servicePrincipals' @{ appId = $app.appId; tags = @('HideApp', 'WindowsAzureActiveDirectoryIntegratedApp') } -ReplicationRetry
+    Write-Host "Granting admin consent for these delegated permissions..."
+    foreach ($resource in $resources) {
+        Write-Host "  $($resource.Name): $($resource.Scopes -join ', ')"
+        Invoke-Graph POST '/oauth2PermissionGrants' @{ clientId = $appSp.id; consentType = 'AllPrincipals'; resourceId = $resource.ServicePrincipalId; scope = ($resource.Scopes -join ' ') } -ReplicationRetry | Out-Null
+    }
+    if ($AllowedGroupId) {
+        Write-Host "Limiting sign-in to members of group $AllowedGroupId..."
+        Invoke-Graph PATCH "/servicePrincipals/$($appSp.id)" @{ appRoleAssignmentRequired = $true } | Out-Null
+        Invoke-Graph POST "/servicePrincipals/$($appSp.id)/appRoleAssignedTo" @{ principalId = $AllowedGroupId; resourceId = $appSp.id; appRoleId = [Guid]::Empty.ToString() } -ReplicationRetry | Out-Null
+    }
+} catch {
+    $reason = $_.Exception.Message
+    if ($app) {
+        try { Invoke-Graph DELETE "/applications/$($app.id)" | Out-Null }
+        catch { throw "Setup did not finish. Delete app registration '$DisplayName' (client id $($app.appId)) in the Entra admin center. Cleanup failed: $($_.Exception.Message) Original failure: $reason" }
+        throw "Setup did not finish. The half-created app registration was removed, so nothing was left behind. $reason"
+    }
+    throw "Setup did not finish. $reason"
 }
 
 Write-Host ""
 Write-Host "Done. Copy the two lines below and paste them into the Sign in step of Set up TenuVault:" -ForegroundColor Green
 Write-Host "  Tenant id:                $($context.TenantId)"
 Write-Host "  Application (client) id:  $($app.AppId)"
+try {
+    if (Get-Command Set-Clipboard -ErrorAction SilentlyContinue) {
+        Set-Clipboard -Value "  Tenant id:                $($context.TenantId)`n  Application (client) id:  $($app.AppId)"
+        Write-Host "Both lines are on the clipboard."
+    }
+} catch { }
 Write-Host ""
 Write-Host "The admins who use TenuVault also need an Intune role (for example Intune Administrator)."
 Write-Host "For backups, schedules and the audit log in an Azure storage account they also need 'Storage"

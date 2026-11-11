@@ -43,6 +43,7 @@ const bridge: TenuVaultPreloadBridge = {
     onSavedChanged: (listener) => subscribe<void>("proxy:savedChanged", () => listener()),
   },
   setup: {
+    clipboardIds: () => invoke("setup:clipboardIds"),
     saveScript: () => invoke("setup:saveScript"),
   },
   backups: {

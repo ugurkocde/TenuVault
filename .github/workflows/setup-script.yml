@@ -1,0 +1,42 @@
+name: Setup script
+on:
+  pull_request:
+    paths:
+      - resources/New-TenuVaultDesktopApp.ps1
+      - test/fixtures/app-registration/**
+      - test/app-registration-script.test.ts
+      - .github/workflows/setup-script.yml
+  push:
+    branches: [main]
+    paths:
+      - resources/New-TenuVaultDesktopApp.ps1
+      - test/fixtures/app-registration/**
+      - test/app-registration-script.test.ts
+      - .github/workflows/setup-script.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  setup:
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            powershell: powershell.exe
+          - os: windows-latest
+            powershell: pwsh
+          - os: macos-latest
+            powershell: pwsh
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx vitest run test/app-registration-script.test.ts
+        env:
+          TENUVAULT_TEST_POWERSHELL: ${{ matrix.powershell }}

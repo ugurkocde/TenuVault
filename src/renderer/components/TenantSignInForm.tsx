@@ -139,7 +139,7 @@ export function SetupScriptCard() {
         </span>
         <div>
           <h2 className="text-base font-medium text-gray-900">Create the app registration</h2>
-          <p className="text-gray-600">Once per tenant, in about five minutes. Skip this if it already exists.</p>
+          <p className="text-gray-600">Once per tenant, in about two minutes. Skip this if it already exists.</p>
         </div>
       </div>
       <p>
@@ -169,7 +169,7 @@ export function SetupScriptCard() {
           {saveError && <p role="alert" className="text-xs text-red-700">{saveError}</p>}
         </Step>
         <Step number={2} title="Run it in PowerShell">
-          <p className="text-gray-600">Open PowerShell, PowerShell 7 (pwsh) on macOS, and run:</p>
+          <p className="text-gray-600">Use Windows PowerShell 5.1 or PowerShell 7 on Windows, PowerShell 7 (pwsh) on macOS. The script installs nothing. Run:</p>
           <CommandLine command={runCommand} label="Copy the command" copied={copied === "command"} onCopy={() => void copy("command", runCommand)} />
           <p className="text-xs text-gray-600">
             If PowerShell refuses to run the script, run{" "}
@@ -177,14 +177,13 @@ export function SetupScriptCard() {
             applies to this window only.
           </p>
         </Step>
-        <Step number={3} title="Sign in when Microsoft Graph PowerShell asks">
+        <Step number={3} title="Sign in in your browser">
           <p className="text-gray-600">
-            Your browser opens. Microsoft may first ask you to consent to Microsoft Graph PowerShell, which the script uses to
-            create the app registration.
+            The script opens your browser. Choose your admin account. Microsoft may first ask you to consent to Microsoft Graph Command Line Tools, which the script signs in through to create the app registration.
           </p>
         </Step>
-        <Step number={4} title="Copy the two lines it prints at the end">
-          <p className="text-gray-600">The Tenant id and the Application (client) id. You paste them on the next step.</p>
+        <Step number={4} title="Return to TenuVault">
+          <p className="text-gray-600">The script prints the Tenant id and the Application (client) id and copies them to your clipboard. TenuVault fills them in on the next step.</p>
         </Step>
       </ol>
 
@@ -243,6 +242,27 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
   notify.current = onFieldsChange
 
   useEffect(() => { notify.current?.({ tenant, clientId, displayName }) }, [tenant, clientId, displayName])
+
+  const latestFields = useRef({ tenant, clientId, busy })
+  latestFields.current = { tenant, clientId, busy }
+  useEffect(() => {
+    let active = true
+    const check = async () => {
+      if (latestFields.current.tenant || latestFields.current.clientId || latestFields.current.busy) return
+      try {
+        const ids = await bridge.setup?.clipboardIds?.()
+        const current = latestFields.current
+        if (!active || !ids || current.tenant || current.clientId || current.busy) return
+        latestFields.current = { ...current, tenant: ids.tenantId, clientId: ids.clientId }
+        setTenant(ids.tenantId)
+        setClientId(ids.clientId)
+        setPasteNote({ ok: true, text: "Filled in the tenant ID and the client ID from your clipboard." })
+      } catch { /* Older bridges and unavailable clipboards are harmless. */ }
+    }
+    void check()
+    window.addEventListener("focus", check)
+    return () => { active = false; window.removeEventListener("focus", check) }
+  }, [])
 
   /** Fills the fields from pasted script output; returns whether anything was found. */
   const applyOutput = (text: string): boolean => {

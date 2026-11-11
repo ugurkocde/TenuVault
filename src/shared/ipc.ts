@@ -407,6 +407,7 @@ export interface TenuVaultBridge {
     onSavedChanged: (listener: () => void) => () => void
   }
   setup: {
+    clipboardIds: () => Promise<{ tenantId: string; clientId: string } | null>
     /** Asks where to save the app registration setup script this build ships with, and writes it. */
     saveScript: () => Promise<{ saved: boolean; folder?: string; fileName?: string }>
   }

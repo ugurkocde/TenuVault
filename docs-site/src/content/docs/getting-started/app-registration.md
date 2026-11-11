@@ -49,7 +49,7 @@ The table above is the default permission set. It does not change unless you opt
 
 * An account with **Global Administrator**, **Privileged Role Administrator** or **Cloud Application Administrator**, which can grant admin consent.
 * PowerShell: Windows PowerShell 5.1 or PowerShell 7 on Windows, PowerShell 7 (`pwsh`) on macOS.
-* The Microsoft Graph PowerShell modules `Microsoft.Graph.Applications` and `Microsoft.Graph.Identity.SignIns`. The Graph modules only load together at one version, so the script uses the newest installed `Microsoft.Graph.Authentication` version and installs any missing module at that version for the current user from the PowerShell Gallery. If another Graph version is already loaded in your PowerShell session, the script stops and asks you to open a new PowerShell window. If that version cannot be downloaded, the script stops and names it; update the installed Graph modules to one version with `Get-InstalledModule Microsoft.Graph* | Update-Module` and run it again.
+* No modules are needed and nothing is installed. Use a browser on the same computer, or `-UseDeviceCode` for a remote shell. Conditional Access often blocks device code flow.
 * Optional: the object ID of a security group, if only its members should be able to sign in.
 
 ## In TenuVault: the Prepare step
@@ -58,8 +58,8 @@ When you select **Connect your tenant** on the welcome screen, TenuVault opens *
 
 1. **Save the setup script.** Select **Save setup script** and choose a folder in the save dialog. By default it is saved to your Documents folder as `New-TenuVaultDesktopApp.ps1`. TenuVault saves the copy of the script it ships with. **Copy script** copies it instead; paste it into a text editor and save it as `New-TenuVaultDesktopApp.ps1`.
 2. **Run it in PowerShell.** The card shows the exact command, with a copy button. After you saved the script, the command first changes to the folder you chose (`cd`) and then runs the script. If PowerShell refuses to run it, the card suggests `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` first; see [Execution policy](#execution-policy).
-3. **Sign in when Microsoft Graph PowerShell asks.** Your browser opens. Microsoft may first ask you to consent to Microsoft Graph PowerShell, which the script uses to create the app registration.
-4. **Copy the two lines it prints at the end:** the Tenant id and the Application (client) id. You paste them on the **Sign in** step.
+3. **Sign in in your browser.** The script opens your browser. Choose your admin account. Microsoft may first ask you to consent to Microsoft Graph Command Line Tools, which the script signs in through to create the app registration.
+4. **Return to TenuVault.** The script prints the Tenant id and the Application (client) id and copies them to your clipboard. TenuVault fills them in on the next step.
 
 The card names the roles that can run the script: Global Administrator, Privileged Role Administrator or Cloud Application Administrator. Expand **Permissions the app registration gets** to see the delegated permissions per API before anyone consents, and the tip to add `-AllowedGroupId` with a group's object ID to limit sign-in to a group of admins.
 
@@ -104,7 +104,7 @@ If the app registration already exists, for example from an earlier setup, skip 
    ./New-TenuVaultDesktopApp.ps1 -TenantId contoso.onmicrosoft.com -IncludeGroupRead
    ```
 
-3. Sign in with your admin account when Microsoft Graph PowerShell asks you to. If you are prompted to consent to the permissions Graph PowerShell requests, accept. The script connects with `Application.ReadWrite.All`, `DelegatedPermissionGrant.ReadWrite.All` and `AppRoleAssignment.ReadWrite.All` to create the app and grant consent.
+3. Sign in in your browser with your admin account. Microsoft may first ask for consent to Microsoft Graph Command Line Tools. The script requests `Application.ReadWrite.All`, `DelegatedPermissionGrant.ReadWrite.All`, `openid` and `profile`. It requests `AppRoleAssignment.ReadWrite.All` only with `-AllowedGroupId`. It prints the sign-in address so you can open it in another browser profile. It waits up to 15 minutes, and Ctrl+C cancels. For a remote shell, run `./New-TenuVaultDesktopApp.ps1 -UseDeviceCode`.
 4. Wait for the script to finish. While it grants admin consent, it lists the delegated permissions per API. At the end it prints:
 
    ```
@@ -113,16 +113,19 @@ If the app registration already exists, for example from an earlier setup, skip 
      Application (client) id:  <client id>
    ```
 
-5. Copy both lines. On the **Sign in** step, paste them into **Paste the script output**, which fills in the tenant ID and the client ID. See [Sign in to your tenant](/getting-started/connect-tenant/). The tenant ID is always printed as a GUID, even if you passed a domain.
+5. When clipboard access is available, the script copies both lines. Return to the **Sign in** step and TenuVault fills the empty fields automatically. You can also paste both lines into **Paste the script output**. See [Sign in to your tenant](/getting-started/connect-tenant/). The tenant ID is always printed as a GUID, even if you passed a domain.
 
 :::note
 The script also ends with a reminder about admin roles. The roles TenuVault Desktop needs are listed in [Requirements](/getting-started/requirements/#admins-who-use-tenuvault).
 :::
 
+If setup fails after creating the application, the script removes the half-created app registration. If cleanup fails, it names the registration to delete in the Entra admin center. An existing registration with the same name produces a yellow note with its client ID; this run creates another registration and leaves the existing one unchanged.
+
 ### Parameters
 
 | Parameter | Required | Description |
 | --- | --- | --- |
+| `-UseDeviceCode` | No | Use device code sign-in for remote shells. Conditional Access often blocks this flow. |
 | `-TenantId` | No | Tenant ID or domain to create the app registration in. Defaults to the tenant of the account you sign in with. |
 | `-DisplayName` | No | Name of the app registration. Default: `TenuVault Desktop`. |
 | `-AllowedGroupId` | No | Object ID of a security group. When set, user assignment is required on the enterprise application and only members of this group can sign in to TenuVault. |

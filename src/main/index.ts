@@ -48,6 +48,7 @@ import { BackupReaderService } from "./auth/backup-reader"
 import readerSetupScript from "../../resources/New-TenuVaultBackupReader.ps1?raw"
 import desktopSetupScript from "../../resources/New-TenuVaultDesktopApp.ps1?raw"
 import { SETUP_SCRIPT_FILE_NAME } from "../shared/app-registration"
+import { setupIdsFromClipboard } from "../shared/app-registration"
 import { licenseKeyFromClipboard } from "./license/clipboard-key"
 import { assertStorageAccountName } from "../shared/storage-account"
 import { hostname } from "node:os"
@@ -1128,6 +1129,7 @@ async function bootstrap(): Promise<void> {
   // Stops waiting for a sign-in the admin abandoned in the browser.
   handleTrusted("auth:cancelSignIn", () => auth.cancelInteractive())
   // The guided setup saves the app registration script it ships with; nothing else is written.
+  handleTrusted("setup:clipboardIds", () => setupIdsFromClipboard(clipboard.readText()))
   handleTrusted("setup:saveScript", async () => {
     const result = await dialog.showSaveDialog(mainWindow!, {
       title: "Save the TenuVault setup script",
