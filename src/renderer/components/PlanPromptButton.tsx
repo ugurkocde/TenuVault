@@ -6,6 +6,7 @@ import { Link, useInRouterContext } from "react-router-dom"
 import { Button } from "~/components/ui/button"
 import { bridge } from "../lib/bridge"
 import { useLicense } from "../lib/license"
+import type { TenantLicenseStatus } from "../../shared/ipc"
 import { openCheckout, planPromptAction } from "../lib/purchase"
 
 // The license status, or null outside a LicenseProvider. useLicense reads the context once
@@ -48,18 +49,20 @@ export function PlanPromptButton({
   const inRouter = useInRouterContext()
   const selectedTenantId = useTenantIfProvided()
   const tenantId = contextTenantId === undefined ? selectedTenantId : contextTenantId?.toLowerCase()
-  const eligible = status?.tenantTrialsEnabled && !status.hasKey && plan === "pro" ? status.tenants.find(t =>
-    (tenantId && t.tenantId === tenantId) && t.signedIn && !t.entitled && !t.activated && (t.trialCanResume || !(t.trialRefusalPermanent ?? Boolean(t.trialRefusal))),
-  ) : undefined
+  const prompted = status && !status.hasKey && plan === "pro" ? status : null
+  const here = (t: TenantLicenseStatus) => Boolean(tenantId) && t.tenantId === tenantId && t.signedIn && !t.entitled && !t.activated
+  // A new trial needs the trial switch. A trial this installation ended early is offered
+  // again without it: an installation with a license for another tenant never learns the
+  // switch, and the service refuses the resume itself while trials are off.
+  const eligible = prompted?.tenants.find(t => here(t) && (t.trialCanResume || (prompted.tenantTrialsEnabled && !(t.trialRefusalPermanent ?? Boolean(t.trialRefusal)))))
   // A resume the service refuses for good ends the offer. The prompt keeps that tenant's
   // trial options mounted, so the reason stays on screen next to Buy Pro.
   const resumeOffered = useRef<string | undefined>(undefined)
   if (eligible?.trialCanResume) resumeOffered.current = eligible.tenantId
-  const shown = eligible ?? (status?.tenantTrialsEnabled && !status.hasKey && plan === "pro" && resumeOffered.current
-    ? status.tenants.find(t => t.tenantId === resumeOffered.current && t.tenantId === tenantId && t.signedIn && !t.entitled && !t.activated)
-    : undefined)
+  const shown = eligible ?? (resumeOffered.current ? prompted?.tenants.find(t => t.tenantId === resumeOffered.current && here(t)) : undefined)
   const requested = planPromptAction(status, plan)
-  const action = status?.tenantTrialsEnabled && requested === "trial" ? "checkout" : requested
+  // With tenant trials, or next to a resume offer, the purchase is the other choice, not the emailed trial.
+  const action = (status?.tenantTrialsEnabled || shown) && requested === "trial" ? "checkout" : requested
   if (action === "trial" && inRouter) {
     // A link: the trial form is on the License page.
     return (

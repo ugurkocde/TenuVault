@@ -1,4 +1,4 @@
-import { act, createElement } from "react"
+import { act, createElement, type FunctionComponent } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { MemoryRouter } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -235,6 +235,16 @@ describe("tenant trial UI", () => {
       expect(container.textContent).not.toContain("Resume Pro trial")
       expect(container.textContent).toContain("This tenant already had a Pro trial.")
       expect([...container.querySelectorAll('[role="alert"]')].map(e => e.textContent)).toEqual(["This trial can no longer be resumed."])
+    })
+    it("offers it while the trial switch is unknown or off, for the asked tenant only", async () => {
+      state.status = { ...state.status!, tenantTrialsEnabled: false, tenants: [tenant, { ...tenant, tenantId: "ended" }] }
+      await render(createElement(TenantTrialOptions))
+      expect([...container.querySelectorAll("button")].filter(b => b.textContent === "Resume Pro trial")).toHaveLength(2)
+      act(() => root.unmount()); root = createRoot(container)
+      await render(createElement(TenantTrialOptions as FunctionComponent<{ tenantId?: string; compact?: boolean }>, { tenantId: "ended", compact: true }))
+      expect([...container.querySelectorAll("button")].filter(b => b.textContent === "Resume Pro trial")).toHaveLength(1)
+      await click("Resume Pro trial")
+      expect(state.action).toHaveBeenCalledWith("ended", "resume_trial")
     })
     it("goes back to the used trial message once the trial cannot be resumed", async () => {
       Object.assign(tenant, { trialCanResume: false, trialResumeUntil: undefined })

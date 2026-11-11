@@ -84,6 +84,47 @@ describe("plan prompt trial and purchase actions", () => {
     expect(container.querySelector("div, p")).toBeNull()
     expect(onLeave).not.toHaveBeenCalled()
   })
+  it("offers the current tenant's resume while the trial switch is unknown or off", async () => {
+    // After a restart an installation with a license for another tenant never learns the
+    // switch. The same holds while the service cannot be reached or trials are off.
+    state.status = { ...status("ended"), tenantTrialsEnabled: false }
+    const until = new Date(Date.now() + 9 * 86400_000).toISOString()
+    Object.assign(state.status.tenants[0]!, { trialCanResume: true, trialResumeUntil: until })
+    state.status.tenants.push({ ...state.status.tenants[0]!, tenantId: "other" })
+    container = document.body.appendChild(document.createElement("div")); root = createRoot(container)
+    await act(async () => root!.render(createElement(MemoryRouter, null, createElement("span", null, createElement(PlanPromptButton, { plan: "pro", source: "locked-fullrestore" })))))
+    // Buy Pro, not the emailed trial, is the other choice next to a resume.
+    expect(container.textContent).toContain("Buy Pro")
+    expect(container.textContent).not.toContain("Start 30 day free trial")
+    expect(container.textContent).not.toContain("Try Pro free")
+    const resumes = [...container.querySelectorAll("button")].filter(b => b.textContent === "Resume Pro trial")
+    expect(resumes).toHaveLength(1)
+    expect(container.querySelector("div, p")).toBeNull()
+    // The service refuses for good: the reason stays next to Buy Pro, and the other tenant's
+    // offer does not take its place.
+    state.action.mockImplementationOnce(async () => {
+      Object.assign(state.status!.tenants[0]!, { trialCanResume: false, trialResumeUntil: undefined })
+      state.status = { ...state.status!, tenants: state.status!.tenants.map(t => ({ ...t })) }
+      throw new Error("This trial can no longer be resumed.")
+    })
+    await act(async () => resumes[0]!.click())
+    expect(state.action).toHaveBeenCalledTimes(1)
+    expect(state.action).toHaveBeenCalledWith("tenant", "resume_trial")
+    expect(container.textContent).toContain("Buy Pro")
+    expect(container.textContent).not.toContain("Resume Pro trial")
+    expect([...container.querySelectorAll('[role="alert"]')].map(e => e.textContent)).toEqual(["This trial can no longer be resumed."])
+    expect(container.querySelector("div, p")).toBeNull()
+  })
+  it("does not offer a resume in a prompt with a saved key or for the MSP plan", async () => {
+    for (const [hasKey, plan] of [[true, "pro"], [false, "msp"]] as const) {
+      state.status = { ...status("ended"), hasKey, tenantTrialsEnabled: false }
+      Object.assign(state.status.tenants[0]!, { trialCanResume: true, trialResumeUntil: new Date(Date.now() + 9 * 86400_000).toISOString() })
+      container?.remove(); act(() => root?.unmount())
+      container = document.body.appendChild(document.createElement("div")); root = createRoot(container)
+      await act(async () => root!.render(createElement(MemoryRouter, null, createElement(PlanPromptButton, { plan, source: "locked-fullrestore" }))))
+      expect(container.textContent, `${hasKey} ${plan}`).not.toContain("Resume Pro trial")
+    }
+  })
   it("offers only Buy Pro once the ended trial cannot be resumed", async () => {
     state.status = status("ended")
     container = document.body.appendChild(document.createElement("div")); root = createRoot(container)

@@ -93,7 +93,10 @@ export function TenantTrialOptions({ onStarted, tenantId, compact = false, varia
   const Container = compact ? "span" : "div"
   const Text = compact ? "span" : "p"
   return <Container className={compact ? "inline-flex flex-wrap items-center gap-3" : "space-y-3"}>
-    {status.tenants.filter(t => (!status?.tenantTrialsEnabled || !tenantId || t.tenantId === tenantId) && t.signedIn && !t.entitled && t.message !== TRIAL_USED_MESSAGE && (status.tenantTrialsEnabled || t.trialRefusal)).map(tenant => <Container key={tenant.tenantId} className={compact ? "inline-flex flex-wrap items-center gap-3" : "flex flex-wrap items-center gap-3"}>
+    {status.tenants.filter(t => t.signedIn && !t.entitled && t.message !== TRIAL_USED_MESSAGE && (t.trialCanResume
+      // A resume is offered for the asked tenant only, and whether or not the trial switch is known.
+      ? !tenantId || t.tenantId === tenantId
+      : (!status?.tenantTrialsEnabled || !tenantId || t.tenantId === tenantId) && (status.tenantTrialsEnabled || t.trialRefusal))).map(tenant => <Container key={tenant.tenantId} className={compact ? "inline-flex flex-wrap items-center gap-3" : "flex flex-wrap items-center gap-3"}>
       {tenant.trialCanResume ? <TrialResume tenant={tenant} compact={compact} variant={variant} size={size} onResumed={onStarted} action={resume} /> : <>
         {!compact && tenant.trialRefusal && <Text role="status">{tenant.trialRefusal}</Text>}
         {tenant.activated ? <Text className="text-sm text-gray-600">Check the saved activation before starting a trial.</Text> : status.tenantTrialsEnabled && !(tenant.trialRefusalPermanent ?? Boolean(tenant.trialRefusal)) && <><Button variant={variant} size={size} disabled={busy} onClick={() => void run(async () => {
