@@ -44,7 +44,7 @@ function kinds(counts: Partial<Record<DamageKind, number>>, codes: string[] = []
   return result
 }
 
-interface Props { count: number; kinds: DamagedFileKinds | null; names?: string[]; unavailable?: number; tenantId?: string; identity?: string }
+interface Props { count: number; kinds: DamagedFileKinds | null; names?: string[]; unavailable?: number; tenantId?: string; identity?: string; listLoading?: boolean; listError?: string }
 
 const updated = async (): Promise<RefreshOutcome> => "updated"
 
@@ -224,12 +224,46 @@ describe("damaged backup files notice", () => {
     expect(container.textContent).not.toContain("still cannot read")
   })
 
-  it("says nothing about the check when a newer refresh replaced it", async () => {
+  it("clears the failed check once a later request for the list succeeds, and keeps it when that one fails too", async () => {
     backups.importRecoveryKey.mockResolvedValue(settings)
+    const failed = "The backups could not be checked again. Select Refresh to try again."
+    const { container, draw } = render({ count: 129, kinds: kinds({ key: 129 }), listError: "Storage unavailable" }, async () => "failed")
+    await importKey(container)
+    expect(container.textContent).toContain(failed)
+    // The timeline's Refresh fails again: the line stays.
+    draw({ count: 129, kinds: kinds({ key: 129 }), listLoading: true, listError: "Storage unavailable" })
+    draw({ count: 129, kinds: kinds({ key: 129 }), listLoading: false, listError: "Storage unavailable" })
+    expect(container.textContent).toContain(failed)
+    // Then it succeeds with the same damage: the backups were checked, nothing failed.
+    draw({ count: 129, kinds: kinds({ key: 129 }), listLoading: true, listError: "Storage unavailable" })
+    draw({ count: 129, kinds: kinds({ key: 129 }), listLoading: false, listError: "" })
+    await flush()
+    expect(container.textContent).not.toContain(failed)
+    expect(container.textContent).toContain("TenuVault cannot read 129 files")
+  })
+
+  it("ends the check with a newer request that replaced the import's refresh", async () => {
+    backups.importRecoveryKey.mockResolvedValue(settings)
+    const { container, draw } = render({ count: 129, kinds: kinds({ key: 129 }), listLoading: true }, async () => "superseded")
+    await importKey(container)
+    // The newer request is still running, so the check is too.
+    expect(container.textContent).toContain("Checking the backups again...")
+    expect(container.textContent).not.toContain("still cannot read")
+    draw({ count: 7, kinds: kinds({ key: 7 }), listLoading: false })
+    await flush()
+    expect(container.textContent).not.toContain("Checking the backups again...")
+    expect(container.textContent).toContain("This device still cannot read 7 of these files.")
+  })
+
+  it("takes the answer of a newer request that already finished when the import's refresh was replaced", async () => {
+    backups.importRecoveryKey.mockResolvedValue(settings)
+    const replaced = render({ count: 129, kinds: kinds({ key: 129 }), listError: "Storage unavailable" }, async () => "superseded")
+    await importKey(replaced.container)
+    expect(replaced.container.textContent).toContain("The backups could not be checked again.")
     const { container } = render({ count: 129, kinds: kinds({ key: 129 }) }, async () => "superseded")
     await importKey(container)
-    expect(container.textContent).not.toContain("still cannot read")
-    expect(container.textContent).not.toContain("could not be checked again")
+    expect(container.textContent).not.toContain("Checking the backups again...")
+    expect(container.textContent).toContain("This device still cannot read 129 of these files.")
   })
 
   it("goes away once the list after an import has no damaged files", async () => {

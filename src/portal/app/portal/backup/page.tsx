@@ -331,6 +331,8 @@ export default function BackupRestorePage() {
               unavailable={backups.filter((backup) => backup.status.toLowerCase() === "unavailable").length}
               tenantId={selectedTenant.credentials?.tenantId}
               onImported={() => backupList.refresh({ force: true })}
+              listLoading={backupList.loading}
+              listError={backupList.error}
             />
             {backupList.unresolved > 0 && (
               <p className="mb-4 flex items-start gap-2 text-sm text-amber-800">

@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react"
+import { useEffect, useId, useRef, useState } from "react"
 import { ChevronDown, FolderOpen, Loader2, Upload } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import { cn } from "~/lib/utils"
@@ -22,6 +22,10 @@ interface DamagedBackupFilesNoticeProps {
   tenantId?: string
   /** Lists the backups again after a key import; resolves with how that went. */
   onImported: () => Promise<RefreshOutcome>
+  /** A request for the list shown is running (the backup list's `loading`). */
+  listLoading?: boolean
+  /** Why the last request for the list failed, empty when it succeeded (the backup list's `error`). */
+  listError?: string
 }
 
 const files = (count: number) => `${count} file${count === 1 ? "" : "s"}`
@@ -102,7 +106,7 @@ function FileNames({ names, more }: { names: string[]; more: number }) {
  * kind of damage the store found, and offers what can fix it: a recovery key import when files
  * may have been made with another key, the tenant's folder, and the file names behind a disclosure.
  */
-export function DamagedBackupFilesNotice({ count, kinds, names, unavailable, tenantId, onImported }: DamagedBackupFilesNoticeProps) {
+export function DamagedBackupFilesNotice({ count, kinds, names, unavailable, tenantId, onImported, listLoading = false, listError = "" }: DamagedBackupFilesNoticeProps) {
   const panelId = useId()
   const [expanded, setExpanded] = useState(false)
   const [importing, setImporting] = useState(false)
@@ -120,6 +124,26 @@ export function DamagedBackupFilesNotice({ count, kinds, names, unavailable, ten
   useEffect(() => {
     if (!(count > 0) || keyFiles <= 0) setCheck("")
   }, [count, keyFiles])
+  // The list request as of this render, for the end of an import's refresh.
+  const list = useRef({ loading: listLoading, error: listError })
+  list.current = { loading: listLoading, error: listError }
+  // Set when the import's refresh was replaced by a newer request that is still running: the check
+  // then ends with that request.
+  const waitingForList = useRef(false)
+  const wasLoading = useRef(listLoading)
+  useEffect(() => {
+    const finished = wasLoading.current && !listLoading
+    wasLoading.current = listLoading
+    if (!finished) return
+    if (waitingForList.current) {
+      waitingForList.current = false
+      setRefreshing(false)
+      setCheck(listError ? "failed" : "checked")
+      return
+    }
+    // A later request that succeeded, such as the timeline's Refresh, did check the backups again.
+    if (!listError) setCheck((current) => (current === "failed" ? "" : current))
+  }, [listLoading, listError])
 
   if (!(count > 0)) return null
   const present = known ? DAMAGE_KINDS.filter((kind) => known.counts[kind] > 0) : []
@@ -188,9 +212,22 @@ export function DamagedBackupFilesNotice({ count, kinds, names, unavailable, ten
             setRefreshing(true)
             // The card is keyed by tenant and storage, so a refresh that ends after a switch only
             // updates the card it was started from, which is gone by then.
-            void onImported()
-              .then((outcome) => setCheck(outcome === "updated" ? "checked" : outcome === "failed" ? "failed" : ""), () => setCheck("failed"))
-              .finally(() => setRefreshing(false))
+            void onImported().then((outcome) => {
+              if (outcome === "superseded") {
+                // A newer request for the same list replaced this one; its answer is the check.
+                if (list.current.loading) {
+                  waitingForList.current = true
+                  return
+                }
+                setCheck(list.current.error ? "failed" : "checked")
+              } else {
+                setCheck(outcome === "updated" ? "checked" : "failed")
+              }
+              setRefreshing(false)
+            }, () => {
+              setCheck("failed")
+              setRefreshing(false)
+            })
           }}
           onError={setError}
           onBusyChange={setPending}
