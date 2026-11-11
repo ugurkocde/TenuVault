@@ -300,6 +300,17 @@ describe("License page after a used tenant trial", () => {
     expect(button(container, "Retry")).toBeTruthy()
   })
 
+  it("explains it in the row of each tenant it is about, and not for the others", async () => {
+    const other = "22222222-2222-4222-8222-222222222222"
+    const container = await render({ ...community, tenantTrialsEnabled: true, tenants: [elsewhere(), used({ tenantId: other, trialEndsAt: null, trialRefusal: undefined, trialRefusalPermanent: false, trialAcknowledged: false })] })
+    expect(occurrences(container, ORGANIZATION_LICENSE_GUIDANCE)).toBe(1)
+    const rows = [...container.querySelectorAll("div")].filter(row => row.textContent!.includes(ORGANIZATION_LICENSE_GUIDANCE) && row.textContent!.includes("11111111-2222-4333-8444-555555555555"))
+    // The innermost element holding both is the tenant's own row: it does not hold the other tenant.
+    expect(rows.at(-1)!.textContent).not.toContain(other)
+    const both = await render({ ...community, tenantTrialsEnabled: true, tenants: [elsewhere(), elsewhere({ tenantId: other })] })
+    expect(occurrences(both, ORGANIZATION_LICENSE_GUIDANCE)).toBe(2)
+  })
+
   it("still shows the tenant's own license message next to the guidance", async () => {
     const container = await render({ ...community, tenantTrialsEnabled: true, tenants: [elsewhere({ message: "The licensing service could not be reached." })] })
     expect(occurrences(container, ORGANIZATION_LICENSE_GUIDANCE)).toBe(1)

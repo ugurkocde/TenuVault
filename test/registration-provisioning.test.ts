@@ -42,6 +42,11 @@ function fixture(options: { apps?: object[]; grants?: object[]; fail?: (url: URL
   const run = (signal?: AbortSignal) => provisionRegistration({ fetch: request, token: "ephemeral", tenantId: "tenant", username: "admin", progress, sleep, signal })
   return { run, calls, sleep, progress, probes }
 }
+// Tenant-wide admin consent on Microsoft Graph that covers Intune: what marks a registration as one
+// an administrator already trusted.
+const INTUNE = "DeviceManagementApps.ReadWrite.All"
+const consent = (scope = INTUNE, id = "g") => ({ id, resourceId: "Microsoft Graph", consentType: "AllPrincipals", scope })
+const trusted = { appPrincipal: { id: "app-sp" }, grants: [consent()] }
 const failure = (status: number, message = "failed", headers?: HeadersInit) => Response.json({ error: { message } }, { status, headers })
 describe("registration provisioning", () => {
   it("creates the default registration, service principal and all consent bodies", async () => {
@@ -53,60 +58,98 @@ describe("registration provisioning", () => {
     expect(f.calls.filter(c => c.url.pathname === "/v1.0/oauth2PermissionGrants" && c.method === "POST").map(c => c.body)).toEqual(DESKTOP_APP_PERMISSIONS.map(r => ({ clientId: "app-sp", consentType: "AllPrincipals", resourceId: r.api, scope: r.permissions.join(" ") })))
   })
   it("reuses the oldest owned registration, unions scopes and creates missing grants", async () => {
-    const f = fixture({ appPrincipal: { id: "app-sp" }, apps: [{ ...own, createdDateTime: "2025-01-01", appId: "older" }, own], grants: [{ id: "g", resourceId: "Microsoft Graph", consentType: "AllPrincipals", scope: "Extra.Scope User.Read" }, { id: "personal", resourceId: "Azure Storage", consentType: "Principal", scope: "user_impersonation" }] })
+    const f = fixture({ appPrincipal: { id: "app-sp" }, apps: [{ ...own, createdDateTime: "2025-01-01", appId: "older" }, own], grants: [consent(`Extra.Scope User.Read ${INTUNE}`), { id: "personal", resourceId: "Azure Storage", consentType: "Principal", scope: "user_impersonation" }] })
     expect(await f.run()).toMatchObject({ reused: true, clientId: "older" })
     expect(f.calls.some(c => c.url.pathname === "/v1.0/applications" && c.method === "POST")).toBe(false)
-    expect(f.calls.find(c => c.method === "PATCH")?.body?.scope).toBe(`Extra.Scope ${DESKTOP_APP_PERMISSIONS[0]!.permissions.join(" ")}`)
+    expect(f.calls.find(c => c.method === "PATCH")?.body?.scope).toBe(["Extra.Scope", "User.Read", INTUNE, ...DESKTOP_APP_PERMISSIONS[0]!.permissions.filter(scope => scope !== "User.Read" && scope !== INTUNE)].join(" "))
     expect(f.calls.filter(c => c.url.pathname === "/v1.0/oauth2PermissionGrants" && c.method === "POST")).toHaveLength(2)
   })
-  it.each([{ displayName: "Fabrikam Desktop" }, { notes: "foreign" }, { signInAudience: "AzureADMultipleOrgs" }, { publicClient: { redirectUris: [] } }])("does not reuse a foreign registration (%j)", async change => {
-    expect(await fixture({ apps: [{ ...own, ...change }] }).run()).toMatchObject({ reused: false })
+  it.each([
+    { displayName: "Fabrikam Desktop" }, { notes: "foreign" }, { signInAudience: "AzureADMultipleOrgs" }, { publicClient: { redirectUris: [] } },
+    // No longer what TenuVault makes: it can answer somewhere else, or it holds a credential.
+    { publicClient: { redirectUris: ["http://localhost", "https://example.invalid/callback"] } },
+    { web: { redirectUris: ["https://example.invalid/callback"] } }, { spa: { redirectUris: ["https://example.invalid/callback"] } },
+    { passwordCredentials: [{ keyId: "secret" }] }, { keyCredentials: [{ keyId: "certificate" }] },
+  ])("does not reuse a foreign registration, even one with admin consent (%j)", async change => {
+    const f = fixture({ ...trusted, apps: [{ ...own, id: "foreign-app", appId: "foreign", ...change }] })
+    expect(await f.run()).toMatchObject({ clientId: "client", reused: false, candidateCount: 0 })
+    expect(f.calls.some(c => c.url.searchParams.get("$filter")?.includes("foreign"))).toBe(false)
+  })
+  it("reuses one that also has the redirect addresses Microsoft offers for desktop apps", async () => {
+    const f = fixture({ ...trusted, apps: [{ ...own, publicClient: { redirectUris: ["http://localhost", "https://login.microsoftonline.com/common/oauth2/nativeclient", "ms-appx-web://Microsoft.AAD.BrokerPlugin/client"] } }] })
+    expect(await f.run()).toMatchObject({ clientId: "client", reused: true })
+  })
+  // A registration somebody put into the tenant: TenuVault's name, note and redirect address, and
+  // a client ID of its own. Any member of a tenant can create one and stays its owner.
+  const planted = (state: { principal?: object | null; grants?: object[] }) => fixture({
+    apps: [{ ...own, id: "planted-app", appId: "planted" }],
+    fail: (url) => {
+      const filter = url.searchParams.get("$filter")
+      if (url.pathname.endsWith("servicePrincipals") && filter === "appId eq 'planted'") return Response.json({ value: state.principal === null ? [] : [state.principal ?? { id: "planted-sp" }] })
+      if (url.pathname.endsWith("oauth2PermissionGrants") && filter === "clientId eq 'planted-sp'") return Response.json({ value: state.grants ?? [] })
+      return undefined
+    },
+  })
+  it.each<[string, { principal?: object | null; grants?: object[] }]>([
+    ["has no enterprise application", { principal: null }],
+    ["has no consent", {}],
+    ["has only the consent a user gave for themselves", { grants: [{ ...consent(), consentType: "Principal", principalId: "user" }] }],
+    ["has tenant-wide consent that covers nothing of Intune", { grants: [consent("User.Read Organization.Read.All")] }],
+    ["has tenant-wide consent for another API only", { grants: [{ ...consent(), resourceId: "custom-api" }] }],
+    ["has sign-in turned off and no consent", { principal: { id: "planted-sp", accountEnabled: false } }],
+  ])("creates its own registration and gives no consent to one that %s", async (_name, state) => {
+    const f = planted(state)
+    expect(await f.run()).toMatchObject({ clientId: "client", reused: false, candidateCount: 0 })
+    expect(f.calls.some(c => c.method === "POST" && c.url.pathname === "/v1.0/applications")).toBe(true)
+    // Nothing is written to it: no enterprise application, no consent, no change.
+    for (const call of f.calls.filter(c => c.method !== "GET")) expect(`${call.url.href} ${JSON.stringify(call.body ?? {})}`).not.toContain("planted")
+    expect(f.calls.filter(c => c.method === "POST" && c.url.pathname.endsWith("oauth2PermissionGrants")).map(c => c.body?.clientId)).toEqual(DESKTOP_APP_PERMISSIONS.map(() => "app-sp"))
   })
   it("reuses another marked TenuVault name with no extra lookup requests", async () => {
-    const f = fixture({ apps: [{ ...own, displayName: "TenuVault Desktop (Lab)" }] })
+    const f = fixture({ ...trusted, apps: [{ ...own, displayName: "TenuVault Desktop (Lab)" }] })
     expect(await f.run()).toMatchObject({ displayName: "TenuVault Desktop (Lab)", candidateCount: 1, reused: true })
     expect(f.calls.filter(c => c.method === "GET" && c.url.pathname.endsWith("servicePrincipals"))).toHaveLength(4)
+    expect(f.calls.filter(c => c.method === "GET" && c.url.pathname.endsWith("oauth2PermissionGrants"))).toHaveLength(1)
     expect(f.calls.find(c => c.url.pathname.endsWith("applications"))!.url.searchParams.get("$filter")).toBe("startswith(displayName,'TenuVault')")
   })
-  // Two registrations that carry the note: "client" from 2026 and "other" from 2025.
-  const two = (other: { principal?: object | null; grants?: object[] }, mine: object[] = []) => fixture({
+  // Two registrations that carry the note and admin consent: "client" from 2026 and "other" from 2025.
+  const two = (other: { principal?: object | null; grants?: object[] }, mine: object[] = [consent()]) => fixture({
     appPrincipal: { id: "app-sp" }, apps: [own, { ...own, id: "other-app", appId: "other", displayName: "TenuVault Desktop (Lab)", createdDateTime: "2025-01-01" }], grants: mine,
     fail: (url) => {
       const filter = url.searchParams.get("$filter")
       if (url.pathname.endsWith("servicePrincipals") && filter === "appId eq 'other'") return Response.json({ value: other.principal === null ? [] : [other.principal ?? { id: "other-sp" }] })
-      if (url.pathname.endsWith("oauth2PermissionGrants") && filter === "clientId eq 'other-sp'") return Response.json({ value: other.grants ?? [] })
+      if (url.pathname.endsWith("oauth2PermissionGrants") && filter === "clientId eq 'other-sp'") return Response.json({ value: other.grants ?? [consent()] })
       return undefined
     },
   })
   it("prefers the registration whose consent covers more of TenuVault's permissions, such as one a switch added", async () => {
-    const f = two({}, [{ id: "g", resourceId: "Microsoft Graph", consentType: "AllPrincipals", scope: "User.Read Mail.Send" }])
+    const f = two({}, [consent(`${INTUNE} Mail.Send`)])
     expect(await f.run()).toMatchObject({ clientId: "client", displayName: "TenuVault Desktop", candidateCount: 2, reused: true })
   })
   it("does not count consent for anything TenuVault does not use", async () => {
     // Unrelated consent on the older one must not be what decides: the newer one covers more of TenuVault's.
-    const f = two({ grants: [{ id: "x", resourceId: "custom-api", consentType: "AllPrincipals", scope: "A.Read B.Read C.Read" }] }, [{ id: "g", resourceId: "Microsoft Graph", consentType: "AllPrincipals", scope: "User.Read" }])
+    const f = two({ grants: [consent(), { id: "x", resourceId: "custom-api", consentType: "AllPrincipals", scope: "A.Read B.Read C.Read" }] }, [consent(`${INTUNE} User.Read`)])
     expect(await f.run()).toMatchObject({ clientId: "client", candidateCount: 2 })
   })
   it("among equals uses the oldest, and names it", async () => {
     const f = two({})
     expect(await f.run()).toMatchObject({ clientId: "other", displayName: "TenuVault Desktop (Lab)", candidateCount: 2, reused: true })
     expect(f.calls.some(c => c.method === "DELETE" || c.method === "POST" && c.url.pathname.endsWith("applications"))).toBe(false)
-    // Each extra enabled candidate costs two reads, and the chosen one's reads are not repeated.
+    // Each candidate costs two reads, and the chosen one's reads are not repeated.
     expect(f.calls.filter(c => c.method === "GET" && (c.url.pathname.endsWith("servicePrincipals") || c.url.pathname.endsWith("oauth2PermissionGrants")))).toHaveLength(7)
   })
   it("skips a registration whose enterprise application has sign-in turned off while another one matches", async () => {
     const f = two({ principal: { id: "other-sp", accountEnabled: false } })
     expect(await f.run()).toMatchObject({ clientId: "client", candidateCount: 2 })
-    expect(f.calls.filter(c => c.method === "GET" && (c.url.pathname.endsWith("servicePrincipals") || c.url.pathname.endsWith("oauth2PermissionGrants")))).toHaveLength(6)
+    expect(f.calls.filter(c => c.method === "GET" && (c.url.pathname.endsWith("servicePrincipals") || c.url.pathname.endsWith("oauth2PermissionGrants")))).toHaveLength(7)
   })
-  it("creates the enterprise application of a chosen registration that has none, and grants consent to it", async () => {
+  it("passes over a registration without an enterprise application and does not create one for it", async () => {
     const f = two({ principal: null })
-    expect(await f.run()).toMatchObject({ clientId: "other", candidateCount: 2 })
-    expect(f.calls.find(c => c.method === "POST" && c.url.pathname.endsWith("servicePrincipals"))?.body).toEqual({ appId: "other", tags: ["HideApp", "WindowsAzureActiveDirectoryIntegratedApp"] })
-    expect(f.calls.filter(c => c.method === "POST" && c.url.pathname.endsWith("oauth2PermissionGrants"))).toHaveLength(DESKTOP_APP_PERMISSIONS.length)
+    expect(await f.run()).toMatchObject({ clientId: "client", candidateCount: 1, reused: true })
+    expect(f.calls.some(c => c.method === "POST" && c.url.pathname.endsWith("servicePrincipals"))).toBe(false)
   })
   it("changes nothing when every matching registration has sign-in turned off, and names the one it found", async () => {
-    const f = fixture({ appPrincipal: { id: "app-sp", accountEnabled: false }, apps: [own, { ...own, id: "other-app", appId: "other", displayName: "TenuVault Desktop (Lab)", createdDateTime: "2025-01-01" }], fail: (url) => url.pathname.endsWith("servicePrincipals") && url.searchParams.get("$filter") === "appId eq 'other'" ? Response.json({ value: [{ id: "other-sp", accountEnabled: false }] }) : undefined })
+    const f = fixture({ grants: [consent()], appPrincipal: { id: "app-sp", accountEnabled: false }, apps: [own, { ...own, id: "other-app", appId: "other", displayName: "TenuVault Desktop (Lab)", createdDateTime: "2025-01-01" }], fail: (url) => url.pathname.endsWith("servicePrincipals") && url.searchParams.get("$filter") === "appId eq 'other'" ? Response.json({ value: [{ id: "other-sp", accountEnabled: false }] }) : undefined })
     await expect(f.run()).rejects.toThrow('"TenuVault Desktop (Lab)" (client id other), but sign-in to its enterprise application is turned off')
     expect(f.calls.some(c => c.method !== "GET")).toBe(false)
   })
@@ -129,7 +172,7 @@ describe("registration provisioning", () => {
     expect(f.calls.filter(c => c.method === "POST")).toHaveLength(1)
   })
   it.each([false, true])("reports 403 and rolls back only a new application (reused %s)", async reused => {
-    const f = fixture({ apps: reused ? [own] : [], fail: (url, init) => url.pathname === "/v1.0/oauth2PermissionGrants" && init.method === "POST" ? failure(403) : undefined })
+    const f = fixture({ ...(reused ? { ...trusted, apps: [own] } : {}), fail: (url, init) => url.pathname === "/v1.0/oauth2PermissionGrants" && init.method === "POST" ? failure(403) : undefined })
     const error = await f.run().then(() => { throw new Error("Expected failure") }, error => error as Error)
     expect(error.message).toContain("signed-in account admin")
     // Microsoft's own reason stays in the message, for refusals that are not about the role.
@@ -170,16 +213,15 @@ describe("registration provisioning", () => {
     expect(f.probes).toHaveLength(3)
   })
   it("stops at a reused registration whose enterprise application is turned off, without touching consent", async () => {
-    const f = fixture({ apps: [own], appPrincipal: { id: "app-sp", accountEnabled: false } })
+    const f = fixture({ apps: [own], grants: [consent()], appPrincipal: { id: "app-sp", accountEnabled: false } })
     await expect(f.run()).rejects.toThrow("sign-in to its enterprise application is turned off")
-    expect(f.calls.some(c => c.url.pathname.includes("oauth2PermissionGrants"))).toBe(false)
     expect(f.calls.some(c => c.method !== "GET")).toBe(false)
   })
   it("names the fields it reads when it lists app registrations and service principals", async () => {
     const f = fixture()
     await f.run()
     const select = (path: string) => f.calls.find(c => c.method === "GET" && c.url.pathname === path)!.url.searchParams.get("$select")
-    expect(select("/v1.0/applications")).toBe("id,appId,displayName,notes,signInAudience,publicClient,createdDateTime")
+    expect(select("/v1.0/applications")).toBe("id,appId,displayName,notes,signInAudience,publicClient,web,spa,passwordCredentials,keyCredentials,createdDateTime")
     expect(select("/v1.0/servicePrincipals")).toBe("id,appId,accountEnabled,oauth2PermissionScopes")
   })
   it("repeats a read that got no answer", async () => {

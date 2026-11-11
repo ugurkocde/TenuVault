@@ -378,6 +378,27 @@ describe("in-app tenant setup", () => {
     expect(state.signIn).not.toHaveBeenCalled()
   })
 
+  it("signs in by itself with the one registration the tenant already had", async () => {
+    state.createRegistration.mockResolvedValueOnce({ ...result, reused: true, displayName: "TenuVault Desktop (Lab)", candidateCount: 1 })
+    state.signIn.mockResolvedValueOnce(result)
+    const container = await render(createElement(OnboardingPage))
+    await act(async () => { button(container, "Set up with Microsoft sign-in")!.click(); await settle() })
+    expect(state.signIn).toHaveBeenCalledTimes(1)
+  })
+
+  it("waits for the admin when the tenant has several registrations, so another one can still be chosen", async () => {
+    state.createRegistration.mockResolvedValueOnce({ ...result, reused: true, displayName: "TenuVault Desktop (Lab)", candidateCount: 2 })
+    const container = await render(createElement(OnboardingPage))
+    await act(async () => { button(container, "Set up with Microsoft sign-in")!.click(); await settle() })
+    expect(state.signIn).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('so TenuVault uses that one. It is one of 2 in this tenant. To use it, select Sign in with Microsoft. To use another one, select Previous, then "I already have an app registration" and enter its client ID.')
+    // The IDs are filled in: one click signs in with the registration TenuVault picked.
+    state.signIn.mockResolvedValueOnce(result)
+    await act(async () => { button(container, "Sign in with Microsoft")!.click(); await settle() })
+    expect(state.signIn).toHaveBeenCalledTimes(1)
+    expect(state.signIn.mock.calls[0]!.slice(0, 2)).toEqual([TENANT, CLIENT])
+  })
+
   it("passes the optional tenant of a guest or partner admin", async () => {
     state.createRegistration.mockResolvedValueOnce(result)
     state.signIn.mockResolvedValueOnce(result)

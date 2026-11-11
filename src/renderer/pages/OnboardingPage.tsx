@@ -178,11 +178,18 @@ export default function OnboardingPage() {
       setAccount(null)
       setChoice(null)
     }
-    setAutoSignIn(result.ready ? { loginHint: result.username } : null)
-    const reusedNotice = result.reused ? `This tenant already had a TenuVault app registration, "${result.displayName}", so TenuVault uses that one.${result.candidateCount > 1 ? ' To use another one, select Previous, then "I already have an app registration" and enter its client ID.' : ""}` : ""
-    setSetupNotice(result.ready
-      ? reusedNotice || "The app registration is ready."
-      : `${reusedNotice ? `${reusedNotice} ` : ""}The app registration is ready, but Microsoft is still making it available for sign-in. Wait a moment, then select Sign in with Microsoft.`)
+    // With several registrations the admin may want another one than the one TenuVault picked. A
+    // sign-in that starts by itself could finish, and move on, while they are going back for it.
+    const several = result.reused && result.candidateCount > 1
+    setAutoSignIn(result.ready && !several ? { loginHint: result.username } : null)
+    const reusedNotice = result.reused ? `This tenant already had a TenuVault app registration, "${result.displayName}", so TenuVault uses that one.` : ""
+    const pending = "The app registration is ready, but Microsoft is still making it available for sign-in. Wait a moment, then select Sign in with Microsoft."
+    setSetupNotice([
+      reusedNotice || (result.ready ? "The app registration is ready." : ""),
+      several ? `It is one of ${result.candidateCount} in this tenant.` : "",
+      result.ready ? (several ? "To use it, select Sign in with Microsoft." : "") : pending,
+      several ? 'To use another one, select Previous, then "I already have an app registration" and enter its client ID.' : "",
+    ].filter(Boolean).join(" "))
     setStep(1)
   }
 

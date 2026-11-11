@@ -1,4 +1,4 @@
-import { ORGANIZATION_LICENSE_MESSAGE, ORGANIZATION_LICENSE_GUIDANCE } from "../../src/shared/constants"
+import { ORGANIZATION_LICENSE_MESSAGE, ORGANIZATION_LICENSE_GUIDANCE, ORGANIZATION_LICENSE_SETUP_GUIDANCE } from "../../src/shared/constants"
 import { TenantTrialOptions } from "../../src/renderer/components/TenantTrial"
 import { PlanContext, TrialOrKey } from "../../src/renderer/components/PlanChoice"
 import { act, createElement } from "react"
@@ -56,7 +56,12 @@ describe("plan prompt trial and purchase actions", () => {
     container = document.body.appendChild(document.createElement("div")); root = createRoot(container)
     const child = place === "options" ? createElement(TenantTrialOptions) : place === "storage" ? createElement(PlanContext, { tenantId: "tenant" }) : createElement(TrialOrKey, { source: "test" })
     await act(async () => root!.render(createElement(MemoryRouter, null, child)))
-    expect(container.textContent!.split(ORGANIZATION_LICENSE_GUIDANCE).length - 1).toBe(1)
+    // In the setup wizard the tenant is not saved yet: it says to go back to the Connect step, not
+    // to remove a tenant.
+    const setup = place === "storage"
+    expect(container.textContent!.split(ORGANIZATION_LICENSE_GUIDANCE).length - 1).toBe(setup ? 0 : 1)
+    expect(container.textContent!.split(ORGANIZATION_LICENSE_SETUP_GUIDANCE).length - 1).toBe(setup ? 1 : 0)
+    if (setup) expect(container.textContent).not.toContain("remove the tenant")
     expect(container.textContent).not.toContain("Try Pro free")
     // Entering a license key stays possible where the choice is offered.
     if (place !== "options") expect(container.textContent).toContain("I have a license key")

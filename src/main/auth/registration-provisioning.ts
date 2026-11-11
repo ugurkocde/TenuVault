@@ -9,6 +9,10 @@ interface Application {
   notes?: string
   signInAudience?: string
   publicClient?: { redirectUris?: string[] }
+  web?: { redirectUris?: string[] }
+  spa?: { redirectUris?: string[] }
+  passwordCredentials?: unknown[]
+  keyCredentials?: unknown[]
   createdDateTime?: string
 }
 interface Principal {
@@ -32,6 +36,23 @@ export interface ProvisioningOptions {
 const ROOT = "https://graph.microsoft.com/v1.0"
 const NOTES = "Used by the TenuVault desktop app. Delegated permissions only, no credentials."
 const GRAPH_APP_ID = "00000003-0000-0000-c000-000000000000"
+const APPLICATION_FIELDS = "id,appId,displayName,notes,signInAudience,publicClient,web,spa,passwordCredentials,keyCredentials,createdDateTime"
+
+/**
+ * Whether an app registration still is what TenuVault makes: named and noted as TenuVault's, single
+ * tenant, and a public client that can only answer on this computer. A secret, a certificate, or a
+ * redirect to anywhere else means someone turned it into something else, and it is left alone.
+ */
+function looksLikeTenuVault(app: Application): boolean {
+  const redirects = (app.publicClient?.redirectUris ?? []).map(uri => uri.toLowerCase())
+  const local = new Set(["http://localhost", "https://login.microsoftonline.com/common/oauth2/nativeclient", `ms-appx-web://microsoft.aad.brokerplugin/${app.appId}`.toLowerCase()])
+  return app.displayName?.startsWith("TenuVault") === true
+    && app.notes?.startsWith("Used by the TenuVault desktop app") === true
+    && app.signInAudience === "AzureADMyOrg"
+    && redirects.includes("http://localhost") && redirects.every(uri => local.has(uri))
+    && !app.web?.redirectUris?.length && !app.spa?.redirectUris?.length
+    && !app.passwordCredentials?.length && !app.keyCredentials?.length
+}
 const REQUEST_TIMEOUT_MS = 30_000
 
 /** Graph provisioning is independent of Electron and MSAL. The caller owns the ephemeral token. */
@@ -113,29 +134,36 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
     })
     resources.push({ ...resource, principal, resourceAccess })
   }
-  const candidates = (await list<Application>(`/applications?$filter=${encodeURIComponent("startswith(displayName,'TenuVault')")}&$select=id,appId,displayName,notes,signInAudience,publicClient,createdDateTime`))
-    .filter(app => app.displayName?.startsWith("TenuVault") && app.notes?.startsWith("Used by the TenuVault desktop app") && app.signInAudience === "AzureADMyOrg" && app.publicClient?.redirectUris?.includes("http://localhost"))
-  const principals = new Map<string, Principal | undefined>()
-  const consent = new Map<string, Grant[]>()
-  let existing = candidates[0]
-  if (candidates.length > 1) {
-    const known = new Map(resources.map(resource => [resource.principal.id, new Set<string>(
-      resource.appId === GRAPH_APP_ID ? [...resource.permissions, ...OPTIONAL_PERMISSIONS.flatMap(entry => entry.permissions), "Policy.ReadWrite.ConditionalAccess"] : resource.permissions,
-    )]))
-    const ranked = []
-    for (const candidate of candidates) {
-      const principal = (await list<Principal>(`/servicePrincipals?$filter=${encodeURIComponent(`appId eq '${candidate.appId}'`)}&${principalFields}`))[0]
-      principals.set(candidate.appId, principal)
-      const grants = principal && principal.accountEnabled !== false
-        ? await list<Grant>(`/oauth2PermissionGrants?$filter=${encodeURIComponent(`clientId eq '${principal.id}'`)}`) : []
-      consent.set(candidate.appId, grants)
-      // Only permissions TenuVault knows count: the default set and the ones its switches add.
-      // Consent for anything else says nothing about which registration the admins use.
-      const permissions = new Set(grants.filter(g => g.consentType === "AllPrincipals").flatMap(g => g.scope.split(/\s+/).filter(scope => known.get(g.resourceId)?.has(scope)).map(scope => `${g.resourceId}:${scope}`)))
-      ranked.push({ candidate, disabled: principal?.accountEnabled === false, score: permissions.size })
-    }
-    ranked.sort((a, b) => Number(a.disabled) - Number(b.disabled) || b.score - a.score || (a.candidate.createdDateTime ?? "9999").localeCompare(b.candidate.createdDateTime ?? "9999") || a.candidate.id.localeCompare(b.candidate.id))
-    existing = ranked[0]!.candidate
+  // An existing registration is used only when an administrator has already given it tenant-wide
+  // consent for TenuVault's Intune permissions. Any member of a tenant may create app
+  // registrations, with any name and note, and remains their owner. Granting consent to such a
+  // registration would hand its owner an app that administrators sign in through. Tenant-wide
+  // consent can only come from an administrator, so it is the proof that one trusted it before.
+  const graphPrincipalId = resources.find(resource => resource.appId === GRAPH_APP_ID)!.principal.id
+  const intune = new Set(resources.find(resource => resource.appId === GRAPH_APP_ID)!.permissions.filter(permission => permission.startsWith("DeviceManagement")))
+  // For choosing among several, only permissions TenuVault knows count: the default set and the
+  // ones its switches add. Consent for anything else says nothing about which one the admins use.
+  const known = new Map(resources.map(resource => [resource.principal.id, new Set<string>(
+    resource.appId === GRAPH_APP_ID ? [...resource.permissions, ...OPTIONAL_PERMISSIONS.flatMap(entry => entry.permissions), "Policy.ReadWrite.ConditionalAccess"] : resource.permissions,
+  )]))
+  const candidates = []
+  for (const candidate of (await list<Application>(`/applications?$filter=${encodeURIComponent("startswith(displayName,'TenuVault')")}&$select=${APPLICATION_FIELDS}`)).filter(looksLikeTenuVault)) {
+    const principal = (await list<Principal>(`/servicePrincipals?$filter=${encodeURIComponent(`appId eq '${candidate.appId}'`)}&${principalFields}`))[0]
+    if (!principal) continue
+    const grants = await list<Grant>(`/oauth2PermissionGrants?$filter=${encodeURIComponent(`clientId eq '${principal.id}'`)}`)
+    const tenantWide = grants.filter(grant => grant.consentType === "AllPrincipals")
+    if (!tenantWide.some(grant => grant.resourceId === graphPrincipalId && grant.scope.split(/\s+/).some(scope => intune.has(scope)))) continue
+    const score = new Set(tenantWide.flatMap(grant => grant.scope.split(/\s+/).filter(scope => known.get(grant.resourceId)?.has(scope)).map(scope => `${grant.resourceId}:${scope}`))).size
+    candidates.push({ app: candidate, principal, grants, disabled: principal.accountEnabled === false, score })
+  }
+  // One whose enterprise application has sign-in turned off comes last, then the one whose consent
+  // covers most of TenuVault's permissions, then the oldest.
+  candidates.sort((a, b) => Number(a.disabled) - Number(b.disabled) || b.score - a.score || (a.app.createdDateTime ?? "9999").localeCompare(b.app.createdDateTime ?? "9999") || a.app.id.localeCompare(b.app.id))
+  const chosen = candidates[0]
+  const existing = chosen?.app
+  // An administrator who turned sign-in off revoked access on purpose: do not add consent to it.
+  if (chosen?.disabled) {
+    throw new Error(`This tenant already has a TenuVault app registration, "${chosen.app.displayName}" (client id ${chosen.app.appId}), but sign-in to its enterprise application is turned off. Turn it on under Entra admin center > Enterprise applications > ${chosen.app.displayName} > Properties, or delete the app registration, then try again. Nothing was changed.`)
   }
   let created: Application | undefined
   let app = existing
@@ -149,14 +177,10 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
       })
       app = created
     }
-    let principal = principals.has(app.appId) ? principals.get(app.appId) : (await list<Principal>(`/servicePrincipals?$filter=${encodeURIComponent(`appId eq '${app.appId}'`)}&${principalFields}`))[0]
-    // An administrator who turned sign-in off revoked access on purpose: do not add consent to it.
-    if (principal?.accountEnabled === false) {
-      throw new Error(`This tenant already has a TenuVault app registration, "${app.displayName}" (client id ${app.appId}), but sign-in to its enterprise application is turned off. Turn it on under Entra admin center > Enterprise applications > ${app.displayName} > Properties, or delete the app registration, then try again. Nothing was changed.`)
-    }
+    let principal: Principal | undefined = chosen?.principal ?? (await list<Principal>(`/servicePrincipals?$filter=${encodeURIComponent(`appId eq '${app.appId}'`)}&${principalFields}`))[0]
     if (!principal) principal = await graph<Principal>("POST", "/servicePrincipals", { appId: app.appId, tags: ["HideApp", "WindowsAzureActiveDirectoryIntegratedApp"] }, true)
     progress({ phase: "consent", reused: Boolean(existing) })
-    const grants = consent.get(app.appId) ?? await list<Grant>(`/oauth2PermissionGrants?$filter=${encodeURIComponent(`clientId eq '${principal.id}'`)}`)
+    const grants = chosen?.grants ?? await list<Grant>(`/oauth2PermissionGrants?$filter=${encodeURIComponent(`clientId eq '${principal.id}'`)}`)
     for (const resource of resources) {
       const grant = grants.find(grant => grant.consentType === "AllPrincipals" && grant.resourceId === resource.principal.id)
       const scopes = new Set(grant?.scope.split(/\s+/).filter(Boolean) ?? [])

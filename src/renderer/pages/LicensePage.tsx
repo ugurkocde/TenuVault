@@ -25,7 +25,7 @@ import { Checkbox } from "~/components/ui/checkbox"
 import { Input } from "~/components/ui/input"
 import { Label } from "~/components/ui/label"
 import type { LicenseStatus, TenantLicenseStatus } from "../../shared/ipc"
-import { INVOICE_REQUEST_EMAIL, INVOICE_REQUEST_URL, TRIAL_USED_MESSAGE } from "../../shared/constants"
+import { INVOICE_REQUEST_EMAIL, INVOICE_REQUEST_URL, ORGANIZATION_LICENSE_GUIDANCE, TRIAL_USED_MESSAGE } from "../../shared/constants"
 import { LicenseAgreementLink } from "../components/LicenseAgreementDialog"
 import { TrialSignupForm } from "../components/TrialSignupForm"
 import { useClipboardLicenseKey } from "../lib/clipboard-key"
@@ -282,6 +282,8 @@ function TenantRow({
         <p className="text-xs text-orange-700">{trialKeyRefusalText(tenant.message)}</p>
         <TrialKeyRefusalActions message={tenant.message} tenant={tenant} source="license-page-trial-key-refused" />
       </>}
+      {/* In the row, so that with several tenants it is clear which one to connect again. */}
+      {!tenant.entitled && tenant.signedIn && organizationLicenseRefusal(tenant) && <p role="status" className="text-xs text-gray-700">{ORGANIZATION_LICENSE_GUIDANCE}</p>}
       {!tenant.entitled && tenant.plan !== "community" && tenant.signedIn && tenant.coverageEnded && !choicePending && <p className="text-xs text-gray-600">Backups of this tenant are kept. Add a license to use it again.</p>}
       {keyHolder && (
         <div className="rounded-2xl bg-gray-50 p-4">
@@ -518,7 +520,7 @@ export default function LicensePage() {
           )}
 
           {isUnlicensed(status) && !status.tenantTrialsEnabled && <TrialCallToAction emailRef={trialEmail} onSent={() => setTrialKeyHint(true)} />}
-          {<TenantTrialOptions />}
+          <TenantTrialOptions guidanceInRows />
           {buyAfterTrial && <TrialActions source="license-page-trial-used" />}
           {status.tenants.filter(t => t.source === "trial" || t.trialCanExtend && t.trialAcknowledged).map(t => <TenantTrialCard key={t.tenantId} tenant={t} welcome={t.entitled && !t.trialAcknowledged} allowUnknownContactRemoval />)}
           {status.trial && !status.tenants.some(t => t.source === "trial") && <TrialStatus status={status} busy={busy} onReplace={replaceKey} />}

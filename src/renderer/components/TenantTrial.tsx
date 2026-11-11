@@ -1,4 +1,4 @@
-import { ORGANIZATION_LICENSE_GUIDANCE } from "../../shared/constants"
+import { ORGANIZATION_LICENSE_GUIDANCE, ORGANIZATION_LICENSE_SETUP_GUIDANCE } from "../../shared/constants"
 import { organizationLicenseRefusal } from "../../shared/trial-notices"
 import { useEffect, useState, type ReactNode } from "react"
 import { Link } from "react-router-dom"
@@ -59,7 +59,12 @@ export function TrialActions({ tenant, source, welcome = false }: { tenant?: Ten
   </div>
 }
 
-export function TenantTrialOptions({ onStarted, tenantId, compact = false, variant, size }: { onStarted?: () => void; tenantId?: string; compact?: boolean; variant?: "default" | "outline"; size?: "default" | "sm" } = {}) {
+/**
+ * The tenant trial per signed-in tenant without a license. `setupTenantId` is the tenant the setup
+ * wizard is connecting, which is not saved yet. `guidanceInRows` is for a page whose tenant rows
+ * already explain a license that was shared through another app registration.
+ */
+export function TenantTrialOptions({ onStarted, tenantId, setupTenantId, guidanceInRows = false, compact = false, variant, size }: { onStarted?: () => void; tenantId?: string; setupTenantId?: string; guidanceInRows?: boolean; compact?: boolean; variant?: "default" | "outline"; size?: "default" | "sm" } = {}) {
   const { status } = useLicense()
   const { busy, error, run } = useTrialAction()
   if (!status || status.hasKey) return null
@@ -67,7 +72,7 @@ export function TenantTrialOptions({ onStarted, tenantId, compact = false, varia
   const Text = compact ? "span" : "p"
   return <Container className={compact ? "inline-flex flex-wrap items-center gap-3" : "space-y-3"}>
     {status.tenants.filter(t => (!status?.tenantTrialsEnabled || !tenantId || t.tenantId === tenantId) && t.signedIn && !t.entitled && t.message !== TRIAL_USED_MESSAGE && (status.tenantTrialsEnabled || t.trialRefusal)).map(tenant => <Container key={tenant.tenantId} className={compact ? "inline-flex flex-wrap items-center gap-3" : "flex flex-wrap items-center gap-3"}>
-      {(!compact || organizationLicenseRefusal(tenant)) && tenant.trialRefusal && <Text role="status" className={organizationLicenseRefusal(tenant) ? "text-sm text-gray-700" : undefined}>{organizationLicenseRefusal(tenant) ? ORGANIZATION_LICENSE_GUIDANCE : tenant.trialRefusal}</Text>}
+      {(!compact || organizationLicenseRefusal(tenant)) && tenant.trialRefusal && !(guidanceInRows && organizationLicenseRefusal(tenant)) && <Text role="status" className={organizationLicenseRefusal(tenant) ? "text-sm text-gray-700" : undefined}>{organizationLicenseRefusal(tenant) ? (tenant.tenantId === setupTenantId ? ORGANIZATION_LICENSE_SETUP_GUIDANCE : ORGANIZATION_LICENSE_GUIDANCE) : tenant.trialRefusal}</Text>}
       {tenant.activated ? <Text className="text-sm text-gray-600">Check the saved activation before starting a trial.</Text> : status.tenantTrialsEnabled && !organizationLicenseRefusal(tenant) && !(tenant.trialRefusalPermanent ?? Boolean(tenant.trialRefusal)) && <><Button variant={variant} size={size} disabled={busy} onClick={() => void run(async () => {
         await bridge.license.startTenantTrial(tenant.tenantId)
         await onStarted?.()

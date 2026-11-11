@@ -32,9 +32,18 @@ Expand **What the setup does** on the Connect step to read these steps and the p
 
 ### An app registration that already exists
 
-TenuVault does not create a second app registration when the tenant already has one of its own. It recognises an app registration whose name starts with `TenuVault`, that is single tenant, has the redirect URI `http://localhost` for mobile and desktop applications, and carries the internal note that starts with `Used by the TenuVault desktop app`. The note is what marks it as TenuVault's; an app registration that only shares the name is left alone. TenuVault uses that app registration, adds any of the default permissions that are missing from its admin consent and removes none. The **Sign in** step names the one it uses.
+TenuVault does not create a second app registration when the tenant already has one of its own that an administrator approved before. It uses an existing app registration only when all of this is true:
 
-If several match, TenuVault uses the one whose tenant-wide admin consent covers the most permissions, and among equals the oldest. One whose enterprise application has sign-in turned off is passed over while another one matches. To use a different one, select **Previous**, then **I already have an app registration**, and enter its client ID.
+* Its name starts with `TenuVault` and it carries the internal note that starts with `Used by the TenuVault desktop app`.
+* It is single tenant and has the redirect URI `http://localhost` for mobile and desktop applications.
+* It is still the plain desktop registration TenuVault makes: no client secret, no certificate, and no web or single-page application redirect URI.
+* It has an enterprise application, and that already has tenant-wide admin consent for at least one of TenuVault's Intune permissions on Microsoft Graph.
+
+The last point is what TenuVault relies on. A name and a note can be set by anyone who may create app registrations, which in many tenants is every member. Tenant-wide admin consent can only come from an administrator, so it shows that an administrator trusted this app registration before. TenuVault never gives first consent to an app registration it did not create in this run: one that does not meet every point is left exactly as it is, and TenuVault creates its own next to it.
+
+For the app registration it uses, TenuVault adds any of the default permissions that are missing from its admin consent and removes none. The **Sign in** step names it.
+
+If several match, TenuVault uses the one whose tenant-wide admin consent covers the most of TenuVault's permissions, and among equals the oldest. One whose enterprise application has sign-in turned off is passed over while another one matches. The **Sign in** step then says how many there are and waits for you instead of signing in by itself. Select **Sign in with Microsoft** to use the one it names. To use a different one, select **Previous**, then **I already have an app registration**, and enter its client ID.
 
 This matters for licensing: an organization license is tied to the app registration it was shared from, so signing in through a second app registration would leave the tenant on Community. See [Manage your license](/licensing/manage/#community-although-the-tenant-has-an-organization-license).
 
