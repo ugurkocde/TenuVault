@@ -80,6 +80,11 @@ export interface ApiResponse {
   body: Uint8Array
 }
 
+/** Where the in-app setup is; `reused` once an existing TenuVault app registration was found. */
+export type SetupProgress = { phase: "signingIn" | "registration" | "consent" | "publishing"; reused?: boolean }
+/** The app registration the in-app setup made or found. `ready` is false while Microsoft's sign-in service does not know it yet. */
+export interface RegistrationResult { tenantId: string; clientId: string; username: string; reused: boolean; ready: boolean }
+
 export interface SignedInAccount {
   tenantId: string
   clientId: string
@@ -381,7 +386,7 @@ export interface ServicesStatus {
 export interface TenuVaultBridge {
   api: (request: ApiRequest) => Promise<ApiResponse>
   auth: {
-    signIn: (tenant: string, clientId: string) => Promise<SignedInAccount>
+    signIn: (tenant: string, clientId: string, options?: { loginHint?: string }) => Promise<SignedInAccount>
     signOut: (tenantId: string) => Promise<void>
     accounts: () => Promise<SignedInAccount[]>
     /** Signs in again to an existing tenant profile, for `scope` (Microsoft Graph when omitted). */
@@ -407,6 +412,16 @@ export interface TenuVaultBridge {
     onSavedChanged: (listener: () => void) => () => void
   }
   setup: {
+    /**
+     * Signs the admin in through Microsoft Graph Command Line Tools and creates the tenant's app
+     * registration through Microsoft Graph, or finds the one TenuVault made earlier. The token
+     * stays in the main process, in memory only. `tenant` is for guest and partner admins.
+     */
+    createRegistration: (options?: { tenant?: string }) => Promise<RegistrationResult>
+    /** Stops waiting for the setup sign-in in the browser. */
+    cancelCreateRegistration: () => Promise<void>
+    /** Called as the setup moves on. Returns an unsubscribe function. */
+    onProgress: (listener: (progress: SetupProgress) => void) => () => void
     /**
      * The tenant ID and client ID the setup script left on the clipboard, or null. Both must be
      * there, and no other clipboard text is ever returned.
@@ -597,7 +612,7 @@ export type TenuVaultPreloadBridge = Omit<TenuVaultBridge, "auth" | "license" | 
     set: (branding: PdfBranding) => Promise<PdfBrandingState | PlanIpcError>
   }
   auth: Omit<TenuVaultBridge["auth"], "signIn"> & {
-    signIn: (tenant: string, clientId: string) => Promise<SignedInAccount | PlanIpcError>
+    signIn: (tenant: string, clientId: string, options?: { loginHint?: string }) => Promise<SignedInAccount | PlanIpcError>
   }
   license: Omit<TenuVaultBridge["license"], "checkNewTenant"> & {
     checkNewTenant: (tenantId: string) => Promise<LicenseStatus | PlanIpcError>

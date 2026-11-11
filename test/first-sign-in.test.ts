@@ -118,3 +118,18 @@ describe("AuthManager sign-in", () => {
     await expect(reauth).resolves.toMatchObject({ tenantId: other, username: "admin@fabrikam.com" })
   })
 })
+
+it.each([undefined, { loginHint: "admin@example.test" }])("uses the browser session only with a login hint (%j)", async options => {
+  msal.interactive.mockResolvedValueOnce({ account: { tenantId: TENANT, username: "admin", homeAccountId: "home" } })
+  await manager().signIn(TENANT, CLIENT, options)
+  const request = msal.interactive.mock.lastCall![0]
+  if (options) {
+    expect(request).toHaveProperty("loginHint", options.loginHint)
+    expect(request).not.toHaveProperty("prompt")
+  } else expect(request).toHaveProperty("prompt", "select_account")
+})
+
+
+it.each(["access_denied", "user_cancelled", "user_canceled"])("explains browser cancellation (%s)", code => {
+  expect((firstSignInError(new Error(code)) as Error).message).toBe("The sign-in was cancelled in the browser. Sign in again to continue.")
+})

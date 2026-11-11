@@ -7,6 +7,7 @@ const script = readFileSync(new URL("../resources/New-TenuVaultDesktopApp.ps1", 
 
 describe("the app registration shown in the guided setup", () => {
   it("lists exactly the default permissions the setup script grants", () => {
+    for (const entry of DESKTOP_APP_PERMISSIONS) expect(script).toContain(`AppId  = "${entry.appId}"`)
     const graph = /AppId\s*=\s*"00000003-0000-0000-c000-000000000000"\s*Scopes\s*=\s*@\(([^)]*)\)/.exec(script)?.[1] ?? ""
     const scopes = [...graph.matchAll(/"([^"]+)"/g)].map((match) => match[1])
     expect(DESKTOP_APP_PERMISSIONS[0]!.permissions).toEqual(scopes)

@@ -1,3 +1,4 @@
+import { AppRegistrationSetup, setupLoginHint } from "./auth/app-registration-setup"
 import { trialBackupObserver } from "./license/usage-actions"
 import { cachedTrialUsage, trialWorkflowsConfigured } from "./license/usage"
 import { notifyTenantTrial, runTrialNotificationCheck } from "./license/notifications"
@@ -1103,8 +1104,27 @@ async function bootstrap(): Promise<void> {
       pushLicense()
     }
   }
-  handleTrusted("auth:signIn", (_event, tenant: string, clientId: string) => withPlanError(async () => {
-    const account = await auth.signIn(tenant, clientId)
+  const registrationSetup = new AppRegistrationSetup({
+    fetch: bridgedFetchLater,
+    openBrowser: url => shell.openExternal(url),
+    progress: progress => mainWindow?.webContents.send("setup:progress", progress),
+  })
+  // Creates (or finds) the tenant's app registration with a sign-in that is kept in memory only.
+  // The sign-in that follows may skip the account picker once, for exactly this registration and
+  // the account that just set it up; any other request for that is ignored.
+  let setupSignIn: { tenantId: string; clientId: string; username: string } | null = null
+  handleTrusted("setup:createRegistration", async (_event, options?: { tenant?: string }) => {
+    setupSignIn = null
+    const result = await registrationSetup.create(options)
+    setupSignIn = { tenantId: result.tenantId, clientId: result.clientId, username: result.username }
+    return result
+  })
+  handleTrusted("setup:cancelCreateRegistration", () => registrationSetup.cancel())
+  handleTrusted("auth:signIn", (_event, tenant: string, clientId: string, options?: { loginHint?: unknown }) => withPlanError(async () => {
+    const expected = setupSignIn
+    setupSignIn = null
+    const loginHint = setupLoginHint(expected, tenant, clientId, options?.loginHint)
+    const account = await auth.signIn(tenant, clientId, loginHint ? { loginHint } : undefined)
     await requireForNewTenant(account.tenantId)
     return account
   }))

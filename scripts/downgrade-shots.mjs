@@ -283,7 +283,7 @@ try {
     ipcMain.handle('auth:signIn', () => ({ planError: { code: 'community_tenant_limit', tenantId: ${JSON.stringify(TENANTS[1].guid)}, message: 'The tenant was not added.', existingTenant: false } }))
   })()`)
   await go("#/portal/onboarding", "Set up TenuVault")
-  await evaluate(`[...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Next: sign in')?.click()`)
+  await evaluate(`[...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'I already have an app registration')?.click()`)
   await assertText("Sign in with Microsoft")
   await evaluate(`(() => {
     for (const [id, value] of [['tenant', ${JSON.stringify(TENANTS[0].guid)}], ['clientId', ${JSON.stringify(CLIENT_ID)}]]) {

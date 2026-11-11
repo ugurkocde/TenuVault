@@ -10,9 +10,10 @@ export const MANUAL_APP_REGISTRATION_URL = `${APP_REGISTRATION_GUIDE_URL}#create
 export const CONSENT_ROLES = ["Global Administrator", "Privileged Role Administrator", "Cloud Application Administrator"] as const
 
 /** The delegated permissions the setup script grants admin consent for by default, per API. */
-export const DESKTOP_APP_PERMISSIONS: readonly { api: string; permissions: readonly string[]; purpose: string }[] = [
+export const DESKTOP_APP_PERMISSIONS: readonly { api: string; appId: string; permissions: readonly string[]; purpose: string }[] = [
   {
     api: "Microsoft Graph",
+    appId: "00000003-0000-0000-c000-000000000000",
     permissions: [
       "User.Read",
       "Organization.Read.All",
@@ -28,11 +29,13 @@ export const DESKTOP_APP_PERMISSIONS: readonly { api: string; permissions: reado
   },
   {
     api: "Azure Service Management",
+    appId: "797f4846-ba00-4fd7-ba43-dac1f8f63013",
     permissions: ["user_impersonation"],
     purpose: "Lists your storage accounts, only if you keep backups in Azure.",
   },
   {
     api: "Azure Storage",
+    appId: "e406a681-f3d4-42a8-90b6-c2b029497af1",
     permissions: ["user_impersonation"],
     purpose: "Reads and writes backup files, only if you keep backups in Azure.",
   },
@@ -58,7 +61,7 @@ export function parseSetupOutput(text: string): { tenantId?: string; clientId?: 
 export function setupHandoffText(): string {
   const permissions = DESKTOP_APP_PERMISSIONS.map((entry) => `  ${entry.api}: ${entry.permissions.join(", ")}`).join("\n")
   return [
-    "Could you create the app registration TenuVault Desktop signs in with? It takes about two minutes.",
+    "Could you create the app registration TenuVault Desktop signs in with? It takes a few minutes.",
     "",
     "TenuVault Desktop backs up and restores our Intune configuration from an admin's computer. It signs in",
     "as the admin through a public client app registration in our own tenant: no secret, no certificate and",

@@ -17,15 +17,15 @@ TenuVault encrypts its saved data (sign-ins, license and backup key) with the op
 
 ## Tenant setup, once per tenant
 
-Someone must create the app registration TenuVault signs in with. The setup script does this in one step. The person who runs it needs one of these Microsoft Entra roles:
+Someone must create the app registration TenuVault signs in with. TenuVault does this with one Microsoft sign-in, and a setup script does the same from PowerShell. The person who signs in needs one of these Microsoft Entra roles:
 
 * Global Administrator
 * Privileged Role Administrator
 * Cloud Application Administrator
 
-The script grants tenant-wide admin consent, so the account must be allowed to consent. See [Create the app registration](/getting-started/app-registration/).
+The setup grants tenant-wide admin consent, so the account must be allowed to consent. See [Create the app registration](/getting-started/app-registration/).
 
-If you do not have one of these roles yourself, select **Someone else is the admin? Copy instructions** on the **Prepare** step of **Set up TenuVault**. It copies a ready-to-send message for your Entra administrator with the script link, the command, the permissions and the two values to send back. TenuVault keeps your setup progress while you wait.
+If you do not have one of these roles yourself, select **Someone else is the admin? Copy instructions** on the **Connect** step of **Set up TenuVault**. It copies a ready-to-send message for your Entra administrator with the script link, the command, the permissions and the two values to send back. TenuVault keeps your setup progress while you wait.
 
 ## Admins who use TenuVault
 

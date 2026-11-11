@@ -46,8 +46,8 @@ export function ActivationScreen({ onSignIn }: { onSignIn: () => void }) {
           </Button>
           <p className="text-xs text-gray-600">
             {status?.tenantTrialsEnabled
-              ? "New tenants start with a Pro trial, no card and no email needed. Setup takes about 10 minutes: create an app registration, sign in and take a first backup. Afterwards, one tenant continues on Community Free."
-              : "Setup takes about 10 minutes: create an app registration in your tenant, sign in and take a first backup. It is free on Community for one tenant, and a TenuVault license your organization shares with the tenant is picked up when you sign in."}
+              ? "New tenants start with a Pro trial, no card and no email needed. Setup takes a few minutes: connect your tenant with Microsoft sign-in and take a first backup. Afterwards, one tenant continues on Community Free."
+              : "Setup takes a few minutes: connect your tenant with Microsoft sign-in and take a first backup. It is free on Community for one tenant, and a TenuVault license your organization shares with the tenant is picked up when you sign in."}
           </p>
         </div>
 
