@@ -10,7 +10,7 @@ import { Progress } from "~/components/ui/progress"
 import { cn } from "~/lib/utils"
 import type { RegistrationResult, SignedInAccount } from "../../shared/ipc"
 import { LOCAL_STORAGE_PREFIX, TRIAL_USED_MESSAGE } from "../../shared/constants"
-import { TrialKeyRefusalActions } from "../components/TenantTrial"
+import { TrialKeyRefusalActions, TrialShortcuts } from "../components/TenantTrial"
 import { StorageChooser } from "../components/StorageChooser"
 import { FirstBackupNote } from "../components/FirstBackupNote"
 import { FirstBackupNextSteps } from "../components/FirstBackupNextSteps"
@@ -207,8 +207,10 @@ export default function OnboardingPage() {
     setCreating(true)
     setAddError(null)
     let community = false
+    let checked: Awaited<ReturnType<typeof bridge.license.checkNewTenant>> | null = null
     try {
       const status = await bridge.license.checkNewTenant(account.tenantId)
+      checked = status
       community = tenantPlan(tenantLicense(status, account.tenantId)) === "community"
     } catch (error) {
       if (!showCommunityLimitError(error)) {
@@ -238,6 +240,10 @@ export default function OnboardingPage() {
       setTenantName(tenant.name)
       setResumed(false)
       setStep(3)
+      // The Storage step showed the trial, so it does not follow the admin into the app as a
+      // welcome card to dismiss. Showing it again costs nothing, so a failure is ignored.
+      const trial = tenantLicense(checked, account.tenantId)
+      if (trial?.source === "trial" && trial.trial && !trial.trialAcknowledged) void bridge.license.tenantTrialAction(account.tenantId, "acknowledge").catch(() => undefined)
     } catch (error) {
       if (!showCommunityLimitError(error)) setAddError({ message: error instanceof Error ? error.message : String(error), license: false })
     } finally {
@@ -425,8 +431,8 @@ export default function OnboardingPage() {
         {step === 2 && account && (
           <div className="space-y-5">
             <StepHeading id="setup-step-2">Choose where backups are stored</StepHeading>
-            <p className="flex items-center gap-2 rounded-full bg-green-50 px-4 py-2.5 text-sm text-green-800">
-              <CheckCircle2 className="h-4 w-4" aria-hidden="true" /> Signed in as {account.username}
+            <p className="flex items-center gap-2 text-sm text-gray-600">
+              <CheckCircle2 className="h-4 w-4 text-green-700" aria-hidden="true" /> Signed in as {account.username}
             </p>
             <PlanContext tenantId={account.tenantId} username={account.username} />
             {addError && <p role="alert" className="text-sm text-red-700">{addError.message}</p>}
@@ -482,6 +488,7 @@ export default function OnboardingPage() {
                 )}
               </div>
             )}
+            {succeeded && credentials && <TrialShortcuts tenantId={credentials.tenantId} />}
             {succeeded && credentials && <FirstBackupNextSteps tenantId={credentials.tenantId} plan={plan} local={!credentials.storageAccountName || credentials.storageAccountName.startsWith(LOCAL_STORAGE_PREFIX)} />}
             <div className="flex flex-wrap justify-end gap-2">
               {succeeded ? (

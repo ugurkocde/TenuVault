@@ -20,6 +20,7 @@ const state = vi.hoisted(() => ({
   storageChoice: null as unknown,
   checkNewTenant: vi.fn(async (): Promise<unknown> => undefined),
   addTenant: vi.fn(),
+  trialAction: vi.fn(async () => undefined),
 }))
 
 vi.mock("../../src/renderer/lib/bridge", () => ({
@@ -30,7 +31,7 @@ vi.mock("../../src/renderer/lib/bridge", () => ({
       removeItem: async (key: string) => void state.store.delete(key),
     },
     auth: { signIn: state.signIn, cancelSignIn: state.cancelSignIn, accounts: state.accounts },
-    license: { releaseTenant: state.releaseTenant, clipboardKey: async () => null, checkNewTenant: state.checkNewTenant },
+    license: { releaseTenant: state.releaseTenant, clipboardKey: async () => null, checkNewTenant: state.checkNewTenant, tenantTrialAction: state.trialAction },
     setup: { createRegistration: state.createRegistration, cancelCreateRegistration: state.cancelCreateRegistration, onProgress: (listener: typeof state.progress) => { state.progress = listener; return () => { state.progress = null } }, clipboardIds: state.clipboardIds, saveScript: async () => ({ saved: false }) },
     app: { openExternal: async () => undefined },
   },
@@ -223,6 +224,27 @@ describe("OnboardingPage", () => {
     expect(state.addTenant).not.toHaveBeenCalled()
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("This tenant is on Community now")
     expect(button(container, "Continue")!.disabled).toBe(true)
+  })
+
+  it.each([
+    ["a new trial", { source: "trial", trial: true, trialAcknowledged: false }, true],
+    ["a trial already seen", { source: "trial", trial: true, trialAcknowledged: true }, false],
+    ["a license key", { source: "key", trial: false }, false],
+  ] as const)("marks %s as seen once the Storage step is done", async (_label, license, acknowledged) => {
+    const account = { tenantId: TENANT, clientId: CLIENT, username: "admin@contoso.com" }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "", account }))
+    state.accounts.mockResolvedValueOnce([account])
+    state.storageChoice = { kind: "local" }
+    state.trialAction.mockClear()
+    state.addTenant.mockClear()
+    state.checkNewTenant.mockResolvedValueOnce({ tenants: [{ tenantId: TENANT, plan: "pro", ...license }] })
+    const container = await render(createElement(OnboardingPage))
+    await act(async () => { button(container, "Continue")!.click() })
+    await flush()
+    expect(state.addTenant).toHaveBeenCalled()
+    // The trial was shown on the Storage step, so no welcome card waits for a click in the app.
+    if (acknowledged) expect(state.trialAction).toHaveBeenCalledWith(TENANT, "acknowledge")
+    else expect(state.trialAction).not.toHaveBeenCalled()
   })
 
   it("shows the Connect checklist with the permissions and the handoff", async () => {

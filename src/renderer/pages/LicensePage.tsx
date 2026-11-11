@@ -522,7 +522,7 @@ export default function LicensePage() {
           {isUnlicensed(status) && !status.tenantTrialsEnabled && <TrialCallToAction emailRef={trialEmail} onSent={() => setTrialKeyHint(true)} />}
           <TenantTrialOptions guidanceInRows />
           {buyAfterTrial && <TrialActions source="license-page-trial-used" />}
-          {status.tenants.filter(t => t.source === "trial" || t.trialCanExtend && t.trialAcknowledged).map(t => <TenantTrialCard key={t.tenantId} tenant={t} welcome={t.entitled && !t.trialAcknowledged} allowUnknownContactRemoval />)}
+          {status.tenants.filter(t => t.source === "trial" || t.trialCanExtend && t.trialAcknowledged).map(t => <TenantTrialCard key={t.tenantId} tenant={t} allowUnknownContactRemoval />)}
           {status.trial && !status.tenants.some(t => t.source === "trial") && <TrialStatus status={status} busy={busy} onReplace={replaceKey} />}
           {savedKeyNotNeededHere(status) ? (
             <p className="text-sm text-gray-600">

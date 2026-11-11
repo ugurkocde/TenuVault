@@ -9,7 +9,7 @@ import type { LicenseStatus } from "../../shared/ipc"
 import { bridge } from "../lib/bridge"
 import { useClipboardLicenseKey } from "../lib/clipboard-key"
 import { tenantLicense, tenantPlan, useLicense } from "../lib/license"
-import { TenantTrialCard, TenantTrialOptions, TrialKeyRefusalActions } from "./TenantTrial"
+import { TenantTrialOptions, TrialKeyRefusalActions, TrialStartedRow } from "./TenantTrial"
 import { TrialSignupForm } from "./TrialSignupForm"
 
 /**
@@ -157,7 +157,7 @@ export function PlanContext({ tenantId, username }: { tenantId: string; username
       </div>
     )
   }
-  if (tenant?.source === "trial" && !tenant.trialAcknowledged) return <TenantTrialCard tenant={tenant} initialEmail={emailLike(username)} welcome />
+  if (tenant?.source === "trial" && tenant.trial && !tenant.trialAcknowledged) return <TrialStartedRow tenant={tenant} initialEmail={emailLike(username)} />
   const name = plan === "msp" ? "MSP" : "Pro"
   return (
     <p className="flex items-center gap-3 rounded-3xl bg-green-50 px-5 py-3 text-sm text-green-900">
