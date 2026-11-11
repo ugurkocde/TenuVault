@@ -214,12 +214,16 @@ function auditFor(tenant) {
 
 function driftsFor(tenant) {
   const list = BACKUPS[tenant.guid].filter((b) => b.status === "Completed")
-  const pair = (i) => ({ fromBackup: list[i + 1].id, toBackup: list[i].id, fromBackupTimestamp: list[i + 1].timestamp, toBackupTimestamp: list[i].timestamp, detectedAt: list[i].timestamp, comparisonIndex: i })
-  // Pick comparisons at different ages so the list and timeline show a spread.
-  const at = (hoursAgo) => Math.max(0, list.findIndex((b) => Date.parse(b.timestamp) < NOW - hoursAgo * HOUR))
-  const drift = (id, i, fields) => ({ id: `drift-${id}`, configId: `${id}-a3f1c9e2`, affectedPolicies: 1, ...pair(i), ...fields })
+  // One saved scan, 65 minutes ago, compared the newest backup taken before it with a baseline
+  // five backups older; every drift belongs to that pair, as the drift page shows it.
+  const lastScan = NOW - 65 * MIN
+  const toIndex = Math.max(0, list.findIndex((b) => Date.parse(b.timestamp) < lastScan))
+  const comparison = list[toIndex]
+  const baseline = list[Math.min(list.length - 1, toIndex + 5)]
+  const pair = { fromBackup: baseline.id, toBackup: comparison.id, fromBackupTimestamp: baseline.timestamp, toBackupTimestamp: comparison.timestamp, detectedAt: iso(lastScan), comparisonIndex: 0 }
+  const drift = (id, fields) => ({ id: `drift-${id}`, configId: `${id}-a3f1c9e2`, affectedPolicies: 1, ...pair, ...fields })
   const drifts = [
-    drift("defender", at(4), {
+    drift("defender", {
       severity: "critical", type: "Configuration Policy", configName: "WIN - Defender Antivirus - Baseline", changeType: "modified",
       description: "Real-time protection and cloud protection settings changed outside of change control.",
       impact: "Devices lose real-time scanning and fall back to the default cloud block level at their next check-in.",
@@ -230,7 +234,7 @@ function driftsFor(tenant) {
         { field: "Submit Samples Consent", oldValue: "Send safe samples automatically", newValue: "Always prompt" },
       ],
     }),
-    drift("ca001", at(9), {
+    drift("ca001", {
       severity: "critical", type: "Conditional Access", configName: "CA001 - Require MFA for admins", changeType: "modified",
       description: "The policy was switched to report-only and a group was excluded.",
       impact: "Administrators can sign in without multifactor authentication while the policy is report-only.",
@@ -240,14 +244,14 @@ function driftsFor(tenant) {
         { field: "conditions.users.excludeGroups", oldValue: "BreakGlass-Accounts", newValue: "BreakGlass-Accounts, IT-Contractors" },
       ],
     }),
-    drift("bitlocker", at(22), {
+    drift("bitlocker", {
       severity: "warning", type: "Device Configuration", configName: "WIN - BitLocker - OS Drive", changeType: "modified",
       description: "The encryption method for operating system drives was lowered.",
       impact: "Newly encrypted drives use XTS-AES 128 instead of the required XTS-AES 256.",
       affectedDevices: 1874,
       changes: [{ field: "bitLockerEncryptionMethod", oldValue: "xtsAes256", newValue: "xtsAes128" }],
     }),
-    drift("ios-compliance", at(31), {
+    drift("ios-compliance", {
       severity: "warning", type: "Compliance Policy", configName: "iOS - Compliance - Corporate", changeType: "modified",
       description: "Minimum OS version and passcode length were relaxed.",
       impact: "Older iOS devices and devices with short passcodes are reported as compliant.",
@@ -257,30 +261,37 @@ function driftsFor(tenant) {
         { field: "passcodeMinimumLength", oldValue: 6, newValue: 4 },
       ],
     }),
-    drift("filevault", at(47), {
+    drift("filevault", {
       severity: "critical", type: "Configuration Policy", configName: "macOS - FileVault", changeType: "deleted",
       description: "The policy no longer exists in Intune.",
       impact: "New Macs are no longer required to turn on FileVault disk encryption.",
       affectedDevices: 286,
     }),
-    drift("whfb", at(70), {
+    drift("whfb", {
       severity: "info", type: "Configuration Policy", configName: "WIN - Windows Hello for Business", changeType: "added",
       description: "A new policy was created in Intune.",
       impact: "Review the assignment before it reaches production devices.",
       affectedDevices: 0,
     }),
-    drift("outlook-app", at(96), {
+    drift("outlook-app", {
       severity: "info", type: "App Protection", configName: "Android - App Protection - Outlook", changeType: "added",
       description: "A new app protection policy was created in Intune.",
       impact: "Review the data transfer settings before assigning it to all users.",
       affectedDevices: 0,
     }),
   ]
+  const count = (type) => drifts.filter((d) => d.changeType === type).length
+  const ref = (b) => ({ id: b.id, timestamp: b.timestamp, trigger: "schedule", status: b.status })
   return {
-    drifts,
-    summary: { total: drifts.length, critical: 3, warning: 2, info: 2, affectedTenants: 1 },
-    lastScan: iso(NOW - 65 * MIN),
-    backupsAnalyzed: 5,
+    drifts: drifts.map((d) => ({ tenant: tenant.name, tenantId: tenant.guid, ...d })),
+    summary: { total: drifts.length, critical: 3, warning: 2, info: 2, added: count("added"), modified: count("modified"), deleted: count("deleted"), affectedTenants: 1 },
+    lastScan: iso(lastScan),
+    backupsAnalyzed: 2,
+    baseline: ref(baseline),
+    comparison: ref(comparison),
+    warnings: [],
+    // Items read and compared plus items skipped as unchanged: the 1,284 policies of a backup.
+    stats: { compared: 37, unchanged: 1247 },
   }
 }
 
@@ -338,7 +349,7 @@ const MOCK = {
     const items = BACKUPS[t.guid].find((b) => b.status === "Completed").totalPolicies
     return {
       tenantId: t.guid, enabled: true, ...t.schedule, since: iso(NOW - 26 * HOUR),
-      lastRunAt: iso(last + between(20, 50) * 1000), lastStatus: "Completed", lastMessage: `Backup completed, ${items.toLocaleString("en-US")} items`,
+      lastRunAt: iso(last + between(20, 50) * 1000), lastAttemptAt: iso(last + between(20, 50) * 1000), lastStatus: "Completed", lastMessage: `Backup completed, ${items.toLocaleString("en-US")} items`,
       nextRunAt: iso(next),
     }
   }),
@@ -469,6 +480,7 @@ const MAIN_OVERRIDES = `(() => {
       case "/api/audit/logs": return json(200, { data: M.audit[tenant] ?? [], total: (M.audit[tenant] ?? []).length })
       case "/api/audit/stats": return json(200, { total: 0 })
       case "/api/audit/log": return json(200, { success: true })
+      case "/api/drift-scan": return json(200, body.action === "result" ? { result: M.drift[tenant] ?? null } : { jobs: [] })
       case "/api/detect-drifts": return json(200, M.drift[tenant] ?? { drifts: [], summary: { total: 0, critical: 0, warning: 0, info: 0, affectedTenants: 0 }, lastScan: new Date().toISOString(), backupsAnalyzed: 0 })
       case "/api/tenant-metadata/check": return json(200, { exists: true })
       case "/api/tenant-metadata/save": case "/api/tenant-metadata/delete": return json(200, { success: true })
@@ -646,9 +658,28 @@ try {
   await sleep(1500)
   await assertText("All tenants", 30000)
   await disableAnimations()
+  // Optional font override for captures on Linux, where the system font differs from the
+  // macOS and Windows fonts customers see: MARKETING_FONT_CSS names a CSS file to inject.
+  if (process.env.MARKETING_FONT_CSS) {
+    // Relative url() references are embedded, since inline CSS resolves them against the app.
+    const { readFileSync } = await import("node:fs")
+    const { dirname, extname } = await import("node:path")
+    const cssPath = resolve(process.env.MARKETING_FONT_CSS)
+    const types = { ".woff2": "font/woff2", ".woff": "font/woff", ".ttf": "font/ttf", ".otf": "font/otf" }
+    const css = readFileSync(cssPath, "utf8").replace(/url\((['"]?)([^'")]+)\1\)/g, (match, _quote, ref) => {
+      if (/^(data:|https?:)/.test(ref)) return match
+      const file = resolve(dirname(cssPath), ref)
+      return `url(data:${types[extname(file).toLowerCase()] ?? "application/octet-stream"};base64,${readFileSync(file).toString("base64")})`
+    })
+    await evaluate(`(() => { const s = document.createElement("style"); s.textContent = ${JSON.stringify(css)}; document.head.appendChild(s); return document.fonts.ready.then(() => true) })()`)
+  }
+  // Optional sharper captures: MARKETING_SCALE=2 renders at twice the pixel density.
+  if (process.env.MARKETING_SCALE) {
+    await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: Number(process.env.MARKETING_SCALE), mobile: false })
+  }
 
   if (process.env.MAA_SHOTS === "1") {
-    await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1120, deviceScaleFactor: 1, mobile: false })
+    await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1120, deviceScaleFactor: Number(process.env.MARKETING_SCALE ?? 1), mobile: false })
     await go("#/portal/backup?tab=restore", "Choose a backup")
     await evaluate(`document.querySelector('[role="option"]').click()`)
     await assertText("Select all")
@@ -771,7 +802,7 @@ try {
   await sleep(300)
   await screenshot("oib-new-types")
   await click("Continue")
-  await assertText("Review and select the policies")
+  await assertText("Select the policies to deploy")
   await sleep(500)
   await scrollAll(0)
   await screenshot("oib-new-select")
