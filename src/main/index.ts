@@ -1183,7 +1183,7 @@ async function bootstrap(): Promise<void> {
   })
   handleTrusted("license:tenantTrialAction", (_event, tenant: unknown, action: unknown, email: unknown) => {
     if (!isTenantId(tenant)) throw new Error("Unknown tenant.")
-    if (action !== "extend_trial" && action !== "end_trial" && action !== "trial_contact" && action !== "acknowledge") throw new Error("Unknown trial action.")
+    if (action !== "extend_trial" && action !== "end_trial" && action !== "resume_trial" && action !== "trial_contact" && action !== "acknowledge") throw new Error("Unknown trial action.")
     if (email !== undefined && (typeof email !== "string" || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) throw new Error("Enter a valid email address.")
     return withStatus(() => license.tenantTrialAction(tenant, action, email as string | undefined))
   })
