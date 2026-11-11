@@ -1,4 +1,5 @@
-import { trialKeyRefusalText } from "../../shared/trial-notices"
+import { organizationLicenseRefusal, trialKeyRefusalText } from "../../shared/trial-notices"
+import { ORGANIZATION_LICENSE_GUIDANCE } from "../../shared/constants"
 import { useId, useRef, useState } from "react"
 import { AlertCircle, Building2, CheckCircle2, KeyRound, Loader2, Sparkles } from "lucide-react"
 import { Alert, AlertDescription } from "~/components/ui/alert"
@@ -108,7 +109,7 @@ export function TrialOrKey({ source, initialEmail, onSaved }: { source: string; 
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap gap-x-4 gap-y-1">
-        {!status?.tenantTrialsEnabled && <button type="button" className={link} aria-expanded={open === "trial"} onClick={() => setOpen(open === "trial" ? null : "trial")}>
+        {!status?.tenants.some(organizationLicenseRefusal) && !status?.tenantTrialsEnabled && <button type="button" className={link} aria-expanded={open === "trial"} onClick={() => setOpen(open === "trial" ? null : "trial")}>
           Try Pro free for 30 days, no card
         </button>}
         <button type="button" className={link} aria-expanded={open === "key"} onClick={() => setOpen(open === "key" ? null : "key")}>
@@ -116,7 +117,7 @@ export function TrialOrKey({ source, initialEmail, onSaved }: { source: string; 
         </button>
       </div>
       <TenantTrialOptions />
-      {open === "trial" && !status?.tenantTrialsEnabled && (
+      {open === "trial" && !status?.tenants.some(organizationLicenseRefusal) && !status?.tenantTrialsEnabled && (
         <div className="space-y-4 rounded-2xl bg-blue-50/60 p-4">
           <TrialSignupForm source={source} initialEmail={initialEmail} onSent={() => setTrialSent(true)} />
           {trialSent && <LicenseKeyEntry watchClipboard onSaved={onSaved} label="Your trial key" />}
@@ -153,7 +154,7 @@ export function PlanContext({ tenantId, username }: { tenantId: string; username
             and drift revert. You can change this later on the License page.
           </span>
         </p>
-        <TrialOrKey source="setup" initialEmail={emailLike(username)} />
+        {organizationLicenseRefusal(tenant) ? <p role="status">{ORGANIZATION_LICENSE_GUIDANCE}</p> : <TrialOrKey source="setup" initialEmail={emailLike(username)} />}
       </div>
     )
   }

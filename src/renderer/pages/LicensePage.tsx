@@ -1,4 +1,5 @@
-import { trialKeyRefusalText } from "../../shared/trial-notices"
+import { ORGANIZATION_LICENSE_GUIDANCE } from "../../shared/constants"
+import { organizationLicenseRefusal, trialKeyRefusalText } from "../../shared/trial-notices"
 import { TenantTrialCard, TenantTrialOptions, TrialActions, TrialKeyRefusalActions, trialEndVisible } from "../components/TenantTrial"
 import { CommunityTenantChoiceButton } from "../components/CommunityTenantPicker"
 import { useEffect, useRef, useState, type MouseEvent, type Ref } from "react"
@@ -279,7 +280,7 @@ function TenantRow({
         </p>
       )}
       {!tenant.entitled && tenant.message && <>
-        <p className="text-xs text-orange-700">{trialKeyRefusalText(tenant.message)}</p>
+        <p className="text-xs text-orange-700">{organizationLicenseRefusal(tenant) ? ORGANIZATION_LICENSE_GUIDANCE : trialKeyRefusalText(tenant.message)}</p>
         <TrialKeyRefusalActions message={tenant.message} tenant={tenant} source="license-page-trial-key-refused" />
       </>}
       {!tenant.entitled && tenant.plan !== "community" && tenant.signedIn && tenant.coverageEnded && !choicePending && <p className="text-xs text-gray-600">Backups of this tenant are kept. Add a license to use it again.</p>}
@@ -511,7 +512,7 @@ export default function LicensePage() {
             </Alert>
           )}
 
-          {isUnlicensed(status) && !status.tenantTrialsEnabled && <TrialCallToAction emailRef={trialEmail} onSent={() => setTrialKeyHint(true)} />}
+          {isUnlicensed(status) && !status.tenants.some(organizationLicenseRefusal) && !status.tenantTrialsEnabled && <TrialCallToAction emailRef={trialEmail} onSent={() => setTrialKeyHint(true)} />}
           {<TenantTrialOptions />}
           {buyAfterTrial && <TrialActions source="license-page-trial-used" />}
           {status.tenants.filter(t => t.source === "trial" || t.trialCanExtend && t.trialAcknowledged).map(t => <TenantTrialCard key={t.tenantId} tenant={t} welcome={t.entitled && !t.trialAcknowledged} allowUnknownContactRemoval />)}

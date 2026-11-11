@@ -1,3 +1,6 @@
+import { ORGANIZATION_LICENSE_MESSAGE, ORGANIZATION_LICENSE_GUIDANCE } from "../../src/shared/constants"
+import { TenantTrialOptions } from "../../src/renderer/components/TenantTrial"
+import { PlanContext, TrialOrKey } from "../../src/renderer/components/PlanChoice"
 import { act, createElement } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { MemoryRouter } from "react-router-dom"
@@ -46,6 +49,16 @@ describe("plan prompt trial and purchase actions", () => {
       await act(async () => purchase!.click())
       expect(state.open).toHaveBeenLastCalledWith(purchase!.textContent?.trim() === "See plans" ? "buy" : "checkout", expect.objectContaining({ source }))
     }
+  })
+  it.each(["prompt", "options", "storage", "choice"])("explains the organization refusal without a trial in %s", async place => {
+    state.status = status("never")
+    Object.assign(state.status.tenants[0]!, { trialRefusal: ORGANIZATION_LICENSE_MESSAGE, trialRefusalPermanent: false })
+    container = document.body.appendChild(document.createElement("div")); root = createRoot(container)
+    const child = place === "prompt" ? createElement(PlanPromptButton, { plan: "pro", source: "test" }) : place === "options" ? createElement(TenantTrialOptions) : place === "storage" ? createElement(PlanContext, { tenantId: "tenant" }) : createElement(TrialOrKey, { source: "test" })
+    await act(async () => root!.render(createElement(MemoryRouter, null, child)))
+    expect(container.textContent).toContain(ORGANIZATION_LICENSE_GUIDANCE)
+    expect(container.textContent).not.toContain("Try Pro free")
+    expect(state.start).not.toHaveBeenCalled()
   })
   it("keeps a temporary refusal out of plan prompts", async () => {
     state.status = status("never")

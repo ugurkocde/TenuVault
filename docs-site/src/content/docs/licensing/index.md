@@ -147,3 +147,12 @@ While TenuVault runs in the tray, a system notification reminds you when a tenan
 one day left and when it ends. Clicking opens the License page. Each notice appears at most once
 per trial end date, including across restarts. Extending re-arms the reminder for the new date.
 Paid tenants and tenants covered by an organization license do not receive these notices.
+
+
+## Community despite an organization license
+
+An organization license is tied to the app registration it was shared from. A sign-in through another registration can show Community and cannot start a trial. TenuVault explains:
+
+> This tenant has an organization license shared through another app registration than the one this sign-in used. This sign-in cannot use that license, and no trial can start. To use the license, remove the tenant from TenuVault and connect it again through that app registration. Choose "I already have an app registration" on the Connect step and enter its client ID, which an Entra administrator can find under App registrations.
+
+Keep **Retry** available to check the license again.

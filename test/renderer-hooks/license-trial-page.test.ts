@@ -1,3 +1,4 @@
+import { ORGANIZATION_LICENSE_MESSAGE, ORGANIZATION_LICENSE_GUIDANCE } from "../../src/shared/constants"
 import { act, createElement } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { MemoryRouter } from "react-router-dom"
@@ -187,6 +188,7 @@ it.each([false, true])("shows a tenant trial key refusal with purchasing actions
   expect(container.textContent?.match(/support@tenuvault\.com/g)).toHaveLength(1)
   expect(container.textContent).not.toContain("Need an invoice instead of a card?")
   expect(button(container, "Try Pro free")).toBeUndefined()
+    expect(button(container, "Start free trial")).toBeUndefined()
   expect(Boolean(button(container, "Extend your trial"))).toBe(canExtend)
   const buy = button(container, "Buy Pro")!
   const mailto = container.querySelector<HTMLAnchorElement>('a[href^="mailto:support@tenuvault.com?subject=TenuVault%20Pro"]')!
@@ -285,6 +287,13 @@ describe("License page after a used tenant trial", () => {
     trialEndsAt: new Date(Date.now() - DAY).toISOString(), trialAcknowledged: true, trialRefusalPermanent: true,
     trialRefusal: "This tenant already had a Pro trial.", trialCanExtend: false, trialExtensionUnavailable: true, ...overrides,
   })
+  it.each([false, true])("explains a license shared through another registration and keeps Retry (tenant trials %s)", async enabled => {
+    const container = await render({ ...community, tenantTrialsEnabled: enabled, tenants: [used({ trialEndsAt: null, trialRefusal: ORGANIZATION_LICENSE_MESSAGE, trialRefusalPermanent: false })] })
+    expect(container.textContent).toContain(ORGANIZATION_LICENSE_GUIDANCE)
+    expect(button(container, "Try Pro free")).toBeUndefined()
+    expect(button(container, "Start free trial")).toBeUndefined()
+    expect(button(container, "Retry")).toBeTruthy()
+  })
   const buyButtons = (container: HTMLElement) => [...container.querySelectorAll("button")].filter(item => item.textContent?.trim() === "Buy Pro")
 
   it.each([
@@ -298,6 +307,7 @@ describe("License page after a used tenant trial", () => {
     expect(container.textContent).toContain("Paste your license key, or buy Pro for daily backups, full restore and drift revert.")
     expect(container.textContent).not.toMatch(/start a free trial/i)
     expect(button(container, "Try Pro free")).toBeUndefined()
+    expect(button(container, "Start free trial")).toBeUndefined()
     expect(button(container, "Start free trial")).toBeUndefined()
     expect(buyButtons(container)).toHaveLength(1)
     const mailto = container.querySelector<HTMLAnchorElement>('a[href^="mailto:support@tenuvault.com?subject=TenuVault%20Pro"]')

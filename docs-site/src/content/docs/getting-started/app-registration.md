@@ -32,11 +32,11 @@ Expand **What the setup does** on the Connect step to read these steps and the p
 
 ### An app registration that already exists
 
-TenuVault does not create a second app registration when the tenant already has one of its own. It recognises an app registration named **TenuVault Desktop** that is single tenant, has the redirect URI `http://localhost` for mobile and desktop applications, and carries the internal note that starts with `Used by the TenuVault desktop app`. It uses the newest one that matches, adds any of the default permissions that are missing from its admin consent and removes none. An app registration that only shares the name is left alone.
+Setup recognizes registrations whose name starts with `TenuVault`, whose note starts with `Used by the TenuVault desktop app`, which are single tenant and have `http://localhost` as a public client redirect URI. The note is required.
 
-This is also what happens when a second admin connects the same tenant on another computer, or when you run the setup again.
+When several match, setup prefers the one with the most delegated permissions covered by tenant-wide (`AllPrincipals`) consent, then the oldest registration. It skips an enterprise application with sign-in turned off when another candidate exists. With only a disabled candidate, setup asks you to enable sign-in. It never deletes an existing registration or removes permissions.
 
-If your tenant does not list Azure Service Management or Azure Storage among its enterprise applications yet, the setup adds them, as the script does. They are Microsoft's own APIs, not part of TenuVault, and they stay in the tenant.
+An organization license is tied to the app registration it was shared from. To choose another registration, select **Previous**, then **I already have an app registration** and enter its client ID.
 
 ### If something goes wrong
 

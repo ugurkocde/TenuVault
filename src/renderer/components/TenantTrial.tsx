@@ -1,3 +1,5 @@
+import { ORGANIZATION_LICENSE_GUIDANCE } from "../../shared/constants"
+import { organizationLicenseRefusal } from "../../shared/trial-notices"
 import { useEffect, useState, type ReactNode } from "react"
 import { Link } from "react-router-dom"
 import { CalendarClock, GitCompareArrows, History, Hourglass, Info, Mail, ShieldCheck, Sparkles } from "lucide-react"
@@ -65,8 +67,8 @@ export function TenantTrialOptions({ onStarted, tenantId, compact = false, varia
   const Text = compact ? "span" : "p"
   return <Container className={compact ? "inline-flex flex-wrap items-center gap-3" : "space-y-3"}>
     {status.tenants.filter(t => (!status?.tenantTrialsEnabled || !tenantId || t.tenantId === tenantId) && t.signedIn && !t.entitled && t.message !== TRIAL_USED_MESSAGE && (status.tenantTrialsEnabled || t.trialRefusal)).map(tenant => <Container key={tenant.tenantId} className={compact ? "inline-flex flex-wrap items-center gap-3" : "flex flex-wrap items-center gap-3"}>
-      {!compact && tenant.trialRefusal && <Text role="status">{tenant.trialRefusal}</Text>}
-      {tenant.activated ? <Text className="text-sm text-gray-600">Check the saved activation before starting a trial.</Text> : status.tenantTrialsEnabled && !(tenant.trialRefusalPermanent ?? Boolean(tenant.trialRefusal)) && <><Button variant={variant} size={size} disabled={busy} onClick={() => void run(async () => {
+      {(!compact || organizationLicenseRefusal(tenant)) && tenant.trialRefusal && <Text role="status">{organizationLicenseRefusal(tenant) ? ORGANIZATION_LICENSE_GUIDANCE : tenant.trialRefusal}</Text>}
+      {tenant.activated ? <Text className="text-sm text-gray-600">Check the saved activation before starting a trial.</Text> : status.tenantTrialsEnabled && !organizationLicenseRefusal(tenant) && !(tenant.trialRefusalPermanent ?? Boolean(tenant.trialRefusal)) && <><Button variant={variant} size={size} disabled={busy} onClick={() => void run(async () => {
         await bridge.license.startTenantTrial(tenant.tenantId)
         await onStarted?.()
       })}>Try Pro free</Button><Text className="text-sm text-gray-600">No card, no email. Starts right away, for this tenant.</Text></>}

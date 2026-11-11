@@ -4,6 +4,7 @@ import type { RegistrationResult, SetupProgress } from "../../shared/ipc"
 interface Application {
   id: string
   appId: string
+  displayName: string
   notes?: string
   signInAudience?: string
   publicClient?: { redirectUris?: string[] }
@@ -26,8 +27,8 @@ export interface ProvisioningOptions {
   signal?: AbortSignal
   sleep?: (ms: number) => Promise<void>
 }
-// The stable Graph version, as the setup script uses it.
-const ROOT = "https://graph.microsoft.com/v1.0"
+// Use the tenant setup Graph endpoint.
+const ROOT = "https://graph.microsoft.com/beta"
 const NOTES = "Used by the TenuVault desktop app. Delegated permissions only, no credentials."
 const REQUEST_TIMEOUT_MS = 30_000
 
@@ -40,7 +41,7 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
   // failed, so a stalled connection cannot keep the setup, and the token it holds, alive.
   async function graph<T>(method: string, path: string, body?: object, replication = false, cleanup = false): Promise<T> {
     const url = new URL(path.startsWith("https:") ? path : `${ROOT}${path}`)
-    if (url.origin !== "https://graph.microsoft.com" || url.username || url.password || url.hash || !url.pathname.startsWith("/v1.0/")) throw new Error("Unexpected Graph paging address.")
+    if (url.origin !== "https://graph.microsoft.com" || url.username || url.password || url.hash || !url.pathname.startsWith("/beta/")) throw new Error("Unexpected Graph paging address.")
     const attempts = replication ? 12 : 4
     // A write that may have been carried out is never sent twice: only a throttled request (which
     // was not carried out) and a replication delay repeat a POST.
@@ -93,7 +94,7 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
   checkCancelled()
   // The sign-in is done; from here on the browser wait can no longer be cancelled.
   progress({ phase: "registration" })
-  const principalFields = "$select=id,appId,accountEnabled,oauth2PermissionScopes"
+  const principalFields = "$select=id,appId,accountEnabled,publishedPermissionScopes"
   const resources = []
   for (const resource of DESKTOP_APP_PERMISSIONS) {
     // A Microsoft API the tenant has not used yet is added to it, as the setup script does. These
@@ -101,7 +102,7 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
     const path = `/servicePrincipals?$filter=${encodeURIComponent(`appId eq '${resource.appId}'`)}&${principalFields}`
     let principal = (await list<Principal>(path))[0]
     if (!principal) principal = await graph<Principal>("POST", "/servicePrincipals", { appId: resource.appId }, true)
-    // Graph v1.0 calls them oauth2PermissionScopes; the beta name is accepted as well.
+    // Accept either permission scope field returned by Graph.
     const scopes = principal.oauth2PermissionScopes ?? principal.publishedPermissionScopes ?? []
     const resourceAccess = resource.permissions.map(value => {
       const scope = scopes.find(scope => scope.value === value && scope.isEnabled !== false)
@@ -110,9 +111,25 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
     })
     resources.push({ ...resource, principal, resourceAccess })
   }
-  const existing = (await list<Application>(`/applications?$filter=${encodeURIComponent("displayName eq 'TenuVault Desktop'")}&$select=id,appId,displayName,notes,signInAudience,publicClient,createdDateTime`))
-    .filter(app => app.notes?.startsWith("Used by the TenuVault desktop app") && app.signInAudience === "AzureADMyOrg" && app.publicClient?.redirectUris?.includes("http://localhost"))
-    .sort((a, b) => (b.createdDateTime ?? "").localeCompare(a.createdDateTime ?? ""))[0]
+  const candidates = (await list<Application>(`/applications?$filter=${encodeURIComponent("startswith(displayName,'TenuVault')")}&$select=id,appId,displayName,notes,signInAudience,publicClient,createdDateTime`))
+    .filter(app => app.displayName?.startsWith("TenuVault") && app.notes?.startsWith("Used by the TenuVault desktop app") && app.signInAudience === "AzureADMyOrg" && app.publicClient?.redirectUris?.includes("http://localhost"))
+  const principals = new Map<string, Principal | undefined>()
+  const consent = new Map<string, Grant[]>()
+  let existing = candidates[0]
+  if (candidates.length > 1) {
+    const ranked = []
+    for (const candidate of candidates) {
+      const principal = (await list<Principal>(`/servicePrincipals?$filter=${encodeURIComponent(`appId eq '${candidate.appId}'`)}&${principalFields}`))[0]
+      principals.set(candidate.appId, principal)
+      const grants = principal && principal.accountEnabled !== false
+        ? await list<Grant>(`/oauth2PermissionGrants?$filter=${encodeURIComponent(`clientId eq '${principal.id}'`)}`) : []
+      consent.set(candidate.appId, grants)
+      const permissions = new Set(grants.filter(g => g.consentType === "AllPrincipals").flatMap(g => g.scope.split(/\s+/).filter(Boolean).map(scope => `${g.resourceId}:${scope}`)))
+      ranked.push({ candidate, disabled: principal?.accountEnabled === false, score: permissions.size })
+    }
+    ranked.sort((a, b) => Number(a.disabled) - Number(b.disabled) || b.score - a.score || (a.candidate.createdDateTime ?? "9999").localeCompare(b.candidate.createdDateTime ?? "9999") || a.candidate.id.localeCompare(b.candidate.id))
+    existing = ranked[0]!.candidate
+  }
   let created: Application | undefined
   let app = existing
   progress({ phase: "registration", reused: Boolean(existing) })
@@ -125,14 +142,14 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
       })
       app = created
     }
-    let principal = (await list<Principal>(`/servicePrincipals?$filter=${encodeURIComponent(`appId eq '${app.appId}'`)}&${principalFields}`))[0]
+    let principal = principals.has(app.appId) ? principals.get(app.appId) : (await list<Principal>(`/servicePrincipals?$filter=${encodeURIComponent(`appId eq '${app.appId}'`)}&${principalFields}`))[0]
     // An administrator who turned sign-in off revoked access on purpose: do not add consent to it.
     if (principal?.accountEnabled === false) {
       throw new Error(`This tenant already has a TenuVault app registration (client id ${app.appId}), but sign-in to its enterprise application is turned off. Turn it on under Entra admin center > Enterprise applications > TenuVault Desktop > Properties, or delete the app registration, then try again. Nothing was changed.`)
     }
     if (!principal) principal = await graph<Principal>("POST", "/servicePrincipals", { appId: app.appId, tags: ["HideApp", "WindowsAzureActiveDirectoryIntegratedApp"] }, true)
     progress({ phase: "consent", reused: Boolean(existing) })
-    const grants = await list<Grant>(`/oauth2PermissionGrants?$filter=${encodeURIComponent(`clientId eq '${principal.id}'`)}`)
+    const grants = consent.get(app.appId) ?? await list<Grant>(`/oauth2PermissionGrants?$filter=${encodeURIComponent(`clientId eq '${principal.id}'`)}`)
     for (const resource of resources) {
       const grant = grants.find(grant => grant.consentType === "AllPrincipals" && grant.resourceId === resource.principal.id)
       const scopes = new Set(grant?.scope.split(/\s+/).filter(Boolean) ?? [])
@@ -166,5 +183,5 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
   // The probe answers as soon as the sign-in service knows the application. Its service principal
   // and consent follow moments later, so leave them a little time before the browser opens.
   if (ready) await sleep(5000)
-  return { tenantId, clientId: app!.appId, username, reused: Boolean(existing), ready }
+  return { tenantId, clientId: app!.appId, username, reused: Boolean(existing), ready, displayName: app!.displayName, candidateCount: candidates.length }
 }

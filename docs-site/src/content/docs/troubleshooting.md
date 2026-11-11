@@ -254,3 +254,12 @@ Feedback and its screenshot are stored up to 12 months; the email copy to suppor
 ## Still stuck?
 
 Check **Settings** > **About** for your TenuVault version and sign-in method, then contact support through **Website and support** on the same page, or tell us what got in your way with [Share feedback](#share-feedback).
+
+
+## Community despite an organization license
+
+An organization license is tied to the app registration it was shared from. A sign-in through another registration can show Community and cannot start a trial. TenuVault explains:
+
+> This tenant has an organization license shared through another app registration than the one this sign-in used. This sign-in cannot use that license, and no trial can start. To use the license, remove the tenant from TenuVault and connect it again through that app registration. Choose "I already have an app registration" on the Connect step and enter its client ID, which an Entra administrator can find under App registrations.
+
+Keep **Retry** available to check the license again.

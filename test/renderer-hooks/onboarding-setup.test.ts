@@ -337,7 +337,7 @@ it("does not bring the same clipboard IDs back after the admin cleared the field
 
 
 describe("in-app tenant setup", () => {
-  const result = { tenantId: TENANT, clientId: CLIENT, username: "admin@contoso.test", reused: false, ready: true }
+  const result = { tenantId: TENANT, clientId: CLIENT, username: "admin@contoso.test", reused: false, ready: true, displayName: "TenuVault Desktop", candidateCount: 0 }
   const settle = () => new Promise(resolve => setTimeout(resolve, 20))
 
   it("explains the setup before it starts", async () => {
@@ -366,6 +366,16 @@ describe("in-app tenant setup", () => {
     expect(state.signIn).toHaveBeenCalledTimes(1)
     expect(state.signIn).toHaveBeenLastCalledWith(TENANT, CLIENT, { loginHint: "admin@contoso.test" })
     expect(container.textContent).toContain("Choose where backups are stored")
+  })
+
+  it.each([1, 2])("names a reused registration and explains selection among %s candidates", async candidateCount => {
+    state.createRegistration.mockResolvedValueOnce({ ...result, reused: true, ready: false, displayName: "TenuVault Desktop (Lab)", candidateCount })
+    const container = await render(createElement(OnboardingPage))
+    await act(async () => { button(container, "Set up with Microsoft sign-in")!.click(); await settle() })
+    expect(container.textContent).toContain('This tenant already had a TenuVault app registration, "TenuVault Desktop (Lab)", so TenuVault uses that one.')
+    expect(container.textContent!.includes('To use another one, select Previous')).toBe(candidateCount > 1)
+    expect(container.textContent).toContain("Microsoft is still making it available for sign-in")
+    expect(state.signIn).not.toHaveBeenCalled()
   })
 
   it("passes the optional tenant of a guest or partner admin", async () => {

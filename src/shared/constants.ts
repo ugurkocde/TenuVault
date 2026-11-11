@@ -68,3 +68,6 @@ export const BACKUP_OWNER_FILE = ".tenuvault-owner.json"
 
 /** How a backup the user cancelled begins its error, also in manifests that recorded it as Failed. */
 export const BACKUP_CANCELLED_MESSAGE = "Backup cancelled by you."
+
+export const ORGANIZATION_LICENSE_MESSAGE = "This tenant already has an organization license."
+export const ORGANIZATION_LICENSE_GUIDANCE = 'This tenant has an organization license shared through another app registration than the one this sign-in used. This sign-in cannot use that license, and no trial can start. To use the license, remove the tenant from TenuVault and connect it again through that app registration. Choose "I already have an app registration" on the Connect step and enter its client ID, which an Entra administrator can find under App registrations.'
