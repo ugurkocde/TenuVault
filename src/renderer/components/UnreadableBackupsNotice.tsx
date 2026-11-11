@@ -4,6 +4,7 @@ import { Button } from "~/components/ui/button"
 import type { BackupSettings } from "../../shared/ipc"
 import { bridge } from "../lib/bridge"
 import { announceBackupSettings } from "../lib/local-inventory"
+import { NoticeCard } from "./NoticeCard"
 import { RecoveryKeyImport } from "./RecoveryKeyImport"
 
 interface UnreadableBackupsNoticeProps {
@@ -58,24 +59,28 @@ export function UnreadableBackupsNotice({ settings, affected, checking, onChange
   }
 
   return (
-    <div role="alert" className="space-y-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-      <div>
-        <p className="font-medium">This folder has backups this device cannot read</p>
-        <p className="mt-1">
+    <NoticeCard
+      role="alert"
+      title="This folder has backups this device cannot read"
+      body={
+        <p>
           Some backups in <span className="break-all font-mono text-xs">{settings.localFolder}</span> were made with a
           different recovery key, for example by another device or an earlier installation, or are damaged or missing. Your other
           backups still work and new backups are saved, but older backups are not deleted until you import that recovery
           key or choose another folder.
         </p>
-      </div>
-      <div className="flex flex-wrap gap-2">
-        <Button type="button" variant="outline" size="sm" className="bg-white" disabled={checking || pending} onClick={() => setImporting((value) => !value)}>
-          <Upload className="mr-2 h-4 w-4" /> Import recovery key
-        </Button>
-        <Button type="button" variant="outline" size="sm" className="bg-white" disabled={checking || pending} onClick={() => void chooseFolder()}>
-          <FolderOpen className="mr-2 h-4 w-4" /> Choose another folder
-        </Button>
-      </div>
+      }
+      actions={
+        <>
+          <Button type="button" variant="outline" size="sm" className="bg-white" disabled={checking || pending} onClick={() => setImporting((value) => !value)}>
+            <Upload className="mr-2 h-4 w-4" /> Import recovery key
+          </Button>
+          <Button type="button" variant="outline" size="sm" className="bg-white" disabled={checking || pending} onClick={() => void chooseFolder()}>
+            <FolderOpen className="mr-2 h-4 w-4" /> Choose another folder
+          </Button>
+        </>
+      }
+    >
       {importing && (
         <RecoveryKeyImport
           onImported={(next) => {
@@ -91,6 +96,6 @@ export function UnreadableBackupsNotice({ settings, affected, checking, onChange
       )}
       {!checking && stillUnreadable && <p className="text-red-700">{stillUnreadable}</p>}
       {error && <p className="text-red-700">{error}</p>}
-    </div>
+    </NoticeCard>
   )
 }

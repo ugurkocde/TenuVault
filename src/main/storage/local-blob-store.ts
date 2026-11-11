@@ -3,6 +3,7 @@ import type { BigIntStats } from "node:fs"
 import { link, mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { BACKUP_CONTAINER, BACKUP_OWNER_FILE } from "../../shared/constants"
+import { DAMAGE_KINDS, type DamageKind, type DamagedFileKinds } from "../../shared/damaged-files"
 import { mapLimit } from "../../shared/map-limit"
 
 /**
@@ -164,6 +165,10 @@ export interface DamagedFile {
   /** The encrypted file name on disk. */
   file: string
   reason: string
+  /** Why it cannot be used, for the backup list's notice; see DamageKind. */
+  kind: DamageKind
+  /** The OS error code, for the os kind. */
+  code?: string
   /** The backup folder the file belongs to, or null when it cannot be traced. */
   backup: string | null
 }
@@ -182,16 +187,36 @@ const RECOVERY = "Import the recovery key it was made with, or restore the damag
 /** Thrown by decrypt when no key in the keyring opens the data, damaged data included. */
 const WRONG_KEY = "This backup was encrypted with a key this device does not have. Import its recovery key."
 
-/** Why a file could not be read. */
+const KEY_REASON = "it is damaged, or was encrypted with a key this device does not have"
+const DAMAGED_REASON = "it is damaged or incomplete"
+const DUPLICATE_REASON = "another file holds the same backup item"
+const OS_CODE = /^E[A-Z]+$/
+
+/** Why a file could not be read: the reason for messages, and its kind and OS error code for the backup list. */
 class Unreadable {
-  constructor(readonly reason: string) {}
+  constructor(readonly reason: string, readonly kind: DamageKind, readonly code?: string) {}
 }
 
-function unreadableReason(error: unknown): string {
-  if (error instanceof Error && error.message === WRONG_KEY) return "it is damaged, or was encrypted with a key this device does not have"
+function unreadable(error: unknown): Unreadable {
+  if (error instanceof Error && error.message === WRONG_KEY) return new Unreadable(KEY_REASON, "key")
   const code = (error as NodeJS.ErrnoException)?.code
-  if (typeof code === "string" && /^E[A-Z]+$/.test(code)) return `it could not be read (${code})`
-  return "it is damaged or incomplete"
+  if (typeof code === "string" && OS_CODE.test(code)) return new Unreadable(`it could not be read (${code})`, "os", code)
+  return new Unreadable(DAMAGED_REASON, "damaged")
+}
+
+/** A damaged file's record from the reason and kind of why it could not be read. */
+const damagedFile = (file: string, why: Unreadable, backup: string | null): DamagedFile =>
+  ({ file, reason: why.reason, kind: why.kind, ...(why.code ? { code: why.code } : {}), backup })
+
+/**
+ * The kind of a body damage record. Records written before kinds were kept have only the reason,
+ * which then is one of the reasons unreadable gives.
+ */
+function rememberedUnreadable(record: { reason: string; kind?: DamageKind; code?: string }): Unreadable {
+  if (record.kind) return new Unreadable(record.reason, record.kind, record.code)
+  if (record.reason === KEY_REASON) return new Unreadable(record.reason, "key")
+  const code = /^it could not be read \((E[A-Z]+)\)$/.exec(record.reason)?.[1]
+  return code ? new Unreadable(record.reason, "os", code) : new Unreadable(record.reason, "damaged")
 }
 
 /**
@@ -217,6 +242,29 @@ function describeDamage(damage: InventoryDamage): string {
     ...(backups ? [`${backups} backup${backups === 1 ? " is" : "s are"} unavailable`] : []),
   ]
   return `${parts.join(" and ")}.`
+}
+
+/**
+ * The damaged files by kind, for the backup list. The named files are shared out between the kinds
+ * in turn, so each kind present has some of its files named.
+ */
+export function damageKinds(damage: InventoryDamage, limit = MAX_NAMED_FILES): DamagedFileKinds {
+  const result: DamagedFileKinds = { counts: { key: 0, os: 0, duplicate: 0, damaged: 0 }, codes: [], names: { key: [], os: [], duplicate: [], damaged: [] } }
+  const byKind = new Map<DamageKind, string[]>(DAMAGE_KINDS.map((kind) => [kind, []]))
+  for (const file of damage.files) {
+    result.counts[file.kind]++
+    byKind.get(file.kind)!.push(file.file)
+    if (file.code && !result.codes.includes(file.code)) result.codes.push(file.code)
+  }
+  for (let named = 0, round = 0; named < Math.min(limit, damage.files.length); round++) {
+    for (const kind of DAMAGE_KINDS) {
+      const file = byKind.get(kind)![round]
+      if (file === undefined || named >= limit) continue
+      result.names[kind].push(file)
+      named++
+    }
+  }
+  return result
 }
 
 /** The damage in a container in a few sentences, or null when there is none. */
@@ -402,16 +450,17 @@ export class LocalBlobStore {
       // Inventories check headers only, so a damaged body is found when it is read. Retrying cannot
       // repair it. It is recorded like other damage: its backup becomes unavailable and nothing is
       // deleted, until the file changes and the next listing reads the folder again.
-      const reason = unreadableReason(error)
+      const why = unreadable(error)
+      const { reason } = why
       const damage = this.damageOf.get(entries)
       if (damage && container === BACKUP_CONTAINER && !damage.files.some((file) => file.file === entry!.file)) {
-        damage.files.push({ file: entry.file, reason, backup: folder })
+        damage.files.push(damagedFile(entry.file, why, folder))
         if (folder && !damage.unavailable.has(folder)) damage.unavailable.set(folder, `one of its files could not be read: ${reason}.`)
         this.damagedStamps.get(entries)?.set(entry.file, entry.stamp)
         // Remembered on disk too, so a rebuilt inventory or a restart still knows until the file changes.
         const dir = this.dir(account, container)
         const remembered = await this.readBodyDamage(dir)
-        remembered[entry.file] = { stamp: entry.stamp, reason }
+        remembered[entry.file] = { stamp: entry.stamp, reason, kind: why.kind, ...(why.code ? { code: why.code } : {}) }
         await this.writeBodyDamage(dir, remembered).catch(() => undefined)
       }
       throw Object.assign(new IncompleteInventoryError(1, `${name} could not be read: ${reason}. ${RECOVERY}`), folder ? { backup: folder } : {})
@@ -767,7 +816,7 @@ export class LocalBlobStore {
         ...(header.metadata ? { metadata: header.metadata } : {}),
       }
     } catch (error) {
-      return isMissing(error) ? VANISHED : new Unreadable(unreadableReason(error))
+      return isMissing(error) ? VANISHED : unreadable(error)
     } finally {
       await handle?.close()
     }
@@ -790,17 +839,17 @@ export class LocalBlobStore {
         if (cached && stamp === cached.stamp) return cached
         return this.readEntry(dir, account, container, file)
       } catch (error) {
-        return isMissing(error) ? VANISHED : new Unreadable(unreadableReason(error))
+        return isMissing(error) ? VANISHED : unreadable(error)
       }
     })
-    const unreadable: Array<{ file: string; reason: string }> = []
+    const unreadableFiles: Array<{ file: string; why: Unreadable }> = []
     // Every file that claims a blob another file also claims: none of them can be trusted.
     const claims = new Map<string, string[]>()
     for (const [index, entry] of read.entries()) {
       // A file removed since the listing (retention, another device) is simply gone, and an empty claim holds no blob yet.
       if (entry === VANISHED) continue
       if (entry instanceof Unreadable) {
-        unreadable.push({ file: files[index]!, reason: entry.reason })
+        unreadableFiles.push({ file: files[index]!, why: entry })
         continue
       }
       const first = entries.get(entry.name)
@@ -813,7 +862,7 @@ export class LocalBlobStore {
     }
     // Other containers fail closed, as the backup container did before damage could be traced.
     if (container !== BACKUP_CONTAINER) {
-      const count = unreadable.length + [...claims.values()].reduce((sum, list) => sum + list.length, 0)
+      const count = unreadableFiles.length + [...claims.values()].reduce((sum, list) => sum + list.length, 0)
       if (count) throw new IncompleteInventoryError(count)
       return entries
     }
@@ -822,7 +871,7 @@ export class LocalBlobStore {
     const unavailable = (folder: string, reason: string) => { if (!damage.unavailable.has(folder)) damage.unavailable.set(folder, reason) }
     for (const [name, claimed] of claims) {
       const folder = backupFolderOf(name)
-      for (const file of claimed) damage.files.push({ file, reason: "another file holds the same backup item", backup: folder })
+      for (const file of claimed) damage.files.push({ file, reason: DUPLICATE_REASON, kind: "duplicate", backup: folder })
       if (folder) unavailable(folder, "two files hold the same backup item.")
       else damage.unattributed += claimed.length
     }
@@ -848,7 +897,7 @@ export class LocalBlobStore {
       } catch (error) {
         // A manifest removed since the listing no longer describes a backup.
         if (isMissing(error)) { entries.delete(entry.name); continue }
-        damage.files.push({ file: entry.file, reason: unreadableReason(error), backup: folder })
+        damage.files.push(damagedFile(entry.file, unreadable(error), folder))
         unavailable(folder, "its manifest (metadata.json) could not be read.")
         continue
       }
@@ -873,15 +922,15 @@ export class LocalBlobStore {
       else withManifest.add(folder)
     }
 
-    if (unreadable.length) {
+    if (unreadableFiles.length) {
       const byFileName = new Map<string, string>()
       for (const [name, folder] of traced) {
         for (const file of this.fileNames(account, container, name)) byFileName.set(file, folder)
       }
-      for (const { file, reason } of unreadable) {
+      for (const { file, why } of unreadableFiles) {
         const folder = byFileName.get(file) ?? null
-        damage.files.push({ file, reason, backup: folder })
-        if (folder) unavailable(folder, `one of its files could not be read: ${reason}.`)
+        damage.files.push(damagedFile(file, why, folder))
+        if (folder) unavailable(folder, `one of its files could not be read: ${why.reason}.`)
         else damage.unattributed++
       }
     }
@@ -896,7 +945,8 @@ export class LocalBlobStore {
     const remembered = await this.readBodyDamage(dir)
     const entryOfFile = new Map([...entries.values()].map((entry) => [entry.file, entry]))
     let forgotten = false
-    for (const [file, { stamp, reason }] of Object.entries(remembered)) {
+    for (const [file, record] of Object.entries(remembered)) {
+      const { stamp, reason } = record
       const entry = entryOfFile.get(file)
       if (!entry || entry.stamp !== stamp) {
         delete remembered[file]
@@ -904,7 +954,7 @@ export class LocalBlobStore {
         continue
       }
       const folder = backupFolderOf(entry.name)
-      if (!damage.files.some((damaged) => damaged.file === file)) damage.files.push({ file, reason, backup: folder })
+      if (!damage.files.some((damaged) => damaged.file === file)) damage.files.push(damagedFile(file, rememberedUnreadable(record), folder))
       if (folder) unavailable(folder, `one of its files could not be read: ${reason}.`)
     }
     if (forgotten) await this.writeBodyDamage(dir, remembered).catch(() => undefined)
@@ -914,20 +964,22 @@ export class LocalBlobStore {
   }
 
   /** Files whose body could not be read, by the stamp they had then; see BODY_DAMAGE_FILE. */
-  private async readBodyDamage(dir: string): Promise<Record<string, { stamp: string; reason: string }>> {
+  private async readBodyDamage(dir: string): Promise<Record<string, BodyDamage>> {
     try {
       const value = JSON.parse(await readFile(join(dir, BODY_DAMAGE_FILE), "utf8")) as unknown
       if (!value || typeof value !== "object" || Array.isArray(value)) return {}
-      return Object.fromEntries(Object.entries(value).filter((pair): pair is [string, { stamp: string; reason: string }] => {
-        const [file, record] = pair as [string, { stamp?: unknown; reason?: unknown } | null]
+      return Object.fromEntries(Object.entries(value).filter((pair): pair is [string, BodyDamage] => {
+        const [file, record] = pair as [string, { stamp?: unknown; reason?: unknown; kind?: unknown; code?: unknown } | null]
         return file.endsWith(EXT) && !!record && typeof record.stamp === "string" && typeof record.reason === "string"
+          && (record.kind === undefined || DAMAGE_KINDS.includes(record.kind as DamageKind))
+          && (record.code === undefined || (typeof record.code === "string" && OS_CODE.test(record.code)))
       }))
     } catch {
       return {}
     }
   }
 
-  private async writeBodyDamage(dir: string, value: Record<string, { stamp: string; reason: string }>): Promise<void> {
+  private async writeBodyDamage(dir: string, value: Record<string, BodyDamage>): Promise<void> {
     const path = join(dir, BODY_DAMAGE_FILE)
     if (Object.keys(value).length === 0) {
       await rm(path, { force: true })
@@ -948,6 +1000,14 @@ export class LocalBlobStore {
     }
     throw new Error(WRONG_KEY)
   }
+}
+
+/** A body damage record; see BODY_DAMAGE_FILE. Records written before kinds were kept have no kind. */
+interface BodyDamage {
+  stamp: string
+  reason: string
+  kind?: DamageKind
+  code?: string
 }
 
 /** Errors of a file system that has no hard links. */

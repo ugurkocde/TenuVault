@@ -1,5 +1,5 @@
 import { stat } from "node:fs/promises"
-import { join } from "node:path"
+import { isAbsolute, join, relative } from "node:path"
 import { BACKUP_CONTAINER, localStorageAccountName } from "../../shared/constants"
 import { damageSummary, type LocalBlobStore } from "../storage/local-blob-store"
 
@@ -34,6 +34,26 @@ export async function localInventoryProblem(store: Pick<LocalBlobStore, "damage"
     if (await folderStamp(folder) === before) return problem
   }
   return null
+}
+
+const TENANT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * The folder Open backup folder shows: the tenant's backup folder when it exists, otherwise the
+ * root. The tenant comes from the renderer, so anything but a tenant ID is refused, and the
+ * folder must stay inside the root.
+ */
+export async function folderToOpen(root: string, tenantId: unknown): Promise<string> {
+  if (tenantId === undefined || tenantId === null) return root
+  if (typeof tenantId !== "string" || !TENANT_ID.test(tenantId)) throw new Error("Unknown tenant.")
+  const folder = join(root, localStorageAccountName(tenantId), BACKUP_CONTAINER)
+  const inside = relative(root, folder)
+  if (!inside || inside.startsWith("..") || isAbsolute(inside)) throw new Error("Unknown tenant.")
+  try {
+    return (await stat(folder)).isDirectory() ? folder : root
+  } catch {
+    return root
+  }
 }
 
 /** Adding, removing or replacing a file changes the folder's own timestamps. */

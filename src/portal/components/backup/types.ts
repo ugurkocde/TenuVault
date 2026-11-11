@@ -93,12 +93,6 @@ export function statusLabel(status: string): string {
   return STATUS_LABEL[statusKind(status)]
 }
 
-/** Shown when files in the local backup folder could not be read. */
-export function damagedFilesNotice(count: number, names: string[] = []): string {
-  const listed = names.length ? ` (${names.join(", ")}${count > names.length ? `, and ${count - names.length} more` : ""})` : ""
-  return `${count} file${count === 1 ? "" : "s"}${listed} in this tenant's backup folder could not be read, so some backups may be unavailable or missing from this list. Older backups are not deleted until this is resolved. Import the recovery key the files were made with, or restore them from a copy. Files that cannot be recovered can be removed from the backup folder.`
-}
-
 /** Shown when backup folders were left out of the list because their ownership could not be read. */
 export function unresolvedNotice(count: number): string {
   return `${count} backup${count === 1 ? "" : "s"} could not be read. Select Refresh to try again.`

@@ -1,6 +1,7 @@
 import { useEffect, useSyncExternalStore } from "react"
 import type { Tenant } from "~/contexts/TenantContext"
 import type { BackupSummary } from "~/components/backup/types"
+import { damagedFileKindsFrom, type DamagedFileKinds } from "../../shared/damaged-files"
 
 /**
  * Each tenant's backup list, kept for every page while the app runs. Listing backups reads every
@@ -23,9 +24,11 @@ export interface BackupList {
   damagedFiles: number
   /** Their encrypted file names on disk, the first few, so they can be found to restore or remove them. */
   damagedFileNames: string[]
+  /** The damaged files by why they cannot be used; null when the list did not say. */
+  damagedKinds: DamagedFileKinds | null
 }
 
-const EMPTY: BackupList = { backups: null, error: "", loading: false, unresolved: 0, sealed: 0, damagedFiles: 0, damagedFileNames: [] }
+const EMPTY: BackupList = { backups: null, error: "", loading: false, unresolved: 0, sealed: 0, damagedFiles: 0, damagedFileNames: [], damagedKinds: null }
 
 let lists: Record<string, BackupList> = {}
 const listeners = new Set<() => void>()
@@ -91,7 +94,7 @@ export function refreshBackupList(tenant: Tenant, options: { force?: boolean } =
       })
       const data = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(data.details || data.error || "Backups are unavailable. Check this tenant's sign-in, license, and storage access.")
-      if (latest.get(key) === id) update(key, { backups: data.backups ?? [], error: "", loading: false, unresolved: typeof data.unresolved === "number" ? data.unresolved : 0, sealed: typeof data.sealed === "number" ? data.sealed : 0, damagedFiles: typeof data.damagedFiles === "number" ? data.damagedFiles : 0, damagedFileNames: Array.isArray(data.damagedFileNames) ? data.damagedFileNames.filter((name: unknown): name is string => typeof name === "string") : [] })
+      if (latest.get(key) === id) update(key, { backups: data.backups ?? [], error: "", loading: false, unresolved: typeof data.unresolved === "number" ? data.unresolved : 0, sealed: typeof data.sealed === "number" ? data.sealed : 0, damagedFiles: typeof data.damagedFiles === "number" ? data.damagedFiles : 0, damagedFileNames: Array.isArray(data.damagedFileNames) ? data.damagedFileNames.filter((name: unknown): name is string => typeof name === "string") : [], damagedKinds: damagedFileKindsFrom(data.damagedKinds) })
     } catch (failure) {
       if (latest.get(key) === id) update(key, { error: failure instanceof Error ? failure.message : "Backups are unavailable.", loading: false })
     }
