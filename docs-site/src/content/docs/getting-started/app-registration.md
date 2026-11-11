@@ -1,13 +1,28 @@
 ---
 title: "Create the app registration"
-description: Create the app registration TenuVault signs in with.
----
+description: Create the app registration TenuVault signs in through an app registration in your own tenant. In **Set up TenuVault**, open **Connect**, headed **Connect your tenant**, and select **Set up with Microsoft sign-in**. TenuVault creates or reuses the registration, grants admin consent and signs you in, with no IDs to copy.
 
-TenuVault signs in through an app registration that lives in your own tenant. A PowerShell setup script creates it in one step and prints the two values you paste into the app: the tenant ID and the client ID. In TenuVault, the **Prepare** step of **Set up TenuVault** walks you through it.
+You do this once per tenant. Every admin in that tenant can use the same registration. Setup takes a few minutes. The PowerShell script remains available if another person is the admin or you prefer to read the script first.
 
-You do this once per tenant. Every admin who uses TenuVault in that tenant signs in through the same app registration.
+## Set up inside TenuVault
 
-## What the script creates
+Use a Global Administrator, Privileged Role Administrator or Cloud Application Administrator with consent rights. The admins who use TenuVault also need an Intune role.
+
+1. Select **Set up with Microsoft sign-in**. Choose your admin account in the browser. Microsoft asks you to approve **Microsoft Graph Command Line Tools**, Microsoft's public sign-in app, with delegated `Application.ReadWrite.All` and `DelegatedPermissionGrant.ReadWrite.All` permissions. These let setup create the registration and grant admin consent. They are not permissions of the resulting TenuVault registration.
+2. TenuVault checks the tenant's plan before writing to Graph. It resolves the default permissions listed below and creates **TenuVault Desktop**, its enterprise application and tenant-wide delegated consent. If a registration has the same name, notes beginning with `Used by the TenuVault desktop app`, single-tenant audience and `http://localhost` public-client redirect URI, setup reuses it, choosing the newest matching registration. It adds missing consent without removing existing scopes. A different app with the same name is left alone.
+3. The checklist shows **Wait for Microsoft to publish it**. Before the last item, it says **Your browser opens once more. There is nothing to enter this time.** The second sign-in uses the account you just chose. After sign-in you continue to **Storage**.
+
+TenuVault keeps the setup token in memory only, with no persistent cache, and drops it when setup ends. No setup token reaches the renderer. The approval of **Microsoft Graph Command Line Tools** remains for that admin afterwards. Remove it in **Entra admin center > Enterprise applications > Microsoft Graph Command Line Tools > Permissions**. Removing that approval does not remove the TenuVault registration.
+
+Expand **What the setup does** to review the permissions and the optional **Tenant ID or domain** field. Guest or partner admins can enter the target tenant there. Empty means the tenant of the account you sign in with. **Cancel** stops waiting for the setup browser sign-in.
+
+If the final sign-in fails, the **Sign in** step keeps the IDs and shows the error. If publication takes longer, it says **Microsoft is still publishing the app registration. Wait a moment, then sign in.** Use **Sign in with Microsoft** after waiting briefly. You do not need to create another registration.
+
+If provisioning fails after this run created the application, setup tries to remove it and reports whether cleanup succeeded. A reused registration is never deleted. Changes to a reused registration's consent can remain after an interrupted setup; retry setup to finish.
+
+To remove TenuVault's access, delete **TenuVault Desktop** from **Entra admin center > App registrations** and remove its enterprise application if it remains. Backups already saved on this computer or in your own Azure storage stay there.
+
+## What the setup creates
 
 | Setting | Value |
 | --- | --- |
@@ -48,13 +63,13 @@ The table above is the default permission set. It does not change unless you opt
 ## Before you start
 
 * An account with **Global Administrator**, **Privileged Role Administrator** or **Cloud Application Administrator**, which can grant admin consent.
-* PowerShell: Windows PowerShell 5.1 or PowerShell 7 on Windows, PowerShell 7 (`pwsh`) on macOS.
-* A browser on the same computer. The script opens it for the sign-in. It needs no PowerShell modules and installs nothing. In a remote shell without a browser, use `-UseDeviceCode` instead; Conditional Access often blocks device code flow.
+* For the script alternative, PowerShell: Windows PowerShell 5.1 or PowerShell 7 on Windows, PowerShell 7 (`pwsh`) on macOS.
+* A browser on the same computer. The script alternative opens it for the sign-in. It needs no PowerShell modules and installs nothing. In a remote shell without a browser, use `-UseDeviceCode` instead; Conditional Access often blocks device code flow.
 * Optional: the object ID of a security group, if only its members should be able to sign in.
 
-## In TenuVault: the Prepare step
+## Use the setup script instead
 
-When you select **Connect your tenant** on the welcome screen, TenuVault opens **Set up TenuVault** on the **Prepare** step, **Before you sign in**. Its card, **Create the app registration**, is a numbered checklist:
+On **Connect**, select **Use the setup script instead** to reveal the script checklist:
 
 1. **Save the setup script.** Select **Save setup script** and choose a folder in the save dialog. By default it is saved to your Documents folder as `New-TenuVaultDesktopApp.ps1`. TenuVault saves the copy of the script it ships with. **Copy script** copies it instead; paste it into a text editor and save it as `New-TenuVaultDesktopApp.ps1`.
 2. **Run it in PowerShell.** The card shows the exact command, with a copy button. After you saved the script, the command first changes to the folder you chose (`cd`) and then runs the script. If PowerShell refuses to run it, the card suggests `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` first; see [Execution policy](#execution-policy).
@@ -71,7 +86,7 @@ The buttons under the checklist:
 | **Create it by hand instead** | Opens [Create the app registration manually](#create-the-app-registration-manually) on this page. |
 | **Setup guide** | Opens this page. |
 
-If the app registration already exists, for example from an earlier setup, skip the checklist. Select **Next: sign in** to continue to [Sign in to your tenant](/getting-started/connect-tenant/).
+If the app registration already exists, select **I already have an app registration** to continue to [Sign in to your tenant](/getting-started/connect-tenant/).
 
 ## Get the script without TenuVault
 

@@ -330,9 +330,9 @@ await check("hung license checks time out and ignore late responses after retry"
     assert(await evaluate(`window.__licenseTimeout.calls === 4 && ${body}.innerText.includes("Welcome to TenuVault")`), "background check did not keep the loaded status")
     await evaluate(`window.__licenseTimeout.onChanged({ ...window.__licenseTimeout.status, hasKey: true })`)
     // With a key and no tenant the app opens the guided setup, which has the window to itself.
-    assert(await waitForCondition(`${body}.innerText.includes("Save setup script")`), "license change was not delivered during the pending check")
+    assert(await waitForCondition(`${body}.innerText.includes("Set up with Microsoft sign-in")`), "license change was not delivered during the pending check")
     assert(await waitForCondition(`window.__licenseTimeout.expired === 2 && window.__licenseTimeout.timers.size === 0`), "hung background check did not time out")
-    assert(await evaluate(`${body}.innerText.includes("Save setup script") && !${body}.querySelector('[role="alert"]')`), "background timeout discarded the loaded status")
+    assert(await evaluate(`${body}.innerText.includes("Set up with Microsoft sign-in") && !${body}.querySelector('[role="alert"]')`), "background timeout discarded the loaded status")
     await evaluate(`window.__licenseTimeout.refresh()`)
     assert(await waitForCondition(`window.__licenseTimeout.calls === 5 && ${body}.innerText.includes("Welcome to TenuVault")`), "background timeout left the refresh guard locked")
     await evaluate(`window.__licenseTimeout.resolveBackground()`)
@@ -360,10 +360,10 @@ await check("malformed license keys are rejected", async () => {
 await check("Community users can reach the tenant sign-in without a key", async () => {
   await evaluate(`[...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Connect your tenant").click()`)
   assert(await waitForText("Set up TenuVault", 15000), "tenant sign-in did not open")
-  assert(await waitForText("Save setup script"), "setup checklist missing")
+  assert(await waitForText("Set up with Microsoft sign-in"), "setup checklist missing")
   // Until a tenant is connected the guided setup has the window to itself.
   assert(!(await evaluate(`Boolean(document.querySelector('nav[aria-label="Main navigation"]'))`)), "sidebar shown during the first setup")
-  await screenshot("00b-setup-prepare")
+  await screenshot("00b-setup-connect")
 })
 
 await check("dashboard renders in the desktop shell", async () => {
@@ -568,14 +568,15 @@ await check("tenants page offers delegated sign-in", async () => {
   assert(opened, "Connect tenant button not found")
   // Connect tenant opens the guided setup, the one way to connect a tenant on the desktop.
   assert(await waitForCondition(`location.hash === "#/portal/onboarding"`), "Connect tenant did not open the guided setup")
-  assert(await waitForText("Save setup script"), "guided setup did not open")
+  assert(await waitForText("Set up with Microsoft sign-in"), "guided setup did not open")
   assert(!(await evaluate(`document.body.innerText.includes("Client Secret")`)), "setup still asks for a client secret")
   await screenshot("03-add-tenant")
 })
 
 await check("onboarding is the desktop wizard, without client secrets", async () => {
   await go("#/portal/onboarding", "Set up TenuVault")
-  assert(await waitForText("Save setup script"), "setup script step missing")
+  assert(await waitForText("Set up with Microsoft sign-in"), "Microsoft setup button missing")
+  await evaluate(`[...document.querySelectorAll("summary")].find(item => item.textContent.includes("What the setup does")).click()`)
   assert(await waitForText("Permissions the app registration gets"), "permission list missing")
   assert(!(await evaluate(`/client secret/i.test(document.body.innerText) && !/no secret/i.test(document.body.innerText)`)), "wizard mentions client secrets")
   await screenshot("04-onboarding")
@@ -1614,12 +1615,12 @@ await check("appearance can switch to dark and back", async () => {
   await evaluate(`(() => { const select = [...document.querySelectorAll('select')].find(s => [...s.options].some(o => o.value === 'dark')); select.value = 'dark'; select.dispatchEvent(new Event('change', {bubbles:true})); })()`)
   assert(await evaluate(`document.documentElement.classList.contains('dark')`), "dark appearance was not applied")
   await screenshot("12-settings-dark")
-  await go("#/portal/onboarding", "Create the app registration")
+  await go("#/portal/onboarding", "Connect your tenant")
   const contrast = await evaluate(`(() => {
-    const style = getComputedStyle(document.querySelector('[class~="bg-blue-50/60"]'));
+    const style = getComputedStyle(document.querySelector('[data-tenant-connect]'));
     const luminance = color => { const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1; const ctx = canvas.getContext('2d'); ctx.fillStyle = color; ctx.fillRect(0, 0, 1, 1); return [...ctx.getImageData(0, 0, 1, 1).data].slice(0, 3).map(v => { v /= 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }).reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i], 0); };
-    const a = luminance(style.color), b = luminance(style.backgroundColor);
-    const button = getComputedStyle(document.querySelector('button.bg-blue-600')); const c = luminance(button.color), d = luminance(button.backgroundColor); return Math.min((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05), (Math.max(c, d) + 0.05) / (Math.min(c, d) + 0.05));
+    const a = luminance(style.color), b = luminance(getComputedStyle(document.querySelector('[data-tenant-connect]').closest('.bg-card')).backgroundColor);
+    const button = getComputedStyle([...document.querySelectorAll('button')].find(button => button.textContent.includes('Set up with Microsoft sign-in'))); const c = luminance(button.color), d = luminance(button.backgroundColor); return Math.min((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05), (Math.max(c, d) + 0.05) / (Math.min(c, d) + 0.05));
   })()`)
   assert(contrast >= 4.5, `dark setup card contrast is too low: ${contrast}`)
   await screenshot("13-setup-dark")

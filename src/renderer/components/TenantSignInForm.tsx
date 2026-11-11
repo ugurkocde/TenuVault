@@ -85,7 +85,7 @@ export function PermissionList() {
       </summary>
       <div className="mt-3 space-y-3 text-sm text-gray-700">
         <p>
-          The script grants tenant-wide admin consent for these delegated permissions. Every call still runs as the admin
+          The setup grants tenant-wide admin consent for these delegated permissions. Every call still runs as the admin
           who signs in, so it is limited by their own Intune role, MFA and Conditional Access.
         </p>
         <ul className="space-y-2">
@@ -98,8 +98,7 @@ export function PermissionList() {
         </ul>
         <p className="text-xs text-gray-600">
           By default any user of the tenant can sign in to the app registration, but gets no more than their own roles
-          allow. To limit sign-in to a group of admins, add <code className="font-mono">-AllowedGroupId</code> and the
-          group&apos;s object ID to the command (needs Entra ID P1 or P2).
+          allow. To limit sign-in, assign an admin group to the enterprise application in Entra and turn on Assignment required (needs Entra ID P1 or P2). The script also supports <code className="font-mono">-AllowedGroupId</code>.
         </p>
       </div>
     </details>

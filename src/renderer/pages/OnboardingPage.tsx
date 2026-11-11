@@ -16,7 +16,8 @@ import { FirstBackupNote } from "../components/FirstBackupNote"
 import { FirstBackupNextSteps } from "../components/FirstBackupNextSteps"
 import { PlanContext, TrialOrKey } from "../components/PlanChoice"
 import { tenantLicense, tenantPlan, useLicense, useTenantPlan } from "../lib/license"
-import { SetupScriptCard, TenantSignInForm, type SignInFields } from "../components/TenantSignInForm"
+import { ConnectTenantSetup } from "../components/ConnectTenantSetup"
+import { TenantSignInForm, type SignInFields } from "../components/TenantSignInForm"
 import { bridge } from "../lib/bridge"
 import { buildTenantProfile } from "../lib/desktop-tenant"
 import { clearOnboardingDraft, loadOnboardingDraft, saveOnboardingDraft } from "../lib/onboarding-draft"
@@ -25,7 +26,7 @@ import { desktopTenantCredentials, type TenantCredentials } from "../overrides/a
 import { resolveBackupJobDisplay, toBackupJobDisplay, type BackupJobDisplay } from "~/lib/backup-job-display"
 
 const STEPS = [
-  { title: "Prepare", icon: ShieldCheck },
+  { title: "Connect", icon: ShieldCheck },
   { title: "Sign in", icon: KeyRound },
   { title: "Storage", icon: Database },
   { title: "First backup", icon: HardDriveDownload },
@@ -281,7 +282,7 @@ export default function OnboardingPage() {
       <div>
         <h1 className="text-4xl font-medium tracking-tight text-gray-900">Set up TenuVault</h1>
         <p className="mt-2 text-base text-gray-500">
-          Connect a tenant and take your first backup, in about 10 minutes. Everything runs on this computer as you; no Azure
+          Connect a tenant and take your first backup, in a few minutes. Everything runs on this computer as you; no Azure
           resources are required.
         </p>
       </div>
@@ -314,17 +315,18 @@ export default function OnboardingPage() {
       <div className="rounded-3xl bg-card p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
         {step === 0 && (
           <div className="space-y-5">
-            <StepHeading id="setup-step-0">Before you sign in</StepHeading>
-            <SetupScriptCard />
-            <p className="text-sm text-gray-600">
-              The admins who use TenuVault need an Intune role, for example Intune Administrator. Already have the two values
-              from an earlier setup? Continue.
-            </p>
-            <div className="flex justify-end">
-              <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => setStep(1)}>
-                Next: sign in <ArrowRight className="ml-2 h-4 w-4" aria-hidden="true" />
-              </Button>
-            </div>
+            <StepHeading id="setup-step-0">Connect your tenant</StepHeading>
+            <ConnectTenantSetup
+              trials={Boolean(status?.tenantTrialsEnabled)}
+              onManual={() => setStep(1)}
+              onRegistered={result => {
+                const next = { ...fields, tenant: result.tenantId, clientId: result.clientId }
+                setFields(next)
+                saveOnboardingDraft({ step: 1, ...next, account: null })
+              }}
+              onSignedIn={signedIn => { setAddError(null); setAccount(signedIn); setStep(2) }}
+              onSignInFailed={message => { setAddError({ message, license: false }); setStep(1) }}
+            />
           </div>
         )}
 

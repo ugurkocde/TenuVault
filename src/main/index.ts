@@ -1,3 +1,4 @@
+import { AppRegistrationSetup } from "./auth/app-registration-setup"
 import { trialBackupObserver } from "./license/usage-actions"
 import { cachedTrialUsage, trialWorkflowsConfigured } from "./license/usage"
 import { notifyTenantTrial, runTrialNotificationCheck } from "./license/notifications"
@@ -1103,8 +1104,16 @@ async function bootstrap(): Promise<void> {
       pushLicense()
     }
   }
-  handleTrusted("auth:signIn", (_event, tenant: string, clientId: string) => withPlanError(async () => {
-    const account = await auth.signIn(tenant, clientId)
+  const registrationSetup = new AppRegistrationSetup({
+    fetch: bridgedFetchLater,
+    openBrowser: url => shell.openExternal(url),
+    checkTenant: tenantId => license.checkNewTenant(tenantId),
+    progress: progress => mainWindow?.webContents.send("setup:progress", progress),
+  })
+  handleTrusted("setup:createRegistration", (_event, options?: { tenant?: string }) => withPlanError(() => registrationSetup.create(options)))
+  handleTrusted("setup:cancelCreateRegistration", () => registrationSetup.cancel())
+  handleTrusted("auth:signIn", (_event, tenant: string, clientId: string, options?: { loginHint?: string }) => withPlanError(async () => {
+    const account = await auth.signIn(tenant, clientId, options)
     await requireForNewTenant(account.tenantId)
     return account
   }))

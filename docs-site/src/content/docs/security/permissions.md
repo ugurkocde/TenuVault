@@ -7,9 +7,11 @@ TenuVault signs in through an app registration that you create in your own tenan
 
 For the step-by-step setup, see [Create the app registration](/getting-started/app-registration/).
 
-## What the setup script creates
+## What the setup creates
 
-The setup script, `New-TenuVaultDesktopApp.ps1`, is available as a [download from this site](/downloads/New-TenuVaultDesktopApp.ps1), from the **Prepare** step of **Set up TenuVault** (**Save setup script** or **Copy script**) and in the public repository. The same step lists these permissions under **Permissions the app registration gets** before anyone consents. It creates:
+Use **Set up with Microsoft sign-in** on **Connect** in **Set up TenuVault**. It creates the registration below or reuses the newest matching TenuVault registration. Matching requires the name `TenuVault Desktop`, notes beginning with `Used by the TenuVault desktop app`, single-tenant audience and the public-client `http://localhost` redirect URI. Existing consent scopes are preserved and missing scopes are added.
+
+The alternative **Use the setup script instead** reveals **Save setup script** and **Copy script**. Both paths list **Permissions the app registration gets** before consent.
 
 | Setting | Value |
 | --- | --- |
@@ -25,7 +27,7 @@ The setup script, `New-TenuVaultDesktopApp.ps1`, is available as a [download fro
 
 While it grants admin consent, the script lists the delegated permissions per API. At the end, it prints your tenant ID and the application (client) ID. You paste these two lines into the **Sign in** step of **Set up TenuVault**.
 
-### Who can run the script
+### Who can run setup
 
 The desktop setup script needs no modules and installs nothing. It signs in through your browser. You need one of these roles:
 
@@ -33,7 +35,11 @@ The desktop setup script needs no modules and installs nothing. It signs in thro
 * Privileged Role Administrator
 * Cloud Application Administrator
 
-The script connects to Microsoft Graph with the delegated scopes `Application.ReadWrite.All`, `DelegatedPermissionGrant.ReadWrite.All` and `AppRoleAssignment.ReadWrite.All`. It needs them only to create the app registration, grant consent and, if you use `-AllowedGroupId`, assign the group. TenuVault itself never uses these scopes.
+Both paths sign in through **Microsoft Graph Command Line Tools**, Microsoft's own public client. The admin approves delegated `Application.ReadWrite.All` and `DelegatedPermissionGrant.ReadWrite.All` to create the registration and grant consent. Only the script's optional `-AllowedGroupId` adds `AppRoleAssignment.ReadWrite.All` for group assignment.
+
+For in-app setup, the token stays in main-process memory only for the setup, with no cache plugin or persistent token storage. The renderer never receives it. The approval remains for that admin in the tenant. To revoke it, open **Entra admin center > Enterprise applications > Microsoft Graph Command Line Tools > Permissions**. This is separate from the TenuVault registration's default delegated scopes below.
+
+Delete **TenuVault Desktop** in **App registrations**, and its enterprise application if it remains, to remove TenuVault's sign-in registration and consent. Your stored backups remain. Setup removes a newly created application on provisioning failure where possible; it never deletes a reused registration.
 
 ## Why delegated permissions matter
 

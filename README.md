@@ -124,9 +124,16 @@ For recovery, see [readiness and manual artifacts](docs/disaster-recovery.md), [
 
 ## Customer setup
 
-1. Run [`resources/New-TenuVaultDesktopApp.ps1`](resources/New-TenuVaultDesktopApp.ps1), also
-   available on the Prepare step of the app's guided setup. It creates a single-tenant public client app registration with these
-   delegated permissions and grants admin consent:
+1. Open **Set up TenuVault > Connect**, then select **Set up with Microsoft sign-in**. A Global Administrator,
+   Privileged Role Administrator or Cloud Application Administrator approves Microsoft's **Microsoft Graph Command Line Tools**
+   with `Application.ReadWrite.All` and `DelegatedPermissionGrant.ReadWrite.All`. The setup token stays in memory only for setup.
+   This approval remains for that admin. Remove it in **Entra admin center > Enterprise applications > Microsoft Graph Command Line Tools > Permissions**.
+   Setup checks the plan, creates or reuses the newest matching **TenuVault Desktop** registration, grants consent,
+   waits for publication, then signs you in with the same account. No IDs need copying. Reuse requires matching notes,
+   single-tenant audience and the public-client localhost redirect. Existing consent scopes are preserved.
+   **Use the setup script instead** reveals [`resources/New-TenuVaultDesktopApp.ps1`](resources/New-TenuVaultDesktopApp.ps1),
+   for another admin or for reviewing a script first. Both paths create a single-tenant public client with these
+   delegated permissions and grant admin consent:
    - Microsoft Graph: `User.Read`, `Organization.Read.All`, `Policy.Read.All`,
      `DeviceManagementConfiguration.ReadWrite.All`, `DeviceManagementApps.ReadWrite.All`,
      `DeviceManagementServiceConfig.ReadWrite.All`, `DeviceManagementScripts.ReadWrite.All`,
@@ -135,7 +142,8 @@ For recovery, see [readiness and manual artifacts](docs/disaster-recovery.md), [
      an Azure storage account)
 
    Redirect URI: `http://localhost`.
-   `-AllowedGroupId` restricts sign-in to one group.
+   The script option `-AllowedGroupId` restricts sign-in to one group.
+   To remove access, delete **TenuVault Desktop** in Entra **App registrations** and its enterprise application if it remains. Stored backups stay in place.
 2. Admins need an Intune role, for example Intune Administrator. To store backups in Azure they
    also need `Storage Blob Data Contributor` on the storage account.
 

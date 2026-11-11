@@ -121,7 +121,7 @@ export function firstSignInError(error: unknown): unknown {
   const message = error instanceof Error ? error.message : String(error)
   const code = /AADSTS\d+/.exec(message)?.[0]
   if (code && FIRST_SIGN_IN_ERRORS[code]) return new Error(`${FIRST_SIGN_IN_ERRORS[code]} (${code})`)
-  if (/access_denied/i.test(message) && !code) return new Error("The sign-in was cancelled in the browser. Sign in again to continue.")
+  if (/access_denied|user_cancelled|user_canceled|authentication_canceled/i.test(message) && !code) return new Error("The sign-in was cancelled in the browser. Sign in again to continue.")
   return error
 }
 
@@ -140,9 +140,9 @@ export function idTokenIssuedAt(token: string): number | null {
 }
 
 const SUCCESS_PAGE = page("Signed in to TenuVault", "You can close this tab and return to TenuVault.")
-const ERROR_PAGE = page("Sign-in failed", "Return to TenuVault for details. You can close this tab.")
+export const ERROR_PAGE = page("Sign-in failed", "Return to TenuVault for details. You can close this tab.")
 
-function page(title: string, message: string): string {
+export function page(title: string, message: string): string {
   return `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title></head>
 <body style="font-family:system-ui,sans-serif;display:grid;place-items:center;height:100vh;margin:0;background:#f8fafc;color:#0f172a">
 <div style="text-align:center"><h1 style="font-size:1.5rem">${title}</h1><p>${message}</p></div></body></html>`
@@ -171,8 +171,8 @@ export class AuthManager {
    * Interactive sign-in used when a tenant is added. `tenant` may be a tenant id or
    * a verified domain; the returned account always carries the tenant id.
    */
-  async signIn(tenant: string, clientId: string): Promise<SignedInAccount> {
-    const result = await this.acquireInteractive(clientId, tenant, RESOURCE_SCOPES.graph, "select_account", undefined, true).catch((error: unknown) => {
+  async signIn(tenant: string, clientId: string, options?: { loginHint?: string }): Promise<SignedInAccount> {
+    const result = await this.acquireInteractive(clientId, tenant, RESOURCE_SCOPES.graph, options?.loginHint ? undefined : "select_account", options?.loginHint, true).catch((error: unknown) => {
       throw firstSignInError(error)
     })
     const account = result.account

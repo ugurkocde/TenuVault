@@ -7,6 +7,9 @@ import type { SignedInAccount } from "../../src/shared/ipc"
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const state = vi.hoisted(() => ({
+  createRegistration: vi.fn(),
+  cancelCreateRegistration: vi.fn(async () => undefined),
+  progress: null as null | ((value: import("../../src/shared/ipc").SetupProgress) => void),
   clipboardIds: vi.fn(async (): Promise<{ tenantId: string; clientId: string } | null> => null),
   store: new Map<string, string>(),
   signIn: vi.fn<(tenant: string, clientId: string) => Promise<SignedInAccount>>(),
@@ -28,7 +31,7 @@ vi.mock("../../src/renderer/lib/bridge", () => ({
     },
     auth: { signIn: state.signIn, cancelSignIn: state.cancelSignIn, accounts: state.accounts },
     license: { releaseTenant: state.releaseTenant, clipboardKey: async () => null, checkNewTenant: state.checkNewTenant },
-    setup: { clipboardIds: state.clipboardIds, saveScript: async () => ({ saved: false }) },
+    setup: { createRegistration: state.createRegistration, cancelCreateRegistration: state.cancelCreateRegistration, onProgress: (listener: typeof state.progress) => { state.progress = listener; return () => { state.progress = null } }, clipboardIds: state.clipboardIds, saveScript: async () => ({ saved: false }) },
     app: { openExternal: async () => undefined },
   },
 }))
@@ -66,6 +69,7 @@ const OUTPUT = `Done. Copy the two lines below and paste them into the Sign in s
 const roots: Root[] = []
 
 beforeEach(() => {
+  state.createRegistration.mockReset()
   state.clipboardIds.mockReset()
   state.clipboardIds.mockResolvedValue(null)
   state.store.clear()
@@ -221,9 +225,11 @@ describe("OnboardingPage", () => {
     expect(button(container, "Continue")!.disabled).toBe(true)
   })
 
-  it("shows the Prepare checklist with the permissions and the handoff", async () => {
+  it("shows the Connect checklist with the permissions and the handoff", async () => {
     const container = await render(createElement(OnboardingPage))
-    expect(button(container, "Save setup script")).toBeDefined()
+    expect(button(container, "Set up with Microsoft sign-in")).toBeDefined()
+    expect(container.textContent).toContain("Connect your tenant")
+    expect(container.textContent).toContain("Microsoft Graph Command Line Tools")
     expect(container.textContent).toContain("Privileged Role Administrator")
     expect(container.textContent).toContain("Permissions the app registration gets")
     expect(button(container, "Someone else is the admin? Copy instructions")).toBeDefined()
@@ -323,4 +329,54 @@ it("does not bring the same clipboard IDs back after the admin cleared the field
   await act(async () => { window.dispatchEvent(new Event("focus")) })
   expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe("")
   expect(container.querySelector<HTMLInputElement>("#clientId")!.value).toBe("")
+})
+
+
+describe("in-app tenant setup", () => {
+  const result = { tenantId: TENANT, clientId: CLIENT, username: "admin", reused: false, ready: true }
+  it("shows progress and continues to Storage with the browser session", async () => {
+    let finish!: (value: typeof result) => void
+    state.createRegistration.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    state.signIn.mockResolvedValueOnce(result)
+    const container = await render(createElement(OnboardingPage))
+    await act(async () => button(container, "Set up with Microsoft sign-in")!.click())
+    expect(container.textContent).toContain("Sign in with Microsoft in your browser")
+    await act(async () => state.progress?.({ phase: "registration", reused: true }))
+    expect(container.textContent).toContain("Found the existing app registration")
+    await act(async () => { finish(result); await new Promise(resolve => setTimeout(resolve, 150)) })
+    expect(state.signIn).toHaveBeenLastCalledWith(TENANT, CLIENT, { loginHint: "admin" })
+    expect(container.textContent).toContain("Choose where backups are stored")
+  })
+  it("keeps IDs and shows the final sign-in error on Sign in", async () => {
+    state.createRegistration.mockResolvedValueOnce(result)
+    state.signIn.mockRejectedValueOnce(new Error("Sign-in cancelled."))
+    const container = await render(createElement(OnboardingPage))
+    await act(async () => { button(container, "Set up with Microsoft sign-in")!.click(); await new Promise(resolve => setTimeout(resolve, 150)) })
+    expect(container.textContent).toContain("Sign in to your tenant")
+    expect(container.querySelector<HTMLInputElement>("#clientId")!.value).toBe(CLIENT)
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Sign-in cancelled.")
+    await flush()
+    expect(loadOnboardingDraft()?.clientId).toBe(CLIENT)
+  })
+  it("offers manual sign-in when publication takes longer", async () => {
+    state.createRegistration.mockResolvedValueOnce({ ...result, ready: false })
+    const container = await render(createElement(OnboardingPage))
+    await act(async () => button(container, "Set up with Microsoft sign-in")!.click())
+    expect(container.textContent).toContain("Microsoft is still publishing the app registration")
+    expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(TENANT)
+    expect(state.signIn).not.toHaveBeenCalled()
+  })
+  it("cancels browser setup and keeps alternatives available", async () => {
+    let reject!: (error: Error) => void
+    state.createRegistration.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail }))
+    state.cancelCreateRegistration.mockImplementationOnce(async () => { reject(new Error("Sign-in cancelled.")); return undefined })
+    const container = await render(createElement(OnboardingPage))
+    await act(async () => button(container, "Set up with Microsoft sign-in")!.click())
+    await act(async () => button(container, "Cancel")!.click())
+    expect(button(container, "Try again")).toBeDefined()
+    await act(async () => button(container, "Use the setup script instead")!.click())
+    expect(button(container, "Save setup script")).toBeDefined()
+    await act(async () => button(container, "I already have an app registration")!.click())
+    expect(container.querySelector("#clientId")).not.toBeNull()
+  })
 })

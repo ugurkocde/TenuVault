@@ -80,6 +80,9 @@ export interface ApiResponse {
   body: Uint8Array
 }
 
+export type SetupProgress = { phase: "signingIn" | "checking" | "registration" | "consent" | "publishing"; reused?: boolean }
+export interface RegistrationResult { tenantId: string; clientId: string; username: string; reused: boolean; ready: boolean }
+
 export interface SignedInAccount {
   tenantId: string
   clientId: string
@@ -381,7 +384,7 @@ export interface ServicesStatus {
 export interface TenuVaultBridge {
   api: (request: ApiRequest) => Promise<ApiResponse>
   auth: {
-    signIn: (tenant: string, clientId: string) => Promise<SignedInAccount>
+    signIn: (tenant: string, clientId: string, options?: { loginHint?: string }) => Promise<SignedInAccount>
     signOut: (tenantId: string) => Promise<void>
     accounts: () => Promise<SignedInAccount[]>
     /** Signs in again to an existing tenant profile, for `scope` (Microsoft Graph when omitted). */
@@ -407,6 +410,9 @@ export interface TenuVaultBridge {
     onSavedChanged: (listener: () => void) => () => void
   }
   setup: {
+    createRegistration: (options?: { tenant?: string }) => Promise<RegistrationResult>
+    cancelCreateRegistration: () => Promise<void>
+    onProgress: (listener: (progress: SetupProgress) => void) => () => void
     /**
      * The tenant ID and client ID the setup script left on the clipboard, or null. Both must be
      * there, and no other clipboard text is ever returned.
@@ -587,7 +593,10 @@ export interface TenuVaultBridge {
 }
 
 /** Plan failures cross the preload boundary as data, then become renderer errors. */
-export type TenuVaultPreloadBridge = Omit<TenuVaultBridge, "auth" | "license" | "schedules" | "pdfBranding" | "backupReader"> & {
+export type TenuVaultPreloadBridge = Omit<TenuVaultBridge, "setup" | "auth" | "license" | "schedules" | "pdfBranding" | "backupReader"> & {
+  setup: Omit<TenuVaultBridge["setup"], "createRegistration"> & {
+    createRegistration: (options?: { tenant?: string }) => Promise<RegistrationResult | PlanIpcError>
+  }
   backupReader: Omit<TenuVaultBridge["backupReader"], "prepare" | "verify" | "test"> & {
     prepare: (tenantId: string) => Promise<BackupReaderState | PlanIpcError>
     verify: (tenantId: string, clientId: string, renewal?: boolean) => Promise<BackupReaderState | PlanIpcError>
@@ -597,7 +606,7 @@ export type TenuVaultPreloadBridge = Omit<TenuVaultBridge, "auth" | "license" | 
     set: (branding: PdfBranding) => Promise<PdfBrandingState | PlanIpcError>
   }
   auth: Omit<TenuVaultBridge["auth"], "signIn"> & {
-    signIn: (tenant: string, clientId: string) => Promise<SignedInAccount | PlanIpcError>
+    signIn: (tenant: string, clientId: string, options?: { loginHint?: string }) => Promise<SignedInAccount | PlanIpcError>
   }
   license: Omit<TenuVaultBridge["license"], "checkNewTenant"> & {
     checkNewTenant: (tenantId: string) => Promise<LicenseStatus | PlanIpcError>
