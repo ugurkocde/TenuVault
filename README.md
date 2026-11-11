@@ -124,9 +124,15 @@ For recovery, see [readiness and manual artifacts](docs/disaster-recovery.md), [
 
 ## Customer setup
 
-1. Run [`resources/New-TenuVaultDesktopApp.ps1`](resources/New-TenuVaultDesktopApp.ps1), also
-   available on the Prepare step of the app's guided setup. It creates a single-tenant public client app registration with these
-   delegated permissions and grants admin consent:
+1. In the app, open **Set up TenuVault** and select **Set up with Microsoft sign-in** on the Connect step. A Global
+   Administrator, Privileged Role Administrator or Cloud Application Administrator signs in once in the browser, and the
+   app creates the app registration through Microsoft Graph, grants admin consent and signs in. The setup sign-in goes
+   through Microsoft's own Microsoft Graph Command Line Tools and is kept in memory only. A tenant that already has a
+   TenuVault app registration keeps it: the app uses it instead of creating a second one.
+
+   [`resources/New-TenuVaultDesktopApp.ps1`](resources/New-TenuVaultDesktopApp.ps1) does the same from PowerShell, for
+   another administrator or for reading what runs first; the Connect step offers it under **Use the setup script instead**.
+   Both create a single-tenant public client app registration with these delegated permissions and grant admin consent:
    - Microsoft Graph: `User.Read`, `Organization.Read.All`, `Policy.Read.All`,
      `DeviceManagementConfiguration.ReadWrite.All`, `DeviceManagementApps.ReadWrite.All`,
      `DeviceManagementServiceConfig.ReadWrite.All`, `DeviceManagementScripts.ReadWrite.All`,
@@ -135,7 +141,8 @@ For recovery, see [readiness and manual artifacts](docs/disaster-recovery.md), [
      an Azure storage account)
 
    Redirect URI: `http://localhost`.
-   `-AllowedGroupId` restricts sign-in to one group.
+   The script's `-AllowedGroupId` restricts sign-in to one group.
+   To remove TenuVault's access, delete **TenuVault Desktop** under App registrations in the Entra admin center.
 2. Admins need an Intune role, for example Intune Administrator. To store backups in Azure they
    also need `Storage Blob Data Contributor` on the storage account.
 

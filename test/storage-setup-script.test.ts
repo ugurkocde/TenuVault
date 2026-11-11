@@ -103,18 +103,12 @@ describe("New-TenuVaultDesktopApp.ps1", () => {
 
   it("lists the permissions it grants admin consent for", () => {
     expect(desktopScript).toContain('Write-Host "  $($resource.Name): $($resource.Scopes -join \', \')"')
-    expect(desktopScript.indexOf("$($resource.Scopes -join ', ')")).toBeLessThan(desktopScript.indexOf("New-MgOauth2PermissionGrant"))
+    expect(desktopScript.indexOf("$($resource.Scopes -join ', ')")).toBeLessThan(desktopScript.indexOf("Invoke-Graph POST '/oauth2PermissionGrants'"))
   })
 
-  it("installs and imports every Graph module at the Microsoft.Graph.Authentication version", () => {
-    expect(desktopScript).toContain("Install-Module $module -RequiredVersion $graphVersion")
-    expect(desktopScript).toContain("Import-Module $module -RequiredVersion $graphVersion")
-    expect(desktopScript).toContain("Open a new PowerShell window and run the script again.")
-    expect(desktopScript.indexOf("Import-Module $module -RequiredVersion $graphVersion")).toBeLessThan(desktopScript.indexOf("Connect-MgGraph"))
-    expect(desktopScript).toContain(`Get-Module -Name "Microsoft.Graph.*" | Where-Object Version -ne $graphVersion`)
-    expect(desktopScript.indexOf("is already loaded in this PowerShell session")).toBeLessThan(desktopScript.indexOf("Install-Module $module -RequiredVersion $graphVersion"))
-    expect(desktopScript).toContain("Check that the PowerShell Gallery is reachable")
-    expect(desktopScript).toContain("Get-InstalledModule Microsoft.Graph* | Update-Module")
-    expect(desktopScript).toContain("Could not install Microsoft.Graph.Authentication.")
+  it("uses browser authentication and direct REST without installing modules", () => {
+    expect(desktopScript).not.toMatch(/Install-Module|Import-Module|Connect-MgGraph|New-MgOauth2PermissionGrant/)
+    expect(desktopScript).toContain("code_challenge_method = 'S256'")
+    expect(desktopScript).toContain("return Invoke-RestMethod @parameters")
   })
 })

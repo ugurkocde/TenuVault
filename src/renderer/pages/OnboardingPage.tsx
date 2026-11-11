@@ -8,7 +8,7 @@ import { useBackupProgress } from "~/contexts/BackupProgressContext"
 import { Button } from "~/components/ui/button"
 import { Progress } from "~/components/ui/progress"
 import { cn } from "~/lib/utils"
-import type { SignedInAccount } from "../../shared/ipc"
+import type { RegistrationResult, SignedInAccount } from "../../shared/ipc"
 import { LOCAL_STORAGE_PREFIX, TRIAL_USED_MESSAGE } from "../../shared/constants"
 import { TrialKeyRefusalActions } from "../components/TenantTrial"
 import { StorageChooser } from "../components/StorageChooser"
@@ -16,7 +16,8 @@ import { FirstBackupNote } from "../components/FirstBackupNote"
 import { FirstBackupNextSteps } from "../components/FirstBackupNextSteps"
 import { PlanContext, TrialOrKey } from "../components/PlanChoice"
 import { tenantLicense, tenantPlan, useLicense, useTenantPlan } from "../lib/license"
-import { SetupScriptCard, TenantSignInForm, type SignInFields } from "../components/TenantSignInForm"
+import { ConnectTenantSetup } from "../components/ConnectTenantSetup"
+import { TenantSignInForm, type SignInFields } from "../components/TenantSignInForm"
 import { bridge } from "../lib/bridge"
 import { buildTenantProfile } from "../lib/desktop-tenant"
 import { clearOnboardingDraft, loadOnboardingDraft, saveOnboardingDraft } from "../lib/onboarding-draft"
@@ -25,7 +26,7 @@ import { desktopTenantCredentials, type TenantCredentials } from "../overrides/a
 import { resolveBackupJobDisplay, toBackupJobDisplay, type BackupJobDisplay } from "~/lib/backup-job-display"
 
 const STEPS = [
-  { title: "Prepare", icon: ShieldCheck },
+  { title: "Connect", icon: ShieldCheck },
   { title: "Sign in", icon: KeyRound },
   { title: "Storage", icon: Database },
   { title: "First backup", icon: HardDriveDownload },
@@ -75,6 +76,9 @@ export default function OnboardingPage() {
   const [runningJobId, setRunningJobId] = useState<string | null>(null)
   const [cancelling, setCancelling] = useState(false)
   const [addError, setAddError] = useState<{ message: string; license: boolean } | null>(null)
+  // After the in-app setup: what it did, and the account the Sign in step signs in as by itself.
+  const [setupNotice, setSetupNotice] = useState("")
+  const [autoSignIn, setAutoSignIn] = useState<{ loginHint: string } | null>(null)
   const logRef = useRef<HTMLPreElement>(null)
   const { addJob, removeJob, activeJobs } = useBackupProgress()
   const completedBackup = useRef<string | null>(null)
@@ -153,6 +157,32 @@ export default function OnboardingPage() {
     } finally {
       setReleasing(false)
     }
+  }
+
+  /**
+   * The in-app setup made (or found) the app registration: keep its IDs and sign in on the next
+   * step, where a failed sign-in can simply be repeated. An earlier sign-in that was never saved
+   * belongs to another attempt and is given up first, as "Use a different tenant or account" does,
+   * so the wizard cannot carry on with the tenant it showed before.
+   */
+  const registered = async (result: RegistrationResult) => {
+    const next = { ...fields, tenant: result.tenantId, clientId: result.clientId }
+    setFields(next)
+    saveOnboardingDraft({ step: 1, ...next, account: null })
+    setAddError(null)
+    if (account) {
+      setReleasing(true)
+      // A release the licensing service could not take is repeated at the next start.
+      try { if (!connected(account.tenantId)) await bridge.license.releaseTenant(account.tenantId) } catch { /* see above */ }
+      setReleasing(false)
+      setAccount(null)
+      setChoice(null)
+    }
+    setAutoSignIn(result.ready ? { loginHint: result.username } : null)
+    setSetupNotice(result.ready
+      ? (result.reused ? "This tenant already had a TenuVault app registration, so TenuVault uses that one." : "The app registration is ready.")
+      : "The app registration is ready, but Microsoft is still making it available for sign-in. Wait a moment, then select Sign in with Microsoft.")
+    setStep(1)
   }
 
   // The license was checked at the sign-in; it is checked again before the tenant is saved. A
@@ -281,7 +311,7 @@ export default function OnboardingPage() {
       <div>
         <h1 className="text-4xl font-medium tracking-tight text-gray-900">Set up TenuVault</h1>
         <p className="mt-2 text-base text-gray-500">
-          Connect a tenant and take your first backup, in about 10 minutes. Everything runs on this computer as you; no Azure
+          Connect a tenant and take your first backup, in a few minutes. Everything runs on this computer as you; no Azure
           resources are required.
         </p>
       </div>
@@ -314,17 +344,12 @@ export default function OnboardingPage() {
       <div className="rounded-3xl bg-card p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
         {step === 0 && (
           <div className="space-y-5">
-            <StepHeading id="setup-step-0">Before you sign in</StepHeading>
-            <SetupScriptCard />
-            <p className="text-sm text-gray-600">
-              The admins who use TenuVault need an Intune role, for example Intune Administrator. Already have the two values
-              from an earlier setup? Continue.
-            </p>
-            <div className="flex justify-end">
-              <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => setStep(1)}>
-                Next: sign in <ArrowRight className="ml-2 h-4 w-4" aria-hidden="true" />
-              </Button>
-            </div>
+            <StepHeading id="setup-step-0">Connect your tenant</StepHeading>
+            <ConnectTenantSetup
+              trials={Boolean(status?.tenantTrialsEnabled)}
+              onManual={() => { setSetupNotice(""); setAutoSignIn(null); setStep(1) }}
+              onRegistered={(result) => void registered(result)}
+            />
           </div>
         )}
 
@@ -332,6 +357,11 @@ export default function OnboardingPage() {
           <div className="space-y-4">
             <StepHeading id="setup-step-1">Sign in to your tenant</StepHeading>
             {status?.tenantTrialsEnabled && <p className="text-sm text-gray-600">New tenants start with a Pro trial. No card and no email needed.</p>}
+            {setupNotice && !account && (
+              <p role="status" className="flex items-start gap-2 rounded-2xl bg-green-50 px-4 py-2.5 text-sm text-green-800">
+                <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" /> {setupNotice}
+              </p>
+            )}
             {addError && (
               <div role="alert" className="space-y-3 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700">
                 <p className="flex items-start gap-2"><XCircle className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" /> {addError.license ? trialKeyRefusalText(addError.message) : addError.message}</p>
@@ -359,9 +389,14 @@ export default function OnboardingPage() {
             ) : (
               <TenantSignInForm
                 initial={fields}
+                autoSignIn={autoSignIn}
+                hidePaste={Boolean(setupNotice)}
                 onFieldsChange={setFields}
                 onSignedIn={(signedIn, displayName) => {
                   setAddError(null)
+                  // The automatic sign-in is for this one registration; a later sign-in asks again.
+                  setAutoSignIn(null)
+                  setSetupNotice("")
                   setAccount(signedIn)
                   setFields((current) => ({ ...current, displayName }))
                   setStep(2)

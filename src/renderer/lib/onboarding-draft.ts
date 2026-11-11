@@ -7,7 +7,7 @@ import { bridge } from "./bridge"
  * another administrator. Only identifiers are kept, never a token.
  */
 export interface OnboardingDraft {
-  /** 0 Prepare, 1 Sign in, 2 Storage. The first backup step is never resumed. */
+  /** 0 Connect, 1 Sign in, 2 Storage. The first backup step is never resumed. */
   step: 0 | 1 | 2
   tenant: string
   clientId: string
@@ -55,7 +55,7 @@ export function loadOnboardingDraft(): OnboardingDraft | null {
   }
 }
 
-/** Whether a draft holds nothing worth resuming: the Prepare step with no input. */
+/** Whether a draft holds nothing worth resuming: the Connect step with no input. */
 export function isEmptyDraft(draft: OnboardingDraft): boolean {
   return draft.step === 0 && !draft.tenant && !draft.clientId && !draft.displayName && !draft.account
 }

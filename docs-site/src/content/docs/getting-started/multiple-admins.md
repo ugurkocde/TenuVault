@@ -19,7 +19,7 @@ Several admins can use TenuVault for the same tenant, each on their own computer
 
 1. Make sure the admin is in the admin group with the roles above, and, if sign-in is restricted, in the group that may sign in. See [Restrict who can sign in](/deploy/#restrict-who-can-sign-in).
 2. The admin installs TenuVault and selects **Connect your tenant**. See [Start TenuVault for the first time](/getting-started/first-launch/).
-3. On the **Prepare** step, they skip the setup script, because the app registration already exists, and select **Next: sign in**. They enter the tenant ID and the client ID of the existing app registration and sign in with their own account. See [Sign in to your tenant](/getting-started/connect-tenant/).
+3. On the **Connect** step, they select **I already have an app registration**, because the tenant already has one. They enter the tenant ID and the client ID of the existing app registration and sign in with their own account. An admin who can grant admin consent can select **Set up with Microsoft sign-in** instead: TenuVault finds the existing app registration and uses it. See [Sign in to your tenant](/getting-started/connect-tenant/).
 4. On the **Storage** step, they select **Your Azure storage account**, choose the same storage account and select **Check access**. No recovery key is needed.
 5. The existing backups appear in **Backup & Restore** right away.
 

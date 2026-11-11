@@ -10,9 +10,10 @@ export const MANUAL_APP_REGISTRATION_URL = `${APP_REGISTRATION_GUIDE_URL}#create
 export const CONSENT_ROLES = ["Global Administrator", "Privileged Role Administrator", "Cloud Application Administrator"] as const
 
 /** The delegated permissions the setup script grants admin consent for by default, per API. */
-export const DESKTOP_APP_PERMISSIONS: readonly { api: string; permissions: readonly string[]; purpose: string }[] = [
+export const DESKTOP_APP_PERMISSIONS: readonly { api: string; appId: string; permissions: readonly string[]; purpose: string }[] = [
   {
     api: "Microsoft Graph",
+    appId: "00000003-0000-0000-c000-000000000000",
     permissions: [
       "User.Read",
       "Organization.Read.All",
@@ -28,11 +29,13 @@ export const DESKTOP_APP_PERMISSIONS: readonly { api: string; permissions: reado
   },
   {
     api: "Azure Service Management",
+    appId: "797f4846-ba00-4fd7-ba43-dac1f8f63013",
     permissions: ["user_impersonation"],
     purpose: "Lists your storage accounts, only if you keep backups in Azure.",
   },
   {
     api: "Azure Storage",
+    appId: "e406a681-f3d4-42a8-90b6-c2b029497af1",
     permissions: ["user_impersonation"],
     purpose: "Reads and writes backup files, only if you keep backups in Azure.",
   },
@@ -67,15 +70,27 @@ export function setupHandoffText(): string {
     `Who can run it: ${CONSENT_ROLES.join(", ")}.`,
     "",
     `1. Download the setup script: ${SETUP_SCRIPT_DOWNLOAD_URL}`,
-    "2. Run it in PowerShell (PowerShell 7 on macOS):",
+    "2. Run it in PowerShell (PowerShell 7 on macOS). It installs nothing:",
     `   ./${SETUP_SCRIPT_FILE_NAME}`,
     "   To limit sign-in to a group of admins, add: -AllowedGroupId <group object id>",
-    "3. Sign in when Microsoft Graph PowerShell asks you to.",
+    "3. Sign in with your admin account in the browser window it opens. Microsoft may first ask you to consent to",
+    "   Microsoft Graph Command Line Tools, which the script signs in through to create the app registration.",
     "4. Send me the two lines it prints at the end: the Tenant id and the Application (client) id.",
+    "   The script also copies them to your clipboard.",
     "",
     "It grants tenant-wide admin consent for these delegated permissions:",
     permissions,
     "",
     `Guide, including how to create it by hand in the Entra admin center: ${APP_REGISTRATION_GUIDE_URL}`,
   ].join("\n")
+}
+
+/**
+ * The two IDs the setup script copied to the clipboard, or null. Both must be present, so other
+ * clipboard content never reaches the renderer.
+ */
+export function setupIdsFromClipboard(text: unknown): { tenantId: string; clientId: string } | null {
+  if (typeof text !== "string" || text.length > 4000) return null
+  const { tenantId, clientId } = parseSetupOutput(text)
+  return tenantId && clientId ? { tenantId, clientId } : null
 }

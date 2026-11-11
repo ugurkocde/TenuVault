@@ -1,3 +1,4 @@
+import { AppRegistrationSetup, setupLoginHint } from "./auth/app-registration-setup"
 import { trialBackupObserver } from "./license/usage-actions"
 import { cachedTrialUsage, trialWorkflowsConfigured } from "./license/usage"
 import { notifyTenantTrial, runTrialNotificationCheck } from "./license/notifications"
@@ -47,7 +48,7 @@ import { BackupReaderService } from "./auth/backup-reader"
 // The same setup script the docs site downloads and the card copies, bundled so Save writes it exactly.
 import readerSetupScript from "../../resources/New-TenuVaultBackupReader.ps1?raw"
 import desktopSetupScript from "../../resources/New-TenuVaultDesktopApp.ps1?raw"
-import { SETUP_SCRIPT_FILE_NAME } from "../shared/app-registration"
+import { SETUP_SCRIPT_FILE_NAME, setupIdsFromClipboard } from "../shared/app-registration"
 import { licenseKeyFromClipboard } from "./license/clipboard-key"
 import { assertStorageAccountName } from "../shared/storage-account"
 import { hostname } from "node:os"
@@ -1103,8 +1104,27 @@ async function bootstrap(): Promise<void> {
       pushLicense()
     }
   }
-  handleTrusted("auth:signIn", (_event, tenant: string, clientId: string) => withPlanError(async () => {
-    const account = await auth.signIn(tenant, clientId)
+  const registrationSetup = new AppRegistrationSetup({
+    fetch: bridgedFetchLater,
+    openBrowser: url => shell.openExternal(url),
+    progress: progress => mainWindow?.webContents.send("setup:progress", progress),
+  })
+  // Creates (or finds) the tenant's app registration with a sign-in that is kept in memory only.
+  // The sign-in that follows may skip the account picker once, for exactly this registration and
+  // the account that just set it up; any other request for that is ignored.
+  let setupSignIn: { tenantId: string; clientId: string; username: string } | null = null
+  handleTrusted("setup:createRegistration", async (_event, options?: { tenant?: string }) => {
+    setupSignIn = null
+    const result = await registrationSetup.create(options)
+    setupSignIn = { tenantId: result.tenantId, clientId: result.clientId, username: result.username }
+    return result
+  })
+  handleTrusted("setup:cancelCreateRegistration", () => registrationSetup.cancel())
+  handleTrusted("auth:signIn", (_event, tenant: string, clientId: string, options?: { loginHint?: unknown }) => withPlanError(async () => {
+    const expected = setupSignIn
+    setupSignIn = null
+    const loginHint = setupLoginHint(expected, tenant, clientId, options?.loginHint)
+    const account = await auth.signIn(tenant, clientId, loginHint ? { loginHint } : undefined)
     await requireForNewTenant(account.tenantId)
     return account
   }))
@@ -1127,6 +1147,9 @@ async function bootstrap(): Promise<void> {
   handleTrusted("auth:accounts", () => auth.accounts())
   // Stops waiting for a sign-in the admin abandoned in the browser.
   handleTrusted("auth:cancelSignIn", () => auth.cancelInteractive())
+  // The setup script leaves its two closing lines on the clipboard; only those two IDs are passed on.
+  // Electron reads the clipboard asynchronously, so the text has to be awaited before it is parsed.
+  handleTrusted("setup:clipboardIds", async () => setupIdsFromClipboard(await clipboard.readText()))
   // The guided setup saves the app registration script it ships with; nothing else is written.
   handleTrusted("setup:saveScript", async () => {
     const result = await dialog.showSaveDialog(mainWindow!, {
@@ -1226,8 +1249,8 @@ async function bootstrap(): Promise<void> {
   handleTrusted("license:startTrial", (_event, email: unknown, options?: { source?: unknown }) =>
     requestTrialKey(LICENSE_API_BASE, email, options?.source, chromiumFetch))
   // While a trial key is on its way, the renderer asks for a key the admin copied from the email.
-  handleTrusted("license:clipboardKey", () => {
-    const key = licenseKeyFromClipboard(clipboard.readText())
+  handleTrusted("license:clipboardKey", async () => {
+    const key = licenseKeyFromClipboard(await clipboard.readText())
     return key && !license.isSavedKey(key) ? key : null
   })
 

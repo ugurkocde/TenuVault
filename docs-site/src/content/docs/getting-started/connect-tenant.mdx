@@ -1,11 +1,9 @@
 ---
 title: "Sign in to your tenant"
-description: Sign in to your tenant with your own admin account and the client ID from the setup script.
+description: Connect your tenant with one Microsoft sign-in, using your own admin account.
 ---
 
-You connect a tenant by signing in with your own admin account, through the app registration you created. TenuVault never asks for a password or a client secret.
-
-You need the two values printed by the [setup script](/getting-started/app-registration/): the **Tenant id** (or a domain of your tenant) and the **Application (client) id**.
+You connect a tenant by signing in with your own admin account. TenuVault creates the app registration it signs in through in your tenant, and never asks for a password or a client secret.
 
 ## Open the guided setup
 
@@ -16,23 +14,39 @@ The guided setup, **Set up TenuVault**, is the only way to connect a tenant. Ten
 * From **Tenants** or the dashboard's **Quick Actions**: **Connect tenant**.
 * From the **All tenants** page: **Connect a tenant**.
 
-The guided setup has four steps: **Prepare**, **Sign in**, **Storage** and **First backup**. Use **Previous** to go back a step. While no tenant is connected, the setup has the window to itself: there is no sidebar, only **License** and **Support** links at the top. Once a tenant is connected, the setup shows **Back to dashboard**.
+The guided setup has four steps: **Connect**, **Sign in**, **Storage** and **First backup**. Use **Previous** to go back a step. While no tenant is connected, the setup has the window to itself: there is no sidebar, only **License** and **Support** links at the top. Once a tenant is connected, the setup shows **Back to dashboard**.
 
 ### Continue where you left off
 
 TenuVault saves your progress on this computer, in its encrypted app store: the step, the tenant ID, the client ID, the display name, and a sign-in to a tenant that is not saved yet. No token is kept in this record. Your progress survives a restart, so you can close TenuVault while you run the setup script or wait for another administrator. When you come back, TenuVault skips the welcome screen and the setup says **Welcome back. You can continue where you left off**. A saved sign-in is resumed only while it is still signed in on this computer; otherwise you sign in again. The **First backup** step is not resumed.
 
-## Step 1: Prepare
+## Step 1: Connect
 
-The **Prepare** step, **Before you sign in**, guides you through creating the app registration with the setup script. See [Create the app registration](/getting-started/app-registration/#in-tenuvault-the-prepare-step).
+The **Connect** step, **Connect your tenant**, takes one Microsoft sign-in.
 
-The admins who use TenuVault need an Intune role, for example Intune Administrator. If the app registration already exists, select **Next: sign in**.
+1. Read the four points on the step. They say what you let in: one app registration that lives in your own tenant, acts only as you, has no secret, and leaves your backups with you. Above the button, the step tells you that Microsoft will ask you to approve Microsoft Graph Command Line Tools, Microsoft's own sign-in app, which TenuVault uses once to create the app registration.
+2. Select **Set up with Microsoft sign-in** and sign in as a Global Administrator, Privileged Role Administrator or Cloud Application Administrator. The setup grants admin consent, which needs one of these roles.
+3. Follow the list under **Setting up your tenant**. When it is done, your browser opens once more and signs you in to TenuVault, with nothing to enter. TenuVault skips the **Sign in** step and continues with **Storage**.
+
+For what happens in each step, what is created and how to remove it, see [Create the app registration](/getting-started/app-registration/).
+
+Under **Other ways to connect**:
+
+| Button | Use it when |
+| --- | --- |
+| **Someone else is the admin? Copy instructions** | You cannot grant admin consent yourself. It copies a ready-to-send message for your Entra administrator. TenuVault keeps your place; when they send back the two lines, select **I already have an app registration** and paste them. |
+| **Use the setup script instead** | You want to create the app registration with the [PowerShell script](/getting-started/app-registration/#use-the-setup-script-instead). |
+| **I already have an app registration** | The tenant has an app registration from an earlier setup and you know its two IDs. It opens the **Sign in** step. |
+
+The admins who use TenuVault need an Intune role, for example Intune Administrator.
 
 ## Step 2: Sign in
 
-The **Sign in** step is headed **Sign in to your tenant**.
+The **Sign in** step is headed **Sign in to your tenant**. After **Set up with Microsoft sign-in** on the **Connect** step you do not use it: TenuVault signs you in by itself and goes on to **Storage**. If that sign-in fails or you cancel it, this step opens with both IDs filled in and the note **The app registration is ready.**; select **Sign in with Microsoft** to try again.
 
-1. Paste the two lines the setup script printed into **Paste the script output**. TenuVault fills in **Tenant id or domain** and **Application (client) id** and shows **Filled in the tenant ID and the client ID.** Pasting the whole output into either ID field works too. Or type the values:
+You use this step yourself when the app registration was created with the setup script, by another administrator, or in an earlier setup:
+
+1. Enter the tenant ID and the client ID. The setup script copies its two closing lines to your clipboard, so when you open this step with both ID fields empty, TenuVault fills them in and shows **Filled in the tenant ID and the client ID from your clipboard.** It never replaces values you typed or that it kept from an earlier visit. If the fields stay empty, paste the two lines the setup script printed into **Paste the script output**: TenuVault fills in **Tenant id or domain** and **Application (client) id** and shows **Filled in the tenant ID and the client ID.** Pasting the whole output into either ID field works too. Or type the values:
 
    | Field | Enter | Example |
    | --- | --- | --- |
@@ -74,8 +88,8 @@ If Microsoft refuses the first sign-in, TenuVault shows what to do, followed by 
 
 | Code | Meaning | Fix |
 | --- | --- | --- |
-| `AADSTS700016` | No app registration with this client ID exists in this tenant. | Check the **Application (client) id** the script printed, and that the tenant is the one the script ran in. |
-| `AADSTS90002`, `AADSTS900023` | Microsoft does not know this tenant, or it is not a valid tenant ID or domain. | Use the **Tenant id** the script printed, or a domain such as `contoso.onmicrosoft.com`. |
+| `AADSTS700016` | No app registration with this client ID exists in this tenant. | Check the **Application (client) id**, and that the tenant is the one the app registration was created in. If it was created a moment ago, wait a minute and sign in again. |
+| `AADSTS90002`, `AADSTS900023` | Microsoft does not know this tenant, or it is not a valid tenant ID or domain. | Use the tenant ID of your tenant, or a domain such as `contoso.onmicrosoft.com`. |
 | `AADSTS50011` | The app registration has no `http://localhost` redirect URI for mobile and desktop applications. | Run the setup script again, or add the redirect URI as described in [Create the app registration manually](/getting-started/app-registration/#2-add-the-redirect-uris). |
 | `AADSTS7000218` | The app registration asks for a client secret, because `http://localhost` is registered for the **Web** platform. | Add `http://localhost` under **Mobile and desktop applications** on the app registration's **Authentication** page, or run the setup script again. |
 | `AADSTS50020` | The account does not belong to this tenant. | Sign in with an admin account of this tenant. |

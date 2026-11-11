@@ -23,7 +23,7 @@ function subscribe<T>(channel: string, listener: (payload: T) => void): () => vo
 const bridge: TenuVaultPreloadBridge = {
   api: (request) => invoke("api", request),
   auth: {
-    signIn: (tenant, clientId) => invoke("auth:signIn", tenant, clientId),
+    signIn: (tenant, clientId, options) => invoke("auth:signIn", tenant, clientId, options),
     signOut: (tenantId) => invoke("auth:signOut", tenantId),
     accounts: () => invoke("auth:accounts"),
     reauthenticate: (tenantId, clientId, scope) => invoke("auth:reauthenticate", tenantId, clientId, scope),
@@ -43,6 +43,10 @@ const bridge: TenuVaultPreloadBridge = {
     onSavedChanged: (listener) => subscribe<void>("proxy:savedChanged", () => listener()),
   },
   setup: {
+    createRegistration: (options) => invoke("setup:createRegistration", options),
+    cancelCreateRegistration: () => invoke("setup:cancelCreateRegistration"),
+    onProgress: (listener) => subscribe("setup:progress", listener),
+    clipboardIds: () => invoke("setup:clipboardIds"),
     saveScript: () => invoke("setup:saveScript"),
   },
   backups: {

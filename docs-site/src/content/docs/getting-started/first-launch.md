@@ -16,7 +16,7 @@ While no tenant is connected, TenuVault always opens the guided setup, **Set up 
 
 * Three short points on what TenuVault does: back up your Intune policies encrypted on this computer, restore a single policy or a whole set, and see what changed between backups.
 * **Connect your tenant**: opens **Set up TenuVault**.
-* A note that setup takes about 10 minutes: create an app registration in your tenant, sign in and take a first backup. Community is free for one tenant, and a TenuVault license your organization shares with the tenant is picked up when you sign in.
+* A note that setup takes a few minutes: connect your tenant with Microsoft sign-in and take a first backup. Community is free for one tenant, and a TenuVault license your organization shares with the tenant is picked up when you sign in.
 * Two links: **Try Pro free for 30 days, no card** and **I have a license key**.
 
 To buy a license or ask for an invoice, use the **License** page after setup. See [Activate and manage your license](/licensing/manage/). For what each plan includes, see [Plans and features](/licensing/).
@@ -24,7 +24,7 @@ To buy a license or ask for an invoice, use the **License** page after setup. Se
 ## Connect your tenant
 
 1. Select **Connect your tenant**.
-2. TenuVault opens **Set up TenuVault** on the **Prepare** step, which guides you through the app registration. Continue with [Create the app registration](/getting-started/app-registration/).
+2. TenuVault opens **Set up TenuVault** on the **Connect** step, where one Microsoft sign-in creates the app registration in your tenant. Continue with [Create the app registration](/getting-started/app-registration/).
 
 The first tenant you sign in to without a key uses Community. If your organization shares a TenuVault license with that tenant, TenuVault picks it up when you sign in, and the tenant uses that plan instead. You can also start the trial or enter a key later, on the **Storage** step of the setup or on the **License** page.
 
