@@ -115,7 +115,6 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
   // The plan is checked when the admin signs in to the tenant, as with a registration the script
   // made. Checking it here would start licensing for a tenant that is not signed in yet.
   checkCancelled()
-  // The sign-in is done; from here on the browser wait can no longer be cancelled.
   progress({ phase: "registration" })
   const principalFields = "$select=id,appId,accountEnabled,oauth2PermissionScopes"
   // Microsoft's own enterprise applications for the APIs TenuVault uses. One the tenant has not
@@ -206,24 +205,39 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
     try { await graph("DELETE", `/applications/${created.id}`, undefined, true, true); removed = true } catch { /* Best effort cleanup. */ }
     throw new Error(`Setup did not finish. ${removed ? "The half-created app registration was removed again." : `Cleanup failed. Delete app registration TenuVault Desktop (client id ${created.appId}) in the Entra admin center.`} ${error instanceof Error ? error.message : String(error)}`)
   }
+  checkCancelled()
   progress({ phase: "publishing", reused: Boolean(existing) })
+  // Stop publication waits at once when the admin cancels.
+  const waitPublishing = async (ms: number) => {
+    checkCancelled()
+    let abort!: () => void
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      abort = () => reject(new Error("Sign-in cancelled."))
+      signal?.addEventListener("abort", abort, { once: true })
+    })
+    try { await Promise.race([sleep(ms), cancelled]); checkCancelled() }
+    finally { signal?.removeEventListener("abort", abort) }
+  }
   // Provisioning has committed. Publication failures must preserve the IDs for manual sign-in.
   let ready = false
   const deadline = Date.now() + 90_000
   for (let attempt = 0; attempt < 45 && Date.now() < deadline; attempt++) {
+    checkCancelled()
     try {
       const response = await request(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/devicecode`, {
-        method: "POST", redirect: "error", signal: AbortSignal.timeout(Math.max(1, Math.min(5000, deadline - Date.now()))),
+        method: "POST", redirect: "error", signal: AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(Math.max(1, Math.min(5000, deadline - Date.now())))]),
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({ client_id: app!.appId, scope: "https://graph.microsoft.com/User.Read" }).toString(),
       })
+      checkCancelled()
       const data = await response.json() as { error?: string; error_codes?: number[]; device_code?: string }
       if ((response.ok && data.device_code) || (response.status === 400 && data.error && !(data.error === "unauthorized_client" && data.error_codes?.includes(700016)))) { ready = true; break }
     } catch { /* Return IDs even when the publication service cannot be reached. */ }
-    await sleep(Math.max(0, Math.min(2000, deadline - Date.now())))
+    await waitPublishing(Math.max(0, Math.min(2000, deadline - Date.now())))
   }
   // The probe answers as soon as the sign-in service knows the application. Its service principal
   // and consent follow moments later, so leave them a little time before the browser opens.
-  if (ready) await sleep(5000)
+  if (ready) await waitPublishing(5000)
+  checkCancelled()
   return { tenantId, clientId: app!.appId, username, reused: Boolean(existing), ready, displayName: app!.displayName, candidateCount: candidates.length, missingConsent }
 }
