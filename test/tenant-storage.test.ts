@@ -52,7 +52,7 @@ describe("tenantStorage", () => {
     expect(tenantStorage.getItem(TENANTS_KEY)).toBe(stored)
     await setImmediate()
 
-    expect(bridge.storage.getItemSync).toHaveBeenCalledOnce()
+    expect(bridge.storage.getItemSync.mock.calls.filter(([key]) => key === TENANTS_KEY)).toHaveLength(1)
     expect(bridge.license.status).toHaveBeenCalledOnce()
     expect(bridge.license.releaseTenant).toHaveBeenCalledExactlyOnceWith("orphaned-tenant")
   })
@@ -292,4 +292,18 @@ describe("tenantStorage", () => {
     expect(bridge.storage.setItem).toHaveBeenCalledExactlyOnceWith(TENANTS_KEY, "[]")
     expect(bridge.license.releaseTenant.mock.calls).toEqual([["orphaned-tenant"], ["saved-tenant"]])
   })
+
+  it("rejects an unacknowledged profile write without releasing the preserved tenant", async () => {
+    const previous = JSON.stringify([{ credentials: { tenantId: "saved-tenant" } }])
+    bridge.storage.getItemSync.mockImplementation(key => key === TENANTS_KEY ? previous : null)
+    const { tenantStorage } = await import("../src/renderer/overrides/tenant-storage")
+    tenantStorage.getItem(TENANTS_KEY)
+    await setImmediate()
+    bridge.license.releaseTenant.mockClear()
+    bridge.storage.setItem.mockRejectedValueOnce(new Error("Disk full"))
+    await expect(tenantStorage.setItemAsync(TENANTS_KEY, "[]")).rejects.toThrow("Disk full")
+    expect(tenantStorage.getItem(TENANTS_KEY)).toBe(previous)
+    expect(bridge.license.releaseTenant).not.toHaveBeenCalled()
+  })
+
 })

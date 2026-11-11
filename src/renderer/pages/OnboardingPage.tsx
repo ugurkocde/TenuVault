@@ -11,7 +11,7 @@ import { cn } from "~/lib/utils"
 import type { RegistrationResult, SignedInAccount } from "../../shared/ipc"
 import { LOCAL_STORAGE_PREFIX, TRIAL_USED_MESSAGE } from "../../shared/constants"
 import { TrialKeyRefusalActions } from "../components/TenantTrial"
-import { StorageChooser } from "../components/StorageChooser"
+import { StorageChooser, type StorageChooserDraft } from "../components/StorageChooser"
 import { FirstBackupNote } from "../components/FirstBackupNote"
 import { FirstBackupNextSteps } from "../components/FirstBackupNextSteps"
 import { PlanContext, TrialOrKey } from "../components/PlanChoice"
@@ -64,6 +64,7 @@ export default function OnboardingPage() {
   const [resumed, setResumed] = useState(Boolean(initial && (initial.step > 0 || initial.account)))
   const [checkingResume, setCheckingResume] = useState(Boolean(initial?.account))
   const [choice, setChoice] = useState<StorageChoice | null>(null)
+  const [storageDraft, setStorageDraft] = useState<StorageChooserDraft | undefined>(initial?.storage)
   const [storageBlocker, setStorageBlocker] = useState<string | null>(null)
   const plan = useTenantPlan(account?.tenantId)
   const [credentials, setCredentials] = useState<TenantCredentials | null>(null)
@@ -80,7 +81,7 @@ export default function OnboardingPage() {
   const [setupNotice, setSetupNotice] = useState("")
   const [autoSignIn, setAutoSignIn] = useState<{ loginHint: string } | null>(null)
   const logRef = useRef<HTMLPreElement>(null)
-  const { addJob, removeJob, activeJobs } = useBackupProgress()
+  const { addJob, updateJob, removeJob, activeJobs } = useBackupProgress()
   const completedBackup = useRef<string | null>(null)
   const handledPollError = useRef<string | null>(null)
   const [snapshot, setSnapshot] = useState<JobStatus | null>(null)
@@ -89,6 +90,17 @@ export default function OnboardingPage() {
   // The snapshot keeps a finished backup finished after the store removes it.
   const displayJob: JobStatus | null = resolveBackupJobDisplay(trackedStatus, snapshot, job)
   const firstStep = useRef(true)
+  const mounted = useRef(false)
+  const jobOnExit = useRef({ jobId: null as string | null, updateJob })
+  jobOnExit.current.updateJob = updateJob
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+      const { jobId, updateJob } = jobOnExit.current
+      if (jobId) updateJob(jobId, { isHidden: false, quiet: false })
+    }
+  }, [])
 
   // A resumed sign-in counts only while it is still signed in on this computer.
   useEffect(() => {
@@ -100,6 +112,8 @@ export default function OnboardingPage() {
       const signedIn = accounts.some((item) => item.tenantId === saved.tenantId && item.clientId === saved.clientId)
       if (!signedIn) {
         setAccount(null)
+        setStorageDraft(undefined)
+        setChoice(null)
         setStep((current) => (current > 1 ? 1 : current))
       }
     }).catch(() => undefined).finally(() => { if (active) setCheckingResume(false) })
@@ -108,8 +122,8 @@ export default function OnboardingPage() {
 
   useEffect(() => {
     if (step === 3) clearOnboardingDraft()
-    else saveOnboardingDraft({ step, ...fields, account })
-  }, [step, fields, account])
+    else saveOnboardingDraft({ step, ...fields, account, ...(storageDraft ? { storage: storageDraft } : {}) })
+  }, [step, fields, account, storageDraft])
 
   // Each step starts at its heading, for keyboard and screen reader users too.
   useEffect(() => {
@@ -151,6 +165,7 @@ export default function OnboardingPage() {
       if (!connected(account.tenantId)) await bridge.license.releaseTenant(account.tenantId)
       setAccount(null)
       setChoice(null)
+      setStorageDraft(undefined)
       setStep(1)
     } catch (error) {
       setAddError({ message: error instanceof Error ? error.message : String(error), license: false })
@@ -177,6 +192,7 @@ export default function OnboardingPage() {
       setReleasing(false)
       setAccount(null)
       setChoice(null)
+      setStorageDraft(undefined)
     }
     setAutoSignIn(result.ready ? { loginHint: result.username } : null)
     setSetupNotice(result.ready
@@ -189,7 +205,7 @@ export default function OnboardingPage() {
   // tenant the license does not cover is not added and its sign-in is removed in the main
   // process, so the admin signs in again with the same IDs once the license is sorted.
   const createTenant = async () => {
-    if (!account || !choice) return
+    if (!account || !choice || creating) return
     setCreating(true)
     setAddError(null)
     let community = false
@@ -203,6 +219,7 @@ export default function OnboardingPage() {
       }
       setAccount(null)
       setChoice(null)
+      setStorageDraft(undefined)
       setCreating(false)
       setStep(1)
       return
@@ -211,13 +228,14 @@ export default function OnboardingPage() {
     if (community && choice.kind === "azure") {
       setAddError({ message: "This tenant is on Community now, which keeps backups on this device. Choose This device to continue.", license: false })
       setChoice(null)
+      setStorageDraft(undefined)
       setCreating(false)
       return
     }
     try {
       const creds = desktopTenantCredentials(account, fields.displayName, choice)
       const tenant = await buildTenantProfile(creds)
-      addTenant(tenant)
+      await addTenant(tenant)
       setSelectedTenantId(tenant.id)
       setCredentials(creds)
       setTenantProfileId(tenant.id)
@@ -246,6 +264,7 @@ export default function OnboardingPage() {
   const runBackup = async () => {
     if (!credentials) return
     if (runningJobId) removeJob(runningJobId)
+    jobOnExit.current.jobId = null
     setRunningJobId(null)
     setCancelling(false)
     setJobError("")
@@ -258,6 +277,7 @@ export default function OnboardingPage() {
       const started = await post<{ jobId?: string }>("/api/backup/start", credentials)
       if (!started.jobId) throw new Error("The backup could not start.")
       jobId = started.jobId
+      jobOnExit.current.jobId = jobId
       setRunningJobId(jobId)
     } catch (error) {
       setJob(null)
@@ -268,7 +288,7 @@ export default function OnboardingPage() {
     // The shared backup job store polls this job; the effect above records a successful finish.
     addJob({
       jobId,
-      tenantName: "",
+      tenantName,
       tenantId: credentials.tenantId,
       status: "Running",
       progress: 5,
@@ -276,8 +296,8 @@ export default function OnboardingPage() {
       startTime: new Date().toISOString(),
       isComplete: false,
       isSuccessful: false,
-      isHidden: true,
-      quiet: true,
+      isHidden: mounted.current,
+      quiet: mounted.current,
       credentials: { tenantId: credentials.tenantId, appId: credentials.appId, clientSecret: credentials.clientSecret },
       resources: { subscriptionId: credentials.subscriptionId ?? "", resourceGroupName: credentials.resourceGroupName ?? "", automationAccountName: "", storageAccountName: credentials.storageAccountName ?? "" },
     })
@@ -310,7 +330,7 @@ export default function OnboardingPage() {
       )}
       <div>
         <h1 className="text-4xl font-medium tracking-tight text-gray-900">Set up TenuVault</h1>
-        <p className="mt-2 text-base text-gray-500">
+        <p className="mt-2 text-base text-gray-600">
           Connect a tenant and take your first backup, in a few minutes. Everything runs on this computer as you; no Azure
           resources are required.
         </p>
@@ -414,12 +434,12 @@ export default function OnboardingPage() {
             </p>
             <PlanContext tenantId={account.tenantId} username={account.username} />
             {addError && <p role="alert" className="text-sm text-red-700">{addError.message}</p>}
-            <StorageChooser tenantId={account.tenantId} clientId={account.clientId} onChange={setChoice} onBlockerChange={setStorageBlocker} />
+            <StorageChooser tenantId={account.tenantId} clientId={account.clientId} initialDraft={storageDraft} onDraftChange={setStorageDraft} onChange={setChoice} onBlockerChange={setStorageBlocker} />
             <div className="flex flex-wrap items-center justify-end gap-3">
               {!choice && storageBlocker && <p role="status" className="text-sm text-gray-600">{storageBlocker}</p>}
               <Button className="bg-blue-600 hover:bg-blue-700" disabled={!choice || creating || checkingResume} onClick={() => void createTenant()}>
                 {creating && <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />}
-                {creating ? "Checking the license..." : "Continue"}
+                {creating ? "Saving tenant…" : "Continue"}
               </Button>
             </div>
           </div>
@@ -452,7 +472,7 @@ export default function OnboardingPage() {
                   </span>
                   <span className="text-gray-500">{displayJob.progress}%</span>
                 </div>
-                <Progress value={displayJob.progress} />
+                <Progress value={displayJob.progress} aria-label="First backup progress" />
                 {!displayJob.isComplete && runningJobId && (
                   <Button variant="outline" disabled={cancelling} onClick={() => void cancelBackup()}>
                     {cancelling ? "Cancelling…" : "Cancel backup"}

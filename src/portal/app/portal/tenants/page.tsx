@@ -464,7 +464,7 @@ function TenantsPageContent() {
     }
 
     // Add to tenants list
-    addTenant(newTenant)
+    await addTenant(newTenant)
 
     // Try to load metadata from Azure if it exists
     let finalName = credentials.displayName || "New Tenant"

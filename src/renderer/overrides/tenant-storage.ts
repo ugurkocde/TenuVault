@@ -1,3 +1,4 @@
+import { loadOnboardingDraft } from "../lib/onboarding-draft"
 import { bridge } from "../lib/bridge"
 
 /**
@@ -37,11 +38,15 @@ function tenantIds(serialized: string | null): Set<string> | null {
 const cache = new Map<string, string | null>()
 const cachedTenantIds = new Map<string, Set<string> | null>()
 let preservationWarningShown = false
+const revisions = new Map<string, symbol>()
 
 async function releaseOrphanedTenants(saved: Set<string>): Promise<void> {
   const status = await bridge.license.status()
   for (const { tenantId } of status.tenants.filter((tenant) => tenant.activated)) {
-    if (!saved.has(tenantId)) await bridge.license.releaseTenant(tenantId)
+    const id = tenantId.toLowerCase()
+    const unfinished = loadOnboardingDraft()?.account?.tenantId.toLowerCase()
+    const current = cachedTenantIds.get(TENANTS_KEY) ?? saved
+    if (!current.has(id) && unfinished !== id) await bridge.license.releaseTenant(tenantId)
   }
 }
 
@@ -62,8 +67,13 @@ export const tenantStorage = {
     return cache.get(key) ?? null
   },
   setItem(key: string, value: string): void {
+    void tenantStorage.setItemAsync(key, value).catch((error) => console.error("Could not save tenant data:", error))
+  },
+  /** Resolves only after the encrypted store acknowledges the write. */
+  async setItemAsync(key: string, value: string): Promise<void> {
+    let next: Set<string> | null | undefined
     if (key === TENANTS_KEY) {
-      const next = tenantIds(value)
+      next = tenantIds(value)
       tenantStorage.getItem(key)
       const previous = cachedTenantIds.get(key)
       if (previous === null && (next === null || next.size === 0)) {
@@ -73,15 +83,28 @@ export const tenantStorage = {
         }
         return
       }
-      if (next && previous) for (const id of previous) {
-        if (!next.has(id)) void bridge.license.releaseTenant(id).catch((error) => console.error("Could not release removed tenant:", error))
-      }
-      cachedTenantIds.set(key, next)
     }
+    const previousValue = cache.get(key) ?? null
+    const previousIds = cachedTenantIds.get(key)
+    const revision = Symbol()
+    revisions.set(key, revision)
     cache.set(key, value)
-    void bridge.storage.setItem(key, value)
+    if (key === TENANTS_KEY) cachedTenantIds.set(key, next ?? null)
+    try {
+      await bridge.storage.setItem(key, value)
+    } catch (error) {
+      if (revisions.get(key) === revision) {
+        cache.set(key, previousValue)
+        if (key === TENANTS_KEY) cachedTenantIds.set(key, previousIds ?? null)
+      }
+      throw error
+    }
+    if (next && previousIds) for (const id of previousIds) {
+      if (!next.has(id)) void bridge.license.releaseTenant(id).catch((error) => console.error("Could not release removed tenant:", error))
+    }
   },
   removeItem(key: string): void {
+    revisions.set(key, Symbol())
     cache.set(key, null)
     if (key === TENANTS_KEY) cachedTenantIds.set(key, new Set())
     void bridge.storage.removeItem(key)

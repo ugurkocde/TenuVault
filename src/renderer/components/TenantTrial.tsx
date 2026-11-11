@@ -110,7 +110,7 @@ export function TrialContact({ tenant, initialEmail, allowUnknownRemoval = false
   </div>
 }
 
-export function TenantTrialCard({ tenant, initialEmail, welcome = false, allowUnknownContactRemoval = false, children }: { tenant: TenantLicenseStatus; initialEmail?: string; welcome?: boolean; allowUnknownContactRemoval?: boolean; children?: ReactNode }) {
+export function TenantTrialCard({ tenant, initialEmail, welcome = false, allowUnknownContactRemoval = false, showShortcuts = true, children }: { tenant: TenantLicenseStatus; initialEmail?: string; welcome?: boolean; allowUnknownContactRemoval?: boolean; showShortcuts?: boolean; children?: ReactNode }) {
   const { status } = useLicense()
   const { busy, error, run: perform } = useTrialAction()
   const name = useTenants().find(t => t.credentials?.tenantId?.toLowerCase() === tenant.tenantId)?.name
@@ -151,7 +151,7 @@ export function TenantTrialCard({ tenant, initialEmail, welcome = false, allowUn
     <div className="space-y-5 px-6 py-5">
       {!welcome && status?.tenantTrialsEnabled && <TrialUsage tenant={tenant} />}
       {!tenant.trial && <p className="text-sm text-gray-600">{(status?.tenants.filter(t => !t.entitled && t.trialEndsAt).length ?? 0) > 1 ? "One tenant continues on Community Free. You choose which." : "This tenant continues on Community Free."} Backups and settings are kept. Community keeps 30 days of backup history.</p>}
-      {welcome && <div className="space-y-2">
+      {welcome && showShortcuts && <div className="space-y-2">
         <div className="text-xs font-medium uppercase tracking-wide text-gray-500">Try these first</div>
         <div className="flex flex-wrap gap-2">
           <Link className={shortcut} to="/portal/backup?tab=schedule"><CalendarClock />Daily backup schedule</Link>

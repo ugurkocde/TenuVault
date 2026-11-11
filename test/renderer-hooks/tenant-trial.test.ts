@@ -514,3 +514,10 @@ it("uses today for a one-day reminder that ends on the local calendar date", asy
     expect(container.textContent).toContain("Your Pro trial ends today")
   } finally { vi.useRealTimers() }
 })
+
+
+it("keeps feature shortcuts on the trial welcome outside onboarding", async () => {
+  await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+  expect(container.querySelector('a[href="/portal/backup?tab=schedule"]')).not.toBeNull()
+  expect(container.querySelector('a[href="/portal/drift"]')).not.toBeNull()
+})

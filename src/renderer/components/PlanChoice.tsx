@@ -157,7 +157,7 @@ export function PlanContext({ tenantId, username }: { tenantId: string; username
       </div>
     )
   }
-  if (tenant?.source === "trial" && !tenant.trialAcknowledged) return <TenantTrialCard tenant={tenant} initialEmail={emailLike(username)} welcome />
+  if (tenant?.source === "trial" && !tenant.trialAcknowledged) return <TenantTrialCard tenant={tenant} initialEmail={emailLike(username)} welcome showShortcuts={false} />
   const name = plan === "msp" ? "MSP" : "Pro"
   return (
     <p className="flex items-center gap-3 rounded-3xl bg-green-50 px-5 py-3 text-sm text-green-900">

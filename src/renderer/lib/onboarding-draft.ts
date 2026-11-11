@@ -1,4 +1,5 @@
 import type { SignedInAccount } from "../../shared/ipc"
+import type { StorageChooserDraft } from "../components/StorageChooser"
 import { bridge } from "./bridge"
 
 /**
@@ -14,6 +15,8 @@ export interface OnboardingDraft {
   displayName: string
   /** The sign-in of a tenant that was not saved yet; resumed only while it is still signed in. */
   account: SignedInAccount | null
+  /** Selection survives restarts; access is checked again before Azure can be used. */
+  storage?: StorageChooserDraft
 }
 
 const KEY = "tenuvault.onboarding.draft"
@@ -42,12 +45,16 @@ export function loadOnboardingDraft(): OnboardingDraft | null {
     const value = JSON.parse(raw) as Record<string, unknown>
     const step = value.step === 1 || value.step === 2 ? value.step : 0
     const account = validAccount(value.account)
+    const storage = value.storage as Partial<StorageChooserDraft> | null
     const draft: OnboardingDraft = {
       step: step === 2 && !account ? 1 : step,
       tenant: text(value.tenant),
       clientId: text(value.clientId),
       displayName: text(value.displayName),
       account,
+      ...(account && storage && (storage.kind === "local" || storage.kind === "azure") ? {
+        storage: { kind: storage.kind, selectedAccount: text(storage.selectedAccount), verifiedAccount: "" },
+      } : {}),
     }
     return isEmptyDraft(draft) ? null : draft
   } catch {

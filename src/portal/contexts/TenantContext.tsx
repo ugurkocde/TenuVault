@@ -59,7 +59,7 @@ interface TenantContextType {
   tenants: Tenant[]
   selectedTenantId: number | null
   setSelectedTenantId: (id: number | null) => void
-  addTenant: (tenant: Tenant) => void
+  addTenant: (tenant: Tenant) => Promise<void>
   updateTenant: (id: number, updates: Partial<Tenant>) => void
   deleteTenant: (id: number) => void
   getTenant: (id: number) => Tenant | undefined
@@ -86,7 +86,7 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
   const tenantsRef = useRef(tenants)
   const syncTimeoutsRef = useRef<TenantSyncTimers>(new Map())
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     tenantsRef.current = tenants
   }, [tenants])
 
@@ -138,8 +138,24 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
     }
   }, [selectedTenantId, isLoaded])
 
-  const addTenant = useCallback((tenant: Tenant) => {
-    setTenants(prev => [...prev, { createdAt: new Date().toISOString(), ...tenant }])
+  const additions = useRef<Promise<void>>(Promise.resolve())
+  const addTenant = useCallback((tenant: Tenant): Promise<void> => {
+    const added = { createdAt: new Date().toISOString(), ...tenant }
+    const save = async () => {
+      let previous: Tenant[]
+      let next: Tenant[]
+      // Include edits made while a save was pending, without publishing an unsaved profile.
+      do {
+        previous = tenantsRef.current
+        next = [...previous, added]
+        await tenantStorage.setItemAsync(STORAGE_KEY, serializeTenants(next))
+      } while (tenantsRef.current !== previous)
+      tenantsRef.current = next
+      setTenants(next)
+    }
+    const pending = additions.current.then(save)
+    additions.current = pending.catch(() => undefined)
+    return pending
   }, [])
 
   const updateTenant = useCallback((id: number, updates: Partial<Tenant>) => {
