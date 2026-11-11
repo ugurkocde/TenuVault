@@ -115,6 +115,18 @@ describe("plan prompt trial and purchase actions", () => {
     expect([...container.querySelectorAll('[role="alert"]')].map(e => e.textContent)).toEqual(["This trial can no longer be resumed."])
     expect(container.querySelector("div, p")).toBeNull()
   })
+  it("keeps another tenant's trial texts out of the current tenant's prompt", async () => {
+    // The other tenant used its trial, and its saved activation no longer validates.
+    state.status = { ...status("ended"), tenantTrialsEnabled: false }
+    Object.assign(state.status.tenants[0]!, { trialCanResume: true, trialResumeUntil: new Date(Date.now() + 9 * 86400_000).toISOString() })
+    state.status.tenants.push({ ...status("ended").tenants[0]!, tenantId: "other", activated: true })
+    container = document.body.appendChild(document.createElement("div")); root = createRoot(container)
+    await act(async () => root!.render(createElement(MemoryRouter, null, createElement("span", null, createElement(PlanPromptButton, { plan: "pro", source: "locked-fullrestore" })))))
+    expect(container.textContent).toContain("Buy Pro")
+    expect(container.textContent).toContain("Resume Pro trial")
+    expect(container.textContent).not.toContain("Check the saved activation")
+    expect(container.textContent).not.toContain("This tenant already had a Pro trial.")
+  })
   it("does not offer a resume in a prompt with a saved key or for the MSP plan", async () => {
     for (const [hasKey, plan] of [[true, "pro"], [false, "msp"]] as const) {
       state.status = { ...status("ended"), hasKey, tenantTrialsEnabled: false }
