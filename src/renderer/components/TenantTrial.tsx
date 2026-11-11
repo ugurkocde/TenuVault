@@ -2,7 +2,7 @@ import { ORGANIZATION_LICENSE_GUIDANCE, ORGANIZATION_LICENSE_SETUP_GUIDANCE } fr
 import { organizationLicenseRefusal } from "../../shared/trial-notices"
 import { useEffect, useState, type ReactNode } from "react"
 import { Link } from "react-router-dom"
-import { CalendarClock, GitCompareArrows, History, Hourglass, Info, Mail, ShieldCheck, Sparkles } from "lucide-react"
+import { CalendarClock, GitCompareArrows, History, Hourglass, Info, Mail, ShieldCheck, Sparkles, X } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "~/components/ui/dialog"
 import { Input } from "~/components/ui/input"
@@ -16,6 +16,19 @@ import { SUPPORT_EMAIL, TRIAL_USED_MESSAGE, LOCAL_STORAGE_PREFIX } from "../../s
 import { changeTenantStorage, LOCAL_SWITCH_CONFIRMATION } from "../lib/storage"
 import { useConfirm } from "~/components/ConfirmDialog"
 import { CommunityTenantChoiceButton } from "./CommunityTenantPicker"
+
+type LicenseStatusValue = ReturnType<typeof useLicense>["status"]
+
+/** What happens when a running trial ends, for the card and the setup row. */
+export function trialEndText(status: LicenseStatusValue, tenant: TenantLicenseStatus): string {
+  // Community Free covers one tenant. Once another tenant holds it, the end of this trial
+  // opens no choice: this tenant then needs a license.
+  if (status?.communityTenantId && status.communityTenantId !== tenant.tenantId)
+    return "When the trial ends, this tenant needs a license: Community Free covers one tenant and another tenant already uses it. Backups and settings are kept."
+  return `${(status?.tenants.filter(t => t.source === "trial" || t.trialEndsAt || t.plan === "community").length ?? 0) > 1
+    ? "When the trial ends, you choose which one tenant continues on Community Free."
+    : "When the trial ends, this tenant continues on Community Free by itself."} Backups and settings are kept. Community keeps 30 days of backup history.`
+}
 
 export function TrialUsage({ tenant }: { tenant: TenantLicenseStatus }) {
   const [summary, setSummary] = useState<string | null>(null)
@@ -32,7 +45,7 @@ export function TrialKeyRefusalActions({ message, tenant, source }: { message: s
   return message.includes(TRIAL_USED_MESSAGE) ? <TrialActions tenant={tenant} source={source} /> : null
 }
 
-export function TrialActions({ tenant, source, welcome = false }: { tenant?: TenantLicenseStatus; source: string; welcome?: boolean }) {
+export function TrialActions({ tenant, source }: { tenant?: TenantLicenseStatus; source: string }) {
   const { status } = useLicense()
   const { busy, error, run } = useTrialAction()
   const [notice, setNotice] = useState("")
@@ -42,8 +55,8 @@ export function TrialActions({ tenant, source, welcome = false }: { tenant?: Ten
   const mailto = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent("TenuVault Pro: quote or invoice")}`
   return <div className="min-w-0 space-y-2 text-sm font-normal">
     <div className="flex flex-wrap items-center gap-2">
-      {!welcome && <Button type="button" size="sm" disabled={busy} onClick={() => { setAction("buy"); void run(() => openCheckout(source)).finally(() => setAction(null)) }}>Buy Pro</Button>}
-      {!welcome && tenant?.trialCanExtend && !extended && <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => { setAction("extend"); void run(async () => {
+      <Button type="button" size="sm" disabled={busy} onClick={() => { setAction("buy"); void run(() => openCheckout(source)).finally(() => setAction(null)) }}>Buy Pro</Button>
+      {tenant?.trialCanExtend && !extended && <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => { setAction("extend"); void run(async () => {
         const updated = await bridge.license.tenantTrialAction(tenant.tenantId, "extend_trial")
         const end = updated?.tenants.find(t => t.tenantId === tenant.tenantId)?.trialEndsAt
         setExtended(true)
@@ -51,7 +64,6 @@ export function TrialActions({ tenant, source, welcome = false }: { tenant?: Ten
       }).finally(() => setAction(null)) }}>{busy && action === "extend" ? "Extending trial..." : days ? `Extend trial by ${days} days` : "Extend your trial"}</Button>}
       {tenant?.trialExtensionAvailableAt && Date.parse(tenant.trialExtensionAvailableAt) > Date.now() && !extended && <p className="text-gray-600">You can extend once, from {formatDate(tenant.trialExtensionAvailableAt)}.</p>}
       {tenant && !tenant.trialCanExtend && !tenant.trialExtensionAvailableAt && !tenant.trialExtensionUnavailable && tenant.source === "trial" && !extended && <p className="text-gray-600">Check the License page for trial extension availability.</p>}
-      {welcome && tenant?.trialCanExtend && <p className="text-gray-600">You can extend your trial once, from the License page.</p>}
     </div>
     <p className="text-gray-600">Questions, or need a quote or an invoice for your purchasing team? Write to <a className="font-medium text-blue-700 underline underline-offset-2" href={mailto} onClick={event => { event.preventDefault(); void bridge.app.openExternal(mailto) }}>{SUPPORT_EMAIL}</a>.</p>
     {notice && <p role="status">{notice}</p>}
@@ -118,7 +130,7 @@ export function TenantTrialOptions({ onStarted, tenantId, setupTenantId, guidanc
   </Container>
 }
 
-export function TrialContact({ tenant, initialEmail, allowUnknownRemoval = false }: { tenant: TenantLicenseStatus; initialEmail?: string; allowUnknownRemoval?: boolean }) {
+export function TrialContact({ tenant, initialEmail, allowUnknownRemoval = false, stacked = false }: { tenant: TenantLicenseStatus; initialEmail?: string; allowUnknownRemoval?: boolean; /** For a narrow column: the button goes under the field. */ stacked?: boolean }) {
   const { busy, error, run } = useTrialAction()
   const [email, setEmail] = useState(tenant.trialEmail ?? initialEmail ?? "")
   const [saved, setSaved] = useState(Boolean(tenant.trialEmail))
@@ -140,7 +152,7 @@ export function TrialContact({ tenant, initialEmail, allowUnknownRemoval = false
     setMessage(address ? "Email address saved." : "Email address removed.")
   })
   return <div className="space-y-3 rounded-2xl bg-gray-50 p-4">
-    <div className="flex flex-col items-stretch gap-2 xl:flex-row xl:items-end">
+    <div className={stacked ? "flex flex-col items-start gap-2" : "flex flex-col items-stretch gap-2 xl:flex-row xl:items-end"}>
       <label className="flex w-full min-w-0 flex-1 flex-col gap-1.5 text-sm font-medium">Optional email
         <Input type="email" className="font-normal" value={email} maxLength={254} onChange={event => setEmail(event.target.value)} />
       </label>
@@ -179,10 +191,10 @@ export function TenantTrialCard({ tenant, initialEmail, welcome = false, allowUn
     }
   })
   const days = Math.max(0, Math.ceil((Date.parse(tenant.trialEndsAt ?? "") - Date.now()) / 86400_000))
-  // Community Free covers one tenant. Once another tenant holds it, the end of this trial
-  // opens no choice: this tenant then needs a license.
-  const communityTaken = Boolean(status?.communityTenantId && status.communityTenantId !== tenant.tenantId)
-  const footer = welcome || (!status?.tenantTrialsEnabled && tenant.trialCanExtend)
+  // The welcome asks for no decision: it can only be hidden. Ending the trial early is offered on
+  // the License page, where the card is shown without the welcome.
+  const canEnd = !welcome && tenant.trial && tenant.canEnd
+  const footer = canEnd || (!status?.tenantTrialsEnabled && tenant.trialCanExtend)
   const shortcut = "inline-flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 [&_svg]:size-4 [&_svg]:text-blue-700"
   return <section className="overflow-hidden rounded-3xl border border-gray-200 bg-white">
     <header className="tv-trial-header flex flex-wrap items-center justify-between gap-4 px-6 py-5">
@@ -193,7 +205,10 @@ export function TenantTrialCard({ tenant, initialEmail, welcome = false, allowUn
           <p className="text-sm text-gray-600">{days > 0 ? `Ends on ${formatDate(tenant.trialEndsAt!)}.` : `Ended on ${formatDate(tenant.trialEndsAt!)}.`}</p>
         </div>
       </div>
-      {days > 0 && <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-blue-100 bg-white px-3 py-1 text-sm font-medium text-blue-700"><CalendarClock className="size-4" /><span><span className="tabular-nums">{days}</span> {days === 1 ? "day" : "days"} left</span></span>}
+      <div className="flex shrink-0 items-center gap-2">
+        {days > 0 && <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-blue-100 bg-white px-3 py-1 text-sm font-medium text-blue-700"><CalendarClock className="size-4" /><span><span className="tabular-nums">{days}</span> {days === 1 ? "day" : "days"} left</span></span>}
+        {welcome && <Button type="button" variant="ghost" size="icon" className="size-9 rounded-full" disabled={busy} onClick={() => void run("acknowledge")}><X aria-hidden="true" /><span className="sr-only">Dismiss Pro trial message</span></Button>}
+      </div>
     </header>
     <div className="space-y-5 px-6 py-5">
       {!welcome && status?.tenantTrialsEnabled && <TrialUsage tenant={tenant} />}
@@ -207,20 +222,15 @@ export function TenantTrialCard({ tenant, initialEmail, welcome = false, allowUn
           <Link className={shortcut} to="/portal/frameworks/cis-benchmarks"><ShieldCheck />CIS Benchmarks</Link>
         </div>
       </div>}
-      {tenant.trial && <p className="flex gap-2 text-sm text-gray-600"><Info className="mt-0.5 size-4 shrink-0 text-gray-500" /><span>Nothing is charged and no card is on file. {communityTaken
-        ? "When the trial ends, this tenant needs a license: Community Free covers one tenant and another tenant already uses it. Backups and settings are kept."
-        : `${(status?.tenants.filter(t => t.source === "trial" || t.trialEndsAt || t.plan === "community").length ?? 0) > 1
-          ? "When the trial ends, you choose which one tenant continues on Community Free."
-          : "When the trial ends, this tenant continues on Community Free by itself."} Backups and settings are kept. Community keeps 30 days of backup history.`}</span></p>}
+      {tenant.trial && <p className="flex gap-2 text-sm text-gray-600"><Info className="mt-0.5 size-4 shrink-0 text-gray-500" /><span>Nothing is charged and no card is on file. {trialEndText(status, tenant)}</span></p>}
       {tenant.trial && <TrialContact tenant={tenant} initialEmail={initialEmail} allowUnknownRemoval={allowUnknownContactRemoval && !welcome} />}
-      {status?.tenantTrialsEnabled && <TrialActions tenant={tenant} source={tenant.trial ? "license-page-trial" : "trial-end"} welcome={welcome} />}
+      {!welcome && status?.tenantTrialsEnabled && <TrialActions tenant={tenant} source={tenant.trial ? "license-page-trial" : "trial-end"} />}
       {children}
       {notice && <p role="status" className="text-sm">{notice}</p>}
       {error && <p role="alert" className="text-sm">{error}</p>}
     </div>
     {footer && <footer className="flex flex-wrap items-center gap-2 border-t border-gray-100 px-6 py-4">
-      {welcome && <Button disabled={busy} onClick={() => void run("acknowledge")}>Got it</Button>}
-      {welcome && tenant.canEnd && <Button variant="ghost" disabled={busy} onClick={() => { setEndError(""); setConfirmEnd(true) }}>Use Community instead</Button>}
+      {canEnd && <Button variant="ghost" disabled={busy} onClick={() => { setEndError(""); setConfirmEnd(true) }}>Use Community instead</Button>}
       {!status?.tenantTrialsEnabled && tenant.trialCanExtend && <Button variant="outline" disabled={busy} onClick={() => void run("extend_trial")}>Need more time? Extend your trial</Button>}
     </footer>}
     <Dialog open={confirmEnd} onOpenChange={open => { if (!open && !busy) setConfirmEnd(false) }}>
@@ -237,6 +247,42 @@ export function TenantTrialCard({ tenant, initialEmail, welcome = false, allowUn
       </DialogContent>
     </Dialog>
   </section>
+}
+
+/**
+ * The trial in the setup's Storage step: one compact row above the storage choice, with the
+ * optional email. It asks for no decision; the full card with its shortcuts follows the first
+ * backup, and ending the trial early is offered on the License page.
+ */
+export function TrialStartedRow({ tenant, initialEmail }: { tenant: TenantLicenseStatus; initialEmail?: string }) {
+  const { status } = useLicense()
+  const days = Math.max(1, Math.ceil((Date.parse(tenant.trialEndsAt ?? "") - Date.now()) / 86400_000))
+  return <section aria-label="Pro trial" className="space-y-3 rounded-3xl border border-gray-200 p-5">
+    <p className="flex items-start gap-3 text-sm text-gray-700">
+      <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-blue-50 text-blue-700" aria-hidden="true"><Sparkles className="size-4" /></span>
+      <span>
+        <span className="block font-medium text-gray-900">Pro trial started: {days} {days === 1 ? "day" : "days"}, until {formatDate(tenant.trialEndsAt!)}</span>
+        Nothing is charged and no card is on file. {trialEndText(status, tenant)}
+      </span>
+    </p>
+    <TrialContact tenant={tenant} initialEmail={initialEmail} stacked />
+  </section>
+}
+
+/** What the Pro trial adds, offered once the first backup is done. */
+export function TrialShortcuts({ tenantId }: { tenantId: string }) {
+  const { status } = useLicense()
+  const tenant = status?.tenants.find(t => t.tenantId === tenantId.toLowerCase())
+  if (!tenant?.trial || tenant.source !== "trial") return null
+  const shortcut = "inline-flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 [&_svg]:size-4 [&_svg]:text-blue-700"
+  return <div className="space-y-2">
+    <p className="text-sm font-medium text-gray-900">Also in your Pro trial</p>
+    <div className="flex flex-wrap gap-2">
+      <Link className={shortcut} to="/portal/backup?tab=restore"><History />Full restore</Link>
+      <Link className={shortcut} to="/portal/drift"><GitCompareArrows />Drift revert</Link>
+      <Link className={shortcut} to="/portal/frameworks/cis-benchmarks"><ShieldCheck />CIS Benchmarks</Link>
+    </div>
+  </div>
 }
 
 function TrialAzureChoice() {

@@ -441,7 +441,7 @@ export default function LicensePage() {
   const open = status.tenants.filter(t => t.signedIn && !t.entitled)
   const licenseElsewhere = open.length > 0 && open.every(organizationLicenseRefusal)
   const buyAfterTrial = trialUsed && !trialEndVisible(status)
-    && !status.tenants.some(t => (t.source === "trial" || t.trialCanExtend && t.trialAcknowledged) && !(t.entitled && !t.trialAcknowledged))
+    && !status.tenants.some(t => t.source === "trial" || t.trialCanExtend && t.trialAcknowledged)
     && ![error, status.keyMessage, signedIn > 0 ? status.message : null].some(message => message?.includes(TRIAL_USED_MESSAGE))
     && !trialKeyRefusedInRow
 
@@ -522,7 +522,7 @@ export default function LicensePage() {
           {isUnlicensed(status) && !status.tenantTrialsEnabled && <TrialCallToAction emailRef={trialEmail} onSent={() => setTrialKeyHint(true)} />}
           <TenantTrialOptions guidanceInRows />
           {buyAfterTrial && <TrialActions source="license-page-trial-used" />}
-          {status.tenants.filter(t => t.source === "trial" || t.trialCanExtend && t.trialAcknowledged).map(t => <TenantTrialCard key={t.tenantId} tenant={t} welcome={t.entitled && !t.trialAcknowledged} allowUnknownContactRemoval />)}
+          {status.tenants.filter(t => t.source === "trial" || t.trialCanExtend && t.trialAcknowledged).map(t => <TenantTrialCard key={t.tenantId} tenant={t} allowUnknownContactRemoval />)}
           {status.trial && !status.tenants.some(t => t.source === "trial") && <TrialStatus status={status} busy={busy} onReplace={replaceKey} />}
           {savedKeyNotNeededHere(status) ? (
             <p className="text-sm text-gray-600">

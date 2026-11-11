@@ -8,7 +8,7 @@ const state = vi.hoisted(() => ({ status: null as LicenseStatus | null, action: 
 vi.mock("../../src/renderer/lib/license", async original => ({ ...(await original<typeof import("../../src/renderer/lib/license")>()), useLicense: () => ({ status: state.status, refresh: state.refresh }) }))
 vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { app: { openExternal: state.open }, auth: { accounts: async () => [{ tenantId: "tenant", username: "admin@contoso.example" }] }, license: { trialWorkflowsConfigured: state.configured, trialUsage: state.usage, tenantTrialAction: state.action, startTenantTrial: state.start, startTrial: state.emailTrial, open: state.open }, schedules: { list: async () => [{ tenantId: "tenant", enabled: true, frequency: "daily" }] }, preferences: { get: async () => ({ retentionDays: 90 }) } } }))
 vi.mock("~/contexts/TenantContext", () => ({ useTenantOperations: () => ({ updateTenant: state.update }), useTenants: () => [{ id: 1, name: "Contoso", credentials: { tenantId: "tenant" }, resources: { storageAccountName: "contosobackups" } }, { id: 2, name: "Fabrikam", credentials: { tenantId: "ended" } }] }))
-import { TenantTrialCard, TenantTrialNotices, TenantTrialOptions, TrialActions, TrialChanges, TrialResume } from "../../src/renderer/components/TenantTrial"
+import { TenantTrialCard, TenantTrialNotices, TenantTrialOptions, TrialActions, TrialChanges, TrialResume, TrialShortcuts, TrialStartedRow } from "../../src/renderer/components/TenantTrial"
 import { TrialReminderBanner } from "../../src/renderer/components/DesktopLayout"
 import { TrialOrKey } from "../../src/renderer/components/PlanChoice"
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -46,7 +46,7 @@ describe("tenant trial UI", () => {
     expect([...container.querySelectorAll("button")].find(b => b.textContent === label)?.disabled).toBe(false)
   })
   it.each([
-    ["Got it", "acknowledge"], ["Extend your trial", "extend_trial"],
+    ["Dismiss Pro trial message", "acknowledge"], ["Extend your trial", "extend_trial"],
   ] as const)("handles a rejected %s action and a rejected refresh", async (label, action) => {
     state.action.mockRejectedValueOnce(new Error("Trial action failed"))
     state.refresh.mockRejectedValueOnce(new Error("Status refresh failed"))
@@ -57,6 +57,15 @@ describe("tenant trial UI", () => {
     expect(state.refresh).toHaveBeenCalledTimes(1)
   })
   describe("ending the trial early", () => {
+    it("is offered on the License page card, not in the welcome", async () => {
+      await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+      expect(container.textContent).not.toContain("Use Community instead")
+      await render(createElement(TenantTrialCard, { tenant }))
+      expect(container.textContent).toContain("Use Community instead")
+      tenant.canEnd = false
+      await render(createElement(TenantTrialCard, { tenant }))
+      expect(container.textContent).not.toContain("Use Community instead")
+    })
     const dialog = () => document.body.querySelector<HTMLElement>('[role="dialog"]')
     const inDialog = async (text: string) => {
       const button = [...dialog()!.querySelectorAll("button")].find(b => b.textContent === text)
@@ -64,7 +73,7 @@ describe("tenant trial UI", () => {
       await act(async () => button!.click())
     }
     it("asks first and keeps the trial when the admin backs out", async () => {
-      await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+      await render(createElement(TenantTrialCard, { tenant }))
       expect(dialog()).toBeNull()
       await click("Use Community instead")
       expect(state.action).not.toHaveBeenCalled()
@@ -79,17 +88,17 @@ describe("tenant trial UI", () => {
       expect(dialog()).toBeNull()
       expect(state.action).not.toHaveBeenCalled()
       expect(state.refresh).not.toHaveBeenCalled()
-      expect(container.textContent).toContain("Pro trial started")
+      expect(container.textContent).toContain("Pro trial")
     })
     it("closes on Escape without ending the trial", async () => {
-      await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+      await render(createElement(TenantTrialCard, { tenant }))
       await click("Use Community instead")
       await act(async () => { dialog()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })) })
       expect(dialog()).toBeNull()
       expect(state.action).not.toHaveBeenCalled()
     })
     it("ends the trial once after confirmation", async () => {
-      await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+      await render(createElement(TenantTrialCard, { tenant }))
       await click("Use Community instead")
       await inDialog("End trial and use Community")
       expect(state.action).toHaveBeenCalledTimes(1)
@@ -99,14 +108,14 @@ describe("tenant trial UI", () => {
     })
     it("keeps the trial and shows the error in the dialog when ending fails", async () => {
       state.action.mockRejectedValueOnce(new Error("The licensing service could not be reached."))
-      await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+      await render(createElement(TenantTrialCard, { tenant }))
       await click("Use Community instead")
       await inDialog("End trial and use Community")
       expect(state.action).toHaveBeenCalledTimes(1)
       const alert = dialog()?.querySelector('[role="alert"]')
       expect(alert?.textContent).toContain("The licensing service could not be reached.")
       expect(alert?.textContent).toContain("The trial is still running.")
-      expect(container.textContent).toContain("Pro trial started")
+      expect(container.textContent).toContain("Pro trial")
       await inDialog("Keep the trial")
       expect(dialog()).toBeNull()
       expect(state.action).toHaveBeenCalledTimes(1)
@@ -117,24 +126,17 @@ describe("tenant trial UI", () => {
     it("keeps the end failure in the dialog when the status refresh fails too", async () => {
       state.action.mockRejectedValueOnce(new Error("Trial action failed"))
       state.refresh.mockRejectedValueOnce(new Error("Status refresh failed"))
-      await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+      await render(createElement(TenantTrialCard, { tenant }))
       await click("Use Community instead")
       await inDialog("End trial and use Community")
       expect(state.action).toHaveBeenCalledWith("tenant", "end_trial")
       expect(dialog()?.querySelector('[role="alert"]')?.textContent).toContain("Trial action failed")
       expect(state.refresh).toHaveBeenCalledTimes(1)
     })
-    it("shows a failed status refresh in the dialog", async () => {
-      state.refresh.mockRejectedValueOnce(new Error("Status refresh failed"))
-      await render(createElement(TenantTrialCard, { tenant, welcome: true }))
-      await click("Use Community instead")
-      await act(async () => [...container.querySelectorAll("button")].find(b => b.textContent === "Got it")!.click())
-      expect(dialog()?.querySelector('[role="alert"]')?.textContent).toContain("Status refresh failed")
-    })
     it("ignores a second confirmation that arrives before the first one is handled", async () => {
       let finish!: () => void
       state.action.mockImplementationOnce(() => new Promise<undefined>(resolve => { finish = () => resolve(undefined) }))
-      await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+      await render(createElement(TenantTrialCard, { tenant }))
       await click("Use Community instead")
       const confirm = [...dialog()!.querySelectorAll("button")].find(b => b.textContent === "End trial and use Community")!
       await act(async () => { confirm.click(); confirm.click() })
@@ -145,7 +147,7 @@ describe("tenant trial UI", () => {
     it("cannot be closed while the trial is ending", async () => {
       let finish!: () => void
       state.action.mockImplementationOnce(() => new Promise<undefined>(resolve => { finish = () => resolve(undefined) }))
-      await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+      await render(createElement(TenantTrialCard, { tenant }))
       await click("Use Community instead")
       expect([...dialog()!.querySelectorAll("button")].some(b => b.textContent === "Close")).toBe(true)
       await inDialog("End trial and use Community")
@@ -158,7 +160,7 @@ describe("tenant trial UI", () => {
     it("shows the busy state while the trial is ending", async () => {
       let finish!: () => void
       state.action.mockImplementationOnce(() => new Promise<undefined>(resolve => { finish = () => resolve(undefined) }))
-      await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+      await render(createElement(TenantTrialCard, { tenant }))
       await click("Use Community instead")
       await inDialog("End trial and use Community")
       const buttons = [...dialog()!.querySelectorAll("button")]
@@ -281,21 +283,22 @@ describe("tenant trial UI", () => {
   it("shows a refresh failure without retrying or rejecting the handler", async () => {
     state.refresh.mockRejectedValueOnce(new Error("Status refresh failed"))
     await render(createElement(TenantTrialCard, { tenant, welcome: true }))
-    await click("Got it")
+    await click("Dismiss Pro trial message")
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("Status refresh failed")
     expect(state.refresh).toHaveBeenCalledTimes(1)
   })
-  it.each([true, false])("shows the start card, correct days and starter controls (%s)", async starter => {
+  it.each([true, false])("shows the start card with the correct days and no decision to make (%s)", async starter => {
     tenant.canEnd = starter
     await render(createElement(TenantTrialCard, { tenant, welcome: true }))
     expect(container.textContent).toContain("Pro trial started")
     expect(container.textContent).toContain("5 days left")
-    expect(container.textContent?.includes("Use Community instead")).toBe(starter)
+    expect(container.textContent).not.toContain("Use Community instead")
+    expect(container.textContent).not.toContain("Got it")
     expect(container.textContent).toContain("30 days of backup history")
     expect([...container.querySelectorAll("a")].map(a => a.textContent)).toEqual(expect.arrayContaining(["Daily backup schedule", "Full restore", "Drift revert", "CIS Benchmarks"]))
     expect(container.querySelector('a[href="/portal/backup?tab=restore"]')).toBeTruthy()
     expect([...container.querySelectorAll("button")].find(b => b.textContent === "Email me setup tips and a reminder before the trial ends")?.className).toContain("border")
-    await click("Got it")
+    await click("Dismiss Pro trial message")
     expect(state.action).toHaveBeenCalledWith("tenant", "acknowledge")
   })
   it("prefills contact without sending and submits only on click", async () => {
@@ -393,7 +396,7 @@ describe("tenant trial UI", () => {
     expect(container.textContent).toContain("Pro trial endedFabrikam")
     await click("Continue on Community")
     expect(state.action).toHaveBeenLastCalledWith("ended", "acknowledge")
-    await click("Got it")
+    await click("Dismiss Pro trial message")
     expect(state.action).toHaveBeenLastCalledWith("tenant", "acknowledge")
   })
   it("does not offer a no-op trial when an expired activation is still saved", async () => {
@@ -492,14 +495,41 @@ describe("shared trial actions", () => {
     expect(container.textContent).toContain("Buy Pro")
     expect(container.textContent).toContain("Questions,")
   })
-  it("keeps the start card focused on Got it with contact and availability", async () => {
+  it("keeps extension and purchase details out of the start card", async () => {
     tenant.trialCanExtend = false
     tenant.trialExtensionAvailableAt = new Date(Date.now() + day).toISOString()
     await render(createElement(TenantTrialCard, { tenant, welcome: true }))
-    expect(container.textContent).toContain("Got it")
+    expect(container.textContent).not.toContain("Questions,")
+    expect(container.textContent).not.toContain("You can extend once")
+    expect(container.textContent).not.toContain("Buy Pro")
+    expect(container.textContent).toContain("Optional email")
+    await render(createElement(TenantTrialCard, { tenant }))
     expect(container.textContent).toContain("Questions,")
     expect(container.textContent).toContain("You can extend once, from")
-    expect(container.textContent).not.toContain("Buy Pro")
+  })
+  it("shows the trial in the setup as one row with the email and no decision", async () => {
+    await render(createElement(TrialStartedRow, { tenant, initialEmail: "admin@contoso.example" }))
+    expect(container.textContent).toContain(`Pro trial started: 5 days, until ${formatDate(tenant.trialEndsAt!)}`)
+    expect(container.textContent).toContain("Nothing is charged and no card is on file. When the trial ends, this tenant continues on Community Free by itself.")
+    expect((container.querySelector('input[type="email"]') as HTMLInputElement).value).toBe("admin@contoso.example")
+    expect([...container.querySelectorAll("button")].map(b => b.textContent)).toEqual(["Email me setup tips and a reminder before the trial ends"])
+    expect(container.querySelectorAll("a[href^='/portal']")).toHaveLength(0)
+    expect(state.action).not.toHaveBeenCalled()
+  })
+  it("offers the Pro shortcuts after the first backup only for a running tenant trial", async () => {
+    await render(createElement(TrialShortcuts, { tenantId: "tenant" }))
+    expect([...container.querySelectorAll("a")].map(a => a.getAttribute("href"))).toEqual(["/portal/backup?tab=restore", "/portal/drift", "/portal/frameworks/cis-benchmarks"])
+    await render(createElement(TrialShortcuts, { tenantId: "TENANT" }))
+    expect(container.querySelectorAll("a")).toHaveLength(3)
+    await render(createElement(TrialShortcuts, { tenantId: "other" }))
+    expect(container.textContent).toBe("")
+    tenant.trial = false
+    await render(createElement(TrialShortcuts, { tenantId: "tenant" }))
+    expect(container.textContent).toBe("")
+    tenant.trial = true
+    tenant.source = "key"
+    await render(createElement(TrialShortcuts, { tenantId: "tenant" }))
+    expect(container.textContent).toBe("")
   })
 })
 
