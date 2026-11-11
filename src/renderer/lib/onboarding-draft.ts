@@ -37,11 +37,14 @@ function validAccount(value: unknown): SignedInAccount | null {
 /** How long the sign-in of an unfinished setup is kept through restarts, counted from that sign-in. */
 export const PENDING_SIGN_IN_MAX_AGE_MS = 3 * 86_400_000
 
-/** The draft's sign-in, while it is recent. A draft without its time (saved by an older version) has none. */
+/**
+ * The draft's sign-in, while it is recent. A draft without its time (saved by an older version) has
+ * none, and neither has one dated in the future, such as after the clock was set back.
+ */
 function recentAccount(value: Record<string, unknown>, now = Date.now()): SignedInAccount | null {
   const account = validAccount(value.account)
   const signedInAt = typeof value.signedInAt === "number" ? value.signedInAt : 0
-  return account && now - signedInAt < PENDING_SIGN_IN_MAX_AGE_MS ? account : null
+  return account && signedInAt <= now && now - signedInAt < PENDING_SIGN_IN_MAX_AGE_MS ? account : null
 }
 
 /** The saved draft, or null when there is none or it cannot be read. An expired sign-in is left out. */
@@ -66,7 +69,7 @@ export function loadOnboardingDraft(): OnboardingDraft | null {
 }
 
 /**
- * The tenant an unfinished setup signed in to, while its draft is recent. Startup cleanup leaves
+ * The tenant an unfinished setup signed in to, while its sign-in is recent. Startup cleanup leaves
  * that sign-in alone so the setup can resume; an abandoned one is released after a few days.
  */
 export function pendingSignInTenant(now = Date.now()): string | null {
@@ -90,8 +93,8 @@ let pending: Promise<void> = Promise.resolve()
 function signedInAt(tenantId: string): number {
   try {
     const value = JSON.parse(bridge.storage.getItemSync(KEY) ?? "null") as Record<string, unknown> | null
-    const stored = value && validAccount(value.account)
-    if (stored && stored.tenantId.toLowerCase() === tenantId.toLowerCase() && typeof value.signedInAt === "number") return value.signedInAt
+    const stored = value && recentAccount(value)
+    if (stored && stored.tenantId.toLowerCase() === tenantId.toLowerCase()) return value.signedInAt as number
   } catch { /* A fresh time below. */ }
   return Date.now()
 }

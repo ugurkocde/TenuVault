@@ -206,6 +206,13 @@ describe("onboarding draft", () => {
     saveOnboardingDraft({ step: 2, tenant: "other", clientId: CLIENT, displayName: "", account: { ...account, tenantId: "other" } })
     await flush()
     expect(signedInAt()).toBe(1_000 + PENDING_SIGN_IN_MAX_AGE_MS)
+    // A time in the future, after the clock was set back, does not keep a sign-in.
+    now.mockReturnValue(500)
+    expect(pendingSignInTenant()).toBeNull()
+    // Saving over an expired sign-in to the same tenant starts a new time.
+    saveOnboardingDraft({ step: 2, tenant: "other", clientId: CLIENT, displayName: "", account: { ...account, tenantId: "other" } })
+    await flush()
+    expect(signedInAt()).toBe(500)
     now.mockRestore()
   })
 })
