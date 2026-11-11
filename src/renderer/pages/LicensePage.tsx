@@ -441,7 +441,7 @@ export default function LicensePage() {
   const open = status.tenants.filter(t => t.signedIn && !t.entitled)
   const licenseElsewhere = open.length > 0 && open.every(organizationLicenseRefusal)
   const buyAfterTrial = trialUsed && !trialEndVisible(status)
-    && !status.tenants.some(t => (t.source === "trial" || t.trialCanExtend && t.trialAcknowledged) && !(t.entitled && !t.trialAcknowledged))
+    && !status.tenants.some(t => t.source === "trial" || t.trialCanExtend && t.trialAcknowledged)
     && ![error, status.keyMessage, signedIn > 0 ? status.message : null].some(message => message?.includes(TRIAL_USED_MESSAGE))
     && !trialKeyRefusedInRow
 

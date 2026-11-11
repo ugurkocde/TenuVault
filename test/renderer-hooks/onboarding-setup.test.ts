@@ -21,6 +21,7 @@ const state = vi.hoisted(() => ({
   checkNewTenant: vi.fn(async (): Promise<unknown> => undefined),
   addTenant: vi.fn(),
   trialAction: vi.fn(async () => undefined),
+  license: null as unknown,
 }))
 
 vi.mock("../../src/renderer/lib/bridge", () => ({
@@ -38,9 +39,10 @@ vi.mock("../../src/renderer/lib/bridge", () => ({
 }))
 vi.mock("../../src/renderer/lib/license", () => ({
   useTenantPlan: () => "community",
-  useLicense: () => ({ status: null, error: null, refresh: async () => undefined }),
+  useLicense: () => ({ status: state.license, error: null, refresh: async () => undefined }),
   tenantLicense: (status: { tenants?: unknown[] } | undefined) => status?.tenants?.[0],
   tenantPlan: (tenant: { plan?: string } | undefined) => tenant?.plan ?? null,
+  formatDate: (value: string) => value,
 }))
 vi.mock("~/contexts/TenantContext", () => ({
   useTenants: () => state.tenants,
@@ -76,6 +78,7 @@ beforeEach(() => {
   state.store.clear()
   state.tenants = []
   state.storageChoice = null
+  state.license = null
 })
 
 afterEach(() => {
@@ -227,24 +230,56 @@ describe("OnboardingPage", () => {
   })
 
   it.each([
-    ["a new trial", { source: "trial", trial: true, trialAcknowledged: false }, true],
-    ["a trial already seen", { source: "trial", trial: true, trialAcknowledged: true }, false],
-    ["a license key", { source: "key", trial: false }, false],
-  ] as const)("marks %s as seen once the Storage step is done", async (_label, license, acknowledged) => {
+    ["a new trial shown on the Storage step", { source: "trial", trial: true, trialAcknowledged: false }, { source: "trial", trial: true, trialAcknowledged: false }, true],
+    ["a trial already seen", { source: "trial", trial: true, trialAcknowledged: true }, { source: "trial", trial: true, trialAcknowledged: true }, false],
+    ["a license key", { source: "key", trial: false }, { source: "key", trial: false }, false],
+    // The automatic trial can start only during the check at Continue: it was never shown.
+    ["a trial that starts at Continue", { source: null, trial: false, plan: "community" }, { source: "trial", trial: true, trialAcknowledged: false }, false],
+  ] as const)("marks %s as seen once the Storage step is done", async (_label, shown, checked, acknowledged) => {
     const account = { tenantId: TENANT, clientId: CLIENT, username: "admin@contoso.com" }
     state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "", account }))
     state.accounts.mockResolvedValueOnce([account])
     state.storageChoice = { kind: "local" }
     state.trialAction.mockClear()
     state.addTenant.mockClear()
-    state.checkNewTenant.mockResolvedValueOnce({ tenants: [{ tenantId: TENANT, plan: "pro", ...license }] })
+    state.license = { tenants: [{ tenantId: TENANT, plan: "pro", ...shown }] }
+    state.checkNewTenant.mockResolvedValueOnce({ tenants: [{ tenantId: TENANT, plan: "pro", ...checked }] })
     const container = await render(createElement(OnboardingPage))
     await act(async () => { button(container, "Continue")!.click() })
     await flush()
     expect(state.addTenant).toHaveBeenCalled()
-    // The trial was shown on the Storage step, so no welcome card waits for a click in the app.
     if (acknowledged) expect(state.trialAction).toHaveBeenCalledWith(TENANT, "acknowledge")
     else expect(state.trialAction).not.toHaveBeenCalled()
+  })
+
+  it("reaches the first backup step when marking the trial as seen fails", async () => {
+    const account = { tenantId: TENANT, clientId: CLIENT, username: "admin@contoso.com" }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "", account }))
+    state.accounts.mockResolvedValueOnce([account])
+    state.storageChoice = { kind: "local" }
+    state.trialAction.mockClear()
+    state.trialAction.mockRejectedValueOnce(new Error("offline"))
+    state.license = { tenants: [{ tenantId: TENANT, plan: "pro", source: "trial", trial: true, trialAcknowledged: false }] }
+    state.checkNewTenant.mockResolvedValueOnce(state.license)
+    const container = await render(createElement(OnboardingPage))
+    await act(async () => { button(container, "Continue")!.click() })
+    await flush()
+    expect(state.trialAction).toHaveBeenCalledWith(TENANT, "acknowledge")
+    expect(container.textContent).toContain("Take a first backup")
+  })
+
+  it("does not mark the trial as seen when the tenant cannot be saved", async () => {
+    const account = { tenantId: TENANT, clientId: CLIENT, username: "admin@contoso.com" }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "", account }))
+    state.accounts.mockResolvedValueOnce([account])
+    state.storageChoice = { kind: "local" }
+    state.trialAction.mockClear()
+    state.license = { tenants: [{ tenantId: TENANT, plan: "pro", source: "trial", trial: true, trialAcknowledged: false }] }
+    state.checkNewTenant.mockRejectedValueOnce(new Error("The licensing service could not be reached."))
+    const container = await render(createElement(OnboardingPage))
+    await act(async () => { button(container, "Continue")!.click() })
+    await flush()
+    expect(state.trialAction).not.toHaveBeenCalled()
   })
 
   it("shows the Connect checklist with the permissions and the handoff", async () => {

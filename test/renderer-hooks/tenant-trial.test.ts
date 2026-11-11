@@ -46,7 +46,7 @@ describe("tenant trial UI", () => {
     expect([...container.querySelectorAll("button")].find(b => b.textContent === label)?.disabled).toBe(false)
   })
   it.each([
-    ["Dismiss", "acknowledge"], ["Extend your trial", "extend_trial"],
+    ["Dismiss Pro trial message", "acknowledge"], ["Extend your trial", "extend_trial"],
   ] as const)("handles a rejected %s action and a rejected refresh", async (label, action) => {
     state.action.mockRejectedValueOnce(new Error("Trial action failed"))
     state.refresh.mockRejectedValueOnce(new Error("Status refresh failed"))
@@ -283,7 +283,7 @@ describe("tenant trial UI", () => {
   it("shows a refresh failure without retrying or rejecting the handler", async () => {
     state.refresh.mockRejectedValueOnce(new Error("Status refresh failed"))
     await render(createElement(TenantTrialCard, { tenant, welcome: true }))
-    await click("Dismiss")
+    await click("Dismiss Pro trial message")
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("Status refresh failed")
     expect(state.refresh).toHaveBeenCalledTimes(1)
   })
@@ -298,7 +298,7 @@ describe("tenant trial UI", () => {
     expect([...container.querySelectorAll("a")].map(a => a.textContent)).toEqual(expect.arrayContaining(["Daily backup schedule", "Full restore", "Drift revert", "CIS Benchmarks"]))
     expect(container.querySelector('a[href="/portal/backup?tab=restore"]')).toBeTruthy()
     expect([...container.querySelectorAll("button")].find(b => b.textContent === "Email me setup tips and a reminder before the trial ends")?.className).toContain("border")
-    await click("Dismiss")
+    await click("Dismiss Pro trial message")
     expect(state.action).toHaveBeenCalledWith("tenant", "acknowledge")
   })
   it("prefills contact without sending and submits only on click", async () => {
@@ -396,7 +396,7 @@ describe("tenant trial UI", () => {
     expect(container.textContent).toContain("Pro trial endedFabrikam")
     await click("Continue on Community")
     expect(state.action).toHaveBeenLastCalledWith("ended", "acknowledge")
-    await click("Dismiss")
+    await click("Dismiss Pro trial message")
     expect(state.action).toHaveBeenLastCalledWith("tenant", "acknowledge")
   })
   it("does not offer a no-op trial when an expired activation is still saved", async () => {
@@ -519,6 +519,14 @@ describe("shared trial actions", () => {
   it("offers the Pro shortcuts after the first backup only for a running tenant trial", async () => {
     await render(createElement(TrialShortcuts, { tenantId: "tenant" }))
     expect([...container.querySelectorAll("a")].map(a => a.getAttribute("href"))).toEqual(["/portal/backup?tab=restore", "/portal/drift", "/portal/frameworks/cis-benchmarks"])
+    await render(createElement(TrialShortcuts, { tenantId: "TENANT" }))
+    expect(container.querySelectorAll("a")).toHaveLength(3)
+    await render(createElement(TrialShortcuts, { tenantId: "other" }))
+    expect(container.textContent).toBe("")
+    tenant.trial = false
+    await render(createElement(TrialShortcuts, { tenantId: "tenant" }))
+    expect(container.textContent).toBe("")
+    tenant.trial = true
     tenant.source = "key"
     await render(createElement(TrialShortcuts, { tenantId: "tenant" }))
     expect(container.textContent).toBe("")

@@ -237,7 +237,7 @@ try {
   const active = days => ({ ...base, plan: "pro", tenantLimit: 2, communityTenantId: null, trial: true, trialEndsAt: new Date(NOW + days * DAY).toISOString(), tenants: [trialTenant(0, days)] })
   await scene("trial-started", { ...active(9), tenants: [trialTenant(0, 9, { trialAcknowledged: false })] }, MOCK.tenants.slice(0, 1), "#/portal/overview", "Pro trial started")
   // The welcome asks for no decision: it can only be hidden.
-  if (await evaluate(`document.body.innerText.includes("Got it") || document.body.innerText.includes("Use Community instead") || ![...document.querySelectorAll('button')].some(b => b.textContent === "Dismiss")`)) throw new Error("The welcome asks for a decision")
+  if (await evaluate(`document.body.innerText.includes("Got it") || document.body.innerText.includes("Use Community instead") || ![...document.querySelectorAll('button')].some(b => b.textContent === "Dismiss Pro trial message")`)) throw new Error("The welcome asks for a decision")
   await evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent === "Email me setup tips and a reminder before the trial ends").click()`)
   await assertText("Email address saved.")
   await screenshot("trial-started-email-saved", true)

@@ -346,6 +346,14 @@ describe("License page after a used tenant trial", () => {
     expect(state.open).toHaveBeenCalledWith("checkout", { source: "license-page-trial-used" })
   })
 
+  it("shows one Buy Pro next to a running trial that was not dismissed yet and a tenant whose trial is used", async () => {
+    const running = used({ tenantId: "33333333-2222-4333-8444-555555555555", entitled: true, activated: true, source: "trial", plan: "pro", trial: true, canEnd: true,
+      trialEndsAt: new Date(Date.now() + 9 * DAY).toISOString(), trialAcknowledged: false, trialRefusal: undefined, trialRefusalPermanent: false })
+    const container = await render({ ...community, tenantTrialsEnabled: true, tenants: [running, used()] })
+    expect(buyButtons(container)).toHaveLength(1)
+    expect(occurrences(container, "Questions, or need a quote")).toBe(1)
+    expect(container.textContent).toContain("Use Community instead")
+  })
   it("keeps the extension offer and shows one Buy Pro when the trial ran out with the extension available", async () => {
     const container = await render({ ...community, tenantTrialsEnabled: true, tenantTrialPolicy: { days: 14, extensionDays: 14 }, tenants: [used({ trialCanExtend: true, trialExtensionUnavailable: false })] })
     expect(container.textContent).toContain("Pro trial ended")

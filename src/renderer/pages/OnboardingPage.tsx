@@ -206,11 +206,12 @@ export default function OnboardingPage() {
     if (!account || !choice) return
     setCreating(true)
     setAddError(null)
+    // The trial as the Storage step showed it. A trial that only starts during the check below
+    // was never shown here, so it keeps its welcome card in the app.
+    const shown = tenantLicense(status, account.tenantId)
     let community = false
-    let checked: Awaited<ReturnType<typeof bridge.license.checkNewTenant>> | null = null
     try {
       const status = await bridge.license.checkNewTenant(account.tenantId)
-      checked = status
       community = tenantPlan(tenantLicense(status, account.tenantId)) === "community"
     } catch (error) {
       if (!showCommunityLimitError(error)) {
@@ -242,8 +243,7 @@ export default function OnboardingPage() {
       setStep(3)
       // The Storage step showed the trial, so it does not follow the admin into the app as a
       // welcome card to dismiss. Showing it again costs nothing, so a failure is ignored.
-      const trial = tenantLicense(checked, account.tenantId)
-      if (trial?.source === "trial" && trial.trial && !trial.trialAcknowledged) void bridge.license.tenantTrialAction(account.tenantId, "acknowledge").catch(() => undefined)
+      if (shown?.source === "trial" && shown.trial && !shown.trialAcknowledged) void bridge.license.tenantTrialAction(account.tenantId, "acknowledge").catch(() => undefined)
     } catch (error) {
       if (!showCommunityLimitError(error)) setAddError({ message: error instanceof Error ? error.message : String(error), license: false })
     } finally {

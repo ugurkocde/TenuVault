@@ -45,7 +45,7 @@ export function TrialKeyRefusalActions({ message, tenant, source }: { message: s
   return message.includes(TRIAL_USED_MESSAGE) ? <TrialActions tenant={tenant} source={source} /> : null
 }
 
-export function TrialActions({ tenant, source, welcome = false }: { tenant?: TenantLicenseStatus; source: string; welcome?: boolean }) {
+export function TrialActions({ tenant, source }: { tenant?: TenantLicenseStatus; source: string }) {
   const { status } = useLicense()
   const { busy, error, run } = useTrialAction()
   const [notice, setNotice] = useState("")
@@ -55,8 +55,8 @@ export function TrialActions({ tenant, source, welcome = false }: { tenant?: Ten
   const mailto = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent("TenuVault Pro: quote or invoice")}`
   return <div className="min-w-0 space-y-2 text-sm font-normal">
     <div className="flex flex-wrap items-center gap-2">
-      {!welcome && <Button type="button" size="sm" disabled={busy} onClick={() => { setAction("buy"); void run(() => openCheckout(source)).finally(() => setAction(null)) }}>Buy Pro</Button>}
-      {!welcome && tenant?.trialCanExtend && !extended && <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => { setAction("extend"); void run(async () => {
+      <Button type="button" size="sm" disabled={busy} onClick={() => { setAction("buy"); void run(() => openCheckout(source)).finally(() => setAction(null)) }}>Buy Pro</Button>
+      {tenant?.trialCanExtend && !extended && <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => { setAction("extend"); void run(async () => {
         const updated = await bridge.license.tenantTrialAction(tenant.tenantId, "extend_trial")
         const end = updated?.tenants.find(t => t.tenantId === tenant.tenantId)?.trialEndsAt
         setExtended(true)
@@ -64,7 +64,6 @@ export function TrialActions({ tenant, source, welcome = false }: { tenant?: Ten
       }).finally(() => setAction(null)) }}>{busy && action === "extend" ? "Extending trial..." : days ? `Extend trial by ${days} days` : "Extend your trial"}</Button>}
       {tenant?.trialExtensionAvailableAt && Date.parse(tenant.trialExtensionAvailableAt) > Date.now() && !extended && <p className="text-gray-600">You can extend once, from {formatDate(tenant.trialExtensionAvailableAt)}.</p>}
       {tenant && !tenant.trialCanExtend && !tenant.trialExtensionAvailableAt && !tenant.trialExtensionUnavailable && tenant.source === "trial" && !extended && <p className="text-gray-600">Check the License page for trial extension availability.</p>}
-      {welcome && tenant?.trialCanExtend && <p className="text-gray-600">You can extend your trial once, from the License page.</p>}
     </div>
     <p className="text-gray-600">Questions, or need a quote or an invoice for your purchasing team? Write to <a className="font-medium text-blue-700 underline underline-offset-2" href={mailto} onClick={event => { event.preventDefault(); void bridge.app.openExternal(mailto) }}>{SUPPORT_EMAIL}</a>.</p>
     {notice && <p role="status">{notice}</p>}
@@ -208,7 +207,7 @@ export function TenantTrialCard({ tenant, initialEmail, welcome = false, allowUn
       </div>
       <div className="flex shrink-0 items-center gap-2">
         {days > 0 && <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-blue-100 bg-white px-3 py-1 text-sm font-medium text-blue-700"><CalendarClock className="size-4" /><span><span className="tabular-nums">{days}</span> {days === 1 ? "day" : "days"} left</span></span>}
-        {welcome && <Button type="button" variant="ghost" size="icon" className="size-9 rounded-full" disabled={busy} onClick={() => void run("acknowledge")}><X aria-hidden="true" /><span className="sr-only">Dismiss</span></Button>}
+        {welcome && <Button type="button" variant="ghost" size="icon" className="size-9 rounded-full" disabled={busy} onClick={() => void run("acknowledge")}><X aria-hidden="true" /><span className="sr-only">Dismiss Pro trial message</span></Button>}
       </div>
     </header>
     <div className="space-y-5 px-6 py-5">
