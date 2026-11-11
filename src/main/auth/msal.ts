@@ -139,16 +139,33 @@ export function idTokenIssuedAt(token: string): number | null {
   }
 }
 
-// The headline is what the admin has to do next, because the browser is in front at this point.
-const SUCCESS_PAGE = page("Go back to TenuVault", "You are signed in. You can close this tab.")
-export const ERROR_PAGE = page("Sign-in failed", "Go back to TenuVault for details. You can close this tab.")
+// A ring that draws itself, then the tick (or the cross). Inline, because the page is served
+// from this computer with nothing else to load. People who prefer reduced motion get it drawn.
+const MARKS = {
+  success: { color: "#16a34a", tint: "#dcfce7", path: "M15 27l7.5 7.5L37.5 19", length: 33 },
+  error: { color: "#dc2626", tint: "#fee2e2", path: "M18 18l16 16M34 18L18 34", length: 46 },
+} as const
+const MARK_STYLE = `.mark{display:block;margin:0 auto 1.1rem;animation:pop .35s .85s ease-out both}
+.ring{stroke-dasharray:151;stroke-dashoffset:151;animation:draw .55s ease-out forwards,fill .3s .5s ease-out forwards}
+.sign{stroke-dashoffset:var(--length);animation:draw .35s .5s ease-out forwards}
+@keyframes draw{to{stroke-dashoffset:0}}
+@keyframes fill{to{fill:var(--tint)}}
+@keyframes pop{50%{transform:scale(1.08)}}
+@media (prefers-reduced-motion:reduce){.mark,.ring,.sign{animation:none}.ring,.sign{stroke-dashoffset:0}.ring{fill:var(--tint)}}`
 
 /** The page the browser shows when a sign-in comes back to this computer. The texts are fixed, never user input. */
-export function page(title: string, message: string): string {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title></head>
+export function page(title: string, message: string, kind: keyof typeof MARKS = "success"): string {
+  const mark = MARKS[kind]
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title><style>${MARK_STYLE}</style></head>
 <body style="font-family:Segoe UI,system-ui,-apple-system,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f8fafc;color:#0f172a">
-<main style="max-width:34rem;margin:1rem;padding:2.25rem 2.5rem;background:#fff;border-radius:1rem;box-shadow:0 1px 3px rgba(15,23,42,.15);text-align:center"><h1 style="font-size:1.6rem;margin:0 0 .6rem">${title}</h1><p style="margin:0;line-height:1.5;color:#334155">${message}</p></main></body></html>`
+<main style="max-width:34rem;margin:1rem;padding:2.25rem 2.5rem;background:#fff;border-radius:1rem;box-shadow:0 1px 3px rgba(15,23,42,.15);text-align:center">
+<svg class="mark" viewBox="0 0 52 52" width="76" height="76" aria-hidden="true" style="--tint:${mark.tint};--length:${mark.length}"><circle class="ring" cx="26" cy="26" r="24" fill="transparent" stroke="${mark.color}" stroke-width="3"/><path class="sign" d="${mark.path}" fill="none" stroke="${mark.color}" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="${mark.length}"/></svg>
+<h1 style="font-size:1.6rem;margin:0 0 .6rem">${title}</h1><p style="margin:0;line-height:1.5;color:#334155">${message}</p></main></body></html>`
 }
+
+// The headline is what the admin has to do next, because the browser is in front at this point.
+const SUCCESS_PAGE = page("Go back to TenuVault", "You are signed in. You can close this tab.")
+export const ERROR_PAGE = page("Sign-in failed", "Go back to TenuVault for details. You can close this tab.", "error")
 
 /**
  * Delegated Microsoft Entra sign-in for the admin using the app.

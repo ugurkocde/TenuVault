@@ -23,6 +23,13 @@ it("uses an isolated memory client, setup scopes and the chosen tenant", async (
     // The browser is in front when the sign-in ends, so its page leads with what to do next.
     expect(request.successTemplate).toContain("<h1 style=\"font-size:1.6rem;margin:0 0 .6rem\">Go back to TenuVault</h1>")
     expect(request.successTemplate).toContain("TenuVault is setting up the app registration and continues there")
+    // A green tick that draws itself, drawn at once for people who prefer reduced motion.
+    expect(request.successTemplate).toContain('stroke="#16a34a"')
+    expect(request.successTemplate).toContain("prefers-reduced-motion:reduce")
+    expect(request.errorTemplate).toContain('stroke="#dc2626"')
+    expect(request.errorTemplate).not.toContain("#16a34a")
+    // The page loads nothing from anywhere: no script, no link, no image.
+    for (const template of [request.successTemplate, request.errorTemplate]) expect(template).not.toMatch(/<script|<link|<img|https?:/)
     return { account: { tenantId: "tenant", username: "admin" }, accessToken: "ephemeral" }
   })
   state.provision.mockResolvedValueOnce({ tenantId: "tenant", clientId: "client", username: "admin", reused: false, ready: true })
