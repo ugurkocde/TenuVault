@@ -67,7 +67,7 @@ export function TenantTrialOptions({ onStarted, tenantId, compact = false, varia
   const Text = compact ? "span" : "p"
   return <Container className={compact ? "inline-flex flex-wrap items-center gap-3" : "space-y-3"}>
     {status.tenants.filter(t => (!status?.tenantTrialsEnabled || !tenantId || t.tenantId === tenantId) && t.signedIn && !t.entitled && t.message !== TRIAL_USED_MESSAGE && (status.tenantTrialsEnabled || t.trialRefusal)).map(tenant => <Container key={tenant.tenantId} className={compact ? "inline-flex flex-wrap items-center gap-3" : "flex flex-wrap items-center gap-3"}>
-      {(!compact || organizationLicenseRefusal(tenant)) && tenant.trialRefusal && <Text role="status">{organizationLicenseRefusal(tenant) ? ORGANIZATION_LICENSE_GUIDANCE : tenant.trialRefusal}</Text>}
+      {(!compact || organizationLicenseRefusal(tenant)) && tenant.trialRefusal && <Text role="status" className={organizationLicenseRefusal(tenant) ? "text-sm text-gray-700" : undefined}>{organizationLicenseRefusal(tenant) ? ORGANIZATION_LICENSE_GUIDANCE : tenant.trialRefusal}</Text>}
       {tenant.activated ? <Text className="text-sm text-gray-600">Check the saved activation before starting a trial.</Text> : status.tenantTrialsEnabled && !organizationLicenseRefusal(tenant) && !(tenant.trialRefusalPermanent ?? Boolean(tenant.trialRefusal)) && <><Button variant={variant} size={size} disabled={busy} onClick={() => void run(async () => {
         await bridge.license.startTenantTrial(tenant.tenantId)
         await onStarted?.()

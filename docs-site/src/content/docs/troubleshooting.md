@@ -63,6 +63,7 @@ If the browser shows `AADSTS50011` (redirect URI mismatch), the app registration
 
 | Message | Cause | Fix |
 | --- | --- | --- |
+| This tenant has an organization license shared through another app registration than the one this sign-in used. This sign-in cannot use that license, and no trial can start. To use the license, remove the tenant from TenuVault and connect it again through that app registration. Choose "I already have an app registration" on the Connect step and enter its client ID, which an Entra administrator can find under App registrations. | The tenant has an organization license, but you signed in through another app registration than the one the license was shared from. The tenant shows Community and no trial can start. | Remove the tenant, connect it again with **I already have an app registration** on the **Connect** step and enter the client ID of the app registration the license was shared from. See [Manage your license](/licensing/manage/#community-although-the-tenant-has-an-organization-license). |
 | A TenuVault license is required for this tenant. Add your license key on the License page, or start a 30 day free trial. | The tenant has no license and is not the free Community tenant on this device. | Add a license key on the **License** page, or start the free trial there with your email address. |
 | TenuVault Community covers one tenant, and it is used for tenant *ID*. Add a Pro or MSP license on the License page to use more tenants. | Community is free for one tenant, and another tenant already uses it. | Add a Pro or MSP license key. See [Plans and features](/licensing/). |
 | An active license is required for backup and restore operations. | Notice on the backup, drift and audit pages: the tenant is signed in but not licensed. | Click **Open license** and activate a license for the tenant. |
@@ -254,12 +255,3 @@ Feedback and its screenshot are stored up to 12 months; the email copy to suppor
 ## Still stuck?
 
 Check **Settings** > **About** for your TenuVault version and sign-in method, then contact support through **Website and support** on the same page, or tell us what got in your way with [Share feedback](#share-feedback).
-
-
-## Community despite an organization license
-
-An organization license is tied to the app registration it was shared from. A sign-in through another registration can show Community and cannot start a trial. TenuVault explains:
-
-> This tenant has an organization license shared through another app registration than the one this sign-in used. This sign-in cannot use that license, and no trial can start. To use the license, remove the tenant from TenuVault and connect it again through that app registration. Choose "I already have an app registration" on the Connect step and enter its client ID, which an Entra administrator can find under App registrations.
-
-Keep **Retry** available to check the license again.

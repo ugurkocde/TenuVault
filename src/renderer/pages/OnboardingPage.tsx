@@ -303,7 +303,7 @@ export default function OnboardingPage() {
   const succeeded = Boolean(displayJob?.isComplete && displayJob.isSuccessful)
 
   return (
-    <div className={cn("@container mx-auto space-y-4 p-5 lg:p-6", step === 0 ? "max-w-6xl" : "max-w-3xl")}>
+    <div className={cn("@container mx-auto space-y-4 p-5 lg:p-6", step === 0 ? "max-w-[96rem]" : "max-w-3xl")}>
       {tenants.length > 0 && (
         <Link to="/portal/dashboard" className="group inline-flex items-center gap-3 rounded-full text-sm font-medium text-gray-600 hover:text-gray-900">
           <span className="flex size-10 items-center justify-center rounded-full bg-card transition-colors group-hover:bg-secondary" aria-hidden="true"><ArrowLeft className="h-4 w-4" /></span> Back to dashboard

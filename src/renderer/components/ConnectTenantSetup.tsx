@@ -214,30 +214,6 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
           </div>
         </details>
 
-        <div className="space-y-2 border-t border-gray-100 pt-3">
-          <div>
-            <p className="font-medium text-gray-900">Other ways to connect</p>
-            <p className="text-gray-600">Not an administrator with one of these roles? Your administrator approves once, and you do the rest.</p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="outline" size="sm" disabled={running} onClick={() => void copyHandoff()}>
-              {copied ? <Check className="mr-2 h-4 w-4" aria-hidden="true" /> : <Send className="mr-2 h-4 w-4" aria-hidden="true" />}
-              {copied ? "Copied" : "Someone else is the admin? Copy instructions"}
-            </Button>
-            <Button type="button" variant="ghost" size="sm" disabled={running} onClick={() => setScript(!script)} aria-expanded={script}>
-              Use the setup script instead
-            </Button>
-            <Button type="button" variant="ghost" size="sm" disabled={running} onClick={onManual}>
-              I already have an app registration
-            </Button>
-          </div>
-          {copied && (
-            <p role="status" className="text-xs text-gray-600">
-              Send the instructions to your Entra administrator by email or chat. TenuVault keeps your place here, so you can close
-              it. When they send back the two lines, select &quot;I already have an app registration&quot; and paste them.
-            </p>
-          )}
-        </div>
       </div>
       <ul className="space-y-4 rounded-2xl border border-border bg-muted/40 p-5">
         {REASONS.map(({ icon: Icon, title, text }) => (
@@ -250,6 +226,31 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
           </li>
         ))}
       </ul>
+      {/* Under both columns, so the three ways sit in one row when there is room. */}
+      <div className="space-y-2 border-t border-gray-100 pt-3 @3xl:col-span-2">
+        <div>
+          <p className="font-medium text-gray-900">Other ways to connect</p>
+          <p className="text-gray-600">Not an administrator with one of these roles? Your administrator approves once, and you do the rest.</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" size="sm" disabled={running} onClick={() => void copyHandoff()}>
+            {copied ? <Check className="mr-2 h-4 w-4" aria-hidden="true" /> : <Send className="mr-2 h-4 w-4" aria-hidden="true" />}
+            {copied ? "Copied" : "Someone else is the admin? Copy instructions"}
+          </Button>
+          <Button type="button" variant="ghost" size="sm" disabled={running} onClick={() => setScript(!script)} aria-expanded={script}>
+            Use the setup script instead
+          </Button>
+          <Button type="button" variant="ghost" size="sm" disabled={running} onClick={onManual}>
+            I already have an app registration
+          </Button>
+        </div>
+        {copied && (
+          <p role="status" className="text-xs text-gray-600">
+            Send the instructions to your Entra administrator by email or chat. TenuVault keeps your place here, so you can close
+            it. When they send back the two lines, select &quot;I already have an app registration&quot; and paste them.
+          </p>
+        )}
+      </div>
       {script && (
         <div className="space-y-4 @3xl:col-span-2">
           <SetupScriptCard />

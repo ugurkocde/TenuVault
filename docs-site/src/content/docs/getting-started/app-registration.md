@@ -32,11 +32,15 @@ Expand **What the setup does** on the Connect step to read these steps and the p
 
 ### An app registration that already exists
 
-Setup recognizes registrations whose name starts with `TenuVault`, whose note starts with `Used by the TenuVault desktop app`, which are single tenant and have `http://localhost` as a public client redirect URI. The note is required.
+TenuVault does not create a second app registration when the tenant already has one of its own. It recognises an app registration whose name starts with `TenuVault`, that is single tenant, has the redirect URI `http://localhost` for mobile and desktop applications, and carries the internal note that starts with `Used by the TenuVault desktop app`. The note is what marks it as TenuVault's; an app registration that only shares the name is left alone. TenuVault uses that app registration, adds any of the default permissions that are missing from its admin consent and removes none. The **Sign in** step names the one it uses.
 
-When several match, setup prefers the one with the most delegated permissions covered by tenant-wide (`AllPrincipals`) consent, then the oldest registration. It skips an enterprise application with sign-in turned off when another candidate exists. With only a disabled candidate, setup asks you to enable sign-in. It never deletes an existing registration or removes permissions.
+If several match, TenuVault uses the one whose tenant-wide admin consent covers the most permissions, and among equals the oldest. One whose enterprise application has sign-in turned off is passed over while another one matches. To use a different one, select **Previous**, then **I already have an app registration**, and enter its client ID.
 
-An organization license is tied to the app registration it was shared from. To choose another registration, select **Previous**, then **I already have an app registration** and enter its client ID.
+This matters for licensing: an organization license is tied to the app registration it was shared from, so signing in through a second app registration would leave the tenant on Community. See [Manage your license](/licensing/manage/#community-although-the-tenant-has-an-organization-license).
+
+This is also what happens when a second admin connects the same tenant on another computer, or when you run the setup again.
+
+If your tenant does not list Azure Service Management or Azure Storage among its enterprise applications yet, the setup adds them, as the script does. They are Microsoft's own APIs, not part of TenuVault, and they stay in the tenant.
 
 ### If something goes wrong
 

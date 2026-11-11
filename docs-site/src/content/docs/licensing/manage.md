@@ -101,6 +101,14 @@ You do not need to enter a key. On the welcome screen, click **Connect your tena
 
 TenuVault proves your sign-in to the licensing service with a fresh Microsoft ID token, which it requests silently. If that is not possible, the tenant shows "Sign in to this tenant again to check your organization's license." Sign in to the tenant again and click **Retry**.
 
+### Community although the tenant has an organization license
+
+An organization license is tied to the app registration it was shared from. If you sign in to the tenant through another app registration, for example a second one that was created in the same tenant, the licensing service treats that sign-in as unlicensed, and it cannot start a trial either, because the tenant has a license. The tenant then shows **Community (free)** and TenuVault explains:
+
+> This tenant has an organization license shared through another app registration than the one this sign-in used. This sign-in cannot use that license, and no trial can start. To use the license, remove the tenant from TenuVault and connect it again through that app registration. Choose "I already have an app registration" on the Connect step and enter its client ID, which an Entra administrator can find under App registrations.
+
+To fix it, remove the tenant under **Tenants**, select **Connect tenant** and, on the **Connect** step, **I already have an app registration**. Enter the client ID of the app registration the license was shared from and sign in. **Set up with Microsoft sign-in** avoids this by itself: it uses an existing TenuVault app registration instead of creating a second one. See [An app registration that already exists](/getting-started/app-registration/#an-app-registration-that-already-exists).
+
 ## Move a license to another machine
 
 1. On the old machine, open **License** and click **Deactivate this machine**.
@@ -204,12 +212,3 @@ per trial end date, including across restarts. Extending re-arms the reminder fo
 Paid tenants and tenants covered by an organization license do not receive these notices.
 
 TenuVault keeps a short tally of Pro features used during the trial on this computer to show it in the trial notices. It is never sent.
-
-
-## Community despite an organization license
-
-An organization license is tied to the app registration it was shared from. A sign-in through another registration can show Community and cannot start a trial. TenuVault explains:
-
-> This tenant has an organization license shared through another app registration than the one this sign-in used. This sign-in cannot use that license, and no trial can start. To use the license, remove the tenant from TenuVault and connect it again through that app registration. Choose "I already have an app registration" on the Connect step and enter its client ID, which an Entra administrator can find under App registrations.
-
-Keep **Retry** available to check the license again.

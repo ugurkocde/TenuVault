@@ -27,8 +27,8 @@ export interface ProvisioningOptions {
   signal?: AbortSignal
   sleep?: (ms: number) => Promise<void>
 }
-// Use the tenant setup Graph endpoint.
-const ROOT = "https://graph.microsoft.com/beta"
+// The stable Graph version, as the setup script uses it. The first real setups ran against it.
+const ROOT = "https://graph.microsoft.com/v1.0"
 const NOTES = "Used by the TenuVault desktop app. Delegated permissions only, no credentials."
 const REQUEST_TIMEOUT_MS = 30_000
 
@@ -41,7 +41,7 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
   // failed, so a stalled connection cannot keep the setup, and the token it holds, alive.
   async function graph<T>(method: string, path: string, body?: object, replication = false, cleanup = false): Promise<T> {
     const url = new URL(path.startsWith("https:") ? path : `${ROOT}${path}`)
-    if (url.origin !== "https://graph.microsoft.com" || url.username || url.password || url.hash || !url.pathname.startsWith("/beta/")) throw new Error("Unexpected Graph paging address.")
+    if (url.origin !== "https://graph.microsoft.com" || url.username || url.password || url.hash || !url.pathname.startsWith("/v1.0/")) throw new Error("Unexpected Graph paging address.")
     const attempts = replication ? 12 : 4
     // A write that may have been carried out is never sent twice: only a throttled request (which
     // was not carried out) and a replication delay repeat a POST.
@@ -94,7 +94,7 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
   checkCancelled()
   // The sign-in is done; from here on the browser wait can no longer be cancelled.
   progress({ phase: "registration" })
-  const principalFields = "$select=id,appId,accountEnabled,publishedPermissionScopes"
+  const principalFields = "$select=id,appId,accountEnabled,oauth2PermissionScopes"
   const resources = []
   for (const resource of DESKTOP_APP_PERMISSIONS) {
     // A Microsoft API the tenant has not used yet is added to it, as the setup script does. These
@@ -102,7 +102,7 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
     const path = `/servicePrincipals?$filter=${encodeURIComponent(`appId eq '${resource.appId}'`)}&${principalFields}`
     let principal = (await list<Principal>(path))[0]
     if (!principal) principal = await graph<Principal>("POST", "/servicePrincipals", { appId: resource.appId }, true)
-    // Accept either permission scope field returned by Graph.
+    // Graph v1.0 calls them oauth2PermissionScopes; the beta name is accepted as well.
     const scopes = principal.oauth2PermissionScopes ?? principal.publishedPermissionScopes ?? []
     const resourceAccess = resource.permissions.map(value => {
       const scope = scopes.find(scope => scope.value === value && scope.isEnabled !== false)
