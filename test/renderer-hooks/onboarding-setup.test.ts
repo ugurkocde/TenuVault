@@ -87,8 +87,10 @@ beforeEach(() => {
   state.activeJobs = []
 })
 
-afterEach(() => {
+afterEach(async () => {
   for (const root of roots.splice(0)) act(() => root.unmount())
+  // A form left with a sign-in open cancels it a tick after unmounting.
+  await new Promise((resolve) => setTimeout(resolve, 0))
   document.body.innerHTML = ""
   vi.clearAllMocks()
   vi.unstubAllGlobals()
@@ -545,6 +547,7 @@ it("cancels a sign-in left behind and ignores its late result", async () => {
   const container = await render(createElement(OnboardingPage))
   await act(async () => button(container, "Sign in with Microsoft")!.click())
   await act(async () => button(container, "Previous")!.click())
+  await flush()
   expect(state.cancelSignIn).toHaveBeenCalledOnce()
   await act(async () => finish({ tenantId: TENANT, clientId: CLIENT, username: "late" }))
   expect(container.textContent).toContain("Connect your tenant")
@@ -610,6 +613,39 @@ it.each([false, true])("reveals only an unfinished first backup when leaving, co
   for (const root of roots.splice(0)) act(() => root.unmount())
   if (complete) expect(state.updateJob).not.toHaveBeenCalled()
   else expect(state.updateJob).toHaveBeenCalledWith("first", { isHidden: false })
+})
+
+it("registers a first backup that starts after the admin left as visible", async () => {
+  const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
+  state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "", account }))
+  state.accounts.mockResolvedValueOnce([account])
+  state.storageChoice = { kind: "local" }
+  state.checkNewTenant.mockResolvedValueOnce({ tenants: [{ plan: "community" }] })
+  let started!: (response: Response) => void
+  vi.stubGlobal("fetch", vi.fn((url: string) => url === "/api/backup/start" ? new Promise<Response>(resolve => { started = resolve }) : Promise.resolve(Response.json({}))))
+  const container = await render(createElement(OnboardingPage))
+  await act(async () => button(container, "Continue")!.click())
+  await act(async () => button(container, "Run first backup")!.click())
+  for (const root of roots.splice(0)) act(() => root.unmount())
+  await act(async () => { started(Response.json({ jobId: "late" })); await new Promise(resolve => setTimeout(resolve, 0)) })
+  expect(state.addJob).toHaveBeenCalledWith(expect.objectContaining({ jobId: "late", isHidden: false, quiet: true }))
+})
+
+it("refuses an already connected tenant after the in-app setup with one automatic sign-in", async () => {
+  const account = { tenantId: TENANT, clientId: CLIENT, username: "admin@contoso.test" }
+  state.tenants = [{ credentials: { tenantId: TENANT } }]
+  state.createRegistration.mockResolvedValueOnce({ tenantId: TENANT, clientId: CLIENT, username: account.username, reused: true, ready: true, displayName: "TenuVault Desktop", candidateCount: 1, missingConsent: [] })
+  state.signIn.mockResolvedValue(account)
+  const container = await render(createElement(OnboardingPage))
+  await act(async () => button(container, "Set up with Microsoft sign-in")!.click())
+  await flush()
+  await flush()
+  expect(state.signIn).toHaveBeenCalledOnce()
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("This tenant is already connected to TenuVault.")
+  expect(container.querySelector('[role="alert"] a')?.getAttribute("href")).toBe("/portal/dashboard")
+  expect(container.textContent).not.toContain("Choose where backups are stored")
+  expect(state.releaseTenant).not.toHaveBeenCalled()
+  expect(state.addTenant).not.toHaveBeenCalled()
 })
 
 it("explains the consent checkbox in both setup notes", async () => {

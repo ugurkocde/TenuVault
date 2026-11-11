@@ -254,14 +254,15 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
 
   useEffect(() => { notify.current?.({ tenant, clientId, displayName }) }, [tenant, clientId, displayName])
 
-  // Leaving the form cancels its browser wait and ignores a late answer.
+  // Leaving the form cancels its browser wait and ignores a late answer. The cancel waits a tick,
+  // so the remount of React's StrictMode check does not stop the automatic sign-in.
   const active = useRef(true)
   const signingIn = useRef(false)
   useEffect(() => {
     active.current = true
     return () => {
       active.current = false
-      if (signingIn.current) void bridge.auth.cancelSignIn().catch(() => undefined)
+      setTimeout(() => { if (!active.current && signingIn.current) void bridge.auth.cancelSignIn().catch(() => undefined) })
     }
   }, [])
 

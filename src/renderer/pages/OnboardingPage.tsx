@@ -92,9 +92,14 @@ export default function OnboardingPage() {
   // The floating panel takes over when the admin leaves an unfinished backup.
   const leavingBackup = useRef({ runningJobId, displayJob, updateJob })
   leavingBackup.current = { runningJobId, displayJob, updateJob }
-  useEffect(() => () => {
-    const { runningJobId, displayJob, updateJob } = leavingBackup.current
-    if (runningJobId && !displayJob?.isComplete) updateJob(runningJobId, { isHidden: false })
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+      const { runningJobId, displayJob, updateJob } = leavingBackup.current
+      if (runningJobId && !displayJob?.isComplete) updateJob(runningJobId, { isHidden: false })
+    }
   }, [])
 
   // A resumed sign-in counts only while it is still signed in on this computer.
@@ -309,7 +314,8 @@ export default function OnboardingPage() {
       startTime: new Date().toISOString(),
       isComplete: false,
       isSuccessful: false,
-      isHidden: true,
+      // A backup that started after the admin left is shown in the floating panel straight away.
+      isHidden: mounted.current,
       quiet: true,
       credentials: { tenantId: credentials.tenantId, appId: credentials.appId, clientSecret: credentials.clientSecret },
       resources: { subscriptionId: credentials.subscriptionId ?? "", resourceGroupName: credentials.resourceGroupName ?? "", automationAccountName: "", storageAccountName: credentials.storageAccountName ?? "" },

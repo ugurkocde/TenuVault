@@ -60,6 +60,18 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
   const { fetch: request, tenantId, username, progress, signal } = options
   const sleep = options.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)))
   const checkCancelled = () => { if (signal?.aborted) throw new Error("Sign-in cancelled.") }
+  // A wait that ends at once when the admin cancels. Cleanup waits keep the plain sleep.
+  const wait = async (ms: number, cancelled: () => Error = () => new Error("Sign-in cancelled.")) => {
+    if (signal?.aborted) throw cancelled()
+    let abort!: () => void
+    const stop = new Promise<never>((_resolve, reject) => {
+      abort = () => reject(cancelled())
+      signal?.addEventListener("abort", abort, { once: true })
+    })
+    try { await Promise.race([sleep(ms), stop]) }
+    finally { signal?.removeEventListener("abort", abort) }
+    if (signal?.aborted) throw cancelled()
+  }
   // One request to Microsoft Graph. A request that gets no answer within half a minute counts as
   // failed, so a stalled connection cannot keep the setup, and the token it holds, alive.
   async function graph<T>(method: string, path: string, body?: object, replication = false, cleanup = false): Promise<T> {
@@ -75,13 +87,15 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
       let response: Response
       try {
         response = await request(url.href, {
-          method, redirect: "error", signal: !cleanup && signal ? AbortSignal.any([signal, timeout]) : timeout,
+          // A POST is never cut off midway: Microsoft may already have carried it out, and the
+          // ID in its answer is what the cleanup needs. A cancel is noticed right after it.
+          method, redirect: "error", signal: !cleanup && signal && repeatable ? AbortSignal.any([signal, timeout]) : timeout,
           headers: { Authorization: `Bearer ${options.token}`, "Content-Type": "application/json" },
           ...(body ? { body: JSON.stringify(body) } : {}),
         })
       } catch (error) {
         if (!cleanup) checkCancelled()
-        if (repeatable && attempt < attempts) { await sleep(3000); continue }
+        if (repeatable && attempt < attempts) { await (cleanup ? sleep(3000) : wait(3000)); continue }
         throw new Error(`Graph ${method} failed: Microsoft Graph did not answer${timeout.aborted ? " in time" : ""}. ${error instanceof Error ? error.message : String(error)}`)
       }
       if (response.ok) return (response.status === 204 ? undefined : await response.json()) as T
@@ -92,7 +106,8 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
       if (attempt < attempts && (replicating || transient)) {
         const header = response.headers.get("Retry-After")
         const delay = header ? (/^\d+$/.test(header) ? Number(header) * 1000 : Date.parse(header) - Date.now()) : 3000
-        await sleep(Math.min(60_000, Math.max(3000, Number.isFinite(delay) ? delay : 3000)))
+        const pause = Math.min(60_000, Math.max(3000, Number.isFinite(delay) ? delay : 3000))
+        await (cleanup ? sleep(pause) : wait(pause))
         continue
       }
       if (response.status === 403) throw new Error(`The signed-in account ${username} lacks a role that can create app registrations and grant admin consent. Use a ${CONSENT_ROLES.join(", ")} (with consent rights). ${message}`)
@@ -199,45 +214,38 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
       if (grant && lacking.length) await graph("PATCH", `/oauth2PermissionGrants/${encodeURIComponent(grant.id)}`, { scope: [...scopes].join(" ") }, true)
       if (!grant) await graph("POST", "/oauth2PermissionGrants", { clientId: principal.id, consentType: "AllPrincipals", resourceId: resource.principal!.id, scope: [...scopes].join(" ") }, true)
     }
+    checkCancelled()
   } catch (error) {
     if (!created) throw error
     let removed = false
     try { await graph("DELETE", `/applications/${created.id}`, undefined, true, true); removed = true } catch { /* Best effort cleanup. */ }
     throw new Error(`Setup did not finish. ${removed ? "The half-created app registration was removed again." : `Cleanup failed. Delete app registration TenuVault Desktop (client id ${created.appId}) in the Entra admin center.`} ${error instanceof Error ? error.message : String(error)}`)
   }
-  checkCancelled()
+  // From here on the registration is complete. A cancel keeps it, and says so when this run made it.
+  const kept = () => new Error(existing ? "Sign-in cancelled." : `Setup was cancelled. The app registration "${app!.displayName}" (client id ${app!.appId}) stays in your tenant, and the next setup uses it.`)
+  const checkKept = () => { if (signal?.aborted) throw kept() }
+  checkKept()
   progress({ phase: "publishing", reused: Boolean(existing) })
-  // Stop publication waits at once when the admin cancels.
-  const waitPublishing = async (ms: number) => {
-    checkCancelled()
-    let abort!: () => void
-    const cancelled = new Promise<never>((_resolve, reject) => {
-      abort = () => reject(new Error("Sign-in cancelled."))
-      signal?.addEventListener("abort", abort, { once: true })
-    })
-    try { await Promise.race([sleep(ms), cancelled]); checkCancelled() }
-    finally { signal?.removeEventListener("abort", abort) }
-  }
   // Provisioning has committed. Publication failures must preserve the IDs for manual sign-in.
   let ready = false
   const deadline = Date.now() + 90_000
   for (let attempt = 0; attempt < 45 && Date.now() < deadline; attempt++) {
-    checkCancelled()
+    checkKept()
     try {
       const response = await request(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/devicecode`, {
         method: "POST", redirect: "error", signal: AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(Math.max(1, Math.min(5000, deadline - Date.now())))]),
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({ client_id: app!.appId, scope: "https://graph.microsoft.com/User.Read" }).toString(),
       })
-      checkCancelled()
+      checkKept()
       const data = await response.json() as { error?: string; error_codes?: number[]; device_code?: string }
       if ((response.ok && data.device_code) || (response.status === 400 && data.error && !(data.error === "unauthorized_client" && data.error_codes?.includes(700016)))) { ready = true; break }
     } catch { /* Return IDs even when the publication service cannot be reached. */ }
-    await waitPublishing(Math.max(0, Math.min(2000, deadline - Date.now())))
+    await wait(Math.max(0, Math.min(2000, deadline - Date.now())), kept)
   }
   // The probe answers as soon as the sign-in service knows the application. Its service principal
   // and consent follow moments later, so leave them a little time before the browser opens.
-  if (ready) await waitPublishing(5000)
-  checkCancelled()
+  if (ready) await wait(5000, kept)
+  checkKept()
   return { tenantId, clientId: app!.appId, username, reused: Boolean(existing), ready, displayName: app!.displayName, candidateCount: candidates.length, missingConsent }
 }

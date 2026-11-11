@@ -55,6 +55,26 @@ export function loadOnboardingDraft(): OnboardingDraft | null {
   }
 }
 
+/** How long the sign-in of an unfinished setup is kept through restarts. */
+export const PENDING_SIGN_IN_MAX_AGE_MS = 3 * 86_400_000
+
+/**
+ * The tenant an unfinished setup signed in to, while its draft is recent. Startup cleanup leaves
+ * that sign-in alone so the setup can resume; an abandoned one is released after a few days.
+ */
+export function pendingSignInTenant(now = Date.now()): string | null {
+  try {
+    const raw = bridge.storage.getItemSync(KEY)
+    if (!raw) return null
+    const value = JSON.parse(raw) as Record<string, unknown>
+    const account = validAccount(value.account)
+    const savedAt = typeof value.savedAt === "number" ? value.savedAt : 0
+    return account && now - savedAt < PENDING_SIGN_IN_MAX_AGE_MS ? account.tenantId.toLowerCase() : null
+  } catch {
+    return null
+  }
+}
+
 /** Whether a draft holds nothing worth resuming: the Connect step with no input. */
 export function isEmptyDraft(draft: OnboardingDraft): boolean {
   return draft.step === 0 && !draft.tenant && !draft.clientId && !draft.displayName && !draft.account
@@ -64,7 +84,7 @@ let pending: Promise<void> = Promise.resolve()
 
 /** Saves the draft, or removes it when it is empty. Writes run in order; a failure only logs. */
 export function saveOnboardingDraft(draft: OnboardingDraft): void {
-  const write = () => (isEmptyDraft(draft) ? bridge.storage.removeItem(KEY) : bridge.storage.setItem(KEY, JSON.stringify(draft)))
+  const write = () => (isEmptyDraft(draft) ? bridge.storage.removeItem(KEY) : bridge.storage.setItem(KEY, JSON.stringify({ ...draft, savedAt: Date.now() })))
   pending = pending.then(write).catch((error: unknown) => console.error("Could not save the setup progress:", error))
 }
 

@@ -1,4 +1,4 @@
-import { loadOnboardingDraft } from "../lib/onboarding-draft"
+import { pendingSignInTenant } from "../lib/onboarding-draft"
 import { bridge } from "../lib/bridge"
 
 /**
@@ -41,7 +41,7 @@ let preservationWarningShown = false
 
 async function releaseOrphanedTenants(saved: Set<string>): Promise<void> {
   const status = await bridge.license.status()
-  const resuming = loadOnboardingDraft()?.account?.tenantId.toLowerCase()
+  const resuming = pendingSignInTenant()
   for (const { tenantId } of status.tenants.filter((tenant) => tenant.activated)) {
     if (!saved.has(tenantId.toLowerCase()) && tenantId.toLowerCase() !== resuming) await bridge.license.releaseTenant(tenantId)
   }

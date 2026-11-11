@@ -309,7 +309,8 @@ it.each([false, true])("cancels a publication sleep promptly and keeps the commi
   const pending = f.run(controller.signal)
   await started
   controller.abort()
-  await expect(pending).rejects.toThrow("Sign-in cancelled.")
+  // This run created the registration, so the cancel says that it stays and is used next time.
+  await expect(pending).rejects.toThrow('Setup was cancelled. The app registration "TenuVault Desktop" (client id client) stays in your tenant, and the next setup uses it.')
   expect(f.probes).toHaveLength(1)
   expect(f.calls.some(call => call.method === "DELETE")).toBe(false)
 })
@@ -335,4 +336,28 @@ it("cancels a publication request in flight", async () => {
   })
   await expect(pending).rejects.toThrow("Sign-in cancelled.")
   expect(request).toHaveBeenCalledOnce()
+})
+
+it("lets a create request in flight finish when cancelled, then removes what it created", async () => {
+  const controller = new AbortController()
+  let createSignal: AbortSignal | null | undefined
+  const f = fixture({ fail: (url, init) => {
+    if (url.pathname === "/v1.0/applications" && init.method === "POST") { createSignal = init.signal; controller.abort() }
+    return undefined
+  } })
+  await expect(f.run(controller.signal)).rejects.toThrow("The half-created app registration was removed again. Sign-in cancelled.")
+  // The admin's cancel never cut the POST off, so its answer carried the ID the cleanup deletes.
+  expect(createSignal?.aborted).toBe(false)
+  expect(f.calls.filter(call => call.method === "DELETE").map(call => call.url.pathname)).toEqual(["/v1.0/applications/app"])
+  expect(f.probes).toHaveLength(0)
+})
+
+it("ends a Graph retry wait at once when cancelled", async () => {
+  const controller = new AbortController()
+  let first = true
+  const f = fixture({ fail: () => first ? (first = false, failure(429, "busy", { "Retry-After": "60" })) : undefined })
+  f.sleep.mockImplementationOnce(() => { controller.abort(); return new Promise(() => {}) })
+  await expect(f.run(controller.signal)).rejects.toThrow("Sign-in cancelled.")
+  expect(f.sleep).toHaveBeenCalledExactlyOnceWith(60_000)
+  expect(f.calls).toHaveLength(1)
 })

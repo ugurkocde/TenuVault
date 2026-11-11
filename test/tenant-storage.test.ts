@@ -43,14 +43,20 @@ describe("tenantStorage", () => {
     expect(console.error).not.toHaveBeenCalled()
   })
 
-  it.each([true, false])("protects only the account in a resumable draft: %s", async hasAccount => {
+  it.each([
+    ["a recent draft with a sign-in", true, 0, true],
+    ["a draft without a sign-in", false, 0, false],
+    ["a draft older than three days", true, 3 * 86_400_000 + 1, false],
+    ["a draft without a save time", true, null, false],
+  ] as const)("protects the sign-in of %s: %s", async (_name, hasAccount, age, protectedTenant) => {
     const draft = { step: 2, tenant: "ORPHANED-TENANT", clientId: "client", displayName: "",
-      account: hasAccount ? { tenantId: "ORPHANED-TENANT", clientId: "client", username: "admin" } : null }
+      account: hasAccount ? { tenantId: "ORPHANED-TENANT", clientId: "client", username: "admin" } : null,
+      ...(age === null ? {} : { savedAt: Date.now() - age }) }
     bridge.storage.getItemSync.mockImplementation(key => key === "tenuvault.onboarding.draft" ? JSON.stringify(draft) : null)
     const { tenantStorage } = await import("../src/renderer/overrides/tenant-storage")
     tenantStorage.getItem(TENANTS_KEY)
     await setImmediate()
-    expect(bridge.license.releaseTenant.mock.calls).toEqual(hasAccount ? [["saved-tenant"]] : [["saved-tenant"], ["orphaned-tenant"]])
+    expect(bridge.license.releaseTenant.mock.calls).toEqual(protectedTenant ? [["saved-tenant"]] : [["saved-tenant"], ["orphaned-tenant"]])
   })
 
   it("keeps saved tenants and releases only activated orphans once per cached read", async () => {
