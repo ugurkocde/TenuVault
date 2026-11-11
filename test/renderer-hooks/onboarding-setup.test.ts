@@ -64,7 +64,7 @@ vi.mock("../../src/renderer/components/StorageChooser", () => ({
 
 import OnboardingPage from "../../src/renderer/pages/OnboardingPage"
 import { setupCommand, TenantSignInForm } from "../../src/renderer/components/TenantSignInForm"
-import { loadOnboardingDraft, saveOnboardingDraft } from "../../src/renderer/lib/onboarding-draft"
+import { loadOnboardingDraft, pendingSignInTenant, PENDING_SIGN_IN_MAX_AGE_MS, saveOnboardingDraft } from "../../src/renderer/lib/onboarding-draft"
 import { AddTenantModal } from "../../src/renderer/overrides/add-tenant-modal"
 
 const TENANT = "8c6f2b1e-4d3a-4f7b-9e21-6a5d0c3b7f14"
@@ -184,6 +184,30 @@ describe("onboarding draft", () => {
     state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT }))
     expect(loadOnboardingDraft()?.step).toBe(1)
   })
+
+  it("counts a sign-in's age from when it was first saved, and drops it after three days", async () => {
+    const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
+    const signedInAt = () => JSON.parse(state.store.get(DRAFT_KEY)!).signedInAt
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000)
+    saveOnboardingDraft({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "", account })
+    await flush()
+    expect(signedInAt()).toBe(1_000)
+    // Opening the setup again saves again; that does not extend the sign-in.
+    now.mockReturnValue(2_000)
+    saveOnboardingDraft({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "Contoso", account })
+    await flush()
+    expect(signedInAt()).toBe(1_000)
+    expect(pendingSignInTenant(1_000 + PENDING_SIGN_IN_MAX_AGE_MS - 1)).toBe(TENANT.toLowerCase())
+    // Past three days, resume and startup cleanup agree that the sign-in is gone.
+    now.mockReturnValue(1_000 + PENDING_SIGN_IN_MAX_AGE_MS)
+    expect(pendingSignInTenant()).toBeNull()
+    expect(loadOnboardingDraft()).toMatchObject({ step: 1, account: null })
+    // A sign-in to another tenant starts its own time.
+    saveOnboardingDraft({ step: 2, tenant: "other", clientId: CLIENT, displayName: "", account: { ...account, tenantId: "other" } })
+    await flush()
+    expect(signedInAt()).toBe(1_000 + PENDING_SIGN_IN_MAX_AGE_MS)
+    now.mockRestore()
+  })
 })
 
 describe("OnboardingPage", () => {
@@ -199,7 +223,7 @@ describe("OnboardingPage", () => {
 
   it("resumes at storage while the sign-in is still there, and signs in again when it is gone", async () => {
     const account = { tenantId: TENANT, clientId: CLIENT, username: "admin@contoso.com" }
-    state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "", account }))
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "", account, signedInAt: Date.now() }))
     state.accounts.mockResolvedValueOnce([account])
     let container = await render(createElement(OnboardingPage))
     expect(container.textContent).toContain("Choose where backups are stored")
@@ -214,7 +238,7 @@ describe("OnboardingPage", () => {
 
   it("frees the sign-in of an unsaved tenant before signing in to another one", async () => {
     const account = { tenantId: TENANT, clientId: CLIENT, username: "admin@contoso.com" }
-    state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: TENANT, clientId: CLIENT, displayName: "", account }))
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: TENANT, clientId: CLIENT, displayName: "", account, signedInAt: Date.now() }))
     state.accounts.mockResolvedValueOnce([account])
     const container = await render(createElement(OnboardingPage))
     await act(async () => { button(container, "Use a different tenant or account")!.click() })
@@ -225,7 +249,7 @@ describe("OnboardingPage", () => {
 
   it("keeps an Azure choice from being saved when the tenant turned out to be on Community", async () => {
     const account = { tenantId: TENANT, clientId: CLIENT, username: "admin@contoso.com" }
-    state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "", account }))
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "", account, signedInAt: Date.now() }))
     state.accounts.mockResolvedValueOnce([account])
     state.storageChoice = { kind: "azure", storageAccountName: "contosobackups", subscriptionId: "sub", resourceGroupName: "rg", location: "westeurope" }
     state.checkNewTenant.mockResolvedValueOnce({ tenants: [{ tenantId: TENANT, plan: "community" }] })
@@ -291,7 +315,7 @@ it.each(["", "The tenant was not added. "])("offers Pro and support when signing
 
 it("offers purchasing help when saving a connected tenant refuses its trial key", async () => {
   const account = { tenantId: TENANT, clientId: CLIENT, username: "admin@contoso.com" }
-  state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "", account }))
+  state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "", account, signedInAt: Date.now() }))
   state.accounts.mockResolvedValueOnce([account])
   state.storageChoice = { kind: "local" }
   state.checkNewTenant.mockRejectedValueOnce(new Error("This tenant already had a Pro trial. Buy Pro to continue, or write to support@tenuvault.com for a quote or an invoice."))
@@ -500,7 +524,7 @@ describe("in-app tenant setup", () => {
   it("gives up an earlier, unsaved sign-in when the setup runs again, and connects the new tenant", async () => {
     const earlier = "2f9d4a7c-1b6e-4c3d-8a5f-9e0b7c2d4a61"
     // A sign-in to another tenant that was never saved, as after signing in by hand.
-    state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: earlier, clientId: CLIENT, displayName: "", account: { tenantId: earlier, clientId: CLIENT, username: "alex@fabrikam.test" } }))
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: earlier, clientId: CLIENT, displayName: "", account: { tenantId: earlier, clientId: CLIENT, username: "alex@fabrikam.test" }, signedInAt: Date.now() }))
     state.accounts.mockResolvedValueOnce([{ tenantId: earlier, clientId: CLIENT, username: "alex@fabrikam.test" }])
     const container = await render(createElement(OnboardingPage))
     expect(container.textContent).toContain("Signed in as alex@fabrikam.test")
@@ -562,7 +586,7 @@ it("cancels a sign-in left behind and ignores its late result", async () => {
 it.each([false, true])("refuses a connected tenant without releasing it, resumed: %s", async resumed => {
   const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
   state.tenants = [{ credentials: { tenantId: TENANT.toUpperCase() } }]
-  state.store.set(DRAFT_KEY, JSON.stringify({ step: resumed ? 2 : 1, tenant: TENANT, clientId: CLIENT, displayName: "", account: resumed ? account : null }))
+  state.store.set(DRAFT_KEY, JSON.stringify({ step: resumed ? 2 : 1, tenant: TENANT, clientId: CLIENT, displayName: "", account: resumed ? account : null, signedInAt: Date.now() }))
   state.storageChoice = { kind: "local" }
   state.accounts.mockResolvedValueOnce([account])
   if (!resumed) state.signIn.mockResolvedValueOnce(account)
@@ -578,7 +602,7 @@ it.each([false, true])("refuses a connected tenant without releasing it, resumed
 
 it("requires sign-in again when checking the saved session fails", async () => {
   const account = { tenantId: TENANT, clientId: CLIENT, username: "saved" }
-  state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "", account }))
+  state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "", account, signedInAt: Date.now() }))
   state.accounts.mockRejectedValueOnce(new Error("unavailable"))
   const container = await render(createElement(OnboardingPage))
   expect(container.textContent).toContain("Sign in to your tenant")
@@ -590,7 +614,7 @@ it("requires sign-in again when checking the saved session fails", async () => {
 it("resumes with the current live account instead of the saved admin", async () => {
   const account = { tenantId: TENANT, clientId: CLIENT, username: "saved", name: "Saved" }
   const live = { ...account, username: "current", name: "Current" }
-  state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "", account }))
+  state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "", account, signedInAt: Date.now() }))
   state.accounts.mockResolvedValueOnce([live])
   const container = await render(createElement(OnboardingPage))
   expect(container.textContent).toContain("Signed in as current")
@@ -600,7 +624,7 @@ it("resumes with the current live account instead of the saved admin", async () 
 
 it.each([false, true])("reveals only an unfinished first backup when leaving, complete: %s", async complete => {
   const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
-  state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "", account }))
+  state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "", account, signedInAt: Date.now() }))
   state.accounts.mockResolvedValueOnce([account])
   state.storageChoice = { kind: "local" }
   state.checkNewTenant.mockResolvedValueOnce({ tenants: [{ plan: "community" }] })
@@ -617,7 +641,7 @@ it.each([false, true])("reveals only an unfinished first backup when leaving, co
 
 it("registers a first backup that starts after the admin left as visible", async () => {
   const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
-  state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "", account }))
+  state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "", account, signedInAt: Date.now() }))
   state.accounts.mockResolvedValueOnce([account])
   state.storageChoice = { kind: "local" }
   state.checkNewTenant.mockResolvedValueOnce({ tenants: [{ plan: "community" }] })
@@ -646,6 +670,16 @@ it("refuses an already connected tenant after the in-app setup with one automati
   expect(container.textContent).not.toContain("Choose where backups are stored")
   expect(state.releaseTenant).not.toHaveBeenCalled()
   expect(state.addTenant).not.toHaveBeenCalled()
+})
+
+it("says when a cancelled setup keeps the app registration it created", async () => {
+  const kept = 'Setup was cancelled. The app registration "TenuVault Desktop" (client id client) stays in your tenant, and the next setup uses it.'
+  state.createRegistration.mockRejectedValueOnce(new Error(kept))
+  const container = await render(createElement(OnboardingPage))
+  await act(async () => button(container, "Set up with Microsoft sign-in")!.click())
+  await flush()
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain(kept)
+  expect(button(container, "Try again")).toBeDefined()
 })
 
 it("explains the consent checkbox in both setup notes", async () => {

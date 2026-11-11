@@ -34,14 +34,24 @@ function validAccount(value: unknown): SignedInAccount | null {
   }
 }
 
-/** The saved draft, or null when there is none or it cannot be read. */
+/** How long the sign-in of an unfinished setup is kept through restarts, counted from that sign-in. */
+export const PENDING_SIGN_IN_MAX_AGE_MS = 3 * 86_400_000
+
+/** The draft's sign-in, while it is recent. A draft without its time (saved by an older version) has none. */
+function recentAccount(value: Record<string, unknown>, now = Date.now()): SignedInAccount | null {
+  const account = validAccount(value.account)
+  const signedInAt = typeof value.signedInAt === "number" ? value.signedInAt : 0
+  return account && now - signedInAt < PENDING_SIGN_IN_MAX_AGE_MS ? account : null
+}
+
+/** The saved draft, or null when there is none or it cannot be read. An expired sign-in is left out. */
 export function loadOnboardingDraft(): OnboardingDraft | null {
   try {
     const raw = bridge.storage.getItemSync(KEY)
     if (!raw) return null
     const value = JSON.parse(raw) as Record<string, unknown>
     const step = value.step === 1 || value.step === 2 ? value.step : 0
-    const account = validAccount(value.account)
+    const account = recentAccount(value)
     const draft: OnboardingDraft = {
       step: step === 2 && !account ? 1 : step,
       tenant: text(value.tenant),
@@ -55,9 +65,6 @@ export function loadOnboardingDraft(): OnboardingDraft | null {
   }
 }
 
-/** How long the sign-in of an unfinished setup is kept through restarts. */
-export const PENDING_SIGN_IN_MAX_AGE_MS = 3 * 86_400_000
-
 /**
  * The tenant an unfinished setup signed in to, while its draft is recent. Startup cleanup leaves
  * that sign-in alone so the setup can resume; an abandoned one is released after a few days.
@@ -66,10 +73,7 @@ export function pendingSignInTenant(now = Date.now()): string | null {
   try {
     const raw = bridge.storage.getItemSync(KEY)
     if (!raw) return null
-    const value = JSON.parse(raw) as Record<string, unknown>
-    const account = validAccount(value.account)
-    const savedAt = typeof value.savedAt === "number" ? value.savedAt : 0
-    return account && now - savedAt < PENDING_SIGN_IN_MAX_AGE_MS ? account.tenantId.toLowerCase() : null
+    return recentAccount(JSON.parse(raw) as Record<string, unknown>, now)?.tenantId.toLowerCase() ?? null
   } catch {
     return null
   }
@@ -82,9 +86,21 @@ export function isEmptyDraft(draft: OnboardingDraft): boolean {
 
 let pending: Promise<void> = Promise.resolve()
 
+/** When the stored draft's sign-in to this tenant was first saved, so saving again does not extend it. */
+function signedInAt(tenantId: string): number {
+  try {
+    const value = JSON.parse(bridge.storage.getItemSync(KEY) ?? "null") as Record<string, unknown> | null
+    const stored = value && validAccount(value.account)
+    if (stored && stored.tenantId.toLowerCase() === tenantId.toLowerCase() && typeof value.signedInAt === "number") return value.signedInAt
+  } catch { /* A fresh time below. */ }
+  return Date.now()
+}
+
 /** Saves the draft, or removes it when it is empty. Writes run in order; a failure only logs. */
 export function saveOnboardingDraft(draft: OnboardingDraft): void {
-  const write = () => (isEmptyDraft(draft) ? bridge.storage.removeItem(KEY) : bridge.storage.setItem(KEY, JSON.stringify({ ...draft, savedAt: Date.now() })))
+  const write = () => (isEmptyDraft(draft)
+    ? bridge.storage.removeItem(KEY)
+    : bridge.storage.setItem(KEY, JSON.stringify(draft.account ? { ...draft, signedInAt: signedInAt(draft.account.tenantId) } : draft)))
   pending = pending.then(write).catch((error: unknown) => console.error("Could not save the setup progress:", error))
 }
 

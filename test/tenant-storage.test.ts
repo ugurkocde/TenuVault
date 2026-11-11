@@ -51,7 +51,7 @@ describe("tenantStorage", () => {
   ] as const)("protects the sign-in of %s: %s", async (_name, hasAccount, age, protectedTenant) => {
     const draft = { step: 2, tenant: "ORPHANED-TENANT", clientId: "client", displayName: "",
       account: hasAccount ? { tenantId: "ORPHANED-TENANT", clientId: "client", username: "admin" } : null,
-      ...(age === null ? {} : { savedAt: Date.now() - age }) }
+      ...(age === null ? {} : { signedInAt: Date.now() - age }) }
     bridge.storage.getItemSync.mockImplementation(key => key === "tenuvault.onboarding.draft" ? JSON.stringify(draft) : null)
     const { tenantStorage } = await import("../src/renderer/overrides/tenant-storage")
     tenantStorage.getItem(TENANTS_KEY)

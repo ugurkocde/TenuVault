@@ -361,3 +361,16 @@ it("ends a Graph retry wait at once when cancelled", async () => {
   expect(f.sleep).toHaveBeenCalledExactlyOnceWith(60_000)
   expect(f.calls).toHaveLength(1)
 })
+
+it("sends a cancel during the last consent request through the cleanup", async () => {
+  const controller = new AbortController()
+  let grants = 0
+  const f = fixture({ fail: (url, init) => {
+    if (url.pathname === "/v1.0/oauth2PermissionGrants" && init.method === "POST" && ++grants === DESKTOP_APP_PERMISSIONS.length) controller.abort()
+    return undefined
+  } })
+  await expect(f.run(controller.signal)).rejects.toThrow("The half-created app registration was removed again. Sign-in cancelled.")
+  expect(grants).toBe(DESKTOP_APP_PERMISSIONS.length)
+  expect(f.calls.filter(call => call.method === "DELETE")).toHaveLength(1)
+  expect(f.probes).toHaveLength(0)
+})

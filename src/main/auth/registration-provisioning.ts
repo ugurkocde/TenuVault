@@ -87,8 +87,9 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
       let response: Response
       try {
         response = await request(url.href, {
-          // A POST is never cut off midway: Microsoft may already have carried it out, and the
-          // ID in its answer is what the cleanup needs. A cancel is noticed right after it.
+          // A cancel never cuts a POST off (only the timeout does): Microsoft may already have
+          // carried it out, and the ID in its answer is what the cleanup needs. A cancel is
+          // noticed right after it.
           method, redirect: "error", signal: !cleanup && signal && repeatable ? AbortSignal.any([signal, timeout]) : timeout,
           headers: { Authorization: `Bearer ${options.token}`, "Content-Type": "application/json" },
           ...(body ? { body: JSON.stringify(body) } : {}),
