@@ -229,16 +229,24 @@ interface TenantSignInFormProps {
   onFieldsChange?: (fields: SignInFields) => void
   submitLabel?: string
   initial?: Partial<SignInFields>
+  /**
+   * Set right after the in-app setup made the app registration: the form signs in once by itself,
+   * as this account, so the browser's session is used and the admin has nothing to enter.
+   */
+  autoSignIn?: { loginHint: string } | null
+  /** Leaves out the box for pasted script output, when the IDs came from the in-app setup. */
+  hidePaste?: boolean
 }
 
 /** Tenant, client id and optional display name, then interactive Microsoft sign-in. */
-export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Sign in with Microsoft", initial }: TenantSignInFormProps) {
+export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Sign in with Microsoft", initial, autoSignIn, hidePaste = false }: TenantSignInFormProps) {
   const [tenant, setTenant] = useState(initial?.tenant ?? "")
   const [clientId, setClientId] = useState(initial?.clientId ?? "")
   const [displayName, setDisplayName] = useState(initial?.displayName ?? "")
   const [pasted, setPasted] = useState("")
   const [pasteNote, setPasteNote] = useState<{ ok: boolean; text: string } | null>(null)
   const [busy, setBusy] = useState(false)
+  const [automatic, setAutomatic] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   const [errors, setErrors] = useState<{ tenant?: string; clientId?: string; form?: string }>({})
   const notify = useRef(onFieldsChange)
@@ -305,7 +313,7 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
     if (applyOutput(text)) event.preventDefault()
   }
 
-  const submit = async () => {
+  const submit = async (loginHint?: string) => {
     // Enter can fire while a sign-in window is already open.
     if (busy) return
     const next: typeof errors = {}
@@ -315,18 +323,30 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
     if (next.tenant || next.clientId) { document.getElementById(next.tenant ? "tenant" : "clientId")?.focus(); return }
 
     setBusy(true)
+    setAutomatic(Boolean(loginHint))
     setCancelling(false)
     try {
-      const account = await bridge.auth.signIn(tenant.trim(), clientId.trim())
+      const account = await (loginHint ? bridge.auth.signIn(tenant.trim(), clientId.trim(), { loginHint }) : bridge.auth.signIn(tenant.trim(), clientId.trim()))
       onSignedIn(account, displayName.trim())
     } catch (error) {
       const message = error instanceof Error ? error.message : "Sign-in failed."
       if (message !== CANCELLED && !showCommunityLimitError(error)) setErrors({ form: message })
     } finally {
       setBusy(false)
+      setAutomatic(false)
       setCancelling(false)
     }
   }
+
+  // Straight after the in-app setup: sign in once, without asking for a click.
+  const autoStarted = useRef(false)
+  useEffect(() => {
+    if (!autoSignIn || autoStarted.current) return
+    autoStarted.current = true
+    void submit(autoSignIn.loginHint)
+    // Only the first render with the request counts; later field changes must not sign in again.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoSignIn])
 
   const cancel = async () => {
     setCancelling(true)
@@ -360,27 +380,49 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
     </div>
   )
 
+  // What to do while the browser is open. The automatic sign-in after the in-app setup shows it
+  // first, because there the admin did not press a button on this step.
+  const status = busy && (
+    <div role="status" className="space-y-3 rounded-2xl bg-gray-50 px-4 py-3 text-sm text-gray-700">
+      {automatic
+        ? <p>Your browser opens once more to sign you in through the new app registration. There is nothing to enter this time. TenuVault then checks the license for this tenant.</p>
+        : <p>Complete the sign-in in your browser. TenuVault then checks the license for this tenant.</p>}
+      <p className="text-xs text-gray-600">
+        If Microsoft reports a device or compliance problem, Conditional Access needs a browser that passes the device
+        identity, such as Microsoft Edge signed in to your work profile. Make it your default browser, cancel and sign in
+        again.
+      </p>
+      <Button type="button" variant="outline" size="sm" onClick={() => void cancel()} disabled={cancelling}>
+        <X className="mr-2 h-4 w-4" aria-hidden="true" />
+        {cancelling ? "Cancelling..." : "Cancel sign-in"}
+      </Button>
+    </div>
+  )
+
   return (
     <div className="space-y-4">
-      <div className="space-y-1.5">
-        <Label htmlFor="setup-output" className="flex items-center gap-2">
-          <ClipboardPaste className="h-4 w-4" aria-hidden="true" /> Paste the script output
-        </Label>
-        <textarea
-          id="setup-output"
-          rows={4}
-          value={pasted}
-          onChange={(e) => onPasteOutput(e.target.value)}
-          disabled={busy}
-          spellCheck={false}
-          placeholder={"Tenant id:                00000000-0000-0000-0000-000000000000\nApplication (client) id:  00000000-0000-0000-0000-000000000000"}
-          aria-describedby="setup-output-note"
-          className="flex w-full rounded-2xl border border-input bg-background px-3 py-2 font-mono text-xs ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-        />
-        <p id="setup-output-note" role="status" className={pasteNote && !pasteNote.ok ? "text-xs text-red-700" : "text-xs text-gray-600"}>
-          {pasteNote?.text ?? "Or type the values below."}
-        </p>
-      </div>
+      {automatic && status}
+      {!hidePaste && (
+        <div className="space-y-1.5">
+          <Label htmlFor="setup-output" className="flex items-center gap-2">
+            <ClipboardPaste className="h-4 w-4" aria-hidden="true" /> Paste the script output
+          </Label>
+          <textarea
+            id="setup-output"
+            rows={4}
+            value={pasted}
+            onChange={(e) => onPasteOutput(e.target.value)}
+            disabled={busy}
+            spellCheck={false}
+            placeholder={"Tenant id:                00000000-0000-0000-0000-000000000000\nApplication (client) id:  00000000-0000-0000-0000-000000000000"}
+            aria-describedby="setup-output-note"
+            className="flex w-full rounded-2xl border border-input bg-background px-3 py-2 font-mono text-xs ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+          />
+          <p id="setup-output-note" role="status" className={pasteNote && !pasteNote.ok ? "text-xs text-red-700" : "text-xs text-gray-600"}>
+            {pasteNote?.text ?? "Or type the values below."}
+          </p>
+        </div>
+      )}
       {field("tenant", "Tenant id or domain", tenant, setTenant, "contoso.onmicrosoft.com", errors.tenant, true)}
       {field("clientId", "Application (client) id", clientId, setClientId, "00000000-0000-0000-0000-000000000000", errors.clientId, true)}
       {field("displayName", "Display name (optional)", displayName, setDisplayName, "Contoso Production")}
@@ -396,20 +438,7 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
         {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <KeyRound className="mr-2 h-4 w-4" />}
         {busy ? "Waiting for sign-in..." : submitLabel}
       </Button>
-      {busy && (
-        <div role="status" className="space-y-3 rounded-2xl bg-gray-50 px-4 py-3 text-sm text-gray-700">
-          <p>Complete the sign-in in your browser. TenuVault then checks the license for this tenant.</p>
-          <p className="text-xs text-gray-600">
-            If Microsoft reports a device or compliance problem, Conditional Access needs a browser that passes the device
-            identity, such as Microsoft Edge signed in to your work profile. Make it your default browser, cancel and sign in
-            again.
-          </p>
-          <Button type="button" variant="outline" size="sm" onClick={() => void cancel()} disabled={cancelling}>
-            <X className="mr-2 h-4 w-4" aria-hidden="true" />
-            {cancelling ? "Cancelling..." : "Cancel sign-in"}
-          </Button>
-        </div>
-      )}
+      {!automatic && status}
     </div>
   )
 }

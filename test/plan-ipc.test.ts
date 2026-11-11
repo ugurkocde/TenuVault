@@ -10,13 +10,12 @@ describe("plan errors across IPC and preload", () => {
     const reply = await withPlanError(() => { throw new CommunityLimitError("tenant-id", "The tenant was not added. Original limit message.") })
     const serialized = JSON.parse(JSON.stringify(reply))
     const raw = {
-      setup: { createRegistration: async () => serialized },
       auth: { signIn: async () => serialized },
       license: { checkNewTenant: async () => serialized },
       schedules: { set: async () => [] },
     } as unknown as TenuVaultPreloadBridge
     const bridge = createRendererBridge(raw)
-    for (const result of [bridge.setup.createRegistration(), bridge.auth.signIn("tenant", "client"), bridge.license.checkNewTenant("tenant")]) {
+    for (const result of [bridge.auth.signIn("tenant", "client"), bridge.license.checkNewTenant("tenant")]) {
       await expect(result).rejects.toBeInstanceOf(CommunityLimitError)
       await expect(result).rejects.toMatchObject({ code: "community_tenant_limit", tenantId: "tenant-id", message: "The tenant was not added. Original limit message." })
     }

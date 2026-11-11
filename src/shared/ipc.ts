@@ -80,7 +80,9 @@ export interface ApiResponse {
   body: Uint8Array
 }
 
-export type SetupProgress = { phase: "signingIn" | "checking" | "registration" | "consent" | "publishing"; reused?: boolean }
+/** Where the in-app setup is; `reused` once an existing TenuVault app registration was found. */
+export type SetupProgress = { phase: "signingIn" | "registration" | "consent" | "publishing"; reused?: boolean }
+/** The app registration the in-app setup made or found. `ready` is false while Microsoft's sign-in service does not know it yet. */
 export interface RegistrationResult { tenantId: string; clientId: string; username: string; reused: boolean; ready: boolean }
 
 export interface SignedInAccount {
@@ -410,8 +412,15 @@ export interface TenuVaultBridge {
     onSavedChanged: (listener: () => void) => () => void
   }
   setup: {
+    /**
+     * Signs the admin in through Microsoft Graph Command Line Tools and creates the tenant's app
+     * registration through Microsoft Graph, or finds the one TenuVault made earlier. The token
+     * stays in the main process, in memory only. `tenant` is for guest and partner admins.
+     */
     createRegistration: (options?: { tenant?: string }) => Promise<RegistrationResult>
+    /** Stops waiting for the setup sign-in in the browser. */
     cancelCreateRegistration: () => Promise<void>
+    /** Called as the setup moves on. Returns an unsubscribe function. */
     onProgress: (listener: (progress: SetupProgress) => void) => () => void
     /**
      * The tenant ID and client ID the setup script left on the clipboard, or null. Both must be
@@ -593,10 +602,7 @@ export interface TenuVaultBridge {
 }
 
 /** Plan failures cross the preload boundary as data, then become renderer errors. */
-export type TenuVaultPreloadBridge = Omit<TenuVaultBridge, "setup" | "auth" | "license" | "schedules" | "pdfBranding" | "backupReader"> & {
-  setup: Omit<TenuVaultBridge["setup"], "createRegistration"> & {
-    createRegistration: (options?: { tenant?: string }) => Promise<RegistrationResult | PlanIpcError>
-  }
+export type TenuVaultPreloadBridge = Omit<TenuVaultBridge, "auth" | "license" | "schedules" | "pdfBranding" | "backupReader"> & {
   backupReader: Omit<TenuVaultBridge["backupReader"], "prepare" | "verify" | "test"> & {
     prepare: (tenantId: string) => Promise<BackupReaderState | PlanIpcError>
     verify: (tenantId: string, clientId: string, renewal?: boolean) => Promise<BackupReaderState | PlanIpcError>

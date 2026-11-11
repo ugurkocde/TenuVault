@@ -76,6 +76,9 @@ export default function OnboardingPage() {
   const [runningJobId, setRunningJobId] = useState<string | null>(null)
   const [cancelling, setCancelling] = useState(false)
   const [addError, setAddError] = useState<{ message: string; license: boolean } | null>(null)
+  // After the in-app setup: what it did, and the account the Sign in step signs in as by itself.
+  const [setupNotice, setSetupNotice] = useState("")
+  const [autoSignIn, setAutoSignIn] = useState<{ loginHint: string } | null>(null)
   const logRef = useRef<HTMLPreElement>(null)
   const { addJob, removeJob, activeJobs } = useBackupProgress()
   const completedBackup = useRef<string | null>(null)
@@ -318,14 +321,20 @@ export default function OnboardingPage() {
             <StepHeading id="setup-step-0">Connect your tenant</StepHeading>
             <ConnectTenantSetup
               trials={Boolean(status?.tenantTrialsEnabled)}
-              onManual={() => setStep(1)}
-              onRegistered={result => {
+              onManual={() => { setSetupNotice(""); setAutoSignIn(null); setStep(1) }}
+              onRegistered={(result) => {
+                // The app registration exists now. Keep its IDs before anything else can fail, then
+                // sign in on the next step, where a failed sign-in can simply be repeated.
                 const next = { ...fields, tenant: result.tenantId, clientId: result.clientId }
                 setFields(next)
                 saveOnboardingDraft({ step: 1, ...next, account: null })
+                setAddError(null)
+                setAutoSignIn(result.ready ? { loginHint: result.username } : null)
+                setSetupNotice(result.ready
+                  ? (result.reused ? "This tenant already had a TenuVault app registration, so TenuVault uses that one." : "The app registration is ready.")
+                  : "The app registration is ready, but Microsoft is still making it available for sign-in. Wait a moment, then select Sign in with Microsoft.")
+                setStep(1)
               }}
-              onSignedIn={signedIn => { setAddError(null); setAccount(signedIn); setStep(2) }}
-              onSignInFailed={message => { setAddError({ message, license: false }); setStep(1) }}
             />
           </div>
         )}
@@ -334,6 +343,11 @@ export default function OnboardingPage() {
           <div className="space-y-4">
             <StepHeading id="setup-step-1">Sign in to your tenant</StepHeading>
             {status?.tenantTrialsEnabled && <p className="text-sm text-gray-600">New tenants start with a Pro trial. No card and no email needed.</p>}
+            {setupNotice && !account && (
+              <p role="status" className="flex items-start gap-2 rounded-2xl bg-green-50 px-4 py-2.5 text-sm text-green-800">
+                <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" /> {setupNotice}
+              </p>
+            )}
             {addError && (
               <div role="alert" className="space-y-3 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700">
                 <p className="flex items-start gap-2"><XCircle className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" /> {addError.license ? trialKeyRefusalText(addError.message) : addError.message}</p>
@@ -361,9 +375,14 @@ export default function OnboardingPage() {
             ) : (
               <TenantSignInForm
                 initial={fields}
+                autoSignIn={autoSignIn}
+                hidePaste={Boolean(setupNotice)}
                 onFieldsChange={setFields}
                 onSignedIn={(signedIn, displayName) => {
                   setAddError(null)
+                  // The automatic sign-in is for this one registration; a later sign-in asks again.
+                  setAutoSignIn(null)
+                  setSetupNotice("")
                   setAccount(signedIn)
                   setFields((current) => ({ ...current, displayName }))
                   setStep(2)

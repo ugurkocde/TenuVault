@@ -12,7 +12,7 @@ vi.mock("@azure/msal-node", async original => {
 })
 vi.mock("../src/main/auth/registration-provisioning", () => ({ provisionRegistration: state.provision }))
 import { AppRegistrationSetup } from "../src/main/auth/app-registration-setup"
-const host = () => ({ fetch: vi.fn() as unknown as typeof fetch, openBrowser: vi.fn(async () => undefined), checkTenant: vi.fn(), progress: vi.fn() })
+const host = () => ({ fetch: vi.fn() as unknown as typeof fetch, openBrowser: vi.fn(async () => undefined), progress: vi.fn() })
 beforeEach(() => { vi.clearAllMocks() })
 it("uses an isolated memory client, setup scopes and the chosen tenant", async () => {
   const h = host()
@@ -28,7 +28,7 @@ it("uses an isolated memory client, setup scopes and the chosen tenant", async (
   expect(state.configuration?.auth.authority).toBe("https://login.microsoftonline.com/example.test")
   expect(state.configuration).not.toHaveProperty("cache")
   expect(state.configuration?.system?.networkClient).toBeDefined()
-  expect(state.provision).toHaveBeenCalledWith(expect.objectContaining({ token: "ephemeral", checkTenant: h.checkTenant }))
+  expect(state.provision).toHaveBeenCalledWith(expect.objectContaining({ token: "ephemeral", tenantId: "tenant", username: "admin" }))
   expect(result).not.toHaveProperty("token")
   expect(state.clear).toHaveBeenCalled()
 })
@@ -55,8 +55,18 @@ it("refuses browser URLs outside Microsoft login", async () => {
   expect(h.openBrowser).not.toHaveBeenCalled()
   expect(state.provision).not.toHaveBeenCalled()
 })
-it("maps setup consent refusal and clears memory", async () => {
-  state.interactive.mockRejectedValueOnce(new Error("AADSTS65004 consent denied"))
-  await expect(new AppRegistrationSetup(host()).create()).rejects.toThrow("consent was declined")
+it.each(["AADSTS65004: User declined to consent to access the app.", "AADSTS90094: Admin consent is required."])("says who can approve the setup when Microsoft refuses the approval (%s)", async message => {
+  state.interactive.mockRejectedValueOnce(new Error(message))
+  const error = await new AppRegistrationSetup(host()).create().then(() => null, caught => caught as Error)
+  expect(error?.message).toContain("Microsoft did not let this account approve the setup")
+  expect(error?.message).toContain("Global Administrator, Privileged Role Administrator or Cloud Application Administrator")
+  expect(error?.message).toContain("Nothing was changed.")
+  expect(state.provision).not.toHaveBeenCalled()
   expect(state.clear).toHaveBeenCalled()
+})
+
+it("says that nothing was changed when the setup sign-in fails for another reason", async () => {
+  state.interactive.mockRejectedValueOnce(new Error("invalid_grant: AADSTS9002313: Invalid request."))
+  await expect(new AppRegistrationSetup(host()).create()).rejects.toThrow("AADSTS9002313: Invalid request. Nothing was changed.")
+  expect(state.provision).not.toHaveBeenCalled()
 })

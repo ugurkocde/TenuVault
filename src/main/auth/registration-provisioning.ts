@@ -20,12 +20,12 @@ export interface ProvisioningOptions {
   token: string
   tenantId: string
   username: string
-  checkTenant: (tenant: string) => Promise<unknown>
   progress: (progress: SetupProgress) => void
   signal?: AbortSignal
   sleep?: (ms: number) => Promise<void>
 }
-const ROOT = "https://graph.microsoft.com/beta"
+// The stable Graph version, as the setup script uses it.
+const ROOT = "https://graph.microsoft.com/v1.0"
 const NOTES = "Used by the TenuVault desktop app. Delegated permissions only, no credentials."
 
 /** Graph provisioning is independent of Electron and MSAL. The caller owns the ephemeral token. */
@@ -35,7 +35,7 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
   const checkCancelled = () => { if (signal?.aborted) throw new Error("Sign-in cancelled.") }
   async function graph<T>(method: string, path: string, body?: object, replication = false, cleanup = false): Promise<T> {
     const url = new URL(path.startsWith("https:") ? path : `${ROOT}${path}`)
-    if (url.origin !== "https://graph.microsoft.com" || url.username || url.password || url.hash || !url.pathname.startsWith("/beta/")) throw new Error("Unexpected Graph paging address.")
+    if (url.origin !== "https://graph.microsoft.com" || url.username || url.password || url.hash || !url.pathname.startsWith("/v1.0/")) throw new Error("Unexpected Graph paging address.")
     const attempts = replication ? 12 : 4
     for (let attempt = 1; ; attempt++) {
       if (!cleanup) checkCancelled()
@@ -52,7 +52,7 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
       if (attempt < attempts && (replicating || transient)) {
         const header = response.headers.get("Retry-After")
         const delay = header ? (/^\d+$/.test(header) ? Number(header) * 1000 : Date.parse(header) - Date.now()) : 3000
-        await sleep(Math.max(3000, Number.isFinite(delay) ? delay : 3000))
+        await sleep(Math.min(60_000, Math.max(3000, Number.isFinite(delay) ? delay : 3000)))
         continue
       }
       if (response.status === 403) throw new Error(`The signed-in account ${username} lacks a role that can create app registrations and grant admin consent. Use a ${CONSENT_ROLES.join(", ")} (with consent rights).`)
@@ -72,16 +72,15 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
     }
     return items
   }
-  progress({ phase: "checking" })
-  checkCancelled()
-  await options.checkTenant(tenantId)
+  // The plan is checked when the admin signs in to the tenant, as with a registration the script
+  // made. Checking it here would start licensing for a tenant that is not signed in yet.
   checkCancelled()
   const resources = []
   for (const resource of DESKTOP_APP_PERMISSIONS) {
     const path = `/servicePrincipals?$filter=${encodeURIComponent(`appId eq '${resource.appId}'`)}`
     let principal = (await list<Principal>(path))[0]
     if (!principal) principal = await graph<Principal>("POST", "/servicePrincipals", { appId: resource.appId }, true)
-    // Beta currently exposes publishedPermissionScopes; accept the script's scope shape too.
+    // Graph v1.0 calls them oauth2PermissionScopes; the beta name is accepted as well.
     const scopes = principal.oauth2PermissionScopes ?? principal.publishedPermissionScopes ?? []
     const resourceAccess = resource.permissions.map(value => {
       const scope = scopes.find(scope => scope.value === value && scope.isEnabled !== false)
@@ -121,7 +120,7 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
     if (!created) throw error
     let removed = false
     try { await graph("DELETE", `/applications/${created.id}`, undefined, true, true); removed = true } catch { /* Best effort cleanup. */ }
-    throw new Error(`Setup did not finish. ${removed ? "The half-created app registration was removed." : `Cleanup failed. Delete app registration TenuVault Desktop (client id ${created.appId}) in the Entra admin center.`} ${error instanceof Error ? error.message : String(error)}`)
+    throw new Error(`Setup did not finish. ${removed ? "The half-created app registration was removed again." : `Cleanup failed. Delete app registration TenuVault Desktop (client id ${created.appId}) in the Entra admin center.`} ${error instanceof Error ? error.message : String(error)}`)
   }
   progress({ phase: "publishing", reused: Boolean(existing) })
   // Provisioning has committed. Publication failures must preserve the IDs for manual sign-in.

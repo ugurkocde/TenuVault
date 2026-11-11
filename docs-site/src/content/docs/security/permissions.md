@@ -9,9 +9,7 @@ For the step-by-step setup, see [Create the app registration](/getting-started/a
 
 ## What the setup creates
 
-Use **Set up with Microsoft sign-in** on **Connect** in **Set up TenuVault**. It creates the registration below or reuses the newest matching TenuVault registration. Matching requires the name `TenuVault Desktop`, notes beginning with `Used by the TenuVault desktop app`, single-tenant audience and the public-client `http://localhost` redirect URI. Existing consent scopes are preserved and missing scopes are added.
-
-The alternative **Use the setup script instead** reveals **Save setup script** and **Copy script**. Both paths list **Permissions the app registration gets** before consent.
+In TenuVault, **Set up with Microsoft sign-in** on the **Connect** step of **Set up TenuVault** creates the app registration below. The setup script, `New-TenuVaultDesktopApp.ps1`, creates the same one from PowerShell; it is available as a [download from this site](/downloads/New-TenuVaultDesktopApp.ps1), under **Use the setup script instead** on the Connect step (**Save setup script** or **Copy script**) and in the public repository. The Connect step lists these permissions under **Permissions the app registration gets** before anyone consents.
 
 | Setting | Value |
 | --- | --- |
@@ -27,19 +25,19 @@ The alternative **Use the setup script instead** reveals **Save setup script** a
 
 While it grants admin consent, the script lists the delegated permissions per API. At the end, it prints your tenant ID and the application (client) ID. You paste these two lines into the **Sign in** step of **Set up TenuVault**.
 
-### Who can run setup
+### Who can run the setup
 
-The desktop setup script needs no modules and installs nothing. It signs in through your browser. You need one of these roles:
+Both the setup in TenuVault and the script need one of these roles, because they grant tenant-wide admin consent:
 
 * Global Administrator
 * Privileged Role Administrator
 * Cloud Application Administrator
 
-Both paths sign in through **Microsoft Graph Command Line Tools**, Microsoft's own public client. The admin approves delegated `Application.ReadWrite.All` and `DelegatedPermissionGrant.ReadWrite.All` to create the registration and grant consent. Only the script's optional `-AllowedGroupId` adds `AppRoleAssignment.ReadWrite.All` for group assignment.
+Both sign in through **Microsoft Graph Command Line Tools**, Microsoft's own sign-in app, with the delegated scopes `Application.ReadWrite.All` and `DelegatedPermissionGrant.ReadWrite.All`. They need them only to create the app registration and grant consent. With `-AllowedGroupId` the script also requests `AppRoleAssignment.ReadWrite.All`, to assign the group. TenuVault itself never uses these scopes: they are not permissions of the TenuVault app registration.
 
-For in-app setup, the token stays in main-process memory only for the setup, with no cache plugin or persistent token storage. The renderer never receives it. The approval remains for that admin in the tenant. To revoke it, open **Entra admin center > Enterprise applications > Microsoft Graph Command Line Tools > Permissions**. This is separate from the TenuVault registration's default delegated scopes below.
+TenuVault keeps the setup sign-in in memory only and drops it when the setup ends. The script needs no PowerShell modules and installs nothing. The approval of Microsoft Graph Command Line Tools stays in your tenant, for the account that gave it; to remove it, open **Entra admin center** > **Enterprise applications** > **Microsoft Graph Command Line Tools** > **Permissions**.
 
-Delete **TenuVault Desktop** in **App registrations**, and its enterprise application if it remains, to remove TenuVault's sign-in registration and consent. Your stored backups remain. Setup removes a newly created application on provisioning failure where possible; it never deletes a reused registration.
+To remove TenuVault's access to the tenant, delete **TenuVault Desktop** under **Entra admin center** > **App registrations**. Backups you already saved stay where they are.
 
 ## Why delegated permissions matter
 

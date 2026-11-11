@@ -233,6 +233,10 @@ describe("OnboardingPage", () => {
     expect(container.textContent).toContain("Privileged Role Administrator")
     expect(container.textContent).toContain("Permissions the app registration gets")
     expect(button(container, "Someone else is the admin? Copy instructions")).toBeDefined()
+    // The script route, and creating the registration by hand, sit behind one more click.
+    expect(button(container, "Create it by hand instead")).toBeUndefined()
+    await act(async () => button(container, "Use the setup script instead")!.click())
+    expect(button(container, "Save setup script")).toBeDefined()
     expect(button(container, "Create it by hand instead")).toBeDefined()
   })
 })
@@ -333,50 +337,107 @@ it("does not bring the same clipboard IDs back after the admin cleared the field
 
 
 describe("in-app tenant setup", () => {
-  const result = { tenantId: TENANT, clientId: CLIENT, username: "admin", reused: false, ready: true }
-  it("shows progress and continues to Storage with the browser session", async () => {
+  const result = { tenantId: TENANT, clientId: CLIENT, username: "admin@contoso.test", reused: false, ready: true }
+  const settle = () => new Promise(resolve => setTimeout(resolve, 20))
+
+  it("explains the setup before it starts", async () => {
+    const container = await render(createElement(OnboardingPage))
+    for (const text of ["One Microsoft sign-in, about two minutes.", "It lives in your tenant", "It acts only as you", "Backups stay with you", "Microsoft Graph Command Line Tools", "because the setup grants admin consent", "Application.ReadWrite.All", "kept in memory only"]) expect(container.textContent).toContain(text)
+    expect(container.querySelector("#setup-tenant")).not.toBeNull()
+    expect(container.querySelector('[role="alert"]')).toBeNull()
+  })
+
+  it("shows progress, then signs in by itself as the same account and continues to Storage", async () => {
     let finish!: (value: typeof result) => void
     state.createRegistration.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
     state.signIn.mockResolvedValueOnce(result)
     const container = await render(createElement(OnboardingPage))
     await act(async () => button(container, "Set up with Microsoft sign-in")!.click())
-    expect(container.textContent).toContain("Sign in with Microsoft in your browser")
+    expect(container.textContent).toContain("Setting up your tenant")
+    expect(container.textContent).toContain("Nothing is created before you are signed in.")
+    expect(button(container, "Cancel")).toBeDefined()
     await act(async () => state.progress?.({ phase: "registration", reused: true }))
-    expect(container.textContent).toContain("Found the existing app registration")
-    await act(async () => { finish(result); await new Promise(resolve => setTimeout(resolve, 150)) })
-    expect(state.signIn).toHaveBeenLastCalledWith(TENANT, CLIENT, { loginHint: "admin" })
+    expect(container.textContent).toContain("Use the app registration this tenant already has")
+    expect(button(container, "Cancel")).toBeUndefined()
+    await act(async () => { finish(result); await settle() })
+    expect(state.createRegistration).toHaveBeenCalledWith(undefined)
+    expect(state.signIn).toHaveBeenCalledTimes(1)
+    expect(state.signIn).toHaveBeenLastCalledWith(TENANT, CLIENT, { loginHint: "admin@contoso.test" })
     expect(container.textContent).toContain("Choose where backups are stored")
   })
-  it("keeps IDs and shows the final sign-in error on Sign in", async () => {
+
+  it("passes the optional tenant of a guest or partner admin", async () => {
+    state.createRegistration.mockResolvedValueOnce(result)
+    state.signIn.mockResolvedValueOnce(result)
+    const container = await render(createElement(OnboardingPage))
+    type(container.querySelector<HTMLInputElement>("#setup-tenant")!, " fabrikam.onmicrosoft.com ")
+    await act(async () => { button(container, "Set up with Microsoft sign-in")!.click(); await settle() })
+    expect(state.createRegistration).toHaveBeenCalledWith({ tenant: "fabrikam.onmicrosoft.com" })
+  })
+
+  it("keeps the IDs on the Sign in step when the last sign-in fails, and a retry asks for the account again", async () => {
+    state.createRegistration.mockResolvedValueOnce(result)
+    state.signIn.mockRejectedValueOnce(new Error("Conditional Access blocked this sign-in. (AADSTS53003)"))
+    const container = await render(createElement(OnboardingPage))
+    await act(async () => { button(container, "Set up with Microsoft sign-in")!.click(); await settle() })
+    expect(container.textContent).toContain("Sign in to your tenant")
+    expect(container.textContent).toContain("The app registration is ready.")
+    expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(TENANT)
+    expect(container.querySelector<HTMLInputElement>("#clientId")!.value).toBe(CLIENT)
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("AADSTS53003")
+    await flush()
+    expect(loadOnboardingDraft()).toMatchObject({ step: 1, tenant: TENANT, clientId: CLIENT })
+    state.signIn.mockResolvedValueOnce(result)
+    await act(async () => { button(container, "Sign in with Microsoft")!.click(); await settle() })
+    expect(state.createRegistration).toHaveBeenCalledTimes(1)
+    expect(state.signIn).toHaveBeenLastCalledWith(TENANT, CLIENT)
+    expect(container.textContent).toContain("Choose where backups are stored")
+  })
+
+  it("does not report a cancelled last sign-in as an error", async () => {
     state.createRegistration.mockResolvedValueOnce(result)
     state.signIn.mockRejectedValueOnce(new Error("Sign-in cancelled."))
     const container = await render(createElement(OnboardingPage))
-    await act(async () => { button(container, "Set up with Microsoft sign-in")!.click(); await new Promise(resolve => setTimeout(resolve, 150)) })
-    expect(container.textContent).toContain("Sign in to your tenant")
+    await act(async () => { button(container, "Set up with Microsoft sign-in")!.click(); await settle() })
     expect(container.querySelector<HTMLInputElement>("#clientId")!.value).toBe(CLIENT)
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Sign-in cancelled.")
-    await flush()
-    expect(loadOnboardingDraft()?.clientId).toBe(CLIENT)
+    expect(container.querySelector('[role="alert"]')).toBeNull()
+    expect(button(container, "Sign in with Microsoft")!.disabled).toBe(false)
   })
-  it("offers manual sign-in when publication takes longer", async () => {
+
+  it("leaves the sign-in to the admin while Microsoft does not accept sign-ins to the registration yet", async () => {
     state.createRegistration.mockResolvedValueOnce({ ...result, ready: false })
     const container = await render(createElement(OnboardingPage))
-    await act(async () => button(container, "Set up with Microsoft sign-in")!.click())
-    expect(container.textContent).toContain("Microsoft is still publishing the app registration")
+    await act(async () => { button(container, "Set up with Microsoft sign-in")!.click(); await settle() })
+    expect(container.textContent).toContain("Microsoft is still making it available for sign-in")
     expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(TENANT)
     expect(state.signIn).not.toHaveBeenCalled()
   })
-  it("cancels browser setup and keeps alternatives available", async () => {
+
+  it("shows why the setup failed and offers to try again", async () => {
+    state.createRegistration.mockRejectedValueOnce(new Error("The signed-in account megan@contoso.test lacks a role that can create app registrations and grant admin consent."))
+    const container = await render(createElement(OnboardingPage))
+    await act(async () => { button(container, "Set up with Microsoft sign-in")!.click(); await settle() })
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("lacks a role")
+    expect(container.textContent).toContain("Connect your tenant")
+    state.createRegistration.mockResolvedValueOnce(result)
+    state.signIn.mockResolvedValueOnce(result)
+    await act(async () => { button(container, "Try again")!.click(); await settle() })
+    expect(container.textContent).toContain("Choose where backups are stored")
+  })
+
+  it("cancels the browser wait without an error and keeps the other ways open", async () => {
     let reject!: (error: Error) => void
     state.createRegistration.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail }))
     state.cancelCreateRegistration.mockImplementationOnce(async () => { reject(new Error("Sign-in cancelled.")); return undefined })
     const container = await render(createElement(OnboardingPage))
     await act(async () => button(container, "Set up with Microsoft sign-in")!.click())
-    await act(async () => button(container, "Cancel")!.click())
-    expect(button(container, "Try again")).toBeDefined()
+    await act(async () => { button(container, "Cancel")!.click(); await settle() })
+    expect(container.querySelector('[role="alert"]')).toBeNull()
+    expect(button(container, "Set up with Microsoft sign-in")).toBeDefined()
     await act(async () => button(container, "Use the setup script instead")!.click())
     expect(button(container, "Save setup script")).toBeDefined()
     await act(async () => button(container, "I already have an app registration")!.click())
     expect(container.querySelector("#clientId")).not.toBeNull()
+    expect(state.signIn).not.toHaveBeenCalled()
   })
 })

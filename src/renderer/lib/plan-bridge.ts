@@ -18,7 +18,6 @@ export async function unwrapPlanResult<T>(result: Promise<T | PlanIpcError>): Pr
 export function createRendererBridge(raw: TenuVaultPreloadBridge): TenuVaultBridge {
   return {
     ...raw,
-    setup: { ...raw.setup, createRegistration: (...args) => unwrapPlanResult(raw.setup.createRegistration(...args)) },
     auth: { ...raw.auth, signIn: (...args) => unwrapPlanResult(raw.auth.signIn(...args)) },
     license: { ...raw.license, checkNewTenant: (...args) => unwrapPlanResult(raw.license.checkNewTenant(...args)) },
     schedules: { ...raw.schedules, set: (...args) => unwrapPlanResult(raw.schedules.set(...args)) },

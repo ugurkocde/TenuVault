@@ -1107,13 +1107,15 @@ async function bootstrap(): Promise<void> {
   const registrationSetup = new AppRegistrationSetup({
     fetch: bridgedFetchLater,
     openBrowser: url => shell.openExternal(url),
-    checkTenant: tenantId => license.checkNewTenant(tenantId),
     progress: progress => mainWindow?.webContents.send("setup:progress", progress),
   })
-  handleTrusted("setup:createRegistration", (_event, options?: { tenant?: string }) => withPlanError(() => registrationSetup.create(options)))
+  // Creates (or finds) the tenant's app registration with a sign-in that is kept in memory only.
+  handleTrusted("setup:createRegistration", (_event, options?: { tenant?: string }) => registrationSetup.create(options))
   handleTrusted("setup:cancelCreateRegistration", () => registrationSetup.cancel())
-  handleTrusted("auth:signIn", (_event, tenant: string, clientId: string, options?: { loginHint?: string }) => withPlanError(async () => {
-    const account = await auth.signIn(tenant, clientId, options)
+  handleTrusted("auth:signIn", (_event, tenant: string, clientId: string, options?: { loginHint?: unknown }) => withPlanError(async () => {
+    // The hint only preselects the account in the browser; anything but a short string is ignored.
+    const loginHint = typeof options?.loginHint === "string" && options.loginHint.length <= 320 ? options.loginHint : undefined
+    const account = await auth.signIn(tenant, clientId, loginHint ? { loginHint } : undefined)
     await requireForNewTenant(account.tenantId)
     return account
   }))
