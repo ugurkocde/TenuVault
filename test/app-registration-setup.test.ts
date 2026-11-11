@@ -150,7 +150,7 @@ it("does not keep a timer running after a setup that finished", async () => {
   vi.useFakeTimers()
   try {
     state.interactive.mockResolvedValueOnce({ account: { tenantId: "tenant", username: "admin" }, accessToken: "ephemeral" })
-    state.provision.mockResolvedValueOnce({ tenantId: "tenant", clientId: "client", username: "admin", reused: false, ready: true, displayName: "TenuVault Desktop", candidateCount: 0 })
+    state.provision.mockResolvedValueOnce({ tenantId: "tenant", clientId: "client", username: "admin", reused: false, ready: true, displayName: "TenuVault Desktop", candidateCount: 0, missingConsent: [] })
     await new AppRegistrationSetup(host()).create()
     expect(vi.getTimerCount()).toBe(0)
   } finally { vi.useRealTimers() }

@@ -181,13 +181,19 @@ export default function OnboardingPage() {
     // With several registrations the admin may want another one than the one TenuVault picked. A
     // sign-in that starts by itself could finish, and move on, while they are going back for it.
     const several = result.reused && result.candidateCount > 1
-    setAutoSignIn(result.ready && !several ? { loginHint: result.username } : null)
+    // A reused registration is left as it is. What its admin consent lacks is said here, and the
+    // sign-in waits, because this notice goes away once the admin is signed in.
+    const missing = result.reused ? result.missingConsent : []
+    const paused = several || missing.length > 0
+    setAutoSignIn(result.ready && !paused ? { loginHint: result.username } : null)
     const reusedNotice = result.reused ? `This tenant already had a TenuVault app registration, "${result.displayName}", so TenuVault uses that one.` : ""
     const pending = "The app registration is ready, but Microsoft is still making it available for sign-in. Wait a moment, then select Sign in with Microsoft."
+    const one = missing.length === 1
     setSetupNotice([
       reusedNotice || (result.ready ? "The app registration is ready." : ""),
       several ? `It is one of ${result.candidateCount} in this tenant.` : "",
-      result.ready ? (several ? "To use it, select Sign in with Microsoft." : "") : pending,
+      missing.length ? `It has no tenant-wide admin consent for ${one ? "one permission" : `${missing.length} permissions`} TenuVault uses by default: ${missing.join(", ")}. TenuVault did not change it, and what needs ${one ? "this permission" : "these permissions"} does not work until an administrator grants ${one ? "it" : "them"} under Entra admin center > App registrations > ${result.displayName} > API permissions.` : "",
+      result.ready ? (paused ? "To use it, select Sign in with Microsoft." : "") : pending,
       several ? 'To use another one, select Previous, then "I already have an app registration" and enter its client ID.' : "",
     ].filter(Boolean).join(" "))
     setStep(1)

@@ -337,7 +337,7 @@ it("does not bring the same clipboard IDs back after the admin cleared the field
 
 
 describe("in-app tenant setup", () => {
-  const result = { tenantId: TENANT, clientId: CLIENT, username: "admin@contoso.test", reused: false, ready: true, displayName: "TenuVault Desktop", candidateCount: 0 }
+  const result = { tenantId: TENANT, clientId: CLIENT, username: "admin@contoso.test", reused: false, ready: true, displayName: "TenuVault Desktop", candidateCount: 0, missingConsent: [] }
   const settle = () => new Promise(resolve => setTimeout(resolve, 20))
 
   it("explains the setup before it starts", async () => {
@@ -384,6 +384,15 @@ describe("in-app tenant setup", () => {
     const container = await render(createElement(OnboardingPage))
     await act(async () => { button(container, "Set up with Microsoft sign-in")!.click(); await settle() })
     expect(state.signIn).toHaveBeenCalledTimes(1)
+  })
+
+  it("says what the admin consent of a reused registration lacks, and waits instead of signing in", async () => {
+    state.createRegistration.mockResolvedValueOnce({ ...result, reused: true, displayName: "TenuVault Desktop (Lab)", candidateCount: 1, missingConsent: ["DeviceManagementScripts.ReadWrite.All", "user_impersonation (Azure Storage)"] })
+    const container = await render(createElement(OnboardingPage))
+    await act(async () => { button(container, "Set up with Microsoft sign-in")!.click(); await settle() })
+    expect(state.signIn).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('It has no tenant-wide admin consent for 2 permissions TenuVault uses by default: DeviceManagementScripts.ReadWrite.All, user_impersonation (Azure Storage). TenuVault did not change it, and what needs these permissions does not work until an administrator grants them under Entra admin center > App registrations > TenuVault Desktop (Lab) > API permissions. To use it, select Sign in with Microsoft.')
+    expect(container.textContent).not.toContain("To use another one")
   })
 
   it("waits for the admin when the tenant has several registrations, so another one can still be chosen", async () => {

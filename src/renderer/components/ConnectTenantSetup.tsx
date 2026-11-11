@@ -92,7 +92,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
   const steps = [
     "Sign in with Microsoft in your browser",
     reused ? "Use the app registration this tenant already has" : "Create the app registration",
-    "Grant admin consent",
+    reused ? "Check its admin consent" : "Grant admin consent",
     "Wait until Microsoft accepts sign-ins to it",
   ]
   const current = PHASES.indexOf(phase)
@@ -184,8 +184,8 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
           <div className="mt-3 space-y-4">
             <ol className="list-decimal space-y-1.5 pl-5">
               <li>Your browser opens and you sign in with Microsoft. Microsoft asks you to approve Microsoft Graph Command Line Tools with two permissions: Application.ReadWrite.All and DelegatedPermissionGrant.ReadWrite.All.</li>
-              <li>TenuVault creates the app registration &quot;TenuVault Desktop&quot; in your tenant. If the tenant already has one from an earlier setup, it uses that one.</li>
-              <li>It grants tenant-wide admin consent for the delegated permissions listed below, and nothing else.</li>
+              <li>TenuVault creates the app registration &quot;TenuVault Desktop&quot; in your tenant. If the tenant already has one from an earlier setup, it uses that one and changes nothing in it.</li>
+              <li>It grants the app registration it created tenant-wide admin consent for the delegated permissions listed below, and nothing else.</li>
               <li>When Microsoft accepts sign-ins to the app registration, your browser opens once more and signs you in to TenuVault through it.</li>
             </ol>
             <p>

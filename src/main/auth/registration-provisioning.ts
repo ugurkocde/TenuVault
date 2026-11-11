@@ -118,34 +118,27 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
   // The sign-in is done; from here on the browser wait can no longer be cancelled.
   progress({ phase: "registration" })
   const principalFields = "$select=id,appId,accountEnabled,oauth2PermissionScopes"
-  const resources = []
+  // Microsoft's own enterprise applications for the APIs TenuVault uses. One the tenant has not
+  // used yet is only added when a registration is created: while an existing one is used, the
+  // setup writes nothing at all.
+  const resources: ((typeof DESKTOP_APP_PERMISSIONS)[number] & { principal?: Principal })[] = []
   for (const resource of DESKTOP_APP_PERMISSIONS) {
-    // A Microsoft API the tenant has not used yet is added to it, as the setup script does. These
-    // are Microsoft's own enterprise applications and stay when a later step fails.
-    const path = `/servicePrincipals?$filter=${encodeURIComponent(`appId eq '${resource.appId}'`)}&${principalFields}`
-    let principal = (await list<Principal>(path))[0]
-    if (!principal) principal = await graph<Principal>("POST", "/servicePrincipals", { appId: resource.appId }, true)
-    // Graph v1.0 calls them oauth2PermissionScopes; the beta name is accepted as well.
-    const scopes = principal.oauth2PermissionScopes ?? principal.publishedPermissionScopes ?? []
-    const resourceAccess = resource.permissions.map(value => {
-      const scope = scopes.find(scope => scope.value === value && scope.isEnabled !== false)
-      if (!scope) throw new Error(`Delegated permission ${value} was not found on ${resource.api}.`)
-      return { id: scope.id, type: "Scope" }
-    })
-    resources.push({ ...resource, principal, resourceAccess })
+    resources.push({ ...resource, principal: (await list<Principal>(`/servicePrincipals?$filter=${encodeURIComponent(`appId eq '${resource.appId}'`)}&${principalFields}`))[0] })
   }
   // An existing registration is used only when an administrator has already given it tenant-wide
   // consent for TenuVault's Intune permissions. Any member of a tenant may create app
   // registrations, with any name and note, and remains their owner. Granting consent to such a
   // registration would hand its owner an app that administrators sign in through. Tenant-wide
   // consent can only come from an administrator, so it is the proof that one trusted it before.
-  const graphPrincipalId = resources.find(resource => resource.appId === GRAPH_APP_ID)!.principal.id
-  const intune = new Set(resources.find(resource => resource.appId === GRAPH_APP_ID)!.permissions.filter(permission => permission.startsWith("DeviceManagement")))
+  // Even then the setup writes nothing to it: it only ever gives consent to the one it creates.
+  const graphResource = resources.find(resource => resource.appId === GRAPH_APP_ID)!
+  const graphPrincipalId = graphResource.principal?.id
+  const intune = new Set(graphResource.permissions.filter(permission => permission.startsWith("DeviceManagement")))
   // For choosing among several, only permissions TenuVault knows count: the default set and the
   // ones its switches add. Consent for anything else says nothing about which one the admins use.
-  const known = new Map(resources.map(resource => [resource.principal.id, new Set<string>(
+  const known = new Map(resources.flatMap(resource => resource.principal ? [[resource.principal.id, new Set<string>(
     resource.appId === GRAPH_APP_ID ? [...resource.permissions, ...OPTIONAL_PERMISSIONS.flatMap(entry => entry.permissions), "Policy.ReadWrite.ConditionalAccess"] : resource.permissions,
-  )]))
+  )] as const] : []))
   const candidates = []
   for (const candidate of (await list<Application>(`/applications?$filter=${encodeURIComponent("startswith(displayName,'TenuVault')")}&$select=${APPLICATION_FIELDS}`)).filter(looksLikeTenuVault)) {
     const principal = (await list<Principal>(`/servicePrincipals?$filter=${encodeURIComponent(`appId eq '${candidate.appId}'`)}&${principalFields}`))[0]
@@ -161,19 +154,34 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
   candidates.sort((a, b) => Number(a.disabled) - Number(b.disabled) || b.score - a.score || (a.app.createdDateTime ?? "9999").localeCompare(b.app.createdDateTime ?? "9999") || a.app.id.localeCompare(b.app.id))
   const chosen = candidates[0]
   const existing = chosen?.app
-  // An administrator who turned sign-in off revoked access on purpose: do not add consent to it.
+  // An administrator who turned sign-in off revoked access on purpose, and a second registration
+  // next to it would work around that decision.
   if (chosen?.disabled) {
     throw new Error(`This tenant already has a TenuVault app registration, "${chosen.app.displayName}" (client id ${chosen.app.appId}), but sign-in to its enterprise application is turned off. Turn it on under Entra admin center > Enterprise applications > ${chosen.app.displayName} > Properties, or delete the app registration, then try again. Nothing was changed.`)
   }
   let created: Application | undefined
   let app = existing
+  /** Default permissions the reused registration has no tenant-wide consent for. */
+  const missingConsent: string[] = []
   progress({ phase: "registration", reused: Boolean(existing) })
   try {
     if (!app) {
+      const requiredResourceAccess = []
+      for (const resource of resources) {
+        // A Microsoft API the tenant has not used yet is added to it, as the setup script does.
+        // These are Microsoft's own enterprise applications and stay when a later step fails.
+        resource.principal ??= await graph<Principal>("POST", "/servicePrincipals", { appId: resource.appId }, true)
+        // Graph v1.0 calls them oauth2PermissionScopes; the beta name is accepted as well.
+        const scopes = resource.principal.oauth2PermissionScopes ?? resource.principal.publishedPermissionScopes ?? []
+        requiredResourceAccess.push({ resourceAppId: resource.appId, resourceAccess: resource.permissions.map(value => {
+          const scope = scopes.find(scope => scope.value === value && scope.isEnabled !== false)
+          if (!scope) throw new Error(`Delegated permission ${value} was not found on ${resource.api}.`)
+          return { id: scope.id, type: "Scope" }
+        }) })
+      }
       created = await graph<Application>("POST", "/applications", {
         displayName: "TenuVault Desktop", signInAudience: "AzureADMyOrg", notes: NOTES,
-        publicClient: { redirectUris: ["http://localhost"] },
-        requiredResourceAccess: resources.map(resource => ({ resourceAppId: resource.appId, resourceAccess: resource.resourceAccess })),
+        publicClient: { redirectUris: ["http://localhost"] }, requiredResourceAccess,
       })
       app = created
     }
@@ -182,12 +190,15 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
     progress({ phase: "consent", reused: Boolean(existing) })
     const grants = chosen?.grants ?? await list<Grant>(`/oauth2PermissionGrants?$filter=${encodeURIComponent(`clientId eq '${principal.id}'`)}`)
     for (const resource of resources) {
-      const grant = grants.find(grant => grant.consentType === "AllPrincipals" && grant.resourceId === resource.principal.id)
+      const grant = grants.find(grant => grant.consentType === "AllPrincipals" && grant.resourceId === resource.principal?.id)
       const scopes = new Set(grant?.scope.split(/\s+/).filter(Boolean) ?? [])
-      const missing = resource.permissions.some(scope => !scopes.has(scope))
+      const lacking = resource.permissions.filter(scope => !scopes.has(scope))
+      // A registration this run did not create is used as it is. What an administrator consented
+      // to is their decision; widening it here would approve permissions nobody was asked about.
+      if (existing) { missingConsent.push(...lacking.map(scope => resource.appId === GRAPH_APP_ID ? scope : `${scope} (${resource.api})`)); continue }
       resource.permissions.forEach(scope => scopes.add(scope))
-      if (grant && missing) await graph("PATCH", `/oauth2PermissionGrants/${encodeURIComponent(grant.id)}`, { scope: [...scopes].join(" ") }, true)
-      if (!grant) await graph("POST", "/oauth2PermissionGrants", { clientId: principal.id, consentType: "AllPrincipals", resourceId: resource.principal.id, scope: [...scopes].join(" ") }, true)
+      if (grant && lacking.length) await graph("PATCH", `/oauth2PermissionGrants/${encodeURIComponent(grant.id)}`, { scope: [...scopes].join(" ") }, true)
+      if (!grant) await graph("POST", "/oauth2PermissionGrants", { clientId: principal.id, consentType: "AllPrincipals", resourceId: resource.principal!.id, scope: [...scopes].join(" ") }, true)
     }
   } catch (error) {
     if (!created) throw error
@@ -214,5 +225,5 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
   // The probe answers as soon as the sign-in service knows the application. Its service principal
   // and consent follow moments later, so leave them a little time before the browser opens.
   if (ready) await sleep(5000)
-  return { tenantId, clientId: app!.appId, username, reused: Boolean(existing), ready, displayName: app!.displayName, candidateCount: candidates.length }
+  return { tenantId, clientId: app!.appId, username, reused: Boolean(existing), ready, displayName: app!.displayName, candidateCount: candidates.length, missingConsent }
 }

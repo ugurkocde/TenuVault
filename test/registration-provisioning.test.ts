@@ -57,12 +57,25 @@ describe("registration provisioning", () => {
     expect(f.calls.find(c => c.body?.appId === "client")?.body?.tags).toEqual(["HideApp", "WindowsAzureActiveDirectoryIntegratedApp"])
     expect(f.calls.filter(c => c.url.pathname === "/v1.0/oauth2PermissionGrants" && c.method === "POST").map(c => c.body)).toEqual(DESKTOP_APP_PERMISSIONS.map(r => ({ clientId: "app-sp", consentType: "AllPrincipals", resourceId: r.api, scope: r.permissions.join(" ") })))
   })
-  it("reuses the oldest owned registration, unions scopes and creates missing grants", async () => {
+  it("uses the oldest approved registration as it is, writes nothing, and reports what its consent lacks", async () => {
     const f = fixture({ appPrincipal: { id: "app-sp" }, apps: [{ ...own, createdDateTime: "2025-01-01", appId: "older" }, own], grants: [consent(`Extra.Scope User.Read ${INTUNE}`), { id: "personal", resourceId: "Azure Storage", consentType: "Principal", scope: "user_impersonation" }] })
-    expect(await f.run()).toMatchObject({ reused: true, clientId: "older" })
-    expect(f.calls.some(c => c.url.pathname === "/v1.0/applications" && c.method === "POST")).toBe(false)
-    expect(f.calls.find(c => c.method === "PATCH")?.body?.scope).toBe(["Extra.Scope", "User.Read", INTUNE, ...DESKTOP_APP_PERMISSIONS[0]!.permissions.filter(scope => scope !== "User.Read" && scope !== INTUNE)].join(" "))
-    expect(f.calls.filter(c => c.url.pathname === "/v1.0/oauth2PermissionGrants" && c.method === "POST")).toHaveLength(2)
+    expect(await f.run()).toMatchObject({
+      reused: true, clientId: "older",
+      // A user's own consent is not tenant-wide, so Azure Storage counts as lacking.
+      missingConsent: [...DESKTOP_APP_PERMISSIONS[0]!.permissions.filter(scope => scope !== "User.Read" && scope !== INTUNE), "user_impersonation (Azure Service Management)", "user_impersonation (Azure Storage)"],
+    })
+    // Only reads go to Microsoft Graph: the one write-free request left is the sign-in service's probe.
+    expect(f.calls.filter(c => c.method !== "GET").map(c => c.url.pathname)).toEqual(["/tenant/oauth2/v2.0/devicecode"])
+  })
+  it("reports nothing as lacking when the reused registration has the whole default consent", async () => {
+    const grants = DESKTOP_APP_PERMISSIONS.map((resource, i) => ({ id: `g${i}`, resourceId: resource.api, consentType: "AllPrincipals", scope: resource.permissions.join(" ") }))
+    expect(await fixture({ appPrincipal: { id: "app-sp" }, apps: [own], grants }).run()).toMatchObject({ reused: true, missingConsent: [] })
+  })
+  it("does not add a Microsoft API the tenant has not used yet while it uses an existing registration", async () => {
+    // Microsoft Graph is there, the two Azure APIs are not.
+    const f = fixture({ ...trusted, apps: [own], fail: (url, init) => (init.method ?? "GET") === "GET" && url.pathname.endsWith("servicePrincipals") && /797f4846|e406a681/.test(url.searchParams.get("$filter") ?? "") ? Response.json({ value: [] }) : undefined })
+    expect(await f.run()).toMatchObject({ reused: true, missingConsent: expect.arrayContaining(["user_impersonation (Azure Service Management)", "user_impersonation (Azure Storage)"]) })
+    expect(f.calls.some(c => c.method === "POST" && c.url.pathname.endsWith("servicePrincipals"))).toBe(false)
   })
   it.each([
     { displayName: "Fabrikam Desktop" }, { notes: "foreign" }, { signInAudience: "AzureADMultipleOrgs" }, { publicClient: { redirectUris: [] } },
@@ -171,15 +184,20 @@ describe("registration provisioning", () => {
     await expect(f.run()).rejects.toThrow("failed")
     expect(f.calls.filter(c => c.method === "POST")).toHaveLength(1)
   })
-  it.each([false, true])("reports 403 and rolls back only a new application (reused %s)", async reused => {
-    const f = fixture({ ...(reused ? { ...trusted, apps: [own] } : {}), fail: (url, init) => url.pathname === "/v1.0/oauth2PermissionGrants" && init.method === "POST" ? failure(403) : undefined })
+  it("reports 403 and removes the application it created", async () => {
+    const f = fixture({ fail: (url, init) => url.pathname === "/v1.0/oauth2PermissionGrants" && init.method === "POST" ? failure(403) : undefined })
     const error = await f.run().then(() => { throw new Error("Expected failure") }, error => error as Error)
     expect(error.message).toContain("signed-in account admin")
     // Microsoft's own reason stays in the message, for refusals that are not about the role.
     expect(error.message).toContain("failed")
     for (const role of CONSENT_ROLES) expect(error.message).toContain(role)
-    expect(f.calls.filter(c => c.method === "DELETE")).toHaveLength(reused ? 0 : 1)
-    if (!reused) expect(error.message).toContain("The half-created app registration was removed again.")
+    expect(f.calls.filter(c => c.method === "DELETE")).toHaveLength(1)
+    expect(error.message).toContain("The half-created app registration was removed again.")
+  })
+  it("never deletes or changes a registration it did not create, whatever Microsoft Graph answers to writes", async () => {
+    const f = fixture({ ...trusted, apps: [own], fail: (url, init) => url.origin === "https://graph.microsoft.com" && (init.method ?? "GET") !== "GET" ? failure(403) : undefined })
+    expect(await f.run()).toMatchObject({ reused: true, clientId: "client" })
+    expect(f.calls.some(c => c.url.origin === "https://graph.microsoft.com" && c.method !== "GET")).toBe(false)
   })
   it("reports failed cleanup with the client ID", async () => {
     const f = fixture({ fail: (url, init) => init.method === "DELETE" || url.pathname === "/v1.0/oauth2PermissionGrants" && init.method === "POST" ? failure(403) : undefined })
