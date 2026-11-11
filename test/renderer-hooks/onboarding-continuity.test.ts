@@ -50,6 +50,7 @@ let useTenants: typeof import("../../src/portal/contexts/TenantContext").useTena
 let loadOnboardingDraft: typeof import("../../src/renderer/lib/onboarding-draft").loadOnboardingDraft
 
 const TENANT = "8c6f2b1e-4d3a-4f7b-9e21-6a5d0c3b7f14"
+const SECOND_TENANT = "11111111-1111-4111-8111-111111111111"
 const CLIENT = "5c3b8e21-7a4f-4d19-9c6e-2f81d0a4b7e3"
 const DRAFT = "tenuvault.onboarding.draft"
 const TENANTS = "tenuvault_tenants"
@@ -212,15 +213,15 @@ it.each([{ when: "after starting", pendingStart: false }, { when: "during a pend
 
 it("serializes concurrent additions without dropping either saved profile", async () => {
   await render()
-  const profile = (id: number) => ({ id, name: `Tenant ${id}`, credentials: { tenantId: TENANT, appId: CLIENT } }) as Tenant
+  const profile = (id: number) => ({ id, name: `Tenant ${id}`, credentials: { tenantId: id === 1 ? TENANT : SECOND_TENANT, appId: CLIENT } }) as Tenant
   await act(async () => { await Promise.all([operations.addTenant(profile(1)), operations.addTenant(profile(2))]) })
   expect((JSON.parse(state.store.get(TENANTS)!) as Tenant[]).map(tenant => tenant.id)).toEqual([1, 2])
   expect(container.querySelector('[data-testid="tenants"]')?.textContent).toBe("2")
 })
 
-it("retains existing profile edits made while another profile is being saved", async () => {
+it.each([false, true])("retains edits and sign-ins when an update shares the acknowledgement batch: %s", async sameBatch => {
   await render()
-  const profile = (id: number) => ({ id, name: `Tenant ${id}`, credentials: { tenantId: TENANT, appId: CLIENT } }) as Tenant
+  const profile = (id: number) => ({ id, name: `Tenant ${id}`, credentials: { tenantId: id === 1 ? TENANT : SECOND_TENANT, appId: CLIENT } }) as Tenant
   await act(async () => { await operations.addTenant(profile(1)) })
   let acknowledge!: () => void
   let waiting = true
@@ -233,8 +234,61 @@ it("retains existing profile edits made while another profile is being saved", a
   })
   let saving!: Promise<void>
   await act(async () => { saving = operations.addTenant(profile(2)) })
-  act(() => operations.updateTenant(1, { name: "Updated tenant" }))
-  await act(async () => { acknowledge(); await saving })
+  if (!sameBatch) act(() => operations.updateTenant(1, { name: "Updated tenant" }))
+  await act(async () => {
+    if (sameBatch) operations.updateTenant(1, { name: "Updated tenant" })
+    acknowledge()
+    await saving
+  })
   const saved = JSON.parse(state.store.get(TENANTS)!) as Tenant[]
   expect(saved.map(tenant => [tenant.id, tenant.name])).toEqual([[1, "Updated tenant"], [2, "Tenant 2"]])
+  expect(state.releaseTenant).not.toHaveBeenCalled()
+})
+
+it("releases only the explicitly deleted tenant while an addition is pending", async () => {
+  await render()
+  const profile = (id: number) => ({ id, name: `Tenant ${id}`, credentials: { tenantId: id === 1 ? TENANT : SECOND_TENANT, appId: CLIENT } }) as Tenant
+  await act(async () => { await operations.addTenant(profile(1)) })
+  let acknowledge!: () => void
+  let waiting = true
+  state.setItem.mockImplementation(async (key, value) => {
+    if (key === TENANTS && JSON.parse(value).length === 2 && waiting) {
+      waiting = false
+      await new Promise<void>(resolve => { acknowledge = resolve })
+    }
+    state.store.set(key, value)
+  })
+  let saving!: Promise<void>
+  await act(async () => { saving = operations.addTenant(profile(2)) })
+  await act(async () => { operations.deleteTenant(1); acknowledge(); await saving })
+  expect((JSON.parse(state.store.get(TENANTS)!) as Tenant[]).map(tenant => tenant.id)).toEqual([2])
+  expect(state.releaseTenant).toHaveBeenCalledExactlyOnceWith(TENANT)
+})
+
+it("does not sign out an unsaved addition if persisting a merged edit fails", async () => {
+  await render()
+  const profile = (id: number) => ({ id, name: `Tenant ${id}`, credentials: { tenantId: id === 1 ? TENANT : SECOND_TENANT, appId: CLIENT } }) as Tenant
+  await act(async () => { await operations.addTenant(profile(1)) })
+  let acknowledge!: () => void
+  let waiting = true
+  state.setItem.mockImplementation(async (key, value) => {
+    if (key === TENANTS && JSON.parse(value).length === 2) {
+      if (!waiting) throw new Error("Merged write failed")
+      waiting = false
+      await new Promise<void>(resolve => { acknowledge = resolve })
+    }
+    state.store.set(key, value)
+  })
+  let saving!: Promise<void>
+  let failure!: Promise<void>
+  await act(async () => {
+    saving = operations.addTenant(profile(2))
+    failure = expect(saving).rejects.toThrow("Merged write failed")
+  })
+  await act(async () => { operations.updateTenant(1, { name: "Updated tenant" }); acknowledge(); await failure })
+  expect(state.releaseTenant).not.toHaveBeenCalled()
+  expect(container.querySelector('[data-testid="tenants"]')?.textContent).toBe("1")
+  state.setItem.mockImplementation(async (key, value) => { state.store.set(key, value) })
+  await act(async () => { await operations.addTenant(profile(2)) })
+  expect((JSON.parse(state.store.get(TENANTS)!) as Tenant[]).map(tenant => [tenant.id, tenant.name])).toEqual([[1, "Updated tenant"], [2, "Tenant 2"]])
 })

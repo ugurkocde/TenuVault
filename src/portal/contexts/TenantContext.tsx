@@ -86,9 +86,13 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
   const tenantsRef = useRef(tenants)
   const syncTimeoutsRef = useRef<TenantSyncTimers>(new Map())
 
-  useLayoutEffect(() => {
-    tenantsRef.current = tenants
-  }, [tenants])
+  // Every mutation updates the ref synchronously; React may batch the corresponding renders.
+  const writes = useRef<Promise<void>>(Promise.resolve())
+  const enqueueWrite = useCallback((write: () => Promise<void>): Promise<void> => {
+    const pending = writes.current.then(write)
+    writes.current = pending.catch(() => undefined)
+    return pending
+  }, [])
 
   useEffect(() => {
     const timers = syncTimeoutsRef.current
@@ -103,7 +107,9 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
         const selectedId = tenantStorage.getItem(SELECTED_TENANT_KEY)
         
         if (stored) {
-          setTenants(deserializeTenants(stored))
+          const loaded = deserializeTenants(stored)
+          tenantsRef.current = loaded
+          setTenants(loaded)
         }
         
         if (selectedId) {
@@ -119,13 +125,11 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
   // Save tenants to sessionStorage whenever they change
   useEffect(() => {
     if (isLoaded && typeof window !== "undefined") {
-      try {
-        tenantStorage.setItem(STORAGE_KEY, serializeTenants(tenants))
-      } catch (error) {
-        console.error("Error saving tenants to sessionStorage:", error)
-      }
+      // Read the authoritative state when this write runs, after any queued addition.
+      void enqueueWrite(() => tenantStorage.setItemAsync(STORAGE_KEY, serializeTenants(tenantsRef.current), { releaseRemoved: false }))
+        .catch(error => console.error("Error saving tenants:", error))
     }
-  }, [tenants, isLoaded])
+  }, [tenants, isLoaded, enqueueWrite])
 
   // Save selected tenant ID
   useEffect(() => {
@@ -138,7 +142,6 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
     }
   }, [selectedTenantId, isLoaded])
 
-  const additions = useRef<Promise<void>>(Promise.resolve())
   const addTenant = useCallback((tenant: Tenant): Promise<void> => {
     const added = { createdAt: new Date().toISOString(), ...tenant }
     const save = async () => {
@@ -148,28 +151,36 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
       do {
         previous = tenantsRef.current
         next = [...previous, added]
-        await tenantStorage.setItemAsync(STORAGE_KEY, serializeTenants(next))
+        await tenantStorage.setItemAsync(STORAGE_KEY, serializeTenants(next), { releaseRemoved: false })
       } while (tenantsRef.current !== previous)
       tenantsRef.current = next
       setTenants(next)
     }
-    const pending = additions.current.then(save)
-    additions.current = pending.catch(() => undefined)
-    return pending
-  }, [])
+    return enqueueWrite(save)
+  }, [enqueueWrite])
 
   const updateTenant = useCallback((id: number, updates: Partial<Tenant>) => {
-    setTenants(prev => prev.map(tenant => 
-      tenant.id === id ? { ...tenant, ...updates } : tenant
-    ))
+    const next = tenantsRef.current.map(tenant => tenant.id === id ? { ...tenant, ...updates } : tenant)
+    tenantsRef.current = next
+    setTenants(next)
   }, [])
 
   const deleteTenant = useCallback((id: number) => {
-    setTenants(prev => prev.filter(tenant => tenant.id !== id))
+    const removed = tenantsRef.current.find(tenant => tenant.id === id)?.credentials?.tenantId
+    const next = tenantsRef.current.filter(tenant => tenant.id !== id)
+    tenantsRef.current = next
+    setTenants(next)
+    // Only an explicit deletion releases a sign-in. Intermediate snapshots during additions do not.
+    void enqueueWrite(async () => {
+      await tenantStorage.setItemAsync(STORAGE_KEY, serializeTenants(tenantsRef.current), { releaseRemoved: false })
+      if (removed && !tenantsRef.current.some(tenant => tenant.credentials?.tenantId?.toLowerCase() === removed.toLowerCase())) {
+        await tenantStorage.releaseTenant(removed)
+      }
+    }).catch(error => console.error("Could not remove tenant:", error))
     if (selectedTenantId === id) {
       setSelectedTenantId(null)
     }
-  }, [selectedTenantId])
+  }, [selectedTenantId, enqueueWrite])
 
   const getTenant = useCallback((id: number) => {
     return tenants.find(tenant => tenant.id === id)

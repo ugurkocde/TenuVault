@@ -70,7 +70,7 @@ export const tenantStorage = {
     void tenantStorage.setItemAsync(key, value).catch((error) => console.error("Could not save tenant data:", error))
   },
   /** Resolves only after the encrypted store acknowledges the write. */
-  async setItemAsync(key: string, value: string): Promise<void> {
+  async setItemAsync(key: string, value: string, options: { releaseRemoved?: boolean } = {}): Promise<void> {
     let next: Set<string> | null | undefined
     if (key === TENANTS_KEY) {
       next = tenantIds(value)
@@ -99,10 +99,11 @@ export const tenantStorage = {
       }
       throw error
     }
-    if (next && previousIds) for (const id of previousIds) {
+    if (options.releaseRemoved !== false && next && previousIds) for (const id of previousIds) {
       if (!next.has(id)) void bridge.license.releaseTenant(id).catch((error) => console.error("Could not release removed tenant:", error))
     }
   },
+  releaseTenant: (tenantId: string) => bridge.license.releaseTenant(tenantId),
   removeItem(key: string): void {
     revisions.set(key, Symbol())
     cache.set(key, null)
