@@ -93,7 +93,7 @@ describe("registration provisioning", () => {
   it("waits for an unknown registration to become known", async () => {
     const f = fixture({ unknown: 2 })
     expect(await f.run()).toMatchObject({ ready: true })
-    expect(f.sleep.mock.calls).toEqual([[2000], [2000], [2000]])
+    expect(f.sleep.mock.calls).toEqual([[2000], [2000], [5000]])
   })
   it("returns IDs when Microsoft never publishes the registration", async () => {
     const f = fixture({ unknown: Infinity })

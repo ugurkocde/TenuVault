@@ -138,6 +138,8 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
     } catch { /* Return IDs even when the publication service cannot be reached. */ }
     await sleep(Math.max(0, Math.min(2000, deadline - Date.now())))
   }
-  if (ready) await sleep(2000)
+  // The probe answers as soon as the sign-in service knows the application. Its service principal
+  // and consent follow moments later, so leave them a little time before the browser opens.
+  if (ready) await sleep(5000)
   return { tenantId, clientId: app!.appId, username, reused: Boolean(existing), ready }
 }
