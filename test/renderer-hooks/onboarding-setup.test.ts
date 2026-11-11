@@ -206,13 +206,16 @@ describe("onboarding draft", () => {
     saveOnboardingDraft({ step: 2, tenant: "other", clientId: CLIENT, displayName: "", account: { ...account, tenantId: "other" } })
     await flush()
     expect(signedInAt()).toBe(1_000 + PENDING_SIGN_IN_MAX_AGE_MS)
+    // Setup left open past three days: saving the same sign-in again does not renew it.
+    const other = { ...account, tenantId: "other" }
+    now.mockReturnValue(1_000 + 2 * PENDING_SIGN_IN_MAX_AGE_MS)
+    saveOnboardingDraft({ step: 1, tenant: "other", clientId: CLIENT, displayName: "", account: other })
+    await flush()
+    expect(signedInAt()).toBe(1_000 + PENDING_SIGN_IN_MAX_AGE_MS)
+    expect(pendingSignInTenant()).toBeNull()
     // A time in the future, after the clock was set back, does not keep a sign-in.
     now.mockReturnValue(500)
     expect(pendingSignInTenant()).toBeNull()
-    // Saving over an expired sign-in to the same tenant starts a new time.
-    saveOnboardingDraft({ step: 2, tenant: "other", clientId: CLIENT, displayName: "", account: { ...account, tenantId: "other" } })
-    await flush()
-    expect(signedInAt()).toBe(500)
     now.mockRestore()
   })
 })
@@ -605,6 +608,21 @@ it.each([false, true])("refuses a connected tenant without releasing it, resumed
   expect(button(container, "Sign in with Microsoft")!.disabled).toBe(false)
   expect(state.releaseTenant).not.toHaveBeenCalled()
   expect(state.addTenant).not.toHaveBeenCalled()
+})
+
+it("does not bring back a resumed account the admin switched away from while it was being checked", async () => {
+  const account = { tenantId: TENANT, clientId: CLIENT, username: "saved" }
+  state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: TENANT, clientId: CLIENT, displayName: "", account, signedInAt: Date.now() }))
+  let answer!: (accounts: SignedInAccount[]) => void
+  state.accounts.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+  const container = await render(createElement(OnboardingPage))
+  expect(container.textContent).toContain("Signed in as saved")
+  await act(async () => button(container, "Use a different tenant or account")!.click())
+  await flush()
+  expect(state.releaseTenant).toHaveBeenCalledWith(TENANT)
+  await act(async () => { answer([account]); await new Promise(resolve => setTimeout(resolve, 0)) })
+  expect(container.textContent).not.toContain("Signed in as saved")
+  expect(container.querySelector("#tenant")).not.toBeNull()
 })
 
 it("requires sign-in again when checking the saved session fails", async () => {

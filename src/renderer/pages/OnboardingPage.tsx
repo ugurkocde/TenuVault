@@ -102,20 +102,22 @@ export default function OnboardingPage() {
     }
   }, [])
 
-  // A resumed sign-in counts only while it is still signed in on this computer.
+  // A resumed sign-in counts only while it is still signed in on this computer. The check no longer
+  // applies once the admin switched accounts, ran the setup again or signed in anew.
+  const resumeCheck = useRef(true)
   useEffect(() => {
     if (!initial?.account) return
     let active = true
     const saved = initial.account
     void bridge.auth.accounts().then((accounts) => {
-      if (!active) return
+      if (!active || !resumeCheck.current) return
       const signedIn = accounts.find((item) => item.tenantId === saved.tenantId && item.clientId === saved.clientId)
       setAccount(signedIn ?? null)
       if (!signedIn) {
         setStep((current) => (current > 1 ? 1 : current))
       }
     }).catch(() => {
-      if (!active) return
+      if (!active || !resumeCheck.current) return
       setAccount(null)
       setStep((current) => (current > 1 ? 1 : current))
     }).finally(() => { if (active) setCheckingResume(false) })
@@ -161,6 +163,7 @@ export default function OnboardingPage() {
    */
   const switchTenant = async () => {
     if (!account) return
+    resumeCheck.current = false
     setReleasing(true)
     setAddError(null)
     try {
@@ -182,6 +185,7 @@ export default function OnboardingPage() {
    * so the wizard cannot carry on with the tenant it showed before.
    */
   const registered = async (result: RegistrationResult) => {
+    resumeCheck.current = false
     const next = { ...fields, tenant: result.tenantId, clientId: result.clientId }
     setFields(next)
     saveOnboardingDraft({ step: 1, ...next, account: null })
@@ -435,6 +439,7 @@ export default function OnboardingPage() {
                 hidePaste={Boolean(setupNotice)}
                 onFieldsChange={setFields}
                 onSignedIn={(signedIn, displayName) => {
+                  resumeCheck.current = false
                   if (connected(signedIn.tenantId)) {
                     setAutoSignIn(null)
                     setAddError({ message: "This tenant is already connected to TenuVault.", license: false, alreadyConnected: true })

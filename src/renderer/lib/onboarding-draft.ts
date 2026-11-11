@@ -89,12 +89,16 @@ export function isEmptyDraft(draft: OnboardingDraft): boolean {
 
 let pending: Promise<void> = Promise.resolve()
 
-/** When the stored draft's sign-in to this tenant was first saved, so saving again does not extend it. */
+/**
+ * When the stored draft's sign-in to this tenant was first saved, so saving again never extends it,
+ * also once it expired. A new sign-in always follows a draft saved without an account, so it starts
+ * a new time.
+ */
 function signedInAt(tenantId: string): number {
   try {
     const value = JSON.parse(bridge.storage.getItemSync(KEY) ?? "null") as Record<string, unknown> | null
-    const stored = value && recentAccount(value)
-    if (stored && stored.tenantId.toLowerCase() === tenantId.toLowerCase()) return value.signedInAt as number
+    const stored = value && validAccount(value.account)
+    if (stored && stored.tenantId.toLowerCase() === tenantId.toLowerCase() && typeof value.signedInAt === "number") return value.signedInAt
   } catch { /* A fresh time below. */ }
   return Date.now()
 }
