@@ -47,7 +47,15 @@ const MAIN_OVERRIDES = `(() => {
       M.license.trialEndsAt = tenant.trialEndsAt
     } else if (action === "trial_contact") tenant.trialEmail = email
     else if (action === "acknowledge") tenant.trialAcknowledged = true
+    else if (action === "resume_trial") {
+      // The trial as it was before it was ended, without a second welcome.
+      Object.assign(tenant, M.beforeEnd.tenant, { trialAcknowledged: true, trialCanResume: false, trialResumeUntil: undefined, trialRefusal: undefined, trialRefusalPermanent: false })
+      Object.assign(M.license, M.beforeEnd.license)
+    }
     else if (action === "end_trial") {
+      // The installation that ended the trial can switch back until its original end.
+      M.beforeEnd = { tenant: { ...tenant }, license: { ...M.license, tenants: M.license.tenants } }
+      Object.assign(tenant, { trialCanResume: true, trialResumeUntil: tenant.trialEndsAt })
       Object.assign(tenant, { entitled: false, activated: false, source: null, plan: "community", tenants: null, expiresAt: null, validUntil: null, trial: false, canEnd: false, trialEndsAt: new Date().toISOString(), trialAcknowledged: true, trialCanExtend: false, trialExtensionAvailableAt: undefined, trialExtensionUnavailable: true, trialRefusal: "This tenant already had a Pro trial.", trialRefusalPermanent: true })
       Object.assign(M.license, { plan: null, tenantLimit: null, trial: false, trialEndsAt: null, communityTenantId: tenantId })
     }
@@ -260,6 +268,24 @@ try {
   if (await evaluate(`document.body.innerText.includes("start a free trial") || [...document.querySelectorAll('button')].filter(b => b.textContent === "Buy Pro").length !== 1 || Boolean(document.querySelector('[role="dialog"]'))`)) throw new Error("License page after an ended trial")
   await scrollAll(0)
   await themed("trial-ended-early-license")
+  // Until the trial's own end the same installation can switch back: on the License page, and
+  // next to Buy Pro where a Pro feature is locked.
+  await assertText("You ended the Pro trial for this tenant early. You can switch back until")
+  await assertText("(9 days left). No card, no email.")
+  if (await evaluate(`document.body.innerText.includes("This tenant already had a Pro trial.")`)) throw new Error("Used trial message next to the resume offer")
+  await evaluate(`location.hash = "#/portal/sync"`)
+  await assertText("Resume Pro trial")
+  if (await evaluate(`[...document.querySelectorAll('button')].filter(b => b.textContent.trim() === "Buy Pro").length < 1`)) throw new Error("A locked Pro feature without Buy Pro")
+  await scrollAll(0)
+  await screenshot("trial-ended-early-locked-feature", true)
+  await evaluate(`location.hash = "#/license"`)
+  await assertText("Resume Pro trial")
+  await evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent === "Resume Pro trial").click()`)
+  // "9 days left" is already on screen in the offer, so wait for the running trial itself.
+  if (!(await waitFor(`!document.body.innerText.includes("Resume Pro trial") && document.body.innerText.includes("Nothing is charged and no card is on file.")`))) throw new Error("The trial was not resumed")
+  if (await evaluate(`document.body.innerText.includes("Pro trial started") || !document.body.innerText.includes("9 days left")`)) throw new Error("License page after resuming the trial")
+  await scrollAll(0)
+  await screenshot("trial-resumed-license", true)
   await scene("trial-license-before-window", active(9), MOCK.tenants.slice(0, 1), "#/license", "You can extend once, from")
   await scene("trial-license-extension", active(5), MOCK.tenants.slice(0, 1), "#/license", "Extend trial by 12 days")
   await evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent === "Extend trial by 12 days").click()`)

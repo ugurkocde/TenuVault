@@ -184,6 +184,8 @@ describe("licensing contract, client side", () => {
     await license.tenantTrialAction(TENANT, "trial_contact", "admin@contoso.example")
     await license.tenantTrialAction(TENANT, "trial_contact")
     await license.tenantTrialAction(TENANT, "end_trial")
+    await license.tenantTrialAction(TENANT, "resume_trial")
+    expect(license.status([TENANT]).tenants[0]).toMatchObject({ source: "trial", trial: true, entitled: true })
     for (const { body } of calls) expectFields(body, contract.requests.tenant)
     for (const action of Object.keys(contract.tenantTrial.actions)) expect(calls.some(call => call.body.action === action)).toBe(true)
     expect(contract.tenantTrial.responses.unavailable.reason).toEqual(["used", "licensed", "install_limit", "disabled", "app_update_required", "not_starter"])

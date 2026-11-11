@@ -141,7 +141,7 @@ To use a different key while one is active, click **Use a different key** next t
 
 When enabled, a new connection starts a Pro trial without a card or email. Existing Community tenants can opt in on the License page. Joining from another installation keeps the tenant's original end date. Days remaining and the end date appear on the License page.
 
-Choose **Need more time? Extend your trial** during the last five days or within fourteen days after expiry. You can extend once. Only the installation that started the trial offers **Use Community instead**. TenuVault asks you to confirm first: ending early uses up the trial, and it cannot be started again for that tenant.
+Choose **Need more time? Extend your trial** during the last five days or within fourteen days after expiry. You can extend once. Only the installation that started the trial offers **Use Community instead**. TenuVault asks you to confirm first, and the tenant then moves to Community right away. Until the trial's original end date, the same installation can switch back with **Resume Pro trial** on the License page or where a Pro feature is locked. Resuming adds no time. After that date the trial cannot be started again for that tenant.
 
 The optional email field sends nothing until you press **Email me setup tips and a reminder before the trial ends**. You can change or remove the saved address in the app during the trial on the License page of any installation that joined it, or unsubscribe at any time using the link in each email. See the [privacy policy](https://www.tenuvault.com/privacy).
 

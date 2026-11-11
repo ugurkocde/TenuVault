@@ -1,3 +1,4 @@
+import { useRef } from "react"
 import { organizationLicenseRefusal } from "../../shared/trial-notices"
 import { useSelectedTenant } from "~/contexts/TenantContext"
 import { TenantTrialOptions } from "./TenantTrial"
@@ -6,6 +7,7 @@ import { Link, useInRouterContext } from "react-router-dom"
 import { Button } from "~/components/ui/button"
 import { bridge } from "../lib/bridge"
 import { useLicense } from "../lib/license"
+import type { TenantLicenseStatus } from "../../shared/ipc"
 import { openCheckout, planPromptAction } from "../lib/purchase"
 
 // The license status, or null outside a LicenseProvider. useLicense reads the context once
@@ -24,7 +26,8 @@ function useTenantIfProvided() {
 
 /**
  * The main action of a plan prompt (planPromptAction): a free trial without a
- * license, Buy Pro or Buy MSP once the trial was used, otherwise See plans. onLeave closes a
+ * license, Buy Pro or Buy MSP once the trial was used, otherwise See plans. A trial this
+ * installation ended early is offered again next to Buy Pro while it can be resumed. onLeave closes a
  * dialog before the trial opens the License page. Outside a router or license provider (a
  * screen rendered alone) it falls back to See plans.
  */
@@ -47,11 +50,21 @@ export function PlanPromptButton({
   const inRouter = useInRouterContext()
   const selectedTenantId = useTenantIfProvided()
   const tenantId = contextTenantId === undefined ? selectedTenantId : contextTenantId?.toLowerCase()
-  const eligible = status?.tenantTrialsEnabled && !status.hasKey && plan === "pro" ? status.tenants.find(t =>
-    (tenantId && t.tenantId === tenantId) && t.signedIn && !t.entitled && !t.activated && !organizationLicenseRefusal(t) && !(t.trialRefusalPermanent ?? Boolean(t.trialRefusal)),
-  ) : undefined
+  const prompted = status && !status.hasKey && plan === "pro" ? status : null
+  const here = (t: TenantLicenseStatus) => Boolean(tenantId) && t.tenantId === tenantId && t.signedIn && !t.entitled && !t.activated
+  // A new trial needs the trial switch, and a tenant whose organization license was shared through
+  // another app registration gets none. A trial this installation ended early is offered
+  // again without it: an installation with a license for another tenant never learns the
+  // switch, and the service refuses the resume itself while trials are off.
+  const eligible = prompted?.tenants.find(t => here(t) && (t.trialCanResume || (prompted.tenantTrialsEnabled && !organizationLicenseRefusal(t) && !(t.trialRefusalPermanent ?? Boolean(t.trialRefusal)))))
+  // A resume the service refuses for good ends the offer. The prompt keeps that tenant's
+  // trial options mounted, so the reason stays on screen next to Buy Pro.
+  const resumeOffered = useRef<string | undefined>(undefined)
+  if (eligible?.trialCanResume) resumeOffered.current = eligible.tenantId
+  const shown = eligible ?? (resumeOffered.current ? prompted?.tenants.find(t => t.tenantId === resumeOffered.current && here(t)) : undefined)
   const requested = planPromptAction(status, plan)
-  const action = status?.tenantTrialsEnabled && requested === "trial" ? "checkout" : requested
+  // With tenant trials, or next to a resume offer, the purchase is the other choice, not the emailed trial.
+  const action = (status?.tenantTrialsEnabled || shown) && requested === "trial" ? "checkout" : requested
   if (action === "trial" && inRouter) {
     // A link: the trial form is on the License page.
     return (
@@ -74,8 +87,8 @@ export function PlanPromptButton({
       See plans
     </Button>
   )
-  return eligible ? <span className="inline-flex flex-wrap items-center gap-3">
+  return shown ? <span className="inline-flex flex-wrap items-center gap-3">
     {purchase}
-    <TenantTrialOptions tenantId={eligible.tenantId} compact variant={variant} size={size} onStarted={onLeave} />
+    <TenantTrialOptions tenantId={shown.tenantId} compact variant={variant} size={size} onStarted={onLeave} />
   </span> : purchase
 }

@@ -9,10 +9,10 @@ import type { LicenseStatus, TenantLicenseStatus } from "../../src/shared/ipc"
 import { FEATURE_PLAN } from "../../src/shared/plans"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
-const state = vi.hoisted(() => ({ status: null as LicenseStatus | null, selected: "tenant", start: vi.fn(async () => undefined), open: vi.fn(async () => undefined) }))
+const state = vi.hoisted(() => ({ status: null as LicenseStatus | null, selected: "tenant", start: vi.fn(async () => undefined), open: vi.fn(async () => undefined), action: vi.fn(async () => undefined) }))
 vi.mock("../../src/renderer/lib/license", async original => ({ ...(await original<typeof import("../../src/renderer/lib/license")>()), useLicense: () => ({ status: state.status, refresh: async () => {} }) }))
 vi.mock("~/contexts/TenantContext", () => ({ useSelectedTenant: () => ({ selectedTenant: { credentials: { tenantId: state.selected } } }) }))
-vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { license: { open: state.open, startTenantTrial: state.start } } }))
+vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { license: { open: state.open, startTenantTrial: state.start, tenantTrialAction: state.action } } }))
 import { PlanPromptButton } from "../../src/renderer/components/PlanPromptButton"
 let root: Root | undefined
 let container: HTMLDivElement | undefined
@@ -76,6 +76,103 @@ describe("plan prompt trial and purchase actions", () => {
     // A button, not a paragraph: the locked feature dialog keeps its action.
     expect(container.textContent).toBe("Buy Pro")
     expect(state.start).not.toHaveBeenCalled()
+  })
+  it("offers to resume a trial that was ended early, next to Buy Pro and inline", async () => {
+    state.status = status("ended")
+    Object.assign(state.status.tenants[0]!, { trialCanResume: true, trialResumeUntil: new Date(Date.now() + 9 * 86400_000).toISOString() })
+    container = document.body.appendChild(document.createElement("div")); root = createRoot(container)
+    const onLeave = vi.fn()
+    await act(async () => root!.render(createElement(MemoryRouter, null, createElement("span", null, createElement(PlanPromptButton, { plan: "pro", source: "locked-fullrestore", variant: "outline", size: "sm", onLeave })))))
+    expect(container.textContent).toContain("Buy Pro")
+    expect(container.textContent).toContain("9 days left, until")
+    expect(container.textContent).not.toContain("Try Pro free")
+    expect(container.textContent).not.toContain("This tenant already had a Pro trial.")
+    // A prompt stays one line of inline elements.
+    expect(container.querySelector("div, p")).toBeNull()
+    const resume = [...container.querySelectorAll("button")].find(b => b.textContent === "Resume Pro trial")!
+    expect(resume.className).toContain("border"); expect(resume.className).toContain("h-8")
+    await act(async () => resume.click())
+    expect(state.action).toHaveBeenCalledWith("tenant", "resume_trial")
+    // The dialog the prompt sits in closes, as after starting a trial.
+    expect(onLeave).toHaveBeenCalledTimes(1)
+    expect(state.start).not.toHaveBeenCalled()
+  })
+  it("keeps the reason next to Buy Pro when a refusal ends the offer", async () => {
+    state.status = status("ended")
+    Object.assign(state.status.tenants[0]!, { trialCanResume: true, trialResumeUntil: new Date(Date.now() + 9 * 86400_000).toISOString() })
+    state.action.mockImplementationOnce(async () => {
+      state.status = status("ended")
+      throw new Error("This trial can no longer be resumed.")
+    })
+    container = document.body.appendChild(document.createElement("div")); root = createRoot(container)
+    const onLeave = vi.fn()
+    await act(async () => root!.render(createElement(MemoryRouter, null, createElement("span", null, createElement(PlanPromptButton, { plan: "pro", source: "locked-fullrestore", onLeave })))))
+    await act(async () => [...container!.querySelectorAll("button")].find(b => b.textContent === "Resume Pro trial")!.click())
+    expect(container.textContent).not.toContain("Resume Pro trial")
+    expect(container.textContent).toContain("Buy Pro")
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe("This trial can no longer be resumed.")
+    expect(container.querySelector("div, p")).toBeNull()
+    expect(onLeave).not.toHaveBeenCalled()
+  })
+  it("offers the current tenant's resume while the trial switch is unknown or off", async () => {
+    // After a restart an installation with a license for another tenant never learns the
+    // switch. The same holds while the service cannot be reached or trials are off.
+    state.status = { ...status("ended"), tenantTrialsEnabled: false }
+    const until = new Date(Date.now() + 9 * 86400_000).toISOString()
+    Object.assign(state.status.tenants[0]!, { trialCanResume: true, trialResumeUntil: until })
+    state.status.tenants.push({ ...state.status.tenants[0]!, tenantId: "other" })
+    container = document.body.appendChild(document.createElement("div")); root = createRoot(container)
+    await act(async () => root!.render(createElement(MemoryRouter, null, createElement("span", null, createElement(PlanPromptButton, { plan: "pro", source: "locked-fullrestore" })))))
+    // Buy Pro, not the emailed trial, is the other choice next to a resume.
+    expect(container.textContent).toContain("Buy Pro")
+    expect(container.textContent).not.toContain("Start 30 day free trial")
+    expect(container.textContent).not.toContain("Try Pro free")
+    const resumes = [...container.querySelectorAll("button")].filter(b => b.textContent === "Resume Pro trial")
+    expect(resumes).toHaveLength(1)
+    expect(container.querySelector("div, p")).toBeNull()
+    // The service refuses for good: the reason stays next to Buy Pro, and the other tenant's
+    // offer does not take its place.
+    state.action.mockImplementationOnce(async () => {
+      Object.assign(state.status!.tenants[0]!, { trialCanResume: false, trialResumeUntil: undefined })
+      state.status = { ...state.status!, tenants: state.status!.tenants.map(t => ({ ...t })) }
+      throw new Error("This trial can no longer be resumed.")
+    })
+    await act(async () => resumes[0]!.click())
+    expect(state.action).toHaveBeenCalledTimes(1)
+    expect(state.action).toHaveBeenCalledWith("tenant", "resume_trial")
+    expect(container.textContent).toContain("Buy Pro")
+    expect(container.textContent).not.toContain("Resume Pro trial")
+    expect([...container.querySelectorAll('[role="alert"]')].map(e => e.textContent)).toEqual(["This trial can no longer be resumed."])
+    expect(container.querySelector("div, p")).toBeNull()
+  })
+  it("keeps another tenant's trial texts out of the current tenant's prompt", async () => {
+    // The other tenant used its trial, and its saved activation no longer validates.
+    state.status = { ...status("ended"), tenantTrialsEnabled: false }
+    Object.assign(state.status.tenants[0]!, { trialCanResume: true, trialResumeUntil: new Date(Date.now() + 9 * 86400_000).toISOString() })
+    state.status.tenants.push({ ...status("ended").tenants[0]!, tenantId: "other", activated: true })
+    container = document.body.appendChild(document.createElement("div")); root = createRoot(container)
+    await act(async () => root!.render(createElement(MemoryRouter, null, createElement("span", null, createElement(PlanPromptButton, { plan: "pro", source: "locked-fullrestore" })))))
+    expect(container.textContent).toContain("Buy Pro")
+    expect(container.textContent).toContain("Resume Pro trial")
+    expect(container.textContent).not.toContain("Check the saved activation")
+    expect(container.textContent).not.toContain("This tenant already had a Pro trial.")
+  })
+  it("does not offer a resume in a prompt with a saved key or for the MSP plan", async () => {
+    for (const [hasKey, plan] of [[true, "pro"], [false, "msp"]] as const) {
+      state.status = { ...status("ended"), hasKey, tenantTrialsEnabled: false }
+      Object.assign(state.status.tenants[0]!, { trialCanResume: true, trialResumeUntil: new Date(Date.now() + 9 * 86400_000).toISOString() })
+      container?.remove(); act(() => root?.unmount())
+      container = document.body.appendChild(document.createElement("div")); root = createRoot(container)
+      await act(async () => root!.render(createElement(MemoryRouter, null, createElement(PlanPromptButton, { plan, source: "locked-fullrestore" }))))
+      expect(container.textContent, `${hasKey} ${plan}`).not.toContain("Resume Pro trial")
+    }
+  })
+  it("offers only Buy Pro once the ended trial cannot be resumed", async () => {
+    state.status = status("ended")
+    container = document.body.appendChild(document.createElement("div")); root = createRoot(container)
+    await act(async () => root!.render(createElement(MemoryRouter, null, createElement(PlanPromptButton, { plan: "pro", source: "locked-fullrestore" }))))
+    expect(container.textContent).toContain("Buy Pro")
+    expect(container.textContent).not.toContain("Resume Pro trial")
   })
   it("keeps a temporary refusal out of plan prompts", async () => {
     state.status = status("never")
