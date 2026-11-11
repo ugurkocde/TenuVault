@@ -128,7 +128,8 @@ For recovery, see [readiness and manual artifacts](docs/disaster-recovery.md), [
    Administrator, Privileged Role Administrator or Cloud Application Administrator signs in once in the browser, and the
    app creates the app registration through Microsoft Graph, grants admin consent and signs in. The setup sign-in goes
    through Microsoft's own Microsoft Graph Command Line Tools and is kept in memory only. A tenant that already has a
-   TenuVault app registration keeps it: the app uses it instead of creating a second one.
+   TenuVault app registration that an administrator approved keeps it: the app uses it as it is instead of creating a
+   second one.
 
    [`resources/New-TenuVaultDesktopApp.ps1`](resources/New-TenuVaultDesktopApp.ps1) does the same from PowerShell, for
    another administrator or for reading what runs first; the Connect step offers it under **Use the setup script instead**.

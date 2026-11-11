@@ -11,7 +11,7 @@ vi.mock("@azure/msal-node", async original => {
   } }
 })
 vi.mock("../src/main/auth/registration-provisioning", () => ({ provisionRegistration: state.provision }))
-import { AppRegistrationSetup, setupLoginHint, setupSignInError } from "../src/main/auth/app-registration-setup"
+import { AppRegistrationSetup, SETUP_SIGN_IN_TIMEOUT_MS, setupLoginHint, setupSignInError } from "../src/main/auth/app-registration-setup"
 const host = () => ({ fetch: vi.fn() as unknown as typeof fetch, openBrowser: vi.fn(async () => undefined), progress: vi.fn() })
 beforeEach(() => { vi.clearAllMocks() })
 it("uses an isolated memory client, setup scopes and the chosen tenant", async () => {
@@ -20,7 +20,16 @@ it("uses an isolated memory client, setup scopes and the chosen tenant", async (
     await request.openBrowser("https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize")
     expect(request.prompt).toBe("select_account")
     expect(request.scopes).toEqual(["https://graph.microsoft.com/Application.ReadWrite.All", "https://graph.microsoft.com/DelegatedPermissionGrant.ReadWrite.All"])
-    expect(request.successTemplate).toContain("TenuVault is now setting up the app registration")
+    // The browser is in front when the sign-in ends, so its page leads with what to do next.
+    expect(request.successTemplate).toContain("<h1 style=\"font-size:1.6rem;margin:0 0 .6rem\">Go back to TenuVault</h1>")
+    expect(request.successTemplate).toContain("TenuVault is setting up the app registration and continues there")
+    // A green tick that draws itself, drawn at once for people who prefer reduced motion.
+    expect(request.successTemplate).toContain('stroke="#16a34a"')
+    expect(request.successTemplate).toContain("prefers-reduced-motion:reduce")
+    expect(request.errorTemplate).toContain('stroke="#dc2626"')
+    expect(request.errorTemplate).not.toContain("#16a34a")
+    // The page loads nothing from anywhere: no script, no link, no image.
+    for (const template of [request.successTemplate, request.errorTemplate]) expect(template).not.toMatch(/<script|<link|<img|https?:/)
     return { account: { tenantId: "tenant", username: "admin" }, accessToken: "ephemeral" }
   })
   state.provision.mockResolvedValueOnce({ tenantId: "tenant", clientId: "client", username: "admin", reused: false, ready: true })
@@ -111,4 +120,38 @@ it("skips the account picker only for the registration and account of the setup 
     [expected.tenantId, expected.clientId, 42],
   ]) expect(setupLoginHint(expected, tenant, clientId, hint)).toBeUndefined()
   expect(setupLoginHint(null, expected.tenantId, expected.clientId, expected.username)).toBeUndefined()
+})
+
+it("stops waiting for the browser after 15 minutes and discards a later answer", async () => {
+  vi.useFakeTimers()
+  try {
+    let finish!: (value: unknown) => void
+    state.interactive.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const setup = new AppRegistrationSetup(host())
+    const pending = setup.create()
+    const outcome = pending.then(() => null, caught => caught as Error)
+    await vi.advanceTimersByTimeAsync(SETUP_SIGN_IN_TIMEOUT_MS - 1000)
+    expect(state.clear).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1000)
+    const error = await outcome
+    expect(error?.message).toMatch(/^The sign-in in the browser was not completed within 15 minutes\..*Nothing was changed\.$/)
+    expect(state.provision).not.toHaveBeenCalled()
+    // An answer that arrives afterwards creates nothing, and a new setup can start.
+    finish({ account: { tenantId: "late", username: "admin" }, accessToken: "late" })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(state.provision).not.toHaveBeenCalled()
+    state.interactive.mockImplementationOnce(() => new Promise(() => {}))
+    const next = setup.create()
+    setup.cancel()
+    await expect(next).rejects.toThrow("Sign-in cancelled.")
+  } finally { vi.useRealTimers() }
+})
+it("does not keep a timer running after a setup that finished", async () => {
+  vi.useFakeTimers()
+  try {
+    state.interactive.mockResolvedValueOnce({ account: { tenantId: "tenant", username: "admin" }, accessToken: "ephemeral" })
+    state.provision.mockResolvedValueOnce({ tenantId: "tenant", clientId: "client", username: "admin", reused: false, ready: true, displayName: "TenuVault Desktop", candidateCount: 0, missingConsent: [] })
+    await new AppRegistrationSetup(host()).create()
+    expect(vi.getTimerCount()).toBe(0)
+  } finally { vi.useRealTimers() }
 })

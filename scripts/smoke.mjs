@@ -363,7 +363,12 @@ await check("Community users can reach the tenant sign-in without a key", async 
   assert(await waitForText("Set up with Microsoft sign-in"), "setup checklist missing")
   // Until a tenant is connected the guided setup has the window to itself.
   assert(!(await evaluate(`Boolean(document.querySelector('nav[aria-label="Main navigation"]'))`)), "sidebar shown during the first setup")
+  await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false })
+  await sleep(300)
+  const overflow = await evaluate(`({ height: innerHeight, scroll: document.scrollingElement.scrollHeight, inner: [...document.querySelectorAll('*')].filter(e => ['auto', 'scroll'].includes(getComputedStyle(e).overflowY) && e.scrollHeight > e.clientHeight + 1).map(e => ({ tag: e.tagName, scroll: e.scrollHeight, client: e.clientHeight })) })`)
+  assert(overflow.scroll <= overflow.height && overflow.inner.length === 0, `Connect step scrolls: ${JSON.stringify(overflow)}`)
   await screenshot("00b-setup-connect")
+  await send("Emulation.clearDeviceMetricsOverride")
 })
 
 await check("dashboard renders in the desktop shell", async () => {

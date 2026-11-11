@@ -83,7 +83,18 @@ export interface ApiResponse {
 /** Where the in-app setup is; `reused` once an existing TenuVault app registration was found. */
 export type SetupProgress = { phase: "signingIn" | "registration" | "consent" | "publishing"; reused?: boolean }
 /** The app registration the in-app setup made or found. `ready` is false while Microsoft's sign-in service does not know it yet. */
-export interface RegistrationResult { tenantId: string; clientId: string; username: string; reused: boolean; ready: boolean }
+export interface RegistrationResult {
+  displayName: string
+  /** How many existing registrations qualified for reuse. */
+  candidateCount: number
+  /** Default permissions a reused registration has no tenant-wide admin consent for. The setup leaves them as they are. */
+  missingConsent: string[]
+  tenantId: string
+  clientId: string
+  username: string
+  reused: boolean
+  ready: boolean
+}
 
 export interface SignedInAccount {
   tenantId: string

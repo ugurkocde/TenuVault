@@ -178,10 +178,24 @@ export default function OnboardingPage() {
       setAccount(null)
       setChoice(null)
     }
-    setAutoSignIn(result.ready ? { loginHint: result.username } : null)
-    setSetupNotice(result.ready
-      ? (result.reused ? "This tenant already had a TenuVault app registration, so TenuVault uses that one." : "The app registration is ready.")
-      : "The app registration is ready, but Microsoft is still making it available for sign-in. Wait a moment, then select Sign in with Microsoft.")
+    // With several registrations the admin may want another one than the one TenuVault picked. A
+    // sign-in that starts by itself could finish, and move on, while they are going back for it.
+    const several = result.reused && result.candidateCount > 1
+    // A reused registration is left as it is. What its admin consent lacks is said here, and the
+    // sign-in waits, because this notice goes away once the admin is signed in.
+    const missing = result.reused ? result.missingConsent : []
+    const paused = several || missing.length > 0
+    setAutoSignIn(result.ready && !paused ? { loginHint: result.username } : null)
+    const reusedNotice = result.reused ? `This tenant already had a TenuVault app registration, "${result.displayName}", so TenuVault uses that one.` : ""
+    const pending = "The app registration is ready, but Microsoft is still making it available for sign-in. Wait a moment, then select Sign in with Microsoft."
+    const one = missing.length === 1
+    setSetupNotice([
+      reusedNotice || (result.ready ? "The app registration is ready." : ""),
+      several ? `It is one of ${result.candidateCount} in this tenant.` : "",
+      missing.length ? `It has no tenant-wide admin consent for ${one ? "one permission" : `${missing.length} permissions`} TenuVault uses by default: ${missing.join(", ")}. TenuVault did not change it, and what needs ${one ? "this permission" : "these permissions"} does not work until an administrator grants ${one ? "it" : "them"} under Entra admin center > App registrations > ${result.displayName} > API permissions.` : "",
+      result.ready ? (paused ? "To use it, select Sign in with Microsoft." : "") : pending,
+      several ? 'To use another one, select Previous, then "I already have an app registration" and enter its client ID.' : "",
+    ].filter(Boolean).join(" "))
     setStep(1)
   }
 
@@ -302,21 +316,22 @@ export default function OnboardingPage() {
   const succeeded = Boolean(displayJob?.isComplete && displayJob.isSuccessful)
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6 p-6 lg:p-8">
+    <div className={cn("@container mx-auto space-y-4 p-5 lg:p-6", step === 0 ? "max-w-[96rem]" : "max-w-3xl")}>
       {tenants.length > 0 && (
         <Link to="/portal/dashboard" className="group inline-flex items-center gap-3 rounded-full text-sm font-medium text-gray-600 hover:text-gray-900">
           <span className="flex size-10 items-center justify-center rounded-full bg-card transition-colors group-hover:bg-secondary" aria-hidden="true"><ArrowLeft className="h-4 w-4" /></span> Back to dashboard
         </Link>
       )}
-      <div>
+      <div className="grid items-start gap-2 @3xl:grid-cols-[1fr_auto]">
+      <div className="contents">
         <h1 className="text-4xl font-medium tracking-tight text-gray-900">Set up TenuVault</h1>
-        <p className="mt-2 text-base text-gray-500">
+        <p className="text-base text-gray-500 @3xl:order-3 @3xl:col-span-2">
           Connect a tenant and take your first backup, in a few minutes. Everything runs on this computer as you; no Azure
           resources are required.
         </p>
       </div>
 
-      <ol className="grid grid-cols-4 gap-2" aria-label="Setup steps">
+      <ol className="grid grid-cols-4 gap-2 @3xl:pt-1" aria-label="Setup steps">
         {STEPS.map((s, i) => (
           <li
             key={s.title}
@@ -334,6 +349,7 @@ export default function OnboardingPage() {
           </li>
         ))}
       </ol>
+      </div>
 
       {resumed && step < 3 && (
         <p role="status" className="rounded-2xl bg-blue-50/60 px-4 py-3 text-sm text-gray-700">
@@ -341,9 +357,9 @@ export default function OnboardingPage() {
         </p>
       )}
 
-      <div className="rounded-3xl bg-card p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
+      <div className="@container rounded-3xl bg-card p-5 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
         {step === 0 && (
-          <div className="space-y-5">
+          <div className="space-y-4">
             <StepHeading id="setup-step-0">Connect your tenant</StepHeading>
             <ConnectTenantSetup
               trials={Boolean(status?.tenantTrialsEnabled)}

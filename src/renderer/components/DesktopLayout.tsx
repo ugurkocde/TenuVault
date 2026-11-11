@@ -1,4 +1,4 @@
-import { trialEndWhen } from "../../shared/trial-notices"
+import { trialEndWhen, organizationLicenseRefusal } from "../../shared/trial-notices"
 import { Button } from "~/components/ui/button"
 import { openCheckout } from "../lib/purchase"
 import { TenantTrialNotices, TrialActions, TrialUsage, TrialChanges, trialEndVisible } from "./TenantTrial"
@@ -236,7 +236,9 @@ function LicenseBanner() {
     if (!startPage || !preferencesLoaded || !communityBannerVisible(dismissedAt)) return null
     return (
       <BannerLink tone="neutral" icon={<Sparkles className="h-4 w-4" />} onDismiss={() => void dismiss()} dismissing={dismissing}>
-        You are on Community, the free plan. {status.tenantTrialsEnabled ? "Try Pro free with no card or email" : "Try Pro free for 30 days with no card"}, or add your license key.
+        {status.tenantTrialsEnabled && status.tenants.some(t => t.signedIn && !t.entitled && organizationLicenseRefusal(t))
+          ? "You are on Community, the free plan. This tenant has an organization license that this sign-in cannot use. Open License to see how to use it."
+          : <>You are on Community, the free plan. {status.tenantTrialsEnabled ? "Try Pro free with no card or email" : "Try Pro free for 30 days with no card"}, or add your license key.</>}
       </BannerLink>
     )
   }

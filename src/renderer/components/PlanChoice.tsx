@@ -100,7 +100,7 @@ export function LicenseKeyEntry({ watchClipboard = false, onSaved, label = "Lice
 }
 
 /** The trial and license key options, collapsed behind quiet links until one is chosen. */
-export function TrialOrKey({ source, initialEmail, onSaved }: { source: string; initialEmail?: string; onSaved?: (status: LicenseStatus) => void }) {
+export function TrialOrKey({ source, initialEmail, onSaved, setupTenantId }: { source: string; initialEmail?: string; onSaved?: (status: LicenseStatus) => void; /** The tenant the setup wizard is connecting, not saved yet. */ setupTenantId?: string }) {
   const [open, setOpen] = useState<"trial" | "key" | null>(null)
   const { status } = useLicense()
   const [trialSent, setTrialSent] = useState(false)
@@ -115,7 +115,7 @@ export function TrialOrKey({ source, initialEmail, onSaved }: { source: string; 
           I have a license key
         </button>
       </div>
-      <TenantTrialOptions />
+      <TenantTrialOptions setupTenantId={setupTenantId} />
       {open === "trial" && !status?.tenantTrialsEnabled && (
         <div className="space-y-4 rounded-2xl bg-blue-50/60 p-4">
           <TrialSignupForm source={source} initialEmail={initialEmail} onSent={() => setTrialSent(true)} />
@@ -153,7 +153,7 @@ export function PlanContext({ tenantId, username }: { tenantId: string; username
             and drift revert. You can change this later on the License page.
           </span>
         </p>
-        <TrialOrKey source="setup" initialEmail={emailLike(username)} />
+        <TrialOrKey source="setup" initialEmail={emailLike(username)} setupTenantId={tenantId} />
       </div>
     )
   }

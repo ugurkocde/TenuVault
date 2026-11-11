@@ -1,3 +1,6 @@
+import { ORGANIZATION_LICENSE_MESSAGE, ORGANIZATION_LICENSE_GUIDANCE, ORGANIZATION_LICENSE_SETUP_GUIDANCE } from "../../src/shared/constants"
+import { TenantTrialOptions } from "../../src/renderer/components/TenantTrial"
+import { PlanContext, TrialOrKey } from "../../src/renderer/components/PlanChoice"
 import { act, createElement } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { MemoryRouter } from "react-router-dom"
@@ -46,6 +49,33 @@ describe("plan prompt trial and purchase actions", () => {
       await act(async () => purchase!.click())
       expect(state.open).toHaveBeenLastCalledWith(purchase!.textContent?.trim() === "See plans" ? "buy" : "checkout", expect.objectContaining({ source }))
     }
+  })
+  it.each(["options", "storage", "choice"])("explains the organization refusal without a tenant trial in %s", async place => {
+    state.status = status("never")
+    Object.assign(state.status.tenants[0]!, { trialRefusal: ORGANIZATION_LICENSE_MESSAGE, trialRefusalPermanent: false })
+    container = document.body.appendChild(document.createElement("div")); root = createRoot(container)
+    const child = place === "options" ? createElement(TenantTrialOptions) : place === "storage" ? createElement(PlanContext, { tenantId: "tenant" }) : createElement(TrialOrKey, { source: "test" })
+    await act(async () => root!.render(createElement(MemoryRouter, null, child)))
+    // In the setup wizard the tenant is not saved yet: it says to go back to the Connect step, not
+    // to remove a tenant.
+    const setup = place === "storage"
+    expect(container.textContent!.split(ORGANIZATION_LICENSE_GUIDANCE).length - 1).toBe(setup ? 0 : 1)
+    expect(container.textContent!.split(ORGANIZATION_LICENSE_SETUP_GUIDANCE).length - 1).toBe(setup ? 1 : 0)
+    if (setup) expect(container.textContent).not.toContain("remove the tenant")
+    expect(container.textContent).not.toContain("Try Pro free")
+    // Entering a license key stays possible where the choice is offered.
+    if (place !== "options") expect(container.textContent).toContain("I have a license key")
+    expect(state.start).not.toHaveBeenCalled()
+  })
+
+  it("keeps the purchase action of a plan prompt for a tenant with the organization refusal, without a tenant trial", async () => {
+    state.status = status("never")
+    Object.assign(state.status.tenants[0]!, { trialRefusal: ORGANIZATION_LICENSE_MESSAGE, trialRefusalPermanent: false })
+    container = document.body.appendChild(document.createElement("div")); root = createRoot(container)
+    await act(async () => root!.render(createElement(MemoryRouter, null, createElement(PlanPromptButton, { plan: "pro", source: "test" }))))
+    // A button, not a paragraph: the locked feature dialog keeps its action.
+    expect(container.textContent).toBe("Buy Pro")
+    expect(state.start).not.toHaveBeenCalled()
   })
   it("offers to resume a trial that was ended early, next to Buy Pro and inline", async () => {
     state.status = status("ended")

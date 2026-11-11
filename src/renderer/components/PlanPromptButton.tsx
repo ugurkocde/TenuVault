@@ -1,4 +1,5 @@
 import { useRef } from "react"
+import { organizationLicenseRefusal } from "../../shared/trial-notices"
 import { useSelectedTenant } from "~/contexts/TenantContext"
 import { TenantTrialOptions } from "./TenantTrial"
 import { ExternalLink, Sparkles } from "lucide-react"
@@ -51,10 +52,11 @@ export function PlanPromptButton({
   const tenantId = contextTenantId === undefined ? selectedTenantId : contextTenantId?.toLowerCase()
   const prompted = status && !status.hasKey && plan === "pro" ? status : null
   const here = (t: TenantLicenseStatus) => Boolean(tenantId) && t.tenantId === tenantId && t.signedIn && !t.entitled && !t.activated
-  // A new trial needs the trial switch. A trial this installation ended early is offered
+  // A new trial needs the trial switch, and a tenant whose organization license was shared through
+  // another app registration gets none. A trial this installation ended early is offered
   // again without it: an installation with a license for another tenant never learns the
   // switch, and the service refuses the resume itself while trials are off.
-  const eligible = prompted?.tenants.find(t => here(t) && (t.trialCanResume || (prompted.tenantTrialsEnabled && !(t.trialRefusalPermanent ?? Boolean(t.trialRefusal)))))
+  const eligible = prompted?.tenants.find(t => here(t) && (t.trialCanResume || (prompted.tenantTrialsEnabled && !organizationLicenseRefusal(t) && !(t.trialRefusalPermanent ?? Boolean(t.trialRefusal)))))
   // A resume the service refuses for good ends the offer. The prompt keeps that tenant's
   // trial options mounted, so the reason stays on screen next to Buy Pro.
   const resumeOffered = useRef<string | undefined>(undefined)

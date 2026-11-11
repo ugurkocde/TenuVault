@@ -1,3 +1,4 @@
+import { ORGANIZATION_LICENSE_MESSAGE, ORGANIZATION_LICENSE_GUIDANCE } from "../../src/shared/constants"
 import { act, createElement } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { MemoryRouter } from "react-router-dom"
@@ -285,6 +286,44 @@ describe("License page after a used tenant trial", () => {
     trialEndsAt: new Date(Date.now() - DAY).toISOString(), trialAcknowledged: true, trialRefusalPermanent: true,
     trialRefusal: "This tenant already had a Pro trial.", trialCanExtend: false, trialExtensionUnavailable: true, ...overrides,
   })
+  const elsewhere = (overrides: Record<string, unknown> = {}) => used({ trialEndsAt: null, trialRefusal: ORGANIZATION_LICENSE_MESSAGE, trialRefusalPermanent: false, ...overrides })
+  const occurrences = (container: HTMLElement, text: string) => container.textContent!.split(text).length - 1
+
+  it("explains once that the tenant's license was shared through another app registration, with no trial and no purchase", async () => {
+    const container = await render({ ...community, tenantTrialsEnabled: true, tenants: [elsewhere()] })
+    expect(occurrences(container, ORGANIZATION_LICENSE_GUIDANCE)).toBe(1)
+    expect(container.textContent).toContain("connect the tenant through the app registration its organization license was shared from")
+    expect(container.textContent).not.toMatch(/start a free trial/i)
+    expect(button(container, "Try Pro free")).toBeUndefined()
+    // The tenant has a license: buying another one is not the next step.
+    expect(button(container, "Buy Pro")).toBeUndefined()
+    expect(button(container, "Retry")).toBeTruthy()
+  })
+
+  it("explains it in the row of each tenant it is about, and not for the others", async () => {
+    const other = "22222222-2222-4222-8222-222222222222"
+    const container = await render({ ...community, tenantTrialsEnabled: true, tenants: [elsewhere(), used({ tenantId: other, trialEndsAt: null, trialRefusal: undefined, trialRefusalPermanent: false, trialAcknowledged: false })] })
+    expect(occurrences(container, ORGANIZATION_LICENSE_GUIDANCE)).toBe(1)
+    const rows = [...container.querySelectorAll("div")].filter(row => row.textContent!.includes(ORGANIZATION_LICENSE_GUIDANCE) && row.textContent!.includes("11111111-2222-4333-8444-555555555555"))
+    // The innermost element holding both is the tenant's own row: it does not hold the other tenant.
+    expect(rows.at(-1)!.textContent).not.toContain(other)
+    const both = await render({ ...community, tenantTrialsEnabled: true, tenants: [elsewhere(), elsewhere({ tenantId: other })] })
+    expect(occurrences(both, ORGANIZATION_LICENSE_GUIDANCE)).toBe(2)
+  })
+
+  it("still shows the tenant's own license message next to the guidance", async () => {
+    const container = await render({ ...community, tenantTrialsEnabled: true, tenants: [elsewhere({ message: "The licensing service could not be reached." })] })
+    expect(occurrences(container, ORGANIZATION_LICENSE_GUIDANCE)).toBe(1)
+    expect(container.textContent).toContain("The licensing service could not be reached.")
+  })
+
+  it("keeps the emailed trial available: it belongs to the installation, not to the refused tenant", async () => {
+    const container = await render({ ...community, tenantTrialsEnabled: false, tenants: [elsewhere(), used({ tenantId: "22222222-2222-4222-8222-222222222222", trialEndsAt: null, trialRefusal: undefined, trialRefusalPermanent: false, trialAcknowledged: false })] })
+    expect(occurrences(container, ORGANIZATION_LICENSE_GUIDANCE)).toBe(1)
+    expect(container.textContent).toContain("Try Pro free for 30 days, no card needed.")
+    expect(button(container, "Retry")).toBeTruthy()
+  })
+
   const buyButtons = (container: HTMLElement) => [...container.querySelectorAll("button")].filter(item => item.textContent?.trim() === "Buy Pro")
 
   it.each([

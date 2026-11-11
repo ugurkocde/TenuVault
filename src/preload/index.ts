@@ -1,5 +1,4 @@
 import { contextBridge, ipcRenderer } from "electron"
-import { TRIAL_USED_MESSAGE } from "../shared/constants"
 import type { BackupSchedule, LicenseStatus, ProxySignInPrompt, SignInRequiredEvent, TenuVaultPreloadBridge, UpdateStatus } from "../shared/ipc"
 
 /** Strips Electron's "Error invoking remote method 'x': Error: " prefix from IPC errors. */
@@ -9,7 +8,7 @@ async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     const cleaned = message.replace(/^Error invoking remote method '[^']+': (?:\w*Error: )?/, "")
-    throw new Error(cleaned === `LicenseDenied: ${TRIAL_USED_MESSAGE}` ? TRIAL_USED_MESSAGE : cleaned)
+    throw new Error(cleaned.replace(/^LicenseDenied: /, ""))
   }
 }
 
