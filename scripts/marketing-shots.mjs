@@ -276,11 +276,17 @@ function driftsFor(tenant) {
       affectedDevices: 0,
     }),
   ]
+  const count = (type) => drifts.filter((d) => d.changeType === type).length
+  const ref = (b) => ({ id: b.id, timestamp: b.timestamp, trigger: "schedule", status: b.status })
   return {
-    drifts,
-    summary: { total: drifts.length, critical: 3, warning: 2, info: 2, affectedTenants: 1 },
+    drifts: drifts.map((d) => ({ tenant: tenant.name, tenantId: tenant.guid, ...d })),
+    summary: { total: drifts.length, critical: 3, warning: 2, info: 2, added: count("added"), modified: count("modified"), deleted: count("deleted"), affectedTenants: 1 },
     lastScan: iso(NOW - 65 * MIN),
     backupsAnalyzed: 5,
+    baseline: ref(list[Math.min(list.length - 1, 5)]),
+    comparison: ref(list[0]),
+    warnings: [],
+    stats: { compared: 1284, unchanged: 1277 },
   }
 }
 
@@ -338,7 +344,7 @@ const MOCK = {
     const items = BACKUPS[t.guid].find((b) => b.status === "Completed").totalPolicies
     return {
       tenantId: t.guid, enabled: true, ...t.schedule, since: iso(NOW - 26 * HOUR),
-      lastRunAt: iso(last + between(20, 50) * 1000), lastStatus: "Completed", lastMessage: `Backup completed, ${items.toLocaleString("en-US")} items`,
+      lastRunAt: iso(last + between(20, 50) * 1000), lastAttemptAt: iso(last + between(20, 50) * 1000), lastStatus: "Completed", lastMessage: `Backup completed, ${items.toLocaleString("en-US")} items`,
       nextRunAt: iso(next),
     }
   }),
@@ -469,6 +475,7 @@ const MAIN_OVERRIDES = `(() => {
       case "/api/audit/logs": return json(200, { data: M.audit[tenant] ?? [], total: (M.audit[tenant] ?? []).length })
       case "/api/audit/stats": return json(200, { total: 0 })
       case "/api/audit/log": return json(200, { success: true })
+      case "/api/drift-scan": return json(200, body.action === "result" ? { result: M.drift[tenant] ?? null } : { jobs: [] })
       case "/api/detect-drifts": return json(200, M.drift[tenant] ?? { drifts: [], summary: { total: 0, critical: 0, warning: 0, info: 0, affectedTenants: 0 }, lastScan: new Date().toISOString(), backupsAnalyzed: 0 })
       case "/api/tenant-metadata/check": return json(200, { exists: true })
       case "/api/tenant-metadata/save": case "/api/tenant-metadata/delete": return json(200, { success: true })
@@ -646,6 +653,16 @@ try {
   await sleep(1500)
   await assertText("All tenants", 30000)
   await disableAnimations()
+  // Optional font override for captures on Linux, where the system font differs from the
+  // macOS and Windows fonts customers see: MARKETING_FONT_CSS names a CSS file to inject.
+  if (process.env.MARKETING_FONT_CSS) {
+    const css = (await import("node:fs")).readFileSync(process.env.MARKETING_FONT_CSS, "utf8")
+    await evaluate(`(() => { const s = document.createElement("style"); s.textContent = ${JSON.stringify(css)}; document.head.appendChild(s); return document.fonts.ready.then(() => true) })()`)
+  }
+  // Optional sharper captures: MARKETING_SCALE=2 renders at twice the pixel density.
+  if (process.env.MARKETING_SCALE) {
+    await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: Number(process.env.MARKETING_SCALE), mobile: false })
+  }
 
   if (process.env.MAA_SHOTS === "1") {
     await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1120, deviceScaleFactor: 1, mobile: false })
@@ -771,7 +788,7 @@ try {
   await sleep(300)
   await screenshot("oib-new-types")
   await click("Continue")
-  await assertText("Review and select the policies")
+  await assertText("Select the policies to deploy")
   await sleep(500)
   await scrollAll(0)
   await screenshot("oib-new-select")
