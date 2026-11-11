@@ -169,7 +169,7 @@ export function SetupScriptCard() {
           {saveError && <p role="alert" className="text-xs text-red-700">{saveError}</p>}
         </Step>
         <Step number={2} title="Run it in PowerShell">
-          <p className="text-gray-600">Use Windows PowerShell 5.1 or PowerShell 7 on Windows, PowerShell 7 (pwsh) on macOS. The script installs nothing. Run:</p>
+          <p className="text-gray-600">Open PowerShell, PowerShell 7 (pwsh) on macOS, and run the command. The script installs nothing.</p>
           <CommandLine command={runCommand} label="Copy the command" copied={copied === "command"} onCopy={() => void copy("command", runCommand)} />
           <p className="text-xs text-gray-600">
             If PowerShell refuses to run the script, run{" "}
@@ -179,11 +179,15 @@ export function SetupScriptCard() {
         </Step>
         <Step number={3} title="Sign in in your browser">
           <p className="text-gray-600">
-            The script opens your browser. Choose your admin account. Microsoft may first ask you to consent to Microsoft Graph Command Line Tools, which the script signs in through to create the app registration.
+            The script opens your browser. Choose your admin account. Microsoft may first ask you to consent to Microsoft
+            Graph Command Line Tools, which the script signs in through to create the app registration.
           </p>
         </Step>
         <Step number={4} title="Return to TenuVault">
-          <p className="text-gray-600">The script prints the Tenant id and the Application (client) id and copies them to your clipboard. TenuVault fills them in on the next step.</p>
+          <p className="text-gray-600">
+            The script prints the Tenant id and the Application (client) id and copies them to your clipboard. TenuVault
+            fills them in on the next step.
+          </p>
         </Step>
       </ol>
 
@@ -243,8 +247,11 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
 
   useEffect(() => { notify.current?.({ tenant, clientId, displayName }) }, [tenant, clientId, displayName])
 
+  // The setup script leaves its two closing lines on the clipboard. While both ID fields are empty,
+  // take them from there when the form opens and when the admin comes back to the window.
   const latestFields = useRef({ tenant, clientId, busy })
   latestFields.current = { tenant, clientId, busy }
+  const filledFromClipboard = useRef("")
   useEffect(() => {
     let active = true
     const check = async () => {
@@ -253,6 +260,10 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
         const ids = await bridge.setup?.clipboardIds?.()
         const current = latestFields.current
         if (!active || !ids || current.tenant || current.clientId || current.busy) return
+        // An admin who cleared the fields does not get the same pair back on the next focus.
+        const pair = `${ids.tenantId} ${ids.clientId}`
+        if (filledFromClipboard.current === pair) return
+        filledFromClipboard.current = pair
         latestFields.current = { ...current, tenant: ids.tenantId, clientId: ids.clientId }
         setTenant(ids.tenantId)
         setClientId(ids.clientId)

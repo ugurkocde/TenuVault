@@ -67,11 +67,13 @@ export function setupHandoffText(): string {
     `Who can run it: ${CONSENT_ROLES.join(", ")}.`,
     "",
     `1. Download the setup script: ${SETUP_SCRIPT_DOWNLOAD_URL}`,
-    "2. Run it in PowerShell (Windows PowerShell 5.1 or PowerShell 7 on Windows, PowerShell 7 on macOS). It installs nothing:",
+    "2. Run it in PowerShell (PowerShell 7 on macOS). It installs nothing:",
     `   ./${SETUP_SCRIPT_FILE_NAME}`,
     "   To limit sign-in to a group of admins, add: -AllowedGroupId <group object id>",
-    "3. Sign in in your browser. Choose your admin account. Microsoft may first ask you to consent to Microsoft Graph Command Line Tools, which the script signs in through to create the app registration.",
-    "4. The script prints the Tenant id and the Application (client) id and copies them to your clipboard. TenuVault fills them in on the next step. Send me both lines.",
+    "3. Sign in with your admin account in the browser window it opens. Microsoft may first ask you to consent to",
+    "   Microsoft Graph Command Line Tools, which the script signs in through to create the app registration.",
+    "4. Send me the two lines it prints at the end: the Tenant id and the Application (client) id.",
+    "   The script also copies them to your clipboard.",
     "",
     "It grants tenant-wide admin consent for these delegated permissions:",
     permissions,
@@ -80,9 +82,12 @@ export function setupHandoffText(): string {
   ].join("\n")
 }
 
-/** Only the two setup IDs can leave the main process clipboard reader. */
+/**
+ * The two IDs the setup script copied to the clipboard, or null. Both must be present, so other
+ * clipboard content never reaches the renderer.
+ */
 export function setupIdsFromClipboard(text: unknown): { tenantId: string; clientId: string } | null {
-  if (typeof text !== "string") return null
+  if (typeof text !== "string" || text.length > 4000) return null
   const { tenantId, clientId } = parseSetupOutput(text)
   return tenantId && clientId ? { tenantId, clientId } : null
 }

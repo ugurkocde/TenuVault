@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
-import { setupIdsFromClipboard, CONSENT_ROLES, DESKTOP_APP_PERMISSIONS, parseSetupOutput, setupHandoffText, SETUP_SCRIPT_DOWNLOAD_URL } from "../src/shared/app-registration"
+import { CONSENT_ROLES, DESKTOP_APP_PERMISSIONS, parseSetupOutput, setupHandoffText, setupIdsFromClipboard, SETUP_SCRIPT_DOWNLOAD_URL } from "../src/shared/app-registration"
 import { licenseKeyFromClipboard } from "../src/main/license/clipboard-key"
 
 const script = readFileSync(new URL("../resources/New-TenuVaultDesktopApp.ps1", import.meta.url), "utf8")
@@ -72,5 +72,6 @@ describe("setupIdsFromClipboard", () => {
     const clientId = "22222222-2222-4222-8222-222222222222"
     expect(setupIdsFromClipboard(`private text\nTenant id: ${tenantId}\nApplication (client) id: ${clientId}`)).toEqual({ tenantId, clientId })
     for (const value of [null, 42, "private text", `Tenant id: ${tenantId}`]) expect(setupIdsFromClipboard(value)).toBeNull()
+    expect(setupIdsFromClipboard(`${"x".repeat(4000)}\nTenant id: ${tenantId}\nApplication (client) id: ${clientId}`)).toBeNull()
   })
 })

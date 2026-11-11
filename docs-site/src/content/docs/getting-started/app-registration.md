@@ -49,7 +49,7 @@ The table above is the default permission set. It does not change unless you opt
 
 * An account with **Global Administrator**, **Privileged Role Administrator** or **Cloud Application Administrator**, which can grant admin consent.
 * PowerShell: Windows PowerShell 5.1 or PowerShell 7 on Windows, PowerShell 7 (`pwsh`) on macOS.
-* No modules are needed and nothing is installed. Use a browser on the same computer, or `-UseDeviceCode` for a remote shell. Conditional Access often blocks device code flow.
+* A browser on the same computer. The script opens it for the sign-in. It needs no PowerShell modules and installs nothing. In a remote shell without a browser, use `-UseDeviceCode` instead; Conditional Access often blocks device code flow.
 * Optional: the object ID of a security group, if only its members should be able to sign in.
 
 ## In TenuVault: the Prepare step
@@ -104,7 +104,12 @@ If the app registration already exists, for example from an earlier setup, skip 
    ./New-TenuVaultDesktopApp.ps1 -TenantId contoso.onmicrosoft.com -IncludeGroupRead
    ```
 
-3. Sign in in your browser with your admin account. Microsoft may first ask for consent to Microsoft Graph Command Line Tools. The script requests `Application.ReadWrite.All`, `DelegatedPermissionGrant.ReadWrite.All`, `openid` and `profile`. It requests `AppRoleAssignment.ReadWrite.All` only with `-AllowedGroupId`. It prints the sign-in address so you can open it in another browser profile. It waits up to 15 minutes, and Ctrl+C cancels. For a remote shell, run `./New-TenuVaultDesktopApp.ps1 -UseDeviceCode`.
+3. Sign in with your admin account in the browser the script opens. It asks you to choose an account, so a browser that is already signed in with another account does not pick that one.
+
+   * The script signs in through **Microsoft Graph Command Line Tools**, the Microsoft app that Microsoft Graph PowerShell also signs in through. If Microsoft asks you to consent to it, accept. It requests `Application.ReadWrite.All` and `DelegatedPermissionGrant.ReadWrite.All` to create the app and grant consent, and `AppRoleAssignment.ReadWrite.All` only with `-AllowedGroupId`.
+   * The script also prints the sign-in address. Open it by hand if the browser does not open, or if you need another browser or browser profile, for example the one Conditional Access accepts.
+   * The script waits up to 15 minutes for the sign-in. Ctrl+C cancels. Nothing is created before you are signed in.
+   * In a remote shell without a browser, run `./New-TenuVaultDesktopApp.ps1 -UseDeviceCode`: the script prints an address and a code to enter in a browser on any device.
 4. Wait for the script to finish. While it grants admin consent, it lists the delegated permissions per API. At the end it prints:
 
    ```
@@ -113,23 +118,25 @@ If the app registration already exists, for example from an earlier setup, skip 
      Application (client) id:  <client id>
    ```
 
-5. When clipboard access is available, the script copies both lines. Return to the **Sign in** step and TenuVault fills the empty fields automatically. You can also paste both lines into **Paste the script output**. See [Sign in to your tenant](/getting-started/connect-tenant/). The tenant ID is always printed as a GUID, even if you passed a domain.
+5. The script also copies both lines to your clipboard. Return to TenuVault: on the **Sign in** step it fills in the tenant ID and the client ID from the clipboard when both fields are empty. You can also paste both lines into **Paste the script output**. See [Sign in to your tenant](/getting-started/connect-tenant/). The tenant ID is always printed as a GUID, even if you passed a domain.
 
 :::note
 The script also ends with a reminder about admin roles. The roles TenuVault Desktop needs are listed in [Requirements](/getting-started/requirements/#admins-who-use-tenuvault).
 :::
 
-If setup fails after creating the application, the script removes the half-created app registration. If cleanup fails, it names the registration to delete in the Entra admin center. An existing registration with the same name produces a yellow note with its client ID; this run creates another registration and leaves the existing one unchanged.
+If a step fails after the app registration was created, the script removes it again, so a failed run leaves nothing behind. If it cannot remove it, it names the app registration to delete in the Microsoft Entra admin center.
+
+If an app registration with the same name already exists, the script prints a note with its client ID. It still creates a new one and leaves the existing one unchanged.
 
 ### Parameters
 
 | Parameter | Required | Description |
 | --- | --- | --- |
-| `-UseDeviceCode` | No | Use device code sign-in for remote shells. Conditional Access often blocks this flow. |
 | `-TenantId` | No | Tenant ID or domain to create the app registration in. Defaults to the tenant of the account you sign in with. |
 | `-DisplayName` | No | Name of the app registration. Default: `TenuVault Desktop`. |
 | `-AllowedGroupId` | No | Object ID of a security group. When set, user assignment is required on the enterprise application and only members of this group can sign in to TenuVault. |
 | `-IncludeGroupRead` | No | Switch. When set, also requests the delegated `Group.Read.All` permission so the hygiene unresolved groups check can run. Off by default, so the default permission set is unchanged. Because each run creates a new app registration, use this on a fresh run and sign in with the new client ID, or add `Group.Read.All` to an existing registration manually and grant admin consent. |
+| `-UseDeviceCode` | No | Switch. Signs in with a device code instead of opening a browser on this computer, for remote shells without a browser. Conditional Access often blocks device code flow, so only use it when the browser sign-in is not possible. |
 
 ### Execution policy
 

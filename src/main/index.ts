@@ -47,8 +47,7 @@ import { BackupReaderService } from "./auth/backup-reader"
 // The same setup script the docs site downloads and the card copies, bundled so Save writes it exactly.
 import readerSetupScript from "../../resources/New-TenuVaultBackupReader.ps1?raw"
 import desktopSetupScript from "../../resources/New-TenuVaultDesktopApp.ps1?raw"
-import { SETUP_SCRIPT_FILE_NAME } from "../shared/app-registration"
-import { setupIdsFromClipboard } from "../shared/app-registration"
+import { SETUP_SCRIPT_FILE_NAME, setupIdsFromClipboard } from "../shared/app-registration"
 import { licenseKeyFromClipboard } from "./license/clipboard-key"
 import { assertStorageAccountName } from "../shared/storage-account"
 import { hostname } from "node:os"
@@ -1128,8 +1127,9 @@ async function bootstrap(): Promise<void> {
   handleTrusted("auth:accounts", () => auth.accounts())
   // Stops waiting for a sign-in the admin abandoned in the browser.
   handleTrusted("auth:cancelSignIn", () => auth.cancelInteractive())
-  // The guided setup saves the app registration script it ships with; nothing else is written.
+  // The setup script leaves its two closing lines on the clipboard; only those two IDs are passed on.
   handleTrusted("setup:clipboardIds", () => setupIdsFromClipboard(clipboard.readText()))
+  // The guided setup saves the app registration script it ships with; nothing else is written.
   handleTrusted("setup:saveScript", async () => {
     const result = await dialog.showSaveDialog(mainWindow!, {
       title: "Save the TenuVault setup script",

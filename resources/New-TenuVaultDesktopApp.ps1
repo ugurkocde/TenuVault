@@ -14,9 +14,16 @@
       * grants tenant-wide admin consent for those permissions
       * optionally limits sign-in to members of one group
 
-    No modules are needed and nothing is installed. Sign in through your system browser.
-    Requires a Global Administrator, Privileged Role Administrator or Cloud Application Administrator
-    (plus consent rights) account.
+    The script needs no PowerShell modules and installs nothing. It opens your browser to
+    sign in (through Microsoft Graph Command Line Tools, the Microsoft app that Microsoft
+    Graph PowerShell also signs in through) and then calls Microsoft Graph directly. It
+    waits up to 15 minutes for the sign-in.
+
+    Sign in with a Global Administrator, Privileged Role Administrator or Cloud Application
+    Administrator account, which can grant admin consent.
+
+    If a step fails after the app registration was created, the script removes it again,
+    so a failed run leaves nothing behind.
 
 .PARAMETER TenantId
     Tenant to create the app registration in. Defaults to the tenant of the account you sign in with.
@@ -56,7 +63,16 @@
     permission set cannot change Conditional Access.
 
 .PARAMETER UseDeviceCode
-    Use device code sign-in for remote shells. Conditional Access often blocks this flow.
+    Signs in with a device code instead of opening a browser on this computer: the script
+    prints an address and a code that you enter in a browser on any device. For remote
+    shells without a browser. Conditional Access often blocks device code flow, so only
+    use it when the browser sign-in is not possible.
+
+.EXAMPLE
+    ./New-TenuVaultDesktopApp.ps1
+
+.EXAMPLE
+    ./New-TenuVaultDesktopApp.ps1 -TenantId contoso.onmicrosoft.com -AllowedGroupId 5f0c...
 
 .EXAMPLE
     ./New-TenuVaultDesktopApp.ps1 -UseDeviceCode
@@ -77,15 +93,24 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# Any failure ends the script with one readable message instead of an excerpt of this file.
+trap {
+    if ($ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage') { break }
+    $PSCmdlet.ThrowTerminatingError((New-Object Management.Automation.ErrorRecord ([Exception]$_.Exception.Message), 'TenuVaultSetupFailed', ([Management.Automation.ErrorCategory]::NotSpecified), $null))
+}
+$manualGuide = 'https://docs.tenuvault.com/getting-started/app-registration/#create-the-app-registration-manually'
 if ($ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage') {
-    throw "This script needs FullLanguage mode. Use the manual route: https://docs.tenuvault.com/getting-started/app-registration/#create-the-app-registration-manually"
+    throw "This PowerShell session runs in $($ExecutionContext.SessionState.LanguageMode) mode, which blocks the browser sign-in this script uses. Create the app registration by hand instead: $manualGuide"
 }
 if ($AllowedGroupId) {
     $groupGuid = [Guid]::Empty
-    if (-not [Guid]::TryParse($AllowedGroupId, [ref]$groupGuid)) { throw "AllowedGroupId must be a GUID." }
+    if (-not [Guid]::TryParse($AllowedGroupId, [ref]$groupGuid)) { throw "-AllowedGroupId must be the object ID of a group, a GUID. Nothing was changed." }
 }
+# Windows PowerShell 5.1 does not offer TLS 1.2 by default on older systems.
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+# Behind a proxy that asks for the Windows sign-in, answer with the current user (5.1, then 7).
 try { [Net.WebRequest]::DefaultWebProxy.Credentials = [Net.CredentialCache]::DefaultNetworkCredentials } catch { }
+try { [Net.Http.HttpClient]::DefaultProxy.Credentials = [Net.CredentialCache]::DefaultNetworkCredentials } catch { }
 
 # Both PowerShell editions expose HTTP error bodies, but in different places.
 function Get-HttpFailure($Record) {
@@ -130,8 +155,10 @@ function New-RandomToken {
     try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
     ConvertTo-Base64Url $bytes
 }
-function Send-BrowserResponse($Response, [string]$Message) {
-    $html = '<!doctype html><html><head><meta charset="utf-8"><title>TenuVault setup</title></head><body><h1>TenuVault setup</h1><p>' + [Net.WebUtility]::HtmlEncode($Message) + '</p></body></html>'
+# The page the browser shows when the sign-in comes back to this computer.
+function Send-BrowserResponse($Response, [string]$Title, [string]$Message) {
+    $style = 'body{font-family:Segoe UI,system-ui,-apple-system,sans-serif;background:#f8fafc;color:#0f172a;margin:0;display:flex;min-height:100vh;align-items:center;justify-content:center}main{max-width:34rem;margin:1rem;padding:2rem;background:#fff;border-radius:1rem;box-shadow:0 1px 3px rgba(15,23,42,.15)}h1{font-size:1.25rem;margin:0 0 .5rem}p{margin:0;line-height:1.5;overflow-wrap:anywhere}'
+    $html = '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>TenuVault setup</title><style>' + $style + '</style></head><body><main><h1>' + [Net.WebUtility]::HtmlEncode($Title) + '</h1><p>' + [Net.WebUtility]::HtmlEncode($Message) + '</p></main></body></html>'
     $bytes = [Text.Encoding]::UTF8.GetBytes($html)
     $Response.ContentType = 'text/html; charset=utf-8'
     $Response.ContentLength64 = $bytes.Length
@@ -144,10 +171,16 @@ if ($TenantId) { $authorityTenant = [uri]::EscapeDataString($TenantId) }
 $authority = "https://login.microsoftonline.com/$authorityTenant/oauth2/v2.0"
 $scope = 'https://graph.microsoft.com/Application.ReadWrite.All https://graph.microsoft.com/DelegatedPermissionGrant.ReadWrite.All openid profile'
 if ($AllowedGroupId) { $scope += ' https://graph.microsoft.com/AppRoleAssignment.ReadWrite.All' }
-Write-Host 'Run as a Global Administrator, Privileged Role Administrator or Cloud Application Administrator (with consent rights).'
+Write-Host ''
+Write-Host "Creating the app registration '$DisplayName' that TenuVault Desktop signs in with."
+Write-Host 'Sign in with an account that is Global Administrator, Privileged Role Administrator or'
+Write-Host 'Cloud Application Administrator. Nothing is installed on this computer.'
+Write-Host ''
 if ($UseDeviceCode) {
-    $device = Invoke-RestMethod -Method Post -Uri "$authority/devicecode" -Body @{ client_id = $clientId; scope = $scope }
-    Write-Host "Open $($device.verification_uri) and enter code $($device.user_code)."
+    try { $device = Invoke-RestMethod -Method Post -Uri "$authority/devicecode" -Body @{ client_id = $clientId; scope = $scope } }
+    catch { $failure = Get-HttpFailure $_; throw "Could not start device code sign-in. Nothing was changed. $($failure.Message)" }
+    Write-Host "To sign in, open $($device.verification_uri) in a browser on any device and enter the code $($device.user_code)"
+    Write-Host 'Waiting for you to sign in (Ctrl+C cancels)...'
     $deadline = [DateTime]::UtcNow.AddSeconds($device.expires_in)
     $interval = [Math]::Max(1, [int]$device.interval)
     $token = $null
@@ -189,10 +222,12 @@ if ($UseDeviceCode) {
         $query = [ordered]@{ client_id = $clientId; response_type = 'code'; redirect_uri = $redirectUri; response_mode = 'query'; scope = $scope; state = $state; code_challenge = $challenge; code_challenge_method = 'S256'; prompt = 'select_account' }
         $parts = foreach ($key in $query.Keys) { [uri]::EscapeDataString($key) + '=' + [uri]::EscapeDataString($query[$key]) }
         $url = "$authority/authorize?" + ($parts -join '&')
-        Write-Host 'Your browser opens now. Choose your admin account.'
-        Write-Host 'You can open this address by hand in another browser or browser profile:'
+        Write-Host 'Your browser opens now. Choose your admin account there.'
+        Write-Host ''
+        Write-Host 'If it does not open, or you need another browser or browser profile, open this address by hand:'
         Write-Host $url
-        Write-Host 'Waiting up to 15 minutes. Ctrl+C cancels.'
+        Write-Host ''
+        Write-Host 'Waiting for you to sign in (up to 15 minutes, Ctrl+C cancels)...'
         try { Start-Process $url } catch { Write-Host 'The browser did not open. Open the address above by hand, or run with -UseDeviceCode.' }
         $deadline = [DateTime]::UtcNow.AddMinutes(15)
         $pending = $listener.GetContextAsync()
@@ -202,18 +237,18 @@ if ($UseDeviceCode) {
             $answer = $pending.GetAwaiter().GetResult()
             $values = $answer.Request.QueryString
             if ($values['state'] -cne $state -or (-not $values['code'] -and -not $values['error'])) {
-                Send-BrowserResponse $answer.Response 'Waiting for the sign-in answer.'
+                Send-BrowserResponse $answer.Response 'TenuVault setup' 'Waiting for the sign-in answer.'
                 $pending = $listener.GetContextAsync()
                 continue
             }
             if ($values['error']) {
                 $message = $values['error_description']
                 if (-not $message) { $message = $values['error'] }
-                Send-BrowserResponse $answer.Response $message
-                throw "Browser sign-in failed: $message"
+                Send-BrowserResponse $answer.Response 'Sign-in did not work' "$message Go back to PowerShell and run the script again."
+                throw "Browser sign-in failed. Nothing was changed. $message"
             }
             $code = $values['code']
-            Send-BrowserResponse $answer.Response 'Signed in. Go back to PowerShell. You can close this tab.'
+            Send-BrowserResponse $answer.Response 'You are signed in' 'Go back to PowerShell, where the setup continues. You can close this tab.'
             break
         }
         if (-not $code) { throw 'Sign-in was not completed within 15 minutes. Nothing was changed. Run the script again.' }
@@ -222,8 +257,9 @@ if ($UseDeviceCode) {
     }
     try {
         $token = Invoke-RestMethod -Method Post -Uri "$authority/token" -Body @{ grant_type = 'authorization_code'; client_id = $clientId; code = $code; redirect_uri = $redirectUri; code_verifier = $verifier }
-    } catch { $failure = Get-HttpFailure $_; throw "Token exchange failed: $($failure.Message)" }
+    } catch { $failure = Get-HttpFailure $_; throw "Microsoft did not accept the sign-in. Nothing was changed. $($failure.Message)" }
 }
+if (-not $token.access_token -or -not $token.id_token) { throw 'Sign-in did not return the tenant, user name and access token. Nothing was changed.' }
 $payload = $token.id_token.Split('.')[1].Replace('-', '+').Replace('_', '/')
 $payload = $payload.PadRight($payload.Length + ((4 - $payload.Length % 4) % 4), '=')
 $identity = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($payload)) | ConvertFrom-Json
@@ -235,19 +271,25 @@ $context = @{ TenantId = $identity.tid }
 Write-Host "Signed in as $username (tenant $($context.TenantId))."
 
 function Invoke-Graph([string]$Method, [string]$Path, $Body, [switch]$ReplicationRetry) {
-    for ($attempt = 0; $attempt -lt 6; $attempt++) {
+    $parameters = @{ Method = $Method; Uri = "https://graph.microsoft.com/v1.0$Path"; Headers = @{ Authorization = "Bearer $($token.access_token)" } }
+    if ($null -ne $Body) {
+        $parameters.ContentType = 'application/json; charset=utf-8'
+        $parameters.Body = [Text.Encoding]::UTF8.GetBytes(($Body | ConvertTo-Json -Depth 20))
+    }
+    # A new object takes a few seconds to reach every Microsoft Graph replica, so calls that
+    # refer to one are retried for about half a minute.
+    $attempts = 4
+    if ($ReplicationRetry) { $attempts = 12 }
+    for ($attempt = 1; ; $attempt++) {
         try {
-            $parameters = @{ Method = $Method; Uri = "https://graph.microsoft.com/v1.0$Path"; Headers = @{ Authorization = "Bearer $($token.access_token)" } }
-            if ($null -ne $Body) {
-                $parameters.ContentType = 'application/json; charset=utf-8'
-                $parameters.Body = [Text.Encoding]::UTF8.GetBytes(($Body | ConvertTo-Json -Depth 20))
-            }
             return Invoke-RestMethod @parameters
         } catch {
             $failure = Get-HttpFailure $_
-            $replication = $ReplicationRetry -and ($failure.Status -eq 404 -or ($failure.Status -eq 400 -and $failure.Message -match 'appId.*(valid application|application object)'))
-            if ($attempt -lt 5 -and ($replication -or $failure.Status -eq 429 -or $failure.Status -ge 500)) {
-                Start-Sleep -Seconds ([Math]::Max(2, $failure.RetryAfter))
+            $notThereYet = $ReplicationRetry -and ($failure.Status -eq 404 -or ($failure.Status -eq 400 -and $failure.Message -match 'valid application object|does not exist|not found|not present'))
+            # A failed write is only repeated when repeating it cannot create a second object.
+            $busy = $failure.Status -eq 429 -or ($failure.Status -ge 500 -and ($Method -eq 'GET' -or $ReplicationRetry))
+            if ($attempt -lt $attempts -and ($notThereYet -or $busy)) {
+                Start-Sleep -Seconds ([Math]::Min(60, [Math]::Max(3, $failure.RetryAfter)))
                 continue
             }
             if ($failure.Status -eq 403 -or $failure.Code -eq 'Authorization_RequestDenied') {
@@ -368,7 +410,7 @@ try {
 } catch {
     $reason = $_.Exception.Message
     if ($app) {
-        try { Invoke-Graph DELETE "/applications/$($app.id)" | Out-Null }
+        try { Invoke-Graph DELETE "/applications/$($app.id)" -ReplicationRetry | Out-Null }
         catch { throw "Setup did not finish. Delete app registration '$DisplayName' (client id $($app.appId)) in the Entra admin center. Cleanup failed: $($_.Exception.Message) Original failure: $reason" }
         throw "Setup did not finish. The half-created app registration was removed, so nothing was left behind. $reason"
     }
@@ -381,8 +423,8 @@ Write-Host "  Tenant id:                $($context.TenantId)"
 Write-Host "  Application (client) id:  $($app.AppId)"
 try {
     if (Get-Command Set-Clipboard -ErrorAction SilentlyContinue) {
-        Set-Clipboard -Value "  Tenant id:                $($context.TenantId)`n  Application (client) id:  $($app.AppId)"
-        Write-Host "Both lines are on the clipboard."
+        Set-Clipboard -Value ("  Tenant id:                $($context.TenantId)", "  Application (client) id:  $($app.AppId)" -join [Environment]::NewLine)
+        Write-Host "Both lines are on your clipboard. TenuVault fills them in when you return to the Sign in step."
     }
 } catch { }
 Write-Host ""

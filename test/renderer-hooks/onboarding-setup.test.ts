@@ -313,3 +313,14 @@ it("preserves input typed while a clipboard read is pending", async () => {
   await act(async () => { finish({ tenantId: TENANT, clientId: CLIENT }) })
   expect(container.querySelector<HTMLInputElement>("#clientId")!.value).toBe("typing")
 })
+
+it("does not bring the same clipboard IDs back after the admin cleared the fields", async () => {
+  state.clipboardIds.mockResolvedValue({ tenantId: TENANT, clientId: CLIENT })
+  const container = await render(createElement(TenantSignInForm, { onSignedIn: vi.fn() }))
+  expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(TENANT)
+  type(container.querySelector<HTMLInputElement>("#tenant")!, "")
+  type(container.querySelector<HTMLInputElement>("#clientId")!, "")
+  await act(async () => { window.dispatchEvent(new Event("focus")) })
+  expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe("")
+  expect(container.querySelector<HTMLInputElement>("#clientId")!.value).toBe("")
+})
