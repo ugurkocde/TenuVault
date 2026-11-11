@@ -1107,7 +1107,11 @@ async function bootstrap(): Promise<void> {
   const registrationSetup = new AppRegistrationSetup({
     fetch: bridgedFetchLater,
     openBrowser: url => shell.openExternal(url),
-    progress: progress => mainWindow?.webContents.send("setup:progress", progress),
+    progress: progress => {
+      // The first report after the sign-in: the browser part of the setup is over.
+      if (progress.phase === "registration" && progress.reused === undefined) returnToApp()
+      mainWindow?.webContents.send("setup:progress", progress)
+    },
   })
   // Creates (or finds) the tenant's app registration with a sign-in that is kept in memory only.
   // The sign-in that follows may skip the account picker once, for exactly this registration and
@@ -1124,13 +1128,13 @@ async function bootstrap(): Promise<void> {
     const expected = setupSignIn
     setupSignIn = null
     const loginHint = setupLoginHint(expected, tenant, clientId, options?.loginHint)
-    const account = await auth.signIn(tenant, clientId, loginHint ? { loginHint } : undefined)
+    const account = await auth.signIn(tenant, clientId, loginHint ? { loginHint } : undefined).finally(returnToApp)
     await requireForNewTenant(account.tenantId)
     return account
   }))
   // Signing in again also renews the ID token an organization license is checked with.
   handleTrusted("auth:reauthenticate", async (_event, tenantId: string, clientId: string, scope?: unknown) => {
-    const account = await auth.reauthenticate(tenantId, clientId, scope === undefined ? undefined : String(scope))
+    const account = await auth.reauthenticate(tenantId, clientId, scope === undefined ? undefined : String(scope)).finally(returnToApp)
     try {
       await license.requireEntitlement(tenantId, { retry: true })
     } finally {
@@ -1441,6 +1445,20 @@ function showWindow(): void {
   mainWindow?.show()
   if (mainWindow?.isMinimized()) mainWindow.restore()
   mainWindow?.focus()
+}
+
+/**
+ * After a sign-in in the browser the admin is still looking at the browser. Bring TenuVault to
+ * the front, and where the system does not allow that (Windows), flash its taskbar button.
+ */
+function returnToApp(): void {
+  showWindow()
+  if (process.platform === "darwin") app.focus({ steal: true })
+  const window = mainWindow
+  if (window && !window.isDestroyed() && !window.isFocused()) {
+    window.flashFrame(true)
+    window.once("focus", () => { if (!window.isDestroyed()) window.flashFrame(false) })
+  }
 }
 
 function rendererUrl(): string {

@@ -20,7 +20,9 @@ it("uses an isolated memory client, setup scopes and the chosen tenant", async (
     await request.openBrowser("https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize")
     expect(request.prompt).toBe("select_account")
     expect(request.scopes).toEqual(["https://graph.microsoft.com/Application.ReadWrite.All", "https://graph.microsoft.com/DelegatedPermissionGrant.ReadWrite.All"])
-    expect(request.successTemplate).toContain("TenuVault is now setting up the app registration")
+    // The browser is in front when the sign-in ends, so its page leads with what to do next.
+    expect(request.successTemplate).toContain("<h1 style=\"font-size:1.6rem;margin:0 0 .6rem\">Go back to TenuVault</h1>")
+    expect(request.successTemplate).toContain("TenuVault is setting up the app registration and continues there")
     return { account: { tenantId: "tenant", username: "admin" }, accessToken: "ephemeral" }
   })
   state.provision.mockResolvedValueOnce({ tenantId: "tenant", clientId: "client", username: "admin", reused: false, ready: true })

@@ -86,7 +86,7 @@ export class AppRegistrationSetup {
           if (!isMicrosoftLoginUrl(url)) throw new Error("Microsoft returned an unexpected sign-in address.")
           return this.host.openBrowser(url)
         },
-        successTemplate: page("Signed in", "TenuVault is now setting up the app registration. You can close this tab and return to TenuVault."),
+        successTemplate: page("Go back to TenuVault", "You are signed in. TenuVault is setting up the app registration and continues there. You can close this tab."),
         errorTemplate: ERROR_PAGE,
       })
       // A late browser answer after cancellation is never used and its memory cache is cleared.

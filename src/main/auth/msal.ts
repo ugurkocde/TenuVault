@@ -139,13 +139,15 @@ export function idTokenIssuedAt(token: string): number | null {
   }
 }
 
-const SUCCESS_PAGE = page("Signed in to TenuVault", "You can close this tab and return to TenuVault.")
-export const ERROR_PAGE = page("Sign-in failed", "Return to TenuVault for details. You can close this tab.")
+// The headline is what the admin has to do next, because the browser is in front at this point.
+const SUCCESS_PAGE = page("Go back to TenuVault", "You are signed in. You can close this tab.")
+export const ERROR_PAGE = page("Sign-in failed", "Go back to TenuVault for details. You can close this tab.")
 
+/** The page the browser shows when a sign-in comes back to this computer. The texts are fixed, never user input. */
 export function page(title: string, message: string): string {
-  return `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title></head>
-<body style="font-family:system-ui,sans-serif;display:grid;place-items:center;height:100vh;margin:0;background:#f8fafc;color:#0f172a">
-<div style="text-align:center"><h1 style="font-size:1.5rem">${title}</h1><p>${message}</p></div></body></html>`
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title></head>
+<body style="font-family:Segoe UI,system-ui,-apple-system,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f8fafc;color:#0f172a">
+<main style="max-width:34rem;margin:1rem;padding:2.25rem 2.5rem;background:#fff;border-radius:1rem;box-shadow:0 1px 3px rgba(15,23,42,.15);text-align:center"><h1 style="font-size:1.6rem;margin:0 0 .6rem">${title}</h1><p style="margin:0;line-height:1.5;color:#334155">${message}</p></main></body></html>`
 }
 
 /**
