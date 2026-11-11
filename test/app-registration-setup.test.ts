@@ -155,3 +155,19 @@ it("does not keep a timer running after a setup that finished", async () => {
     expect(vi.getTimerCount()).toBe(0)
   } finally { vi.useRealTimers() }
 })
+
+it("passes cancellation through after the browser sign-in has finished", async () => {
+  state.interactive.mockResolvedValueOnce({ account: { tenantId: "tenant", username: "admin" }, accessToken: "ephemeral" })
+  let started!: () => void
+  const provisioning = new Promise<void>(resolve => { started = resolve })
+  state.provision.mockImplementationOnce(({ signal }: { signal: AbortSignal }) => new Promise((_resolve, reject) => {
+    signal.addEventListener("abort", () => reject(new Error("Sign-in cancelled.")), { once: true })
+    started()
+  }))
+  const setup = new AppRegistrationSetup(host())
+  const pending = setup.create()
+  await provisioning
+  setup.cancel()
+  await expect(pending).rejects.toThrow("Sign-in cancelled.")
+  expect(state.clear).toHaveBeenCalled()
+})

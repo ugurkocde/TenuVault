@@ -44,6 +44,8 @@ The admins who use TenuVault need an Intune role, for example Intune Administrat
 
 The **Sign in** step is headed **Sign in to your tenant**. After **Set up with Microsoft sign-in** on the **Connect** step you do not use it: TenuVault signs you in by itself and goes on to **Storage**. If that sign-in fails or you cancel it, this step opens with both IDs filled in and the note **The app registration is ready.**; select **Sign in with Microsoft** to try again.
 
+If you sign in to a tenant that is already connected to TenuVault, the step says **This tenant is already connected to TenuVault.** with a link to the dashboard, and the tenant is not added a second time.
+
 You use this step yourself when the app registration was created with the setup script, by another administrator, or in an earlier setup:
 
 1. Enter the tenant ID and the client ID. The setup script copies its two closing lines to your clipboard, so when you open this step with both ID fields empty, TenuVault fills them in and shows **Filled in the tenant ID and the client ID from your clipboard.** It never replaces values you typed or that it kept from an earlier visit. If the fields stay empty, paste the two lines the setup script printed into **Paste the script output**: TenuVault fills in **Tenant id or domain** and **Application (client) id** and shows **Filled in the tenant ID and the client ID.** Pasting the whole output into either ID field works too. Or type the values:

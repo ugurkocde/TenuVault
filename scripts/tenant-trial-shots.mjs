@@ -348,7 +348,7 @@ try {
   await scene("trial-refusal-retry", { ...existing, tenants: [{ ...existing.tenants[0], trialRefusal: "Update TenuVault to start a Pro trial.", trialRefusalPermanent: false }] }, MOCK.tenants.slice(0, 1), "#/license", "Try Pro free")
   await scene("email-trial-fallback", { ...existing, tenantTrialsEnabled: false }, MOCK.tenants.slice(0, 1), "#/license", "We email you a Pro license key for 30 days")
   await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1800, deviceScaleFactor: 1, mobile: false })
-  await evaluate(`window.tenuvault.storage.setItem("tenuvault.onboarding.draft", ${JSON.stringify(JSON.stringify({ step: 2, tenant: TENANTS[0].domain, clientId: CLIENT_ID, displayName: TENANTS[0].name, account: MOCK.accounts[0] }))})`)
+  await evaluate(`window.tenuvault.storage.setItem("tenuvault.onboarding.draft", ${JSON.stringify(JSON.stringify({ step: 2, tenant: TENANTS[0].domain, clientId: CLIENT_ID, displayName: TENANTS[0].name, account: MOCK.accounts[0], signedInAt: Date.now() }))})`)
   await scene("trial-onboarding-welcome", { ...active(9), tenants: [trialTenant(0, 9, { trialAcknowledged: false })] }, MOCK.tenants.slice(0, 1), "#/portal/onboarding", "Pro trial started")
   if (await evaluate(`[...document.querySelectorAll('h2')].filter(e => e.textContent.startsWith("Pro trial started")).length !== 1`)) throw new Error("Duplicate onboarding welcome")
   await evaluate(`window.tenuvault.storage.removeItem("tenuvault.onboarding.draft")`)

@@ -254,6 +254,18 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
 
   useEffect(() => { notify.current?.({ tenant, clientId, displayName }) }, [tenant, clientId, displayName])
 
+  // Leaving the form cancels its browser wait and ignores a late answer. The cancel waits a tick,
+  // so the remount of React's StrictMode check does not stop the automatic sign-in.
+  const active = useRef(true)
+  const signingIn = useRef(false)
+  useEffect(() => {
+    active.current = true
+    return () => {
+      active.current = false
+      setTimeout(() => { if (!active.current && signingIn.current) void bridge.auth.cancelSignIn().catch(() => undefined) })
+    }
+  }, [])
+
   // The setup script leaves its two closing lines on the clipboard. While both ID fields are empty,
   // take them from there when the form opens and when the admin comes back to the window.
   const latestFields = useRef({ tenant, clientId, busy })
@@ -315,26 +327,31 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
 
   const submit = async (loginHint?: string) => {
     // Enter can fire while a sign-in window is already open.
-    if (busy) return
+    if (signingIn.current) return
     const next: typeof errors = {}
     if (!GUID.test(tenant.trim()) && !DOMAIN.test(tenant.trim())) next.tenant = "Enter a tenant id or a domain such as contoso.onmicrosoft.com."
     if (!GUID.test(clientId.trim())) next.clientId = "The client id is a GUID, printed by the setup script."
     setErrors(next)
     if (next.tenant || next.clientId) { document.getElementById(next.tenant ? "tenant" : "clientId")?.focus(); return }
 
+    signingIn.current = true
     setBusy(true)
     setAutomatic(Boolean(loginHint))
     setCancelling(false)
     try {
       const account = await (loginHint ? bridge.auth.signIn(tenant.trim(), clientId.trim(), { loginHint }) : bridge.auth.signIn(tenant.trim(), clientId.trim()))
-      onSignedIn(account, displayName.trim())
+      if (active.current) onSignedIn(account, displayName.trim())
     } catch (error) {
+      if (!active.current) return
       const message = error instanceof Error ? error.message : "Sign-in failed."
       if (message !== CANCELLED && !showCommunityLimitError(error)) setErrors({ form: message })
     } finally {
-      setBusy(false)
-      setAutomatic(false)
-      setCancelling(false)
+      signingIn.current = false
+      if (active.current) {
+        setBusy(false)
+        setAutomatic(false)
+        setCancelling(false)
+      }
     }
   }
 
@@ -353,6 +370,7 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
     try {
       await bridge.auth.cancelSignIn()
     } catch (error) {
+      if (!active.current) return
       setCancelling(false)
       setErrors({ form: error instanceof Error ? error.message : "Could not cancel the sign-in." })
     }

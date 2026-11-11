@@ -137,10 +137,6 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
                   identity, such as Microsoft Edge signed in to your work profile. Make it your default browser, cancel and start
                   again.
                 </p>
-                <Button type="button" variant="outline" size="sm" onClick={() => void cancel()} disabled={cancelling}>
-                  <X className="mr-2 h-4 w-4" aria-hidden="true" />
-                  {cancelling ? "Cancelling..." : "Cancel"}
-                </Button>
               </div>
             ) : (
               <p className="border-t border-gray-200 pt-4 text-xs text-gray-600">
@@ -149,6 +145,10 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
                   : "This takes a few seconds."}
               </p>
             )}
+            <Button type="button" variant="outline" size="sm" onClick={() => void cancel()} disabled={cancelling}>
+              <X className="mr-2 h-4 w-4" aria-hidden="true" />
+              {cancelling ? "Cancelling..." : "Cancel"}
+            </Button>
           </div>
         ) : (
           <div className="space-y-3">
@@ -158,7 +158,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
               <span>
                 Microsoft will ask you to approve <span className="font-medium text-gray-900">Microsoft Graph Command Line Tools</span>.
                 That is Microsoft&apos;s own sign-in app. TenuVault uses it once to create the app registration; after that you
-                sign in to TenuVault directly.
+                sign in to TenuVault directly. Leave &quot;Consent on behalf of your organization&quot; unticked; the setup does not need it.
               </span>
             </p>
             <Button type="button" size="lg" className="w-full bg-blue-600 text-white hover:bg-blue-700 sm:w-auto" onClick={() => void start()}>
@@ -190,8 +190,9 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
             </ol>
             <p>
               The sign-in from step 1 is kept in memory only and dropped when the setup ends. Your approval of Microsoft Graph Command
-              Line Tools stays with your account. To remove it, open Entra admin center &gt; Enterprise applications &gt; Microsoft
-              Graph Command Line Tools &gt; Permissions.
+              Line Tools stays with your account, as long as you leave &quot;Consent on behalf of your organization&quot; unticked; the
+              setup does not need it. To remove it, open Entra admin center &gt; Enterprise applications &gt; Microsoft Graph Command
+              Line Tools &gt; Permissions.
             </p>
             <div className="rounded-2xl bg-gray-50"><PermissionList /></div>
             <div className="space-y-1.5">

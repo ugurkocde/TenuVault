@@ -75,12 +75,12 @@ export default function OnboardingPage() {
   const [jobError, setJobError] = useState("")
   const [runningJobId, setRunningJobId] = useState<string | null>(null)
   const [cancelling, setCancelling] = useState(false)
-  const [addError, setAddError] = useState<{ message: string; license: boolean } | null>(null)
+  const [addError, setAddError] = useState<{ message: string; license: boolean; alreadyConnected?: boolean } | null>(null)
   // After the in-app setup: what it did, and the account the Sign in step signs in as by itself.
   const [setupNotice, setSetupNotice] = useState("")
   const [autoSignIn, setAutoSignIn] = useState<{ loginHint: string } | null>(null)
   const logRef = useRef<HTMLPreElement>(null)
-  const { addJob, removeJob, activeJobs } = useBackupProgress()
+  const { addJob, removeJob, updateJob, activeJobs } = useBackupProgress()
   const completedBackup = useRef<string | null>(null)
   const handledPollError = useRef<string | null>(null)
   const [snapshot, setSnapshot] = useState<JobStatus | null>(null)
@@ -89,20 +89,38 @@ export default function OnboardingPage() {
   // The snapshot keeps a finished backup finished after the store removes it.
   const displayJob: JobStatus | null = resolveBackupJobDisplay(trackedStatus, snapshot, job)
   const firstStep = useRef(true)
+  // The floating panel takes over when the admin leaves an unfinished backup.
+  const leavingBackup = useRef({ runningJobId, displayJob, updateJob })
+  leavingBackup.current = { runningJobId, displayJob, updateJob }
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+      const { runningJobId, displayJob, updateJob } = leavingBackup.current
+      if (runningJobId && !displayJob?.isComplete) updateJob(runningJobId, { isHidden: false })
+    }
+  }, [])
 
-  // A resumed sign-in counts only while it is still signed in on this computer.
+  // A resumed sign-in counts only while it is still signed in on this computer. The check no longer
+  // applies once the admin switched accounts, ran the setup again or signed in anew.
+  const resumeCheck = useRef(true)
   useEffect(() => {
     if (!initial?.account) return
     let active = true
     const saved = initial.account
     void bridge.auth.accounts().then((accounts) => {
-      if (!active) return
-      const signedIn = accounts.some((item) => item.tenantId === saved.tenantId && item.clientId === saved.clientId)
+      if (!active || !resumeCheck.current) return
+      const signedIn = accounts.find((item) => item.tenantId === saved.tenantId && item.clientId === saved.clientId)
+      setAccount(signedIn ?? null)
       if (!signedIn) {
-        setAccount(null)
         setStep((current) => (current > 1 ? 1 : current))
       }
-    }).catch(() => undefined).finally(() => { if (active) setCheckingResume(false) })
+    }).catch(() => {
+      if (!active || !resumeCheck.current) return
+      setAccount(null)
+      setStep((current) => (current > 1 ? 1 : current))
+    }).finally(() => { if (active) setCheckingResume(false) })
     return () => { active = false }
   }, [initial])
 
@@ -145,6 +163,7 @@ export default function OnboardingPage() {
    */
   const switchTenant = async () => {
     if (!account) return
+    resumeCheck.current = false
     setReleasing(true)
     setAddError(null)
     try {
@@ -166,6 +185,7 @@ export default function OnboardingPage() {
    * so the wizard cannot carry on with the tenant it showed before.
    */
   const registered = async (result: RegistrationResult) => {
+    resumeCheck.current = false
     const next = { ...fields, tenant: result.tenantId, clientId: result.clientId }
     setFields(next)
     saveOnboardingDraft({ step: 1, ...next, account: null })
@@ -204,6 +224,14 @@ export default function OnboardingPage() {
   // process, so the admin signs in again with the same IDs once the license is sorted.
   const createTenant = async () => {
     if (!account || !choice) return
+    if (connected(account.tenantId)) {
+      setAddError({ message: "This tenant is already connected to TenuVault.", license: false, alreadyConnected: true })
+      setAccount(null)
+      setChoice(null)
+      setAutoSignIn(null)
+      setStep(1)
+      return
+    }
     setCreating(true)
     setAddError(null)
     let community = false
@@ -290,7 +318,8 @@ export default function OnboardingPage() {
       startTime: new Date().toISOString(),
       isComplete: false,
       isSuccessful: false,
-      isHidden: true,
+      // A backup that started after the admin left is shown in the floating panel straight away.
+      isHidden: mounted.current,
       quiet: true,
       credentials: { tenantId: credentials.tenantId, appId: credentials.appId, clientSecret: credentials.clientSecret },
       resources: { subscriptionId: credentials.subscriptionId ?? "", resourceGroupName: credentials.resourceGroupName ?? "", automationAccountName: "", storageAccountName: credentials.storageAccountName ?? "" },
@@ -381,6 +410,7 @@ export default function OnboardingPage() {
             {addError && (
               <div role="alert" className="space-y-3 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700">
                 <p className="flex items-start gap-2"><XCircle className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" /> {addError.license ? trialKeyRefusalText(addError.message) : addError.message}</p>
+                {addError.alreadyConnected && <Link className="text-blue-600 underline" to="/portal/dashboard">Go to dashboard</Link>}
                 {addError.license && <div className="space-y-2 text-gray-700">
                   <TrialKeyRefusalActions message={addError.message} source="setup-trial-key-refused" />
                   {addError.message.includes(TRIAL_USED_MESSAGE) ? <Link className="text-blue-600 underline" to="/license">Enter a Pro license key</Link> : <TrialOrKey source="setup-license-error" />}
@@ -409,6 +439,12 @@ export default function OnboardingPage() {
                 hidePaste={Boolean(setupNotice)}
                 onFieldsChange={setFields}
                 onSignedIn={(signedIn, displayName) => {
+                  resumeCheck.current = false
+                  if (connected(signedIn.tenantId)) {
+                    setAutoSignIn(null)
+                    setAddError({ message: "This tenant is already connected to TenuVault.", license: false, alreadyConnected: true })
+                    return
+                  }
                   setAddError(null)
                   // The automatic sign-in is for this one registration; a later sign-in asks again.
                   setAutoSignIn(null)
