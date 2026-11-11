@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
-import { CONSENT_ROLES, DESKTOP_APP_PERMISSIONS, parseSetupOutput, setupHandoffText, SETUP_SCRIPT_DOWNLOAD_URL } from "../src/shared/app-registration"
+import { CONSENT_ROLES, DESKTOP_APP_PERMISSIONS, parseSetupOutput, setupHandoffText, setupIdsFromClipboard, SETUP_SCRIPT_DOWNLOAD_URL } from "../src/shared/app-registration"
 import { licenseKeyFromClipboard } from "../src/main/license/clipboard-key"
 
 const script = readFileSync(new URL("../resources/New-TenuVaultDesktopApp.ps1", import.meta.url), "utf8")
@@ -50,7 +50,7 @@ describe("setupHandoffText", () => {
     expect(text).toContain("Application (client) id")
     expect(text).toContain("DeviceManagementConfiguration.ReadWrite.All")
     expect(text).toContain("-AllowedGroupId")
-    expect(text).not.toContain("—")
+    expect(text).not.toContain("\u2014")
   })
 })
 
@@ -63,5 +63,25 @@ describe("licenseKeyFromClipboard", () => {
     for (const text of ["", "hello", "Your key: TENU-ABCD-1234", "TENU-AB", "TENU-ABCD 1234", `TENU-${"A".repeat(200)}`, 42, null]) {
       expect(licenseKeyFromClipboard(text)).toBeNull()
     }
+  })
+})
+
+describe("the clipboard handlers in the main process", () => {
+  it("wait for the clipboard text before parsing it", () => {
+    // Electron's clipboard.readText() returns a promise. Parsing the promise itself finds nothing.
+    const main = readFileSync(new URL("../src/main/index.ts", import.meta.url), "utf8")
+    expect(main).toContain("setupIdsFromClipboard(await clipboard.readText())")
+    expect(main).toContain("licenseKeyFromClipboard(await clipboard.readText())")
+    expect(main).not.toMatch(/FromClipboard\(clipboard\.readText\(\)\)/)
+  })
+})
+
+describe("setupIdsFromClipboard", () => {
+  it("returns only a complete ID pair", () => {
+    const tenantId = "11111111-1111-4111-8111-111111111111"
+    const clientId = "22222222-2222-4222-8222-222222222222"
+    expect(setupIdsFromClipboard(`private text\nTenant id: ${tenantId}\nApplication (client) id: ${clientId}`)).toEqual({ tenantId, clientId })
+    for (const value of [null, 42, "private text", `Tenant id: ${tenantId}`]) expect(setupIdsFromClipboard(value)).toBeNull()
+    expect(setupIdsFromClipboard(`${"x".repeat(4000)}\nTenant id: ${tenantId}\nApplication (client) id: ${clientId}`)).toBeNull()
   })
 })

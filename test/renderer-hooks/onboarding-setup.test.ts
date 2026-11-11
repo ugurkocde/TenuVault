@@ -7,6 +7,7 @@ import type { SignedInAccount } from "../../src/shared/ipc"
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const state = vi.hoisted(() => ({
+  clipboardIds: vi.fn(async (): Promise<{ tenantId: string; clientId: string } | null> => null),
   store: new Map<string, string>(),
   signIn: vi.fn<(tenant: string, clientId: string) => Promise<SignedInAccount>>(),
   cancelSignIn: vi.fn(async () => undefined),
@@ -27,7 +28,7 @@ vi.mock("../../src/renderer/lib/bridge", () => ({
     },
     auth: { signIn: state.signIn, cancelSignIn: state.cancelSignIn, accounts: state.accounts },
     license: { releaseTenant: state.releaseTenant, clipboardKey: async () => null, checkNewTenant: state.checkNewTenant },
-    setup: { saveScript: async () => ({ saved: false }) },
+    setup: { clipboardIds: state.clipboardIds, saveScript: async () => ({ saved: false }) },
     app: { openExternal: async () => undefined },
   },
 }))
@@ -65,6 +66,8 @@ const OUTPUT = `Done. Copy the two lines below and paste them into the Sign in s
 const roots: Root[] = []
 
 beforeEach(() => {
+  state.clipboardIds.mockReset()
+  state.clipboardIds.mockResolvedValue(null)
   state.store.clear()
   state.tenants = []
   state.storageChoice = null
@@ -278,4 +281,46 @@ it("offers purchasing help when saving a connected tenant refuses its trial key"
   expect(alert.querySelector('a[href^="mailto:support@tenuvault.com"]')).toBeTruthy()
   expect(button(alert as HTMLElement, "Try Pro free")).toBeUndefined()
   expect(alert.querySelector('a[href="/license"]')).toBeTruthy()
+})
+
+it("fills empty IDs from the clipboard on mount and focus", async () => {
+  state.clipboardIds.mockResolvedValueOnce({ tenantId: TENANT, clientId: CLIENT })
+  const mounted = await render(createElement(TenantSignInForm, { onSignedIn: vi.fn() }))
+  expect(mounted.querySelector<HTMLInputElement>("#tenant")!.value).toBe(TENANT)
+  expect(mounted.textContent).toContain("Filled in the tenant ID and the client ID from your clipboard.")
+  const focused = await render(createElement(TenantSignInForm, { onSignedIn: vi.fn() }))
+  state.clipboardIds.mockResolvedValue({ tenantId: TENANT, clientId: CLIENT })
+  await act(async () => { window.dispatchEvent(new Event("focus")) })
+  expect(focused.querySelector<HTMLInputElement>("#clientId")!.value).toBe(CLIENT)
+})
+
+it("preserves typed and initial fields and ignores bridge failure", async () => {
+  state.clipboardIds.mockRejectedValueOnce(new Error("unavailable"))
+  const container = await render(createElement(TenantSignInForm, { onSignedIn: vi.fn() }))
+  type(container.querySelector<HTMLInputElement>("#tenant")!, "typed.example")
+  state.clipboardIds.mockResolvedValue({ tenantId: TENANT, clientId: CLIENT })
+  await act(async () => { window.dispatchEvent(new Event("focus")) })
+  expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe("typed.example")
+  const initial = await render(createElement(TenantSignInForm, { onSignedIn: vi.fn(), initial: { clientId: CLIENT } }))
+  expect(initial.querySelector<HTMLInputElement>("#tenant")!.value).toBe("")
+})
+
+it("preserves input typed while a clipboard read is pending", async () => {
+  let finish!: (value: { tenantId: string; clientId: string }) => void
+  state.clipboardIds.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+  const container = await render(createElement(TenantSignInForm, { onSignedIn: vi.fn() }))
+  type(container.querySelector<HTMLInputElement>("#clientId")!, "typing")
+  await act(async () => { finish({ tenantId: TENANT, clientId: CLIENT }) })
+  expect(container.querySelector<HTMLInputElement>("#clientId")!.value).toBe("typing")
+})
+
+it("does not bring the same clipboard IDs back after the admin cleared the fields", async () => {
+  state.clipboardIds.mockResolvedValue({ tenantId: TENANT, clientId: CLIENT })
+  const container = await render(createElement(TenantSignInForm, { onSignedIn: vi.fn() }))
+  expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(TENANT)
+  type(container.querySelector<HTMLInputElement>("#tenant")!, "")
+  type(container.querySelector<HTMLInputElement>("#clientId")!, "")
+  await act(async () => { window.dispatchEvent(new Event("focus")) })
+  expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe("")
+  expect(container.querySelector<HTMLInputElement>("#clientId")!.value).toBe("")
 })

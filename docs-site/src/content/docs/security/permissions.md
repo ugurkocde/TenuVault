@@ -27,13 +27,13 @@ While it grants admin consent, the script lists the delegated permissions per AP
 
 ### Who can run the script
 
-You need the `Microsoft.Graph.Applications` and `Microsoft.Graph.Identity.SignIns` PowerShell modules (the script installs missing modules for the current user at the version of your installed `Microsoft.Graph.Authentication` module, so all Graph modules load at one version) and one of these roles:
+The desktop setup script needs no modules and installs nothing. It signs in through your browser. You need one of these roles:
 
 * Global Administrator
 * Privileged Role Administrator
 * Cloud Application Administrator
 
-The script connects to Microsoft Graph with the delegated scopes `Application.ReadWrite.All`, `DelegatedPermissionGrant.ReadWrite.All` and `AppRoleAssignment.ReadWrite.All`. It needs them only to create the app registration, grant consent and, if you use `-AllowedGroupId`, assign the group. TenuVault itself never uses these scopes.
+The script signs in to Microsoft Graph with the delegated scopes `Application.ReadWrite.All` and `DelegatedPermissionGrant.ReadWrite.All`, which it needs only to create the app registration and grant consent. With `-AllowedGroupId` it also requests `AppRoleAssignment.ReadWrite.All`, to assign the group. TenuVault itself never uses these scopes.
 
 ## Why delegated permissions matter
 

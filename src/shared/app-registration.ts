@@ -58,7 +58,7 @@ export function parseSetupOutput(text: string): { tenantId?: string; clientId?: 
 export function setupHandoffText(): string {
   const permissions = DESKTOP_APP_PERMISSIONS.map((entry) => `  ${entry.api}: ${entry.permissions.join(", ")}`).join("\n")
   return [
-    "Could you create the app registration TenuVault Desktop signs in with? It takes a few minutes.",
+    "Could you create the app registration TenuVault Desktop signs in with? It takes about two minutes.",
     "",
     "TenuVault Desktop backs up and restores our Intune configuration from an admin's computer. It signs in",
     "as the admin through a public client app registration in our own tenant: no secret, no certificate and",
@@ -67,15 +67,27 @@ export function setupHandoffText(): string {
     `Who can run it: ${CONSENT_ROLES.join(", ")}.`,
     "",
     `1. Download the setup script: ${SETUP_SCRIPT_DOWNLOAD_URL}`,
-    "2. Run it in PowerShell (PowerShell 7 on macOS):",
+    "2. Run it in PowerShell (PowerShell 7 on macOS). It installs nothing:",
     `   ./${SETUP_SCRIPT_FILE_NAME}`,
     "   To limit sign-in to a group of admins, add: -AllowedGroupId <group object id>",
-    "3. Sign in when Microsoft Graph PowerShell asks you to.",
+    "3. Sign in with your admin account in the browser window it opens. Microsoft may first ask you to consent to",
+    "   Microsoft Graph Command Line Tools, which the script signs in through to create the app registration.",
     "4. Send me the two lines it prints at the end: the Tenant id and the Application (client) id.",
+    "   The script also copies them to your clipboard.",
     "",
     "It grants tenant-wide admin consent for these delegated permissions:",
     permissions,
     "",
     `Guide, including how to create it by hand in the Entra admin center: ${APP_REGISTRATION_GUIDE_URL}`,
   ].join("\n")
+}
+
+/**
+ * The two IDs the setup script copied to the clipboard, or null. Both must be present, so other
+ * clipboard content never reaches the renderer.
+ */
+export function setupIdsFromClipboard(text: unknown): { tenantId: string; clientId: string } | null {
+  if (typeof text !== "string" || text.length > 4000) return null
+  const { tenantId, clientId } = parseSetupOutput(text)
+  return tenantId && clientId ? { tenantId, clientId } : null
 }

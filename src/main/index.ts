@@ -47,7 +47,7 @@ import { BackupReaderService } from "./auth/backup-reader"
 // The same setup script the docs site downloads and the card copies, bundled so Save writes it exactly.
 import readerSetupScript from "../../resources/New-TenuVaultBackupReader.ps1?raw"
 import desktopSetupScript from "../../resources/New-TenuVaultDesktopApp.ps1?raw"
-import { SETUP_SCRIPT_FILE_NAME } from "../shared/app-registration"
+import { SETUP_SCRIPT_FILE_NAME, setupIdsFromClipboard } from "../shared/app-registration"
 import { licenseKeyFromClipboard } from "./license/clipboard-key"
 import { assertStorageAccountName } from "../shared/storage-account"
 import { hostname } from "node:os"
@@ -1127,6 +1127,9 @@ async function bootstrap(): Promise<void> {
   handleTrusted("auth:accounts", () => auth.accounts())
   // Stops waiting for a sign-in the admin abandoned in the browser.
   handleTrusted("auth:cancelSignIn", () => auth.cancelInteractive())
+  // The setup script leaves its two closing lines on the clipboard; only those two IDs are passed on.
+  // Electron reads the clipboard asynchronously, so the text has to be awaited before it is parsed.
+  handleTrusted("setup:clipboardIds", async () => setupIdsFromClipboard(await clipboard.readText()))
   // The guided setup saves the app registration script it ships with; nothing else is written.
   handleTrusted("setup:saveScript", async () => {
     const result = await dialog.showSaveDialog(mainWindow!, {
@@ -1226,8 +1229,8 @@ async function bootstrap(): Promise<void> {
   handleTrusted("license:startTrial", (_event, email: unknown, options?: { source?: unknown }) =>
     requestTrialKey(LICENSE_API_BASE, email, options?.source, chromiumFetch))
   // While a trial key is on its way, the renderer asks for a key the admin copied from the email.
-  handleTrusted("license:clipboardKey", () => {
-    const key = licenseKeyFromClipboard(clipboard.readText())
+  handleTrusted("license:clipboardKey", async () => {
+    const key = licenseKeyFromClipboard(await clipboard.readText())
     return key && !license.isSavedKey(key) ? key : null
   })
 
