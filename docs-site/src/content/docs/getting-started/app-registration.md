@@ -133,13 +133,13 @@ If the app registration already exists, select **I already have an app registrat
      Application (client) id:  <client id>
    ```
 
-5. The script also copies both lines to your clipboard. Return to TenuVault: on the **Sign in** step it fills in the tenant ID and the client ID from the clipboard when both fields are empty. You can also paste both lines into **Paste the script output**. See [Sign in to your tenant](/getting-started/connect-tenant/). The tenant ID is always printed as a GUID, even if you passed a domain.
+5. The script also copies both lines to your clipboard, when the computer it runs on offers one. Return to TenuVault: on the **Sign in** step it fills in the tenant ID and the client ID from the clipboard when both fields are empty. Otherwise paste both lines into **Paste the script output**. See [Sign in to your tenant](/getting-started/connect-tenant/). The tenant ID is always printed as a GUID, even if you passed a domain.
 
 :::note
 The script also ends with a reminder about admin roles. The roles TenuVault Desktop needs are listed in [Requirements](/getting-started/requirements/#admins-who-use-tenuvault).
 :::
 
-If a step fails after the app registration was created, the script removes it again, so a failed run leaves nothing behind. If it cannot remove it, it names the app registration to delete in the Microsoft Entra admin center.
+If a step fails after the app registration was created, the script removes it again. If it cannot remove it, it names the app registration to delete in the Microsoft Entra admin center. A run that you stop with Ctrl+C while it creates the app registration can leave it behind; delete it in the Microsoft Entra admin center before you run the script again.
 
 If an app registration with the same name already exists, the script prints a note with its client ID. It still creates a new one and leaves the existing one unchanged.
 

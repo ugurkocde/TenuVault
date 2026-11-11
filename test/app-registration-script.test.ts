@@ -15,6 +15,20 @@ const clientId = "22222222-2222-4222-8222-222222222222"
 const group = "33333333-3333-4333-8333-333333333333"
 const source = readFileSync(script, "utf8")
 
+// Every API gets its own service principal ID and its own permission IDs, so a mix-up between
+// APIs in the app registration or in a consent grant shows up in the recorded requests.
+const API_IDS: Record<string, string> = {
+  "Microsoft Graph": "00000003-0000-0000-c000-000000000000",
+  "Azure Service Management": "797f4846-ba00-4fd7-ba43-dac1f8f63013",
+  "Azure Storage": "e406a681-f3d4-42a8-90b6-c2b029497af1",
+}
+const GRAPH_DEFAULTS = DESKTOP_APP_PERMISSIONS[0]!.permissions
+// The opt-in permissions, in the order the script appends them.
+const OPT_IN = { IncludeGroupRead: ["Group.Read.All"], IncludeConditionalAccessRestore: ["Policy.ReadWrite.ConditionalAccess"], IncludeAuditLog: ["AuditLog.Read.All"], IncludeNotifications: ["Mail.Send", "GroupMember.Read.All", "User.Read.All"] }
+const offered = (appId: string) => (appId === API_IDS["Microsoft Graph"] ? [...GRAPH_DEFAULTS, ...Object.values(OPT_IN).flat()] : ["user_impersonation"])
+const scopeId = (appId: string, value: string) => `${appId}/${value}`
+const spId = (appId: string) => `sp-${appId}`
+
 it("keeps the setup script ASCII and free of module dependencies", () => {
   expect([...source].every(character => character.charCodeAt(0) < 128)).toBe(true)
   expect(source).not.toMatch(/(?:Install-Module|Import-Module|Connect-MgGraph|\w+-Mg\w+)/i)
@@ -28,22 +42,24 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
   })
 
   async function run(scenario = "default", args: Record<string, unknown> = {}) {
-    const requests: { method: string; path: string; body: Record<string, unknown>; query: URLSearchParams; headers: Record<string, unknown> }[] = []
+    const requests: { method: string; path: string; body: Record<string, unknown>; query: URLSearchParams; headers: Record<string, unknown>; status: number }[] = []
     let challenge = ""
     let redirect = ""
     let pkce = false
     let polls = 0
     let spAttempts = 0
     let grantAttempts = 0
+    let readFailures = 0
     const server = createServer(async (req, res) => {
       const url = new URL(req.url!, "http://localhost")
       const chunks: Buffer[] = []
       for await (const chunk of req) chunks.push(Buffer.from(chunk))
       const raw = Buffer.concat(chunks).toString("utf8")
       const body = raw ? (req.headers["content-type"]?.includes("json") ? JSON.parse(raw) : Object.fromEntries(new URLSearchParams(raw))) : {}
-      requests.push({ method: req.method!, path: url.pathname, body, query: url.searchParams, headers: req.headers })
+      const entry = { method: req.method!, path: url.pathname, body, query: url.searchParams, headers: req.headers, status: 200 }
+      requests.push(entry)
       res.setHeader("Content-Type", "application/json")
-      const send = (value: unknown, status = 200) => { res.statusCode = status; res.end(JSON.stringify(value)) }
+      const send = (value: unknown, status = 200) => { entry.status = status; res.statusCode = status; res.end(JSON.stringify(value)) }
       if (url.pathname.endsWith("/authorize")) {
         challenge = url.searchParams.get("code_challenge")!
         redirect = url.searchParams.get("redirect_uri")!
@@ -59,7 +75,12 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
       }
       if (url.pathname.endsWith("/devicecode")) return send({ device_code: "device", user_code: "ABCD", verification_uri: "https://microsoft.com/devicelogin", interval: 1, expires_in: 60 })
       if (url.pathname.endsWith("/token")) {
-        if (body.device_code && polls++ === 0) return send({ error: "authorization_pending" }, 400)
+        if (body.device_code) {
+          polls++
+          if (scenario === "device-declined") return send({ error: "authorization_declined", error_description: "The user declined." }, 400)
+          if (scenario === "device-expired") return send({ error: "expired_token", error_description: "The code expired." }, 400)
+          if (polls === 1) return send({ error: scenario === "device-slow" ? "slow_down" : "authorization_pending" }, 400)
+        }
         if (body.code) {
           pkce = createHash("sha256").update(body.code_verifier).digest("base64url") === challenge && body.redirect_uri === redirect
           if (!pkce) return send({ error: "invalid_grant" }, 400)
@@ -68,8 +89,9 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
       }
       const path = url.pathname.replace("/graph.microsoft.com/v1.0", "")
       if (path === "/servicePrincipals" && req.method === "GET") {
-        const appId = /'([^']+)'/.exec(url.searchParams.get("$filter")!)![1]
-        return send({ value: [{ id: appId, appId, oauth2PermissionScopes: [...DESKTOP_APP_PERMISSIONS.flatMap(p => p.permissions), "Group.Read.All"].map((value, i) => ({ value, id: `scope-${i}` })) }] })
+        if (scenario === "transient" && readFailures++ < 1) return send({ error: { message: "Service unavailable" } }, 503)
+        const appId = /'([^']+)'/.exec(url.searchParams.get("$filter")!)![1]!
+        return send({ value: [{ id: spId(appId), appId, oauth2PermissionScopes: offered(appId).map(value => ({ value, id: scopeId(appId, value) })) }] })
       }
       if (path === "/applications" && req.method === "GET") return send({ value: scenario === "existing" ? [{ appId: group }] : [] })
       if (path === "/applications" && req.method === "POST") return send({ id: "app-object", appId: clientId })
@@ -77,10 +99,11 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
         if (scenario === "replication" && spAttempts++ < 2) return send({ error: { message: "appId does not reference a valid application object" } }, spAttempts === 1 ? 404 : 400)
         return send({ id: "app-sp" })
       }
-      if (path === "/oauth2PermissionGrants" && scenario === "transient" && grantAttempts++ < 2) {
+      if (path === "/oauth2PermissionGrants" && scenario === "transient" && grantAttempts++ < 1) {
         res.setHeader("Retry-After", "2")
-        return send({ error: { message: "Try again" } }, grantAttempts === 1 ? 429 : 503)
+        return send({ error: { message: "Try again" } }, 429)
       }
+      if (path === "/oauth2PermissionGrants" && scenario === "server-error") return send({ error: { message: "Internal server error" } }, 500)
       if (path === "/oauth2PermissionGrants" && scenario === "denied") return send({ error: { code: "Authorization_RequestDenied", message: "Insufficient privileges" } }, 403)
       if (req.method === "DELETE" || req.method === "PATCH") { res.statusCode = 204; res.end(); return }
       send({ id: "grant" })
@@ -104,14 +127,16 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
     } finally { server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); rmSync(dir, { recursive: true, force: true }) }
   }
 
-  it.each(["default", "tenant", "group", "optional", "device", "wrong-state", "replication", "existing", "unicode", "transient"])("completes %s setup", async scenario => {
-    const args = scenario === "tenant" ? { TenantId: tenantId } : scenario === "group" ? { AllowedGroupId: group } : scenario === "optional" ? { IncludeGroupRead: true } : scenario === "device" ? { UseDeviceCode: true } : scenario === "unicode" ? { DisplayName: "TenuVault Caf\u00e9" } : {}
+  it.each(["default", "tenant", "group", "optional", "all-optional", "device", "device-slow", "wrong-state", "replication", "existing", "unicode", "transient"])("completes %s setup", async scenario => {
+    const device = scenario.startsWith("device")
+    const switches = scenario === "optional" ? ["IncludeGroupRead"] : scenario === "all-optional" ? Object.keys(OPT_IN) : []
+    const args: Record<string, unknown> = scenario === "tenant" ? { TenantId: tenantId } : scenario === "group" ? { AllowedGroupId: group } : device ? { UseDeviceCode: true } : scenario === "unicode" ? { DisplayName: "TenuVault Caf\u00e9" } : Object.fromEntries(switches.map(name => [name, true]))
     const result = await run(scenario, args)
     expect(result.code, result.text).toBe(0)
     expect(parseSetupOutput(result.text)).toEqual({ tenantId, clientId })
     expect(parseSetupOutput(result.clipboard)).toEqual({ tenantId, clientId })
     const auth = result.requests.find(r => r.path.endsWith("/authorize"))
-    if (scenario !== "device") {
+    if (!device) {
       expect(result.pkce).toBe(true)
       expect(auth!.query.get("client_id")).toBe("14d82eec-204b-4c2f-b7e8-296a70dab67e")
       expect(auth!.query.get("response_type")).toBe("code")
@@ -122,23 +147,58 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
       expect(auth!.path).toContain(scenario === "tenant" ? tenantId : "organizations")
       expect(auth!.query.get("scope")!.includes("AppRoleAssignment.ReadWrite.All")).toBe(scenario === "group")
     } else expect(result.polls).toBe(2)
+
+    // The app registration asks for each API's own permissions, and each consent grant goes to
+    // that API's service principal.
+    const graphScopes = [...GRAPH_DEFAULTS, ...switches.flatMap(name => OPT_IN[name as keyof typeof OPT_IN])]
+    const scopesOf = (api: string) => (api === "Microsoft Graph" ? graphScopes : ["user_impersonation"])
     const app = result.requests.find(r => r.method === "POST" && r.path.endsWith("/applications"))!
-    expect(app.body).toMatchObject({ signInAudience: "AzureADMyOrg", publicClient: { redirectUris: ["http://localhost"] } })
-    if (scenario === "unicode") expect(app.body.displayName).toBe("TenuVault Caf\u00e9")
+    expect(app.body).toMatchObject({ signInAudience: "AzureADMyOrg", publicClient: { redirectUris: ["http://localhost"] }, notes: "Used by the TenuVault desktop app. Delegated permissions only, no credentials." })
+    expect(app.body.displayName).toBe(scenario === "unicode" ? "TenuVault Caf\u00e9" : "TenuVault Desktop")
+    expect(app.body.requiredResourceAccess).toEqual(DESKTOP_APP_PERMISSIONS.map(({ api }) => ({
+      resourceAppId: API_IDS[api],
+      resourceAccess: scopesOf(api).map(value => ({ id: scopeId(API_IDS[api]!, value), type: "Scope" })),
+    })))
     expect(app.headers["content-type"]).toBe("application/json; charset=utf-8")
-    const grants = result.requests.filter(r => r.path.endsWith("/oauth2PermissionGrants"))
-    expect(grants).toHaveLength(scenario === "transient" ? 5 : 3)
     const createdSp = result.requests.find(r => r.method === "POST" && r.path.endsWith("/servicePrincipals"))!
     expect(createdSp.body).toEqual({ appId: clientId, tags: ["HideApp", "WindowsAzureActiveDirectoryIntegratedApp"] })
+    const granted = result.requests.filter(r => r.path.endsWith("/oauth2PermissionGrants") && r.status === 200)
+    expect(granted.map(r => r.body)).toEqual(DESKTOP_APP_PERMISSIONS.map(({ api }) => ({
+      clientId: "app-sp",
+      consentType: "AllPrincipals",
+      resourceId: spId(API_IDS[api]!),
+      scope: scopesOf(api).join(" "),
+    })))
+
     if (scenario === "group") {
       expect(result.requests.find(r => r.path.endsWith("/appRoleAssignedTo"))!.body).toEqual({ principalId: group, resourceId: "app-sp", appRoleId: "00000000-0000-0000-0000-000000000000" })
       expect(result.requests.find(r => r.method === "PATCH")!.body).toEqual({ appRoleAssignmentRequired: true })
     }
-    expect(grants[0]!.body).toMatchObject({ clientId: "app-sp", consentType: "AllPrincipals" })
-    if (scenario === "optional") expect(grants[0]!.body.scope).toContain("Group.Read.All")
     expect(result.requests.some(r => r.path.endsWith("/appRoleAssignedTo"))).toBe(scenario === "group")
     if (scenario === "replication") expect(result.spAttempts).toBe(3)
     if (scenario === "existing") expect(result.text).toContain(`already exists (client id ${group})`)
+    if (scenario === "transient") {
+      // A read that met a server error and a throttled write are both repeated.
+      expect(result.requests.filter(r => r.status === 503 && r.method === "GET")).toHaveLength(1)
+      expect(result.requests.filter(r => r.status === 429 && r.path.endsWith("/oauth2PermissionGrants"))).toHaveLength(1)
+    }
+  }, 45000)
+
+  it.each([["device-declined", "Device code sign-in was declined"], ["device-expired", "Device code expired"]])("stops a %s sign-in without Graph requests", async (scenario, message) => {
+    const result = await run(scenario, { UseDeviceCode: true })
+    expect(result.code).toBe(1)
+    expect(result.text).toContain(message)
+    expect(result.text).toContain("Nothing was changed.")
+    expect(result.requests.some(r => r.path.includes("graph.microsoft.com"))).toBe(false)
+  }, 45000)
+
+  it("does not repeat a write that met a server error, and rolls back", async () => {
+    // The write may have been carried out, so repeating it could create a second object.
+    const result = await run("server-error")
+    expect(result.code).toBe(1)
+    expect(result.requests.filter(r => r.method === "POST" && r.path.endsWith("/oauth2PermissionGrants"))).toHaveLength(1)
+    expect(result.requests.some(r => r.method === "DELETE" && r.path.endsWith("/applications/app-object"))).toBe(true)
+    expect(result.text).toContain("half-created app registration was removed again")
   }, 45000)
 
   it("reports declined consent without Graph writes", async () => {
@@ -151,6 +211,6 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
     const result = await run("denied")
     expect(result.code).toBe(1)
     expect(result.requests.some(r => r.method === "DELETE" && r.path.endsWith("/applications/app-object"))).toBe(true)
-    for (const text of ["half-created app registration was removed", "admin@example.test", "Global Administrator", "Privileged Role Administrator", "Cloud Application Administrator"]) expect(result.text).toContain(text)
+    for (const text of ["half-created app registration was removed again", "admin@example.test", "Global Administrator", "Privileged Role Administrator", "Cloud Application Administrator"]) expect(result.text).toContain(text)
   }, 45000)
 })
