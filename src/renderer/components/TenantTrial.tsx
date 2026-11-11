@@ -172,6 +172,9 @@ export function TenantTrialCard({ tenant, initialEmail, welcome = false, allowUn
     }
   })
   const days = Math.max(0, Math.ceil((Date.parse(tenant.trialEndsAt ?? "") - Date.now()) / 86400_000))
+  // Community Free covers one tenant. Once another tenant holds it, the end of this trial
+  // opens no choice: this tenant then needs a license.
+  const communityTaken = Boolean(status?.communityTenantId && status.communityTenantId !== tenant.tenantId)
   const footer = welcome || (!status?.tenantTrialsEnabled && tenant.trialCanExtend)
   const shortcut = "inline-flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 [&_svg]:size-4 [&_svg]:text-blue-700"
   return <section className="overflow-hidden rounded-3xl border border-gray-200 bg-white">
@@ -197,9 +200,11 @@ export function TenantTrialCard({ tenant, initialEmail, welcome = false, allowUn
           <Link className={shortcut} to="/portal/frameworks/cis-benchmarks"><ShieldCheck />CIS Benchmarks</Link>
         </div>
       </div>}
-      {tenant.trial && <p className="flex gap-2 text-sm text-gray-600"><Info className="mt-0.5 size-4 shrink-0 text-gray-500" /><span>Nothing is charged and no card is on file. {(status?.tenants.filter(t => t.source === "trial" || t.trialEndsAt || t.plan === "community").length ?? 0) > 1
-        ? "When the trial ends, you choose which one tenant continues on Community Free."
-        : "When the trial ends, this tenant continues on Community Free by itself."} Backups and settings are kept. Community keeps 30 days of backup history.</span></p>}
+      {tenant.trial && <p className="flex gap-2 text-sm text-gray-600"><Info className="mt-0.5 size-4 shrink-0 text-gray-500" /><span>Nothing is charged and no card is on file. {communityTaken
+        ? "When the trial ends, this tenant needs a license: Community Free covers one tenant and another tenant already uses it. Backups and settings are kept."
+        : `${(status?.tenants.filter(t => t.source === "trial" || t.trialEndsAt || t.plan === "community").length ?? 0) > 1
+          ? "When the trial ends, you choose which one tenant continues on Community Free."
+          : "When the trial ends, this tenant continues on Community Free by itself."} Backups and settings are kept. Community keeps 30 days of backup history.`}</span></p>}
       {tenant.trial && <TrialContact tenant={tenant} initialEmail={initialEmail} allowUnknownRemoval={allowUnknownContactRemoval && !welcome} />}
       {status?.tenantTrialsEnabled && <TrialActions tenant={tenant} source={tenant.trial ? "license-page-trial" : "trial-end"} welcome={welcome} />}
       {children}

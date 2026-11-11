@@ -268,6 +268,16 @@ describe("tenant trial UI", () => {
     expect(container.textContent).toContain("Nothing is charged and no card is on file. When the trial ends, you choose which one tenant continues on Community Free. Backups and settings are kept.")
     expect(container.textContent).not.toContain("by itself")
   })
+  it("says that the tenant needs a license afterwards when another tenant already holds Community", async () => {
+    // Two tenants, but the choice was made before: the end of this trial opens none.
+    state.status!.tenants = [tenant, { ...tenant, tenantId: "other", trial: false, source: null, trialEndsAt: undefined, plan: "community" }]
+    state.status!.communityTenantId = "other"
+    await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+    expect(container.textContent).toContain("Nothing is charged and no card is on file. When the trial ends, this tenant needs a license: Community Free covers one tenant and another tenant already uses it. Backups and settings are kept.")
+    expect(container.textContent).not.toContain("you choose which")
+    expect(container.textContent).not.toContain("by itself")
+    expect(container.textContent).not.toContain("Community keeps 30 days")
+  })
   it("shows a refresh failure without retrying or rejecting the handler", async () => {
     state.refresh.mockRejectedValueOnce(new Error("Status refresh failed"))
     await render(createElement(TenantTrialCard, { tenant, welcome: true }))
