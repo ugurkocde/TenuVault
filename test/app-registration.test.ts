@@ -66,6 +66,16 @@ describe("licenseKeyFromClipboard", () => {
   })
 })
 
+describe("the clipboard handlers in the main process", () => {
+  it("wait for the clipboard text before parsing it", () => {
+    // Electron's clipboard.readText() returns a promise. Parsing the promise itself finds nothing.
+    const main = readFileSync(new URL("../src/main/index.ts", import.meta.url), "utf8")
+    expect(main).toContain("setupIdsFromClipboard(await clipboard.readText())")
+    expect(main).toContain("licenseKeyFromClipboard(await clipboard.readText())")
+    expect(main).not.toMatch(/FromClipboard\(clipboard\.readText\(\)\)/)
+  })
+})
+
 describe("setupIdsFromClipboard", () => {
   it("returns only a complete ID pair", () => {
     const tenantId = "11111111-1111-4111-8111-111111111111"
