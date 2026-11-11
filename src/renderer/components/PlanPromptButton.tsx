@@ -1,4 +1,3 @@
-import { ORGANIZATION_LICENSE_GUIDANCE } from "../../shared/constants"
 import { organizationLicenseRefusal } from "../../shared/trial-notices"
 import { useSelectedTenant } from "~/contexts/TenantContext"
 import { TenantTrialOptions } from "./TenantTrial"
@@ -51,8 +50,6 @@ export function PlanPromptButton({
   const eligible = status?.tenantTrialsEnabled && !status.hasKey && plan === "pro" ? status.tenants.find(t =>
     (tenantId && t.tenantId === tenantId) && t.signedIn && !t.entitled && !t.activated && !organizationLicenseRefusal(t) && !(t.trialRefusalPermanent ?? Boolean(t.trialRefusal)),
   ) : undefined
-  const refused = status?.tenants.find(t => t.tenantId === tenantId && organizationLicenseRefusal(t))
-  if (refused) return <span className="text-sm text-gray-600">{ORGANIZATION_LICENSE_GUIDANCE}</span>
   const requested = planPromptAction(status, plan)
   const action = status?.tenantTrialsEnabled && requested === "trial" ? "checkout" : requested
   if (action === "trial" && inRouter) {

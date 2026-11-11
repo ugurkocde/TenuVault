@@ -107,7 +107,7 @@ An organization license is tied to the app registration it was shared from. If y
 
 > This tenant has an organization license shared through another app registration than the one this sign-in used. This sign-in cannot use that license, and no trial can start. To use the license, remove the tenant from TenuVault and connect it again through that app registration. Choose "I already have an app registration" on the Connect step and enter its client ID, which an Entra administrator can find under App registrations.
 
-To fix it, remove the tenant under **Tenants**, select **Connect tenant** and, on the **Connect** step, **I already have an app registration**. Enter the client ID of the app registration the license was shared from and sign in. **Set up with Microsoft sign-in** avoids this by itself: it uses an existing TenuVault app registration instead of creating a second one. See [An app registration that already exists](/getting-started/app-registration/#an-app-registration-that-already-exists).
+To fix it, remove the tenant under **Tenants**, select **Connect tenant** and, on the **Connect** step, **I already have an app registration**. Enter the client ID of the app registration the license was shared from and sign in. **Set up with Microsoft sign-in** avoids this when the existing app registration carries TenuVault's note: it then uses that one instead of creating a second one. See [An app registration that already exists](/getting-started/app-registration/#an-app-registration-that-already-exists).
 
 ## Move a license to another machine
 

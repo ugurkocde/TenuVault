@@ -50,7 +50,7 @@ If your tenant does not list Azure Service Management or Azure Storage among its
 * If the last sign-in fails or you cancel it, the **Sign in** step opens with the tenant ID and the client ID filled in. Select **Sign in with Microsoft** to try again. Nothing is created twice.
 * If Microsoft takes longer than a minute and a half to accept sign-ins to the new app registration, the browser does not open again. The **Sign in** step says so. Wait a moment, then select **Sign in with Microsoft**.
 * If the browser says that Microsoft cannot find the application, Microsoft has not finished publishing the new app registration. Wait a minute, select **Cancel sign-in** in TenuVault and sign in again.
-* If the tenant already has a TenuVault app registration whose enterprise application has sign-in turned off, the setup stops and changes nothing. Turn sign-in on again under **Entra admin center** > **Enterprise applications** > **TenuVault Desktop** > **Properties**, or delete the app registration, then run the setup again.
+* If the tenant already has a TenuVault app registration whose enterprise application has sign-in turned off, the setup stops and changes nothing. Turn sign-in on again under **Entra admin center** > **Enterprise applications** > the application the message names > **Properties**, or delete the app registration, then run the setup again.
 
 For the messages TenuVault shows, see [Troubleshooting](/troubleshooting/).
 

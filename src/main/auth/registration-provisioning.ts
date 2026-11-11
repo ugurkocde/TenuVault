@@ -1,4 +1,5 @@
 import { CONSENT_ROLES, DESKTOP_APP_PERMISSIONS } from "../../shared/app-registration"
+import { OPTIONAL_PERMISSIONS } from "../../shared/services/optional-permissions"
 import type { RegistrationResult, SetupProgress } from "../../shared/ipc"
 
 interface Application {
@@ -30,6 +31,7 @@ export interface ProvisioningOptions {
 // The stable Graph version, as the setup script uses it. The first real setups ran against it.
 const ROOT = "https://graph.microsoft.com/v1.0"
 const NOTES = "Used by the TenuVault desktop app. Delegated permissions only, no credentials."
+const GRAPH_APP_ID = "00000003-0000-0000-c000-000000000000"
 const REQUEST_TIMEOUT_MS = 30_000
 
 /** Graph provisioning is independent of Electron and MSAL. The caller owns the ephemeral token. */
@@ -117,6 +119,9 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
   const consent = new Map<string, Grant[]>()
   let existing = candidates[0]
   if (candidates.length > 1) {
+    const known = new Map(resources.map(resource => [resource.principal.id, new Set<string>(
+      resource.appId === GRAPH_APP_ID ? [...resource.permissions, ...OPTIONAL_PERMISSIONS.flatMap(entry => entry.permissions), "Policy.ReadWrite.ConditionalAccess"] : resource.permissions,
+    )]))
     const ranked = []
     for (const candidate of candidates) {
       const principal = (await list<Principal>(`/servicePrincipals?$filter=${encodeURIComponent(`appId eq '${candidate.appId}'`)}&${principalFields}`))[0]
@@ -124,7 +129,9 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
       const grants = principal && principal.accountEnabled !== false
         ? await list<Grant>(`/oauth2PermissionGrants?$filter=${encodeURIComponent(`clientId eq '${principal.id}'`)}`) : []
       consent.set(candidate.appId, grants)
-      const permissions = new Set(grants.filter(g => g.consentType === "AllPrincipals").flatMap(g => g.scope.split(/\s+/).filter(Boolean).map(scope => `${g.resourceId}:${scope}`)))
+      // Only permissions TenuVault knows count: the default set and the ones its switches add.
+      // Consent for anything else says nothing about which registration the admins use.
+      const permissions = new Set(grants.filter(g => g.consentType === "AllPrincipals").flatMap(g => g.scope.split(/\s+/).filter(scope => known.get(g.resourceId)?.has(scope)).map(scope => `${g.resourceId}:${scope}`)))
       ranked.push({ candidate, disabled: principal?.accountEnabled === false, score: permissions.size })
     }
     ranked.sort((a, b) => Number(a.disabled) - Number(b.disabled) || b.score - a.score || (a.candidate.createdDateTime ?? "9999").localeCompare(b.candidate.createdDateTime ?? "9999") || a.candidate.id.localeCompare(b.candidate.id))
@@ -145,7 +152,7 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
     let principal = principals.has(app.appId) ? principals.get(app.appId) : (await list<Principal>(`/servicePrincipals?$filter=${encodeURIComponent(`appId eq '${app.appId}'`)}&${principalFields}`))[0]
     // An administrator who turned sign-in off revoked access on purpose: do not add consent to it.
     if (principal?.accountEnabled === false) {
-      throw new Error(`This tenant already has a TenuVault app registration (client id ${app.appId}), but sign-in to its enterprise application is turned off. Turn it on under Entra admin center > Enterprise applications > TenuVault Desktop > Properties, or delete the app registration, then try again. Nothing was changed.`)
+      throw new Error(`This tenant already has a TenuVault app registration, "${app.displayName}" (client id ${app.appId}), but sign-in to its enterprise application is turned off. Turn it on under Entra admin center > Enterprise applications > ${app.displayName} > Properties, or delete the app registration, then try again. Nothing was changed.`)
     }
     if (!principal) principal = await graph<Principal>("POST", "/servicePrincipals", { appId: app.appId, tags: ["HideApp", "WindowsAzureActiveDirectoryIntegratedApp"] }, true)
     progress({ phase: "consent", reused: Boolean(existing) })

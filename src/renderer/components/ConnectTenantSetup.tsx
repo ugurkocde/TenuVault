@@ -23,7 +23,7 @@ const PHASES: readonly SetupProgress["phase"][] = ["signingIn", "registration", 
 
 /**
  * The Connect step: one button that signs the admin in and creates the tenant's app registration
- * through Microsoft Graph, with the reasons first and the other routes (another administrator,
+ * through Microsoft Graph, with the reasons beside it and the other routes (another administrator,
  * the setup script, an existing app registration) below.
  */
 export function ConnectTenantSetup({ trials, onManual, onRegistered }: {

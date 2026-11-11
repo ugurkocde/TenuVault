@@ -50,14 +50,26 @@ describe("plan prompt trial and purchase actions", () => {
       expect(state.open).toHaveBeenLastCalledWith(purchase!.textContent?.trim() === "See plans" ? "buy" : "checkout", expect.objectContaining({ source }))
     }
   })
-  it.each(["prompt", "options", "storage", "choice"])("explains the organization refusal without a trial in %s", async place => {
+  it.each(["options", "storage", "choice"])("explains the organization refusal without a tenant trial in %s", async place => {
     state.status = status("never")
     Object.assign(state.status.tenants[0]!, { trialRefusal: ORGANIZATION_LICENSE_MESSAGE, trialRefusalPermanent: false })
     container = document.body.appendChild(document.createElement("div")); root = createRoot(container)
-    const child = place === "prompt" ? createElement(PlanPromptButton, { plan: "pro", source: "test" }) : place === "options" ? createElement(TenantTrialOptions) : place === "storage" ? createElement(PlanContext, { tenantId: "tenant" }) : createElement(TrialOrKey, { source: "test" })
+    const child = place === "options" ? createElement(TenantTrialOptions) : place === "storage" ? createElement(PlanContext, { tenantId: "tenant" }) : createElement(TrialOrKey, { source: "test" })
     await act(async () => root!.render(createElement(MemoryRouter, null, child)))
-    expect(container.textContent).toContain(ORGANIZATION_LICENSE_GUIDANCE)
+    expect(container.textContent!.split(ORGANIZATION_LICENSE_GUIDANCE).length - 1).toBe(1)
     expect(container.textContent).not.toContain("Try Pro free")
+    // Entering a license key stays possible where the choice is offered.
+    if (place !== "options") expect(container.textContent).toContain("I have a license key")
+    expect(state.start).not.toHaveBeenCalled()
+  })
+
+  it("keeps the purchase action of a plan prompt for a tenant with the organization refusal, without a tenant trial", async () => {
+    state.status = status("never")
+    Object.assign(state.status.tenants[0]!, { trialRefusal: ORGANIZATION_LICENSE_MESSAGE, trialRefusalPermanent: false })
+    container = document.body.appendChild(document.createElement("div")); root = createRoot(container)
+    await act(async () => root!.render(createElement(MemoryRouter, null, createElement(PlanPromptButton, { plan: "pro", source: "test" }))))
+    // A button, not a paragraph: the locked feature dialog keeps its action.
+    expect(container.textContent).toBe("Buy Pro")
     expect(state.start).not.toHaveBeenCalled()
   })
   it("keeps a temporary refusal out of plan prompts", async () => {

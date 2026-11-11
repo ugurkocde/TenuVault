@@ -1,4 +1,3 @@
-import { organizationLicenseRefusal } from "../../shared/trial-notices"
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react"
 import type { LicenseStatus, TenantLicenseStatus } from "../../shared/ipc"
 import { planLabel, type Plan } from "../../shared/plans"
@@ -131,7 +130,7 @@ export function hasPaidLicense(status: LicenseStatus): boolean {
 export function trialUsedUp(status: LicenseStatus): boolean {
   if (!status.tenantTrialsEnabled || status.hasKey) return false
   const open = status.tenants.filter((tenant) => tenant.signedIn && !tenant.entitled)
-  return open.length > 0 && open.every((tenant) => organizationLicenseRefusal(tenant) || (tenant.trialRefusalPermanent ?? Boolean(tenant.trialRefusal)))
+  return open.length > 0 && open.every((tenant) => tenant.trialRefusalPermanent ?? Boolean(tenant.trialRefusal))
 }
 
 /** Signed-in tenants the license does not cover right now. */
