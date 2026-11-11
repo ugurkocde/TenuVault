@@ -30,9 +30,15 @@ export interface BackupList {
 
 const EMPTY: BackupList = { backups: null, error: "", loading: false, unresolved: 0, sealed: 0, damagedFiles: 0, damagedFileNames: [], damagedKinds: null }
 
+/**
+ * How a refresh went: updated when its answer is now the list, failed when it brought no list, and
+ * superseded when a newer refresh of the same list replaced it, so its answer was dropped.
+ */
+export type RefreshOutcome = "updated" | "failed" | "superseded"
+
 let lists: Record<string, BackupList> = {}
 const listeners = new Set<() => void>()
-const running = new Map<string, Promise<void>>()
+const running = new Map<string, Promise<RefreshOutcome>>()
 // The newest refresh per list; answers to older ones are stale and dropped.
 const latest = new Map<string, number>()
 // The credentials the newest refresh per list was sent with; see credentialsOf.
@@ -70,9 +76,9 @@ export function backupListOf(key: string | null): BackupList {
  * after a backup finished, when a list read before it would miss the new backup) or it was sent
  * with other credentials. The kept list stays shown until the new one arrives.
  */
-export function refreshBackupList(tenant: Tenant, options: { force?: boolean } = {}): Promise<void> {
+export function refreshBackupList(tenant: Tenant, options: { force?: boolean } = {}): Promise<RefreshOutcome> {
   const key = backupListKey(tenant)
-  if (!key || !tenant.credentials || !tenant.resources) return Promise.resolve()
+  if (!key || !tenant.credentials || !tenant.resources) return Promise.resolve("failed")
   const pending = running.get(key)
   const credentials = credentialsOf(tenant)
   if (pending && !options.force && sentWith.get(key) === credentials) return pending
@@ -80,7 +86,7 @@ export function refreshBackupList(tenant: Tenant, options: { force?: boolean } =
   latest.set(key, id)
   sentWith.set(key, credentials)
   update(key, { loading: true })
-  const request = (async () => {
+  const request = (async (): Promise<RefreshOutcome> => {
     try {
       const response = await fetch("/api/list-backups", {
         method: "POST",
@@ -94,9 +100,14 @@ export function refreshBackupList(tenant: Tenant, options: { force?: boolean } =
       })
       const data = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(data.details || data.error || "Backups are unavailable. Check this tenant's sign-in, license, and storage access.")
-      if (latest.get(key) === id) update(key, { backups: data.backups ?? [], error: "", loading: false, unresolved: typeof data.unresolved === "number" ? data.unresolved : 0, sealed: typeof data.sealed === "number" ? data.sealed : 0, damagedFiles: typeof data.damagedFiles === "number" ? data.damagedFiles : 0, damagedFileNames: Array.isArray(data.damagedFileNames) ? data.damagedFileNames.filter((name: unknown): name is string => typeof name === "string") : [], damagedKinds: damagedFileKindsFrom(data.damagedKinds) })
+      if (latest.get(key) !== id) return "superseded"
+      const damagedFiles = typeof data.damagedFiles === "number" ? data.damagedFiles : 0
+      update(key, { backups: data.backups ?? [], error: "", loading: false, unresolved: typeof data.unresolved === "number" ? data.unresolved : 0, sealed: typeof data.sealed === "number" ? data.sealed : 0, damagedFiles, damagedFileNames: Array.isArray(data.damagedFileNames) ? data.damagedFileNames.filter((name: unknown): name is string => typeof name === "string") : [], damagedKinds: damagedFileKindsFrom(data.damagedKinds, damagedFiles) })
+      return "updated"
     } catch (failure) {
-      if (latest.get(key) === id) update(key, { error: failure instanceof Error ? failure.message : "Backups are unavailable.", loading: false })
+      if (latest.get(key) !== id) return "superseded"
+      update(key, { error: failure instanceof Error ? failure.message : "Backups are unavailable.", loading: false })
+      return "failed"
     }
   })().finally(() => {
     if (running.get(key) === request) running.delete(key)
@@ -111,14 +122,14 @@ function subscribe(listener: () => void) {
 }
 
 /** The tenant's backup list; refreshed in the background whenever a page using it opens or its credentials change. */
-export function useBackupList(tenant: Tenant | null | undefined): BackupList & { refresh: (options?: { force?: boolean }) => Promise<void> } {
+export function useBackupList(tenant: Tenant | null | undefined): BackupList & { refresh: (options?: { force?: boolean }) => Promise<RefreshOutcome> } {
   const key = backupListKey(tenant)
   const credentials = credentialsOf(tenant)
   const list = useSyncExternalStore(subscribe, () => backupListOf(key))
   useEffect(() => {
     if (tenant && key) void refreshBackupList(tenant)
   }, [key, credentials])
-  return { ...list, refresh: (options) => (tenant ? refreshBackupList(tenant, options) : Promise.resolve()) }
+  return { ...list, refresh: (options) => (tenant ? refreshBackupList(tenant, options) : Promise.resolve("failed")) }
 }
 
 /** Forgets every list; for tests. */

@@ -2,9 +2,9 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { randomBytes } from "node:crypto"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { folderToOpen } from "../src/main/backup/local-inventory"
-import { handleLocalBlobRequest } from "../src/main/storage/blob-emulator"
+import { handleLocalBlobRequest, localAccountFromUrl } from "../src/main/storage/blob-emulator"
 import { damageKinds, LocalBlobStore, type InventoryDamage } from "../src/main/storage/local-blob-store"
 import { BACKUP_OWNER_FILE, localStorageAccountName } from "../src/shared/constants"
 import { DAMAGE_KINDS_HEADER, damagedFileKindsFrom } from "../src/shared/damaged-files"
@@ -131,6 +131,40 @@ describe("kinds of damaged local backup files", () => {
   })
 })
 
+describe("damage kinds in the backup list", () => {
+  /** Lists the backups of an empty store whose container properties carry the given kinds header. */
+  async function listWith(kindsHeader: string) {
+    const { store } = await setup()
+    const { NextRequest } = await import("../src/main/api/next-server-shim")
+    const { POST: listBackups } = await import("../src/portal/app/api/list-backups/route")
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init)
+      const url = new URL(request.url)
+      if (url.hostname === "login.microsoftonline.com") return Response.json({ access_token: "token" })
+      if (url.searchParams.get("restype") === "container" && !url.searchParams.get("comp")) {
+        return new Response(null, { status: 200, headers: { "x-tenuvault-unreadable-files": "3", "x-tenuvault-unavailable-backups": "0", "x-tenuvault-unreadable-file-names": "ab12.tvb", [DAMAGE_KINDS_HEADER]: kindsHeader } })
+      }
+      if (localAccountFromUrl(url)) return handleLocalBlobRequest(store, request)
+      throw new Error(`unexpected ${url}`)
+    }))
+    try {
+      const body = { tenantId: TENANT, appId: "app", clientSecret: "x", storageAccountName: account, subscriptionId: "local", resourceGroupName: "local" }
+      return await (await listBackups(new NextRequest("http://tenuvault.internal/api/list-backups", { method: "POST", body: JSON.stringify(body) }))).json()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  }
+
+  it("sends kinds that count the unreadable files, and leaves out kinds that do not", async () => {
+    expect((await listWith(JSON.stringify({ counts: { key: 2, os: 1 }, codes: ["EACCES"], names: { key: ["ab12.tvb"] } }))).damagedKinds?.counts).toEqual({ key: 2, os: 1, duplicate: 0, damaged: 0 })
+    for (const header of [JSON.stringify({ counts: { key: 2 }, codes: [], names: {} }), JSON.stringify({ counts: {}, codes: [], names: {} }), "{not json"]) {
+      const data = await listWith(header)
+      expect(data.damagedFiles).toBe(3)
+      expect(data.damagedKinds).toBeUndefined()
+    }
+  })
+})
+
 describe("damage kinds from untrusted JSON", () => {
   it("drops names and codes that are not file names or error codes, and refuses other shapes", () => {
     expect(damagedFileKindsFrom({ counts: { key: 2 }, codes: ["EACCES", "rm -rf", "EACCES"], names: { key: ["ab12.tvb", "../x.tvb", 3] } }))
@@ -140,6 +174,11 @@ describe("damage kinds from untrusted JSON", () => {
     expect(damagedFileKindsFrom({ counts: { key: -1 }, codes: [], names: {} })).toBeNull()
     expect(damagedFileKindsFrom({ counts: { key: "2" }, codes: [], names: {} })).toBeNull()
     expect(damagedFileKindsFrom({ counts: {}, codes: "EACCES", names: {} })).toBeNull()
+    // Kinds that count no file, or other files than the list has, describe nothing.
+    expect(damagedFileKindsFrom({ counts: {}, codes: [], names: {} })).toBeNull()
+    expect(damagedFileKindsFrom({ counts: { key: 0, os: 0 }, codes: [], names: {} })).toBeNull()
+    expect(damagedFileKindsFrom({ counts: { key: 2, os: 1 }, codes: [], names: {} }, 4)).toBeNull()
+    expect(damagedFileKindsFrom({ counts: { key: 2, os: 1 }, codes: [], names: {} }, 3)?.counts).toEqual({ key: 2, os: 1, duplicate: 0, damaged: 0 })
   })
 })
 

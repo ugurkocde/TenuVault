@@ -320,7 +320,8 @@ export async function POST(request: NextRequest) {
       const properties = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container`, { headers: storageHeaders(accessToken) }).catch(() => null)
       damagedFiles = Number(properties?.headers.get('x-tenuvault-unreadable-files') ?? 0) || 0
       damagedFileNames = (properties?.headers.get('x-tenuvault-unreadable-file-names') ?? '').split(',').filter((name) => /^[0-9a-f]{1,64}\.tvb$/i.test(name))
-      try { damagedKinds = damagedFileKindsFrom(JSON.parse(properties?.headers.get(DAMAGE_KINDS_HEADER) ?? 'null')) } catch { damagedKinds = null }
+      // Kinds that do not count exactly the unreadable files are left out; the page then says the reasons are not known.
+      try { damagedKinds = damagedFileKindsFrom(JSON.parse(properties?.headers.get(DAMAGE_KINDS_HEADER) ?? 'null'), damagedFiles) } catch { damagedKinds = null }
     }
     
     // Get details for each backup folder

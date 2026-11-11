@@ -23,8 +23,11 @@ export const DAMAGE_KINDS_HEADER = "x-tenuvault-unreadable-file-kinds"
 const FILE_NAME = /^[0-9a-f]{1,64}\.tvb$/i
 const OS_CODE = /^E[A-Z]+$/
 
-/** DamagedFileKinds from untrusted JSON, or null when it is not one. Unknown names and codes are dropped. */
-export function damagedFileKindsFrom(value: unknown): DamagedFileKinds | null {
+/**
+ * DamagedFileKinds from untrusted JSON, or null when it is not one, counts no file, or does not
+ * count exactly `total` files when that is given. Unknown names and codes are dropped.
+ */
+export function damagedFileKindsFrom(value: unknown, total?: number): DamagedFileKinds | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null
   const { counts, codes, names } = value as { counts?: unknown; codes?: unknown; names?: unknown }
   if (!counts || typeof counts !== "object" || !Array.isArray(codes) || !names || typeof names !== "object") return null
@@ -36,6 +39,8 @@ export function damagedFileKindsFrom(value: unknown): DamagedFileKinds | null {
     const listed = (names as Record<string, unknown>)[kind]
     if (Array.isArray(listed)) result.names[kind] = listed.filter((name): name is string => typeof name === "string" && FILE_NAME.test(name))
   }
+  const counted = DAMAGE_KINDS.reduce((sum, kind) => sum + result.counts[kind], 0)
+  if (counted === 0 || (total !== undefined && counted !== total)) return null
   result.codes = [...new Set(codes.filter((code): code is string => typeof code === "string" && OS_CODE.test(code)))]
   return result
 }

@@ -3,6 +3,7 @@ import { createRoot, type Root } from "react-dom/client"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { BackupSettings } from "../../src/shared/ipc"
 import type { DamageKind, DamagedFileKinds } from "../../src/shared/damaged-files"
+import type { RefreshOutcome } from "../../src/renderer/lib/backup-list"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -43,16 +44,17 @@ function kinds(counts: Partial<Record<DamageKind, number>>, codes: string[] = []
   return result
 }
 
-interface Props { count: number; kinds: DamagedFileKinds | null; names?: string[]; unavailable?: number; onImported?: () => Promise<void> }
+interface Props { count: number; kinds: DamagedFileKinds | null; names?: string[]; unavailable?: number; tenantId?: string; identity?: string }
 
-function render(props: Props) {
+const updated = async (): Promise<RefreshOutcome> => "updated"
+
+function render(props: Props, onImported: () => Promise<RefreshOutcome> = vi.fn(updated)) {
   const container = document.createElement("div")
   document.body.appendChild(container)
   containers.push(container)
   const root = createRoot(container)
   roots.push(root)
-  const onImported = props.onImported ?? vi.fn(async () => undefined)
-  const draw = (next: Props) => act(() => root.render(createElement(DamagedBackupFilesNotice, { names: [], unavailable: 0, tenantId: TENANT, ...next, onImported })))
+  const draw = (next: Props, imported = onImported) => act(() => root.render(createElement(DamagedBackupFilesNotice, { key: next.identity ?? "a", names: [], unavailable: 0, tenantId: TENANT, ...next, onImported: imported })))
   draw(props)
   return { container, draw, onImported }
 }
@@ -77,6 +79,9 @@ async function importKey(container: HTMLElement) {
   await click(container, "Import")
 }
 
+const IMPACT = "New backups are still saved. Older backups are not deleted until this is fixed."
+const paragraphs = (container: HTMLElement) => [...container.querySelectorAll("[role=status] > div > div > p")].map((p) => p.textContent)
+
 describe("damaged backup files notice", () => {
   it("shows nothing when every file can be read", () => {
     expect(render({ count: 0, kinds: null }).container.textContent).toBe("")
@@ -93,21 +98,20 @@ describe("damaged backup files notice", () => {
   })
 
   it.each([
-    ["key", { key: 129 }, [], "TenuVault cannot read 129 files in this tenant's backup folder. Most often they were made with a different recovery key, for example by another device or an earlier installation. They can also be damaged."],
-    ["key", { key: 1 }, [], "TenuVault cannot read 1 file in this tenant's backup folder. Most often it was made with a different recovery key, for example by another device or an earlier installation. It can also be damaged."],
-    ["os", { os: 9 }, ["EACCES", "EPERM"], "TenuVault cannot open 9 files in this tenant's backup folder (EACCES, EPERM). Check the folder's permissions, and that a sync app has downloaded the files, then select Refresh."],
-    ["os", { os: 1 }, ["EACCES"], "TenuVault cannot open 1 file in this tenant's backup folder (EACCES). Check the folder's permissions, and that a sync app has downloaded the files, then select Refresh."],
-    ["duplicate", { duplicate: 4 }, [], "4 files in this tenant's backup folder hold the same backup item twice, for example after a backup folder was copied in by hand. Keep one copy of each, then select Refresh."],
-    ["duplicate", { duplicate: 1 }, [], "1 file in this tenant's backup folder holds a backup item that another file also holds, for example after a backup folder was copied in by hand. Keep one copy of each, then select Refresh."],
-    ["damaged", { damaged: 3 }, [], "TenuVault cannot read 3 files in this tenant's backup folder. They are damaged or incomplete. Restore them from a copy, then select Refresh."],
-    ["damaged", { damaged: 1 }, [], "TenuVault cannot read 1 file in this tenant's backup folder. It is damaged or incomplete. Restore it from a copy, then select Refresh."],
-    ["mixed with key", { key: 120, os: 9 }, ["EACCES"], "TenuVault cannot read 129 files in this tenant's backup folder, for different reasons. Show file names lists them by reason. Some may have been made with a different recovery key, for example by another device or an earlier installation."],
-    ["mixed without key", { os: 2, damaged: 3 }, ["EIO"], "TenuVault cannot read 5 files in this tenant's backup folder, for different reasons. Show file names lists them by reason."],
+    ["key", { key: 129 }, [], "TenuVault cannot read 129 files in this tenant's backup folder. They were most likely made with the recovery key of another device or an earlier installation, or they are damaged."],
+    ["key", { key: 1 }, [], "TenuVault cannot read 1 file in this tenant's backup folder. It was most likely made with the recovery key of another device or an earlier installation, or it is damaged."],
+    ["os", { os: 9 }, ["EACCES", "EPERM"], "TenuVault cannot open 9 files in this tenant's backup folder (EACCES, EPERM). Check the folder's permissions and that a sync app has downloaded them, then select Refresh."],
+    ["os", { os: 1 }, ["EACCES"], "TenuVault cannot open 1 file in this tenant's backup folder (EACCES). Check the folder's permissions and that a sync app has downloaded it, then select Refresh."],
+    ["duplicate", { duplicate: 4 }, [], "4 files in this tenant's backup folder hold the same backup items twice. Keep one copy of each, then select Refresh."],
+    ["duplicate", { duplicate: 1 }, [], "1 file in this tenant's backup folder holds a backup item that another file also holds. Keep one copy of each, then select Refresh."],
+    ["damaged", { damaged: 3 }, [], "TenuVault cannot read 3 files in this tenant's backup folder because they are damaged or incomplete. Restore them from a copy, then select Refresh."],
+    ["damaged", { damaged: 1 }, [], "TenuVault cannot read 1 file in this tenant's backup folder because it is damaged or incomplete. Restore it from a copy, then select Refresh."],
+    ["mixed with key", { key: 120, os: 9 }, ["EACCES"], "TenuVault cannot read 129 files in this tenant's backup folder for different reasons, such as another device's recovery key. Show file names lists them by reason."],
+    ["mixed without key", { os: 2, damaged: 3 }, ["EIO"], "TenuVault cannot read 5 files in this tenant's backup folder for different reasons. Show file names lists them by reason."],
   ] as const)("words the body for %s files", (_kind, counts, codes, body) => {
     const count = Object.values(counts).reduce((sum: number, value) => sum + (value ?? 0), 0)
     const { container } = render({ count, kinds: kinds(counts, [...codes]) })
-    const paragraphs = [...container.querySelectorAll("[role=status] > div > div > p")].map((p) => p.textContent)
-    expect(paragraphs).toEqual([body, "Your other backups work and new backups are still saved. Until this is fixed, older backups are not deleted."])
+    expect(paragraphs(container)).toEqual([body, IMPACT])
     expect(labels(container).includes("Import recovery key")).toBe(("key" in counts ? counts.key : 0) > 0)
     expect(labels(container)).toContain("Open backup folder")
     expect(labels(container)).toContain(`Show file names (${count})`)
@@ -116,17 +120,29 @@ describe("damaged backup files notice", () => {
 
   it("says how many backups in the list are marked Unavailable, only when there are some", () => {
     const { container, draw } = render({ count: 2, kinds: kinds({ damaged: 2 }), unavailable: 1 })
-    expect(container.textContent).toContain("1 backup in this list is marked Unavailable. Your other backups work")
+    expect(paragraphs(container)[1]).toBe(`1 backup in this list is marked Unavailable. ${IMPACT}`)
     draw({ count: 2, kinds: kinds({ damaged: 2 }), unavailable: 3 })
-    expect(container.textContent).toContain("3 backups in this list are marked Unavailable. Your other backups work")
+    expect(paragraphs(container)[1]).toBe(`3 backups in this list are marked Unavailable. ${IMPACT}`)
     draw({ count: 2, kinds: kinds({ damaged: 2 }), unavailable: 0 })
-    expect(container.textContent).not.toContain("marked Unavailable")
+    expect(paragraphs(container)[1]).toBe(IMPACT)
   })
 
-  it("treats a list without kinds as damaged files", () => {
-    const { container } = render({ count: 2, kinds: null, names: [hex(1), hex(2)] })
-    expect(container.textContent).toContain("They are damaged or incomplete.")
-    expect(labels(container)).not.toContain("Import recovery key")
+  it.each([
+    ["missing", null],
+    ["empty", { counts: { key: 0, os: 0, duplicate: 0, damaged: 0 }, codes: [], names: { key: [], os: [], duplicate: [], damaged: [] } }],
+    ["counting other files", kinds({ damaged: 5 })],
+  ] as const)("does not diagnose the files when their kinds are %s, and still offers a key import", async (_case, given) => {
+    const { container } = render({ count: 2, kinds: given as DamagedFileKinds | null, names: [hex(1), hex(2)] })
+    expect(paragraphs(container)[0]).toBe("TenuVault cannot read 2 files in this tenant's backup folder. They may have been made with another recovery key, or they may be damaged.")
+    expect(labels(container)).toContain("Import recovery key")
+    await click(container, "Show file names (2)")
+    expect([...container.querySelectorAll(".max-h-40 li")].map((item) => item.textContent)).toEqual([hex(1), hex(2)])
+    expect(container.querySelector(".max-h-40 p.font-medium")).toBeNull()
+  })
+
+  it("words the unknown reasons for one file", () => {
+    const { container } = render({ count: 1, kinds: null, names: [hex(1)] })
+    expect(paragraphs(container)[0]).toBe("TenuVault cannot read 1 file in this tenant's backup folder. It may have been made with another recovery key, or it may be damaged.")
   })
 
   it("shows the file names behind a disclosure that is a button with aria-expanded and aria-controls", async () => {
@@ -171,19 +187,17 @@ describe("damaged backup files notice", () => {
 
   it("lists the backups again after an import and says how many files still cannot be read", async () => {
     backups.importRecoveryKey.mockResolvedValue(settings)
-    let draw!: (props: Props) => void
     const announced = vi.fn()
     window.addEventListener("tenuvault:backup-settings", announced)
     let finish!: () => void
-    const onImported = vi.fn(() => new Promise<void>((resolve) => { finish = () => { draw({ count: 5, kinds: kinds({ key: 5 }) }); resolve() } }))
-    const rendered = render({ count: 129, kinds: kinds({ key: 129 }), onImported })
-    draw = (props) => rendered.draw({ ...props, onImported })
+    let rendered!: ReturnType<typeof render>
+    const onImported = vi.fn(() => new Promise<RefreshOutcome>((resolve) => { finish = () => { rendered.draw({ count: 5, kinds: kinds({ key: 5 }) }); resolve("updated") } }))
+    rendered = render({ count: 129, kinds: kinds({ key: 129 }) }, onImported)
     await importKey(rendered.container)
     expect(backups.importRecoveryKey).toHaveBeenCalledWith("TVK2.example")
     expect(onImported).toHaveBeenCalledOnce()
     expect(announced).toHaveBeenCalledOnce()
     expect(rendered.container.textContent).toContain("Checking the backups again...")
-    expect(labels(rendered.container).find((label) => label === "Import recovery key")).toBeDefined()
     expect([...rendered.container.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Import recovery key")!.disabled).toBe(true)
     await act(async () => finish())
     await flush()
@@ -199,16 +213,52 @@ describe("damaged backup files notice", () => {
     expect(container.textContent).toContain("This device still cannot read this file. It needs a different recovery key, or a copy from before it was damaged.")
   })
 
+  it.each([
+    ["the list could not be read", async (): Promise<RefreshOutcome> => "failed"],
+    ["the refresh threw", async (): Promise<RefreshOutcome> => { throw new Error("offline") }],
+  ])("says the backups could not be checked again when %s, not that files still cannot be read", async (_case, onImported) => {
+    backups.importRecoveryKey.mockResolvedValue(settings)
+    const { container } = render({ count: 129, kinds: kinds({ key: 129 }) }, onImported)
+    await importKey(container)
+    expect(container.textContent).toContain("The backups could not be checked again. Select Refresh to try again.")
+    expect(container.textContent).not.toContain("still cannot read")
+  })
+
+  it("says nothing about the check when a newer refresh replaced it", async () => {
+    backups.importRecoveryKey.mockResolvedValue(settings)
+    const { container } = render({ count: 129, kinds: kinds({ key: 129 }) }, async () => "superseded")
+    await importKey(container)
+    expect(container.textContent).not.toContain("still cannot read")
+    expect(container.textContent).not.toContain("could not be checked again")
+  })
+
   it("goes away once the list after an import has no damaged files", async () => {
     backups.importRecoveryKey.mockResolvedValue(settings)
-    let draw!: (props: Props) => void
-    const onImported = vi.fn(async () => { draw({ count: 0, kinds: null }) })
-    const rendered = render({ count: 3, kinds: kinds({ key: 3 }), onImported })
-    draw = (props) => rendered.draw({ ...props, onImported })
+    let rendered!: ReturnType<typeof render>
+    const onImported = vi.fn(async (): Promise<RefreshOutcome> => { rendered.draw({ count: 0, kinds: null }); return "updated" })
+    rendered = render({ count: 3, kinds: kinds({ key: 3 }) }, onImported)
     await importKey(rendered.container)
     expect(rendered.container.textContent).toBe("")
-    draw({ count: 1, kinds: kinds({ key: 1 }) })
+    rendered.draw({ count: 1, kinds: kinds({ key: 1 }) })
     expect(rendered.container.textContent).not.toContain("still cannot read")
+  })
+
+  it("keeps a check started for one tenant off the next tenant's card", async () => {
+    backups.importRecoveryKey.mockResolvedValue(settings)
+    let finish!: () => void
+    const slow = vi.fn(() => new Promise<RefreshOutcome>((resolve) => { finish = () => resolve("updated") }))
+    const { container, draw } = render({ count: 129, kinds: kinds({ key: 129 }), identity: "tenant-a/tvlocal-a" }, slow)
+    await importKey(container)
+    expect(container.textContent).toContain("Checking the backups again...")
+    // The page shows another tenant's list while the first refresh is still running.
+    draw({ count: 4, kinds: kinds({ key: 4 }), identity: "tenant-b/tvlocal-b", tenantId: "22222222-2222-2222-2222-222222222222" }, vi.fn(updated))
+    expect(container.textContent).not.toContain("Checking the backups again...")
+    await act(async () => finish())
+    await flush()
+    expect(container.textContent).toContain("TenuVault cannot read 4 files")
+    expect(container.textContent).not.toContain("still cannot read")
+    expect(container.textContent).not.toContain("could not be checked again")
+    expect([...container.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Import recovery key")!.disabled).toBe(false)
   })
 
   it("shows an import error inline", async () => {

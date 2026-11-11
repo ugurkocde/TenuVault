@@ -101,4 +101,36 @@ describe('Backup list cache', () => {
     await stale
     expect(backupListOf(key)).toEqual({ backups: [backup('b2'), backup('b1')], error: '', loading: false, unresolved: 0, sealed: 0, damagedFiles: 0, damagedFileNames: [], damagedKinds: null })
   })
+
+  it('says how each refresh went: updated, failed, or superseded by a newer one', async () => {
+    const fetches = pendingFetch()
+    const before = refreshBackupList(tenant())
+    const forced = refreshBackupList(tenant(), { force: true })
+    fetches.answer(1, Response.json({ backups: [] }))
+    expect(await forced).toBe('updated')
+    fetches.answer(0, Response.json({ backups: [backup('b1')] }))
+    expect(await before).toBe('superseded')
+    const failing = refreshBackupList(tenant(), { force: true })
+    fetches.answer(2, Response.json({ error: 'Storage unavailable' }, { status: 500 }))
+    expect(await failing).toBe('failed')
+    expect(await refreshBackupList(tenant(''))).toBe('failed')
+  })
+
+  it('drops damage kinds that do not count exactly the unreadable files', async () => {
+    const fetches = pendingFetch()
+    const key = backupListKey(tenant())
+    const kinds = (key: number) => ({ counts: { key }, codes: [], names: {} })
+    const first = refreshBackupList(tenant())
+    fetches.answer(0, Response.json({ backups: [], damagedFiles: 3, damagedFileNames: [], damagedKinds: kinds(2) }))
+    await first
+    expect(backupListOf(key).damagedKinds).toBeNull()
+    const second = refreshBackupList(tenant(), { force: true })
+    fetches.answer(1, Response.json({ backups: [], damagedFiles: 3, damagedFileNames: [], damagedKinds: { counts: {}, codes: [], names: {} } }))
+    await second
+    expect(backupListOf(key).damagedKinds).toBeNull()
+    const third = refreshBackupList(tenant(), { force: true })
+    fetches.answer(2, Response.json({ backups: [], damagedFiles: 3, damagedFileNames: [], damagedKinds: kinds(3) }))
+    await third
+    expect(backupListOf(key).damagedKinds?.counts).toEqual({ key: 3, os: 0, duplicate: 0, damaged: 0 })
+  })
 })

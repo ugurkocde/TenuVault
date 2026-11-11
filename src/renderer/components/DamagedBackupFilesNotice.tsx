@@ -3,6 +3,7 @@ import { ChevronDown, FolderOpen, Loader2, Upload } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import { cn } from "~/lib/utils"
 import { DAMAGE_KINDS, type DamageKind, type DamagedFileKinds } from "../../shared/damaged-files"
+import type { RefreshOutcome } from "../lib/backup-list"
 import { bridge } from "../lib/bridge"
 import { announceBackupSettings } from "../lib/local-inventory"
 import { NoticeCard } from "./NoticeCard"
@@ -13,47 +14,59 @@ interface DamagedBackupFilesNoticeProps {
   count: number
   /** The same files by why they cannot be used; null when the list did not say. */
   kinds: DamagedFileKinds | null
-  /** The first encrypted file names on disk, for a list that did not send kinds. */
+  /** The first encrypted file names on disk, listed when the reasons are not known. */
   names: string[]
   /** Backups in the list that are marked Unavailable. */
   unavailable: number
   /** The tenant, so Open backup folder shows its own folder. */
   tenantId?: string
-  /** Lists the backups again after a key import; resolves when the new list arrived. */
-  onImported: () => Promise<void>
+  /** Lists the backups again after a key import; resolves with how that went. */
+  onImported: () => Promise<RefreshOutcome>
 }
 
 const files = (count: number) => `${count} file${count === 1 ? "" : "s"}`
 
-/** The first paragraph of the notice: what is wrong with the files and what to do. */
-export function damagedFilesBody(count: number, kinds: DamagedFileKinds): string {
-  const present = DAMAGE_KINDS.filter((kind) => kinds.counts[kind] > 0)
+/** The kinds when they describe every one of the count files; null when the reasons are not known. */
+export function knownKinds(count: number, kinds: DamagedFileKinds | null): DamagedFileKinds | null {
+  if (!kinds) return null
+  const total = DAMAGE_KINDS.reduce((sum, kind) => sum + kinds.counts[kind], 0)
+  return total > 0 && total === count ? kinds : null
+}
+
+/** The first paragraph of the notice: what is wrong with the files and what to do. Kinds are null when the reasons are not known. */
+export function damagedFilesBody(count: number, kinds: DamagedFileKinds | null): string {
+  const present = kinds ? DAMAGE_KINDS.filter((kind) => kinds.counts[kind] > 0) : []
   const one = count === 1
+  const folder = `${files(count)} in this tenant's backup folder`
   if (present.length > 1) {
-    return `TenuVault cannot read ${files(count)} in this tenant's backup folder, for different reasons. Show file names lists them by reason.${kinds.counts.key > 0 ? " Some may have been made with a different recovery key, for example by another device or an earlier installation." : ""}`
+    return `TenuVault cannot read ${folder} for different reasons${kinds!.counts.key > 0 ? ", such as another device's recovery key" : ""}. Show file names lists them by reason.`
   }
   switch (present[0]) {
     case "key":
       return one
-        ? "TenuVault cannot read 1 file in this tenant's backup folder. Most often it was made with a different recovery key, for example by another device or an earlier installation. It can also be damaged."
-        : `TenuVault cannot read ${files(count)} in this tenant's backup folder. Most often they were made with a different recovery key, for example by another device or an earlier installation. They can also be damaged.`
+        ? `TenuVault cannot read ${folder}. It was most likely made with the recovery key of another device or an earlier installation, or it is damaged.`
+        : `TenuVault cannot read ${folder}. They were most likely made with the recovery key of another device or an earlier installation, or they are damaged.`
     case "os":
-      return `TenuVault cannot open ${files(count)} in this tenant's backup folder${kinds.codes.length ? ` (${kinds.codes.join(", ")})` : ""}. Check the folder's permissions, and that a sync app has downloaded the files, then select Refresh.`
+      return `TenuVault cannot open ${folder}${kinds!.codes.length ? ` (${kinds!.codes.join(", ")})` : ""}. Check the folder's permissions and that a sync app has downloaded ${one ? "it" : "them"}, then select Refresh.`
     case "duplicate":
       return one
-        ? "1 file in this tenant's backup folder holds a backup item that another file also holds, for example after a backup folder was copied in by hand. Keep one copy of each, then select Refresh."
-        : `${files(count)} in this tenant's backup folder hold the same backup item twice, for example after a backup folder was copied in by hand. Keep one copy of each, then select Refresh.`
+        ? `${folder} holds a backup item that another file also holds. Keep one copy of each, then select Refresh.`
+        : `${folder} hold the same backup items twice. Keep one copy of each, then select Refresh.`
+    case "damaged":
+      return one
+        ? `TenuVault cannot read ${folder} because it is damaged or incomplete. Restore it from a copy, then select Refresh.`
+        : `TenuVault cannot read ${folder} because they are damaged or incomplete. Restore them from a copy, then select Refresh.`
     default:
       return one
-        ? "TenuVault cannot read 1 file in this tenant's backup folder. It is damaged or incomplete. Restore it from a copy, then select Refresh."
-        : `TenuVault cannot read ${files(count)} in this tenant's backup folder. They are damaged or incomplete. Restore them from a copy, then select Refresh.`
+        ? `TenuVault cannot read ${folder}. It may have been made with another recovery key, or it may be damaged.`
+        : `TenuVault cannot read ${folder}. They may have been made with another recovery key, or they may be damaged.`
   }
 }
 
 /** The second paragraph: what still works, and the backups marked Unavailable. */
 export function damagedFilesImpact(unavailable: number): string {
   const marked = unavailable > 0 ? `${unavailable === 1 ? "1 backup in this list is" : `${unavailable} backups in this list are`} marked Unavailable. ` : ""
-  return `${marked}Your other backups work and new backups are still saved. Until this is fixed, older backups are not deleted.`
+  return `${marked}New backups are still saved. Older backups are not deleted until this is fixed.`
 }
 
 /** One line per kind in the file list when the files are damaged for different reasons. */
@@ -98,17 +111,18 @@ export function DamagedBackupFilesNotice({ count, kinds, names, unavailable, ten
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState("")
   const [openError, setOpenError] = useState("")
-  // Set when the list after an import still has files that may need a key; cleared once none are left.
-  const [checked, setChecked] = useState(false)
-  const breakdown: DamagedFileKinds = kinds ?? { counts: { key: 0, os: 0, duplicate: 0, damaged: count }, codes: [], names: { key: [], os: [], duplicate: [], damaged: names } }
-  const keyFiles = breakdown.counts.key
+  // How the list read after an import went: "checked" once a current list arrived, "failed" when it
+  // did not. Only a current list can say how many files still cannot be read.
+  const [check, setCheck] = useState<"" | "checked" | "failed">("")
+  const known = knownKinds(count, kinds)
+  // Files a recovery key may open. When the reasons are not known, any of them may.
+  const keyFiles = known ? known.counts.key : count
   useEffect(() => {
-    if (!(count > 0) || keyFiles <= 0) setChecked(false)
+    if (!(count > 0) || keyFiles <= 0) setCheck("")
   }, [count, keyFiles])
 
   if (!(count > 0)) return null
-  const present = DAMAGE_KINDS.filter((kind) => breakdown.counts[kind] > 0)
-  const mixed = present.length > 1
+  const present = known ? DAMAGE_KINDS.filter((kind) => known.counts[kind] > 0) : []
 
   const openFolder = async () => {
     setOpenError("")
@@ -127,7 +141,7 @@ export function DamagedBackupFilesNotice({ count, kinds, names, unavailable, ten
       bodyClassName="max-w-3xl space-y-1"
       body={
         <>
-          <p>{damagedFilesBody(count, breakdown)}</p>
+          <p>{damagedFilesBody(count, known)}</p>
           <p>{damagedFilesImpact(unavailable)}</p>
         </>
       }
@@ -152,14 +166,14 @@ export function DamagedBackupFilesNotice({ count, kinds, names, unavailable, ten
         <div id={panelId} className="max-w-3xl space-y-2">
           <p>These are the encrypted names on disk, so you can find the files. They do not match backup or policy names.</p>
           <div className="max-h-40 space-y-2 overflow-auto rounded-xl bg-white p-3">
-            {mixed
+            {known && present.length > 1
               ? present.map((kind) => (
                 <div key={kind} className="space-y-1">
-                  <p className="font-medium">{kindLabel(kind, breakdown.counts[kind], breakdown.codes)}</p>
-                  <FileNames names={breakdown.names[kind]} more={breakdown.counts[kind] - breakdown.names[kind].length} />
+                  <p className="font-medium">{kindLabel(kind, known.counts[kind], known.codes)}</p>
+                  <FileNames names={known.names[kind]} more={known.counts[kind] - known.names[kind].length} />
                 </div>
               ))
-              : <FileNames names={breakdown.names[present[0]!]} more={count - breakdown.names[present[0]!].length} />}
+              : <FileNames names={known && present[0] ? known.names[present[0]] : names} more={count - (known && present[0] ? known.names[present[0]] : names).length} />}
           </div>
           <p>If you have no copy and no recovery key, you can remove these files from the folder yourself. TenuVault never removes them for you.</p>
         </div>
@@ -169,12 +183,14 @@ export function DamagedBackupFilesNotice({ count, kinds, names, unavailable, ten
           onImported={(next) => {
             setImporting(false)
             setError("")
+            setCheck("")
             announceBackupSettings(next)
             setRefreshing(true)
-            void onImported().finally(() => {
-              setRefreshing(false)
-              setChecked(true)
-            })
+            // The card is keyed by tenant and storage, so a refresh that ends after a switch only
+            // updates the card it was started from, which is gone by then.
+            void onImported()
+              .then((outcome) => setCheck(outcome === "updated" ? "checked" : outcome === "failed" ? "failed" : ""), () => setCheck("failed"))
+              .finally(() => setRefreshing(false))
           }}
           onError={setError}
           onBusyChange={setPending}
@@ -183,13 +199,14 @@ export function DamagedBackupFilesNotice({ count, kinds, names, unavailable, ten
       {refreshing && (
         <p className="flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Checking the backups again...</p>
       )}
-      {checked && !refreshing && keyFiles > 0 && (
+      {check === "checked" && !refreshing && keyFiles > 0 && (
         <p className="text-red-700">
           {keyFiles === 1
             ? "This device still cannot read this file. It needs a different recovery key, or a copy from before it was damaged."
             : `This device still cannot read ${keyFiles} of these files. They need a different recovery key, or a copy from before they were damaged.`}
         </p>
       )}
+      {check === "failed" && !refreshing && <p className="text-red-700">The backups could not be checked again. Select Refresh to try again.</p>}
       {error && <p className="text-red-700">{error}</p>}
       {openError && <p className="text-red-700">{openError}</p>}
     </NoticeCard>

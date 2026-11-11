@@ -91,6 +91,9 @@ export default function BackupRestorePage() {
   const backups = backupList.backups ?? NO_BACKUPS
   const retentionMessage = retentionNote(plan, backups, new Date())
   const isLoading = backupList.loading && backupList.backups === null
+  // The tenant and storage the list is for. Notices are keyed by it, so their state, such as a check
+  // after a key import, never carries over to another tenant's list.
+  const listIdentity = `${selectedTenant?.credentials?.tenantId?.toLowerCase() ?? ""}/${selectedTenant?.resources?.storageAccountName?.toLowerCase() ?? ""}`
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [restoreFrom, setRestoreFrom] = useState<string | null>(null)
   const [setupError, setSetupError] = useState("")
@@ -321,6 +324,7 @@ export default function BackupRestorePage() {
               <div className="mb-4"><FirstBackupNote key={completedBackup.jobId} plan={plan} /></div>
             )}
             <DamagedBackupFilesNotice
+              key={`damaged:${listIdentity}`}
               count={backupList.damagedFiles}
               kinds={backupList.damagedKinds}
               names={backupList.damagedFileNames}
@@ -334,7 +338,7 @@ export default function BackupRestorePage() {
                 {unresolvedNotice(backupList.unresolved)}
               </p>
             )}
-            <LegacySealedBackupsNotice count={backupList.sealed} onImported={() => backupList.refresh({ force: true })} />
+            <LegacySealedBackupsNotice key={`sealed:${listIdentity}`} count={backupList.sealed} onImported={async () => { await backupList.refresh({ force: true }) }} />
             {retentionMessage && (
               <p className="mb-4 text-sm text-gray-500">
                 {retentionMessage}{" "}
