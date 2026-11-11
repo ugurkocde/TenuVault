@@ -49,6 +49,7 @@ export const SETUP_SIGN_IN_TIMEOUT_MS = 15 * 60_000
 
 export class AppRegistrationSetup {
   private cancelWaiting?: () => void
+  private controller?: AbortController
   private running = false
   constructor(private readonly host: {
     fetch: typeof fetch
@@ -56,12 +57,14 @@ export class AppRegistrationSetup {
     progress: (progress: SetupProgress) => void
   }) {}
 
-  cancel(): void { this.cancelWaiting?.() }
+  cancel(): void { this.controller?.abort(); this.cancelWaiting?.() }
 
   async create(options?: { tenant?: string }): Promise<RegistrationResult> {
     if (this.running) throw new Error("Setup is already running.")
     if (options?.tenant !== undefined && (typeof options.tenant !== "string" || options.tenant.length > 253 || options.tenant !== "" && !isGuid(options.tenant) && !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(options.tenant))) throw new Error("Enter a valid tenant ID or domain.")
     this.running = true
+    const controller = new AbortController()
+    this.controller = controller
     // No cache plugin or logger. This client and its privileged tokens live only for this run.
     const app = new PublicClientApplication({
       auth: { clientId: "14d82eec-204b-4c2f-b7e8-296a70dab67e", authority: `https://login.microsoftonline.com/${encodeURIComponent(options?.tenant || "organizations")}` },
@@ -98,11 +101,12 @@ export class AppRegistrationSetup {
       return await provisionRegistration({
         fetch: this.host.fetch, token: result.accessToken,
         tenantId: result.account.tenantId.toLowerCase(), username: result.account.username,
-        progress: this.host.progress,
+        progress: this.host.progress, signal: controller.signal,
       })
     } finally {
       clearTimeout(deadline)
       this.cancelWaiting = undefined
+      this.controller = undefined
       this.running = false
       await app.clearCache()
     }

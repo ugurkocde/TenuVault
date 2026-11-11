@@ -14,21 +14,21 @@ If someone else is the administrator who can grant consent, or you prefer to rea
 You need an account with **Global Administrator**, **Privileged Role Administrator** or **Cloud Application Administrator**, because the setup grants tenant-wide admin consent.
 
 1. On the **Connect** step, **Connect your tenant**, select **Set up with Microsoft sign-in**.
-2. Your browser opens. Choose your admin account. Microsoft asks you to approve **Microsoft Graph Command Line Tools** with two permissions, `Application.ReadWrite.All` and `DelegatedPermissionGrant.ReadWrite.All`. This is Microsoft's own sign-in app, the one Microsoft Graph PowerShell also signs in through. TenuVault uses it once, to create the app registration and grant consent. These two permissions are not permissions of the TenuVault app registration.
+2. Your browser opens. Choose your admin account. Microsoft asks you to approve **Microsoft Graph Command Line Tools** with two permissions, `Application.ReadWrite.All` and `DelegatedPermissionGrant.ReadWrite.All`. This is Microsoft's own sign-in app, the one Microsoft Graph PowerShell also signs in through. TenuVault uses it once, to create the app registration and grant consent. These two permissions are not permissions of the TenuVault app registration. If Microsoft also shows **Consent on behalf of your organization**, leave it unticked; the setup does not need it.
 3. TenuVault shows what it is doing under **Setting up your tenant**:
    * **Create the app registration**: the app registration **TenuVault Desktop**, as described in [What the setup creates](#what-the-setup-creates). If the tenant already has a TenuVault app registration from an earlier setup, TenuVault uses that one and the list says **Use the app registration this tenant already has**, followed by **Check its admin consent**.
    * **Grant admin consent**: tenant-wide consent for the [delegated permissions](#delegated-permissions) below, and nothing else.
    * **Wait until Microsoft accepts sign-ins to it**: Microsoft needs a few seconds before a new app registration can be used.
 4. When Microsoft accepts sign-ins to the app registration, your browser opens once more and signs you in to TenuVault through it. There is nothing to enter this time. TenuVault continues with the **Storage** step: [Choose where backups are stored](/getting-started/choose-storage/).
 
-**Cancel** stops waiting for the browser. Nothing is created before you are signed in.
+**Cancel** works in every phase of the setup. Nothing is created before you are signed in. If you cancel while TenuVault creates the app registration or grants consent, it removes the app registration it created. If you cancel while it waits for Microsoft to accept sign-ins, the app registration is complete and stays in your tenant: TenuVault says so, and the next setup uses it.
 
 Expand **What the setup does** on the Connect step to read these steps and the permissions before you start. It also has the optional field **Tenant ID or domain (optional)**, for guest and partner admins who set up a tenant other than their own. Leave it empty to use the tenant of the account you sign in with.
 
 ### What TenuVault does with the setup sign-in
 
 * The sign-in from step 2 is kept in memory only and dropped when the setup ends. It is never saved on the computer.
-* Your approval of **Microsoft Graph Command Line Tools** stays in your tenant, for your account. To remove it, open **Entra admin center** > **Enterprise applications** > **Microsoft Graph Command Line Tools** > **Permissions**. Removing it does not affect the TenuVault app registration.
+* Your approval of **Microsoft Graph Command Line Tools** stays in your tenant, for your account, as long as you left **Consent on behalf of your organization** unticked. To remove it, open **Entra admin center** > **Enterprise applications** > **Microsoft Graph Command Line Tools** > **Permissions**. Removing it does not affect the TenuVault app registration.
 
 ### An app registration that already exists
 

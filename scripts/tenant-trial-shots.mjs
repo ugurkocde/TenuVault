@@ -351,7 +351,7 @@ try {
   await scene("email-trial-fallback", { ...existing, tenantTrialsEnabled: false }, MOCK.tenants.slice(0, 1), "#/license", "We email you a Pro license key for 30 days")
   // A laptop screen: the storage choice has to be visible next to the trial.
   await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false })
-  await evaluate(`window.tenuvault.storage.setItem("tenuvault.onboarding.draft", ${JSON.stringify(JSON.stringify({ step: 2, tenant: TENANTS[0].domain, clientId: CLIENT_ID, displayName: TENANTS[0].name, account: MOCK.accounts[0] }))})`)
+  await evaluate(`window.tenuvault.storage.setItem("tenuvault.onboarding.draft", ${JSON.stringify(JSON.stringify({ step: 2, tenant: TENANTS[0].domain, clientId: CLIENT_ID, displayName: TENANTS[0].name, account: MOCK.accounts[0], signedInAt: Date.now() }))})`)
   await scene("trial-onboarding-storage", { ...active(9), tenants: [trialTenant(0, 9, { trialAcknowledged: false })] }, MOCK.tenants.slice(0, 1), "#/portal/onboarding", "Pro trial started: 9 days")
   if (await evaluate(`[...document.querySelectorAll('h2')].some(e => e.textContent.startsWith("Pro trial started")) || /Got it|Use Community instead|Try these first|You can extend|Questions,/.test(document.body.innerText)`)) throw new Error("The Storage step shows the full trial card")
   if (await evaluate(`!document.body.innerText.includes("This device")`)) throw new Error("The storage choice is missing")

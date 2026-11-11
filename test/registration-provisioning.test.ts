@@ -265,7 +265,7 @@ describe("registration provisioning", () => {
   it("reports each phase in order", async () => {
     const f = fixture()
     await f.run()
-    // The first report follows the sign-in at once, so the browser wait stops being cancellable.
+    // The first report follows the sign-in at once.
     expect(f.progress.mock.calls.map(([value]) => value.phase)).toEqual(["registration", "registration", "consent", "publishing"])
     expect(f.calls[0]!.url.pathname).toBe("/v1.0/servicePrincipals")
   })
@@ -287,4 +287,90 @@ describe("registration provisioning", () => {
     await expect(f.run()).rejects.toThrow("Unexpected Graph paging address")
     expect(f.calls).toHaveLength(1)
   })
+})
+
+it("cancels provisioning and still cleans up the new registration", async () => {
+  const controller = new AbortController()
+  const f = fixture({ fail: (url, init) => {
+    if (url.pathname.endsWith("oauth2PermissionGrants") && init.method === "POST") controller.abort()
+    return undefined
+  } })
+  await expect(f.run(controller.signal)).rejects.toThrow("Sign-in cancelled.")
+  expect(f.calls.some(call => call.method === "DELETE")).toBe(true)
+  expect(f.probes).toHaveLength(0)
+})
+
+it.each([false, true])("cancels a publication sleep promptly and keeps the committed registration, ready: %s", async ready => {
+  const controller = new AbortController()
+  const f = fixture({ unknown: ready ? 0 : 99 })
+  let sleeping!: () => void
+  const started = new Promise<void>(resolve => { sleeping = resolve })
+  f.sleep.mockImplementationOnce(() => { sleeping(); return new Promise(() => {}) })
+  const pending = f.run(controller.signal)
+  await started
+  controller.abort()
+  // This run created the registration, so the cancel says that it stays and is used next time.
+  await expect(pending).rejects.toThrow('Setup was cancelled. The app registration "TenuVault Desktop" (client id client) stays in your tenant, and the next setup uses it.')
+  expect(f.probes).toHaveLength(1)
+  expect(f.calls.some(call => call.method === "DELETE")).toBe(false)
+})
+
+it("cancels a publication request in flight", async () => {
+  const controller = new AbortController()
+  const f = fixture()
+  const request = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).includes("devicecode")) {
+      controller.abort()
+      expect(init?.signal?.aborted).toBe(true)
+      throw new Error("aborted")
+    }
+    return Response.json({ value: [] })
+  })
+  // Use the normal fixture through provisioning, then block only the publication probe.
+  const pending = provisionRegistration({
+    fetch: async (input, init) => String(input).includes("devicecode") ? request(input, init) : Response.json(
+      String(input).includes("applications") ? { value: [own] } :
+      String(input).includes("oauth2PermissionGrants") ? { value: [consent()] } :
+      { value: [{ id: String(input).includes("00000003") ? "Microsoft Graph" : "app-sp" }] }),
+    token: "ephemeral", tenantId: "tenant", username: "admin", signal: controller.signal, progress: f.progress,
+  })
+  await expect(pending).rejects.toThrow("Sign-in cancelled.")
+  expect(request).toHaveBeenCalledOnce()
+})
+
+it("lets a create request in flight finish when cancelled, then removes what it created", async () => {
+  const controller = new AbortController()
+  let createSignal: AbortSignal | null | undefined
+  const f = fixture({ fail: (url, init) => {
+    if (url.pathname === "/v1.0/applications" && init.method === "POST") { createSignal = init.signal; controller.abort() }
+    return undefined
+  } })
+  await expect(f.run(controller.signal)).rejects.toThrow("The half-created app registration was removed again. Sign-in cancelled.")
+  // The admin's cancel never cut the POST off, so its answer carried the ID the cleanup deletes.
+  expect(createSignal?.aborted).toBe(false)
+  expect(f.calls.filter(call => call.method === "DELETE").map(call => call.url.pathname)).toEqual(["/v1.0/applications/app"])
+  expect(f.probes).toHaveLength(0)
+})
+
+it("ends a Graph retry wait at once when cancelled", async () => {
+  const controller = new AbortController()
+  let first = true
+  const f = fixture({ fail: () => first ? (first = false, failure(429, "busy", { "Retry-After": "60" })) : undefined })
+  f.sleep.mockImplementationOnce(() => { controller.abort(); return new Promise(() => {}) })
+  await expect(f.run(controller.signal)).rejects.toThrow("Sign-in cancelled.")
+  expect(f.sleep).toHaveBeenCalledExactlyOnceWith(60_000)
+  expect(f.calls).toHaveLength(1)
+})
+
+it("sends a cancel during the last consent request through the cleanup", async () => {
+  const controller = new AbortController()
+  let grants = 0
+  const f = fixture({ fail: (url, init) => {
+    if (url.pathname === "/v1.0/oauth2PermissionGrants" && init.method === "POST" && ++grants === DESKTOP_APP_PERMISSIONS.length) controller.abort()
+    return undefined
+  } })
+  await expect(f.run(controller.signal)).rejects.toThrow("The half-created app registration was removed again. Sign-in cancelled.")
+  expect(grants).toBe(DESKTOP_APP_PERMISSIONS.length)
+  expect(f.calls.filter(call => call.method === "DELETE")).toHaveLength(1)
+  expect(f.probes).toHaveLength(0)
 })
