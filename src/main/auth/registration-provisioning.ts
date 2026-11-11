@@ -11,6 +11,8 @@ interface Application {
 }
 interface Principal {
   id: string
+  /** False when an administrator turned sign-in to the enterprise application off. */
+  accountEnabled?: boolean
   oauth2PermissionScopes?: { id: string; value: string; isEnabled?: boolean }[]
   publishedPermissionScopes?: { id: string; value: string; isEnabled?: boolean }[]
 }
@@ -27,35 +29,49 @@ export interface ProvisioningOptions {
 // The stable Graph version, as the setup script uses it.
 const ROOT = "https://graph.microsoft.com/v1.0"
 const NOTES = "Used by the TenuVault desktop app. Delegated permissions only, no credentials."
+const REQUEST_TIMEOUT_MS = 30_000
 
 /** Graph provisioning is independent of Electron and MSAL. The caller owns the ephemeral token. */
 export async function provisionRegistration(options: ProvisioningOptions): Promise<RegistrationResult> {
   const { fetch: request, tenantId, username, progress, signal } = options
   const sleep = options.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)))
   const checkCancelled = () => { if (signal?.aborted) throw new Error("Sign-in cancelled.") }
+  // One request to Microsoft Graph. A request that gets no answer within half a minute counts as
+  // failed, so a stalled connection cannot keep the setup, and the token it holds, alive.
   async function graph<T>(method: string, path: string, body?: object, replication = false, cleanup = false): Promise<T> {
     const url = new URL(path.startsWith("https:") ? path : `${ROOT}${path}`)
     if (url.origin !== "https://graph.microsoft.com" || url.username || url.password || url.hash || !url.pathname.startsWith("/v1.0/")) throw new Error("Unexpected Graph paging address.")
     const attempts = replication ? 12 : 4
+    // A write that may have been carried out is never sent twice: only a throttled request (which
+    // was not carried out) and a replication delay repeat a POST.
+    const repeatable = method !== "POST"
     for (let attempt = 1; ; attempt++) {
       if (!cleanup) checkCancelled()
-      const response = await request(url.href, {
-        method, redirect: "error", signal: cleanup ? undefined : signal,
-        headers: { Authorization: `Bearer ${options.token}`, "Content-Type": "application/json" },
-        ...(body ? { body: JSON.stringify(body) } : {}),
-      })
+      const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+      let response: Response
+      try {
+        response = await request(url.href, {
+          method, redirect: "error", signal: !cleanup && signal ? AbortSignal.any([signal, timeout]) : timeout,
+          headers: { Authorization: `Bearer ${options.token}`, "Content-Type": "application/json" },
+          ...(body ? { body: JSON.stringify(body) } : {}),
+        })
+      } catch (error) {
+        if (!cleanup) checkCancelled()
+        if (repeatable && attempt < attempts) { await sleep(3000); continue }
+        throw new Error(`Graph ${method} failed: Microsoft Graph did not answer${timeout.aborted ? " in time" : ""}. ${error instanceof Error ? error.message : String(error)}`)
+      }
       if (response.ok) return (response.status === 204 ? undefined : await response.json()) as T
       const data = await response.json().catch(() => ({})) as { error?: { message?: string } }
       const message = data.error?.message ?? `HTTP ${response.status}`
       const replicating = replication && (response.status === 404 || response.status === 400 && /valid application object|does not exist|not found|not present/i.test(message))
-      const transient = response.status === 429 || response.status >= 500 && ["GET", "PATCH", "DELETE"].includes(method)
+      const transient = response.status === 429 || response.status >= 500 && repeatable
       if (attempt < attempts && (replicating || transient)) {
         const header = response.headers.get("Retry-After")
         const delay = header ? (/^\d+$/.test(header) ? Number(header) * 1000 : Date.parse(header) - Date.now()) : 3000
         await sleep(Math.min(60_000, Math.max(3000, Number.isFinite(delay) ? delay : 3000)))
         continue
       }
-      if (response.status === 403) throw new Error(`The signed-in account ${username} lacks a role that can create app registrations and grant admin consent. Use a ${CONSENT_ROLES.join(", ")} (with consent rights).`)
+      if (response.status === 403) throw new Error(`The signed-in account ${username} lacks a role that can create app registrations and grant admin consent. Use a ${CONSENT_ROLES.join(", ")} (with consent rights). ${message}`)
       throw new Error(`Graph ${method} failed: ${message}`)
     }
   }
@@ -75,9 +91,14 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
   // The plan is checked when the admin signs in to the tenant, as with a registration the script
   // made. Checking it here would start licensing for a tenant that is not signed in yet.
   checkCancelled()
+  // The sign-in is done; from here on the browser wait can no longer be cancelled.
+  progress({ phase: "registration" })
+  const principalFields = "$select=id,appId,accountEnabled,oauth2PermissionScopes"
   const resources = []
   for (const resource of DESKTOP_APP_PERMISSIONS) {
-    const path = `/servicePrincipals?$filter=${encodeURIComponent(`appId eq '${resource.appId}'`)}`
+    // A Microsoft API the tenant has not used yet is added to it, as the setup script does. These
+    // are Microsoft's own enterprise applications and stay when a later step fails.
+    const path = `/servicePrincipals?$filter=${encodeURIComponent(`appId eq '${resource.appId}'`)}&${principalFields}`
     let principal = (await list<Principal>(path))[0]
     if (!principal) principal = await graph<Principal>("POST", "/servicePrincipals", { appId: resource.appId }, true)
     // Graph v1.0 calls them oauth2PermissionScopes; the beta name is accepted as well.
@@ -89,7 +110,7 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
     })
     resources.push({ ...resource, principal, resourceAccess })
   }
-  const existing = (await list<Application>(`/applications?$filter=${encodeURIComponent("displayName eq 'TenuVault Desktop'")}`))
+  const existing = (await list<Application>(`/applications?$filter=${encodeURIComponent("displayName eq 'TenuVault Desktop'")}&$select=id,appId,displayName,notes,signInAudience,publicClient,createdDateTime`))
     .filter(app => app.notes?.startsWith("Used by the TenuVault desktop app") && app.signInAudience === "AzureADMyOrg" && app.publicClient?.redirectUris?.includes("http://localhost"))
     .sort((a, b) => (b.createdDateTime ?? "").localeCompare(a.createdDateTime ?? ""))[0]
   let created: Application | undefined
@@ -104,7 +125,11 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
       })
       app = created
     }
-    let principal = (await list<Principal>(`/servicePrincipals?$filter=${encodeURIComponent(`appId eq '${app.appId}'`)}`))[0]
+    let principal = (await list<Principal>(`/servicePrincipals?$filter=${encodeURIComponent(`appId eq '${app.appId}'`)}&${principalFields}`))[0]
+    // An administrator who turned sign-in off revoked access on purpose: do not add consent to it.
+    if (principal?.accountEnabled === false) {
+      throw new Error(`This tenant already has a TenuVault app registration (client id ${app.appId}), but sign-in to its enterprise application is turned off. Turn it on under Entra admin center > Enterprise applications > TenuVault Desktop > Properties, or delete the app registration, then try again. Nothing was changed.`)
+    }
     if (!principal) principal = await graph<Principal>("POST", "/servicePrincipals", { appId: app.appId, tags: ["HideApp", "WindowsAzureActiveDirectoryIntegratedApp"] }, true)
     progress({ phase: "consent", reused: Boolean(existing) })
     const grants = await list<Grant>(`/oauth2PermissionGrants?$filter=${encodeURIComponent(`clientId eq '${principal.id}'`)}`)

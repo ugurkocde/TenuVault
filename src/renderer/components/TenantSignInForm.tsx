@@ -385,7 +385,10 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
   const status = busy && (
     <div role="status" className="space-y-3 rounded-2xl bg-gray-50 px-4 py-3 text-sm text-gray-700">
       {automatic
-        ? <p>Your browser opens once more to sign you in through the new app registration. There is nothing to enter this time. TenuVault then checks the license for this tenant.</p>
+        ? <>
+            <p>Your browser opens once more to sign you in through the new app registration. There is nothing to enter this time. TenuVault then checks the license for this tenant.</p>
+            <p className="text-xs text-gray-600">If Microsoft says it cannot find the application, it has not finished publishing the new app registration. Wait a minute, select Cancel sign-in and sign in again.</p>
+          </>
         : <p>Complete the sign-in in your browser. TenuVault then checks the license for this tenant.</p>}
       <p className="text-xs text-gray-600">
         If Microsoft reports a device or compliance problem, Conditional Access needs a browser that passes the device

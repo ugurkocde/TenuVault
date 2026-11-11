@@ -8,7 +8,7 @@ import { useBackupProgress } from "~/contexts/BackupProgressContext"
 import { Button } from "~/components/ui/button"
 import { Progress } from "~/components/ui/progress"
 import { cn } from "~/lib/utils"
-import type { SignedInAccount } from "../../shared/ipc"
+import type { RegistrationResult, SignedInAccount } from "../../shared/ipc"
 import { LOCAL_STORAGE_PREFIX, TRIAL_USED_MESSAGE } from "../../shared/constants"
 import { TrialKeyRefusalActions } from "../components/TenantTrial"
 import { StorageChooser } from "../components/StorageChooser"
@@ -157,6 +157,32 @@ export default function OnboardingPage() {
     } finally {
       setReleasing(false)
     }
+  }
+
+  /**
+   * The in-app setup made (or found) the app registration: keep its IDs and sign in on the next
+   * step, where a failed sign-in can simply be repeated. An earlier sign-in that was never saved
+   * belongs to another attempt and is given up first, as "Use a different tenant or account" does,
+   * so the wizard cannot carry on with the tenant it showed before.
+   */
+  const registered = async (result: RegistrationResult) => {
+    const next = { ...fields, tenant: result.tenantId, clientId: result.clientId }
+    setFields(next)
+    saveOnboardingDraft({ step: 1, ...next, account: null })
+    setAddError(null)
+    if (account) {
+      setReleasing(true)
+      // A release the licensing service could not take is repeated at the next start.
+      try { if (!connected(account.tenantId)) await bridge.license.releaseTenant(account.tenantId) } catch { /* see above */ }
+      setReleasing(false)
+      setAccount(null)
+      setChoice(null)
+    }
+    setAutoSignIn(result.ready ? { loginHint: result.username } : null)
+    setSetupNotice(result.ready
+      ? (result.reused ? "This tenant already had a TenuVault app registration, so TenuVault uses that one." : "The app registration is ready.")
+      : "The app registration is ready, but Microsoft is still making it available for sign-in. Wait a moment, then select Sign in with Microsoft.")
+    setStep(1)
   }
 
   // The license was checked at the sign-in; it is checked again before the tenant is saved. A
@@ -322,19 +348,7 @@ export default function OnboardingPage() {
             <ConnectTenantSetup
               trials={Boolean(status?.tenantTrialsEnabled)}
               onManual={() => { setSetupNotice(""); setAutoSignIn(null); setStep(1) }}
-              onRegistered={(result) => {
-                // The app registration exists now. Keep its IDs before anything else can fail, then
-                // sign in on the next step, where a failed sign-in can simply be repeated.
-                const next = { ...fields, tenant: result.tenantId, clientId: result.clientId }
-                setFields(next)
-                saveOnboardingDraft({ step: 1, ...next, account: null })
-                setAddError(null)
-                setAutoSignIn(result.ready ? { loginHint: result.username } : null)
-                setSetupNotice(result.ready
-                  ? (result.reused ? "This tenant already had a TenuVault app registration, so TenuVault uses that one." : "The app registration is ready.")
-                  : "The app registration is ready, but Microsoft is still making it available for sign-in. Wait a moment, then select Sign in with Microsoft.")
-                setStep(1)
-              }}
+              onRegistered={(result) => void registered(result)}
             />
           </div>
         )}

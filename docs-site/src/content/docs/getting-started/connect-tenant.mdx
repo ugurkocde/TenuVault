@@ -88,8 +88,8 @@ If Microsoft refuses the first sign-in, TenuVault shows what to do, followed by 
 
 | Code | Meaning | Fix |
 | --- | --- | --- |
-| `AADSTS700016` | No app registration with this client ID exists in this tenant. | Check the **Application (client) id** the script printed, and that the tenant is the one the script ran in. |
-| `AADSTS90002`, `AADSTS900023` | Microsoft does not know this tenant, or it is not a valid tenant ID or domain. | Use the **Tenant id** the script printed, or a domain such as `contoso.onmicrosoft.com`. |
+| `AADSTS700016` | No app registration with this client ID exists in this tenant. | Check the **Application (client) id**, and that the tenant is the one the app registration was created in. If it was created a moment ago, wait a minute and sign in again. |
+| `AADSTS90002`, `AADSTS900023` | Microsoft does not know this tenant, or it is not a valid tenant ID or domain. | Use the tenant ID of your tenant, or a domain such as `contoso.onmicrosoft.com`. |
 | `AADSTS50011` | The app registration has no `http://localhost` redirect URI for mobile and desktop applications. | Run the setup script again, or add the redirect URI as described in [Create the app registration manually](/getting-started/app-registration/#2-add-the-redirect-uris). |
 | `AADSTS7000218` | The app registration asks for a client secret, because `http://localhost` is registered for the **Web** platform. | Add `http://localhost` under **Mobile and desktop applications** on the app registration's **Authentication** page, or run the setup script again. |
 | `AADSTS50020` | The account does not belong to this tenant. | Sign in with an admin account of this tenant. |

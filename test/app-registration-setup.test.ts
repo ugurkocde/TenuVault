@@ -11,7 +11,7 @@ vi.mock("@azure/msal-node", async original => {
   } }
 })
 vi.mock("../src/main/auth/registration-provisioning", () => ({ provisionRegistration: state.provision }))
-import { AppRegistrationSetup } from "../src/main/auth/app-registration-setup"
+import { AppRegistrationSetup, setupLoginHint, setupSignInError } from "../src/main/auth/app-registration-setup"
 const host = () => ({ fetch: vi.fn() as unknown as typeof fetch, openBrowser: vi.fn(async () => undefined), progress: vi.fn() })
 beforeEach(() => { vi.clearAllMocks() })
 it("uses an isolated memory client, setup scopes and the chosen tenant", async () => {
@@ -69,4 +69,46 @@ it("says that nothing was changed when the setup sign-in fails for another reaso
   state.interactive.mockRejectedValueOnce(new Error("invalid_grant: AADSTS9002313: Invalid request."))
   await expect(new AppRegistrationSetup(host()).create()).rejects.toThrow("AADSTS9002313: Invalid request. Nothing was changed.")
   expect(state.provision).not.toHaveBeenCalled()
+})
+
+it("explains a refusal of Microsoft's sign-in app as that, not as a problem with the tenant's app registration", () => {
+  for (const code of ["AADSTS700016", "AADSTS7000112", "AADSTS50105"]) {
+    const message = (setupSignInError(new Error(`${code}: refused`)) as Error).message
+    expect(message).toContain("Microsoft Graph Command Line Tools")
+    expect(message).toContain(code)
+    expect(message).not.toMatch(/setup script printed|client ID exists/)
+    expect(message).toMatch(/Nothing was changed\.$/)
+  }
+})
+it("keeps the shared wording for tenant, account and Conditional Access refusals", () => {
+  expect((setupSignInError(new Error("AADSTS53003: blocked")) as Error).message).toMatch(/^Conditional Access blocked this sign-in\..*Nothing was changed\.$/)
+  expect((setupSignInError(new Error("access_denied")) as Error).message).toBe("The sign-in was cancelled in the browser. Sign in again to continue. Nothing was changed.")
+})
+it("shows Microsoft's own words for a refusal it has no better text for", () => {
+  // AADSTS50011 has a text for the tenant's app registration, which would mislead here.
+  expect((setupSignInError(new Error("AADSTS50011: The redirect URI does not match.")) as Error).message).toBe("AADSTS50011: The redirect URI does not match. Nothing was changed.")
+})
+it.each(["https://evil.example", "a b", "contoso", "x".repeat(300) + ".com", 42])("refuses a tenant that is not a tenant ID or a domain (%s)", async tenant => {
+  await expect(new AppRegistrationSetup(host()).create({ tenant: tenant as string })).rejects.toThrow("Enter a valid tenant ID or domain.")
+  expect(state.interactive).not.toHaveBeenCalled()
+})
+it("runs one setup at a time", async () => {
+  state.interactive.mockImplementationOnce(() => new Promise(() => {}))
+  const setup = new AppRegistrationSetup(host())
+  const first = setup.create()
+  await expect(setup.create()).rejects.toThrow("Setup is already running.")
+  setup.cancel()
+  await expect(first).rejects.toThrow("Sign-in cancelled.")
+})
+it("skips the account picker only for the registration and account of the setup that just ran", () => {
+  const expected = { tenantId: "11111111-1111-4111-8111-111111111111", clientId: "22222222-2222-4222-8222-222222222222", username: "admin@contoso.test" }
+  expect(setupLoginHint(expected, expected.tenantId.toUpperCase(), expected.clientId, "admin@contoso.test")).toBe("admin@contoso.test")
+  for (const [tenant, clientId, hint] of [
+    [expected.tenantId, expected.clientId, "someone.else@contoso.test"],
+    [expected.tenantId, "33333333-3333-4333-8333-333333333333", expected.username],
+    ["contoso.onmicrosoft.com", expected.clientId, expected.username],
+    [expected.tenantId, expected.clientId, undefined],
+    [expected.tenantId, expected.clientId, 42],
+  ]) expect(setupLoginHint(expected, tenant, clientId, hint)).toBeUndefined()
+  expect(setupLoginHint(null, expected.tenantId, expected.clientId, expected.username)).toBeUndefined()
 })

@@ -19,7 +19,7 @@ You need an account with **Global Administrator**, **Privileged Role Administrat
    * **Create the app registration**: the app registration **TenuVault Desktop**, as described in [What the setup creates](#what-the-setup-creates). If the tenant already has a TenuVault app registration from an earlier setup, TenuVault uses that one and the list says **Use the app registration this tenant already has**.
    * **Grant admin consent**: tenant-wide consent for the [delegated permissions](#delegated-permissions) below, and nothing else.
    * **Wait until Microsoft accepts sign-ins to it**: Microsoft needs a few seconds before a new app registration can be used.
-4. Your browser opens once more and signs you in to TenuVault through the new app registration. There is nothing to enter this time. TenuVault continues with the **Storage** step: [Choose where backups are stored](/getting-started/choose-storage/).
+4. When Microsoft accepts sign-ins to the app registration, your browser opens once more and signs you in to TenuVault through it. There is nothing to enter this time. TenuVault continues with the **Storage** step: [Choose where backups are stored](/getting-started/choose-storage/).
 
 **Cancel** stops waiting for the browser. Nothing is created before you are signed in.
 
@@ -36,11 +36,15 @@ TenuVault does not create a second app registration when the tenant already has 
 
 This is also what happens when a second admin connects the same tenant on another computer, or when you run the setup again.
 
+If your tenant does not list Azure Service Management or Azure Storage among its enterprise applications yet, the setup adds them, as the script does. They are Microsoft's own APIs, not part of TenuVault, and they stay in the tenant.
+
 ### If something goes wrong
 
 * If a step fails after TenuVault created the app registration, TenuVault removes it again and tells you why. If it cannot remove it, it names the app registration to delete in the Microsoft Entra admin center. An app registration that existed before is never deleted.
 * If the last sign-in fails or you cancel it, the **Sign in** step opens with the tenant ID and the client ID filled in. Select **Sign in with Microsoft** to try again. Nothing is created twice.
-* If Microsoft takes longer than usual to accept sign-ins to the new app registration, the **Sign in** step says so. Wait a moment, then select **Sign in with Microsoft**.
+* If Microsoft takes longer than a minute and a half to accept sign-ins to the new app registration, the browser does not open again. The **Sign in** step says so. Wait a moment, then select **Sign in with Microsoft**.
+* If the browser says that Microsoft cannot find the application, Microsoft has not finished publishing the new app registration. Wait a minute, select **Cancel sign-in** in TenuVault and sign in again.
+* If the tenant already has a TenuVault app registration whose enterprise application has sign-in turned off, the setup stops and changes nothing. Turn sign-in on again under **Entra admin center** > **Enterprise applications** > **TenuVault Desktop** > **Properties**, or delete the app registration, then run the setup again.
 
 For the messages TenuVault shows, see [Troubleshooting](/troubleshooting/).
 

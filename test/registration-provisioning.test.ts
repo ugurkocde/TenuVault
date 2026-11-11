@@ -3,8 +3,9 @@ import { provisionRegistration } from "../src/main/auth/registration-provisionin
 import { CONSENT_ROLES, DESKTOP_APP_PERMISSIONS } from "../src/shared/app-registration"
 
 const own = { id: "app", appId: "client", notes: "Used by the TenuVault desktop app", signInAudience: "AzureADMyOrg", publicClient: { redirectUris: ["http://localhost"] }, createdDateTime: "2026-01-01" }
-function fixture(options: { apps?: object[]; grants?: object[]; fail?: (url: URL, init: RequestInit, count: number) => Response | undefined; unknown?: number; missingResource?: boolean } = {}) {
-  let probes = 0
+function fixture(options: { apps?: object[]; grants?: object[]; fail?: (url: URL, init: RequestInit, count: number) => Response | undefined; unknown?: number; missingResource?: boolean; appPrincipal?: object; probe?: () => Response } = {}) {
+  // What the sign-in service was asked. Checked after the run: the probe swallows its own errors.
+  const probes: { clientId: string | null; authorization: unknown }[] = []
   const calls: { url: URL; method: string; body?: Record<string, unknown> }[] = []
   const sleep = vi.fn(async () => undefined)
   const progress = vi.fn()
@@ -16,9 +17,9 @@ function fixture(options: { apps?: object[]; grants?: object[]; fail?: (url: URL
     const failed = options.fail?.(url, init, calls.length)
     if (failed) return failed
     if (url.pathname.endsWith("devicecode")) {
-      expect(init.headers).not.toHaveProperty("Authorization")
-      expect(new URLSearchParams(String(init.body)).get("client_id")).toBe("client")
-      return ++probes <= (options.unknown ?? 0) ? Response.json({ error: "unauthorized_client", error_codes: [700016] }, { status: 400 }) : Response.json({ device_code: "unused" })
+      probes.push({ clientId: new URLSearchParams(String(init.body)).get("client_id"), authorization: (init.headers as Record<string, unknown>).Authorization })
+      if (options.probe) return options.probe()
+      return probes.length <= (options.unknown ?? 0) ? Response.json({ error: "unauthorized_client", error_codes: [700016] }, { status: 400 }) : Response.json({ device_code: "unused" })
     }
     expect(url.origin).toBe("https://graph.microsoft.com")
     expect(url.pathname).toMatch(/^\/v1.0\//)
@@ -30,7 +31,7 @@ function fixture(options: { apps?: object[]; grants?: object[]; fail?: (url: URL
         const principal = { id: resource.api, oauth2PermissionScopes: resource.permissions.map((value, i) => ({ id: `${resource.api}-${i}`, value })) }
         return Response.json(method === "GET" ? { value: options.missingResource ? [] : [principal] } : principal)
       }
-      return Response.json(method === "GET" ? { value: [] } : { id: "app-sp" })
+      return Response.json(method === "GET" ? { value: options.appPrincipal ? [options.appPrincipal] : [] } : { id: "app-sp" })
     }
     if (url.pathname === "/v1.0/oauth2PermissionGrants" && method === "GET") return Response.json({ value: options.grants ?? [] })
     if (method === "DELETE" || method === "PATCH") return new Response(null, { status: 204 })
@@ -38,7 +39,7 @@ function fixture(options: { apps?: object[]; grants?: object[]; fail?: (url: URL
     throw new Error(`Unhandled ${url}`)
   }) as unknown as typeof fetch
   const run = (signal?: AbortSignal) => provisionRegistration({ fetch: request, token: "ephemeral", tenantId: "tenant", username: "admin", progress, sleep, signal })
-  return { run, calls, sleep, progress }
+  return { run, calls, sleep, progress, probes }
 }
 const failure = (status: number, message = "failed", headers?: HeadersInit) => Response.json({ error: { message } }, { status, headers })
 describe("registration provisioning", () => {
@@ -82,6 +83,8 @@ describe("registration provisioning", () => {
     const f = fixture({ apps: reused ? [own] : [], fail: (url, init) => url.pathname === "/v1.0/oauth2PermissionGrants" && init.method === "POST" ? failure(403) : undefined })
     const error = await f.run().then(() => { throw new Error("Expected failure") }, error => error as Error)
     expect(error.message).toContain("signed-in account admin")
+    // Microsoft's own reason stays in the message, for refusals that are not about the role.
+    expect(error.message).toContain("failed")
     for (const role of CONSENT_ROLES) expect(error.message).toContain(role)
     expect(f.calls.filter(c => c.method === "DELETE")).toHaveLength(reused ? 0 : 1)
     if (!reused) expect(error.message).toContain("The half-created app registration was removed again.")
@@ -99,11 +102,63 @@ describe("registration provisioning", () => {
     const f = fixture({ unknown: Infinity })
     expect(await f.run()).toMatchObject({ clientId: "client", ready: false })
     expect(f.calls.filter(c => c.url.pathname.endsWith("devicecode"))).toHaveLength(45)
+    for (const probe of f.probes) expect(probe).toEqual({ clientId: "client", authorization: undefined })
   })
-  it("reports each phase once, in order, and never touches licensing", async () => {
+  it("asks the sign-in service about the new app without sending the setup token", async () => {
+    const f = fixture({ unknown: 1 })
+    await f.run()
+    expect(f.probes).toEqual([{ clientId: "client", authorization: undefined }, { clientId: "client", authorization: undefined }])
+  })
+  it("takes any other refusal of the sign-in service as knowing the app", async () => {
+    const f = fixture({ probe: () => Response.json({ error: "invalid_client", error_codes: [7000218] }, { status: 400 }) })
+    expect(await f.run()).toMatchObject({ ready: true })
+    expect(f.probes).toHaveLength(1)
+  })
+  it("keeps waiting while the sign-in service is unavailable", async () => {
+    let calls = 0
+    const f = fixture({ probe: () => ++calls < 3 ? Response.json({ error: "temporarily_unavailable" }, { status: 503 }) : Response.json({ device_code: "unused" }) })
+    expect(await f.run()).toMatchObject({ ready: true })
+    expect(f.probes).toHaveLength(3)
+  })
+  it("stops at a reused registration whose enterprise application is turned off, without touching consent", async () => {
+    const f = fixture({ apps: [own], appPrincipal: { id: "app-sp", accountEnabled: false } })
+    await expect(f.run()).rejects.toThrow("sign-in to its enterprise application is turned off")
+    expect(f.calls.some(c => c.url.pathname.includes("oauth2PermissionGrants"))).toBe(false)
+    expect(f.calls.some(c => c.method !== "GET")).toBe(false)
+  })
+  it("names the fields it reads when it lists app registrations and service principals", async () => {
     const f = fixture()
     await f.run()
-    expect(f.progress.mock.calls.map(([value]) => value.phase)).toEqual(["registration", "consent", "publishing"])
+    const select = (path: string) => f.calls.find(c => c.method === "GET" && c.url.pathname === path)!.url.searchParams.get("$select")
+    expect(select("/v1.0/applications")).toBe("id,appId,displayName,notes,signInAudience,publicClient,createdDateTime")
+    expect(select("/v1.0/servicePrincipals")).toBe("id,appId,accountEnabled,oauth2PermissionScopes")
+  })
+  it("repeats a read that got no answer", async () => {
+    let first = true
+    const f = fixture({ fail: () => { if (first) { first = false; throw new TypeError("fetch failed") } return undefined } })
+    expect(await f.run()).toMatchObject({ ready: true })
+    expect(f.calls.filter(c => c.url.pathname === "/v1.0/servicePrincipals" && c.method === "GET").length).toBeGreaterThan(3)
+  })
+  it("does not repeat a write that got no answer, and removes the registration it created", async () => {
+    const f = fixture({ fail: (url, init) => { if (url.pathname === "/v1.0/oauth2PermissionGrants" && init.method === "POST") throw new TypeError("fetch failed"); return undefined } })
+    const error = await f.run().then(() => { throw new Error("Expected failure") }, caught => caught as Error)
+    expect(error.message).toContain("The half-created app registration was removed again.")
+    expect(error.message).toContain("Microsoft Graph did not answer")
+    expect(f.calls.filter(c => c.url.pathname === "/v1.0/oauth2PermissionGrants" && c.method === "POST")).toHaveLength(1)
+    expect(f.calls.filter(c => c.method === "DELETE")).toHaveLength(1)
+  })
+  it("sets a deadline on every Graph request", async () => {
+    const signals: unknown[] = []
+    const f = fixture({ fail: (_url, init) => { signals.push(init.signal); return undefined } })
+    await f.run()
+    for (const signal of signals) expect(signal).toBeInstanceOf(AbortSignal)
+  })
+  it("reports each phase in order", async () => {
+    const f = fixture()
+    await f.run()
+    // The first report follows the sign-in at once, so the browser wait stops being cancellable.
+    expect(f.progress.mock.calls.map(([value]) => value.phase)).toEqual(["registration", "registration", "consent", "publishing"])
+    expect(f.calls[0]!.url.pathname).toBe("/v1.0/servicePrincipals")
   })
   it("caps a long Retry-After at one minute", async () => {
     let first = true

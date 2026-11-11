@@ -151,7 +151,9 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
             </div>
           ) : (
             <p className="border-t border-gray-200 pt-4 text-xs text-gray-600">
-              This takes a few seconds. Afterwards your browser opens once more to sign you in to TenuVault, with nothing to enter.
+              {phase === "publishing"
+                ? "Microsoft needs a moment before a new app registration can be used, usually a few seconds and at most a minute and a half. When it is ready, your browser opens once more to sign you in to TenuVault, with nothing to enter."
+                : "This takes a few seconds."}
             </p>
           )}
         </div>
@@ -191,7 +193,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
             <li>Your browser opens and you sign in with Microsoft. Microsoft asks you to approve Microsoft Graph Command Line Tools with two permissions: Application.ReadWrite.All and DelegatedPermissionGrant.ReadWrite.All.</li>
             <li>TenuVault creates the app registration &quot;TenuVault Desktop&quot; in your tenant. If the tenant already has one from an earlier setup, it uses that one.</li>
             <li>It grants tenant-wide admin consent for the delegated permissions listed below, and nothing else.</li>
-            <li>Your browser opens once more and signs you in to TenuVault through the new app registration.</li>
+            <li>When Microsoft accepts sign-ins to the app registration, your browser opens once more and signs you in to TenuVault through it.</li>
           </ol>
           <p>
             The sign-in from step 1 is kept in memory only and dropped when the setup ends. Your approval of Microsoft Graph Command

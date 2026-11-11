@@ -13,13 +13,35 @@ import type { RegistrationResult, SetupProgress } from "../../shared/ipc"
 export function setupSignInError(error: unknown): unknown {
   if (error instanceof SignInCancelledError) return error
   const message = error instanceof Error ? error.message : String(error)
-  const code = /AADSTS(65004|65001|90094)\b/.exec(message)?.[0]
-  if (code) return new Error(`Microsoft did not let this account approve the setup (${code}). Sign in with a ${CONSENT_ROLES.slice(0, -1).join(", ")} or ${CONSENT_ROLES.at(-1)}, or use "Someone else is the admin?". Nothing was changed.`)
-  // Any other refusal happens before the first Graph call, which is worth saying.
-  const mapped = firstSignInError(error)
-  const text = mapped instanceof Error ? mapped.message : String(mapped)
-  return new Error(/Nothing was changed\.$/.test(text) ? text : `${text} Nothing was changed.`)
+  const code = /AADSTS\d+/.exec(message)?.[0]
+  const nothingChanged = (text: string) => new Error(/Nothing was changed\.$/.test(text) ? text : `${text} Nothing was changed.`)
+  if (code && ["AADSTS65004", "AADSTS65001", "AADSTS90094"].includes(code)) {
+    return nothingChanged(`Microsoft did not let this account approve the setup (${code}). Sign in with a ${CONSENT_ROLES.slice(0, -1).join(", ")} or ${CONSENT_ROLES.at(-1)}, or use "Someone else is the admin?".`)
+  }
+  // The setup signs in through Microsoft's app, not through the tenant's TenuVault app
+  // registration, so a refusal of the app itself is about Microsoft Graph Command Line Tools.
+  if (code && ["AADSTS700016", "AADSTS7000112", "AADSTS50105"].includes(code)) {
+    return nothingChanged(`This tenant does not allow your account to use Microsoft Graph Command Line Tools, the Microsoft sign-in app the setup goes through (${code}). Ask your Entra administrator to allow it, or use "Use the setup script instead" and create the app registration by hand as the setup guide describes.`)
+  }
+  // Refusals about the tenant, the account and Conditional Access read the same for every sign-in.
+  if (code && SHARED_SIGN_IN_CODES.has(code) || !code) {
+    const mapped = firstSignInError(error)
+    return nothingChanged(mapped instanceof Error ? mapped.message : String(mapped))
+  }
+  return nothingChanged(message)
 }
+
+/**
+ * The account the sign-in after a setup may be completed as without the account picker: only for
+ * the registration that setup just returned and the account that ran it. Anything else gets the
+ * picker, so a request from the renderer cannot choose an account by itself.
+ */
+export function setupLoginHint(expected: { tenantId: string; clientId: string; username: string } | null, tenant: unknown, clientId: unknown, loginHint: unknown): string | undefined {
+  if (!expected || typeof tenant !== "string" || typeof clientId !== "string" || typeof loginHint !== "string") return undefined
+  return loginHint === expected.username && clientId.toLowerCase() === expected.clientId.toLowerCase() && tenant.toLowerCase() === expected.tenantId.toLowerCase() ? expected.username : undefined
+}
+
+const SHARED_SIGN_IN_CODES = new Set(["AADSTS90002", "AADSTS900023", "AADSTS50020", "AADSTS53000", "AADSTS53001", "AADSTS53003"])
 
 export class AppRegistrationSetup {
   private cancelWaiting?: () => void

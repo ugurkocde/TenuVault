@@ -442,4 +442,46 @@ describe("in-app tenant setup", () => {
     expect(container.querySelector("#clientId")).not.toBeNull()
     expect(state.signIn).not.toHaveBeenCalled()
   })
+
+  it("gives up an earlier, unsaved sign-in when the setup runs again, and connects the new tenant", async () => {
+    const earlier = "2f9d4a7c-1b6e-4c3d-8a5f-9e0b7c2d4a61"
+    // A sign-in to another tenant that was never saved, as after signing in by hand.
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: earlier, clientId: CLIENT, displayName: "", account: { tenantId: earlier, clientId: CLIENT, username: "alex@fabrikam.test" } }))
+    state.accounts.mockResolvedValueOnce([{ tenantId: earlier, clientId: CLIENT, username: "alex@fabrikam.test" }])
+    const container = await render(createElement(OnboardingPage))
+    expect(container.textContent).toContain("Signed in as alex@fabrikam.test")
+    await act(async () => button(container, "Previous")!.click())
+    await act(async () => button(container, "Previous")!.click())
+    expect(container.textContent).toContain("Connect your tenant")
+
+    state.createRegistration.mockResolvedValueOnce(result)
+    state.signIn.mockResolvedValueOnce(result)
+    await act(async () => { button(container, "Set up with Microsoft sign-in")!.click(); await settle() })
+    expect(state.releaseTenant).toHaveBeenCalledWith(earlier)
+    expect(state.signIn).toHaveBeenLastCalledWith(TENANT, CLIENT, { loginHint: "admin@contoso.test" })
+    expect(container.textContent).toContain("Choose where backups are stored")
+    expect(container.textContent).toContain("Signed in as admin@contoso.test")
+    expect(container.textContent).not.toContain("alex@fabrikam.test")
+    await flush()
+    expect(loadOnboardingDraft()).toMatchObject({ tenant: TENANT, clientId: CLIENT, account: { tenantId: TENANT, username: "admin@contoso.test" } })
+  })
+
+  it("says how long Microsoft may take while it waits, and what to do if the browser reports a missing application", async () => {
+    let finish!: (value: typeof result) => void
+    state.createRegistration.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    state.signIn.mockImplementationOnce(() => new Promise(() => {}))
+    const container = await render(createElement(OnboardingPage))
+    await act(async () => button(container, "Set up with Microsoft sign-in")!.click())
+    await act(async () => state.progress?.({ phase: "consent" }))
+    const progress = () => container.querySelector('[role="status"]')!.textContent
+    expect(progress()).toContain("This takes a few seconds.")
+    expect(progress()).not.toContain("your browser opens once more")
+    await act(async () => state.progress?.({ phase: "publishing" }))
+    expect(progress()).toContain("at most a minute and a half")
+    expect(progress()).toContain("your browser opens once more")
+    await act(async () => { finish(result); await settle() })
+    expect(container.textContent).toContain("There is nothing to enter this time.")
+    expect(container.textContent).toContain("If Microsoft says it cannot find the application")
+    expect(button(container, "Cancel sign-in")).toBeDefined()
+  })
 })

@@ -97,9 +97,9 @@ export class SignInCancelledError extends Error {
 
 /** Microsoft's refusals of a first sign-in that the admin can fix, with what to do. */
 const FIRST_SIGN_IN_ERRORS: Record<string, string> = {
-  AADSTS700016: "No app registration with this client ID exists in this tenant. Check the Application (client) id the setup script printed, and that the tenant is the one the script ran in.",
+  AADSTS700016: "No app registration with this client ID exists in this tenant. Check the Application (client) id, and that the tenant is the one the app registration was created in. If it was created a moment ago, wait a minute and sign in again.",
   AADSTS90002: "Microsoft does not know this tenant. Check the tenant ID or domain, for example contoso.onmicrosoft.com.",
-  AADSTS900023: "This is not a valid tenant ID or domain. Use the Tenant id the setup script printed, or a domain such as contoso.onmicrosoft.com.",
+  AADSTS900023: "This is not a valid tenant ID or domain. Use the tenant ID of your tenant, or a domain such as contoso.onmicrosoft.com.",
   AADSTS50011: "The app registration has no http://localhost redirect URI for mobile and desktop applications. Run the setup script again, or add the redirect URI as the setup guide describes.",
   AADSTS7000218: "The app registration asks for a client secret, which happens when http://localhost is registered for the Web platform. In the Entra admin center, open the app registration > Authentication and add http://localhost under Mobile and desktop applications instead, or run the setup script again.",
   AADSTS50020: "This account does not belong to the tenant. Sign in with an admin account of this tenant.",
