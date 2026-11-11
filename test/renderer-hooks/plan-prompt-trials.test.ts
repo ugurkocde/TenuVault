@@ -6,10 +6,10 @@ import type { LicenseStatus, TenantLicenseStatus } from "../../src/shared/ipc"
 import { FEATURE_PLAN } from "../../src/shared/plans"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
-const state = vi.hoisted(() => ({ status: null as LicenseStatus | null, selected: "tenant", start: vi.fn(async () => undefined), open: vi.fn(async () => undefined) }))
+const state = vi.hoisted(() => ({ status: null as LicenseStatus | null, selected: "tenant", start: vi.fn(async () => undefined), open: vi.fn(async () => undefined), action: vi.fn(async () => undefined) }))
 vi.mock("../../src/renderer/lib/license", async original => ({ ...(await original<typeof import("../../src/renderer/lib/license")>()), useLicense: () => ({ status: state.status, refresh: async () => {} }) }))
 vi.mock("~/contexts/TenantContext", () => ({ useSelectedTenant: () => ({ selectedTenant: { credentials: { tenantId: state.selected } } }) }))
-vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { license: { open: state.open, startTenantTrial: state.start } } }))
+vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { license: { open: state.open, startTenantTrial: state.start, tenantTrialAction: state.action } } }))
 import { PlanPromptButton } from "../../src/renderer/components/PlanPromptButton"
 let root: Root | undefined
 let container: HTMLDivElement | undefined
@@ -46,6 +46,33 @@ describe("plan prompt trial and purchase actions", () => {
       await act(async () => purchase!.click())
       expect(state.open).toHaveBeenLastCalledWith(purchase!.textContent?.trim() === "See plans" ? "buy" : "checkout", expect.objectContaining({ source }))
     }
+  })
+  it("offers to resume a trial that was ended early, next to Buy Pro and inline", async () => {
+    state.status = status("ended")
+    Object.assign(state.status.tenants[0]!, { trialCanResume: true, trialResumeUntil: new Date(Date.now() + 9 * 86400_000).toISOString() })
+    container = document.body.appendChild(document.createElement("div")); root = createRoot(container)
+    const onLeave = vi.fn()
+    await act(async () => root!.render(createElement(MemoryRouter, null, createElement("span", null, createElement(PlanPromptButton, { plan: "pro", source: "locked-fullrestore", variant: "outline", size: "sm", onLeave })))))
+    expect(container.textContent).toContain("Buy Pro")
+    expect(container.textContent).toContain("9 days left, until")
+    expect(container.textContent).not.toContain("Try Pro free")
+    expect(container.textContent).not.toContain("This tenant already had a Pro trial.")
+    // A prompt stays one line of inline elements.
+    expect(container.querySelector("div, p")).toBeNull()
+    const resume = [...container.querySelectorAll("button")].find(b => b.textContent === "Resume Pro trial")!
+    expect(resume.className).toContain("border"); expect(resume.className).toContain("h-8")
+    await act(async () => resume.click())
+    expect(state.action).toHaveBeenCalledWith("tenant", "resume_trial")
+    // The dialog the prompt sits in closes, as after starting a trial.
+    expect(onLeave).toHaveBeenCalledTimes(1)
+    expect(state.start).not.toHaveBeenCalled()
+  })
+  it("offers only Buy Pro once the ended trial cannot be resumed", async () => {
+    state.status = status("ended")
+    container = document.body.appendChild(document.createElement("div")); root = createRoot(container)
+    await act(async () => root!.render(createElement(MemoryRouter, null, createElement(PlanPromptButton, { plan: "pro", source: "locked-fullrestore" }))))
+    expect(container.textContent).toContain("Buy Pro")
+    expect(container.textContent).not.toContain("Resume Pro trial")
   })
   it("keeps a temporary refusal out of plan prompts", async () => {
     state.status = status("never")

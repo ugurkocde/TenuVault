@@ -57,6 +57,26 @@ export function TrialActions({ tenant, source, welcome = false }: { tenant?: Ten
   </div>
 }
 
+/** Switches back to a trial this installation ended early. Offered until the trial's original end; resuming adds no time. */
+export function TrialResume({ tenant, compact = false, variant, size, onResumed }: { tenant: TenantLicenseStatus; compact?: boolean; variant?: "default" | "outline"; size?: "default" | "sm"; onResumed?: () => void }) {
+  const { busy, error, run } = useTrialAction()
+  if (!tenant.trialCanResume || !tenant.trialResumeUntil) return null
+  const days = Math.max(1, Math.ceil((Date.parse(tenant.trialResumeUntil) - Date.now()) / 86400_000))
+  const left = `${days} ${days === 1 ? "day" : "days"} left`
+  const Container = compact ? "span" : "div"
+  const Text = compact ? "span" : "p"
+  return <Container className={compact ? "inline-flex flex-wrap items-center gap-3" : "flex flex-wrap items-center gap-3"}>
+    <Button type="button" variant={variant} size={size} disabled={busy} onClick={() => void run(async () => {
+      await bridge.license.tenantTrialAction(tenant.tenantId, "resume_trial")
+      await onResumed?.()
+    })}>{busy ? "Resuming trial..." : "Resume Pro trial"}</Button>
+    <Text className="text-sm text-gray-600">{compact
+      ? `${left}, until ${formatDate(tenant.trialResumeUntil)}.`
+      : `You ended the Pro trial for this tenant early. You can switch back until ${formatDate(tenant.trialResumeUntil)} (${left}). No card, no email.`}</Text>
+    {error && <Text role="alert">{error}</Text>}
+  </Container>
+}
+
 export function TenantTrialOptions({ onStarted, tenantId, compact = false, variant, size }: { onStarted?: () => void; tenantId?: string; compact?: boolean; variant?: "default" | "outline"; size?: "default" | "sm" } = {}) {
   const { status } = useLicense()
   const { busy, error, run } = useTrialAction()
@@ -65,11 +85,13 @@ export function TenantTrialOptions({ onStarted, tenantId, compact = false, varia
   const Text = compact ? "span" : "p"
   return <Container className={compact ? "inline-flex flex-wrap items-center gap-3" : "space-y-3"}>
     {status.tenants.filter(t => (!status?.tenantTrialsEnabled || !tenantId || t.tenantId === tenantId) && t.signedIn && !t.entitled && t.message !== TRIAL_USED_MESSAGE && (status.tenantTrialsEnabled || t.trialRefusal)).map(tenant => <Container key={tenant.tenantId} className={compact ? "inline-flex flex-wrap items-center gap-3" : "flex flex-wrap items-center gap-3"}>
-      {!compact && tenant.trialRefusal && <Text role="status">{tenant.trialRefusal}</Text>}
-      {tenant.activated ? <Text className="text-sm text-gray-600">Check the saved activation before starting a trial.</Text> : status.tenantTrialsEnabled && !(tenant.trialRefusalPermanent ?? Boolean(tenant.trialRefusal)) && <><Button variant={variant} size={size} disabled={busy} onClick={() => void run(async () => {
-        await bridge.license.startTenantTrial(tenant.tenantId)
-        await onStarted?.()
-      })}>Try Pro free</Button><Text className="text-sm text-gray-600">No card, no email. Starts right away, for this tenant.</Text></>}
+      {tenant.trialCanResume ? <TrialResume tenant={tenant} compact={compact} variant={variant} size={size} onResumed={onStarted} /> : <>
+        {!compact && tenant.trialRefusal && <Text role="status">{tenant.trialRefusal}</Text>}
+        {tenant.activated ? <Text className="text-sm text-gray-600">Check the saved activation before starting a trial.</Text> : status.tenantTrialsEnabled && !(tenant.trialRefusalPermanent ?? Boolean(tenant.trialRefusal)) && <><Button variant={variant} size={size} disabled={busy} onClick={() => void run(async () => {
+          await bridge.license.startTenantTrial(tenant.tenantId)
+          await onStarted?.()
+        })}>Try Pro free</Button><Text className="text-sm text-gray-600">No card, no email. Starts right away, for this tenant.</Text></>}
+      </>}
     </Container>)}
     {error && <Text role="alert">{error}</Text>}
   </Container>
@@ -122,7 +144,8 @@ export function TenantTrialCard({ tenant, initialEmail, welcome = false, allowUn
       setNotice(end ? `Trial extended. Ends on ${formatDate(end)}.` : "Trial extended.")
     }
   })
-  // Ending is final: the tenant gets one trial, so the admin confirms it first.
+  // Ending moves the tenant to Community at once, so the admin confirms it first. Until the
+  // trial's own end this installation can switch back on the License page.
   const [confirmEnd, setConfirmEnd] = useState(false)
   const [endError, setEndError] = useState("")
   const endTrial = () => perform(async () => {
@@ -160,9 +183,9 @@ export function TenantTrialCard({ tenant, initialEmail, welcome = false, allowUn
           <Link className={shortcut} to="/portal/frameworks/cis-benchmarks"><ShieldCheck />CIS Benchmarks</Link>
         </div>
       </div>}
-      {tenant.trial && <p className="flex gap-2 text-sm text-gray-600"><Info className="mt-0.5 size-4 shrink-0 text-gray-500" /><span>{(status?.tenants.filter(t => t.source === "trial" || t.trialEndsAt || t.plan === "community").length ?? 0) > 1
-        ? "Afterwards, one tenant continues on Community Free. You choose which."
-        : "Afterwards, this tenant continues on Community Free."} Backups and settings are kept. Community keeps 30 days of backup history. No payment is needed.</span></p>}
+      {tenant.trial && <p className="flex gap-2 text-sm text-gray-600"><Info className="mt-0.5 size-4 shrink-0 text-gray-500" /><span>Nothing is charged and no card is on file. {(status?.tenants.filter(t => t.source === "trial" || t.trialEndsAt || t.plan === "community").length ?? 0) > 1
+        ? "When the trial ends, one tenant continues on Community Free by itself. You choose which."
+        : "When the trial ends, this tenant continues on Community Free by itself."} Backups and settings are kept. Community keeps 30 days of backup history.</span></p>}
       {tenant.trial && <TrialContact tenant={tenant} initialEmail={initialEmail} allowUnknownRemoval={allowUnknownContactRemoval && !welcome} />}
       {status?.tenantTrialsEnabled && <TrialActions tenant={tenant} source={tenant.trial ? "license-page-trial" : "trial-end"} welcome={welcome} />}
       {children}
@@ -178,7 +201,7 @@ export function TenantTrialCard({ tenant, initialEmail, welcome = false, allowUn
       <DialogContent hideClose={busy}>
         <DialogHeader>
           <DialogTitle>End the Pro trial now?</DialogTitle>
-          <DialogDescription>This tenant moves to Community Free right away. The trial cannot be started again for this tenant. Backups and settings are kept. Community keeps 30 days of backup history.</DialogDescription>
+          <DialogDescription>This tenant moves to Community Free right away. {tenant.trialEndsAt ? `You can switch back to the Pro trial on the License page until ${formatDate(tenant.trialEndsAt)}. After that it cannot be started again.` : "The trial cannot be started again for this tenant."} Backups and settings are kept. Community keeps 30 days of backup history.</DialogDescription>
         </DialogHeader>
         {(endError || error) && <p role="alert" className="text-sm text-red-700">{endError ? `${endError} The trial is still running.` : error}</p>}
         <div className="flex flex-wrap justify-end gap-2">

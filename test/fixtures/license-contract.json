@@ -73,6 +73,15 @@
         },
         "authorization": "Only the starting install; another install receives 403 trial_unavailable with reason not_starter"
       },
+      "resume_trial": {
+        "required": {
+          "activationId": "trial activation ID"
+        },
+        "response": "trialEntitlement",
+        "window": "Until the trial's existing end (ends_at). Clears ended_early_at and sets resumed_at; ends_at does not move. A trial that was not ended early is answered like a refresh.",
+        "authorization": "Only the starting install; another install receives 403 trial_unavailable with reason not_starter",
+        "refusals": "403 trial_unavailable: used (no trial row, a key trial, or the end has passed), disabled (tenant trials switched off), app_update_required, licensed (the tenant has an organization license)"
+      },
       "trial_contact": {
         "required": {
           "activationId": "trial activation ID"

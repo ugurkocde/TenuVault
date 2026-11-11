@@ -23,7 +23,8 @@ function useTenantIfProvided() {
 
 /**
  * The main action of a plan prompt (planPromptAction): a free trial without a
- * license, Buy Pro or Buy MSP once the trial was used, otherwise See plans. onLeave closes a
+ * license, Buy Pro or Buy MSP once the trial was used, otherwise See plans. A trial this
+ * installation ended early is offered again next to Buy Pro while it can be resumed. onLeave closes a
  * dialog before the trial opens the License page. Outside a router or license provider (a
  * screen rendered alone) it falls back to See plans.
  */
@@ -47,7 +48,7 @@ export function PlanPromptButton({
   const selectedTenantId = useTenantIfProvided()
   const tenantId = contextTenantId === undefined ? selectedTenantId : contextTenantId?.toLowerCase()
   const eligible = status?.tenantTrialsEnabled && !status.hasKey && plan === "pro" ? status.tenants.find(t =>
-    (tenantId && t.tenantId === tenantId) && t.signedIn && !t.entitled && !t.activated && !(t.trialRefusalPermanent ?? Boolean(t.trialRefusal)),
+    (tenantId && t.tenantId === tenantId) && t.signedIn && !t.entitled && !t.activated && (t.trialCanResume || !(t.trialRefusalPermanent ?? Boolean(t.trialRefusal))),
   ) : undefined
   const requested = planPromptAction(status, plan)
   const action = status?.tenantTrialsEnabled && requested === "trial" ? "checkout" : requested

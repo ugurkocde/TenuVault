@@ -99,6 +99,10 @@ export interface TenantLicenseStatus {
   trialExtensionUnavailable?: boolean
   trialExtensionAvailableAt?: string
   trialCanExtend?: boolean
+  /** This installation ended the trial early and can still switch back to it. */
+  trialCanResume?: boolean
+  /** The trial's original end, until which it can be resumed. */
+  trialResumeUntil?: string
   coverageEnded?: boolean
   tenantId: string
   /** An admin is signed in to the tenant in this app. */
@@ -447,7 +451,7 @@ export interface TenuVaultBridge {
     trialWorkflowsConfigured: (tenantId: string) => Promise<boolean>
     trialUsage: (tenantId: string) => Promise<string | null>
     startTenantTrial: (tenantId: string) => Promise<LicenseStatus>
-    tenantTrialAction: (tenantId: string, action: "extend_trial" | "end_trial" | "trial_contact" | "acknowledge", email?: string) => Promise<LicenseStatus>
+    tenantTrialAction: (tenantId: string, action: "extend_trial" | "end_trial" | "resume_trial" | "trial_contact" | "acknowledge", email?: string) => Promise<LicenseStatus>
     chooseCommunity: (tenantId: string) => Promise<LicenseStatus>
     status: () => Promise<LicenseStatus>
     /** Refreshes every cached activation with the licensing service, so a plan or tenant quantity change shows without waiting for the next periodic check. */

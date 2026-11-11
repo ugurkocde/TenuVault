@@ -160,6 +160,7 @@ export const communityLimit = (tenantId: string) =>
 export const LICENSE_REQUIRED =
   "A TenuVault license is required for this tenant. Add your license key on the License page, or start a free trial."
 
+const TRIAL_RESUME_OVER = "This trial can no longer be resumed."
 const TRIAL_REASONS: Record<string, string> = {
   used: "This tenant already had a Pro trial.",
   licensed: "This tenant already has an organization license.",
@@ -447,6 +448,20 @@ export class LicenseService {
       (!this.state?.activations[tenant] || this.state.activations[tenant]?.source === "trial") && remaining <= (this.trialsEnabled ? this.trialPolicy.extensionWindowDays ?? 5 : 5) * 86400_000 && remaining >= -(this.trialsEnabled ? this.trialPolicy.extensionGraceDays ?? 14 : 14) * 86400_000)
   }
 
+  /**
+   * Until when a trial this installation ended early ("Use Community instead") can be
+   * resumed: its original end, which the service never moves on a resume, or null when
+   * it cannot. Only the installation that started and ended the trial can resume it.
+   */
+  private trialResumeUntil(tenant: string): number | null {
+    const record = this.trialRecords[tenant]
+    if (!this.trialsEnabled || this.state?.key || this.state?.activations[tenant]) return null
+    if (!record?.activationId || !record.endedAt || !record.canEnd || record.resumeUnavailable) return null
+    const payload = record.token ? decodeToken(record.token, this.publicKeys) : null
+    const end = payload?.keyExp ? payload.keyExp * 1000 : record.trialEndsAt
+    return end !== undefined && end > Date.now() ? end : null
+  }
+
   trialUsagePeriod(tenant: string): { since: number; until: number } | null {
     this.load()
     if (!this.trialsEnabled || this.state?.key) return null
@@ -571,7 +586,7 @@ export class LicenseService {
     }
   }
 
-  async tenantTrialAction(tenantId: string, action: "extend_trial" | "end_trial" | "trial_contact" | "acknowledge", email?: string): Promise<void> {
+  async tenantTrialAction(tenantId: string, action: "extend_trial" | "end_trial" | "resume_trial" | "trial_contact" | "acknowledge", email?: string): Promise<void> {
     this.load()
     const tenant = tenantId.toLowerCase()
     return this.mutate([tenant], true, async () => {
@@ -580,6 +595,7 @@ export class LicenseService {
       if (action === "acknowledge") { if (this.valid(tenant)) record.acknowledged = true; else record.endedAcknowledged = true; this.saveTrials(); this.options.onChange?.(); return }
       if (action === "end_trial" && !record.canEnd) throw new Error("Only the installation that started this trial can end it.")
       if (action === "extend_trial" && !this.canExtendTrial(tenant)) throw new Error("This trial cannot be extended now.")
+      if (action === "resume_trial" && this.trialResumeUntil(tenant) === null) throw new Error(TRIAL_RESUME_OVER)
       const current = this.requestGuard(tenant)
       try {
         const data = await this.tenantCall(tenant, action, current, { activationId: record.activationId }, undefined, email === undefined ? {} : { email })
@@ -587,6 +603,17 @@ export class LicenseService {
           this.accept(tenant, data, "trial")
           this.rememberTrial(tenant, data)
           this.trialRecords[tenant]!.extended = true
+        } else if (action === "resume_trial") {
+          // The trial runs again as if it had not been ended. The admin has seen its
+          // welcome, so the running trial shows as a normal trial, and its end is
+          // announced again when it comes.
+          this.accept(tenant, data, "trial")
+          this.rememberTrial(tenant, data)
+          const resumed = this.trialRecords[tenant]!
+          delete resumed.endedAt
+          delete resumed.endedAcknowledged
+          resumed.acknowledged = true
+          for (const field of ["refusal", "refusalReason", "refusalAt", "refusalVersion"] as const) delete resumed[field]
         } else if (action === "end_trial") {
           this.confirmCommunity(tenant)
           if (this.state) delete this.state.activations[tenant]
@@ -602,6 +629,12 @@ export class LicenseService {
           record.extended = true
           this.saveTrials()
           throw new Error("This trial cannot be extended.")
+        }
+        // The service says this trial is over or belongs to another installation: stop offering it.
+        if (action === "resume_trial" && error instanceof LicenseDenied && error.trialUnavailable && ["used", "not_starter"].includes(error.reason)) {
+          record.resumeUnavailable = true
+          this.saveTrials()
+          throw new Error(TRIAL_RESUME_OVER)
         }
         throw error
       } finally { this.saveTrials(); this.options.onChange?.() }
@@ -870,9 +903,11 @@ export class LicenseService {
       throw new Error("The licensing service returned an unexpected response. Check for a firewall block or network sign-in page and retry.")
     }
     const result = data as Record<string, unknown>
-    const trialAction = action === "tenant" && ["start_trial", "extend_trial", "end_trial", "trial_contact"].includes(String((body as Record<string, unknown>).action))
+    const tenantAction = action === "tenant" ? String((body as Record<string, unknown>).action) : ""
+    const trialAction = ["start_trial", "extend_trial", "end_trial", "resume_trial", "trial_contact"].includes(tenantAction)
     if (trialAction && response.status === 400) {
-      this.trialsEnabled = false
+      // A service that does not know resuming yet still runs trials.
+      if (tenantAction !== "resume_trial") this.trialsEnabled = false
       throw new LicenseDenied("Tenant trials require an updated licensing service.", "unknown_action")
     }
     if (trialAction && response.status === 403 && result.error === "trial_unavailable") {
@@ -1032,7 +1067,7 @@ export class LicenseService {
   // can be had silently.
   private async tenantCall(
     tenantId: string,
-    action: "activate" | "refresh" | "deactivate" | "start_trial" | "extend_trial" | "end_trial" | "trial_contact",
+    action: "activate" | "refresh" | "deactivate" | "start_trial" | "extend_trial" | "end_trial" | "resume_trial" | "trial_contact",
     current: () => boolean,
     entry?: Pick<StoredActivation, "activationId" | "licenseKeyId">,
     token?: string,
@@ -1925,6 +1960,7 @@ export class LicenseService {
       const entry = this.state?.activations[tenantId]
       this.coverageEndedAt(tenantId)
       const payload = this.valid(tenantId)
+      const resumeUntil = this.trialResumeUntil(tenantId)
       const source = payload && entry ? (entry.source ?? "key") : null
       if (payload && source === "key" && (!keyToken || payload.iat > keyToken.iat)) keyToken = payload
       const tenantValidUntil = payload?.v === 2 && typeof payload.keyExp === "number"
@@ -1959,6 +1995,8 @@ export class LicenseService {
         trialExtensionAvailableAt: !this.state?.key && (!entry || entry.source === "trial") && this.trialsEnabled && this.trialRecords[tenantId]?.activationId && !this.trialRecords[tenantId]?.extended && !this.trialRecords[tenantId]?.endedAt && this.trialEnd(tenantId)
           ? new Date(Date.parse(this.trialEnd(tenantId)!) - (this.trialPolicy.extensionWindowDays ?? 5) * 86400_000).toISOString() : undefined,
         trialCanExtend: this.canExtendTrial(tenantId),
+        trialCanResume: resumeUntil !== null,
+        trialResumeUntil: resumeUntil !== null ? new Date(resumeUntil).toISOString() : undefined,
         shared: source === "key" ? (entry?.shared ?? null) : null,
         shareNeedsSignIn: source === "key" && Boolean(entry?.shareNeedsSignIn),
         displayKey: source === "tenant" ? (entry?.displayKey ?? null) : null,

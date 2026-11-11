@@ -3,12 +3,12 @@ import { createRoot, type Root } from "react-dom/client"
 import { MemoryRouter } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { LicenseStatus, TenantLicenseStatus } from "../../src/shared/ipc"
-import { licenseChipState, trialReminder } from "../../src/renderer/lib/license"
+import { formatDate, licenseChipState, trialReminder } from "../../src/renderer/lib/license"
 const state = vi.hoisted(() => ({ status: null as LicenseStatus | null, action: vi.fn(async () => undefined), start: vi.fn(async () => undefined), emailTrial: vi.fn(async () => undefined), update: vi.fn(), open: vi.fn(async () => undefined), configured: vi.fn(async () => true), usage: vi.fn(async (): Promise<string | null> => null), refresh: vi.fn(async () => undefined) }))
 vi.mock("../../src/renderer/lib/license", async original => ({ ...(await original<typeof import("../../src/renderer/lib/license")>()), useLicense: () => ({ status: state.status, refresh: state.refresh }) }))
 vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { app: { openExternal: state.open }, auth: { accounts: async () => [{ tenantId: "tenant", username: "admin@contoso.example" }] }, license: { trialWorkflowsConfigured: state.configured, trialUsage: state.usage, tenantTrialAction: state.action, startTenantTrial: state.start, startTrial: state.emailTrial, open: state.open }, schedules: { list: async () => [{ tenantId: "tenant", enabled: true, frequency: "daily" }] }, preferences: { get: async () => ({ retentionDays: 90 }) } } }))
 vi.mock("~/contexts/TenantContext", () => ({ useTenantOperations: () => ({ updateTenant: state.update }), useTenants: () => [{ id: 1, name: "Contoso", credentials: { tenantId: "tenant" }, resources: { storageAccountName: "contosobackups" } }, { id: 2, name: "Fabrikam", credentials: { tenantId: "ended" } }] }))
-import { TenantTrialCard, TenantTrialNotices, TenantTrialOptions, TrialActions, TrialChanges } from "../../src/renderer/components/TenantTrial"
+import { TenantTrialCard, TenantTrialNotices, TenantTrialOptions, TrialActions, TrialChanges, TrialResume } from "../../src/renderer/components/TenantTrial"
 import { TrialReminderBanner } from "../../src/renderer/components/DesktopLayout"
 import { TrialOrKey } from "../../src/renderer/components/PlanChoice"
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -69,7 +69,9 @@ describe("tenant trial UI", () => {
       await click("Use Community instead")
       expect(state.action).not.toHaveBeenCalled()
       expect(dialog()?.textContent).toContain("End the Pro trial now?")
-      expect(dialog()?.textContent).toContain("The trial cannot be started again for this tenant.")
+      // Ending is not final: the dialog says until when the admin can switch back.
+      expect(dialog()?.textContent).toContain(`You can switch back to the Pro trial on the License page until ${formatDate(tenant.trialEndsAt!)}. After that it cannot be started again.`)
+      expect(dialog()?.textContent).not.toContain("The trial cannot be started again for this tenant.")
       expect(dialog()?.textContent).toContain("Community keeps 30 days of backup history.")
       // The safe choice comes first, so it takes the focus when the dialog opens.
       expect([...dialog()!.querySelectorAll("button")].map(b => b.textContent).slice(0, 2)).toEqual(["Keep the trial", "End trial and use Community"])
@@ -192,6 +194,50 @@ describe("tenant trial UI", () => {
     await act(async () => [...document.body.querySelectorAll("button")].find(b => b.textContent === "Switch to local backups")!.click())
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("Storage switch failed")
     expect(state.refresh).toHaveBeenCalledTimes(1)
+  })
+  describe("resuming a trial that was ended early", () => {
+    const until = () => new Date(Date.now() + 5 * day).toISOString()
+    beforeEach(() => {
+      Object.assign(tenant, { entitled: false, activated: false, trial: false, source: null, plan: "community", canEnd: false, trialCanExtend: false, trialRefusal: "This tenant already had a Pro trial.", trialRefusalPermanent: true, trialEndsAt: new Date(Date.now() - day).toISOString(), trialCanResume: true, trialResumeUntil: until() })
+      Object.assign(state.status!, { plan: null, trial: false, trialEndsAt: null, communityTenantId: "tenant" })
+    })
+    it("offers the resume in place of the used trial message, with the date and the days left", async () => {
+      await render(createElement(TenantTrialOptions))
+      expect(container.textContent).not.toContain("This tenant already had a Pro trial.")
+      expect(container.textContent).not.toContain("Try Pro free")
+      expect(container.textContent).toContain(`You ended the Pro trial for this tenant early. You can switch back until ${formatDate(tenant.trialResumeUntil!)} (5 days left). No card, no email.`)
+      await click("Resume Pro trial")
+      expect(state.action).toHaveBeenCalledTimes(1)
+      expect(state.action).toHaveBeenCalledWith("tenant", "resume_trial")
+      expect(state.refresh).toHaveBeenCalledTimes(1)
+    })
+    it("counts the last day as one day", async () => {
+      tenant.trialResumeUntil = new Date(Date.now() + 3600_000).toISOString()
+      await render(createElement(TrialResume, { tenant }))
+      expect(container.textContent).toContain("(1 day left)")
+    })
+    it("shows why a resume failed and keeps the button", async () => {
+      state.action.mockRejectedValueOnce(new Error("This trial can no longer be resumed."))
+      await render(createElement(TenantTrialOptions))
+      await click("Resume Pro trial")
+      expect(container.querySelector('[role="alert"]')?.textContent).toContain("This trial can no longer be resumed.")
+      expect([...container.querySelectorAll("button")].find(b => b.textContent === "Resume Pro trial")?.disabled).toBe(false)
+    })
+    it("goes back to the used trial message once the trial cannot be resumed", async () => {
+      Object.assign(tenant, { trialCanResume: false, trialResumeUntil: undefined })
+      await render(createElement(TenantTrialOptions))
+      expect(container.textContent).toContain("This tenant already had a Pro trial.")
+      expect(container.textContent).not.toContain("Resume Pro trial")
+    })
+    it("renders nothing for a tenant that cannot resume", async () => {
+      Object.assign(tenant, { trialCanResume: false })
+      await render(createElement(TrialResume, { tenant }))
+      expect(container.textContent).toBe("")
+    })
+  })
+  it("says on a running trial that nothing is charged and what happens at its end", async () => {
+    await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+    expect(container.textContent).toContain("Nothing is charged and no card is on file. When the trial ends, this tenant continues on Community Free by itself. Backups and settings are kept. Community keeps 30 days of backup history.")
   })
   it("shows a refresh failure without retrying or rejecting the handler", async () => {
     state.refresh.mockRejectedValueOnce(new Error("Status refresh failed"))
