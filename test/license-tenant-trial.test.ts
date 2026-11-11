@@ -183,7 +183,53 @@ describe("tenant trials", () => {
       await expect(license.tenantTrialAction(tenant, "resume_trial")).rejects.toThrow("can no longer be resumed")
       expect(calls).toHaveLength(before)
     })
-    it("is not offered for a running trial, with a saved key or while trials are off", async () => {
+    it("is offered next to a license for another tenant, where the trial switch is never asked", async () => {
+      await ended()
+      const other = "99999999-2222-4333-8444-555555555555"
+      const saved = JSON.parse(store.get("license.state")!)
+      store.set("license.state", JSON.stringify({ ...saved, activations: { ...saved.activations, [other]: { activationId: "org-1", token: "invalid.token", source: "tenant" } } }))
+      const before = requests
+      const license = await restarted()
+      // With a license on the installation the app does not ask whether trials are on.
+      expect(requests).toBe(before)
+      expect(license.status([tenant]).tenantTrialsEnabled).toBe(false)
+      expect(tenantStatus(license)).toMatchObject({ trialCanResume: true, trialResumeUntil: new Date(end).toISOString() })
+      await license.tenantTrialAction(tenant, "resume_trial")
+      expect(tenantStatus(license)).toMatchObject({ entitled: true, source: "trial", trial: true, trialCanResume: false })
+    })
+    it("uses the end the service gave when the trial was ended, after an extension by another installation", async () => {
+      const license = service()
+      await connect(license)
+      const extendedEnd = end + 14 * day
+      response = body => body.action === "end_trial" ? Response.json({ success: true, endsAt: new Date(extendedEnd).toISOString() }) : body.action === "activate" ? Response.json({ reason: "tenant_not_licensed" }, { status: 403 }) : entitlement()
+      await license.tenantTrialAction(tenant, "end_trial")
+      response = undefined
+      expect(tenantStatus(license)).toMatchObject({ trialCanResume: true, trialResumeUntil: new Date(extendedEnd).toISOString() })
+      // Past the end this installation knew, inside the extended one, also after a restart.
+      vi.setSystemTime(end + day)
+      expect(tenantStatus(await restarted())).toMatchObject({ trialCanResume: true, trialResumeUntil: new Date(extendedEnd).toISOString() })
+      end = extendedEnd
+      await license.tenantTrialAction(tenant, "resume_trial")
+      expect(tenantStatus(license)).toMatchObject({ entitled: true, trial: true, trialEndsAt: new Date(extendedEnd).toISOString() })
+      vi.setSystemTime(extendedEnd)
+      expect(tenantStatus(license)).toMatchObject({ entitled: false, trialCanResume: false })
+    })
+    it.each(["not a date", 12345, null])("ignores an unusable end in the answer to an ending (%s)", async endsAt => {
+      const license = service()
+      await connect(license)
+      response = body => body.action === "end_trial" ? Response.json({ success: true, endsAt }) : entitlement()
+      await license.tenantTrialAction(tenant, "end_trial")
+      response = undefined
+      expect(tenantStatus(license)).toMatchObject({ trialCanResume: true, trialResumeUntil: new Date(end).toISOString() })
+    })
+    it("asks for an update in its own words when the app is too old to resume", async () => {
+      const license = await ended()
+      response = () => Response.json({ error: "trial_unavailable", reason: "app_update_required" }, { status: 403 })
+      await expect(license.tenantTrialAction(tenant, "resume_trial")).rejects.toThrow("Update TenuVault to resume this trial.")
+      response = undefined
+      expect(tenantStatus(license).trialCanResume).toBe(true)
+    })
+    it("is not offered for a running trial or with a saved key, and is left to the service while trials are off", async () => {
       const license = service()
       await connect(license)
       expect(tenantStatus(license).trialCanResume).toBe(false)
@@ -194,11 +240,16 @@ describe("tenant trials", () => {
       expect(tenantStatus(await restarted()).trialCanResume).toBe(false)
       store.set("license.state", JSON.stringify(saved))
       expect(tenantStatus(await restarted()).trialCanResume).toBe(true)
+      // The switch is the service's to enforce: the offer stays and the refusal is shown.
       enabled = false
       const off = service()
       vi.setSystemTime(start + day)
       await off.checkTrialHealth()
-      expect(tenantStatus(off).trialCanResume).toBe(false)
+      expect(off.status([tenant]).tenantTrialsEnabled).toBe(false)
+      expect(tenantStatus(off).trialCanResume).toBe(true)
+      response = () => Response.json({ error: "trial_unavailable", reason: "disabled" }, { status: 403 })
+      await expect(off.tenantTrialAction(tenant, "resume_trial")).rejects.toThrow("currently unavailable")
+      expect(tenantStatus(off)).toMatchObject({ entitled: false, trialCanResume: true })
     })
     it.each(["used", "not_starter"])("stops offering it for good when the service answers %s", async reason => {
       const license = await ended()

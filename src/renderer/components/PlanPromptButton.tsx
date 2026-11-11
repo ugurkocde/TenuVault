@@ -1,3 +1,4 @@
+import { useRef } from "react"
 import { useSelectedTenant } from "~/contexts/TenantContext"
 import { TenantTrialOptions } from "./TenantTrial"
 import { ExternalLink, Sparkles } from "lucide-react"
@@ -50,6 +51,13 @@ export function PlanPromptButton({
   const eligible = status?.tenantTrialsEnabled && !status.hasKey && plan === "pro" ? status.tenants.find(t =>
     (tenantId && t.tenantId === tenantId) && t.signedIn && !t.entitled && !t.activated && (t.trialCanResume || !(t.trialRefusalPermanent ?? Boolean(t.trialRefusal))),
   ) : undefined
+  // A resume the service refuses for good ends the offer. The prompt keeps that tenant's
+  // trial options mounted, so the reason stays on screen next to Buy Pro.
+  const resumeOffered = useRef<string | undefined>(undefined)
+  if (eligible?.trialCanResume) resumeOffered.current = eligible.tenantId
+  const shown = eligible ?? (status?.tenantTrialsEnabled && !status.hasKey && plan === "pro" && resumeOffered.current
+    ? status.tenants.find(t => t.tenantId === resumeOffered.current && t.tenantId === tenantId && t.signedIn && !t.entitled && !t.activated)
+    : undefined)
   const requested = planPromptAction(status, plan)
   const action = status?.tenantTrialsEnabled && requested === "trial" ? "checkout" : requested
   if (action === "trial" && inRouter) {
@@ -74,8 +82,8 @@ export function PlanPromptButton({
       See plans
     </Button>
   )
-  return eligible ? <span className="inline-flex flex-wrap items-center gap-3">
+  return shown ? <span className="inline-flex flex-wrap items-center gap-3">
     {purchase}
-    <TenantTrialOptions tenantId={eligible.tenantId} compact variant={variant} size={size} onStarted={onLeave} />
+    <TenantTrialOptions tenantId={shown.tenantId} compact variant={variant} size={size} onStarted={onLeave} />
   </span> : purchase
 }

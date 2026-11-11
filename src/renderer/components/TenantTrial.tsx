@@ -58,8 +58,14 @@ export function TrialActions({ tenant, source, welcome = false }: { tenant?: Ten
 }
 
 /** Switches back to a trial this installation ended early. Offered until the trial's original end; resuming adds no time. */
-export function TrialResume({ tenant, compact = false, variant, size, onResumed }: { tenant: TenantLicenseStatus; compact?: boolean; variant?: "default" | "outline"; size?: "default" | "sm"; onResumed?: () => void }) {
-  const { busy, error, run } = useTrialAction()
+export function TrialResume({ tenant, compact = false, variant, size, onResumed, action }: {
+  tenant: TenantLicenseStatus; compact?: boolean; variant?: "default" | "outline"; size?: "default" | "sm"; onResumed?: () => void
+  /** The caller's action state. A caller that outlives this offer passes it and shows the error itself: a refusal removes the offer. */
+  action?: ReturnType<typeof useTrialAction>
+}) {
+  const own = useTrialAction()
+  const { busy, run } = action ?? own
+  const error = action ? "" : own.error
   if (!tenant.trialCanResume || !tenant.trialResumeUntil) return null
   const days = Math.max(1, Math.ceil((Date.parse(tenant.trialResumeUntil) - Date.now()) / 86400_000))
   const left = `${days} ${days === 1 ? "day" : "days"} left`
@@ -80,12 +86,15 @@ export function TrialResume({ tenant, compact = false, variant, size, onResumed 
 export function TenantTrialOptions({ onStarted, tenantId, compact = false, variant, size }: { onStarted?: () => void; tenantId?: string; compact?: boolean; variant?: "default" | "outline"; size?: "default" | "sm" } = {}) {
   const { status } = useLicense()
   const { busy, error, run } = useTrialAction()
+  // Kept here and not in the offer: a resume the service refuses for good removes the offer,
+  // and the reason has to stay on screen.
+  const resume = useTrialAction()
   if (!status || status.hasKey) return null
   const Container = compact ? "span" : "div"
   const Text = compact ? "span" : "p"
   return <Container className={compact ? "inline-flex flex-wrap items-center gap-3" : "space-y-3"}>
     {status.tenants.filter(t => (!status?.tenantTrialsEnabled || !tenantId || t.tenantId === tenantId) && t.signedIn && !t.entitled && t.message !== TRIAL_USED_MESSAGE && (status.tenantTrialsEnabled || t.trialRefusal)).map(tenant => <Container key={tenant.tenantId} className={compact ? "inline-flex flex-wrap items-center gap-3" : "flex flex-wrap items-center gap-3"}>
-      {tenant.trialCanResume ? <TrialResume tenant={tenant} compact={compact} variant={variant} size={size} onResumed={onStarted} /> : <>
+      {tenant.trialCanResume ? <TrialResume tenant={tenant} compact={compact} variant={variant} size={size} onResumed={onStarted} action={resume} /> : <>
         {!compact && tenant.trialRefusal && <Text role="status">{tenant.trialRefusal}</Text>}
         {tenant.activated ? <Text className="text-sm text-gray-600">Check the saved activation before starting a trial.</Text> : status.tenantTrialsEnabled && !(tenant.trialRefusalPermanent ?? Boolean(tenant.trialRefusal)) && <><Button variant={variant} size={size} disabled={busy} onClick={() => void run(async () => {
           await bridge.license.startTenantTrial(tenant.tenantId)
@@ -94,6 +103,7 @@ export function TenantTrialOptions({ onStarted, tenantId, compact = false, varia
       </>}
     </Container>)}
     {error && <Text role="alert">{error}</Text>}
+    {resume.error && <Text role="alert">{resume.error}</Text>}
   </Container>
 }
 
@@ -184,7 +194,7 @@ export function TenantTrialCard({ tenant, initialEmail, welcome = false, allowUn
         </div>
       </div>}
       {tenant.trial && <p className="flex gap-2 text-sm text-gray-600"><Info className="mt-0.5 size-4 shrink-0 text-gray-500" /><span>Nothing is charged and no card is on file. {(status?.tenants.filter(t => t.source === "trial" || t.trialEndsAt || t.plan === "community").length ?? 0) > 1
-        ? "When the trial ends, one tenant continues on Community Free by itself. You choose which."
+        ? "When the trial ends, you choose which one tenant continues on Community Free."
         : "When the trial ends, this tenant continues on Community Free by itself."} Backups and settings are kept. Community keeps 30 days of backup history.</span></p>}
       {tenant.trial && <TrialContact tenant={tenant} initialEmail={initialEmail} allowUnknownRemoval={allowUnknownContactRemoval && !welcome} />}
       {status?.tenantTrialsEnabled && <TrialActions tenant={tenant} source={tenant.trial ? "license-page-trial" : "trial-end"} welcome={welcome} />}

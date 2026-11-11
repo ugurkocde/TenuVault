@@ -71,6 +71,7 @@
         "response": {
           "success": true
         },
+        "resumable": "With a trial row the answer also carries endsAt, the trial's end in ISO 8601. Until then the starting install can undo the ending with resume_trial.",
         "authorization": "Only the starting install; another install receives 403 trial_unavailable with reason not_starter"
       },
       "resume_trial": {
@@ -78,7 +79,7 @@
           "activationId": "trial activation ID"
         },
         "response": "trialEntitlement",
-        "window": "Until the trial's existing end (ends_at). Clears ended_early_at and sets resumed_at; ends_at does not move. A trial that was not ended early is answered like a refresh.",
+        "window": "Until the trial's existing end (ends_at). Clears ended_early_at and sets resumed_at; ends_at does not move. For the starting install, a trial that was not ended early is left unchanged and answered with its entitlement.",
         "authorization": "Only the starting install; another install receives 403 trial_unavailable with reason not_starter",
         "refusals": "403 trial_unavailable: used (no trial row, a key trial, or the end has passed), disabled (tenant trials switched off), app_update_required, licensed (the tenant has an organization license)"
       },

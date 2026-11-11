@@ -452,14 +452,19 @@ export class LicenseService {
    * Until when a trial this installation ended early ("Use Community instead") can be
    * resumed: its original end, which the service never moves on a resume, or null when
    * it cannot. Only the installation that started and ended the trial can resume it.
+   * The offer does not wait for the trial switch (trialsEnabled): an installation with a
+   * license for another tenant never asks for it, and the service refuses a resume
+   * itself while trials are off. The end is the later of the saved token's and the one
+   * the service gave when the trial was ended, which is ahead of the token when another
+   * installation extended the trial.
    */
   private trialResumeUntil(tenant: string): number | null {
     const record = this.trialRecords[tenant]
-    if (!this.trialsEnabled || this.state?.key || this.state?.activations[tenant]) return null
+    if (this.state?.key || this.state?.activations[tenant]) return null
     if (!record?.activationId || !record.endedAt || !record.canEnd || record.resumeUnavailable) return null
     const payload = record.token ? decodeToken(record.token, this.publicKeys) : null
-    const end = payload?.keyExp ? payload.keyExp * 1000 : record.trialEndsAt
-    return end !== undefined && end > Date.now() ? end : null
+    const end = Math.max(payload?.keyExp ? payload.keyExp * 1000 : 0, record.trialEndsAt ?? 0)
+    return end > Date.now() ? end : null
   }
 
   trialUsagePeriod(tenant: string): { since: number; until: number } | null {
@@ -615,6 +620,9 @@ export class LicenseService {
           resumed.acknowledged = true
           for (const field of ["refusal", "refusalReason", "refusalAt", "refusalVersion"] as const) delete resumed[field]
         } else if (action === "end_trial") {
+          // The trial's end as the service has it, until which it can be resumed.
+          const endsAt = typeof data.endsAt === "string" ? Date.parse(data.endsAt) : NaN
+          if (Number.isFinite(endsAt)) record.trialEndsAt = endsAt
           this.confirmCommunity(tenant)
           if (this.state) delete this.state.activations[tenant]
           record.endedAcknowledged = true
@@ -635,6 +643,9 @@ export class LicenseService {
           record.resumeUnavailable = true
           this.saveTrials()
           throw new Error(TRIAL_RESUME_OVER)
+        }
+        if (action === "resume_trial" && error instanceof LicenseDenied && error.trialUnavailable && error.reason === "app_update_required") {
+          throw new Error("Update TenuVault to resume this trial.")
         }
         throw error
       } finally { this.saveTrials(); this.options.onChange?.() }

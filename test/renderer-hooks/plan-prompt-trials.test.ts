@@ -67,6 +67,23 @@ describe("plan prompt trial and purchase actions", () => {
     expect(onLeave).toHaveBeenCalledTimes(1)
     expect(state.start).not.toHaveBeenCalled()
   })
+  it("keeps the reason next to Buy Pro when a refusal ends the offer", async () => {
+    state.status = status("ended")
+    Object.assign(state.status.tenants[0]!, { trialCanResume: true, trialResumeUntil: new Date(Date.now() + 9 * 86400_000).toISOString() })
+    state.action.mockImplementationOnce(async () => {
+      state.status = status("ended")
+      throw new Error("This trial can no longer be resumed.")
+    })
+    container = document.body.appendChild(document.createElement("div")); root = createRoot(container)
+    const onLeave = vi.fn()
+    await act(async () => root!.render(createElement(MemoryRouter, null, createElement("span", null, createElement(PlanPromptButton, { plan: "pro", source: "locked-fullrestore", onLeave })))))
+    await act(async () => [...container!.querySelectorAll("button")].find(b => b.textContent === "Resume Pro trial")!.click())
+    expect(container.textContent).not.toContain("Resume Pro trial")
+    expect(container.textContent).toContain("Buy Pro")
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe("This trial can no longer be resumed.")
+    expect(container.querySelector("div, p")).toBeNull()
+    expect(onLeave).not.toHaveBeenCalled()
+  })
   it("offers only Buy Pro once the ended trial cannot be resumed", async () => {
     state.status = status("ended")
     container = document.body.appendChild(document.createElement("div")); root = createRoot(container)

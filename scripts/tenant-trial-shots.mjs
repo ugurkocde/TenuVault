@@ -281,8 +281,9 @@ try {
   await evaluate(`location.hash = "#/license"`)
   await assertText("Resume Pro trial")
   await evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent === "Resume Pro trial").click()`)
-  await assertText("9 days left")
-  if (await evaluate(`document.body.innerText.includes("Pro trial started") || document.body.innerText.includes("Resume Pro trial") || !document.body.innerText.includes("Nothing is charged and no card is on file.")`)) throw new Error("License page after resuming the trial")
+  // "9 days left" is already on screen in the offer, so wait for the running trial itself.
+  await waitFor(`!document.body.innerText.includes("Resume Pro trial") && document.body.innerText.includes("Nothing is charged and no card is on file.")`)
+  if (await evaluate(`document.body.innerText.includes("Pro trial started") || !document.body.innerText.includes("9 days left")`)) throw new Error("License page after resuming the trial")
   await scrollAll(0)
   await screenshot("trial-resumed-license", true)
   await scene("trial-license-before-window", active(9), MOCK.tenants.slice(0, 1), "#/license", "You can extend once, from")

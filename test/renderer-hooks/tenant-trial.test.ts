@@ -223,6 +223,19 @@ describe("tenant trial UI", () => {
       expect(container.querySelector('[role="alert"]')?.textContent).toContain("This trial can no longer be resumed.")
       expect([...container.querySelectorAll("button")].find(b => b.textContent === "Resume Pro trial")?.disabled).toBe(false)
     })
+    it("keeps the reason on screen when a refusal ends the offer", async () => {
+      // The service refuses for good: the status that follows no longer offers the resume.
+      state.action.mockImplementationOnce(async () => {
+        Object.assign(tenant, { trialCanResume: false, trialResumeUntil: undefined })
+        state.status = { ...state.status!, tenants: [{ ...tenant }] }
+        throw new Error("This trial can no longer be resumed.")
+      })
+      await render(createElement(TenantTrialOptions))
+      await click("Resume Pro trial")
+      expect(container.textContent).not.toContain("Resume Pro trial")
+      expect(container.textContent).toContain("This tenant already had a Pro trial.")
+      expect([...container.querySelectorAll('[role="alert"]')].map(e => e.textContent)).toEqual(["This trial can no longer be resumed."])
+    })
     it("goes back to the used trial message once the trial cannot be resumed", async () => {
       Object.assign(tenant, { trialCanResume: false, trialResumeUntil: undefined })
       await render(createElement(TenantTrialOptions))
@@ -238,6 +251,12 @@ describe("tenant trial UI", () => {
   it("says on a running trial that nothing is charged and what happens at its end", async () => {
     await render(createElement(TenantTrialCard, { tenant, welcome: true }))
     expect(container.textContent).toContain("Nothing is charged and no card is on file. When the trial ends, this tenant continues on Community Free by itself. Backups and settings are kept. Community keeps 30 days of backup history.")
+  })
+  it("says with several tenants that the admin chooses the one that continues", async () => {
+    state.status!.tenants = [tenant, { ...tenant, tenantId: "ended" }]
+    await render(createElement(TenantTrialCard, { tenant, welcome: true }))
+    expect(container.textContent).toContain("Nothing is charged and no card is on file. When the trial ends, you choose which one tenant continues on Community Free. Backups and settings are kept.")
+    expect(container.textContent).not.toContain("by itself")
   })
   it("shows a refresh failure without retrying or rejecting the handler", async () => {
     state.refresh.mockRejectedValueOnce(new Error("Status refresh failed"))
