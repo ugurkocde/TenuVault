@@ -22,8 +22,7 @@
     Sign in with a Global Administrator, Privileged Role Administrator or Cloud Application
     Administrator account, which can grant admin consent.
 
-    If a step fails after the app registration was created, the script removes it again,
-    so a failed run leaves nothing behind.
+    If a step fails after the app registration was created, the script removes it again.
 
 .PARAMETER TenantId
     Tenant to create the app registration in. Defaults to the tenant of the account you sign in with.
@@ -286,8 +285,9 @@ function Invoke-Graph([string]$Method, [string]$Path, $Body, [switch]$Replicatio
         } catch {
             $failure = Get-HttpFailure $_
             $notThereYet = $ReplicationRetry -and ($failure.Status -eq 404 -or ($failure.Status -eq 400 -and $failure.Message -match 'valid application object|does not exist|not found|not present'))
-            # A failed write is only repeated when repeating it cannot create a second object.
-            $busy = $failure.Status -eq 429 -or ($failure.Status -ge 500 -and ($Method -eq 'GET' -or $ReplicationRetry))
+            # Throttled requests were not carried out, so they are always repeated. After a server
+            # error a request is only repeated when it cannot create a second object (not a POST).
+            $busy = $failure.Status -eq 429 -or ($failure.Status -ge 500 -and $Method -ne 'POST')
             if ($attempt -lt $attempts -and ($notThereYet -or $busy)) {
                 Start-Sleep -Seconds ([Math]::Min(60, [Math]::Max(3, $failure.RetryAfter)))
                 continue
@@ -404,7 +404,7 @@ try {
     }
     if ($AllowedGroupId) {
         Write-Host "Limiting sign-in to members of group $AllowedGroupId..."
-        Invoke-Graph PATCH "/servicePrincipals/$($appSp.id)" @{ appRoleAssignmentRequired = $true } | Out-Null
+        Invoke-Graph PATCH "/servicePrincipals/$($appSp.id)" @{ appRoleAssignmentRequired = $true } -ReplicationRetry | Out-Null
         Invoke-Graph POST "/servicePrincipals/$($appSp.id)/appRoleAssignedTo" @{ principalId = $AllowedGroupId; resourceId = $appSp.id; appRoleId = [Guid]::Empty.ToString() } -ReplicationRetry | Out-Null
     }
 } catch {
@@ -412,7 +412,7 @@ try {
     if ($app) {
         try { Invoke-Graph DELETE "/applications/$($app.id)" -ReplicationRetry | Out-Null }
         catch { throw "Setup did not finish. Delete app registration '$DisplayName' (client id $($app.appId)) in the Entra admin center. Cleanup failed: $($_.Exception.Message) Original failure: $reason" }
-        throw "Setup did not finish. The half-created app registration was removed, so nothing was left behind. $reason"
+        throw "Setup did not finish. The half-created app registration was removed again. $reason"
     }
     throw "Setup did not finish. $reason"
 }
