@@ -13,6 +13,7 @@ import type { RegistrationResult, SetupProgress } from "../../shared/ipc"
 export function setupSignInError(error: unknown): unknown {
   if (error instanceof SignInCancelledError) return error
   const message = error instanceof Error ? error.message : String(error)
+  if (/Nothing was changed\.$/.test(message)) return error
   const code = /AADSTS\d+/.exec(message)?.[0]
   const nothingChanged = (text: string) => new Error(/Nothing was changed\.$/.test(text) ? text : `${text} Nothing was changed.`)
   if (code && ["AADSTS65004", "AADSTS65001", "AADSTS90094"].includes(code)) {
@@ -43,6 +44,9 @@ export function setupLoginHint(expected: { tenantId: string; clientId: string; u
 
 const SHARED_SIGN_IN_CODES = new Set(["AADSTS90002", "AADSTS900023", "AADSTS50020", "AADSTS53000", "AADSTS53001", "AADSTS53003"])
 
+/** How long the setup waits for the sign-in in the browser. Microsoft's own error pages never come back to the app. */
+export const SETUP_SIGN_IN_TIMEOUT_MS = 15 * 60_000
+
 export class AppRegistrationSetup {
   private cancelWaiting?: () => void
   private running = false
@@ -64,9 +68,14 @@ export class AppRegistrationSetup {
       system: { networkClient: fetchNetworkClient(this.host.fetch) },
     })
     let cancelled = false
+    let abandon: (error: Error) => void = () => undefined
     const cancellation = new Promise<never>((_resolve, reject) => {
-      this.cancelWaiting = () => { cancelled = true; reject(new SignInCancelledError()) }
+      abandon = (error) => { cancelled = true; reject(error) }
+      this.cancelWaiting = () => abandon(new SignInCancelledError())
     })
+    // When Microsoft shows an error page of its own (admin approval needed, a blocked app,
+    // Conditional Access), nothing returns to the app. Stop waiting after a while and say so.
+    const deadline = setTimeout(() => abandon(new Error("The sign-in in the browser was not completed within 15 minutes. If Microsoft showed an error there, your account may not be allowed to approve the setup. Nothing was changed.")), SETUP_SIGN_IN_TIMEOUT_MS)
     try {
       this.host.progress({ phase: "signingIn" })
       const interactive = app.acquireTokenInteractive({
@@ -83,6 +92,7 @@ export class AppRegistrationSetup {
       // A late browser answer after cancellation is never used and its memory cache is cleared.
       void interactive.finally(() => { if (cancelled) app.clearCache() }).catch(() => undefined)
       const result = await Promise.race([interactive, cancellation]).catch(error => { throw setupSignInError(error) })
+      clearTimeout(deadline)
       this.cancelWaiting = undefined
       if (!result.account?.tenantId || !result.account.username || !result.accessToken) throw new Error("Microsoft did not return the tenant, user name and access token. Nothing was changed.")
       return await provisionRegistration({
@@ -91,6 +101,7 @@ export class AppRegistrationSetup {
         progress: this.host.progress,
       })
     } finally {
+      clearTimeout(deadline)
       this.cancelWaiting = undefined
       this.running = false
       await app.clearCache()

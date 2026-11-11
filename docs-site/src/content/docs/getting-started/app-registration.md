@@ -44,6 +44,8 @@ If your tenant does not list Azure Service Management or Azure Storage among its
 
 ### If something goes wrong
 
+* If your account cannot approve the setup, Microsoft says so in the browser, for example **Need admin approval**, and nothing comes back to TenuVault. Select **Cancel** on the Connect step and use one of the **Other ways to connect**: **Someone else is the admin? Copy instructions** for your Entra administrator, or **I already have an app registration**. If you decline Microsoft's request instead, TenuVault tells you which roles can approve it. Nothing is created in either case, and TenuVault stops waiting by itself after 15 minutes.
+* If your account may sign in but lacks a role that can create app registrations or grant admin consent, the setup stops with a message that names the roles. If it had already created the app registration, it removes it again first.
 * If a step fails after TenuVault created the app registration, TenuVault removes it again and tells you why. If it cannot remove it, it names the app registration to delete in the Microsoft Entra admin center. An app registration that existed before is never deleted.
 * If the last sign-in fails or you cancel it, the **Sign in** step opens with the tenant ID and the client ID filled in. Select **Sign in with Microsoft** to try again. Nothing is created twice.
 * If Microsoft takes longer than a minute and a half to accept sign-ins to the new app registration, the browser does not open again. The **Sign in** step says so. Wait a moment, then select **Sign in with Microsoft**.

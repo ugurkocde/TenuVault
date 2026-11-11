@@ -11,7 +11,7 @@ vi.mock("@azure/msal-node", async original => {
   } }
 })
 vi.mock("../src/main/auth/registration-provisioning", () => ({ provisionRegistration: state.provision }))
-import { AppRegistrationSetup, setupLoginHint, setupSignInError } from "../src/main/auth/app-registration-setup"
+import { AppRegistrationSetup, SETUP_SIGN_IN_TIMEOUT_MS, setupLoginHint, setupSignInError } from "../src/main/auth/app-registration-setup"
 const host = () => ({ fetch: vi.fn() as unknown as typeof fetch, openBrowser: vi.fn(async () => undefined), progress: vi.fn() })
 beforeEach(() => { vi.clearAllMocks() })
 it("uses an isolated memory client, setup scopes and the chosen tenant", async () => {
@@ -111,4 +111,38 @@ it("skips the account picker only for the registration and account of the setup 
     [expected.tenantId, expected.clientId, 42],
   ]) expect(setupLoginHint(expected, tenant, clientId, hint)).toBeUndefined()
   expect(setupLoginHint(null, expected.tenantId, expected.clientId, expected.username)).toBeUndefined()
+})
+
+it("stops waiting for the browser after 15 minutes and discards a later answer", async () => {
+  vi.useFakeTimers()
+  try {
+    let finish!: (value: unknown) => void
+    state.interactive.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const setup = new AppRegistrationSetup(host())
+    const pending = setup.create()
+    const outcome = pending.then(() => null, caught => caught as Error)
+    await vi.advanceTimersByTimeAsync(SETUP_SIGN_IN_TIMEOUT_MS - 1000)
+    expect(state.clear).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1000)
+    const error = await outcome
+    expect(error?.message).toMatch(/^The sign-in in the browser was not completed within 15 minutes\..*Nothing was changed\.$/)
+    expect(state.provision).not.toHaveBeenCalled()
+    // An answer that arrives afterwards creates nothing, and a new setup can start.
+    finish({ account: { tenantId: "late", username: "admin" }, accessToken: "late" })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(state.provision).not.toHaveBeenCalled()
+    state.interactive.mockImplementationOnce(() => new Promise(() => {}))
+    const next = setup.create()
+    setup.cancel()
+    await expect(next).rejects.toThrow("Sign-in cancelled.")
+  } finally { vi.useRealTimers() }
+})
+it("does not keep a timer running after a setup that finished", async () => {
+  vi.useFakeTimers()
+  try {
+    state.interactive.mockResolvedValueOnce({ account: { tenantId: "tenant", username: "admin" }, accessToken: "ephemeral" })
+    state.provision.mockResolvedValueOnce({ tenantId: "tenant", clientId: "client", username: "admin", reused: false, ready: true, displayName: "TenuVault Desktop", candidateCount: 0 })
+    await new AppRegistrationSetup(host()).create()
+    expect(vi.getTimerCount()).toBe(0)
+  } finally { vi.useRealTimers() }
 })

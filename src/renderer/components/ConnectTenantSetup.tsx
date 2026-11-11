@@ -129,6 +129,10 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
               <div className="space-y-3 border-t border-gray-200 pt-4">
                 <p>Choose your admin account in the browser and approve the request. Nothing is created before you are signed in.</p>
                 <p className="text-xs text-gray-600">
+                  If Microsoft says that you need admin approval, or shows an error instead of signing you in, this account cannot
+                  approve the setup. Select Cancel and use one of the other ways to connect below.
+                </p>
+                <p className="text-xs text-gray-600">
                   If Microsoft reports a device or compliance problem, Conditional Access needs a browser that passes the device
                   identity, such as Microsoft Edge signed in to your work profile. Make it your default browser, cancel and start
                   again.
