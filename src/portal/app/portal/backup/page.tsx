@@ -11,7 +11,7 @@ import { Alert, AlertDescription } from "~/components/ui/alert"
 import { BackupProgressModal } from "~/components/tenants/backup-progress-modal"
 import { BackupChangesDialog } from "~/components/backup/backup-changes-dialog"
 import { RestoreWizard } from "~/components/backup/restore-wizard"
-import { damagedFilesNotice, formatDate, formatDuration, formatSize, statusKind, statusLabel, TRIGGER_LABEL, unresolvedNotice, type BackupSummary, type BackupTenant, type StatusKind } from "~/components/backup/types"
+import { formatDate, formatDuration, formatSize, statusKind, statusLabel, TRIGGER_LABEL, unresolvedNotice, type BackupSummary, type BackupTenant, type StatusKind } from "~/components/backup/types"
 import { BackupSchedulePanel } from "@desktop/components/BackupSchedulePanel"
 import { RunBackupDialog } from "@desktop/components/RunBackupDialog"
 import { useTenantPlan } from "@desktop/lib/license"
@@ -21,6 +21,7 @@ import { backupTypeTrends } from "~/lib/backup-trends"
 import { retentionNote } from "@desktop/lib/plan-notes"
 import { FirstBackupNote } from "@desktop/components/FirstBackupNote"
 import { LegacySealedBackupsNotice } from "@desktop/components/LegacySealedBackupsNotice"
+import { DamagedBackupFilesNotice } from "@desktop/components/DamagedBackupFilesNotice"
 import { allows } from "../../../../shared/plans"
 import { AREAS } from "../../../../shared/intune/scope"
 import { typeForFolder, type Item } from "../../../../shared/intune/registry"
@@ -90,6 +91,9 @@ export default function BackupRestorePage() {
   const backups = backupList.backups ?? NO_BACKUPS
   const retentionMessage = retentionNote(plan, backups, new Date())
   const isLoading = backupList.loading && backupList.backups === null
+  // The tenant and storage the list is for. Notices are keyed by it, so their state, such as a check
+  // after a key import, never carries over to another tenant's list.
+  const listIdentity = `${selectedTenant?.credentials?.tenantId?.toLowerCase() ?? ""}/${selectedTenant?.resources?.storageAccountName?.toLowerCase() ?? ""}`
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [restoreFrom, setRestoreFrom] = useState<string | null>(null)
   const [setupError, setSetupError] = useState("")
@@ -319,19 +323,24 @@ export default function BackupRestorePage() {
             {completedBackup && completedBackup.tenantId === selectedTenant?.credentials?.tenantId.toLowerCase() && (
               <div className="mb-4"><FirstBackupNote key={completedBackup.jobId} plan={plan} /></div>
             )}
-            {backupList.damagedFiles > 0 && (
-              <p className="mb-4 flex items-start gap-2 text-sm text-amber-800">
-                <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-                {damagedFilesNotice(backupList.damagedFiles, backupList.damagedFileNames)}
-              </p>
-            )}
+            <DamagedBackupFilesNotice
+              key={`damaged:${listIdentity}`}
+              count={backupList.damagedFiles}
+              kinds={backupList.damagedKinds}
+              names={backupList.damagedFileNames}
+              unavailable={backups.filter((backup) => backup.status.toLowerCase() === "unavailable").length}
+              tenantId={selectedTenant.credentials?.tenantId}
+              onImported={() => backupList.refresh({ force: true })}
+              listLoading={backupList.loading}
+              listError={backupList.error}
+            />
             {backupList.unresolved > 0 && (
               <p className="mb-4 flex items-start gap-2 text-sm text-amber-800">
                 <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
                 {unresolvedNotice(backupList.unresolved)}
               </p>
             )}
-            <LegacySealedBackupsNotice count={backupList.sealed} onImported={() => backupList.refresh({ force: true })} />
+            <LegacySealedBackupsNotice key={`sealed:${listIdentity}`} count={backupList.sealed} onImported={async () => { await backupList.refresh({ force: true }) }} />
             {retentionMessage && (
               <p className="mb-4 text-sm text-gray-500">
                 {retentionMessage}{" "}
@@ -344,8 +353,8 @@ export default function BackupRestorePage() {
                 <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-gray-100">
                   <Download className="h-6 w-6 text-gray-500" />
                 </div>
-                <p className="font-medium text-gray-900">No backups found for this tenant</p>
-                <p className="mt-1 text-sm text-gray-500">Run a backup to see it appear here</p>
+                <p className="font-medium text-gray-900">{backupList.damagedFiles > 0 ? "No readable backups found for this tenant" : "No backups found for this tenant"}</p>
+                <p className="mt-1 text-sm text-gray-500">{backupList.damagedFiles > 0 ? "Some backups may be missing because of the files described above." : "Run a backup to see it appear here"}</p>
               </div>
             ) : (
               <div className="-mx-2 space-y-1">
@@ -359,7 +368,7 @@ export default function BackupRestorePage() {
                       </div>
                       <button
                         type="button"
-                        className={cn("flex-1 rounded-2xl border p-4 text-left transition-colors", selectedId === backup.id ? "border-blue-200" : "border-transparent hover:bg-gray-50")}
+                        className={cn("flex-1 rounded-2xl border p-4 text-left transition-colors", selectedId === backup.id ? "border-primary" : "border-transparent hover:bg-gray-50")}
                         onClick={() => {
                           setSelectedId(backup.id)
                           requestAnimationFrame(() => detailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }))

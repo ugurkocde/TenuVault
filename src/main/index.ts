@@ -41,7 +41,7 @@ import { FailedAttemptLog, recordPlanRefusal } from "./backup/failed-attempts"
 import { backupTenantLabel, notifyBackupFailure } from "./backup/notifications"
 import { BackupKeys } from "./backup/keys"
 import { readBackupSettings } from "./backup/settings"
-import { localInventoryProblem } from "./backup/local-inventory"
+import { folderToOpen, localInventoryProblem } from "./backup/local-inventory"
 import { legacyAzureReader, registerStorageToken } from "./storage/azure-seal"
 import { createArmCaller } from "./azure/arm"
 import { BackupReaderService } from "./auth/backup-reader"
@@ -1342,10 +1342,10 @@ async function bootstrap(): Promise<void> {
     }
     return backupSettings()
   })
-  handleTrusted("backups:openFolder", async () => {
+  handleTrusted("backups:openFolder", async (_event, tenantId: unknown) => {
     const { mkdir } = await import("node:fs/promises")
     await mkdir(localFolder(), { recursive: true })
-    const failure = await shell.openPath(localFolder())
+    const failure = await shell.openPath(await folderToOpen(localFolder(), tenantId))
     if (failure) throw new Error(failure)
   })
   handleTrusted("backups:exportRecoveryKey", async () => {

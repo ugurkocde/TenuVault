@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks"
 import { BACKUP_CONTAINER, LOCAL_STORAGE_PREFIX, localStorageAccountName } from "../../shared/constants"
-import { BlobAlreadyExistsError, BlobConditionNotMetError, BlobNotFoundError, IncompleteInventoryError, MAX_NAMED_FILES, type LocalBlobStore, type StoredBlob } from "./local-blob-store"
+import { DAMAGE_KINDS_HEADER } from "../../shared/damaged-files"
+import { BlobAlreadyExistsError, BlobConditionNotMetError, BlobNotFoundError, damageKinds, IncompleteInventoryError, MAX_NAMED_FILES, type InventoryDamage, type LocalBlobStore, type StoredBlob } from "./local-blob-store"
 
 /**
  * Serves the subset of the Azure Blob REST API that the shared API routes use
@@ -182,7 +183,7 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
       if (method === "GET" || method === "HEAD") {
         // Container properties say how much of the backup folder could not be read, so a list of
         // backups can say that some may be missing from it.
-        const damage = container === BACKUP_CONTAINER ? await store.damage(account, container) : { files: [], unavailable: new Map() }
+        const damage: InventoryDamage = container === BACKUP_CONTAINER ? await store.damage(account, container) : { files: [], unavailable: new Map(), unattributed: 0 }
         return new Response(null, {
           status: 200,
           headers: {
@@ -190,6 +191,8 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
             "x-tenuvault-unavailable-backups": String(damage.unavailable.size),
             // The encrypted file names on disk (hex), so the files can be found to restore or remove them.
             "x-tenuvault-unreadable-file-names": damage.files.slice(0, MAX_NAMED_FILES).map((file) => file.file).join(","),
+            // The same files by why they cannot be used, so the list can say what to do about them.
+            [DAMAGE_KINDS_HEADER]: JSON.stringify(damageKinds(damage)),
           },
         })
       }

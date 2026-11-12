@@ -457,7 +457,8 @@ export interface TenuVaultBridge {
     inventoryProblem: (tenantId: string) => Promise<string | null>
     /** Lets the admin pick a new folder. Existing backups stay where they are. */
     chooseFolder: () => Promise<BackupSettings>
-    openFolder: () => Promise<void>
+    /** Opens the backup folder, or the tenant's own folder in it when one is given and it exists. */
+    openFolder: (tenantId?: string) => Promise<void>
     /** Saves the recovery key to a file the admin chooses. */
     exportRecoveryKey: () => Promise<{ saved: boolean; path?: string }>
     /** Null when the admin cancels the confirmation. */

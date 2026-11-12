@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it, vi } from "vitest"
 import BackupRestorePage from "../src/portal/app/portal/backup/page"
 
-const state = vi.hoisted(() => ({ unresolved: 0, backups: [] as Array<Record<string, unknown>> }))
+const state = vi.hoisted(() => ({ unresolved: 0, damagedFiles: 0, backups: [] as Array<Record<string, unknown>> }))
 vi.mock("react", async (original) => ({
   ...await original<typeof import("react")>(),
   useEffect: () => undefined,
@@ -17,7 +17,7 @@ vi.mock("~/contexts/TenantContext", () => ({
 }))
 vi.mock("@desktop/lib/license", () => ({ useTenantPlan: () => null }))
 vi.mock("@desktop/lib/bridge", () => ({ bridge: { license: { open: vi.fn() } } }))
-vi.mock("@desktop/lib/backup-list", () => ({ useBackupList: () => ({ backups: state.backups, loading: false, error: "", unresolved: state.unresolved, refresh: vi.fn() }) }))
+vi.mock("@desktop/lib/backup-list", () => ({ useBackupList: () => ({ backups: state.backups, loading: false, error: "", unresolved: state.unresolved, damagedFiles: state.damagedFiles, damagedFileNames: [], damagedKinds: null, refresh: vi.fn() }) }))
 vi.mock("@desktop/components/BackupSchedulePanel", () => ({ BackupSchedulePanel: () => null }))
 vi.mock("@desktop/components/RunBackupDialog", () => ({ RunBackupDialog: () => null }))
 vi.mock("~/components/tenants/backup-progress-modal", () => ({ BackupProgressModal: () => null }))
@@ -42,5 +42,16 @@ describe("Backup History", () => {
     expect(markup).not.toContain(">Complete<")
     expect(markup).not.toContain("bg-red-50")
     state.backups = []
+  })
+
+  it("says the timeline may be missing backups when files cannot be read and none are listed", () => {
+    expect(renderToStaticMarkup(createElement(BackupRestorePage))).toContain("No backups found for this tenant")
+    state.damagedFiles = 129
+    const markup = renderToStaticMarkup(createElement(BackupRestorePage))
+    expect(markup).toContain("Some backups may be missing from this list")
+    expect(markup).toContain("No readable backups found for this tenant")
+    expect(markup).toContain("Some backups may be missing because of the files described above.")
+    expect(markup).not.toContain("Run a backup to see it appear here")
+    state.damagedFiles = 0
   })
 })

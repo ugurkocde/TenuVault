@@ -28,7 +28,7 @@ describe('Backup list cache', () => {
     expect(backupListKey(tenant('Other'))).toBe(`${TENANT}/other`)
     expect(backupListKey(tenant(''))).toBeNull()
     expect(backupListKey(null)).toBeNull()
-    expect(backupListOf(null)).toEqual({ backups: null, error: '', loading: false, unresolved: 0, sealed: 0, damagedFiles: 0, damagedFileNames: [] })
+    expect(backupListOf(null)).toEqual({ backups: null, error: '', loading: false, unresolved: 0, sealed: 0, damagedFiles: 0, damagedFileNames: [], damagedKinds: null })
   })
 
   it('keeps the list for the next visit and joins a refresh already running', async () => {
@@ -39,17 +39,17 @@ describe('Backup list cache', () => {
     expect(second).toBe(first)
     expect(fetches.stub).toHaveBeenCalledTimes(1)
     expect(JSON.parse(String((fetches.stub.mock.calls[0] as unknown as [string, RequestInit])[1].body))).toMatchObject({ subscriptionId: 'local', resourceGroupName: 'local', storageAccountName: 'store' })
-    expect(backupListOf(key)).toEqual({ backups: null, error: '', loading: true, unresolved: 0, sealed: 0, damagedFiles: 0, damagedFileNames: [] })
+    expect(backupListOf(key)).toEqual({ backups: null, error: '', loading: true, unresolved: 0, sealed: 0, damagedFiles: 0, damagedFileNames: [], damagedKinds: null })
     fetches.answer(0, Response.json({ backups: [backup('b1')] }))
     await first
-    expect(backupListOf(key)).toEqual({ backups: [backup('b1')], error: '', loading: false, unresolved: 0, sealed: 0, damagedFiles: 0, damagedFileNames: [] })
+    expect(backupListOf(key)).toEqual({ backups: [backup('b1')], error: '', loading: false, unresolved: 0, sealed: 0, damagedFiles: 0, damagedFileNames: [], damagedKinds: null })
 
     // The next visit shows the kept list while it refreshes; a failed refresh keeps it too.
     const again = refreshBackupList(tenant())
     expect(backupListOf(key)).toMatchObject({ backups: [backup('b1')], loading: true })
     fetches.answer(1, Response.json({ error: 'Storage unavailable' }, { status: 503 }))
     await again
-    expect(backupListOf(key)).toEqual({ backups: [backup('b1')], error: 'Storage unavailable', loading: false, unresolved: 0, sealed: 0, damagedFiles: 0, damagedFileNames: [] })
+    expect(backupListOf(key)).toEqual({ backups: [backup('b1')], error: 'Storage unavailable', loading: false, unresolved: 0, sealed: 0, damagedFiles: 0, damagedFileNames: [], damagedKinds: null })
     expect(backupListOf(backupListKey(tenant('other')))).toMatchObject({ backups: null })
   })
 
@@ -57,13 +57,14 @@ describe('Backup list cache', () => {
     const fetches = pendingFetch()
     const key = backupListKey(tenant())
     const first = refreshBackupList(tenant())
-    fetches.answer(0, Response.json({ backups: [backup('b1')], unresolved: 2, sealed: 4, damagedFiles: 3, damagedFileNames: ['ab12.tvb'] }))
+    const damagedKinds = { counts: { key: 2, os: 1, duplicate: 0, damaged: 0 }, codes: ['EACCES'], names: { key: ['ab12.tvb'], os: [], duplicate: [], damaged: [] } }
+    fetches.answer(0, Response.json({ backups: [backup('b1')], unresolved: 2, sealed: 4, damagedFiles: 3, damagedFileNames: ['ab12.tvb'], damagedKinds }))
     await first
-    expect(backupListOf(key)).toEqual({ backups: [backup('b1')], error: '', loading: false, unresolved: 2, sealed: 4, damagedFiles: 3, damagedFileNames: ['ab12.tvb'] })
+    expect(backupListOf(key)).toEqual({ backups: [backup('b1')], error: '', loading: false, unresolved: 2, sealed: 4, damagedFiles: 3, damagedFileNames: ['ab12.tvb'], damagedKinds })
     const again = refreshBackupList(tenant(), { force: true })
     fetches.answer(1, Response.json({ backups: [backup('b2'), backup('b1')], unresolved: 0 }))
     await again
-    expect(backupListOf(key)).toEqual({ backups: [backup('b2'), backup('b1')], error: '', loading: false, unresolved: 0, sealed: 0, damagedFiles: 0, damagedFileNames: [] })
+    expect(backupListOf(key)).toEqual({ backups: [backup('b2'), backup('b1')], error: '', loading: false, unresolved: 0, sealed: 0, damagedFiles: 0, damagedFileNames: [], damagedKinds: null })
   })
 
   it('starts over when forced and drops the answer of the refresh it replaced', async () => {
@@ -78,7 +79,7 @@ describe('Backup list cache', () => {
     // Read before the newest backup finished, so it must not replace the newer list.
     fetches.answer(0, Response.json({ backups: [backup('b1')] }))
     await before
-    expect(backupListOf(key)).toEqual({ backups: [backup('b2'), backup('b1')], error: '', loading: false, unresolved: 0, sealed: 0, damagedFiles: 0, damagedFileNames: [] })
+    expect(backupListOf(key)).toEqual({ backups: [backup('b2'), backup('b1')], error: '', loading: false, unresolved: 0, sealed: 0, damagedFiles: 0, damagedFileNames: [], damagedKinds: null })
   })
 
   it('does not join a refresh sent with credentials that changed since, and keeps the list meanwhile', async () => {
@@ -98,6 +99,38 @@ describe('Backup list cache', () => {
     // The answer to the old credentials arrives last and is dropped.
     fetches.answer(1, Response.json({ backups: [] }))
     await stale
-    expect(backupListOf(key)).toEqual({ backups: [backup('b2'), backup('b1')], error: '', loading: false, unresolved: 0, sealed: 0, damagedFiles: 0, damagedFileNames: [] })
+    expect(backupListOf(key)).toEqual({ backups: [backup('b2'), backup('b1')], error: '', loading: false, unresolved: 0, sealed: 0, damagedFiles: 0, damagedFileNames: [], damagedKinds: null })
+  })
+
+  it('says how each refresh went: updated, failed, or superseded by a newer one', async () => {
+    const fetches = pendingFetch()
+    const before = refreshBackupList(tenant())
+    const forced = refreshBackupList(tenant(), { force: true })
+    fetches.answer(1, Response.json({ backups: [] }))
+    expect(await forced).toBe('updated')
+    fetches.answer(0, Response.json({ backups: [backup('b1')] }))
+    expect(await before).toBe('superseded')
+    const failing = refreshBackupList(tenant(), { force: true })
+    fetches.answer(2, Response.json({ error: 'Storage unavailable' }, { status: 500 }))
+    expect(await failing).toBe('failed')
+    expect(await refreshBackupList(tenant(''))).toBe('failed')
+  })
+
+  it('drops damage kinds that do not count exactly the unreadable files', async () => {
+    const fetches = pendingFetch()
+    const key = backupListKey(tenant())
+    const kinds = (key: number) => ({ counts: { key }, codes: [], names: {} })
+    const first = refreshBackupList(tenant())
+    fetches.answer(0, Response.json({ backups: [], damagedFiles: 3, damagedFileNames: [], damagedKinds: kinds(2) }))
+    await first
+    expect(backupListOf(key).damagedKinds).toBeNull()
+    const second = refreshBackupList(tenant(), { force: true })
+    fetches.answer(1, Response.json({ backups: [], damagedFiles: 3, damagedFileNames: [], damagedKinds: { counts: {}, codes: [], names: {} } }))
+    await second
+    expect(backupListOf(key).damagedKinds).toBeNull()
+    const third = refreshBackupList(tenant(), { force: true })
+    fetches.answer(2, Response.json({ backups: [], damagedFiles: 3, damagedFileNames: [], damagedKinds: kinds(3) }))
+    await third
+    expect(backupListOf(key).damagedKinds?.counts).toEqual({ key: 3, os: 0, duplicate: 0, damaged: 0 })
   })
 })

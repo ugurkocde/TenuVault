@@ -11,6 +11,7 @@ import { backupFoldersIn, parseBackupName } from "../../../../shared/intune/back
 import { isLegacyOtherTenantError, isLegacySealedError } from "../../../../shared/legacy-sealed"
 import { oversizedOwnershipFile, resolveBackupOwnership, type OwnershipFile } from "../../../../shared/backup-ownership"
 import { readJsonCapped } from "../../../../shared/capped-body"
+import { DAMAGE_KINDS_HEADER, damagedFileKindsFrom, type DamagedFileKinds } from "../../../../shared/damaged-files"
 import { type NextRequest, NextResponse } from "next/server"
 
 // Helper function to format bytes to human readable format
@@ -313,10 +314,14 @@ export async function POST(request: NextRequest) {
     // the list can say that some backups may be missing from it or unavailable.
     let damagedFiles = 0
     let damagedFileNames: string[] = []
+    // Why they cannot be used, by kind, so the list can say what to do about them.
+    let damagedKinds: DamagedFileKinds | null = null
     if (storageAccountName.startsWith(LOCAL_STORAGE_PREFIX)) {
       const properties = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container`, { headers: storageHeaders(accessToken) }).catch(() => null)
       damagedFiles = Number(properties?.headers.get('x-tenuvault-unreadable-files') ?? 0) || 0
       damagedFileNames = (properties?.headers.get('x-tenuvault-unreadable-file-names') ?? '').split(',').filter((name) => /^[0-9a-f]{1,64}\.tvb$/i.test(name))
+      // Kinds that do not count exactly the unreadable files are left out; the page then says the reasons are not known.
+      try { damagedKinds = damagedFileKindsFrom(JSON.parse(properties?.headers.get(DAMAGE_KINDS_HEADER) ?? 'null'), damagedFiles) } catch { damagedKinds = null }
     }
     
     // Get details for each backup folder
@@ -359,7 +364,7 @@ export async function POST(request: NextRequest) {
       delete backup.sealed
     }
 
-    return NextResponse.json({ backups, unresolved, sealed, ...(damagedFiles ? { damagedFiles, damagedFileNames } : {}) })
+    return NextResponse.json({ backups, unresolved, sealed, ...(damagedFiles ? { damagedFiles, damagedFileNames, ...(damagedKinds ? { damagedKinds } : {}) } : {}) })
   } catch (error) {
     console.error("List backups error:", error)
     return NextResponse.json(

@@ -272,7 +272,7 @@ describe("localInventoryProblem", () => {
     let writes = 0
     const changing = { damage: vi.fn(async () => {
       writeFileSync(join(containerDir(root), `write-${writes++}.tmp`), "")
-      return { files: [{ file: "a.tvb", reason: "it is damaged or incomplete", backup: null }], unavailable: new Map<string, string>(), unattributed: 1 }
+      return { files: [{ file: "a.tvb", reason: "it is damaged or incomplete", kind: "damaged" as const, backup: null }], unavailable: new Map<string, string>(), unattributed: 1 }
     }) }
     expect(await localInventoryProblem(changing, root, TENANT_A)).toBeNull()
     expect(changing.damage).toHaveBeenCalledTimes(3)

@@ -1,12 +1,12 @@
 import { act, createElement } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { resetBackupLists, useBackupList, type BackupList } from "../../src/renderer/lib/backup-list"
+import { resetBackupLists, useBackupList, type BackupList, type RefreshOutcome } from "../../src/renderer/lib/backup-list"
 import type { Tenant } from "../../src/portal/contexts/TenantContext"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-type HookResult = BackupList & { refresh: (options?: { force?: boolean }) => Promise<void> }
+type HookResult = BackupList & { refresh: (options?: { force?: boolean }) => Promise<RefreshOutcome> }
 
 function renderHook(run: () => HookResult): { result: { current: HookResult }; unmount: () => void } {
   const result = { current: undefined as unknown as HookResult }

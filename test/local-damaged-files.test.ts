@@ -299,6 +299,8 @@ describe("backup history with damaged local files", () => {
         const data = await response.json()
         expect(data.damagedFiles).toBe(1)
         expect(data.damagedFileNames).toEqual([damagedFile])
+        // A damaged header looks like a file made with another key, so it is sent as the key kind.
+        expect(data.damagedKinds).toEqual({ counts: { key: 1, os: 0, duplicate: 0, damaged: 0 }, codes: [], names: { key: [damagedFile], os: [], duplicate: [], damaged: [] } })
         const byId = Object.fromEntries(data.backups.map((entry: { id: string }) => [entry.id, entry]))
         expect(byId[NEW]).toMatchObject({ status: "Success", totalPolicies: 2 })
         expect(byId[OLD]).toMatchObject({ status: "unavailable" })
