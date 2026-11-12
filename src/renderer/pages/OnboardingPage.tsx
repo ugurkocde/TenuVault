@@ -2,7 +2,7 @@ import { trialKeyRefusalText } from "../../shared/trial-notices"
 import { showCommunityLimitError } from "../lib/plan-dialog"
 import { useEffect, useRef, useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
-import { ArrowLeft, ArrowRight, Ban, CheckCircle2, Database, HardDriveDownload, KeyRound, Loader2, Play, RotateCcw, ShieldCheck, XCircle } from "lucide-react"
+import { AlertTriangle, ArrowLeft, ArrowRight, Ban, CheckCircle2, Database, HardDriveDownload, KeyRound, Loader2, Play, RotateCcw, ShieldCheck, XCircle } from "lucide-react"
 import { useSelectedTenant, useTenantOperations, useTenants } from "~/contexts/TenantContext"
 import { useBackupProgress } from "~/contexts/BackupProgressContext"
 import { Button } from "~/components/ui/button"
@@ -23,7 +23,7 @@ import { buildTenantProfile } from "../lib/desktop-tenant"
 import { clearOnboardingDraft, loadOnboardingDraft, saveOnboardingDraft } from "../lib/onboarding-draft"
 import type { StorageChoice } from "../lib/storage"
 import { desktopTenantCredentials, type TenantCredentials } from "../overrides/add-tenant-modal"
-import { resolveBackupJobDisplay, toBackupJobDisplay, type BackupJobDisplay } from "~/lib/backup-job-display"
+import { completedWithWarnings, resolveBackupJobDisplay, toBackupJobDisplay, type BackupJobDisplay } from "~/lib/backup-job-display"
 import { BackupResults } from "~/components/backup/backup-results"
 
 const STEPS = [
@@ -37,8 +37,9 @@ type JobStatus = BackupJobDisplay
 type Step = 0 | 1 | 2 | 3
 
 /** The first backup's state: running, completed, cancelled by the user (grey) or failed. */
-export function JobStateIcon({ job }: { job: Pick<JobStatus, "isComplete" | "isSuccessful" | "status"> }) {
+export function JobStateIcon({ job }: { job: Pick<JobStatus, "isComplete" | "isSuccessful" | "status" | "progressMessage" | "results"> }) {
   if (!job.isComplete) return <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+  if (completedWithWarnings(job)) return <AlertTriangle className="h-4 w-4 text-amber-700" />
   if (job.isSuccessful) return <CheckCircle2 className="h-4 w-4 text-green-600" />
   return job.status === "Cancelled" ? <Ban className="h-4 w-4 text-gray-500" /> : <XCircle className="h-4 w-4 text-red-600" />
 }

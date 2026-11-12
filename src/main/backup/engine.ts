@@ -713,6 +713,7 @@ export class BackupEngine {
       this.write(job, `Saved ${maskedItems.length} object${maskedItems.length === 1 ? "" : "s"} with encrypted OMA-URI values masked (****): Microsoft refused the plain-text read, so these copies cannot be restored. A manual backup with your sign-in captures them when Microsoft returns the values.`, "warning")
     }
     const warnings = failures + retentionWarnings + (maskedItems.length ? 1 : 0)
+    results.warnings = warnings
     job.progressMessage =
       job.status === "Failed" ? "Backup failed: no policies could be saved" : warnings > 0 ? `Backup completed with ${warnings} warning${warnings === 1 ? "" : "s"}` : "Backup completed successfully"
     const extra = inventory.map(([folder, count]) => ` and ${count} ${typeForFolder(folder)!.label}`).join("")

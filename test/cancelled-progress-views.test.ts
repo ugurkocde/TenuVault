@@ -84,7 +84,7 @@ describe("a backup the user cancelled, in the progress views", () => {
   })
 
   it("shows a grey icon on the first backup step of setup", () => {
-    const icon = (status: string, isSuccessful = false, isComplete = true) => renderToStaticMarkup(createElement(JobStateIcon, { job: { status, isComplete, isSuccessful } }))
+    const icon = (status: string, isSuccessful = false, isComplete = true) => renderToStaticMarkup(createElement(JobStateIcon, { job: { status, isComplete, isSuccessful, progressMessage: "" } }))
     expect(icon("Cancelled")).toContain("h-4 w-4 text-gray-500")
     expect(icon("Failed")).toContain("h-4 w-4 text-red-600")
     expect(icon("Completed", true)).toContain("text-green-600")

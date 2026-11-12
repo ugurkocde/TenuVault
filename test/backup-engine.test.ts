@@ -195,6 +195,7 @@ describe("BackupEngine", () => {
     expect(types.filter((type) => type.state === "reading")).toEqual([])
     expect(types.some((type) => type.state === "empty")).toBe(true)
     expect(job.results!.totalPolicies).toBe(job.totalPolicies)
+    expect(job.results!.warnings).toBe(1)
     expect(jobStatus(job).results).toBe(job.results)
   })
 

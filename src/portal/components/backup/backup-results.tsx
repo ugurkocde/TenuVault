@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useId, useRef, useState } from "react"
-import { AlertTriangle, Check, ChevronDown, ChevronRight, Copy, FileText, LoaderCircle, MinusCircle, XCircle } from "lucide-react"
+import { AlertTriangle, CircleStop, Check, ChevronDown, ChevronRight, Copy, FileText, LoaderCircle, MinusCircle, XCircle } from "lucide-react"
 import { cn } from "~/lib/utils"
 import { formatBackupDuration, summarizeBackupResults, typeHeading, type BackupJobDisplay } from "~/lib/backup-job-display"
 import { MAX_ITEM_ERRORS, type BackupTypeResult } from "../../../shared/backup-results"
@@ -24,12 +24,13 @@ export function BackupResults({ job, compact = false, jobId }: BackupResultsProp
   const results = job.results
   if (!results) return job.output ? <RawLog output={job.output} jobId={jobId} live={!job.isComplete} compact={compact} /> : null
 
-  const summary = summarizeBackupResults(results)
+  const summary = summarizeBackupResults(results, job.isComplete)
   const duration = formatBackupDuration(job.startTime, job.endTime)
-  const rows = compact ? summary.saved.slice(0, COMPACT_ROWS) : summary.saved
-  const hidden = summary.saved.length - rows.length
+  const rows = compact ? summary.rows.slice(0, COMPACT_ROWS) : summary.rows
+  const hidden = summary.rows.length - rows.length
   const problems = summary.unreadable.length + summary.skipped.length + summary.partial.length + summary.warnings.length
-  const failedRun = job.isComplete && job.status === "Failed"
+  // Red for a failed run or a type that could not be read; a run the user cancelled stays amber.
+  const severe = job.status !== "Cancelled" && ((job.isComplete && job.status === "Failed") || summary.unreadable.length > 0)
   const extras = summary.inventory.map((entry) => `${entry.count} ${entry.label}`)
 
   return (
@@ -37,26 +38,26 @@ export function BackupResults({ job, compact = false, jobId }: BackupResultsProp
       {compact ? (
         <p className="text-xs text-foreground">
           <span className="font-semibold tabular-nums">{summary.policies}</span> {summary.policies === 1 ? "policy" : "policies"} {job.isComplete ? "saved" : "saved so far"}
-          <span className="text-muted-foreground"> across {summary.saved.length} type{summary.saved.length === 1 ? "" : "s"}{duration ? `, ${duration}` : ""}</span>
+          <span className="text-muted-foreground"> across {summary.typesBackedUp} type{summary.typesBackedUp === 1 ? "" : "s"}{duration ? `, ${duration}` : ""}</span>
         </p>
       ) : (
         <dl className="grid grid-cols-3 gap-2">
           <Stat label={job.isComplete ? "Policies saved" : "Saved so far"} value={String(summary.policies)} />
-          <Stat label="Types backed up" value={String(summary.saved.length)} />
+          <Stat label="Types backed up" value={String(summary.typesBackedUp)} />
           <Stat label={job.isComplete ? "Duration" : "Elapsed"} value={duration || "-"} />
         </dl>
       )}
       {extras.length > 0 && <p className="text-xs text-muted-foreground">Also saved: {extras.join(", ")}.</p>}
 
       {problems > 0 && (
-        <div className={cn("rounded-2xl px-3.5 py-3", failedRun || summary.unreadable.length ? "bg-red-50" : "bg-amber-50")}>
-          <p className={cn("flex items-center gap-2 text-sm font-medium", failedRun || summary.unreadable.length ? "text-red-700" : "text-amber-800")}>
+        <div className={cn("rounded-2xl px-3.5 py-3", severe ? "bg-red-50" : "bg-amber-50")}>
+          <p className={cn("flex items-center gap-2 text-sm font-medium", severe ? "text-red-700" : "text-amber-800")}>
             <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
             Needs attention
           </p>
           <ul className="mt-2 space-y-1.5 text-xs text-foreground">
             {summary.unreadable.map((type) => (
-              <Problem key={type.folder} title={`Could not read ${type.label}`} detail={type.reason} />
+              <Problem key={type.folder} title={`Could not read ${type.label}`} detail={type.reason} compact={compact} />
             ))}
             {summary.partial.map((type) => (
               <Problem key={type.folder} title={`${type.failed} of ${type.found ?? type.saved + type.failed} ${type.label} could not be saved`} items={type.errors} more={type.failed - (type.errors?.length ?? 0)} compact={compact} />
@@ -64,17 +65,16 @@ export function BackupResults({ job, compact = false, jobId }: BackupResultsProp
             {summary.skipped.map((type) => (
               <Problem key={type.folder} title={`${typeHeading(type.label)} left out`} detail={type.reason} compact={compact} />
             ))}
-            {summary.warnings.map((message) => (
-              <Problem key={message} title={message} />
+            {summary.warnings.map((message, index) => (
+              <Problem key={index} title={message} />
             ))}
           </ul>
         </div>
       )}
 
-      {(rows.length > 0 || summary.active.length > 0) && (
+      {rows.length > 0 && (
         <ul aria-label="Backed up types" className="divide-y divide-border overflow-hidden rounded-2xl border border-border">
-          {rows.map((type) => <TypeRow key={type.folder} type={type} />)}
-          {!compact && summary.active.map((type) => <TypeRow key={type.folder} type={type} />)}
+          {rows.map((type) => <TypeRow key={type.folder} type={type} finished={job.isComplete} />)}
         </ul>
       )}
       {hidden > 0 && <p className="text-xs text-muted-foreground">and {hidden} more type{hidden === 1 ? "" : "s"}</p>}
@@ -93,7 +93,7 @@ export function BackupResults({ job, compact = false, jobId }: BackupResultsProp
 
       {!compact && summary.info.length > 0 && (
         <ul className="space-y-1 text-xs text-muted-foreground">
-          {summary.info.map((message) => <li key={message}>{message}</li>)}
+          {summary.info.map((message, index) => <li key={index}>{message}</li>)}
         </ul>
       )}
 
@@ -111,12 +111,18 @@ function Stat({ label, value }: { label: string; value: string }) {
   )
 }
 
-function TypeRow({ type }: { type: BackupTypeResult }) {
-  const active = type.state === "reading"
+/** A type the job is backing up, or, once it has ended, stopped part way through. */
+function TypeRow({ type, finished }: { type: BackupTypeResult; finished: boolean }) {
+  const unfinished = type.state === "reading"
+  const active = unfinished && !finished
+  const stopped = unfinished && finished
+  const state = active ? "in progress" : stopped ? "stopped before it finished" : type.saved === 0 ? `none saved, ${type.failed} failed` : type.failed > 0 ? "saved with failures" : "saved"
   return (
     <li className="flex items-center gap-2.5 bg-card px-3 py-2 text-sm">
       {active ? (
         <LoaderCircle className="h-4 w-4 shrink-0 animate-spin text-coral-500" aria-hidden="true" />
+      ) : stopped ? (
+        <CircleStop className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
       ) : type.saved === 0 ? (
         <XCircle className="h-4 w-4 shrink-0 text-red-600" aria-hidden="true" />
       ) : type.failed > 0 ? (
@@ -125,11 +131,12 @@ function TypeRow({ type }: { type: BackupTypeResult }) {
         <Check className="h-4 w-4 shrink-0 text-green-600" aria-hidden="true" />
       )}
       <span className="min-w-0 flex-1 truncate text-foreground" title={typeHeading(type.label)}>{typeHeading(type.label)}</span>
+      {stopped && <span className="shrink-0 text-xs text-muted-foreground">Stopped</span>}
       {type.failed > 0 && <span className="shrink-0 text-xs text-amber-800">{type.failed} failed</span>}
       <span className="shrink-0 tabular-nums font-medium text-foreground">
-        {active ? <span className="text-muted-foreground">{type.saved} of {type.found}</span> : type.saved}
+        {unfinished ? <span className="text-muted-foreground">{type.saved} of {type.found}</span> : type.saved}
       </span>
-      <span className="sr-only">{active ? "in progress" : type.failed > 0 ? "saved with failures" : "saved"}</span>
+      <span className="sr-only">{state}</span>
     </li>
   )
 }
@@ -141,7 +148,7 @@ function Problem({ title, detail, items, more = 0, compact = false }: { title: s
       {detail && !compact && <p className="text-muted-foreground">{detail}</p>}
       {items && items.length > 0 && !compact && (
         <ul className="mt-0.5 list-disc space-y-0.5 pl-4 text-muted-foreground">
-          {items.slice(0, MAX_ITEM_ERRORS).map((item) => <li key={item} className="break-words">{item}</li>)}
+          {items.slice(0, MAX_ITEM_ERRORS).map((item, index) => <li key={index} className="break-words">{item}</li>)}
           {more > 0 && <li>and {more} more, listed in the raw log</li>}
         </ul>
       )}

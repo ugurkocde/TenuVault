@@ -163,7 +163,7 @@ export function BackupProgressModal({
 
   return (
     <Dialog open={open} onOpenChange={handleDialogChange}>
-      <DialogContent className="sm:max-w-[500px]">
+      <DialogContent className="flex max-h-[90vh] flex-col sm:max-w-[500px]">
         <DialogHeader>
           <DialogTitle>Backup Progress</DialogTitle>
           <DialogDescription>
@@ -171,7 +171,7 @@ export function BackupProgressModal({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 py-4">
+        <div className="-mx-1 min-h-0 space-y-4 overflow-y-auto px-1 py-4">
           {cancelError && (
             <Alert variant="destructive">
               <AlertCircle className="h-4 w-4" />
@@ -186,7 +186,7 @@ export function BackupProgressModal({
           ) : jobStatus ? (
             <>
               <div className="space-y-2">
-                <div className="flex items-center gap-2.5" role="status">
+                <div className="flex items-center gap-2.5">
                   {jobStatus.isComplete ? (
                     completedWithWarnings(jobStatus) ? (
                       <AlertTriangle className="h-5 w-5 shrink-0 text-amber-700" aria-hidden="true" />
@@ -201,6 +201,8 @@ export function BackupProgressModal({
                     <LoaderCircle className="h-5 w-5 shrink-0 animate-spin text-coral-500" aria-hidden="true" />
                   )}
                   <span className="min-w-0 flex-1 text-sm font-medium text-foreground">{jobStatus.progressMessage}</span>
+                  {/* Announces the result once, not every progress tick. */}
+                  <span role="status" className="sr-only">{jobStatus.isComplete ? jobStatus.progressMessage : ""}</span>
                   {!jobStatus.isComplete && <span className="shrink-0 text-sm tabular-nums text-muted-foreground">{jobStatus.progress}%</span>}
                 </div>
                 {!jobStatus.isComplete && <Progress value={jobStatus.progress} aria-label="Backup progress" className="h-2 bg-gray-100 [&>div]:bg-coral-500" />}

@@ -106,47 +106,49 @@ export function isBackupJobPollable(job: { isComplete: boolean; pollError?: stri
 
 /** What a backup's results section shows, worked out from the engine's per type results. */
 export interface BackupResultsSummary {
-  /** Types with something saved or failed, in registry order. */
-  saved: BackupTypeResult[]
-  /** Types being backed up right now. */
-  active: BackupTypeResult[]
-  /** Types still being listed. */
+  /**
+   * Policy types with a row, in registry order: saved (some may have failed), being backed up, or,
+   * once the job has ended, stopped part way. Inventory such as Autopilot devices is in `inventory`.
+   */
+  rows: BackupTypeResult[]
+  /** Policy types with at least one object saved. */
+  typesBackedUp: number
+  /** Types still being listed while the job runs. */
   pending: number
   empty: BackupTypeResult[]
   skipped: BackupTypeResult[]
   unreadable: BackupTypeResult[]
-  /** Types whose list was read but where some items could not be saved. */
+  /** Types where some objects could not be saved. */
   partial: BackupTypeResult[]
-  failedItems: number
   policies: number
   inventory: Array<{ label: string; count: number }>
   warnings: string[]
   info: string[]
 }
 
-export function summarizeBackupResults(results: BackupResults): BackupResultsSummary {
+/** `finished` once the job has ended: a type it never finished then counts as stopped, not running. */
+export function summarizeBackupResults(results: BackupResults, finished = false): BackupResultsSummary {
   const types = results.types
-  const saved = types.filter((type) => type.state === "saved" && (type.saved > 0 || type.failed > 0))
-  const counted = types.filter((type) => !type.inventory).reduce((sum, type) => sum + type.saved, 0)
+  const policyTypes = types.filter((type) => !type.inventory)
   return {
-    saved,
-    active: types.filter((type) => type.state === "reading" && (type.found ?? 0) > 0),
-    pending: types.filter((type) => type.state === "reading" && type.found === undefined).length,
+    rows: policyTypes.filter((type) => (type.state === "saved" && (type.saved > 0 || type.failed > 0)) || (type.state === "reading" && (type.found ?? 0) > 0)),
+    typesBackedUp: policyTypes.filter((type) => type.saved > 0).length,
+    pending: finished ? 0 : types.filter((type) => type.state === "reading" && type.found === undefined).length,
     empty: types.filter((type) => type.state === "empty" || (type.state === "saved" && type.saved === 0 && type.failed === 0)),
     skipped: types.filter((type) => type.state === "skipped"),
     unreadable: types.filter((type) => type.state === "unreadable"),
     partial: types.filter((type) => type.failed > 0),
-    failedItems: types.reduce((sum, type) => sum + type.failed, 0),
-    policies: results.totalPolicies ?? counted,
+    policies: results.totalPolicies ?? policyTypes.reduce((sum, type) => sum + type.saved, 0),
     inventory: types.filter((type) => type.inventory && type.saved > 0).map((type) => ({ label: type.label, count: type.saved })),
     warnings: results.notices.filter((notice) => notice.level === "warning").map((notice) => notice.message),
     info: results.notices.filter((notice) => notice.level === "info").map((notice) => notice.message),
   }
 }
 
-/** A completed backup that left something out or could not save everything, per the engine's summary. */
-export function completedWithWarnings(job: { isComplete: boolean; isSuccessful: boolean; progressMessage: string }): boolean {
-  return job.isComplete && job.isSuccessful && /with \d+ warnings?/.test(job.progressMessage)
+/** A completed backup with warnings: the engine's count, or its message for a job without results. */
+export function completedWithWarnings(job: { isComplete: boolean; isSuccessful: boolean; progressMessage: string; results?: BackupResults }): boolean {
+  if (!job.isComplete || !job.isSuccessful) return false
+  return job.results?.warnings !== undefined ? job.results.warnings > 0 : /with \d+ warnings?/.test(job.progressMessage)
 }
 
 /** A type label as a row heading: "compliance policies" becomes "Compliance policies". */

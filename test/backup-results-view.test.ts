@@ -23,9 +23,10 @@ const results: Results = {
 }
 
 describe("backup results summary", () => {
-  it("splits types into saved, empty and problem groups and leaves inventory out of the policy total", () => {
+  it("splits types into rows, empty and problem groups and keeps inventory out of rows and totals", () => {
     const summary = summarizeBackupResults(results)
-    expect(summary.saved.map((entry) => entry.folder)).toEqual(["Compliance", "Settings", "Autopilot"])
+    expect(summary.rows.map((entry) => entry.folder)).toEqual(["Compliance", "Settings"])
+    expect(summary.typesBackedUp).toBe(2)
     expect(summary.empty.map((entry) => entry.folder)).toEqual(["Roles"])
     expect(summary.skipped.map((entry) => entry.folder)).toEqual(["Scripts"])
     expect(summary.unreadable.map((entry) => entry.folder)).toEqual(["Apps"])
@@ -38,9 +39,13 @@ describe("backup results summary", () => {
   })
 
   it("counts types still being listed or backed up while the run goes", () => {
-    const summary = summarizeBackupResults({ types: [type("A", { state: "reading" }), type("B", { state: "reading", found: 5, saved: 2 })], notices: [] })
+    const live = { types: [type("A", { state: "reading" }), type("B", { state: "reading", found: 5, saved: 2 }), type("C", { found: 2, saved: 0, failed: 2 })], notices: [] }
+    const summary = summarizeBackupResults(live)
     expect(summary.pending).toBe(1)
-    expect(summary.active.map((entry) => entry.folder)).toEqual(["B"])
+    expect(summary.rows.map((entry) => entry.folder)).toEqual(["B", "C"])
+    // A type where nothing was saved is not counted as backed up.
+    expect(summary.typesBackedUp).toBe(1)
+    expect(summarizeBackupResults(live, true).pending).toBe(0)
   })
 
   it("formats durations, headings and the warnings state", () => {
@@ -51,6 +56,9 @@ describe("backup results summary", () => {
     const done = { isComplete: true, isSuccessful: true }
     expect(completedWithWarnings({ ...done, progressMessage: "Backup completed with 2 warnings" })).toBe(true)
     expect(completedWithWarnings({ ...done, progressMessage: "Backup completed successfully" })).toBe(false)
+    // The engine's count wins over the message wording.
+    expect(completedWithWarnings({ ...done, progressMessage: "Backup completed successfully", results: { types: [], notices: [], warnings: 1 } })).toBe(true)
+    expect(completedWithWarnings({ ...done, progressMessage: "Backup completed with 2 warnings", results: { types: [], notices: [], warnings: 0 } })).toBe(false)
   })
 })
 
@@ -63,6 +71,7 @@ describe("BackupResults", () => {
     expect(html).toContain(">8<")
     expect(html).toContain(">5s<")
     expect(html).toContain("Also saved: 4 Autopilot devices.")
+    expect(html).not.toContain(">Autopilot devices<")
     expect(html.indexOf("Needs attention")).toBeLessThan(html.indexOf("Backed up types"))
     expect(html).toContain("Could not read apps")
     expect(html).toContain("1 of 3 settings catalog policies could not be saved")
@@ -80,6 +89,25 @@ describe("BackupResults", () => {
     expect(html).toContain("across 8 types, 5s")
     expect(html.match(/<li /g)?.length).toBe(5)
     expect(html).toContain("and 3 more types")
+  })
+
+  it("shows a type a cancelled run never finished as stopped, not spinning, and keeps the box amber", () => {
+    const stopped: Results = { types: [type("A", { label: "compliance policies", state: "reading", found: 12, saved: 3 }), type("B", { label: "apps", state: "unreadable", reason: "Graph returned 500" })], notices: [] }
+    const html = renderToStaticMarkup(createElement(BackupResults, { job: { ...job, status: "Cancelled", results: stopped } }))
+    expect(html).toContain("Stopped")
+    expect(html).toContain("3 of 12")
+    expect(html).toContain("stopped before it finished")
+    expect(html).not.toContain("animate-spin")
+    expect(html).not.toContain("in progress")
+    expect(html).toContain("bg-amber-50")
+    expect(html).not.toContain("bg-red-50")
+    const running = renderToStaticMarkup(createElement(BackupResults, { job: { ...job, status: "Running", isComplete: false, results: stopped } }))
+    expect(running).toContain("animate-spin")
+  })
+
+  it("announces a type where nothing was saved as none saved", () => {
+    const none: Results = { types: [type("A", { found: 2, saved: 0, failed: 2 })], notices: [] }
+    expect(renderToStaticMarkup(createElement(BackupResults, { job: { ...job, results: none } }))).toContain("none saved, 2 failed")
   })
 
   it("offers only the raw log when the job has no per type results", () => {

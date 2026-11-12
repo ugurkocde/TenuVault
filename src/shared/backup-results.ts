@@ -38,6 +38,8 @@ export interface BackupResults {
   notices: BackupNotice[]
   /** Set when the run reached its manifest. */
   totalPolicies?: number
+  /** Warnings the result message counts, set with totalPolicies. */
+  warnings?: number
 }
 
 export const MAX_ITEM_ERRORS = 5
