@@ -27,6 +27,27 @@ async function packageFile(folder: string, options: { extra?: string; xml?: stri
 }
 
 describe("streaming app source store", () => {
+  it.each([".intunewin", ".INTUNEWIN"])("bounds empty-label filename fallbacks and reads authenticated legacy labels for %s", async extension => {
+    const folder = await root(), input = await packageFile(folder, { bytes: 128 }), base = join(folder, "store"), name = "a".repeat(201) + extension
+    const file = join(folder, name); await cp(input.file, file)
+    const store = new AppSourceStore(base, () => [master]), item = await store.attach(tenant, file, "  ")
+    expect(item.appName).toBe("a".repeat(200))
+    expect(await store.list(tenant)).toMatchObject({ sources: [item], unreadableSources: false })
+    await store.export(tenant, item.id, join(folder, "new.intunewin"))
+    expect(await readFile(join(folder, "new.intunewin"))).toEqual(input.data)
+    // Simulate a manifest written before filename-derived labels were bounded.
+    const legacy = { ...item, appName: name.endsWith(".intunewin") ? name.slice(0, -10) : name }
+    const fixture = store as unknown as { encode: (value: unknown, tenant: string, id: string, purpose: string) => Buffer }
+    const manifest = join(base, tenant, item.id, "manifest.tvm")
+    await writeFile(manifest, fixture.encode(legacy, tenant, item.id, "manifest"))
+    expect(await store.list(tenant)).toMatchObject({ sources: [item], unreadableSources: false })
+    await store.export(tenant, item.id, join(folder, "legacy.intunewin"))
+    expect(await readFile(join(folder, "legacy.intunewin"))).toEqual(input.data)
+    await store.attach(tenant, input.file, "Another")
+    expect((await store.list(tenant)).sources).toHaveLength(2)
+    await writeFile(manifest, fixture.encode({ ...legacy, appName: "unrelated".repeat(30) }, tenant, item.id, "manifest"))
+    expect((await store.list(tenant)).unreadableSources).toBe(true)
+  })
   it("does not create missing folders while listing or attempting an export", async () => {
     const folder = await root(), base = join(folder, "missing"), store = new AppSourceStore(base, () => [master])
     expect((await store.list(tenant)).sources).toEqual([])

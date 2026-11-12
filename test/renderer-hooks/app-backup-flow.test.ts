@@ -19,4 +19,9 @@ it("starts from the actual app list and explains preparation without enabling ca
   expect(node.textContent).toContain("Installed program files are not a substitute")
   expect([...node.querySelectorAll("button")].find(b => b.textContent === "Capture unavailable in this build")?.disabled).toBe(true)
   expect(api.signIn).not.toHaveBeenCalled()
+  const close = [...node.querySelectorAll("button")].find(b => b.textContent === "Close preparation")!
+  close.focus()
+  await act(async () => close.click())
+  expect(document.activeElement).toBe(button)
+  expect(node.textContent).not.toContain("Prepare backup: Finance")
 })

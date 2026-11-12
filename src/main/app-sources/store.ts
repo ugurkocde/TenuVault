@@ -131,7 +131,10 @@ export class AppSourceStore {
     const bytes = await readMetadata(join(directory, "manifest.tvm"))
     const decoded = this.decode<StoredAppSource>(bytes, tenant, id, "manifest")
     const v = decoded.value
-    if (!/^[a-f0-9]{24}$/.test(v.keyId) || v.id !== id || v.tenantId !== tenant || v.format !== "intunewin" || v.provenance !== "administrator-selected" || !Number.isSafeInteger(v.bytes) || v.bytes < 0 || v.bytes > 2 * 1024 ** 3 || !/^[a-f0-9]{64}$/.test(v.sha256) || typeof v.fileName !== "string" || v.fileName !== basename(v.fileName) || !/\.intunewin$/i.test(v.fileName) || typeof v.appName !== "string" || v.appName.length > 200 || !Number.isFinite(Date.parse(v.createdAt))) throw new Error("The source manifest is invalid.")
+    if (!/^[a-f0-9]{24}$/.test(v.keyId) || v.id !== id || v.tenantId !== tenant || v.format !== "intunewin" || v.provenance !== "administrator-selected" || !Number.isSafeInteger(v.bytes) || v.bytes < 0 || v.bytes > 2 * 1024 ** 3 || !/^[a-f0-9]{64}$/.test(v.sha256) || typeof v.fileName !== "string" || v.fileName !== basename(v.fileName) || !/\.intunewin$/i.test(v.fileName) || typeof v.appName !== "string" || (v.appName.length > 200 && v.appName !== basename(v.fileName, ".intunewin")) || !Number.isFinite(Date.parse(v.createdAt))) throw new Error("The source manifest is invalid.")
+    // Earlier builds used an unbounded filename-derived label. Normalize only that
+    // authenticated legacy value in memory, keeping retained/read-only stores usable.
+    v.appName = v.appName.slice(0, 200)
     return { ...decoded, directory }
   }
   async list(tenant: string): Promise<{ sources: StoredAppSource[]; warnings: string[]; unreadableSources: boolean }> {
@@ -198,7 +201,7 @@ export class AppSourceStore {
         await artifact.sync(); abort(signal)
         // Inspect only the immutable encrypted snapshot that will be published, not the live input.
         await inspectIntunewin(snapshotReader(artifact, size, secret, tenant, id, signal), size); abort(signal)
-        const manifest: StoredAppSource = { id, tenantId: tenant, fileName: basename(input), appName: appName.trim() || basename(input, ".intunewin"), bytes: size, sha256, createdAt: new Date().toISOString(), provenance: "administrator-selected", format: "intunewin", keyId: createHmac("sha256", master).update("TenuVault/app-sources/key-id/v1").digest("hex").slice(0, 24) }
+        const manifest: StoredAppSource = { id, tenantId: tenant, fileName: basename(input), appName: appName.trim() || basename(input).replace(/\.intunewin$/i, "").slice(0, 200), bytes: size, sha256, createdAt: new Date().toISOString(), provenance: "administrator-selected", format: "intunewin", keyId: createHmac("sha256", master).update("TenuVault/app-sources/key-id/v1").digest("hex").slice(0, 24) }
         await this.privateWrite(join(stage, "manifest.tvm"), this.encode(manifest, tenant, id, "manifest", master))
         await artifact.close(); abort(signal)
         await rename(stage, join(folder, id))

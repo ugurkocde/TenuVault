@@ -55,3 +55,5 @@ The final Opus backend re-check scored 8.5/10 with no merge blocker and confirme
 App-first validation: 62 focused tests passed, together with typecheck, lint (existing warnings only), production/docs builds and desktop smoke. The disposable Electron capture uses clearly identified synthetic app descriptors for privacy, with real trusted native attachment, encrypted storage and byte-identical export.
 
 Final app-first full suite: 5,101 passed, two existing skips. All 355 test files passed.
+
+The app-first council review scored 8/10. Its blocker is fixed: new filename-derived labels are capped at 200 characters, and authenticated legacy manifests whose longer label exactly matches the old filename fallback are normalized in memory, preserving retained/read-only access. Other invalid long labels remain rejected. Regressions cover lowercase/uppercase extensions, empty labels, old manifests, exact export and subsequent attachment. Closing preparation now restores focus to its originating app button. All 99 focused tests, typecheck and lint passed after these corrections.
