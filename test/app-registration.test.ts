@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
-import { CONSENT_ROLES, DESKTOP_APP_PERMISSIONS, parseSetupOutput, setupHandoffText, setupIdsFromClipboard, SETUP_SCRIPT_DOWNLOAD_URL } from "../src/shared/app-registration"
+import { CONSENT_ROLES, CONSENT_ROLES_TEXT, DESKTOP_APP_PERMISSIONS, MANUAL_APP_REGISTRATION_URL, parseSetupOutput, setupHandoffText, setupIdsFromClipboard, SETUP_SCRIPT_DOWNLOAD_URL, suggestsCreatingByHand } from "../src/shared/app-registration"
 import { licenseKeyFromClipboard } from "../src/main/license/clipboard-key"
 
 const script = readFileSync(new URL("../resources/New-TenuVaultDesktopApp.ps1", import.meta.url), "utf8")
@@ -20,6 +20,24 @@ describe("the app registration shown in the guided setup", () => {
   it("names every role the script header allows", () => {
     const header = script.replace(/\s+/g, " ")
     for (const role of CONSENT_ROLES) expect(header).toContain(role)
+  })
+
+  it("lists only roles that can both create the app registration and grant the consent", () => {
+    expect(CONSENT_ROLES_TEXT).toBe("Global Administrator, Cloud Application Administrator or Application Administrator")
+    expect(script).not.toContain("Privileged Role Administrator")
+  })
+
+  it("tells the other administrator what to do when the tenant blocks the script's sign-in app", () => {
+    const text = setupHandoffText()
+    expect(text).toContain("blocks Microsoft Graph Command Line Tools")
+    expect(text).toContain(MANUAL_APP_REGISTRATION_URL)
+    // The manual route is offered before the closing guide line, not only through it.
+    expect(text.indexOf(MANUAL_APP_REGISTRATION_URL)).toBeLessThan(text.lastIndexOf("Guide, including"))
+  })
+
+  it("recognises the errors that need the manual route", () => {
+    expect(suggestsCreatingByHand("... or create the app registration by hand in the Entra admin center. Nothing was changed.")).toBe(true)
+    expect(suggestsCreatingByHand("Graph POST failed: Request rate is too high.")).toBe(false)
   })
 })
 

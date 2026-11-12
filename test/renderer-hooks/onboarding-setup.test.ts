@@ -25,6 +25,7 @@ const state = vi.hoisted(() => ({
   updateJob: vi.fn(),
   addJob: vi.fn(),
   activeJobs: [] as { jobId: string; isComplete: boolean; isSuccessful: boolean; status: string; progress: number }[],
+  openExternal: vi.fn(async (_url: string) => undefined),
 }))
 
 vi.mock("../../src/renderer/lib/bridge", () => ({
@@ -40,7 +41,7 @@ vi.mock("../../src/renderer/lib/bridge", () => ({
     preferences: { get: async () => ({ firstBackupNoteSeen: true }) },
     schedules: { list: async () => [] },
     backups: { settings: async () => ({ recoveryExported: true }) },
-    app: { openExternal: async () => undefined },
+    app: { openExternal: state.openExternal },
   },
 }))
 vi.mock("../../src/renderer/lib/license", () => ({
@@ -334,7 +335,8 @@ describe("OnboardingPage", () => {
     expect(button(container, "Set up with Microsoft sign-in")).toBeDefined()
     expect(container.textContent).toContain("Connect your tenant")
     expect(container.textContent).toContain("Microsoft Graph Command Line Tools")
-    expect(container.textContent).toContain("Privileged Role Administrator")
+    expect(container.textContent).toContain("Application Administrator")
+    expect(container.textContent).not.toContain("Privileged Role Administrator")
     expect(container.textContent).toContain("Permissions the app registration gets")
     expect(button(container, "Someone else is the admin? Copy instructions")).toBeDefined()
     // The script route, and creating the registration by hand, sit behind one more click.
@@ -446,7 +448,7 @@ describe("in-app tenant setup", () => {
 
   it("explains the setup before it starts", async () => {
     const container = await render(createElement(OnboardingPage))
-    for (const text of ["One Microsoft sign-in.", "It lives in your tenant", "It acts only as you", "No secret to protect", "Backups stay with you", "Microsoft will ask you to approve Microsoft Graph Command Line Tools", "because the setup grants admin consent", "Your administrator approves once", "Application.ReadWrite.All", "kept in memory only"]) expect(container.textContent).toContain(text)
+    for (const text of ["One Microsoft sign-in.", "It lives in your tenant", "It acts only as you", "No secret to protect", "Backups stay with you", "Microsoft will ask you to approve Microsoft Graph Command Line Tools", "because the setup creates an app registration and grants admin consent", "GCC High, DoD and 21Vianet tenants are not supported", "Your administrator approves once", "Application.ReadWrite.All", "kept in memory only"]) expect(container.textContent).toContain(text)
     // Claims the app cannot stand behind are not made: no time promise, and no "everything stays in your tenant".
     expect(container.textContent).not.toMatch(/about (a|one|two) minutes?|stays in your tenant|no background access/i)
     expect(container.querySelector("#setup-tenant")).not.toBeNull()
@@ -538,6 +540,40 @@ describe("in-app tenant setup", () => {
     expect(state.createRegistration).toHaveBeenCalledTimes(1)
     expect(state.signIn).toHaveBeenLastCalledWith(TENANT, CLIENT)
     expect(container.textContent).toContain("Choose where backups are stored")
+  })
+
+  const MANUAL = "https://docs.tenuvault.com/getting-started/app-registration/#create-the-app-registration-manually"
+
+  it("offers the manual route next to an error that needs it, because the setup script is blocked too", async () => {
+    state.createRegistration.mockRejectedValueOnce(new Error("This tenant does not let your account sign in to Microsoft Graph Command Line Tools, the Microsoft app that the setup and the setup script sign in through (AADSTS7000112). Ask your Entra administrator to allow it for your account, or create the app registration by hand in the Entra admin center. Nothing was changed."))
+    const container = await render(createElement(OnboardingPage))
+    await act(async () => { button(container, "Set up with Microsoft sign-in")!.click(); await settle() })
+    const alert = container.querySelector<HTMLElement>('[role="alert"]')!
+    expect(alert.textContent).toContain("AADSTS7000112")
+    await act(async () => button(alert, "Create it by hand")!.click())
+    expect(state.openExternal).toHaveBeenCalledWith(MANUAL)
+    // Once it exists, the admin goes on from the same place to enter its IDs.
+    await act(async () => { button(alert, "I already have an app registration")!.click(); await settle() })
+    expect(container.textContent).toContain("Sign in to your tenant")
+  })
+
+  it("does not offer the manual route next to an error it does not help with", async () => {
+    state.createRegistration.mockRejectedValueOnce(new Error("Graph POST failed: Request rate is too high."))
+    const container = await render(createElement(OnboardingPage))
+    await act(async () => { button(container, "Set up with Microsoft sign-in")!.click(); await settle() })
+    const alert = container.querySelector<HTMLElement>('[role="alert"]')!
+    expect(alert.textContent).toContain("Request rate is too high")
+    expect(button(alert, "Create it by hand")).toBeUndefined()
+  })
+
+  it("says while it waits which refusal in the browser needs which route", async () => {
+    state.createRegistration.mockImplementationOnce(() => new Promise(() => {}))
+    const container = await render(createElement(OnboardingPage))
+    await act(async () => button(container, "Set up with Microsoft sign-in")!.click())
+    expect(container.textContent).toContain('If Microsoft says that you need admin approval, this account cannot approve the setup. Select Cancel and use "Someone else is the admin?" below.')
+    expect(container.textContent).toContain("the setup script is blocked too")
+    await act(async () => button(container, "create the app registration by hand")!.click())
+    expect(state.openExternal).toHaveBeenCalledWith(MANUAL)
   })
 
   it("does not report a cancelled last sign-in as an error", async () => {

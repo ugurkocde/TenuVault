@@ -6,8 +6,24 @@ export const SETUP_SCRIPT_DOWNLOAD_URL = "https://docs.tenuvault.com/downloads/N
 export const APP_REGISTRATION_GUIDE_URL = "https://docs.tenuvault.com/getting-started/app-registration/"
 export const MANUAL_APP_REGISTRATION_URL = `${APP_REGISTRATION_GUIDE_URL}#create-the-app-registration-manually`
 
-/** The Entra roles that can run the setup script, because they can grant tenant-wide admin consent. */
-export const CONSENT_ROLES = ["Global Administrator", "Privileged Role Administrator", "Cloud Application Administrator"] as const
+/**
+ * The Entra roles that can run the setup: each can both create the app registration and grant
+ * tenant-wide admin consent for delegated permissions. A Privileged Role Administrator can grant
+ * the consent, but creates an app registration only where every user may, so it is not listed.
+ */
+export const CONSENT_ROLES = ["Global Administrator", "Cloud Application Administrator", "Application Administrator"] as const
+/** The roles in a sentence: "A, B or C". */
+export const CONSENT_ROLES_TEXT = `${CONSENT_ROLES.slice(0, -1).join(", ")} or ${CONSENT_ROLES.at(-1)}`
+
+/**
+ * The route that works when the tenant blocks Microsoft Graph Command Line Tools, which the setup
+ * and the setup script both sign in through. Setup errors that need it say these words, and the
+ * Connect step then offers the manual guide next to the error.
+ */
+export const CREATE_BY_HAND = "create the app registration by hand"
+export function suggestsCreatingByHand(message: string): boolean {
+  return message.toLowerCase().includes(CREATE_BY_HAND)
+}
 
 /** The delegated permissions the setup script grants admin consent for by default, per API. */
 export const DESKTOP_APP_PERMISSIONS: readonly { api: string; appId: string; permissions: readonly string[]; purpose: string }[] = [
@@ -77,6 +93,10 @@ export function setupHandoffText(): string {
     "   Microsoft Graph Command Line Tools, which the script signs in through to create the app registration.",
     "4. Send me the two lines it prints at the end: the Tenant id and the Application (client) id.",
     "   The script also copies them to your clipboard.",
+    "",
+    "If our tenant blocks Microsoft Graph Command Line Tools for your account (for example AADSTS7000112,",
+    "AADSTS50105 or a Conditional Access policy), the script cannot sign in. Create the app registration by hand",
+    `in the Entra admin center instead and send me the same two IDs: ${MANUAL_APP_REGISTRATION_URL}`,
     "",
     "It grants tenant-wide admin consent for these delegated permissions:",
     permissions,

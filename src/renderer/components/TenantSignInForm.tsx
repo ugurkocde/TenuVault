@@ -11,7 +11,7 @@ import setupScript from "../../../resources/New-TenuVaultDesktopApp.ps1?raw"
 import type { SignedInAccount } from "../../shared/ipc"
 import {
   APP_REGISTRATION_GUIDE_URL,
-  CONSENT_ROLES,
+  CONSENT_ROLES_TEXT,
   DESKTOP_APP_PERMISSIONS,
   MANUAL_APP_REGISTRATION_URL,
   parseSetupOutput,
@@ -143,8 +143,8 @@ export function SetupScriptCard() {
       </div>
       <p>
         TenuVault signs in through an app registration in your own tenant: a public client with no secret and delegated
-        permissions only. A setup script creates it. Run it as a {CONSENT_ROLES.slice(0, -1).join(", ")} or{" "}
-        {CONSENT_ROLES.at(-1)}, who can grant admin consent.
+        permissions only. A setup script creates it. Run it as a {CONSENT_ROLES_TEXT}, who can create it and grant admin
+        consent.
       </p>
 
       <ol className="space-y-4">

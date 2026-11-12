@@ -2,7 +2,7 @@ import { PublicClientApplication } from "@azure/msal-node"
 import { fetchNetworkClient } from "./network-client"
 import { ERROR_PAGE, firstSignInError, page, SignInCancelledError } from "./msal"
 import { isGuid, isMicrosoftLoginUrl } from "../../shared/security"
-import { CONSENT_ROLES } from "../../shared/app-registration"
+import { CONSENT_ROLES_TEXT, CREATE_BY_HAND } from "../../shared/app-registration"
 import { provisionRegistration } from "./registration-provisioning"
 import type { RegistrationResult, SetupProgress } from "../../shared/ipc"
 
@@ -16,13 +16,20 @@ export function setupSignInError(error: unknown): unknown {
   if (/Nothing was changed\.$/.test(message)) return error
   const code = /AADSTS\d+/.exec(message)?.[0]
   const nothingChanged = (text: string) => new Error(/Nothing was changed\.$/.test(text) ? text : `${text} Nothing was changed.`)
-  if (code && ["AADSTS65004", "AADSTS65001", "AADSTS90094"].includes(code)) {
-    return nothingChanged(`Microsoft did not let this account approve the setup (${code}). Sign in with a ${CONSENT_ROLES.slice(0, -1).join(", ")} or ${CONSENT_ROLES.at(-1)}, or use "Someone else is the admin?".`)
+  if (code === "AADSTS65004") {
+    return nothingChanged(`You declined Microsoft's request to approve Microsoft Graph Command Line Tools (${code}). Select Try again and accept it, or use "Someone else is the admin?".`)
+  }
+  if (code && ["AADSTS65001", "AADSTS90094"].includes(code)) {
+    return nothingChanged(`Microsoft did not let this account approve the setup (${code}). Sign in with a ${CONSENT_ROLES_TEXT}, or use "Someone else is the admin?".`)
   }
   // The setup signs in through Microsoft's app, not through the tenant's TenuVault app
   // registration, so a refusal of the app itself is about Microsoft Graph Command Line Tools.
+  // The setup script signs in through the same app, so only the manual route gets around it.
   if (code && ["AADSTS700016", "AADSTS7000112", "AADSTS50105"].includes(code)) {
-    return nothingChanged(`This tenant does not allow your account to use Microsoft Graph Command Line Tools, the Microsoft sign-in app the setup goes through (${code}). Ask your Entra administrator to allow it, or use "Use the setup script instead" and create the app registration by hand as the setup guide describes.`)
+    return nothingChanged(`This tenant does not let your account sign in to Microsoft Graph Command Line Tools, the Microsoft app that the setup and the setup script sign in through (${code}). Ask your Entra administrator to allow it for your account, or ${CREATE_BY_HAND} in the Entra admin center.`)
+  }
+  if (code === "AADSTS53003") {
+    return nothingChanged(`Conditional Access blocked the sign-in to Microsoft Graph Command Line Tools, the Microsoft app that the setup and the setup script sign in through (${code}). Check the sign-in logs in the Entra admin center for the policy. If it blocks that app, ${CREATE_BY_HAND} in the Entra admin center.`)
   }
   // Refusals about the tenant, the account and Conditional Access read the same for every sign-in.
   if (code && SHARED_SIGN_IN_CODES.has(code) || !code) {
@@ -42,7 +49,7 @@ export function setupLoginHint(expected: { tenantId: string; clientId: string; u
   return loginHint === expected.username && clientId.toLowerCase() === expected.clientId.toLowerCase() && tenant.toLowerCase() === expected.tenantId.toLowerCase() ? expected.username : undefined
 }
 
-const SHARED_SIGN_IN_CODES = new Set(["AADSTS90002", "AADSTS900023", "AADSTS50020", "AADSTS53000", "AADSTS53001", "AADSTS53003"])
+const SHARED_SIGN_IN_CODES = new Set(["AADSTS90002", "AADSTS900023", "AADSTS50020", "AADSTS53000", "AADSTS53001"])
 
 /** How long the setup waits for the sign-in in the browser. Microsoft's own error pages never come back to the app. */
 export const SETUP_SIGN_IN_TIMEOUT_MS = 15 * 60_000
@@ -78,7 +85,7 @@ export class AppRegistrationSetup {
     })
     // When Microsoft shows an error page of its own (admin approval needed, a blocked app,
     // Conditional Access), nothing returns to the app. Stop waiting after a while and say so.
-    const deadline = setTimeout(() => abandon(new Error("The sign-in in the browser was not completed within 15 minutes. If Microsoft showed an error there, your account may not be allowed to approve the setup. Nothing was changed.")), SETUP_SIGN_IN_TIMEOUT_MS)
+    const deadline = setTimeout(() => abandon(new Error(`The sign-in in the browser was not completed within 15 minutes. If Microsoft said that you need admin approval, use "Someone else is the admin?". If it said that Microsoft Graph Command Line Tools is blocked, disabled or not assigned to you, the setup script is blocked too: ${CREATE_BY_HAND} in the Entra admin center. Nothing was changed.`)), SETUP_SIGN_IN_TIMEOUT_MS)
     try {
       this.host.progress({ phase: "signingIn" })
       const interactive = app.acquireTokenInteractive({

@@ -12,6 +12,7 @@ vi.mock("@azure/msal-node", async original => {
 })
 vi.mock("../src/main/auth/registration-provisioning", () => ({ provisionRegistration: state.provision }))
 import { AppRegistrationSetup, SETUP_SIGN_IN_TIMEOUT_MS, setupLoginHint, setupSignInError } from "../src/main/auth/app-registration-setup"
+import { suggestsCreatingByHand } from "../src/shared/app-registration"
 const host = () => ({ fetch: vi.fn() as unknown as typeof fetch, openBrowser: vi.fn(async () => undefined), progress: vi.fn() })
 beforeEach(() => { vi.clearAllMocks() })
 it("uses an isolated memory client, setup scopes and the chosen tenant", async () => {
@@ -64,14 +65,21 @@ it("refuses browser URLs outside Microsoft login", async () => {
   expect(h.openBrowser).not.toHaveBeenCalled()
   expect(state.provision).not.toHaveBeenCalled()
 })
-it.each(["AADSTS65004: User declined to consent to access the app.", "AADSTS90094: Admin consent is required."])("says who can approve the setup when Microsoft refuses the approval (%s)", async message => {
+it.each(["AADSTS65001: The user or administrator has not consented.", "AADSTS90094: Admin consent is required."])("says who can approve the setup when Microsoft refuses the approval (%s)", async message => {
   state.interactive.mockRejectedValueOnce(new Error(message))
   const error = await new AppRegistrationSetup(host()).create().then(() => null, caught => caught as Error)
   expect(error?.message).toContain("Microsoft did not let this account approve the setup")
-  expect(error?.message).toContain("Global Administrator, Privileged Role Administrator or Cloud Application Administrator")
+  // A Privileged Role Administrator can grant the consent, but not always create the app registration.
+  expect(error?.message).toContain("Global Administrator, Cloud Application Administrator or Application Administrator")
+  expect(error?.message).not.toContain("Privileged Role Administrator")
   expect(error?.message).toContain("Nothing was changed.")
   expect(state.provision).not.toHaveBeenCalled()
   expect(state.clear).toHaveBeenCalled()
+})
+
+it("tells an admin who declined the approval that they declined it, not that they may not give it", () => {
+  const message = (setupSignInError(new Error("AADSTS65004: User declined to consent to access the app.")) as Error).message
+  expect(message).toBe(`You declined Microsoft's request to approve Microsoft Graph Command Line Tools (AADSTS65004). Select Try again and accept it, or use "Someone else is the admin?". Nothing was changed.`)
 })
 
 it("says that nothing was changed when the setup sign-in fails for another reason", async () => {
@@ -86,11 +94,24 @@ it("explains a refusal of Microsoft's sign-in app as that, not as a problem with
     expect(message).toContain("Microsoft Graph Command Line Tools")
     expect(message).toContain(code)
     expect(message).not.toMatch(/setup script printed|client ID exists/)
+    // The setup script signs in through the same app, so it is not offered as the way around it.
+    expect(message).toContain("the setup and the setup script sign in through")
+    expect(message).not.toContain("Use the setup script instead")
+    expect(suggestsCreatingByHand(message)).toBe(true)
     expect(message).toMatch(/Nothing was changed\.$/)
   }
 })
-it("keeps the shared wording for tenant, account and Conditional Access refusals", () => {
-  expect((setupSignInError(new Error("AADSTS53003: blocked")) as Error).message).toMatch(/^Conditional Access blocked this sign-in\..*Nothing was changed\.$/)
+it("names Microsoft Graph Command Line Tools and the manual route when Conditional Access blocks the setup sign-in", () => {
+  const message = (setupSignInError(new Error("AADSTS53003: Access has been blocked by Conditional Access policies.")) as Error).message
+  expect(message).toMatch(/^Conditional Access blocked the sign-in to Microsoft Graph Command Line Tools/)
+  expect(message).toContain("(AADSTS53003)")
+  expect(suggestsCreatingByHand(message)).toBe(true)
+  expect(message).toMatch(/Nothing was changed\.$/)
+})
+it("keeps the shared wording for tenant, account and device refusals", () => {
+  const device = (setupSignInError(new Error("AADSTS53000: Device is not in required device state.")) as Error).message
+  expect(device).toMatch(/\(AADSTS53000\) Nothing was changed\.$/)
+  expect(suggestsCreatingByHand(device)).toBe(false)
   expect((setupSignInError(new Error("access_denied")) as Error).message).toBe("The sign-in was cancelled in the browser. Sign in again to continue. Nothing was changed.")
 })
 it("shows Microsoft's own words for a refusal it has no better text for", () => {
@@ -135,6 +156,9 @@ it("stops waiting for the browser after 15 minutes and discards a later answer",
     await vi.advanceTimersByTimeAsync(1000)
     const error = await outcome
     expect(error?.message).toMatch(/^The sign-in in the browser was not completed within 15 minutes\..*Nothing was changed\.$/)
+    // Microsoft's own error pages never return, so the timeout names both ways on.
+    expect(error?.message).toContain("Someone else is the admin?")
+    expect(suggestsCreatingByHand(error!.message)).toBe(true)
     expect(state.provision).not.toHaveBeenCalled()
     // An answer that arrives afterwards creates nothing, and a new setup can start.
     finish({ account: { tenantId: "late", username: "admin" }, accessToken: "late" })

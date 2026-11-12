@@ -4,7 +4,7 @@ import { Alert, AlertDescription } from "~/components/ui/alert"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
 import { Label } from "~/components/ui/label"
-import { APP_REGISTRATION_GUIDE_URL, CONSENT_ROLES, setupHandoffText } from "../../shared/app-registration"
+import { APP_REGISTRATION_GUIDE_URL, CONSENT_ROLES_TEXT, MANUAL_APP_REGISTRATION_URL, setupHandoffText, suggestsCreatingByHand } from "../../shared/app-registration"
 import type { RegistrationResult, SetupProgress } from "../../shared/ipc"
 import { bridge } from "../lib/bridge"
 import { PermissionList, SetupScriptCard } from "./TenantSignInForm"
@@ -96,7 +96,9 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
     "Wait until Microsoft accepts sign-ins to it",
   ]
   const current = PHASES.indexOf(phase)
-  const roles = `${CONSENT_ROLES.slice(0, -1).join(", ")} or ${CONSENT_ROLES.at(-1)}`
+  // The setup and the setup script sign in through the same Microsoft app. Where the tenant blocks
+  // it, creating the app registration in the Entra admin center is the route that still works.
+  const openManualGuide = () => void bridge.app.openExternal(MANUAL_APP_REGISTRATION_URL)
 
   return (
     <div data-tenant-connect className="grid items-start gap-5 text-sm text-gray-700 @3xl:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
@@ -106,7 +108,15 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
         {error && (
           <Alert variant="destructive" role="alert">
             <AlertCircle className="h-4 w-4" />
-            <AlertDescription>{error}</AlertDescription>
+            <AlertDescription>
+              <p>{error}</p>
+              {suggestsCreatingByHand(error) && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Button type="button" variant="outline" size="sm" onClick={openManualGuide}>Create it by hand</Button>
+                  <Button type="button" variant="ghost" size="sm" onClick={onManual}>I already have an app registration</Button>
+                </div>
+              )}
+            </AlertDescription>
           </Alert>
         )}
 
@@ -129,8 +139,16 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
               <div className="space-y-3 border-t border-gray-200 pt-4">
                 <p>Choose your admin account in the browser and approve the request. Nothing is created before you are signed in.</p>
                 <p className="text-xs text-gray-600">
-                  If Microsoft says that you need admin approval, or shows an error instead of signing you in, this account cannot
-                  approve the setup. Select Cancel and use one of the other ways to connect below.
+                  If Microsoft says that you need admin approval, this account cannot approve the setup. Select Cancel and use
+                  &quot;Someone else is the admin?&quot; below.
+                </p>
+                <p className="text-xs text-gray-600">
+                  If Microsoft says that Microsoft Graph Command Line Tools is blocked, disabled or not assigned to you, the setup
+                  script is blocked too. Select Cancel and{" "}
+                  <button type="button" className="font-medium text-gray-900 underline underline-offset-2" onClick={openManualGuide}>
+                    create the app registration by hand
+                  </button>
+                  .
                 </p>
                 <p className="text-xs text-gray-600">
                   If Microsoft reports a device or compliance problem, Conditional Access needs a browser that passes the device
@@ -165,7 +183,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
               <KeyRound className="mr-2 h-4 w-4" aria-hidden="true" />
               {error ? "Try again" : "Set up with Microsoft sign-in"}
             </Button>
-            <p className="text-xs text-gray-600">Sign in as a {roles}, because the setup grants admin consent.</p>
+            <p className="text-xs text-gray-600">Sign in as a {CONSENT_ROLES_TEXT}, because the setup creates an app registration and grants admin consent.</p>
             {trials && (
               <p className="flex items-center gap-2 text-sm text-gray-700">
                 <Sparkles className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
@@ -210,7 +228,8 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
               />
               <p id="setup-tenant-help" className="text-xs text-gray-600">
                 Only for guest and partner admins who set up a tenant other than their own. Leave it empty to use the tenant of the
-                account you sign in with.
+                account you sign in with. TenuVault connects tenants in Microsoft&apos;s global cloud; GCC High, DoD and 21Vianet
+                tenants are not supported.
               </p>
             </div>
             <Button type="button" variant="ghost" size="sm" onClick={() => void bridge.app.openExternal(APP_REGISTRATION_GUIDE_URL)}>
