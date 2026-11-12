@@ -9,7 +9,7 @@ All tenant operations used live Lokka Microsoft and Graph `/beta`. Capture, pack
 | Test | Result | Evidence and limit |
 | --- | --- | --- |
 | 1. Normal IME refresh | Passed for this fixture | Before any explicit service restart in this continuation, the registry contained AnyDesk policy version `_3`; Graph still reported current content version 3. Old `_1` keys also remained. This supports the mapping for one real update and warns against treating every retained registry key as current. |
-| 2. Independent source comparison | Passed | Six independently authored files were packaged, uploaded, recovered and compared against a manifest created before upload. All names, sizes and hashes matched, including a Unicode filename and a 64 KiB random binary file. |
+| 2. Independent source comparison | Six-file comparison passed; Unicode literal limitation | Six independently authored files were packaged, uploaded, recovered and compared against a manifest created before upload. All created names, sizes and hashes matched, including a 64 KiB random binary file. The intended Unicode literal was decoded incorrectly by Windows PowerShell 5.1; see the correction below. |
 | 3. Repackage and install | Passed for this fixture | Recovered source repackaged successfully with the official tool and uploaded as a separate lab app. IME installed it, detected version 1 and reported execution success with no execution errors. The installed payload hash matched the original. Managed uninstall then removed both the files and the registry marker. |
 | 4. Failure handling | Tested, findings remain | Seven injected download/content failures were rejected; unavailable version returned 404; synthetic certificate and archive guards were exercised. Cleanup and exit-code findings below prevent calling the spike production-ready. |
 | 5. Helper authorization | Blocked by implementation | No production helper, authenticated RPC, tenant-bound job ticket, replay store or actor authorization layer exists to exercise. The certificate-only spike cannot substitute for these tests. |
@@ -44,7 +44,7 @@ The size guard also rejected injected original-size metadata above 256 MiB befor
 
 Synthetic checks exercised the existing selection/path predicates without altering the device certificate store: expired candidate metadata matched zero certificates, two valid candidates triggered the count guard, and traversal, rooted and NTFS-stream archive names were rejected. These are supplemental guard checks; a real expired enrollment certificate, renewed enrollment and actual multiple eligible private keys still need device fixtures.
 
-Findings to carry into implementation (the first two are fixed in the lab probe by this PR, with [eleven regression cases](app-backup-evidence/recovery-fixes.json); production process-death handling is implemented separately in the source store):
+Findings to carry into implementation (the first two are fixed in the lab probe by this PR, with [twelve regression cases](app-backup-evidence/recovery-fixes.json); production process-death handling is implemented separately in the source store):
 
 - **Failure cleanup:** the wrong-digest case left a plaintext ZIP on disk. It was not extracted or given a verified receipt, but production jobs must remove/quarantine plaintext on validation failure. Other failed cases left encrypted download/job artifacts.
 - **HTTP errors exit successfully:** the spike reports non-2xx statuses in JSON but exits 0 on HTTP 403/404. Callers must inspect status and verified-result fields. A production helper must return an explicit failed job result and must not infer success from process exit alone.
@@ -74,3 +74,9 @@ The earlier AnyDesk version 3 and its inactive draft version 2 remain as documen
 This run demonstrates a lab rebuild using Microsoft's external packaging utility. It does not establish a production packaging codec, restore workflow, signed helper or release approval for TenuVault. Tests 5 and 7 remain explicitly blocked as requested.
 
 Official packaging procedure: [Microsoft Win32 Content Prep Tool](https://github.com/microsoft/Microsoft-Win32-Content-Prep-Tool).
+
+## Unicode fixture encoding correction
+
+The original BOM-less `prepare-fixture.ps1` was read as ANSI by Windows PowerShell 5.1. Its `Grüße.txt` literal became mojibake before packaging. The original manifest, captured hashes and comparison remain unchanged as historical evidence; the original `UnicodeFilenameRecovered` flag proves round-trip preservation of the created name, not the intended literal.
+
+The fixture script now has a UTF-8 BOM and requires an explicit new output directory. A newly generated fixture on Windows PowerShell 5.1 created the intended `nested\Grüße.txt` name (code points U+0047/U+0072/U+00FC/U+00DF/U+0065). Its pre-packaging [manifest](app-backup-evidence/unicode-corrected/original-manifest.json) and [validation](app-backup-evidence/unicode-corrected/validation.json) show zero changed/missing files after local package HMAC/digest verification and extraction, plus exact original source-store export and catalog rebuild. This correction involved no tenant writes and no new Intune content-capture test. The temporary new fixture directory was removed after validation.

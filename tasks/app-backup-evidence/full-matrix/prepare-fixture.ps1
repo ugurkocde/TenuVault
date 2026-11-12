@@ -1,6 +1,7 @@
+﻿param([Parameter(Mandatory=$true)][string]$OutputRoot)
 $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
-$root=Join-Path $env:USERPROFILE 'tv-test\r0-full-20261112'
+$root=$OutputRoot
 if(Test-Path $root){throw 'Fixture directory already exists'}
 New-Item -ItemType Directory $root | Out-Null
 $src=New-Item -ItemType Directory (Join-Path $root 'original')

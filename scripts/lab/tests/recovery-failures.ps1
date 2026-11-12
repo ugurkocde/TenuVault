@@ -7,7 +7,7 @@ New-Item -ItemType Directory $root | Out-Null
 $source=Get-Content -LiteralPath $ProbePath -Raw
 $results=@()
 try {
- foreach($case in @('digest','midstream','http404','http403','collision','cleanup-failure','missing-payload','missing-content','missing-decrypt','payload-error','success')){
+ foreach($case in @('digest','midstream','http404','http403','collision','cleanup-failure','missing-payload','missing-content','missing-decrypt','payload-error','empty-archive','success')){
   $script=$source
   $app=$RecoveryAppId.ToString();$version=$RecoveryVersion
   if($case -eq 'cleanup-failure'){$script=$script.Replace('$summary.DownloadedBytes =', '$hold=[IO.File]::Open($zip,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None); throw ''Injected locked file failure.''; $summary.DownloadedBytes =')}
@@ -19,6 +19,7 @@ try {
   if($case -eq 'missing-content'){$script=$script.Replace('$p = $o.ResponsePayload | ConvertFrom-Json', '$p = $o.ResponsePayload | ConvertFrom-Json; $p.ContentInfo=$null')}
   if($case -eq 'missing-decrypt'){$script=$script.Replace('$p = $o.ResponsePayload | ConvertFrom-Json', '$p = $o.ResponsePayload | ConvertFrom-Json; $p.DecryptInfo=$null')}
   if($case -eq 'payload-error'){$script=$script.Replace('$p = $o.ResponsePayload | ConvertFrom-Json', '$p = $o.ResponsePayload | ConvertFrom-Json; $p.ErrorCode=123')}
+  if($case -eq 'empty-archive'){$script=$script.Replace('$archive = [IO.Compression.ZipFile]::OpenRead($zip)', '[IO.File]::WriteAllBytes($zip,[byte[]]@(80,75,5,6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)); $archive = [IO.Compression.ZipFile]::OpenRead($zip)')}
   $output=Join-Path $root $case
   New-Item -ItemType Directory $output | Out-Null
   if($case -eq 'collision'){
@@ -42,6 +43,7 @@ try {
   if($case -in @('missing-payload','missing-content')){$pass=$pass -and $detail.HttpStatus -eq 200 -and $detail.Message -eq 'Content service did not return a complete verified recovery.'}
   if($case -eq 'missing-decrypt'){$pass=$pass -and $detail.HttpStatus -eq 200 -and $detail.Message -eq 'Unsupported encryption profile in spike'}
   if($case -eq 'payload-error'){$pass=$pass -and $detail.HttpStatus -eq 200 -and $detail.Message -eq 'Content service returned a payload error.'}
+  if($case -eq 'empty-archive'){$pass=$pass -and $detail.HttpStatus -eq 200 -and $detail.OwnedOutput -and $detail.Stage -eq 'verify' -and $detail.Message -eq 'Recovered archive contains no files.'}
   if($case -eq 'success'){$pass=($code -eq 0 -and $detail.HttpStatus -eq 200 -and $detail.HmacVerified -and $detail.PlaintextSha256Verified -and $detail.ExtractedFileCount -gt 0 -and $dirs.Count -eq 1 -and (Test-Path (Join-Path $dirs[0].FullName 'evidence.json')))}
   $result=@{Case=$case;Pass=[bool]$pass;ExitCode=$code;HttpStatus=$detail.HttpStatus;CleanupSucceeded=$detail.CleanupSucceeded;OwnedOutput=$detail.OwnedOutput;Stage=$detail.Stage}
   $results+=$result

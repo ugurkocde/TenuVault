@@ -2,6 +2,7 @@ import { execFile } from "node:child_process"
 import { join } from "node:path"
 import type { RecoveryDeviceStatus } from "../../shared/app-sources/types"
 import { sourceTenant } from "../app-sources/store"
+import { CommunityChoicePendingError, CommunityLimitError } from "../../shared/plan-errors"
 
 export interface EnrollmentObservation {
   elevated: boolean
@@ -60,5 +61,9 @@ export async function checkRecoveryDevice(tenant: string, account: () => Promise
       })
     }))()
     return evaluateDevice(tenant, id, data)
-  } catch { return { ...unknown(platform), reason: "The device's enrollment could not be confirmed. Check tenant access and Windows enrollment, then retry. Recovery is not available in this version." } }
+  } catch (error) {
+    if (error instanceof CommunityLimitError) return { ...unknown(platform), reason: "This device check requires plan coverage for the selected tenant. Choose this tenant for Community or update its license, then retry. Stored installers remain available to view and export. Recovery is not available in this version." }
+    if (error instanceof CommunityChoicePendingError) return { ...unknown(platform), reason: "Choose the tenant to continue on Community, then retry this device check. Stored installers remain available to view and export. Recovery is not available in this version." }
+    return { ...unknown(platform), reason: "The device's enrollment could not be confirmed. Check tenant access and Windows enrollment, then retry. Recovery is not available in this version." }
+  }
 }

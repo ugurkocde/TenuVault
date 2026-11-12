@@ -29,6 +29,21 @@ async function click(node: HTMLElement, text: string) {
  await act(async () => button.click()); await flush()
 }
 describe("App Backup local workspace", () => {
+ it("clears the previous device result while a new check runs and after it fails", async () => {
+  const node = await mount()
+  api.deviceStatus.mockResolvedValueOnce({ enrollment: "matched", certificate: "matched", reason: "Previous device observation", captureAvailable: false })
+  await click(node, "Check this device")
+  expect(node.textContent).toContain("Matching certificate found")
+  let fail!: (error: Error) => void
+  api.deviceStatus.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject }))
+  await click(node, "Check this device")
+  expect(node.textContent).not.toContain("Matching certificate found")
+  expect(node.textContent).not.toContain("Previous device observation")
+  expect(node.textContent).toContain("Checking device metadata")
+  await act(async () => fail(new Error("Device probe failed"))); await flush()
+  expect(node.textContent).toContain("Device probe failed")
+  expect(node.textContent).not.toContain("Previous device observation")
+ })
  it.each(["success", "failure"])("ignores an older same-tenant list %s after a fresh post-attach reload", async mode => {
   const node = await mount()
   let finish!: (value: unknown) => void, fail!: (error: Error) => void

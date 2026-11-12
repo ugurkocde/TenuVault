@@ -4,12 +4,22 @@ import { checkRecoveryDevice, evaluateDevice, type EnrollmentObservation } from 
 import { CONTENT_REQUEST_DOMAIN, ContentRequestVerifier, type ContentRequest, type RequestContext } from "../src/main/app-backup/request"
 import { RECOVERY_API_PATHS, isRecoveryBackupRequest } from "../src/main/features/recovery"
 import { readFile } from "node:fs/promises"
+import { CommunityChoicePendingError, CommunityLimitError } from "../src/shared/plan-errors"
 
 const tenant = "11111111-1111-1111-1111-111111111111", account = "22222222-2222-2222-2222-222222222222", other = "33333333-3333-3333-3333-333333333333"
 const now = Date.now()
 function observation(): EnrollmentObservation { return { elevated: false, enrollments: [{ tenantId: tenant, thumbprint: "ABC" }], certificates: [{ accountId: account, thumbprint: "ABC", hasPrivateKey: true, notBefore: new Date(now - 10000).toISOString(), notAfter: new Date(now + 10000).toISOString() }] } }
 
 describe("read-only recovery device check", () => {
+  it.each(["uncovered", "community-choice"])("explains the %s plan refusal without probing Windows", async mode => {
+    const probe = vi.fn(async () => observation())
+    const result = await checkRecoveryDevice(tenant, async () => { throw mode === "uncovered" ? new CommunityLimitError(other, "Not covered", true) : new CommunityChoicePendingError() }, { platform: "win32", probe })
+    expect(result).toMatchObject({ enrollment: "unknown", certificate: "unknown", captureAvailable: false })
+    expect(result.reason).toContain(mode === "uncovered" ? "requires plan coverage" : "continue on Community")
+    expect(result.reason).toContain("Stored installers remain available")
+    expect(result.reason).not.toContain("Sign in")
+    expect(probe).not.toHaveBeenCalled()
+  })
   it("binds both the selected tenant enrollment and Intune account, without enabling capture", () => {
     const result = evaluateDevice(tenant, account, observation(), now)
     expect(result).toMatchObject({ enrollment: "matched", certificate: "matched", captureAvailable: false, elevated: false })

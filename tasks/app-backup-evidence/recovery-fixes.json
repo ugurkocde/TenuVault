@@ -90,6 +90,15 @@
     "HttpStatus": 200
   },
   {
+    "OwnedOutput": true,
+    "CleanupSucceeded": true,
+    "ExitCode": 1,
+    "Pass": true,
+    "Case": "empty-archive",
+    "Stage": "verify",
+    "HttpStatus": 200
+  },
+  {
     "OwnedOutput": null,
     "CleanupSucceeded": null,
     "ExitCode": 0,

@@ -177,13 +177,14 @@ try {
                     } finally { $archive.Dispose() }
                     [IO.Compression.ZipFile]::ExtractToDirectory($zip,$extract)
                     $summary.ExtractedFiles = @(Get-ChildItem $extract -Recurse -File | ForEach-Object { @{ RelativePath=$_.FullName.Substring($extractRoot.Length); Bytes=$_.Length; Sha256=(Get-FileHash $_.FullName -Algorithm SHA256).Hash } })
+                    if ($summary.ExtractedFiles.Count -lt 1) { throw 'Recovered archive contains no files.' }
                     $summary.ElapsedSeconds = [Math]::Round($watch.Elapsed.TotalSeconds,2)
                     $summary | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $out 'evidence.json') -Encoding UTF8
                 }
             }
         }
     }
-    if ($Recover -and (!$ownsOutputDirectory -or !$summary.HmacVerified -or !$summary.PlaintextSha256Verified -or !$summary.Contains('ExtractedFiles') -or !(Test-Path -LiteralPath (Join-Path $out 'evidence.json')))) { throw 'Content service did not return a complete verified recovery.' }
+    if ($Recover -and (!$ownsOutputDirectory -or !$summary.HmacVerified -or !$summary.PlaintextSha256Verified -or !$summary.Contains('ExtractedFiles') -or $summary.ExtractedFiles.Count -lt 1 -or !(Test-Path -LiteralPath (Join-Path $out 'evidence.json')))) { throw 'Content service did not return a complete verified recovery.' }
     if ($summary.Contains('ExtractedFiles')) {
         $summary.ExtractedFileCount = $summary.ExtractedFiles.Count
         $summary.Remove('ExtractedFiles')
