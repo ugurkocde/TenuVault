@@ -157,6 +157,8 @@ describe("License page heading", () => {
     expect(heading(container)).toBe("Licensed through your organization")
     expect(container.textContent).toContain("A tenant admin shared their TenuVault license with your tenant.")
     expect(container.textContent).not.toContain("Your license covers 2 tenants")
+    // The whole card header describes the selected tenant: no badge for the other tenant's trial.
+    expect(container.querySelector("[data-slot=card-header], .p-7")?.textContent).not.toContain("Pro trial")
   })
 
   it("describes the trial when the tenant that runs it is selected", async () => {

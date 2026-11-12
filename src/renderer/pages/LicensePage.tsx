@@ -500,7 +500,7 @@ export default function LicensePage() {
                             : "Your organization license is not currently active. Sign in again and retry the license check below."}
               </CardDescription>
             </div>
-            {status.plan && <Badge variant="secondary">{status.trial ? "Pro trial" : planName(status.plan)}</Badge>}
+            {summary.plan && <Badge variant="secondary">{summary.trial ? "Pro trial" : planName(summary.plan)}</Badge>}
           </div>
         </CardHeader>
         <CardContent className="space-y-5 px-7 pb-7">

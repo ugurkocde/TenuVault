@@ -57,4 +57,11 @@ describe("license summary for the selected tenant", () => {
     const community = { ...mixed, tenants: [trialTenant, { ...orgTenant, activated: false, source: null, plan: "community" as const }] }
     expect(statusForTenant(community, "org-tenant")).toBe(community)
   })
+
+  it("shows an emailed trial key as a trial on the chip and in the heading", () => {
+    const emailed: TenantLicenseStatus = { ...trialTenant, tenantId: "emailed", source: "key", trial: true, trialEndsAt: null, validUntil: TRIAL_ENDS }
+    const summary = statusForTenant({ ...mixed, hasKey: true, keyState: "active", tenants: [emailed, orgTenant] }, "emailed")
+    expect(licenseChipState(summary)).toEqual({ label: "Pro trial", tone: "trial", daysLeft: 14 })
+    expect(licensePageTitle(summary)).toBe("Pro trial active")
+  })
 })
