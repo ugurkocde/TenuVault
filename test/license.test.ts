@@ -22,7 +22,7 @@ import LicensePage from "../src/renderer/pages/LicensePage"
 import type { LicenseStatus } from "../src/shared/ipc"
 
 vi.mock("../src/renderer/lib/bridge", () => ({ bridge: {} }))
-vi.mock("../src/portal/contexts/TenantContext", () => ({ useTenants: () => [] }))
+vi.mock("../src/portal/contexts/TenantContext", () => ({ useTenants: () => [], useSelectedTenant: () => ({ selectedTenantId: null, selectedTenant: undefined, setSelectedTenantId: () => {} }) }))
 
 const { publicKey, privateKey } = generateKeyPairSync("ed25519")
 const publicPem = publicKey.export({ type: "spki", format: "pem" }).toString()

@@ -10,16 +10,25 @@ const state = vi.hoisted(() => ({
   refreshLicenses: vi.fn(),
   refreshStatus: vi.fn(async () => undefined),
   status: null as LicenseStatus | null,
+  selectedTenantId: undefined as string | undefined,
 }))
 
 vi.mock("../../src/renderer/lib/bridge", () => ({
-  bridge: { license: { refresh: state.refreshLicenses, open: async () => undefined, status: async () => state.status } },
+  bridge: {
+    license: { refresh: state.refreshLicenses, open: async () => undefined, status: async () => state.status, trialUsage: async () => null, trialWorkflowsConfigured: async () => false },
+    auth: { accounts: async () => [] },
+    schedules: { list: async () => [] },
+    preferences: { get: async () => ({}), set: async () => ({}) },
+  },
 }))
 vi.mock("../../src/renderer/lib/license", async (original) => ({
   ...(await original<typeof import("../../src/renderer/lib/license")>()),
   useLicense: () => ({ status: state.status, error: null, refresh: state.refreshStatus }),
 }))
-vi.mock("~/contexts/TenantContext", () => ({ useTenants: () => [] }))
+vi.mock("~/contexts/TenantContext", () => ({
+  useSelectedTenant: () => ({ selectedTenantId: null, selectedTenant: state.selectedTenantId ? { id: 1, name: "Selected", credentials: { tenantId: state.selectedTenantId } } : undefined, setSelectedTenantId: () => {} }),
+  useTenants: () => [],
+}))
 vi.mock("~/components/ConfirmDialog", () => ({ useConfirm: () => ({ confirm: async () => true, confirmDialog: null }) }))
 vi.mock("@desktop/components/LicenseAgreementDialog", () => ({ LicenseAgreementLink: () => null }))
 
@@ -40,6 +49,7 @@ afterEach(() => {
   for (const container of containers.splice(0)) container.remove()
   vi.clearAllMocks()
   state.refreshStatus = vi.fn(async () => undefined)
+  state.selectedTenantId = undefined
 })
 
 async function flush(): Promise<void> {
@@ -124,4 +134,35 @@ it.each([
   const { container } = renderPage()
   await flush()
   expect(container.textContent?.includes("Backups of this tenant are kept. Add a license to use it again.")).toBe(shown)
+})
+
+describe("License page heading", () => {
+  const TRIAL_ENDS = new Date(Date.now() + 13.5 * 86_400_000).toISOString()
+  const entry = { signedIn: true, activated: true, entitled: true, expiresAt: TRIAL_ENDS, shared: null, shareNeedsSignIn: false, message: null }
+  const mixed: LicenseStatus = {
+    ...proStatus, hasKey: false, keyState: "none", keyHint: null, trial: true, trialEndsAt: TRIAL_ENDS,
+    tenants: [
+      { ...entry, tenantId: "t-trial", source: "trial", plan: "pro", tenants: 2, trial: true, trialEndsAt: TRIAL_ENDS, validUntil: TRIAL_ENDS, displayKey: null },
+      { ...entry, tenantId: "t-org", source: "tenant", plan: "msp", tenants: 10, validUntil: null, displayKey: "****ABCDEF" },
+    ],
+  }
+  const heading = (container: HTMLElement) => container.querySelector(".text-2xl")?.textContent
+
+  it("describes the selected organization-licensed tenant, not the other tenant's trial", async () => {
+    state.status = mixed
+    state.refreshLicenses.mockResolvedValue(mixed)
+    state.selectedTenantId = "t-org"
+    const { container } = renderPage()
+    await flush()
+    expect(heading(container)).toBe("Licensed through your organization")
+  })
+
+  it("describes the trial when the tenant that runs it is selected", async () => {
+    state.status = mixed
+    state.refreshLicenses.mockResolvedValue(mixed)
+    state.selectedTenantId = "t-trial"
+    const { container } = renderPage()
+    await flush()
+    expect(heading(container)).toBe("Pro trial active")
+  })
 })

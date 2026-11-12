@@ -16,7 +16,7 @@ import {
   Sparkles,
   WifiOff,
 } from "lucide-react"
-import { useTenants } from "~/contexts/TenantContext"
+import { useSelectedTenant, useTenants } from "~/contexts/TenantContext"
 import { Alert, AlertDescription } from "~/components/ui/alert"
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
@@ -32,7 +32,7 @@ import { useClipboardLicenseKey } from "../lib/clipboard-key"
 import { openCheckout } from "../lib/purchase"
 import { bridge } from "../lib/bridge"
 import { useConfirm } from "~/components/ConfirmDialog"
-import { formatDate, formatDateTime, hasPaidLicense, isUnlicensed, licensePageTitle, planName, savedKeyNotNeededHere, tenantPlanName, trialDaysLeft, trialUsedUp, useLicense } from "../lib/license"
+import { formatDate, formatDateTime, hasPaidLicense, isUnlicensed, licensePageTitle, planName, savedKeyNotNeededHere, statusForTenant, tenantPlanName, trialDaysLeft, trialUsedUp, useLicense } from "../lib/license"
 
 type Busy = "activate" | "replace" | "deactivate" | `retry:${string}` | `share:${string}` | null
 
@@ -313,6 +313,7 @@ export default function LicensePage() {
   const { confirm, confirmDialog } = useConfirm()
   const { status, error: statusError, refresh } = useLicense()
   const tenants = useTenants()
+  const { selectedTenant } = useSelectedTenant()
   const [key, setKey] = useState("")
   const keyInput = useRef<HTMLInputElement>(null)
   const [trialKeyHint, setTrialKeyHint] = useState(false)
@@ -430,7 +431,9 @@ export default function LicensePage() {
         : "Other admins in this tenant can no longer use this license.",
     )
 
-  const title = licensePageTitle(status)
+  // The heading and its icon describe the selected tenant's coverage; the rows below list every tenant.
+  const summary = statusForTenant(status, selectedTenant?.credentials?.tenantId)
+  const title = licensePageTitle(summary)
   // A tenant row below already shows the refused trial key's message with Buy Pro.
   const trialKeyRefusedInRow = status.tenants.some(t => !t.entitled && t.message?.includes(TRIAL_USED_MESSAGE))
   // After a used trial the page offers Buy Pro once: not when the ended notice above the page,
@@ -462,7 +465,7 @@ export default function LicensePage() {
             <div>
               <CardTitle className="flex items-center gap-3 text-2xl font-medium">
                 <span className="flex size-10 flex-shrink-0 items-center justify-center rounded-full bg-secondary" aria-hidden="true">
-                  {status.plan ? (
+                  {summary.plan ? (
                     <BadgeCheck className="h-[18px] w-[18px] text-green-600" />
                   ) : (
                     <KeyRound className="h-[18px] w-[18px] text-gray-600" />

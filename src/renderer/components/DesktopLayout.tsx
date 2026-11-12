@@ -31,11 +31,11 @@ import {
   Sparkles,
 } from "lucide-react"
 import { FloatingProgress } from "~/components/backup/floating-progress"
-import { useTenants } from "~/contexts/TenantContext"
+import { useSelectedTenant, useTenants } from "~/contexts/TenantContext"
 import { cn } from "~/lib/utils"
 import { BrandMark } from "./BrandMark"
 import { ErrorBoundary } from "./ErrorBoundary"
-import { communityBannerVisible, earliestExpiringTenant, formatDate, formatDateTime, hasPaidLicense, inactiveTenantNotice, isUnlicensed, licenseChipState, licenseExpiryWarning, offlineDeadline, trialEndedNotice, trialReminder, unlicensedTenants, useLicense } from "../lib/license"
+import { communityBannerVisible, earliestExpiringTenant, formatDate, formatDateTime, hasPaidLicense, inactiveTenantNotice, isUnlicensed, licenseChipState, licenseExpiryWarning, offlineDeadline, statusForTenant, trialEndedNotice, trialReminder, unlicensedTenants, useLicense } from "../lib/license"
 import { PlanPromptButton } from "./PlanPromptButton"
 import { PurchaseKeyWatcher } from "./PurchaseKeyWatcher"
 import { toast, Toaster } from "../lib/toast"
@@ -309,9 +309,10 @@ function WhatsNewNav({ linkClass }: { linkClass: (active: boolean) => string }) 
 
 function LicenseNavBadge() {
   const { status } = useLicense()
+  const { selectedTenant } = useSelectedTenant()
   if (!status) return null
   const chip = "ml-auto inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-medium leading-4"
-  const state = licenseChipState(status)
+  const state = licenseChipState(statusForTenant(status, selectedTenant?.credentials?.tenantId))
   if (state.tone === "trial") {
     const days = state.daysLeft ?? 0
     const full = `${state.label}, ${days} ${days === 1 ? "day" : "days"} left`
