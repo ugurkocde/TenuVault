@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useId, useRef, useState } from "react"
 import { Printer, ExternalLink, Package, Download } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "~/components/ui/dialog"
@@ -21,6 +21,7 @@ function Fields({items}: {items: Array<[string, string | number | null | undefin
 
 export function AppDetailsDialog({tenant,app,onClose,onBackup,returnFocus}: {tenant:string;app:IntuneBackupApp|null;onClose:()=>void;onBackup:(app:IntuneBackupApp)=>void;returnFocus:()=>void}) {
   const [section,setSection] = useState("overview")
+  const tabsId = useId()
   const [details,setDetails] = useState<IntuneAppDetails|null>(null), [error,setError] = useState(""), [loading,setLoading] = useState(false)
   const [printing,setPrinting] = useState(false), [printNotice,setPrintNotice] = useState("")
   const [downloading,setDownloading] = useState<number|null>(null), [downloadNotice,setDownloadNotice] = useState("")
@@ -53,33 +54,37 @@ export function AppDetailsDialog({tenant,app,onClose,onBackup,returnFocus}: {ten
       {loading&&<p role="status" className="py-8 text-sm text-muted-foreground">Loading app details from the current Microsoft session…</p>}
       {error&&<div role="alert" className="rounded-xl bg-secondary p-4 text-sm"><p>{error}</p><Button variant="outline" className="mt-3" onClick={()=>void load()}>Retry details</Button></div>}
       {details&&<div className="min-w-0">
-        <nav aria-label="App details sections" className="flex flex-wrap gap-1 rounded-xl bg-secondary p-1">{[["overview","Overview"],["program","Installation"],["scripts",`Scripts (${details.scripts.length})`],["rules","Detection & requirements"],["assignments","Assignments"]].map(([id,label])=><Button key={id} variant={section===id?"default":"ghost"} size="sm" aria-pressed={section===id} onClick={()=>setSection(id!)}>{label}</Button>)}</nav>
-        {section==="overview"&&<section aria-label="overview" className="space-y-6 pt-4">
+        <div role="tablist" aria-label="App details sections" className="flex flex-wrap gap-1 rounded-xl bg-secondary p-1">{[["overview","Overview"],["program","Installation"],["scripts",`Scripts (${details.scripts.length})`],["rules","Detection & requirements"],["assignments","Assignments"]].map(([id,label])=><Button key={id} variant={section===id?"default":"ghost"} size="sm" role="tab" id={`${tabsId}-${id}-tab`} aria-selected={section===id} aria-controls={`${tabsId}-${id}-panel`} tabIndex={section===id?0:-1} onClick={()=>setSection(id!)} onKeyDown={event=>{
+          const order=["overview","program","scripts","rules","assignments"], at=order.indexOf(id!)
+          const next=event.key==="ArrowRight"?order[(at+1)%order.length]:event.key==="ArrowLeft"?order[(at+order.length-1)%order.length]:event.key==="Home"?order[0]:event.key==="End"?order[order.length-1]:null
+          if(next){event.preventDefault();setSection(next);document.getElementById(`${tabsId}-${next}-tab`)?.focus()}
+        }}>{label}</Button>)}</div>
+        <section hidden={section!=="overview"} role="tabpanel" id={`${tabsId}-overview-panel`} aria-labelledby={`${tabsId}-overview-tab`} tabIndex={0} aria-label="overview" className="space-y-6 pt-4">
           <Fields items={[["Version",details.version],["Publisher",details.publisher],["Last modified",date(details.modifiedAt)],["Created",date(details.createdAt)],["Installer filename",details.fileName],["Package size",details.packageBytes===null?null:new Intl.NumberFormat(undefined,{style:"unit",unit:"megabyte",maximumFractionDigits:1}).format(details.packageBytes/1024**2)]]}/>
           <div><h3 className="font-medium">Description</h3><p className="mt-2 whitespace-pre-wrap break-words text-sm text-muted-foreground">{details.description||"No description provided in Intune."}</p></div>
           <div><h3 className="font-medium">Intune app ID</h3><p className="mt-2 break-all font-mono text-xs text-muted-foreground">{details.id}</p></div>
-        </section>}
-        {section==="program"&&<section aria-label="program" className="space-y-5 pt-4">
+        </section>
+        <section hidden={section!=="program"} role="tabpanel" id={`${tabsId}-program-panel`} aria-labelledby={`${tabsId}-program-tab`} tabIndex={0} aria-label="program" className="space-y-5 pt-4">
           <Fields items={[["Install context",details.installContext],["Restart behavior",details.restartBehavior],["Maximum runtime (minutes)",details.maxRunTimeMinutes]]}/>
           {[["Install command",details.installCommand],["Uninstall command",details.uninstallCommand]].map(([label,value])=><div key={label}><h3 className="font-medium">{label}</h3><pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-xl bg-secondary p-4 text-xs">{value||"No command line provided. Check the Scripts tab for an active script."}</pre></div>)}
           <p className="text-xs text-muted-foreground">Installation information is read-only. These commands are not executed by viewing or backing up this app.</p>
-        </section>}
-        {section==="scripts"&&<section aria-label="scripts" className="space-y-4 pt-4">
+        </section>
+        <section hidden={section!=="scripts"} role="tabpanel" id={`${tabsId}-scripts-panel`} aria-labelledby={`${tabsId}-scripts-tab`} tabIndex={0} aria-label="scripts" className="space-y-4 pt-4">
           {details.scriptWarning&&<p role="status" className="rounded-xl bg-secondary p-4 text-sm">{details.scriptWarning}</p>}
           {!details.scripts.length&&<p className="text-sm text-muted-foreground">No install, uninstall, detection or requirement script content was returned. This app may use command lines instead.</p>}
           {details.scripts.map((script,index)=><section key={`${script.kind}-${index}`}><div className="flex items-center justify-between gap-3"><h3 className="min-w-0 break-words font-medium">{script.name}</h3><Button variant="outline" size="sm" disabled={script.content===null||downloading!==null} aria-label={`Download ${script.name}`} onClick={()=>void download(index)}><Download className="mr-2 size-4" aria-hidden="true"/>{downloading===index?"Saving…":"Download"}</Button></div><p className="mt-1 text-xs text-muted-foreground">{script.kind} · Signature check: {script.signatureCheck===null?"Not specified":script.signatureCheck?"Required":"Not required"} · 32-bit: {script.runAs32Bit===null?"Not specified":script.runAs32Bit?"Yes":"No"}</p><pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-xl bg-secondary p-4 text-xs">{script.content===null?"Script content is unavailable.":script.content||"Empty script"}</pre></section>)}
           <p className="text-xs text-muted-foreground">Scripts are displayed as text and are never run here. Download saves the displayed script as a UTF-8 PowerShell file after checking it still matches Intune; existing files are preserved.</p>{downloadNotice&&<p role="status" className="rounded-xl bg-secondary p-3 text-sm">{downloadNotice}</p>}
-        </section>}
-        {section==="rules"&&<section aria-label="rules" className="space-y-4 pt-4">
+        </section>
+        <section hidden={section!=="rules"} role="tabpanel" id={`${tabsId}-rules-panel`} aria-labelledby={`${tabsId}-rules-tab`} tabIndex={0} aria-label="rules" className="space-y-4 pt-4">
           {!details.rules.length&&<p className="text-sm text-muted-foreground">No detection or requirement rules returned.</p>}
           {details.rules.map((rule,index)=><section key={index} className="rounded-xl border p-4"><h3 className="font-medium">{rule.purpose||"Rule"} · {friendly(rule.type)}</h3><dl className="mt-3 grid gap-2 text-xs">{Object.entries(rule.properties).map(([key,value])=><div key={key} className="grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-3"><dt className="break-words text-muted-foreground">{friendly(key)}</dt><dd className="break-all">{typeof value==="boolean"?(value?"Yes":"No"):String(value??"Not specified")}</dd></div>)}</dl></section>)}
-        </section>}
-        {section==="assignments"&&<section aria-label="assignments" className="space-y-4 pt-4">
+        </section>
+        <section hidden={section!=="assignments"} role="tabpanel" id={`${tabsId}-assignments-panel`} aria-labelledby={`${tabsId}-assignments-tab`} tabIndex={0} aria-label="assignments" className="space-y-4 pt-4">
           <p className="text-sm text-muted-foreground">Assignments are read-only. Group membership, exclusions and filters determine whether a particular PC is included.</p>
           {details.assignmentWarning&&<p role="status" className="rounded-xl bg-secondary p-4 text-sm">{details.assignmentWarning}</p>}
           {details.assignments?.length===0&&<p className="text-sm text-muted-foreground">No assignments returned for this app.</p>}
           {details.assignments?.map((assignment,index)=><div key={index} className="rounded-xl border p-4 text-sm"><p className="font-medium">{assignment.intent.slice(0,1).toUpperCase()+assignment.intent.slice(1)} · {targets[assignment.target]??friendly(assignment.target)}</p>{assignment.groupId&&<p className="mt-2 break-all font-mono text-xs">Group: {assignment.groupId}</p>}{assignment.filterId&&<p className="mt-2 break-all text-xs">Filter: {assignment.filterId} ({assignment.filterType})</p>}</div>)}
-        </section>}
+        </section>
       </div>}
       {printing&&<p role="status" className="text-sm text-muted-foreground">Preparing app details…</p>}
       {printNotice&&<p role="status" className="rounded-xl bg-secondary p-3 text-sm">{printNotice}</p>}

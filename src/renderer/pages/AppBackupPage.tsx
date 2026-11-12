@@ -75,7 +75,7 @@ export function SourceWorkspace({ tenant }: { tenant: string }) {
     try {
       const done = await action(id)
       if (alive.current) {
-        if (done) { await reload(); if (alive.current) setNotice(success) }
+        if (done) { setNotice(success); void reload() }
         else setNotice(cancelled)
       }
       return done
@@ -145,7 +145,7 @@ export function SourceWorkspace({ tenant }: { tenant: string }) {
         <Button type="submit" disabled={busy}><Plus className="mr-2 size-4" aria-hidden="true" />Save installer</Button>
         <p className="basis-full text-xs text-gray-600">Choose an existing .intunewin package, up to 2 GiB. Its container is checked and the original bytes are encrypted in the source folder. Installation behavior is not tested.</p>
       </form></details>
-      {(!feedbackSource || !state?.sources.some(source => source.id === feedbackSource)) && feedback}
+      {(loading || !feedbackSource || !state?.sources.some(source => source.id === feedbackSource)) && feedback}
       {state?.warnings.map(warning => <p role="status" key={warning} className="mt-4 rounded-2xl bg-amber-50 p-4 text-sm text-amber-900">{warning}</p>)}
       <p className="mt-4 text-xs text-gray-600">Export needs a destination with hard-link support and preserves existing files.</p>
       <div className="mt-6"><label htmlFor="source-search" className="mb-2 block text-sm font-medium text-gray-900">Search stored packages</label><Input id="source-search" name="sourceSearch" autoComplete="off" disabled={!state || !state.sources.length || busy} value={search} onChange={event => setSearch(event.target.value)} placeholder="App label or file name…" /></div>

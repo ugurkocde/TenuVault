@@ -7,10 +7,21 @@ const TYPE = "#microsoft.graph.win32LobApp"
 const qualified = ["displayVersion", "fileName", "size", "installCommandLine", "uninstallCommandLine", "installExperience", "activeInstallScript", "activeUninstallScript", "committedContentVersion", "rules"].map(field => `microsoft.graph.win32LobApp/${field}`)
 const SELECT = ["id", "displayName", "publisher", "description", "largeIcon", "createdDateTime", "lastModifiedDateTime", ...qualified].join(",")
 function object(value: unknown): Record<string, unknown> { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {} }
+function scriptText(encoded: unknown): string | null {
+  if (typeof encoded !== "string" || encoded.length > 140000 || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) return null
+  const bytes = Buffer.from(encoded, "base64")
+  if (bytes.length > 102400 || bytes.toString("base64") !== encoded) return null
+  // UTF-32 is unsupported; its LE BOM otherwise resembles UTF-16LE.
+  if (bytes.subarray(0,4).equals(Buffer.from([0xff,0xfe,0,0])) || bytes.subarray(0,4).equals(Buffer.from([0,0,0xfe,0xff]))) return null
+  const encoding = bytes[0] === 0xff && bytes[1] === 0xfe ? "utf-16le" : bytes[0] === 0xfe && bytes[1] === 0xff ? "utf-16be" : "utf-8"
+  try {
+    const text = new TextDecoder(encoding, { fatal: true }).decode(bytes)
+    return text.includes("\0") ? null : text
+  } catch { return null }
+}
 function script(value: unknown, kind: IntuneAppScript["kind"]): IntuneAppScript {
   const row = object(value), encoded = row.content ?? row.scriptContent
-  const bytes = typeof encoded === "string" && encoded.length <= 140000 && /^[A-Za-z0-9+/]*={0,2}$/.test(encoded) ? Buffer.from(encoded, "base64") : null
-  const content = bytes && bytes.length <= 102400 ? bytes.toString("utf8") : null
+  const content = scriptText(encoded)
   const name = appText(row.displayName, 300) || `${kind} script`
   const id = createHash("sha256").update(JSON.stringify([kind,name,content])).digest("hex")
   return { id, name, kind, content, signatureCheck: typeof row.enforceSignatureCheck === "boolean" ? row.enforceSignatureCheck : null, runAs32Bit: typeof row.runAs32Bit === "boolean" ? row.runAs32Bit : null }
@@ -77,6 +88,7 @@ export async function readAppBackupDetails(tenant: string, appId: string, tokenF
       } catch (error) { assignmentWarning = error instanceof Error ? error.message : "Assignments could not be read." }
     })()
   ])
+  if (!scriptWarning && scripts.some(item => item.content === null)) scriptWarning = "One or more scripts have unavailable content or an unsupported text encoding. They cannot be downloaded."
   return {
     id, name: appText(row.displayName,300), publisher: appText(row.publisher,300), version: appText(row.displayVersion,200) || null, icon: appIcon(row.largeIcon), modifiedAt: appDate(row.lastModifiedDateTime), installContext: appText(experience.runAsAccount,40) || null,
     description: appText(row.description,32768), createdAt: appDate(row.createdDateTime), fileName: appText(row.fileName,300) || null, packageBytes: typeof row.size === "number" && Number.isSafeInteger(row.size) && row.size >= 0 ? row.size : null,

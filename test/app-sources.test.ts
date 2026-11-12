@@ -201,7 +201,7 @@ describe("streaming app source store", () => {
     expect((await readdir(folder)).some(n => n.startsWith(".tenuvault-export-"))).toBe(false)
     expect((await readdir(join(base, tenant))).some(n => n.startsWith(".export-"))).toBe(false)
   })
-  it.each(["offset", "signature", "data-bounds"])("rejects a malformed content entry %s before publishing the package", async mode => {
+  it.each(["offset", "signature", "data-bounds", "aliased-metadata", "local-name"])("rejects a malformed content entry %s before publishing the package", async mode => {
     const folder = await root(), input = await packageFile(folder, { bytes: 128 }), data = Buffer.from(input.data)
     let position = data.readUInt32LE(data.length - 6)
     for (;;) {
@@ -213,6 +213,12 @@ describe("streaming app source store", () => {
     if (mode === "offset") data.writeUInt32LE(data.length, position + 42)
     if (mode === "signature") data.writeUInt32LE(0, data.readUInt32LE(position + 42))
     if (mode === "data-bounds") data.writeUInt32LE(data.length, position + 20)
+    if (mode === "local-name") { const at = data.readUInt32LE(position + 42) + 30; data.writeUInt8(data.readUInt8(at) ^ 1, at) }
+    if (mode === "aliased-metadata") {
+      let metadata = data.readUInt32LE(data.length - 6)
+      while (data.subarray(metadata + 46, metadata + 46 + data.readUInt16LE(metadata + 28)).toString("utf8") !== "IntuneWinPackage/Metadata/Detection.xml") metadata += 46 + data.readUInt16LE(metadata + 28) + data.readUInt16LE(metadata + 30) + data.readUInt16LE(metadata + 32)
+      data.writeUInt32LE(data.readUInt32LE(metadata + 42), position + 42)
+    }
     await writeFile(input.file, data)
     const store = new AppSourceStore(join(folder, "store"), () => [master])
     await expect(store.attach(tenant, input.file, "App")).rejects.toThrow("package content")

@@ -160,3 +160,16 @@ it("keeps export failures beside the file and avoids unrelated key advice", asyn
  expect(alert.textContent).toContain("Choose a new name")
  expect(alert.textContent).not.toContain("recovery key")
 })
+
+it("stops offering cancellation when the job finishes while its catalog refresh is still pending",async()=>{
+ const node=await mount()
+ let finish!:(value:unknown)=>void
+ api.list.mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve}))
+ await click(node,"Export original")
+ expect(node.textContent).toContain("Reading the source store")
+ expect(node.textContent).not.toContain("Cancel operation")
+ expect(node.textContent).not.toContain("Cancelling")
+ expect(node.textContent).toContain("Original package exported")
+ await act(async()=>finish({storeName:"Sources",warnings:[],sources:[]}));await flush()
+ expect(api.cancel).not.toHaveBeenCalled()
+})

@@ -59,7 +59,7 @@ Select the app name or **Details** to inspect:
 
 - **Overview:** version, publisher, description, dates, package filename/size and Intune app ID.
 - **Installation:** install/uninstall commands, execution context, restart behavior and runtime limit.
-- **Scripts:** available install, uninstall, detection and requirement script content. Scripts are displayed as text and never executed here. **Download** saves an available script through a native file dialog as a UTF-8 `.ps1` file with a BOM for Windows PowerShell compatibility. Downloads check that the returned script still matches the displayed content, preserve existing filenames and do not run it. If it changed, refresh the details first.
+- **Scripts:** available install, uninstall, detection and requirement script content. Scripts are displayed as text and never executed here. **Download** saves an available script through a native file dialog as a UTF-8 `.ps1` file with a BOM for Windows PowerShell compatibility. Downloads check that the returned script still matches the displayed content, preserve existing filenames and do not run it. If it changed, refresh the details first. UTF-8 and BOM-marked UTF-16 scripts are supported; invalid or unsupported encodings show unavailable content with a warning instead of a download.
 - **Detection & requirements:** the rule metadata returned by Intune.
 - **Assignments:** returned Required, Available or Uninstall targeting, including group/filter references where provided. This does not calculate effective eligibility for this PC.
 

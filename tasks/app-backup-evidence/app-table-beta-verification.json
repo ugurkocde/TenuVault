@@ -8,7 +8,16 @@
     "resource": "/beta/deviceAppManagement/mobileApps",
     "win32Filter": "isof('microsoft.graph.win32LobApp')",
     "qualifiedDerivedSelect": true,
-    "verifiedFields": ["id", "displayName", "publisher", "largeIcon", "lastModifiedDateTime", "isAssigned", "displayVersion", "installExperience"],
+    "verifiedFields": [
+      "id",
+      "displayName",
+      "publisher",
+      "largeIcon",
+      "lastModifiedDateTime",
+      "isAssigned",
+      "displayVersion",
+      "installExperience"
+    ],
     "continuationFollowed": true,
     "countNotUsedAsCompletenessEvidence": true
   },
@@ -30,5 +39,22 @@
     "This does not establish delegated sign-in or consent coverage.",
     "Populated active script bodies are covered by official beta schema documentation and local fixtures, not a live populated example.",
     "No assignments, installations or tenant content were changed."
-  ]
+  ],
+  "reviewFollowup": {
+    "graphApiVersion": "beta",
+    "mode": "read-only",
+    "qualifiedRulesAndActiveScriptFieldsReturned": true,
+    "continuationFollowed": true,
+    "invalidSelectStatus": 400,
+    "encodingFixtures": [
+      "UTF-8",
+      "UTF-8 BOM",
+      "UTF-16LE BOM",
+      "UTF-16BE BOM",
+      "invalid UTF-8",
+      "truncated UTF-16",
+      "unsupported UTF-32",
+      "BOM-less NUL-containing input"
+    ]
+  }
 }

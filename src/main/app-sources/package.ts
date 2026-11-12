@@ -23,12 +23,14 @@ export async function inspectIntunewin(file: PackageReader, size: number): Promi
   const count = tail.readUInt16LE(end + 10), length = tail.readUInt32LE(end + 12), offset = tail.readUInt32LE(end + 16)
   if (!count || count > 10_000 || length > 4 * 1024 ** 2 || offset + length > size - tail.length + end) throw new Error("The package directory is invalid or uses unsupported ZIP64 packaging.")
   const directory = await readAt(file, length, offset)
-  const entryData = async (local: number, compressed: number, label: string) => {
+  const entryData = async (local: number, compressed: number, label: string, expectedName: Buffer) => {
     if (local + 30 > offset) throw new Error(`The package ${label} entry is invalid.`)
     const header = await readAt(file, 30, local)
     if (header.readUInt32LE(0) !== 0x04034b50) throw new Error(`The package ${label} header is invalid.`)
     const start = local + 30 + header.readUInt16LE(26) + header.readUInt16LE(28)
     if (start + compressed > offset) throw new Error(`The package ${label} data is invalid.`)
+    const localName = await readAt(file, header.readUInt16LE(26), local + 30)
+    if (!localName.equals(expectedName)) throw new Error(`The package ${label} filename does not match its directory entry.`)
     return start
   }
   const seen = new Set<string>()
@@ -38,7 +40,8 @@ export async function inspectIntunewin(file: PackageReader, size: number): Promi
     const names = directory.readUInt16LE(position + 28), extra = directory.readUInt16LE(position + 30), comment = directory.readUInt16LE(position + 32)
     const next = position + 46 + names + extra + comment
     if (next > length) throw new Error("The package directory is damaged.")
-    const name = directory.subarray(position + 46, position + 46 + names).toString("utf8").replaceAll("\\", "/")
+    const encodedName = directory.subarray(position + 46, position + 46 + names)
+    const name = encodedName.toString("utf8").replaceAll("\\", "/")
     if (name.includes("\0") || name.includes(":") || name.startsWith("/") || name.split("/").includes("..")) throw new Error("The package contains an unsafe entry name.")
     const segments = name.split("/").filter(Boolean)
     if (segments.some(part => /[. ]$/.test(part) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part)) || seen.has(name.toLowerCase())) throw new Error("The package contains duplicate or unsupported entry names.")
@@ -46,7 +49,7 @@ export async function inspectIntunewin(file: PackageReader, size: number): Promi
     if (name.toLowerCase() === "intunewinpackage/metadata/detection.xml") {
       const compressed = directory.readUInt32LE(position + 20), expanded = directory.readUInt32LE(position + 24), local = directory.readUInt32LE(position + 42), method = directory.readUInt16LE(position + 10)
       if (compressed > 1024 ** 2 || expanded > 1024 ** 2 || local + 30 > size || directory.readUInt16LE(position + 8) & 1) throw new Error("The package metadata is too large or encrypted.")
-      const start = await entryData(local, compressed, "metadata")
+      const start = await entryData(local, compressed, "metadata", encodedName)
       const bytes = await readAt(file, compressed, start)
       const xmlBytes = method === 0 ? bytes : method === 8 ? inflateRawSync(bytes, { maxOutputLength: 1024 ** 2 }) : null
       if (!xmlBytes || xmlBytes.length !== expanded) throw new Error("The package metadata compression is unsupported.")
@@ -57,7 +60,7 @@ export async function inspectIntunewin(file: PackageReader, size: number): Promi
       metadata = true
     }
     if (/^intunewinpackage\/contents\/[^/]+\.intunewin$/i.test(name)) {
-      await entryData(directory.readUInt32LE(position + 42), directory.readUInt32LE(position + 20), "content")
+      await entryData(directory.readUInt32LE(position + 42), directory.readUInt32LE(position + 20), "content", encodedName)
       content = true
     }
     position = next

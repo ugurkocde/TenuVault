@@ -31,3 +31,21 @@ it("ignores a late detail response after the dialog is removed",async()=>{
  await act(async()=>root!.render(null));await act(async()=>finish(details))
  expect(document.querySelector('[role="dialog"]')).toBeNull()
 })
+
+it("associates tabs and panels and supports arrow, Home and End keyboard navigation",async()=>{
+ api.details.mockResolvedValue(details)
+ const node=document.createElement("div");document.body.append(node);root=createRoot(node)
+ await act(async()=>root!.render(createElement(AppDetailsDialog,{tenant:"tenant",app,onClose:vi.fn(),onBackup:vi.fn(),returnFocus:vi.fn()})))
+ const tabs=[...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
+ expect(document.querySelectorAll('[role="tablist"]')).toHaveLength(1)
+ for(const tab of tabs){const panel=document.getElementById(tab.getAttribute("aria-controls")!)!;expect(panel.getAttribute("aria-labelledby")).toBe(tab.id)}
+ await act(async()=>{tabs[0]!.focus();tabs[0]!.dispatchEvent(new KeyboardEvent("keydown",{key:"ArrowRight",bubbles:true}))})
+ expect(document.activeElement).toBe(tabs[1]);expect(tabs[1]!.getAttribute("aria-selected")).toBe("true")
+ expect(document.getElementById(tabs[1]!.getAttribute("aria-controls")!)!.hidden).toBe(false)
+ await act(async()=>tabs[1]!.dispatchEvent(new KeyboardEvent("keydown",{key:"End",bubbles:true})))
+ expect(document.activeElement).toBe(tabs[4])
+ await act(async()=>tabs[4]!.dispatchEvent(new KeyboardEvent("keydown",{key:"Home",bubbles:true})))
+ expect(document.activeElement).toBe(tabs[0])
+ await act(async()=>tabs[0]!.dispatchEvent(new KeyboardEvent("keydown",{key:"ArrowLeft",bubbles:true})))
+ expect(document.activeElement).toBe(tabs[4])
+})

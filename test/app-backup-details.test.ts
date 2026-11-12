@@ -41,6 +41,18 @@ describe("read-only Intune app details",()=>{
   const details=await readAppBackupDetails(tenant,appId,async()=>"token",get)
   expect(details.assignments).toBeNull();expect(details.assignmentWarning).toContain('403')
  })
+ it.each(["utf8","utf8-bom","utf16le","utf16be"])("decodes a %s script without corrupting Unicode",async encoding=>{
+  const text="Write-Output 'Grüße 日本語'", utf16=Buffer.from(text,"utf16le")
+  const bytes=encoding==="utf8"?Buffer.from(text):encoding==="utf8-bom"?Buffer.concat([Buffer.from([0xef,0xbb,0xbf]),Buffer.from(text)]):encoding==="utf16le"?Buffer.concat([Buffer.from([0xff,0xfe]),utf16]):Buffer.concat([Buffer.from([0xfe,0xff]),Buffer.from(utf16).swap16()])
+  const get=fetcher();get.mockResolvedValueOnce(Response.json({...row,activeInstallScript:null,rules:[{"@odata.type":"#microsoft.graph.win32LobAppPowerShellScriptRule",ruleType:"detection",scriptContent:bytes.toString("base64")}]}))
+  const details=await readAppBackupDetails(tenant,appId,async()=>"token",get)
+  expect(details.scripts[0]!.content).toBe(text);expect(details.scriptWarning).toBeNull()
+ })
+ it.each([[0xc3,0x28],[0xff,0xfe,0x41],[0xff,0xfe,0,0,0x41,0,0,0],[0,0,0xfe,0xff,0,0,0,0x41],[0x41,0,0x42,0]])("refuses invalid or unsupported script bytes %j instead of offering corrupted text",async(...values)=>{
+  const get=fetcher();get.mockResolvedValueOnce(Response.json({...row,activeInstallScript:null,rules:[{"@odata.type":"#microsoft.graph.win32LobAppPowerShellScriptRule",scriptContent:Buffer.from(values).toString("base64")}]}))
+  const details=await readAppBackupDetails(tenant,appId,async()=>"token",get)
+  expect(details.scripts[0]!.content).toBeNull();expect(details.scriptWarning).toContain("unsupported text encoding")
+ })
  it("escapes app-controlled text and marks truncated print scripts",async()=>{
   const details=await readAppBackupDetails(tenant,appId,async()=>"token",fetcher())
   details.name='<img src=x onerror=alert(1)>';details.scripts[0]!.content='x'.repeat(9000)
