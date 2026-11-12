@@ -1,0 +1,11 @@
+{
+  "appCommit": "5a987cb97c382dbea006fd8a88cd6e236579d3b1",
+  "platform": "linux",
+  "profile": "Disposable synthetic tenant; no Microsoft account and no license key",
+  "storedSources": 1,
+  "sourceSha256": "0a315d4337180d0f7d6eef0e4e1de10a430810d0e1f5bddca79f8443d8f31b63",
+  "exportSha256": "0a315d4337180d0f7d6eef0e4e1de10a430810d0e1f5bddca79f8443d8f31b63",
+  "exactExport": true,
+  "tenantWrites": false,
+  "captureAvailable": false
+}
