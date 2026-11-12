@@ -457,9 +457,11 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
             {openFeedback && !isTrialKeyRefusal(errors.form) && (
               // Open locally with no telemetry or counting. Never prefill errors or identity details;
               // keep the existing snapshot and opt-in screenshot, and send only on explicit Send.
-              <Button type="button" variant="outline" size="sm" className="mt-3" onClick={() => void openFeedback()}>
-                Tell us what went wrong
-              </Button>
+              <div className="mt-2">
+                <Button type="button" variant="outline" size="sm" onClick={() => void openFeedback()}>
+                  Tell us what went wrong
+                </Button>
+              </div>
             )}
           </AlertDescription>
         </Alert>
