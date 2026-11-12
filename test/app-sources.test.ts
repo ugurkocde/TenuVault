@@ -2,7 +2,7 @@ import { appendFileSync } from "node:fs"
 import { afterEach, afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import JSZip from "jszip"
 import { randomBytes, randomUUID } from "node:crypto"
-import { mkdtemp, writeFile, readFile, readdir, rm, cp } from "node:fs/promises"
+import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, cp, symlink, lstat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { spawnSync } from "node:child_process"
@@ -27,6 +27,32 @@ async function packageFile(folder: string, options: { extra?: string; xml?: stri
 }
 
 describe("streaming app source store", () => {
+  it.each(["owner", "export", "manifest"])("quarantines oversized %s metadata without attempting decryption", async kind => {
+    const folder = await root(), base = join(folder, "store"), id = randomUUID(), keys = vi.fn(() => [master])
+    const directory = join(base, tenant, kind === "owner" ? `.staging-${id}` : kind === "manifest" ? id : "")
+    await mkdir(directory, { recursive: true })
+    const metadata = join(directory, kind === "owner" ? "owner.tvm" : kind === "manifest" ? "manifest.tvm" : `.export-${id}.tvm`)
+    await writeFile(metadata, Buffer.alloc(64 * 1024 + 1))
+    const result = await new AppSourceStore(base, keys).list(tenant)
+    expect(result.sources).toEqual([])
+    expect(result.warnings).toHaveLength(1)
+    expect(keys).not.toHaveBeenCalled()
+    expect((await lstat(metadata)).size).toBe(64 * 1024 + 1)
+  })
+  it.each(["owner", "export", "manifest"])("quarantines linked %s metadata without reading its target", async kind => {
+    const folder = await root(), base = join(folder, "store"), id = randomUUID(), keys = vi.fn(() => [master])
+    const directory = join(base, tenant, kind === "owner" ? `.staging-${id}` : kind === "manifest" ? id : "")
+    await mkdir(directory, { recursive: true })
+    const metadata = join(directory, kind === "owner" ? "owner.tvm" : kind === "manifest" ? "manifest.tvm" : `.export-${id}.tvm`)
+    const target = join(folder, "keep.tvm"); await writeFile(target, "TVM1do not follow")
+    await symlink(target, metadata)
+    const result = await new AppSourceStore(base, keys).list(tenant)
+    expect(result.sources).toEqual([])
+    expect(result.warnings).toHaveLength(1)
+    expect(keys).not.toHaveBeenCalled()
+    expect((await lstat(metadata)).isSymbolicLink()).toBe(true)
+    expect(await readFile(target, "utf8")).toBe("TVM1do not follow")
+  })
   it("retains exact original bytes and rebuilds a tenant catalog from the folder and imported TVK2 keys", async () => {
     const folder = await root(), input = await packageFile(folder)
     const values = new Map<string, string>()

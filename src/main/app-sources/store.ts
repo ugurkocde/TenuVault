@@ -2,7 +2,7 @@ import { createCipheriv, createDecipheriv, createHash, createHmac, hkdfSync, ran
 import { constants } from "node:fs"
 import { hostname } from "node:os"
 import { basename, join, dirname } from "node:path"
-import { mkdir, open, readFile, readdir, rename, rm, link, lstat, realpath, type FileHandle } from "node:fs/promises"
+import { mkdir, open, readdir, rename, rm, link, lstat, realpath, type FileHandle } from "node:fs/promises"
 import type { StoredAppSource } from "../../shared/app-sources/types"
 import { inspectIntunewin } from "./package"
 
@@ -10,6 +10,7 @@ const CHUNK = 1024 * 1024
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/
 const MAGIC = Buffer.from("TVS1")
 const MANIFEST = Buffer.from("TVM1")
+const METADATA_LIMIT = 64 * 1024
 const flags = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)
 export function sourceTenant(value: unknown): string {
   if (typeof value !== "string" || !UUID.test(value.toLowerCase())) throw new Error("Select a configured tenant.")
@@ -41,6 +42,25 @@ async function write(file: FileHandle, data: Buffer): Promise<void> {
   while (at < data.length) { const n = await file.write(data, at, data.length - at); if (!n.bytesWritten) throw new Error("Could not write source data."); at += n.bytesWritten }
 }
 async function noLink(path: string): Promise<void> { if ((await lstat(path)).isSymbolicLink()) throw new Error("Source-store links are not supported.") }
+async function readMetadata(path: string): Promise<Buffer> {
+  const before = await lstat(path)
+  if (!before.isFile() || before.size > METADATA_LIMIT) throw new Error("Source metadata must be a regular file of at most 64 KiB.")
+  const file = await open(path, flags)
+  try {
+    const stat = await file.stat()
+    if (!stat.isFile() || stat.size > METADATA_LIMIT) throw new Error("Source metadata must be a regular file of at most 64 KiB.")
+    // The file can grow after stat. Bound the read itself, including an overflow byte.
+    const bytes = Buffer.alloc(METADATA_LIMIT + 1)
+    let size = 0
+    while (size < bytes.length) {
+      const { bytesRead } = await file.read(bytes, size, bytes.length - size, null)
+      if (!bytesRead) return bytes.subarray(0, size)
+      size += bytesRead
+      if (size > METADATA_LIMIT) throw new Error("Source metadata exceeds 64 KiB.")
+    }
+    throw new Error("Source metadata exceeds 64 KiB.")
+  } finally { await file.close() }
+}
 const owner = () => ({ host: hostname(), pid: process.pid })
 function abandoned(value: { host?: unknown; pid?: unknown }): boolean {
   if (value.host !== hostname() || !Number.isInteger(value.pid) || Number(value.pid) <= 0) return false
@@ -61,7 +81,7 @@ export class AppSourceStore {
     return Buffer.concat([MANIFEST, seal(Buffer.from(JSON.stringify(value)), key(master, tenant, `${purpose}/${id}`), aad(tenant, id, 0, 0))])
   }
   private decode<T>(data: Buffer, tenant: string, id: string, purpose: string): { value: T; master: Buffer } {
-    if (!data.subarray(0, 4).equals(MANIFEST) || data.length > 64 * 1024) throw new Error("The source manifest is invalid.")
+    if (!data.subarray(0, 4).equals(MANIFEST) || data.length > METADATA_LIMIT) throw new Error("The source manifest is invalid.")
     for (const master of this.keys()) {
       try { return { value: JSON.parse(unseal(data.subarray(4), key(master, tenant, `${purpose}/${id}`), aad(tenant, id, 0, 0)).toString("utf8")) as T, master } } catch { /* Try rotated/imported keys. */ }
     }
@@ -69,10 +89,7 @@ export class AppSourceStore {
   }
   private async manifest(tenant: string, id: string): Promise<{ value: StoredAppSource; master: Buffer; directory: string }> {
     const directory = join(await this.folder(tenant), sourceId(id)); await noLink(directory)
-    const path = join(directory, "manifest.tvm"); await noLink(path)
-    const file = await open(path, flags)
-    let bytes: Buffer
-    try { if ((await file.stat()).size > 64 * 1024) throw new Error("The source manifest is too large."); bytes = await file.readFile() } finally { await file.close() }
+    const bytes = await readMetadata(join(directory, "manifest.tvm"))
     const decoded = this.decode<StoredAppSource>(bytes, tenant, id, "manifest")
     const v = decoded.value
     if (!/^[a-f0-9]{24}$/.test(v.keyId) || v.id !== id || v.tenantId !== tenant || v.format !== "intunewin" || v.provenance !== "administrator-selected" || !Number.isSafeInteger(v.bytes) || v.bytes < 0 || v.bytes > 2 * 1024 ** 3 || !/^[a-f0-9]{64}$/.test(v.sha256) || typeof v.fileName !== "string" || v.fileName !== basename(v.fileName) || !/\.intunewin$/i.test(v.fileName) || typeof v.appName !== "string" || v.appName.length > 200 || !Number.isFinite(Date.parse(v.createdAt))) throw new Error("The source manifest is invalid.")
@@ -84,7 +101,7 @@ export class AppSourceStore {
       if (entry.name.startsWith(".staging-")) {
         const stage = join(folder, entry.name)
         if (entry.isDirectory() && /^\.staging-[a-f0-9-]{36}$/.test(entry.name)) {
-          try { const data = this.decode<{ host: string; pid: number }>(await readFile(join(stage, "owner.tvm")), tenant, entry.name.slice(9), "owner"); if (abandoned(data.value)) { await rm(stage, { recursive: true }); continue } } catch { /* Unknown staging is quarantined, never listed. */ }
+          try { const data = this.decode<{ host: string; pid: number }>(await readMetadata(join(stage, "owner.tvm")), tenant, entry.name.slice(9), "owner"); if (abandoned(data.value)) { await rm(stage, { recursive: true }); continue } } catch { /* Unknown staging is quarantined, never listed. */ }
         }
         warnings.push("An import has not completed and is not counted as a stored source.")
       } else if (UUID.test(entry.name)) {
@@ -92,7 +109,7 @@ export class AppSourceStore {
       } else if (/^\.export-[a-f0-9-]{36}\.tvm$/.test(entry.name)) {
         try {
           const id = entry.name.slice(8, -4)
-          const data = this.decode<{ host: string; pid: number; temporary: string }>(await readFile(join(folder, entry.name)), tenant, id, "export")
+          const data = this.decode<{ host: string; pid: number; temporary: string }>(await readMetadata(join(folder, entry.name)), tenant, id, "export")
           if (abandoned(data.value)) {
             if (basename(data.value.temporary) !== `.tenuvault-export-${id}.tmp`) throw new Error("Invalid export journal")
             await rm(data.value.temporary, { force: true }); await rm(join(folder, entry.name)); continue
