@@ -81,6 +81,13 @@ jobs:
             echo "$WINGET_ID $VERSION is already in winget-pkgs." | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
+          # Komac does not notice an open pull request for the version, so a re-run would open a second one.
+          open_pr=$(GH_TOKEN="$GITHUB_TOKEN" gh pr list -R microsoft/winget-pkgs --state open \
+            --search "\"$WINGET_ID version $VERSION\" in:title" --json url --jq '.[0].url // ""')
+          if [ -n "$open_pr" ]; then
+            echo "$WINGET_ID $VERSION is waiting for review: $open_pr" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           base="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
           komac update "$WINGET_ID" --version "$VERSION" \
             --urls "$base/TenuVault-$VERSION-win-x64.exe" "$base/TenuVault-$VERSION-win-arm64.exe" "$base/TenuVault-$VERSION-win-x64.msi" \
