@@ -1,15 +1,17 @@
 import { inflateRawSync } from "node:zlib"
 import { DOMParser } from "@xmldom/xmldom"
-import type { FileHandle } from "node:fs/promises"
+export interface PackageReader {
+  read(buffer: Buffer, offset: number, length: number, position: number): Promise<{ bytesRead: number }>
+}
 
-async function readAt(file: FileHandle, length: number, position: number): Promise<Buffer> {
+async function readAt(file: PackageReader, length: number, position: number): Promise<Buffer> {
   const data = Buffer.alloc(length)
   for (let at = 0; at < length;) { const r = await file.read(data, at, length - at, position + at); if (!r.bytesRead) throw new Error("The package is truncated."); at += r.bytesRead }
   return data
 }
 
 /** Inspect the ZIP directory without buffering or extracting the installer. ZIP64 is deferred. */
-export async function inspectIntunewin(file: FileHandle, size: number): Promise<void> {
+export async function inspectIntunewin(file: PackageReader, size: number): Promise<void> {
   if (size < 22 || size > 2 * 1024 ** 3) throw new Error("Choose an .intunewin package smaller than 2 GiB.")
   const tailSize = Math.min(size, 65_557)
   const tail = await readAt(file, tailSize, size - tailSize)

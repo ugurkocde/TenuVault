@@ -4,7 +4,7 @@ import { hostname } from "node:os"
 import { basename, join, dirname } from "node:path"
 import { mkdir, open, readdir, rename, rm, link, lstat, realpath, type FileHandle } from "node:fs/promises"
 import type { StoredAppSource } from "../../shared/app-sources/types"
-import { inspectIntunewin } from "./package"
+import { inspectIntunewin, type PackageReader } from "./package"
 
 const CHUNK = 1024 * 1024
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/
@@ -36,6 +36,35 @@ async function exact(file: FileHandle, length: number): Promise<Buffer> {
   let at = 0
   while (at < length) { const n = await file.read(data, at, length - at, null); if (!n.bytesRead) throw new Error("The source is truncated."); at += n.bytesRead }
   return data
+}
+async function exactAt(file: FileHandle, length: number, position: number): Promise<Buffer> {
+  const data = Buffer.alloc(length)
+  for (let at = 0; at < length;) {
+    const { bytesRead } = await file.read(data, at, length - at, position + at)
+    if (!bytesRead) throw new Error("The source is truncated.")
+    at += bytesRead
+  }
+  return data
+}
+/** Fixed-size encrypted frames allow authenticated positional reads with one cached chunk. */
+function snapshotReader(file: FileHandle, size: number, secret: Buffer, tenant: string, id: string, signal?: AbortSignal): PackageReader {
+  let cachedIndex = -1
+  let cached: Buffer = Buffer.alloc(0)
+  return { async read(buffer, offset, length, position) {
+    let written = 0
+    while (written < length && position + written < size) {
+      abort(signal)
+      const at = position + written, index = Math.floor(at / CHUNK), chunkSize = Math.min(CHUNK, size - index * CHUNK)
+      if (cachedIndex !== index) {
+        const frame = await exactAt(file, chunkSize + 33, 4 + index * (CHUNK + 33))
+        if (frame[0] !== 1 || frame.readUInt32BE(1) !== chunkSize + 28) throw new Error("The source contains an invalid chunk.")
+        cached = unseal(frame.subarray(5), secret, aad(tenant, id, 1, index)); cachedIndex = index
+      }
+      const start = at % CHUNK, count = Math.min(length - written, cached.length - start)
+      cached.copy(buffer, offset + written, start, start + count); written += count
+    }
+    return { bytesRead: written }
+  } }
 }
 async function write(file: FileHandle, data: Buffer): Promise<void> {
   let at = 0
@@ -146,27 +175,28 @@ export class AppSourceStore {
     try {
       const before = await file.stat()
       if (!before.isFile()) throw new Error("Choose a regular .intunewin file.")
-      await inspectIntunewin(file, before.size); abort(signal)
+      if (before.size < 22 || before.size > 2 * 1024 ** 3) throw new Error("Choose an .intunewin package smaller than 2 GiB.")
+      abort(signal)
       await mkdir(stage, { mode: 0o700 }); made = true
       await this.privateWrite(join(stage, "owner.tvm"), this.encode(owner(), tenant, id, "owner", master))
-      const artifact = await open(join(stage, "artifact.tvs"), "wx", 0o600)
+      const artifact = await open(join(stage, "artifact.tvs"), "wx+", 0o600)
       const secret = key(master, tenant, `artifact/${id}`), hash = createHash("sha256")
       let size = 0, index = 0
       try {
         await write(artifact, MAGIC)
         while (size < before.size) {
           abort(signal)
-          const chunk = Buffer.alloc(Math.min(CHUNK, before.size - size)), n = await file.read(chunk, 0, chunk.length, size)
-          if (!n.bytesRead) throw new Error("The selected file changed during import.")
-          const plain = chunk.subarray(0, n.bytesRead); hash.update(plain)
+          const plain = await exactAt(file, Math.min(CHUNK, before.size - size), size); hash.update(plain)
           await this.frame(artifact, plain, secret, tenant, id, 1, index++)
-          size += n.bytesRead
+          size += plain.length
         }
         const after = await file.stat()
         if (before.size !== after.size || before.mtimeMs !== after.mtimeMs) throw new Error("The selected file changed during import.")
         const sha256 = hash.digest("hex")
         await this.frame(artifact, Buffer.from(JSON.stringify({ size, sha256, chunks: index })), secret, tenant, id, 2, index)
         await artifact.sync(); abort(signal)
+        // Inspect only the immutable encrypted snapshot that will be published, not the live input.
+        await inspectIntunewin(snapshotReader(artifact, size, secret, tenant, id, signal), size); abort(signal)
         const manifest: StoredAppSource = { id, tenantId: tenant, fileName: basename(input), appName: appName.trim() || basename(input, ".intunewin"), bytes: size, sha256, createdAt: new Date().toISOString(), provenance: "administrator-selected", format: "intunewin", keyId: createHmac("sha256", master).update("TenuVault/app-sources/key-id/v1").digest("hex").slice(0, 24) }
         await this.privateWrite(join(stage, "manifest.tvm"), this.encode(manifest, tenant, id, "manifest", master))
         await artifact.close(); abort(signal)

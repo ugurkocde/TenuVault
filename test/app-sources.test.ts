@@ -1,4 +1,4 @@
-import { appendFileSync } from "node:fs"
+import { appendFileSync, writeFileSync, utimesSync } from "node:fs"
 import { afterEach, afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import JSZip from "jszip"
 import { randomBytes, randomUUID } from "node:crypto"
@@ -131,11 +131,22 @@ describe("streaming app source store", () => {
     await expect(store.export(tenant, item.id, destination)).rejects.toMatchObject({ code: "EEXIST" })
     expect(await readFile(destination, "utf8")).toBe("existing")
   })
-  it("rejects a source that changes after inspection and leaves no committed or staging record", async () => {
+  it("rejects a source that changes during import and leaves no committed or staging record", async () => {
     const folder = await root(), input = await packageFile(folder), base = join(folder, "store")
     const store = new AppSourceStore(base, () => [master]); let checks = 0
     const signal = { throwIfAborted() { if (++checks === 2) appendFileSync(input.file, "changed") } } as AbortSignal
     await expect(store.attach(tenant, input.file, "App", signal)).rejects.toThrow("changed during import")
+    expect((await store.list(tenant)).sources).toEqual([])
+    expect((await readdir(join(base, tenant))).some(n => n.startsWith(".staging-"))).toBe(false)
+  })
+  it("checks the exact encrypted snapshot when a same-size input rewrite restores its timestamp", async () => {
+    const folder = await root(), input = await packageFile(folder), base = join(folder, "store"), fixed = new Date("2025-01-01T00:00:00Z")
+    utimesSync(input.file, fixed, fixed)
+    const store = new AppSourceStore(base, () => [master]); let checks = 0
+    const signal = { throwIfAborted() {
+      if (++checks === 2) { writeFileSync(input.file, Buffer.alloc(input.data.length)); utimesSync(input.file, fixed, fixed) }
+    } } as AbortSignal
+    await expect(store.attach(tenant, input.file, "App", signal)).rejects.toThrow("ZIP package")
     expect((await store.list(tenant)).sources).toEqual([])
     expect((await readdir(join(base, tenant))).some(n => n.startsWith(".staging-"))).toBe(false)
   })
@@ -183,6 +194,15 @@ describe("crash recovery", () => {
     bundle = join(tmpdir(), `app-sources-${randomUUID()}.cjs`)
     await build({ entryPoints: ["src/main/app-sources/store.ts"], bundle: true, platform: "node", format: "cjs", outfile: bundle, logLevel: "silent" })
   })
+  it("inspects and exports a snapshot spanning chunks when source reads are short", async () => {
+    const folder = await root(), input = await packageFile(folder), base = join(folder, "store")
+    const script = `const fs=require('node:fs/promises'),open=fs.open;fs.open=async(...args)=>{const file=await open(...args);if(args[0]===${JSON.stringify(input.file)}){const read=file.read.bind(file);file.read=(buffer,offset,length,position)=>read(buffer,offset,Math.min(length,16384),position)}return file};const {AppSourceStore}=require(${JSON.stringify(bundle)});new AppSourceStore(${JSON.stringify(base)},()=>[Buffer.from(${JSON.stringify(master.toString("hex"))},'hex')]).attach(${JSON.stringify(tenant)},${JSON.stringify(input.file)},'App').then(()=>process.exit(0)).catch(()=>process.exit(9));`
+    expect(spawnSync(process.execPath, ["-e", script], { timeout: 5000 }).status).toBe(0)
+    const store = new AppSourceStore(base, () => [master]), item = (await store.list(tenant)).sources[0]!
+    const destination = join(folder, "snapshot.intunewin")
+    await store.export(tenant, item.id, destination)
+    expect((await readFile(destination)).equals(input.data)).toBe(true)
+  }, 20_000)
   it.each(["cleanup-failure", "wrong-key"])("distinguishes %s while reconciling an abandoned export", async mode => {
     const folder = await root(), input = await packageFile(folder), base = join(folder, "store")
     const store = new AppSourceStore(base, () => [master]), item = await store.attach(tenant, input.file, "App")
