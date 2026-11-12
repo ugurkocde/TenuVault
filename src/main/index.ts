@@ -2,6 +2,10 @@ import { AppSourceService } from "./app-sources/service"
 import { checkRecoveryDevice } from "./app-backup/device-check"
 import { readAppBackupAccount } from "./app-backup/account"
 import { appBackupClientId } from "./app-backup/sign-in"
+import { readAppBackupDetails } from "./app-backup/app-details"
+import { printAppDetails } from "./app-backup/print"
+import { downloadAppScript } from "./app-backup/script-download"
+import { appDetailsHtml } from "../shared/app-sources/details-report"
 import { readAppBackupApps } from "./app-backup/inventory"
 import { AppRegistrationSetup, setupLoginHint } from "./auth/app-registration-setup"
 import { trialBackupObserver } from "./license/usage-actions"
@@ -1398,7 +1402,13 @@ async function bootstrap(): Promise<void> {
   })
 
   const appSources = new AppSourceService({
-    apps: (tenant) => readAppBackupApps(tenant, async id => (await tokenFor(id, signedInClient(id), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch),
+    details: (tenant, id) => readAppBackupDetails(tenant, id, async tid => (await auth.getAccessToken(tid, signedInClient(tid), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch),
+    printDetails: details => printAppDetails(appDetailsHtml(details), options => new BrowserWindow(options)),
+    downloadScript: script => downloadAppScript(script, async fileName => {
+      const result = await dialog.showSaveDialog(mainWindow!, { title: "Download app script", defaultPath: fileName, filters: [{ name: "PowerShell script", extensions: ["ps1"] }] })
+      return result.canceled ? null : result.filePath ?? null
+    }),
+    apps: (tenant) => readAppBackupApps(tenant, async id => (await auth.getAccessToken(id, signedInClient(id), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch),
     knownTenant: (tenant) => connectedTenantIds().some(id => id.toLowerCase() === tenant),
     folder: (tenant) => appStore.get(`app-sources.folder.${tenant}`) ?? join(app.getPath("documents"), "TenuVault App Sources"),
     setFolder: (tenant, folder) => appStore.set(`app-sources.folder.${tenant}`, folder),
@@ -1422,7 +1432,7 @@ async function bootstrap(): Promise<void> {
       return result.canceled ? null : result.filePath ?? null
     },
     checkDevice: (tenant) => checkRecoveryDevice(tenant, () => readAppBackupAccount(tenant,
-      async id => (await tokenFor(id, signedInClient(id), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch)),
+      async id => (await auth.getAccessToken(id, signedInClient(id), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch)),
     signIn: async (tenant) => {
       const clientId = appBackupClientId(tenant, appStore.get(`${RENDERER_STORAGE_PREFIX}tenuvault_tenants`))
       await auth.reauthenticate(tenant, clientId, RESOURCE_SCOPES.graph).finally(returnToApp)
@@ -1437,6 +1447,9 @@ async function bootstrap(): Promise<void> {
   handleTrusted("appSources:cancel", (_event, tenant: unknown, operation: unknown) => appSources.cancel(tenant, operation))
   handleTrusted("appSources:deviceStatus", (_event, tenant: unknown) => appSources.checkDevice(tenant))
   handleTrusted("appSources:signIn", (_event, tenant: unknown) => appSources.signIn(tenant))
+  handleTrusted("appSources:details", (_event, tenant: unknown, id: unknown) => appSources.details(tenant, id))
+  handleTrusted("appSources:printDetails", (_event, tenant: unknown, id: unknown) => appSources.printDetails(tenant, id))
+  handleTrusted("appSources:downloadScript", (_event, tenant: unknown, id: unknown, scriptId: unknown) => appSources.downloadScript(tenant, id, scriptId))
   handleTrusted("appSources:apps", (_event, tenant: unknown) => appSources.apps(tenant))
 
   handleTrusted("app:info", () => ({

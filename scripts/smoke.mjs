@@ -903,7 +903,7 @@ await check("App Backup keeps local stored access independent of sign-in and pre
   await go("#/portal/app-backup/versions", "Saved installers")
   await assertPageInMain("Free encrypted installer storage", "free App Backup")
   assert(!(await evaluate(`document.body.innerText.includes("Choose your Community tenant") || document.body.innerText.includes("Try Pro free with no card or email")`)), "App Backup displayed license-selection or upgrade prompts")
-  assert(await waitForText("No stored installers"), "local source catalog did not load for signed-out configured tenant")
+  assert(await waitForText("No saved installers"), "local source catalog did not load for signed-out configured tenant")
   assert(await evaluate(`typeof window.tenuvault.appSources.list === "function" && typeof window.tenuvault.appSources.export === "function" && typeof window.tenuvault.appSources.signIn === "function"`), "source IPC namespace missing")
   assert(await evaluate(`!document.querySelector('main').innerText.includes("Ready to recover")`), "recovery availability is misleading")
   assert(!(await evaluate(`document.querySelector('main').innerText.includes("An active license is required for backup and restore operations")`)), "stored sources are behind the backup license notice")

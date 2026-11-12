@@ -1,7 +1,7 @@
 import { basename, join } from "node:path"
 import { lstat, readdir } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
-import type { AppSourceState, RecoveryDeviceStatus, AppSourcesBridge } from "../../shared/app-sources/types"
+import type { AppSourceState, RecoveryDeviceStatus, AppSourcesBridge, IntuneAppDetails, IntuneAppScript } from "../../shared/app-sources/types"
 import { AppSourceStore, sourceTenant } from "./store"
 
 export interface AppSourceHost {
@@ -17,6 +17,9 @@ export interface AppSourceHost {
   pickExport: (fileName: string) => Promise<string | null>
   checkDevice: (tenant: string) => Promise<RecoveryDeviceStatus>
   signIn: (tenant: string) => Promise<void>
+  details: (tenant: string, appId: string) => Promise<IntuneAppDetails>
+  printDetails: (details: IntuneAppDetails) => Promise<boolean>
+  downloadScript: (script: IntuneAppScript) => Promise<boolean>
   apps: (tenant: string) => ReturnType<AppSourcesBridge["apps"]>
 }
 
@@ -124,6 +127,24 @@ export class AppSourceService {
     const check = Promise.resolve().then(() => this.host.checkDevice(tenant)).finally(() => { this.deviceChecks.delete(tenant) })
     this.deviceChecks.set(tenant, check)
     return check
+  }
+  details(raw: unknown, app: unknown): Promise<IntuneAppDetails> {
+    return this.host.details(this.tenant(raw), sourceTenant(app))
+  }
+  async printDetails(raw: unknown, app: unknown): Promise<boolean> {
+    const tenant = this.tenant(raw), id = sourceTenant(app)
+    const details = await this.host.details(tenant, id)
+    this.tenant(tenant)
+    return this.host.printDetails(details)
+  }
+  async downloadScript(raw: unknown, app: unknown, scriptId: unknown): Promise<boolean> {
+    const tenant = this.tenant(raw), id = sourceTenant(app)
+    if (typeof scriptId !== "string" || !/^[a-f0-9]{64}$/.test(scriptId)) throw new Error("Select an available app script.")
+    const details = await this.host.details(tenant, id)
+    this.tenant(tenant)
+    const script = details.scripts.find(item => item.id === scriptId)
+    if (!script || script.content === null) throw new Error("This script changed or is unavailable. Refresh app details and retry.")
+    return this.host.downloadScript(script)
   }
   signIn(raw: unknown): Promise<void> { return this.host.signIn(this.tenant(raw)) }
   apps(raw: unknown) {

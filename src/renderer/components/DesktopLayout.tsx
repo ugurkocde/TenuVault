@@ -4,7 +4,7 @@ import { Button } from "~/components/ui/button"
 import { openCheckout } from "../lib/purchase"
 import { TenantTrialNotices, TrialActions, TrialUsage, TrialChanges, trialEndVisible } from "./TenantTrial"
 import { CommunityChoiceBanner } from "./CommunityTenantPicker"
-import { isAppBackupPath } from "../lib/app-backup-route"
+import { isAppBackupPath, desktopRouteBoundaryKey } from "../lib/app-backup-route"
 import { useEffect, useRef, useState, type ComponentType, type ReactNode, type RefObject } from "react"
 import { Link, Outlet, useLocation } from "react-router-dom"
 import {
@@ -509,7 +509,7 @@ export function DesktopLayout() {
         {[/portal\/backup/, /portal\/drift/, /portal\/audit/, /portal\/(governance|changes|operations|reports|alerts|sync)/].some(pattern => pattern.test(pathname)) && <TenantAccessNotice />}
         {/* Room to scroll the end of a page clear of the floating backup and activity panels while they show. */}
         <main className="pb-[calc(var(--floating-progress-offset,0px)+var(--background-tasks-offset,0px))]">
-          <ErrorBoundary key={pathname}>
+          <ErrorBoundary key={desktopRouteBoundaryKey(pathname)}>
             <Outlet />
           </ErrorBoundary>
         </main>

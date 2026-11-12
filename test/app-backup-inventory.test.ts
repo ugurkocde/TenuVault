@@ -6,7 +6,7 @@ describe("App Backup live inventory", () => {
     const app = { id: tenant, displayName: "Finance", publisher: "Contoso", "@odata.type": "#microsoft.graph.win32LobApp" }
     const fetcher = vi.fn().mockResolvedValueOnce(Response.json({ value: [app, { ...app, "@odata.type": "#microsoft.graph.macOSDmgApp" }], "@odata.count": 0, "@odata.nextLink": "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps?$skiptoken=next" })).mockResolvedValueOnce(Response.json({ value: [app] }))
     const result = await readAppBackupApps(tenant, async () => "token", fetcher)
-    expect(result.apps).toEqual([{ id: tenant, name: "Finance", publisher: "Contoso" }])
+    expect(result.apps).toMatchObject([{ id: tenant, name: "Finance", publisher: "Contoso",version:null,icon:null }])
     expect(fetcher).toHaveBeenCalledTimes(2)
   })
   it.each(["https://evil.test/beta/deviceAppManagement/mobileApps", "https://graph.microsoft.com/v1.0/deviceAppManagement/mobileApps", "https://graph.microsoft.com/beta/users"])("never sends credentials to an unexpected continuation %s", async next => {

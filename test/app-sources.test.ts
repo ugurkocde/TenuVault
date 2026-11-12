@@ -327,9 +327,33 @@ describe("crash recovery", () => {
 describe("trusted local source actions", () => {
   async function setup() {
     const folder = await root(), input = await packageFile(folder)
-    const host: AppSourceHost = { knownTenant: id => id === tenant || id === other, folder: () => join(folder, "sources"), setFolder: vi.fn(), confirmNewStore: vi.fn(async () => false), keys: () => [master], ensureKeys: vi.fn(), pickFolder: async () => folder, pickPackage: async () => input.file, pickExport: async () => null, checkDevice: vi.fn(), signIn: vi.fn(async () => {}), apps: vi.fn(async () => ({ apps: [], fetchedAt: new Date().toISOString() })) }
+    const host: AppSourceHost = { details: vi.fn(), printDetails: vi.fn(), downloadScript: vi.fn(), knownTenant: id => id === tenant || id === other, folder: () => join(folder, "sources"), setFolder: vi.fn(), confirmNewStore: vi.fn(async () => false), keys: () => [master], ensureKeys: vi.fn(), pickFolder: async () => folder, pickPackage: async () => input.file, pickExport: async () => null, checkDevice: vi.fn(), signIn: vi.fn(async () => {}), apps: vi.fn(async () => ({ apps: [], fetchedAt: new Date().toISOString() })) }
     return { folder, input, host, service: new AppSourceService(host) }
   }
+  it("guards app details and print targets without invoking paid or arbitrary-path operations", async () => {
+    const {host,service}=await setup(),appId=randomUUID()
+    host.details=vi.fn(async()=>({id:appId,name:"Finance"}) as never)
+    host.printDetails=vi.fn(async()=>true)
+    await service.details(tenant,appId)
+    expect(host.details).toHaveBeenCalledExactlyOnceWith(tenant,appId)
+    expect(await service.printDetails(tenant,appId)).toBe(true)
+    expect(host.printDetails).toHaveBeenCalledWith(expect.objectContaining({id:appId}))
+    expect(()=>service.details(randomUUID(),appId)).toThrow("configured")
+    expect(()=>service.details(tenant,"../../file")).toThrow()
+  })
+  it("downloads only the displayed script identity and refuses changed content or malformed targets", async () => {
+    const {host,service}=await setup(),appId=randomUUID(),scriptId="a".repeat(64)
+    const script={id:scriptId,name:"Install.ps1",kind:"install",content:"Write-Output 'hello'"}
+    host.details=vi.fn(async()=>({id:appId,scripts:[{...script,id:"b".repeat(64)},script]}) as never)
+    host.downloadScript=vi.fn(async()=>true)
+    expect(await service.downloadScript(tenant,appId,scriptId)).toBe(true)
+    expect(host.downloadScript).toHaveBeenCalledExactlyOnceWith(script)
+    vi.mocked(host.downloadScript).mockClear()
+    await expect(service.downloadScript(tenant,appId,"c".repeat(64))).rejects.toThrow("changed or is unavailable")
+    await expect(service.downloadScript(tenant,appId,0)).rejects.toThrow("Select an available")
+    await expect(service.downloadScript(randomUUID(),appId,scriptId)).rejects.toThrow("configured")
+    expect(host.downloadScript).not.toHaveBeenCalled()
+  })
   it.each(["tenant", "renamed-tenant", "artifact"])("refuses a reconnect at the wrong %s folder level", async kind => {
     const { folder, host, service } = await setup(), id = randomUUID()
     const selected = join(folder, kind === "tenant" ? tenant.toUpperCase() : "retained")
@@ -410,7 +434,7 @@ describe("trusted local source actions", () => {
   })
   it("attaches and exports offline for every configured tenant without entitlement, and never mints a key on an empty listing", async () => {
     const folder = await root(), input = await packageFile(folder), ensureKeys = vi.fn()
-    const host: AppSourceHost = { knownTenant: id => id === tenant || id === other, folder: () => join(folder, "sources"), setFolder: vi.fn(), confirmNewStore: vi.fn(async () => false), keys: () => [master], ensureKeys, pickFolder: async () => null, pickPackage: async () => input.file, pickExport: async () => join(folder, "original.intunewin"), checkDevice: vi.fn(), signIn: vi.fn(async () => {}), apps: vi.fn(async () => ({ apps: [], fetchedAt: new Date().toISOString() })) }
+    const host: AppSourceHost = { details: vi.fn(), printDetails: vi.fn(), downloadScript: vi.fn(), knownTenant: id => id === tenant || id === other, folder: () => join(folder, "sources"), setFolder: vi.fn(), confirmNewStore: vi.fn(async () => false), keys: () => [master], ensureKeys, pickFolder: async () => null, pickPackage: async () => input.file, pickExport: async () => join(folder, "original.intunewin"), checkDevice: vi.fn(), signIn: vi.fn(async () => {}), apps: vi.fn(async () => ({ apps: [], fetchedAt: new Date().toISOString() })) }
     const service = new AppSourceService(host)
     expect((await service.list(tenant)).sources).toEqual([]); expect(ensureKeys).not.toHaveBeenCalled()
     await expect(service.list("not-a-tenant")).rejects.toThrow()

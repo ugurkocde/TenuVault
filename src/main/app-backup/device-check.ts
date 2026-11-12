@@ -9,7 +9,7 @@ export interface EnrollmentObservation {
   enrollments: Array<{ tenantId: string; thumbprint: string }>
   certificates: Array<{ thumbprint: string; accountId: string; notBefore: string; notAfter: string; hasPrivateKey: boolean }>
 }
-const reason = "Recovery from Intune is not available in this version. Device checks are read-only."
+const reason = "Capture from Intune is not available in this version. Device checks are read-only."
 const unknown = (platform: RecoveryDeviceStatus["platform"]): RecoveryDeviceStatus => ({ platform, enrollment: "unknown", certificate: "unknown", elevated: false, captureAvailable: false, reason })
 
 /** Public enrollment/certificate metadata only. Never opens or signs with a private key. */
@@ -31,7 +31,7 @@ try {$certificates=@(Get-ChildItem Cert:\LocalMachine\My | Where-Object {$_.Exte
 export function evaluateDevice(tenant: string, intuneAccount: string, data: EnrollmentObservation, now = Date.now()): RecoveryDeviceStatus {
   sourceTenant(tenant); sourceTenant(intuneAccount)
   const state = { ...unknown("win32"), elevated: data.elevated === true }
-  if (data.certificateAccessDenied === true) return { ...state, certificate: "access-denied", reason: "Windows denied access to public certificate metadata. Recovery is not available in this version." }
+  if (data.certificateAccessDenied === true) return { ...state, certificate: "access-denied", reason: "Windows denied access to public certificate metadata. Capture is not available in this version." }
   if (!Array.isArray(data.enrollments) || !Array.isArray(data.certificates)) return state
   const enrolled = data.enrollments.filter(e => e && typeof e.tenantId === "string" && typeof e.thumbprint === "string" && e.tenantId.toLowerCase() === tenant)
   if (!enrolled.length) return { ...state, enrollment: data.enrollments.length ? "different-tenant" : "not-enrolled", certificate: "missing" }
@@ -44,7 +44,7 @@ export function evaluateDevice(tenant: string, intuneAccount: string, data: Enro
 export async function checkRecoveryDevice(tenant: string, account: () => Promise<string>, options: { platform?: RecoveryDeviceStatus["platform"]; probe?: () => Promise<EnrollmentObservation> } = {}): Promise<RecoveryDeviceStatus> {
   const platform = options.platform ?? process.platform as RecoveryDeviceStatus["platform"]
   sourceTenant(tenant)
-  if (platform !== "win32") return { ...unknown(platform), reason: "Device checks require a Windows PC enrolled in the selected tenant. Recovery is not available in this version." }
+  if (platform !== "win32") return { ...unknown(platform), reason: "Device checks require a Windows PC enrolled in the selected tenant. Capture is not available in this version." }
   try {
     const id = sourceTenant(await account())
     const data = await (options.probe ?? (async () => {
@@ -61,6 +61,6 @@ export async function checkRecoveryDevice(tenant: string, account: () => Promise
     }))()
     return evaluateDevice(tenant, id, data)
   } catch {
-    return { ...unknown(platform), reason: "The device's enrollment could not be confirmed. Check Microsoft sign-in, Intune permissions and Windows enrollment, then retry. Recovery is not available in this version." }
+    return { ...unknown(platform), reason: "The device's enrollment could not be confirmed. Check Microsoft sign-in, Intune permissions and Windows enrollment, then retry. Capture is not available in this version." }
   }
 }
