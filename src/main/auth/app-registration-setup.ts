@@ -87,7 +87,7 @@ export class AppRegistrationSetup {
     })
     // When Microsoft shows an error page of its own (admin approval needed, a blocked app,
     // Conditional Access), nothing returns to the app. Stop waiting after a while and say so.
-    const deadline = setTimeout(() => abandon(new Error(`The sign-in in the browser was not completed within 15 minutes. If Microsoft said that you need admin approval, use "Someone else is the admin?". If it said that Microsoft Graph Command Line Tools is blocked, disabled or not assigned to you, the setup script is blocked too: ${CREATE_BY_HAND} in the Entra admin center. Nothing was changed.`)), SETUP_SIGN_IN_TIMEOUT_MS)
+    const deadline = setTimeout(() => abandon(new Error(`The sign-in in the browser was not completed within 15 minutes. If Microsoft said that you need admin approval, use "Someone else is the admin?". If it said that Microsoft Graph Command Line Tools is blocked, disabled or not assigned to you, or a Conditional Access policy blocks it, the setup script is blocked too: ${CREATE_BY_HAND} in the Entra admin center. Nothing was changed.`)), SETUP_SIGN_IN_TIMEOUT_MS)
     try {
       this.host.progress({ phase: "signingIn" })
       const interactive = app.acquireTokenInteractive({

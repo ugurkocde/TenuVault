@@ -143,8 +143,8 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
                   &quot;Someone else is the admin?&quot; below.
                 </p>
                 <p className="text-xs text-gray-600">
-                  If Microsoft says that Microsoft Graph Command Line Tools is blocked, disabled or not assigned to you, the setup
-                  script is blocked too. Select Cancel and{" "}
+                  If Microsoft says that Microsoft Graph Command Line Tools is blocked, disabled or not assigned to you, or a
+                  Conditional Access policy blocks it, the setup script is blocked too. Select Cancel and{" "}
                   <button type="button" className="rounded-sm font-medium text-gray-900 underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={openManualGuide}>
                     create the app registration by hand
                   </button>

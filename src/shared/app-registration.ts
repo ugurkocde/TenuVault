@@ -95,7 +95,7 @@ export function setupHandoffText(): string {
     "   The script also copies them to your clipboard.",
     "",
     "If our tenant blocks Microsoft Graph Command Line Tools for your account (for example AADSTS7000112,",
-    "AADSTS50105 or a Conditional Access policy), the script cannot sign in. Create the app registration by hand",
+    "AADSTS50105 or a Conditional Access policy that blocks the app), the script cannot sign in. Create the app registration by hand",
     `in the Entra admin center instead and send me the same two IDs: ${MANUAL_APP_REGISTRATION_URL}`,
     "",
     "It grants tenant-wide admin consent for these delegated permissions:",

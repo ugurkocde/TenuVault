@@ -50,6 +50,7 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
     let spAttempts = 0
     let grantAttempts = 0
     let readFailures = 0
+    let page = ""
     const server = createServer(async (req, res) => {
       const url = new URL(req.url!, "http://localhost")
       const chunks: Buffer[] = []
@@ -73,6 +74,8 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
           const wrong = new URL(target); wrong.searchParams.set("state", "wrong")
           await fetch(wrong)
         }
+        // For a refusal, read the page the script shows in the browser instead of letting the browser follow.
+        if (scenario === "app-disabled") { page = await (await fetch(target)).text(); return send({}) }
         res.writeHead(302, { Location: target.toString() }); res.end(); return
       }
       if (url.pathname.endsWith("/devicecode")) return send({ device_code: "device", user_code: "ABCD", verification_uri: "https://microsoft.com/devicelogin", interval: 1, expires_in: 60 })
@@ -125,7 +128,7 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
         child.on("error", error => { clearTimeout(timeout); reject(error) })
         child.on("close", code => { clearTimeout(timeout); resolveRun({ code, text }) })
       })
-      return { ...output, requests, pkce, polls, spAttempts, clipboard: existsSync(clipboard) ? readFileSync(clipboard, "utf8") : "" }
+      return { ...output, page, requests, pkce, polls, spAttempts, clipboard: existsSync(clipboard) ? readFileSync(clipboard, "utf8") : "" }
     } finally { server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); rmSync(dir, { recursive: true, force: true }) }
   }
 
@@ -215,6 +218,9 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
     expect(result.text).toContain("AADSTS7000112")
     expect(result.text).toContain("Create the app registration by hand instead: https://docs.tenuvault.com/getting-started/app-registration/#create-the-app-registration-manually")
     expect(result.requests.some(r => r.path.includes("graph.microsoft.com"))).toBe(false)
+    // The browser page says the same, instead of asking for another run that cannot work.
+    expect(result.page).toContain("Create the app registration by hand instead")
+    expect(result.page).not.toContain("run the script again")
   }, 45000)
   it("names both ways on when Conditional Access blocks the script's sign-in", async () => {
     const result = await run("ca-blocked")

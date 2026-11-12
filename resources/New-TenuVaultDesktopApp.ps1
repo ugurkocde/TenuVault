@@ -209,7 +209,7 @@ if ($UseDeviceCode) {
                 'slow_down' { $interval += 5; continue }
                 'authorization_declined' { throw 'Device code sign-in was declined. Nothing was changed.' }
                 'expired_token' { throw "Device code expired. Nothing was changed. Run the script again. $expiredHint" }
-                default { throw "Device code sign-in failed. Conditional Access may block device code flow. $($failure.Message)$(Get-BlockedAppHint $failure.Message)" }
+                default { throw "Device code sign-in failed. Conditional Access may block device code flow; run the script without -UseDeviceCode on a computer with a browser. $($failure.Message)$(Get-BlockedAppHint $failure.Message)" }
             }
         }
     }
@@ -257,8 +257,12 @@ if ($UseDeviceCode) {
             if ($values['error']) {
                 $message = $values['error_description']
                 if (-not $message) { $message = $values['error'] }
-                Send-BrowserResponse $answer.Response 'Sign-in did not work' "$message Go back to PowerShell and run the script again."
-                throw "Browser sign-in failed. Nothing was changed. $message$(Get-BlockedAppHint $message)"
+                # The page says the same as PowerShell: running the script again does not help a blocked app.
+                $hint = Get-BlockedAppHint $message
+                $next = ' Go back to PowerShell and run the script again.'
+                if ($hint) { $next = " Go back to PowerShell.$hint" }
+                Send-BrowserResponse $answer.Response 'Sign-in did not work' "$message$next"
+                throw "Browser sign-in failed. Nothing was changed. $message$hint"
             }
             $code = $values['code']
             Send-BrowserResponse $answer.Response 'You are signed in' 'Go back to PowerShell, where the setup continues. You can close this tab.'
