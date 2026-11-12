@@ -1,14 +1,14 @@
-# App Backup implementation screenshots
+# App Backup screenshots
 
-Captured from the running Electron build of commit `5a987cb97c382dbea006fd8a88cd6e236579d3b1` on Linux on 2026-11-12. These are application captures, not mockups.
+Captured from the production Electron build of commit `86fc372677c95281e00e2991b79c5e5de8fdaacd` on Linux, using a disposable synthetic tenant with no Microsoft account and no license key.
 
-The disposable profile contains one synthetic tenant, no Microsoft account and no license key. The fixture is an independently authored lab package produced by Microsoft's Content Prep Tool. The disposable process debugger supplied native picker results for its temporary source and destination folders; the real trusted IPC handlers, encrypted store, catalog and exporter executed normally. No product bypass or fixture API was added.
+The disposable review process supplied two synthetic app descriptors for the inventory screenshots, so no real tenant app names or IDs are published. The production inventory loader itself was verified separately, read-only through Lokka Microsoft beta, including response fields, exact Win32 type discrimination, continuation paging and malformed-select errors. These screenshots do not establish delegated permission coverage or content access.
 
-The app attached and listed one package, then exported byte-identical original content. [Validation](validation.json) records matching SHA-256 values. No tenant writes or Intune content capture were performed. Temporary source/export data and the app profile were removed after capture.
+Native file-picker results were supplied for temporary review folders and an independently authored `.intunewin` lab fixture. The real trusted IPC, encrypted source store, catalog and exporter ran normally. No product fixture API or bypass was added. The exported file is byte-identical to its input; [validation](validation.json) records matching SHA-256 values. Temporary data and the disposable profile were removed after capture. No tenant writes, assignment changes, installations or Intune content captures occurred.
 
-- [Empty store, light appearance](01-free-empty-light.png): the feature is free, with unknown inventory coverage and unavailable content recovery.
-- [Stored original, dark appearance](02-stored-original-dark.png): completed attachment, administrator-selected provenance and original-file details.
-- [Export completed, light appearance](03-export-complete-light.png): successful export and the actual Linux device-check limitation.
-- [Stored versions at the 1024px minimum width](04-stored-minimum-width.png): responsive desktop layout with a populated catalog.
+- [Intune apps, light appearance](01-intune-apps-light.png): searchable app list and clear capture availability.
+- [Selected app preparation, dark appearance](02-prepare-backup-dark.png): enrolled PC check, targeting guidance and an unavailable capture step, with manual attachment as a fallback.
+- [Original export completed, light appearance](03-export-complete-light.png): the independent offline Saved installers catalog after a real exact export.
+- [Saved installers at 1024px](04-stored-minimum-width.png): populated catalog at the supported minimum desktop width, without horizontal overflow.
 
-Local attachment, listing, reconnect and exact export are implemented. A read-only Windows device check and future request validator are implemented. Production Intune content recovery, the elevated helper/transport, live inventory, upload and restore are not available in this slice.
+Implemented: live Win32 inventory, preparation guidance, free offline attach/list/reconnect/exact export, a read-only Windows device check and a pure future request validator. Production content capture, elevated helper/transport, source coverage, upload and restore remain unavailable.

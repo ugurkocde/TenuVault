@@ -1,5 +1,6 @@
 {
-  "appCommit": "5a987cb97c382dbea006fd8a88cd6e236579d3b1",
+  "appCommit": "86fc372677c95281e00e2991b79c5e5de8fdaacd",
+  "inventory": "Synthetic app descriptors supplied only to the disposable review process",
   "platform": "linux",
   "profile": "Disposable synthetic tenant; no Microsoft account and no license key",
   "storedSources": 1,
