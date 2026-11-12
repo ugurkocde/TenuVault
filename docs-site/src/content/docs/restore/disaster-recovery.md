@@ -25,7 +25,7 @@ Work through this checklist for every tenant you protect:
 3. **Keep backups off the admin device.** Use an Azure storage account (Pro and MSP), which every admin with access can read from any computer, or point the local backup folder at a network share, where the files stay encrypted. See [Backup storage and retention](/backups/storage/).
 4. **Keep an independent copy.** A storage administrator can delete or lock a storage account. Keep a second copy of important backups under your own recovery policy.
 5. **Check recovery readiness.** Open a backup in the restore wizard and expand **Recovery readiness** to see which items restore automatically and which need manual work. See [Check recovery readiness](#check-recovery-readiness).
-6. **Know who owns external artifacts.** Record where the original app installers and Apple tokens come from, and who can renew them.
+6. **Know who owns external artifacts.** Record where the original app installers and Apple tokens come from, and who can renew them. [Free App Backup](/apps/app-backup/) can retain original `.intunewin` files you already have; keep a separate copy of its encrypted source folder and recovery key.
 7. **Practice a restore.** Restore a few items with **Create copies**. Copies are unassigned by default and never change existing items, so a test is safe.
 
 For a rehearsal checklist, follow the guide to [practice an Intune restore](https://www.tenuvault.com/guides/intune-restore-drill).

@@ -150,7 +150,7 @@ export default defineConfig({
 								{ label: 'Schedule backups', slug: 'backups/schedules' },
 								{ label: 'Cloud backups in Azure', slug: 'backups/cloud' },
 								{ label: 'Backup storage and retention', slug: 'backups/storage' },
-								{ label: 'Store Win32 installers', slug: 'apps/app-backup' },
+								{ label: 'App Backup (free)', slug: 'apps/app-backup' },
 								{ label: 'Backup Reader for scheduled backups', slug: 'backups/backup-reader' },
 								{ label: 'Conditional Access backups', slug: 'backups/conditional-access' },
 								{ label: 'Compare backups', slug: 'backups/compare' },

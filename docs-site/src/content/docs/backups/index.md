@@ -24,6 +24,8 @@ Backups go to the storage you chose for the tenant: encrypted on this device, or
 
 For the full list of object types, see [What gets backed up](/backups/coverage/).
 
+For original Win32 installer files you already have, use [free App Backup](/apps/app-backup/). Its encrypted installer store is separate from policy backup storage and remains accessible while signed out.
+
 ## Before you start
 
 * You are signed in to the tenant. See [Sign in to your tenant](/getting-started/connect-tenant/).

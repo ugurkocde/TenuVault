@@ -33,6 +33,7 @@ Steps 3 to 6 happen in the app's guided setup, **Set up TenuVault**, which walks
 
 ## After your first backup
 
+* [Keep original Win32 installers with free App Backup](/apps/app-backup/), separately from policy backups.
 * [Schedule backups](/backups/schedules/) so they run without you.
 * [Save your recovery key](/security/encryption/) somewhere safe, if backups stay on this device.
 * Add the other admins of the tenant with [Work with other admins in one tenant](/getting-started/multiple-admins/).
