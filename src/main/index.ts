@@ -1,3 +1,12 @@
+import { AppSourceService } from "./app-sources/service"
+import { checkRecoveryDevice } from "./app-backup/device-check"
+import { readAppBackupAccount } from "./app-backup/account"
+import { appBackupClientId } from "./app-backup/sign-in"
+import { readAppBackupDetails } from "./app-backup/app-details"
+import { printAppDetails } from "./app-backup/print"
+import { downloadAppScript } from "./app-backup/script-download"
+import { appDetailsHtml } from "../shared/app-sources/details-report"
+import { readAppBackupApps } from "./app-backup/inventory"
 import { AppRegistrationSetup, setupLoginHint } from "./auth/app-registration-setup"
 import { trialBackupObserver } from "./license/usage-actions"
 import { cachedTrialUsage, trialWorkflowsConfigured } from "./license/usage"
@@ -1391,6 +1400,57 @@ async function bootstrap(): Promise<void> {
       (await tokenFor(tenantId, clientId, "https://storage.azure.com/.default")).accessToken,
     )
   })
+
+  const appSources = new AppSourceService({
+    details: (tenant, id) => readAppBackupDetails(tenant, id, async tid => (await auth.getAccessToken(tid, signedInClient(tid), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch),
+    printDetails: details => printAppDetails(appDetailsHtml(details), options => new BrowserWindow(options)),
+    downloadScript: script => downloadAppScript(script, async fileName => {
+      const result = await dialog.showSaveDialog(mainWindow!, { title: "Download app script", defaultPath: fileName, filters: [{ name: "PowerShell script", extensions: ["ps1"] }] })
+      return result.canceled ? null : result.filePath ?? null
+    }),
+    apps: (tenant) => readAppBackupApps(tenant, async id => (await auth.getAccessToken(id, signedInClient(id), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch),
+    knownTenant: (tenant) => connectedTenantIds().some(id => id.toLowerCase() === tenant),
+    folder: (tenant) => appStore.get(`app-sources.folder.${tenant}`) ?? join(app.getPath("documents"), "TenuVault App Sources"),
+    setFolder: (tenant, folder) => appStore.set(`app-sources.folder.${tenant}`, folder),
+    keys: () => backupKeys.existingKeyring(),
+    exportJournalFolder: () => join(app.getPath("userData"), "app-source-export-jobs"),
+    ensureKeys: () => { backupKeys.keyring() },
+    pickFolder: async (current) => {
+      const result = await dialog.showOpenDialog(mainWindow!, { title: "Choose or reconnect source store", defaultPath: current, properties: ["openDirectory", "createDirectory"] })
+      return result.canceled ? null : result.filePaths[0] ?? null
+    },
+    confirmNewStore: async () => {
+      const result = await dialog.showMessageBox(mainWindow!, { type: "question", title: "Use a new source folder?", message: "This folder has no source store for the selected tenant.", detail: "Use it for new attachments, or cancel and select the retained source store. Existing source folders stay where they are.", buttons: ["Cancel", "Use this folder"], defaultId: 0, cancelId: 0 })
+      return result.response === 1
+    },
+    pickPackage: async () => {
+      const result = await dialog.showOpenDialog(mainWindow!, { title: "Attach an existing Win32 package", filters: [{ name: "Intune Win32 package", extensions: ["intunewin"] }], properties: ["openFile"] })
+      return result.canceled ? null : result.filePaths[0] ?? null
+    },
+    pickExport: async (fileName) => {
+      const result = await dialog.showSaveDialog(mainWindow!, { title: "Export original package, choose a new file name", defaultPath: join(app.getPath("documents"), fileName), filters: [{ name: "Intune Win32 package", extensions: ["intunewin"] }] })
+      return result.canceled ? null : result.filePath ?? null
+    },
+    checkDevice: (tenant) => checkRecoveryDevice(tenant, () => readAppBackupAccount(tenant,
+      async id => (await auth.getAccessToken(id, signedInClient(id), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch)),
+    signIn: async (tenant) => {
+      const clientId = appBackupClientId(tenant, appStore.get(`${RENDERER_STORAGE_PREFIX}tenuvault_tenants`))
+      await auth.reauthenticate(tenant, clientId, RESOURCE_SCOPES.graph).finally(returnToApp)
+      pushLicense()
+    },
+  })
+  app.on("before-quit", () => appSources.close())
+  handleTrusted("appSources:list", (_event, tenant: unknown) => appSources.list(tenant))
+  handleTrusted("appSources:chooseStore", (_event, tenant: unknown) => appSources.chooseStore(tenant))
+  handleTrusted("appSources:attach", (_event, tenant: unknown, operation: unknown, name: unknown) => appSources.attach(tenant, operation, name))
+  handleTrusted("appSources:export", (_event, tenant: unknown, operation: unknown, source: unknown) => appSources.export(tenant, operation, source))
+  handleTrusted("appSources:cancel", (_event, tenant: unknown, operation: unknown) => appSources.cancel(tenant, operation))
+  handleTrusted("appSources:deviceStatus", (_event, tenant: unknown) => appSources.checkDevice(tenant))
+  handleTrusted("appSources:signIn", (_event, tenant: unknown) => appSources.signIn(tenant))
+  handleTrusted("appSources:details", (_event, tenant: unknown, id: unknown) => appSources.details(tenant, id))
+  handleTrusted("appSources:printDetails", (_event, tenant: unknown, id: unknown) => appSources.printDetails(tenant, id))
+  handleTrusted("appSources:downloadScript", (_event, tenant: unknown, id: unknown, scriptId: unknown) => appSources.downloadScript(tenant, id, scriptId))
+  handleTrusted("appSources:apps", (_event, tenant: unknown) => appSources.apps(tenant))
 
   handleTrusted("app:info", () => ({
     version: app.getVersion(),

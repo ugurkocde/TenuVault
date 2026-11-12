@@ -1,0 +1,16 @@
+{
+  "appCommit": "53d50e3851f8ed970954302d52fb512905d72083",
+  "inventory": "Synthetic app descriptors and temporary signed-in account metadata supplied only to the disposable review process; no Microsoft token or real account",
+  "platform": "linux",
+  "profile": "Disposable synthetic tenant; no Microsoft account and no license key",
+  "storedSources": 1,
+  "sourceSha256": "0a315d4337180d0f7d6eef0e4e1de10a430810d0e1f5bddca79f8443d8f31b63",
+  "exportSha256": "0a315d4337180d0f7d6eef0e4e1de10a430810d0e1f5bddca79f8443d8f31b63",
+  "exactExport": true,
+  "scriptDownload": true,
+  "scriptExecuted": false,
+  "printUi": true,
+  "tenantWrites": false,
+  "captureAvailable": false,
+  "nativePrinter": "Success, cancellation and failure paths tested; no physical printer job submitted"
+}

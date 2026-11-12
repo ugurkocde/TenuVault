@@ -1,0 +1,13 @@
+import type { IntuneAppDetails } from "./types"
+const escape = (value: unknown) => String(value ?? "Not specified").replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[char]!)
+function printScript(content: string | null): string {
+  if (content === null) return "Content not available"
+  const excerpt = content.slice(0,8000).split(/\r?\n/).slice(0,100).join("\n")
+  return excerpt + (excerpt.length < content.length ? "\n[Print preview truncated. View the full script in app details.]" : "")
+}
+/** All app-controlled text is escaped; no remote assets or executable HTML are accepted. */
+export function appDetailsHtml(app: IntuneAppDetails): string {
+  const fields = [["Publisher",app.publisher],["Version",app.version],["App ID",app.id],["Updated",app.modifiedAt],["Install context",app.installContext],["Package",app.fileName],["Restart behavior",app.restartBehavior]]
+  const commands = [["Install command",app.installCommand],["Uninstall command",app.uninstallCommand]]
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><title>${escape(app.name)}</title><style>@page{size:A4;margin:16mm}body{font:11pt system-ui,sans-serif;color:#1b1917;line-height:1.5}h1{font-size:24pt}h2{font-size:15pt;margin-top:24pt}dt{font-weight:600}dd{margin:0 0 8pt}pre{font:9pt monospace;white-space:pre-wrap;overflow-wrap:anywhere;padding:12pt;background:#f4f2ef}section{break-inside:avoid}footer{margin-top:30pt;font-size:9pt;color:#57534e}</style></head><body><h1>${escape(app.name)}</h1><p>Intune Win32 app details · TenuVault</p><dl>${fields.map(([label,value])=>`<dt>${escape(label)}</dt><dd>${escape(value)}</dd>`).join("")}</dl><h2>Description</h2><p>${escape(app.description || "Not provided")}</p>${commands.map(([label,value])=>`<section><h2>${escape(label)}</h2><pre>${escape(value)}</pre></section>`).join("")}<h2>Scripts</h2>${app.scripts.length ? app.scripts.map(script=>`<h3>${escape(script.name)} (${escape(script.kind)})</h3><pre>${escape(printScript(script.content))}</pre>`).join(""):"<p>No script content returned.</p>"}${app.scriptWarning?`<p>${escape(app.scriptWarning)}</p>`:""}<h2>Assignments</h2>${app.assignments===null?`<p>${escape(app.assignmentWarning||"Unavailable")}</p>`:app.assignments.length?`<ul>${app.assignments.map(a=>`<li>${escape(a.intent)} · ${escape(a.target)}${a.groupId?` · ${escape(a.groupId)}`:""}</li>`).join("")}</ul>`:"<p>No assignments returned.</p>"}<footer>Read-only metadata snapshot. Assignments do not prove that a particular PC is targeted. This document does not contain installer content or establish restore readiness.</footer></body></html>`
+}

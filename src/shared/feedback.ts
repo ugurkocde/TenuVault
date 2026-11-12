@@ -63,6 +63,7 @@ const FEEDBACK_PAGES: ReadonlyArray<readonly [prefix: string, label: string]> = 
   ["/portal/overview", "All tenants"],
   ["/portal/tenants", "Tenants"],
   ["/portal/backup", "Backup & Restore"],
+  ["/portal/app-backup", "App Backup"],
   ["/portal/drift", "Drift Detection"],
   ["/portal/alerts", "Alerts"],
   ["/portal/oib", "OpenIntuneBaseline"],

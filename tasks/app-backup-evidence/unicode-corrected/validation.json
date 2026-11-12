@@ -1,0 +1,22 @@
+{
+  "Encoding": "UTF-8 with BOM",
+  "IntuneCaptureTested": false,
+  "TenantWrites": false,
+  "CatalogRebuilt": true,
+  "PowerShellVersion": "5.1.26100.9818",
+  "ExactSourceStoreRoundTrip": true,
+  "PackageHmacVerified": true,
+  "PackageDigestVerified": true,
+  "ChangedOrMissingFiles": 0,
+  "UnicodeCodePoints": [
+    71,
+    114,
+    252,
+    223,
+    101
+  ],
+  "PrepToolSignature": "Valid",
+  "IntendedUnicodeFilename": "nested\\Grüße.txt",
+  "OriginalFileCount": 6,
+  "PrepToolSha256": "C1BA45B5CB939E84AF064BB7FF4B38FB3DFE33C8DC1078FD9B157672EAE671F6"
+}

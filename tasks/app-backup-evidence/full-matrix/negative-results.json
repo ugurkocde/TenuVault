@@ -1,0 +1,56 @@
+[
+  {
+    "Detail": {
+      "Elevated": true,
+      "Message": "Truncated content header",
+      "ErrorType": "System.Management.Automation.RuntimeException"
+    },
+    "ExitCode": 1,
+    "Case": "truncated-header"
+  },
+  {
+    "Detail": {
+      "Elevated": true,
+      "Message": "IV mismatch",
+      "ErrorType": "System.Management.Automation.RuntimeException"
+    },
+    "ExitCode": 1,
+    "Case": "changed-iv"
+  },
+  {
+    "Detail": {
+      "Elevated": true,
+      "Message": "Header MAC mismatch",
+      "ErrorType": "System.Management.Automation.RuntimeException"
+    },
+    "ExitCode": 1,
+    "Case": "changed-hmac"
+  },
+  {
+    "Detail": {
+      "Elevated": true,
+      "Message": "HMAC verification failed",
+      "ErrorType": "System.Management.Automation.RuntimeException"
+    },
+    "ExitCode": 1,
+    "Case": "changed-ciphertext"
+  },
+  {
+    "Detail": {
+      "Elevated": true,
+      "Message": "Plaintext SHA256 verification failed",
+      "ErrorType": "System.Management.Automation.RuntimeException"
+    },
+    "ExitCode": 1,
+    "Case": "wrong-plaintext-digest"
+  },
+  {
+    "Detail": {
+      "Elevated": true,
+      "Message": "A task was canceled.",
+      "ErrorType": "System.Threading.Tasks.TaskCanceledException"
+    },
+    "ExitCode": 1,
+    "Case": "cancelled-download"
+  }
+]

@@ -5,7 +5,7 @@ faq:
   - question: "Which Intune objects does TenuVault back up?"
     answer: "41 Intune object types in nine areas: device configuration, compliance, endpoint security, scripts and remediations, Windows updates, apps, app protection and configuration, enrollment, and tenant administration. Each object is saved as it is in Microsoft Graph (beta), with its settings and, where Intune has them, its assignments."
   - question: "Does TenuVault back up app installer files?"
-    answer: "No. Apps are saved as their Intune details, assignments, categories, and dependency and supersedence links. Installer files are never downloaded, so Win32 and line-of-business apps cannot be recreated from a backup; store, web and Microsoft 365 apps can."
+    answer: "Policy backups save app details, assignments, categories, and dependency and supersedence links, not installers. Free App Backup separately stores original .intunewin files selected by an administrator and exports their exact bytes. It does not download installers from Intune or enable app-content restoration."
   - question: "Are the groups that assignments target backed up?"
     answer: "No. Assignments are saved as references to groups; the groups themselves are not part of the backup."
   - question: "Are Windows update rings included?"
@@ -19,6 +19,8 @@ TenuVault backs up 41 Intune object types in nine areas. Each object is saved as
 The area and type names below are the ones the **Back up** dialog shows under **Custom**. See [Choose what to back up](/backups/#choose-what-to-back-up).
 
 For the product overview of how to [back up Intune policies](https://www.tenuvault.com/intune-backup), see the backup page on the product site.
+
+Original installers stay separate from this metadata. [App Backup](/apps/app-backup/) can keep encrypted copies of `.intunewin` files you already have and export them later, free for every configured tenant. It does not make the restore wizard recreate Win32 content.
 
 ## How to read the tables
 

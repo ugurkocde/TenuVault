@@ -1,3 +1,4 @@
+import type { AppSourcesBridge } from "./app-sources/types"
 import type { OptionalPermissionStatus } from "./services/optional-permissions"
 import type { PlanIpcError } from "./plan-errors"
 import type { BackupScope } from "./intune/scope"
@@ -399,6 +400,7 @@ export interface ServicesStatus {
 
 /** API exposed to the renderer on `window.tenuvault` by the preload script. */
 export interface TenuVaultBridge {
+  appSources: AppSourcesBridge
   api: (request: ApiRequest) => Promise<ApiResponse>
   auth: {
     signIn: (tenant: string, clientId: string, options?: { loginHint?: string }) => Promise<SignedInAccount>

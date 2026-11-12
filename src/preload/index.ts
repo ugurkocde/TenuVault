@@ -20,6 +20,19 @@ function subscribe<T>(channel: string, listener: (payload: T) => void): () => vo
 }
 
 const bridge: TenuVaultPreloadBridge = {
+  appSources: {
+    details: (tenant, appId) => invoke("appSources:details", tenant, appId),
+    printDetails: (tenant, appId) => invoke("appSources:printDetails", tenant, appId),
+    downloadScript: (tenant, appId, scriptId) => invoke("appSources:downloadScript", tenant, appId, scriptId),
+    apps: (tenant) => invoke("appSources:apps", tenant),
+    list: (tenant) => invoke("appSources:list", tenant),
+    chooseStore: (tenant) => invoke("appSources:chooseStore", tenant),
+    attach: (tenant, operation, name) => invoke("appSources:attach", tenant, operation, name),
+    export: (tenant, operation, source) => invoke("appSources:export", tenant, operation, source),
+    cancel: (tenant, operation) => invoke("appSources:cancel", tenant, operation),
+    deviceStatus: (tenant) => invoke("appSources:deviceStatus", tenant),
+    signIn: (tenant) => invoke("appSources:signIn", tenant),
+  },
   api: (request) => invoke("api", request),
   auth: {
     signIn: (tenant, clientId, options) => invoke("auth:signIn", tenant, clientId, options),

@@ -1,0 +1,12 @@
+{
+  "HasPlaintext": false,
+  "ExitCode": 1,
+  "DownloadedPartialBytes": 1064369,
+  "Case": "MidstreamCancellation",
+  "HasVerifiedReceipt": false,
+  "Detail": {
+    "Elevated": true,
+    "Message": "A task was canceled.",
+    "ErrorType": "System.Threading.Tasks.TaskCanceledException"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "AppName": "AnyDesk",
+  "ApplicationVersion": "1",
+  "Auth": "MDM certificate only",
+  "HttpStatus": 404,
+  "ResponseBytes": 641,
+  "ImeVersion": "1.108.101.0",
+  "Elevated": true
+}

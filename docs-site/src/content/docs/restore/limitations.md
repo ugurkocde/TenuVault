@@ -14,6 +14,8 @@ faq:
 
 Most Intune items restore directly from a backup. A few cannot, because Intune does not export everything needed to recreate them. This page lists those cases and explains **Restore write history**, which protects you from duplicate writes when a restore is interrupted.
 
+For Win32 apps, you can [store original installer packages](/apps/app-backup/) ahead of time and export their original bytes later. This does not add installer upload or app-content restoration to the restore wizard.
+
 ## Items that cannot be restored
 
 The restore wizard marks these items as **Cannot be restored** (or greys them out on **Choose what to restore**) and shows the reason under the item.

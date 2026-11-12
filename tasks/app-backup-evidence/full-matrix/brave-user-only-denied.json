@@ -1,0 +1,9 @@
+{
+  "AppName": "Brave user-only assignment",
+  "ApplicationVersion": "1",
+  "Auth": "MDM certificate only",
+  "HttpStatus": 403,
+  "ResponseBytes": 634,
+  "ImeVersion": "1.108.101.0",
+  "Elevated": true
+}

@@ -1,8 +1,10 @@
+import { Package } from "lucide-react"
 import { trialEndWhen, organizationLicenseRefusal } from "../../shared/trial-notices"
 import { Button } from "~/components/ui/button"
 import { openCheckout } from "../lib/purchase"
 import { TenantTrialNotices, TrialActions, TrialUsage, TrialChanges, trialEndVisible } from "./TenantTrial"
 import { CommunityChoiceBanner } from "./CommunityTenantPicker"
+import { isAppBackupPath, desktopRouteBoundaryKey } from "../lib/app-backup-route"
 import { useEffect, useRef, useState, type ComponentType, type ReactNode, type RefObject } from "react"
 import { Link, Outlet, useLocation } from "react-router-dom"
 import {
@@ -72,6 +74,7 @@ const allNavigation: NavItem[] = [
   { name: "Dashboard", href: "/portal/dashboard", icon: LayoutDashboard },
   { name: "Tenants", href: "/portal/tenants", icon: Building2 },
   { name: "Backup & Restore", href: "/portal/backup", icon: Database },
+  { name: "App Backup", href: "/portal/app-backup", icon: Package, hint: "Keep original Win32 installers in an encrypted source store" },
   { name: "Drift Detection", href: "/portal/drift", icon: GitCompare },
   { name: "Sync", href: "/portal/sync", icon: RefreshCw, hint: "Copy settings from one tenant to others" },
   { name: "Alerts", href: "/portal/alerts", icon: Siren, hint: "Teams, email and webhook alerts for backups and policy changes" },
@@ -357,6 +360,7 @@ function useOverflowing(ref: RefObject<HTMLElement | null>): boolean {
 export function DesktopLayout() {
   const { status: licenseStatus } = useLicense()
   const { pathname } = useLocation()
+  const appBackupPage = isAppBackupPath(pathname)
   const tenants = useTenants()
   useScoreInvalidation()
   // MSPs with several tenants get the all-tenants overview at the top.
@@ -499,14 +503,14 @@ export function DesktopLayout() {
       )}
 
       <div className={focus ? undefined : "pl-64"}>
-        <TenantTrialNotices showWelcome={pathname !== "/portal/onboarding" && pathname !== "/license"} />
-        {!trialEndVisible(licenseStatus) && <CommunityChoiceBanner />}
-        {!focus && <LicenseBanner />}
-        {!focus && <SignInBanner />}
+        {!appBackupPage && <TenantTrialNotices showWelcome={pathname !== "/portal/onboarding" && pathname !== "/license"} />}
+        {!appBackupPage && !trialEndVisible(licenseStatus) && <CommunityChoiceBanner />}
+        {!appBackupPage && !focus && <LicenseBanner />}
+        {!focus && <SignInBanner hidden={appBackupPage} />}
         {[/portal\/backup/, /portal\/drift/, /portal\/audit/, /portal\/(governance|changes|operations|reports|alerts|sync)/].some(pattern => pattern.test(pathname)) && <TenantAccessNotice />}
         {/* Room to scroll the end of a page clear of the floating backup and activity panels while they show. */}
         <main className="pb-[calc(var(--floating-progress-offset,0px)+var(--background-tasks-offset,0px))]">
-          <ErrorBoundary key={pathname}>
+          <ErrorBoundary key={desktopRouteBoundaryKey(pathname)}>
             <Outlet />
           </ErrorBoundary>
         </main>

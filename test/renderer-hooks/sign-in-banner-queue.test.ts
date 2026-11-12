@@ -51,6 +51,21 @@ function mount(): HTMLDivElement {
 }
 
 describe("Sign-in banner", () => {
+  it("retains queued prompts and receives new requests while its content is hidden", () => {
+    const container = mount(), root = roots.at(-1)!, listener = state.listener
+    act(() => state.listener!(event("tenant-a")))
+    expect(container.textContent).toContain("Contoso")
+    act(() => root.render(createElement(SignInBanner, { hidden: true })))
+    expect(container.textContent).toBe("")
+    expect(state.listener).toBe(listener)
+    act(() => state.listener!(event("tenant-b")))
+    expect(container.textContent).toBe("")
+    act(() => root.render(createElement(SignInBanner, { hidden: false })))
+    expect(container.textContent).toContain("Contoso")
+    expect(container.textContent).toContain("1 more sign-in is waiting.")
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="Dismiss"]')!.click())
+    expect(container.textContent).toContain("Fabrikam")
+  })
   it("shows the next tenant's prompt after the first is dismissed", () => {
     const container = mount()
     act(() => {

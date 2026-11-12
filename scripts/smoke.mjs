@@ -207,6 +207,8 @@ await check("a pending license retry shows progress without overlapping requests
       frame.style.cssText = "position: fixed; inset: 0; width: 100%; height: 100%; border: 0; z-index: 9999;"
       document.body.appendChild(frame)
       window.__licenseRetryFrame = frame
+      // Routed screens need a real base URL; about:blank cannot resolve relative route paths.
+      frame.contentWindow.history.replaceState(null, "", window.location.href)
       // Run the built renderer with a mock status response, without changing the frozen preload bridge.
       frame.contentWindow.tenuvault = {
         ...window.tenuvault,
@@ -235,6 +237,11 @@ await check("a pending license retry shows progress without overlapping requests
     })()`)
     const body = `window.__licenseRetryFrame.contentDocument.body`
     assert(await waitForCondition(`${body}.innerText.includes("Could not load license status")`), "startup license error missing")
+    await evaluate(`window.__licenseRetryFrame.contentWindow.location.hash = "#/portal/app-backup"`)
+    assert(await waitForCondition(`${body}.innerText.includes("Win32 app backup")`), "free App Backup was blocked by a license-status failure")
+    assert(!(await evaluate(`${body}.innerText.includes("Could not load license status") || ${body}.innerText.includes("Choose your Community tenant")`)), "billing gates leaked into free App Backup")
+    await evaluate(`window.__licenseRetryFrame.contentWindow.location.hash = "#/"`)
+    assert(await waitForCondition(`${body}.innerText.includes("Could not load license status")`), "non-App-Backup routes lost the license-status error")
     const beforeRetry = await evaluate(`window.__licenseRetry.calls`)
     await evaluate(`(() => {
       const retry = [...${body}.querySelectorAll("button")].find(b => b.textContent === "Retry")
@@ -888,6 +895,27 @@ await check("several tenants get the overview, switcher and schedule tab", async
   await evaluate(`[...document.querySelectorAll("h2")].find(h => h.textContent === "Automatic backups")?.scrollIntoView({ block: "start" })`)
   await sleep(300)
   await screenshot("09-schedule-cloud")
+})
+
+await check("App Backup keeps local stored access independent of sign-in and presents recovery as unavailable", async () => {
+  await go("#/portal/app-backup", "Win32 app backup")
+  await assertPageInMain("Your Win32 apps in Intune", "App Backup")
+  await go("#/portal/app-backup/versions", "Saved installers")
+  await assertPageInMain("Free encrypted installer storage", "free App Backup")
+  assert(!(await evaluate(`document.body.innerText.includes("Choose your Community tenant") || document.body.innerText.includes("Try Pro free with no card or email")`)), "App Backup displayed license-selection or upgrade prompts")
+  assert(await waitForText("No saved installers"), "local source catalog did not load for signed-out configured tenant")
+  assert(await evaluate(`typeof window.tenuvault.appSources.list === "function" && typeof window.tenuvault.appSources.export === "function" && typeof window.tenuvault.appSources.signIn === "function"`), "source IPC namespace missing")
+  assert(await evaluate(`!document.querySelector('main').innerText.includes("Ready to recover")`), "recovery availability is misleading")
+  assert(!(await evaluate(`document.querySelector('main').innerText.includes("An active license is required for backup and restore operations")`)), "stored sources are behind the backup license notice")
+  await screenshot("09a-app-backup")
+  await go("#/portal/app-backup/versions", "Saved installers")
+  await assertPageInMain("Saved installers", "stored source versions")
+  await send("Emulation.setDeviceMetricsOverride", { width: 1024, height: 700, deviceScaleFactor: 1, mobile: false })
+  try {
+  await sleep(200)
+  assert(await evaluate(`document.documentElement.scrollWidth <= innerWidth + 1`), "App Backup overflows the supported minimum desktop window")
+  await screenshot("09b-app-backup-narrow")
+  } finally { await send("Emulation.clearDeviceMetricsOverride") }
 })
 
 await check("Backup Reader card offers setup with a guide link, and the schedule says who runs backups", async () => {
