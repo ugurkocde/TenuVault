@@ -8,8 +8,10 @@ import { bridge } from "@desktop/lib/bridge"
 import { FirstBackupNote } from "@desktop/components/FirstBackupNote"
 import { tenantLicense, tenantPlan, useLicense } from "@desktop/lib/license"
 import { azureStoragePortalUrl } from "~/lib/azure-portal"
-import { backupActivitySummary, backupJobPhase, type BackupJobPhase } from "~/lib/backup-job-display"
+import { backupActivitySummary, backupJobPhase, completedWithWarnings, type BackupJobPhase } from "~/lib/backup-job-display"
+import { BackupResults } from "./backup-results"
 import {
+  AlertTriangle,
   Ban,
   X,
   ChevronDown,
@@ -19,7 +21,6 @@ import {
   LoaderCircle,
   XCircle,
   ExternalLink,
-  FileText,
 } from "lucide-react"
 
 const PHASE_LABEL: Record<BackupJobPhase, string> = {
@@ -30,20 +31,8 @@ const PHASE_LABEL: Record<BackupJobPhase, string> = {
   cancelled: "Backup cancelled",
 }
 
-function formatTime(dateString?: string): string {
-  if (!dateString) return "N/A"
-  return new Date(dateString).toLocaleTimeString()
-}
-
-function formatDuration(startTime?: string, endTime?: string): string {
-  if (!startTime) return "N/A"
-  const start = new Date(startTime).getTime()
-  const end = endTime ? new Date(endTime).getTime() : Date.now()
-  const duration = Math.max(0, Math.floor((end - start) / 1000))
-  return `${Math.floor(duration / 60)}m ${duration % 60}s`
-}
-
-function PhaseIcon({ phase }: { phase: BackupJobPhase }) {
+function PhaseIcon({ phase, warnings }: { phase: BackupJobPhase; warnings: boolean }) {
+  if (phase === "completed" && warnings) return <AlertTriangle className="h-5 w-5 text-amber-700" aria-hidden="true" />
   if (phase === "running") return <LoaderCircle className="h-5 w-5 animate-spin text-coral-500" aria-hidden="true" />
   if (phase === "queued") return <Clock3 className="h-5 w-5 text-gray-500" aria-hidden="true" />
   if (phase === "completed") return <CheckCircle2 className="h-5 w-5 text-green-600" aria-hidden="true" />
@@ -54,16 +43,14 @@ function PhaseIcon({ phase }: { phase: BackupJobPhase }) {
 interface JobRowProps {
   job: BackupJob
   expanded: boolean
-  showingOutput: boolean
   cancelling: boolean
   cancelError?: string
   onToggleExpanded: () => void
-  onToggleOutput: () => void
   onCancel: () => void
   onDismiss: () => void
 }
 
-function JobRow({ job, expanded, showingOutput, cancelling, cancelError, onToggleExpanded, onToggleOutput, onCancel, onDismiss }: JobRowProps) {
+function JobRow({ job, expanded, cancelling, cancelError, onToggleExpanded, onCancel, onDismiss }: JobRowProps) {
   const { status: licenseStatus } = useLicense()
   const phase = backupJobPhase(job)
   const active = phase === "running" || phase === "queued"
@@ -73,12 +60,13 @@ function JobRow({ job, expanded, showingOutput, cancelling, cancelError, onToggl
     resourceGroupName: job.resources.resourceGroupName,
     storageAccountName: job.resources.storageAccountName,
   })
-  const detail = active && job.progressMessage ? job.progressMessage : PHASE_LABEL[phase]
+  // A finished backup's message says whether it completed with warnings.
+  const detail = (active || phase === "completed") && job.progressMessage ? job.progressMessage : PHASE_LABEL[phase]
 
   return (
     <li className="px-4 py-3">
       <div className="flex items-start gap-2.5">
-        <span className="mt-0.5 shrink-0"><PhaseIcon phase={phase} /></span>
+        <span className="mt-0.5 shrink-0"><PhaseIcon phase={phase} warnings={completedWithWarnings(job)} /></span>
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-2">
             <p className="min-w-0 flex-1 truncate text-sm font-medium tracking-tight text-foreground">{job.tenantName}</p>
@@ -123,43 +111,12 @@ function JobRow({ job, expanded, showingOutput, cancelling, cancelError, onToggl
 
           {expanded && (
             <div className="mt-2.5 space-y-2.5 border-t border-border pt-2.5">
-              <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
-                <dt className="text-muted-foreground">Status</dt>
-                <dd className={cn("text-right font-medium text-foreground", phase === "completed" && "text-green-600", phase === "failed" && "text-destructive")}>{job.status}</dd>
-                <dt className="text-muted-foreground">Started</dt>
-                <dd className="text-right tabular-nums text-foreground">{formatTime(job.startTime)}</dd>
-                {job.isComplete && (
-                  <>
-                    <dt className="text-muted-foreground">Finished</dt>
-                    <dd className="text-right tabular-nums text-foreground">{formatTime(job.endTime)}</dd>
-                    <dt className="text-muted-foreground">Duration</dt>
-                    <dd className="text-right tabular-nums text-foreground">{formatDuration(job.startTime, job.endTime)}</dd>
-                  </>
-                )}
-              </dl>
               {job.exception && (
                 <div className={cn("rounded-2xl p-3", phase === "cancelled" ? "bg-gray-100" : "bg-red-50")}>
                   <p className={cn("text-xs", phase === "cancelled" ? "text-gray-700" : "text-red-700")}>{job.exception}</p>
                 </div>
               )}
-              {job.output && (
-                <div className="space-y-2">
-                  <button
-                    type="button"
-                    onClick={onToggleOutput}
-                    aria-expanded={showingOutput}
-                    className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
-                  >
-                    <FileText className="h-3.5 w-3.5" aria-hidden="true" />
-                    {showingOutput ? "Hide output" : "Show output"}
-                  </button>
-                  {showingOutput && (
-                    <div className="max-h-40 overflow-auto rounded-xl bg-slate-950 p-3 text-xs">
-                      <pre className="whitespace-pre-wrap break-words text-slate-50">{job.output}</pre>
-                    </div>
-                  )}
-                </div>
-              )}
+              <BackupResults job={job} compact jobId={job.jobId} />
               {job.isComplete && portalUrl && (
                 <button
                   type="button"
@@ -200,7 +157,6 @@ export function FloatingProgress() {
   const activeJobs = allJobs.filter(job => !job.isHidden)
   const [expandedJobId, setExpandedJobId] = useState<string | null>(null)
   const [collapsed, setCollapsed] = useState(false)
-  const [showOutput, setShowOutput] = useState<Record<string, boolean>>({})
   const [userCollapsed, setUserCollapsed] = useState<Set<string>>(new Set())
   const [cancelling, setCancelling] = useState<Record<string, boolean>>({})
   const [cancelErrors, setCancelErrors] = useState<Record<string, string>>({})
@@ -269,6 +225,7 @@ export function FloatingProgress() {
   const anyActive = activeJobs.some(job => !job.isComplete)
   const anyFailed = activeJobs.some(job => backupJobPhase(job) === "failed")
   const anySuccessful = activeJobs.some(job => job.isSuccessful)
+  const anyWarnings = activeJobs.some(job => completedWithWarnings(job))
   const finished = activeJobs.filter(job => job.isComplete)
 
   return (
@@ -279,6 +236,8 @@ export function FloatingProgress() {
             <LoaderCircle className="h-4 w-4 shrink-0 animate-spin text-coral-500" aria-hidden="true" />
           ) : anyFailed ? (
             <XCircle className="h-4 w-4 shrink-0 text-destructive" aria-hidden="true" />
+          ) : anyWarnings ? (
+            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-700" aria-hidden="true" />
           ) : anySuccessful ? (
             <CheckCircle2 className="h-4 w-4 shrink-0 text-green-600" aria-hidden="true" />
           ) : (
@@ -314,11 +273,9 @@ export function FloatingProgress() {
                 key={job.jobId}
                 job={job}
                 expanded={expandedJobId === job.jobId}
-                showingOutput={showOutput[job.jobId] || false}
                 cancelling={cancelling[job.jobId] || false}
                 cancelError={cancelErrors[job.jobId]}
                 onToggleExpanded={() => toggleJobExpansion(job.jobId)}
-                onToggleOutput={() => setShowOutput(prev => ({ ...prev, [job.jobId]: !prev[job.jobId] }))}
                 onCancel={() => void cancelJob(job.jobId)}
                 onDismiss={() => removeJob(job.jobId)}
               />

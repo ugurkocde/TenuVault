@@ -1,3 +1,5 @@
+import type { BackupResults, BackupTypeResult } from "../../shared/backup-results"
+
 export interface BackupJobDisplay {
   status: string
   progress: number
@@ -6,6 +8,7 @@ export interface BackupJobDisplay {
   endTime?: string
   exception?: string
   output?: string
+  results?: BackupResults
   isComplete: boolean
   isSuccessful: boolean
   pollError?: string
@@ -19,6 +22,7 @@ interface BackupJobLike {
   endTime?: string
   exception?: string
   output?: string
+  results?: BackupResults
   isComplete: boolean
   isSuccessful: boolean
   pollError?: string
@@ -34,6 +38,7 @@ export function toBackupJobDisplay(job: BackupJobLike): BackupJobDisplay {
     endTime: job.endTime,
     exception: job.exception,
     output: job.output,
+    results: job.results,
     isComplete: job.isComplete,
     isSuccessful: job.isSuccessful,
     pollError: job.pollError,
@@ -97,4 +102,72 @@ export function backupActivitySummary(jobs: readonly { status: string; progress:
 /** A backup job is polled only while it is incomplete and has no recorded poll error. */
 export function isBackupJobPollable(job: { isComplete: boolean; pollError?: string }): boolean {
   return !job.isComplete && !job.pollError
+}
+
+/** What a backup's results section shows, worked out from the engine's per type results. */
+export interface BackupResultsSummary {
+  /**
+   * Types with a row, in registry order: saved policy types (some may have failed), and any type
+   * being backed up or, once the job has ended, stopped part way. Saved inventory such as Autopilot
+   * devices is listed in `inventory` instead.
+   */
+  rows: BackupTypeResult[]
+  /** Policy types with at least one object saved. */
+  typesBackedUp: number
+  /** Types still being listed while the job runs. */
+  pending: number
+  /** Types a job that has ended never listed, because it stopped first. */
+  notReached: BackupTypeResult[]
+  empty: BackupTypeResult[]
+  skipped: BackupTypeResult[]
+  unreadable: BackupTypeResult[]
+  /** Types with objects that could not be saved, other than types the job stopped part way. */
+  partial: BackupTypeResult[]
+  /** Types a job that has ended stopped part way, after listing them. */
+  stopped: BackupTypeResult[]
+  policies: number
+  inventory: Array<{ label: string; count: number }>
+  warnings: string[]
+  info: string[]
+}
+
+/** `finished` once the job has ended: a type it never finished then counts as stopped, not running. */
+export function summarizeBackupResults(results: BackupResults, finished = false): BackupResultsSummary {
+  const types = results.types
+  const policyTypes = types.filter((type) => !type.inventory)
+  const listed = (type: BackupTypeResult) => type.state === "reading" && (type.found ?? 0) > 0
+  const stopped = finished ? types.filter(listed) : []
+  return {
+    rows: types.filter((type) => listed(type) || (!type.inventory && type.state === "saved" && (type.saved > 0 || type.failed > 0))),
+    typesBackedUp: policyTypes.filter((type) => type.saved > 0).length,
+    pending: finished ? 0 : types.filter((type) => type.state === "reading" && type.found === undefined).length,
+    notReached: finished ? types.filter((type) => type.state === "reading" && type.found === undefined) : [],
+    empty: types.filter((type) => type.state === "empty" || (type.state === "saved" && type.saved === 0 && type.failed === 0)),
+    skipped: types.filter((type) => type.state === "skipped"),
+    unreadable: types.filter((type) => type.state === "unreadable"),
+    partial: types.filter((type) => type.failed > 0 && !stopped.includes(type)),
+    stopped,
+    policies: results.totalPolicies ?? policyTypes.reduce((sum, type) => sum + type.saved, 0),
+    inventory: types.filter((type) => type.inventory && type.state === "saved" && type.saved > 0).map((type) => ({ label: type.label, count: type.saved })),
+    warnings: results.notices.filter((notice) => notice.level === "warning").map((notice) => notice.message),
+    info: results.notices.filter((notice) => notice.level === "info").map((notice) => notice.message),
+  }
+}
+
+/** A completed backup with warnings: the engine's count, or its message for a job without results. */
+export function completedWithWarnings(job: { isComplete: boolean; isSuccessful: boolean; progressMessage: string; results?: BackupResults }): boolean {
+  if (!job.isComplete || !job.isSuccessful) return false
+  return job.results?.warnings !== undefined ? job.results.warnings > 0 : /with \d+ warnings?/.test(job.progressMessage)
+}
+
+/** A type label as a row heading: "compliance policies" becomes "Compliance policies". */
+export function typeHeading(label: string): string {
+  return label.charAt(0).toUpperCase() + label.slice(1)
+}
+
+/** "5s", "2m 5s"; empty when the job has not started. */
+export function formatBackupDuration(startTime?: string, endTime?: string, now = Date.now()): string {
+  if (!startTime) return ""
+  const seconds = Math.max(0, Math.round(((endTime ? new Date(endTime).getTime() : now) - new Date(startTime).getTime()) / 1000))
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`
 }

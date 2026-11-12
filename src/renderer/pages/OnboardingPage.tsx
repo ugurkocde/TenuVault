@@ -2,7 +2,7 @@ import { trialKeyRefusalText } from "../../shared/trial-notices"
 import { showCommunityLimitError } from "../lib/plan-dialog"
 import { useEffect, useRef, useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
-import { ArrowLeft, ArrowRight, Ban, CheckCircle2, Database, HardDriveDownload, KeyRound, Loader2, Play, RotateCcw, ShieldCheck, XCircle } from "lucide-react"
+import { AlertTriangle, ArrowLeft, ArrowRight, Ban, CheckCircle2, Database, HardDriveDownload, KeyRound, Loader2, Play, RotateCcw, ShieldCheck, XCircle } from "lucide-react"
 import { useSelectedTenant, useTenantOperations, useTenants } from "~/contexts/TenantContext"
 import { useBackupProgress } from "~/contexts/BackupProgressContext"
 import { Button } from "~/components/ui/button"
@@ -23,7 +23,8 @@ import { buildTenantProfile } from "../lib/desktop-tenant"
 import { clearOnboardingDraft, loadOnboardingDraft, saveOnboardingDraft } from "../lib/onboarding-draft"
 import type { StorageChoice } from "../lib/storage"
 import { desktopTenantCredentials, type TenantCredentials } from "../overrides/add-tenant-modal"
-import { resolveBackupJobDisplay, toBackupJobDisplay, type BackupJobDisplay } from "~/lib/backup-job-display"
+import { completedWithWarnings, resolveBackupJobDisplay, toBackupJobDisplay, type BackupJobDisplay } from "~/lib/backup-job-display"
+import { BackupResults } from "~/components/backup/backup-results"
 
 const STEPS = [
   { title: "Connect", icon: ShieldCheck },
@@ -36,8 +37,9 @@ type JobStatus = BackupJobDisplay
 type Step = 0 | 1 | 2 | 3
 
 /** The first backup's state: running, completed, cancelled by the user (grey) or failed. */
-export function JobStateIcon({ job }: { job: Pick<JobStatus, "isComplete" | "isSuccessful" | "status"> }) {
+export function JobStateIcon({ job }: { job: Pick<JobStatus, "isComplete" | "isSuccessful" | "status" | "progressMessage" | "results"> }) {
   if (!job.isComplete) return <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+  if (completedWithWarnings(job)) return <AlertTriangle className="h-4 w-4 text-amber-700" />
   if (job.isSuccessful) return <CheckCircle2 className="h-4 w-4 text-green-600" />
   return job.status === "Cancelled" ? <Ban className="h-4 w-4 text-gray-500" /> : <XCircle className="h-4 w-4 text-red-600" />
 }
@@ -79,7 +81,6 @@ export default function OnboardingPage() {
   // After the in-app setup: what it did, and the account the Sign in step signs in as by itself.
   const [setupNotice, setSetupNotice] = useState("")
   const [autoSignIn, setAutoSignIn] = useState<{ loginHint: string } | null>(null)
-  const logRef = useRef<HTMLPreElement>(null)
   const { addJob, removeJob, updateJob, activeJobs } = useBackupProgress()
   const completedBackup = useRef<string | null>(null)
   const handledPollError = useRef<string | null>(null)
@@ -343,10 +344,6 @@ export default function OnboardingPage() {
     }
   }
 
-  useEffect(() => {
-    logRef.current?.scrollTo({ top: logRef.current.scrollHeight })
-  }, [displayJob?.output])
-
   const finished = Boolean(displayJob?.isComplete)
   const succeeded = Boolean(displayJob?.isComplete && displayJob.isSuccessful)
 
@@ -503,11 +500,13 @@ export default function OnboardingPage() {
             )}
             {displayJob && (
               <div className="space-y-3">
-                <div className="flex items-center justify-between text-sm" role="status">
+                <div className="flex items-center justify-between text-sm">
                   <span className="flex items-center gap-2 text-gray-800">
                     <JobStateIcon job={displayJob} />
                     {displayJob.exception ?? displayJob.progressMessage}
                   </span>
+                  {/* Announces the result once, not every progress tick. */}
+                  <span role="status" className="sr-only">{displayJob.isComplete ? displayJob.exception ?? displayJob.progressMessage : ""}</span>
                   <span className="text-gray-500">{displayJob.progress}%</span>
                 </div>
                 <Progress value={displayJob.progress} />
@@ -517,11 +516,7 @@ export default function OnboardingPage() {
                   </Button>
                 )}
                 {succeeded && <FirstBackupNote plan={plan} />}
-                {displayJob.output && (
-                  <pre ref={logRef} className="max-h-48 overflow-auto rounded-2xl bg-slate-900 p-4 text-xs text-slate-100">
-                    {displayJob.output}
-                  </pre>
-                )}
+                <BackupResults job={displayJob} jobId={runningJobId} />
               </div>
             )}
             {succeeded && credentials && <TrialShortcuts tenantId={credentials.tenantId} />}

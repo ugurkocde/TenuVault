@@ -85,12 +85,14 @@ A backup that leaves out types never ages out the only copy of those types. See 
 
 The **Backup Progress** dialog shows:
 
-* a progress bar with the current step, for example "Reading Intune configuration..." or "Backing up" a type
-* **Status**, **Job ID** and **Start Time**, then **End Time** and **Duration** when the backup ends
+* a progress bar with the current step, for example "Reading Intune configuration..." or "Backing up" a type, and the result when the backup ends
+* **Policies saved** (**Saved so far** while it runs), **Types backed up** and **Duration**
+* **Needs attention**, when a type could not be read or was left out, or some objects could not be saved
+* each type that was backed up, with its count, and the types that had nothing to back up
 * the error, if the backup fails
-* **Show Job Output**, which opens the backup log
+* **Show raw log**, which opens the technical log with **Copy log** and the job ID
 
-Click **Run in Background**, or close the dialog, to keep working. The backup continues and a panel in the lower right corner of the window shows its progress. Expand the panel for details and **Show Output**, or dismiss it with the close button. The panel shows **Backup in progress**, **Backup completed** or **Backup failed**.
+Click **Run in Background**, or close the dialog, to keep working. The backup continues and a panel in the lower right corner of the window shows its progress. Expand the panel for a short summary, the first types saved and **Show raw log**, or dismiss it with the close button. The panel shows **Backup in progress**, the result such as **Backup completed successfully** or **Backup completed with 2 warnings**, or **Backup failed**.
 
 :::caution
 Backups run inside TenuVault. If you quit TenuVault while a backup runs, the backup stops and is shown as **Incomplete**. Closing the window is fine when TenuVault keeps running in the menu bar on macOS or the tray on Windows. See [Schedule backups](/backups/schedules/#keep-tenuvault-running).

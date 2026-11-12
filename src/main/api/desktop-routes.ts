@@ -58,6 +58,7 @@ export function jobStatus(job: BackupJob) {
     exception: job.exception,
     backupFolder: job.backupFolder,
     output: job.log.join("\n"),
+    results: job.results,
     // A stopped job keeps finishing (recording itself as failed) until its end time is set.
     isComplete: job.status !== "Running" && job.status !== "Queued" && job.endTime !== undefined,
     isSuccessful: job.status === "Completed",
