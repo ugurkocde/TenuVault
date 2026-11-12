@@ -1,6 +1,6 @@
 # App Backup lab test matrix, 2026-11-12
 
-Continuation of [the first lab run](app-backup-r0-lab-2026-11-12.md). Ugur authorized tests 1–7, including a separate install fixture, then confirmed that the missing production helper and UI should be documented as implementation blockers. No product feature implementation is included in this task.
+Continuation of [the first lab run](app-backup-r0-lab-2026-11-12.md). Ugur authorized tests 1–7, including a separate install fixture, then confirmed that the missing production helper and UI should be documented as implementation blockers. That lab phase included no product feature implementation. The later authorized first implementation slice is tracked in [App Backup PR1](app-backup-pr1.md).
 
 All tenant operations used live Lokka Microsoft and Graph `/beta`. Capture, packaging and device tests ran over SSH on the enrolled Windows mini PC. Source preparation used Microsoft's Content Prep Tool, downloaded from its official repository; Authenticode status was `Valid`, SHA-256 `C1BA45B5CB939E84AF064BB7FF4B38FB3DFE33C8DC1078FD9B157672EAE671F6`.
 

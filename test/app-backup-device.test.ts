@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 import { generateKeyPairSync, randomBytes, sign } from "node:crypto"
 import { checkRecoveryDevice, evaluateDevice, type EnrollmentObservation } from "../src/main/app-backup/device-check"
-import { ContentRequestVerifier, type ContentRequest, type RequestContext } from "../src/main/app-backup/request"
+import { CONTENT_REQUEST_DOMAIN, ContentRequestVerifier, type ContentRequest, type RequestContext } from "../src/main/app-backup/request"
 import { RECOVERY_API_PATHS, isRecoveryBackupRequest } from "../src/main/features/recovery"
 import { readFile } from "node:fs/promises"
 
@@ -35,13 +35,22 @@ describe("read-only recovery device check", () => {
     expect((await checkRecoveryDevice(tenant, fetchAccount, { platform: "win32", probe })).enrollment).toBe("unknown")
     expect(probe).not.toHaveBeenCalled()
   })
+  it("handles malformed enrollment metadata and certificate access denial without a sign-in diagnosis", async () => {
+    const data = observation()
+    data.enrollments.push({ tenantId: tenant, thumbprint: undefined as unknown as string })
+    expect(evaluateDevice(tenant, account, data, now).certificate).toBe("matched")
+    expect(evaluateDevice(tenant, account, { ...data, certificateAccessDenied: true }, now).certificate).toBe("access-denied")
+    const result = await checkRecoveryDevice(tenant, async () => { throw new Error("not entitled") }, { platform: "win32" })
+    expect(result.reason).toContain("Check tenant access")
+    expect(result.reason).not.toContain("Sign in")
+  })
 })
 
 describe("future content request contract, no transport", () => {
   const { privateKey, publicKey } = generateKeyPairSync("ed25519")
   const context: RequestContext = { tenantId: tenant, intuneAccountId: account, deviceId: other, appId: tenant, contentVersion: "3", requesterObjectId: other, challenge: randomBytes(32).toString("base64url"), appVersion: "1.0.0", jobId: account, contentFileId: other }
   const ticket = (): ContentRequest => ({ v: 1, ...context, requesterTenantId: tenant, issuedAt: now, expiresAt: now + 30_000, roleCheckedAt: now - 1000, appType: "#microsoft.graph.win32LobApp", permission: "update-app" })
-  const signed = (value: unknown) => { const payload = JSON.stringify(value); return [payload, sign(null, Buffer.from(payload), privateKey).toString("base64url")] as const }
+  const signed = (value: unknown) => { const payload = JSON.stringify(value); return [payload, sign(null, Buffer.from(CONTENT_REQUEST_DOMAIN + payload), privateKey).toString("base64url")] as const }
   it("accepts only one signed request bound to its challenge, tenant, actor, device, job and content", () => {
     const verifier = new ContentRequestVerifier(publicKey, context, () => now), value = signed(ticket())
     expect(verifier.consume(...value).tenantId).toBe(tenant)
@@ -64,6 +73,16 @@ describe("future content request contract, no transport", () => {
     if (mode === "extra") t.command = "arbitrary"
     const [payload, signature] = signed(t)
     expect(() => new ContentRequestVerifier(publicKey, context, () => now).consume(mode === "signature" ? payload + " " : payload, signature)).toThrow()
+  })
+  it("burns a correctly signed challenge on a rejected request and rejects duplicate keys and foreign signing purposes", () => {
+    const verifier = new ContentRequestVerifier(publicKey, context, () => now)
+    expect(() => verifier.consume(...signed({ ...ticket(), expiresAt: now }))).toThrow("expired")
+    expect(() => verifier.consume(...signed(ticket()))).toThrow("already been used")
+    const duplicate = JSON.stringify(ticket()).replace('{"v":1,', '{"v":0,"v":1,')
+    const signature = sign(null, Buffer.from(CONTENT_REQUEST_DOMAIN + duplicate), privateKey).toString("base64url")
+    expect(() => new ContentRequestVerifier(publicKey, context, () => now).consume(duplicate, signature)).toThrow("unambiguous")
+    const payload = JSON.stringify(ticket()), foreignSignature = sign(null, Buffer.from(payload), privateKey).toString("base64url")
+    expect(() => new ContentRequestVerifier(publicKey, context, () => now).consume(payload, foreignSignature)).toThrow("signature")
   })
   it("cannot inherit the existing expired-license rollback bypass or execute private protocol calls", async () => {
     expect([...RECOVERY_API_PATHS].some(path => path.startsWith("/api/app-backup"))).toBe(false)

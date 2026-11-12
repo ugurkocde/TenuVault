@@ -42,6 +42,8 @@ describe("App Backup local workspace", () => {
   await click(node, "Refresh")
   expect(node.textContent).toContain("Import the matching recovery key")
   expect(node.textContent).toContain("Reconnect source store")
+  expect(node.textContent).toContain("The source store is unavailable")
+  expect(node.textContent).not.toContain("No stored installers")
   await click(node, "Check this device")
   expect(api.deviceStatus).toHaveBeenCalledWith(ids[0])
  })

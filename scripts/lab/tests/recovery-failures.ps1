@@ -38,7 +38,7 @@ try {
   if($case -eq 'cleanup-failure'){$pass=($detail.HttpStatus -eq 200 -and $code -ne 0 -and $detail.OwnedOutput -and !$detail.CleanupSucceeded -and $detail.Message -eq 'Injected locked file failure.')}
   if($case -eq 'http404'){$pass=$pass -and $detail.HttpStatus -eq 404}
   if($case -eq 'http403'){$pass=$pass -and $detail.HttpStatus -eq 403}
-  if($case -eq 'collision'){$pass=($detail.HttpStatus -eq 200 -and !$detail.OwnedOutput -and $code -ne 0 -and (Get-Content (Join-Path $output 'existing\sentinel.txt') -Raw).Trim() -eq 'keep existing data')}
+  if($case -eq 'collision'){$pass=($detail.HttpStatus -eq 200 -and $detail.Stage -eq 'staging' -and !$detail.OwnedOutput -and $code -ne 0 -and (Get-Content (Join-Path $output 'existing\sentinel.txt') -Raw).Trim() -eq 'keep existing data')}
   if($case -in @('missing-payload','missing-content')){$pass=$pass -and $detail.HttpStatus -eq 200 -and $detail.Message -eq 'Content service did not return a complete verified recovery.'}
   if($case -eq 'missing-decrypt'){$pass=$pass -and $detail.HttpStatus -eq 200 -and $detail.Message -eq 'Unsupported encryption profile in spike'}
   if($case -eq 'payload-error'){$pass=$pass -and $detail.HttpStatus -eq 200 -and $detail.Message -eq 'Content service returned a payload error.'}

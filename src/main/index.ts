@@ -1400,6 +1400,7 @@ async function bootstrap(): Promise<void> {
     folder: (tenant) => appStore.get(`app-sources.folder.${tenant}`) ?? join(app.getPath("documents"), "TenuVault App Sources"),
     setFolder: (tenant, folder) => appStore.set(`app-sources.folder.${tenant}`, folder),
     keys: () => backupKeys.existingKeyring(),
+    exportJournalFolder: () => join(app.getPath("userData"), "app-source-export-jobs"),
     ensureKeys: () => { backupKeys.keyring() },
     authorizeAttach: async (tenant) => { await license.requireEntitlement(tenant) },
     pickFolder: async (current) => {

@@ -69,13 +69,20 @@ function abandoned(value: { host?: unknown; pid?: unknown }): boolean {
 
 /** Streaming, tenant-bound source storage. A final directory rename is the catalog commit point. */
 export class AppSourceStore {
-  constructor(readonly root: string, private readonly keys: () => Buffer[]) {}
-  private async folder(tenant: string): Promise<string> {
+  constructor(readonly root: string, private readonly keys: () => Buffer[], private readonly exportRoot = root) {}
+  private async folder(tenant: string, create = false, root = this.root): Promise<string | null> {
     sourceTenant(tenant)
-    await mkdir(this.root, { recursive: true, mode: 0o700 }); await noLink(this.root)
-    const directory = join(await realpath(this.root), tenant)
-    await mkdir(directory, { recursive: true, mode: 0o700 }); await noLink(directory)
-    return directory
+    try {
+      if (create) await mkdir(root, { recursive: true, mode: 0o700 })
+      await noLink(root)
+      const directory = join(await realpath(root), tenant)
+      if (create) await mkdir(directory, { recursive: true, mode: 0o700 })
+      await noLink(directory)
+      return directory
+    } catch (error) {
+      if (!create && (error as NodeJS.ErrnoException).code === "ENOENT") return null
+      throw error
+    }
   }
   private encode(value: unknown, tenant: string, id: string, purpose: string, master = this.keys()[0]!): Buffer {
     return Buffer.concat([MANIFEST, seal(Buffer.from(JSON.stringify(value)), key(master, tenant, `${purpose}/${id}`), aad(tenant, id, 0, 0))])
@@ -88,40 +95,47 @@ export class AppSourceStore {
     throw new Error("The source could not be authenticated. Check the source files and import the matching recovery key.")
   }
   private async manifest(tenant: string, id: string): Promise<{ value: StoredAppSource; master: Buffer; directory: string }> {
-    const directory = join(await this.folder(tenant), sourceId(id)); await noLink(directory)
+    const folder = await this.folder(tenant)
+    if (!folder) throw new Error("The source folder is unavailable. Reconnect the retained source store.")
+    const directory = join(folder, sourceId(id)); await noLink(directory)
     const bytes = await readMetadata(join(directory, "manifest.tvm"))
     const decoded = this.decode<StoredAppSource>(bytes, tenant, id, "manifest")
     const v = decoded.value
     if (!/^[a-f0-9]{24}$/.test(v.keyId) || v.id !== id || v.tenantId !== tenant || v.format !== "intunewin" || v.provenance !== "administrator-selected" || !Number.isSafeInteger(v.bytes) || v.bytes < 0 || v.bytes > 2 * 1024 ** 3 || !/^[a-f0-9]{64}$/.test(v.sha256) || typeof v.fileName !== "string" || v.fileName !== basename(v.fileName) || !/\.intunewin$/i.test(v.fileName) || typeof v.appName !== "string" || v.appName.length > 200 || !Number.isFinite(Date.parse(v.createdAt))) throw new Error("The source manifest is invalid.")
     return { ...decoded, directory }
   }
-  async list(tenant: string): Promise<{ sources: StoredAppSource[]; warnings: string[] }> {
+  async list(tenant: string): Promise<{ sources: StoredAppSource[]; warnings: string[]; unreadableSources: boolean }> {
     const folder = await this.folder(tenant), sources: StoredAppSource[] = [], warnings: string[] = []
-    for (const entry of await readdir(folder, { withFileTypes: true })) {
-      if (entry.name.startsWith(".staging-")) {
-        const stage = join(folder, entry.name)
-        if (entry.isDirectory() && /^\.staging-[a-f0-9-]{36}$/.test(entry.name)) {
-          try { const data = this.decode<{ host: string; pid: number }>(await readMetadata(join(stage, "owner.tvm")), tenant, entry.name.slice(9), "owner"); if (abandoned(data.value)) { await rm(stage, { recursive: true }); continue } } catch { /* Unknown staging is quarantined, never listed. */ }
-        }
-        warnings.push("An import has not completed and is not counted as a stored source.")
-      } else if (UUID.test(entry.name)) {
-        try { const item = await this.manifest(tenant, entry.name); await noLink(join(item.directory, "artifact.tvs")); sources.push(item.value) } catch { warnings.push("A stored source could not be read. Check the source folder and recovery key.") }
-      } else if (/^\.export-[a-f0-9-]{36}\.tvm$/.test(entry.name)) {
-        try {
-          const id = entry.name.slice(8, -4)
-          const data = this.decode<{ host: string; pid: number; temporary: string }>(await readMetadata(join(folder, entry.name)), tenant, id, "export")
-          if (abandoned(data.value)) {
-            if (basename(data.value.temporary) !== `.tenuvault-export-${id}.tmp`) throw new Error("Invalid export journal")
-            await rm(data.value.temporary, { force: true }); await rm(join(folder, entry.name)); continue
+    let unreadableSources = false
+    const exportFolder = this.exportRoot === this.root ? folder : await this.folder(tenant, false, this.exportRoot)
+    for (const current of new Set([folder, exportFolder])) {
+      if (!current) continue
+      for (const entry of await readdir(current, { withFileTypes: true })) {
+        if (current === folder && entry.name.startsWith(".staging-")) {
+          const stage = join(current, entry.name)
+          if (entry.isDirectory() && /^\.staging-[a-f0-9-]{36}$/.test(entry.name)) {
+            try { const data = this.decode<{ host: string; pid: number }>(await readMetadata(join(stage, "owner.tvm")), tenant, entry.name.slice(9), "owner"); if (abandoned(data.value)) { await rm(stage, { recursive: true }); continue } } catch { /* Unknown staging is quarantined, never listed. */ }
           }
-          warnings.push("An unfinished export belongs to another process or device and has not been reconciled.")
-        } catch { warnings.push("An unfinished export needs the matching recovery key to reconcile.") }
+          warnings.push("An import has not completed and is not counted as a stored source.")
+        } else if (current === folder && UUID.test(entry.name)) {
+          try { const item = await this.manifest(tenant, entry.name); await noLink(join(item.directory, "artifact.tvs")); sources.push(item.value) } catch { unreadableSources = true; warnings.push("A stored source could not be read. Check the source folder and recovery key.") }
+        } else if (/^\.export-[a-f0-9-]{36}\.tvm$/.test(entry.name)) {
+          try {
+            const id = entry.name.slice(8, -4)
+            const data = this.decode<{ host: string; pid: number; temporary: string }>(await readMetadata(join(current, entry.name)), tenant, id, "export")
+            if (abandoned(data.value)) {
+              if (basename(data.value.temporary) !== `.tenuvault-export-${id}.tmp`) throw new Error("Invalid export journal")
+              await rm(data.value.temporary, { force: true }); await rm(join(current, entry.name)); continue
+            }
+            warnings.push("An unfinished export belongs to another process or device and has not been reconciled.")
+          } catch { warnings.push("An unfinished export needs the matching recovery key to reconcile.") }
+        }
       }
     }
-    return { sources: sources.sort((a, b) => b.createdAt.localeCompare(a.createdAt)), warnings: [...new Set(warnings)] }
+    return { sources: sources.sort((a, b) => b.createdAt.localeCompare(a.createdAt)), warnings: [...new Set(warnings)], unreadableSources }
   }
   async attach(tenant: string, input: string, appName: string, signal?: AbortSignal): Promise<StoredAppSource> {
-    const folder = await this.folder(tenant), id = randomUUID(), stage = join(folder, `.staging-${id}`), master = this.keys()[0]!
+    const folder = (await this.folder(tenant, true))!, id = randomUUID(), stage = join(folder, `.staging-${id}`), master = this.keys()[0]!
     if (typeof appName !== "string" || appName.trim().length > 200 || !/\.intunewin$/i.test(input)) throw new Error("Choose an .intunewin file and an app name of at most 200 characters.")
     const file = await open(input, flags)
     let made = false
@@ -167,7 +181,7 @@ export class AppSourceStore {
     await write(file, header); await write(file, encrypted)
   }
   async export(tenant: string, id: string, destination: string, signal?: AbortSignal): Promise<void> {
-    const manifest = await this.manifest(tenant, id), folder = await this.folder(tenant), job = randomUUID()
+    const manifest = await this.manifest(tenant, id), folder = (await this.folder(tenant, true, this.exportRoot))!, job = randomUUID()
     const temporary = join(dirname(destination), `.tenuvault-export-${job}.tmp`), journal = join(folder, `.export-${job}.tvm`)
     let ownsTemp = false, madeJournal = false
     const input = await open(join(manifest.directory, "artifact.tvs"), flags)

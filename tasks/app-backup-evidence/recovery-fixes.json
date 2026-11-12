@@ -41,7 +41,7 @@
     "ExitCode": 1,
     "Pass": true,
     "Case": "collision",
-    "Stage": "gateway",
+    "Stage": "staging",
     "HttpStatus": 200
   },
   {

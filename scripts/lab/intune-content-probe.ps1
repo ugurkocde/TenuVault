@@ -96,6 +96,7 @@ try {
                     if (!$dec -or $dec.ProfileIdentifier -ne 'ProfileVersion1' -or $dec.UnencryptedFileDigestAlgorithm -ne 'SHA256') { throw 'Unsupported encryption profile in spike' }
                     if ([long]$ci.OriginalSize -gt 268435456) { throw 'Package exceeds 256 MiB spike limit' }
                     $out = Join-Path $OutputRoot ( $ApplicationId.ToString() + '-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+                    $stage = "staging"
                     New-Item -ItemType Directory -Path $out -ErrorAction Stop | Out-Null
                     $ownsOutputDirectory = $true
                     $summary.OutputDirectory = $out

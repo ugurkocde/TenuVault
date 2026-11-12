@@ -1,4 +1,5 @@
-import { basename } from "node:path"
+import { basename, join } from "node:path"
+import { lstat, readdir } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
 import type { AppSourceState, RecoveryDeviceStatus } from "../../shared/app-sources/types"
 import { AppSourceStore, sourceTenant } from "./store"
@@ -8,6 +9,7 @@ export interface AppSourceHost {
   folder: (tenant: string) => string
   setFolder: (tenant: string, folder: string) => void
   keys: () => Buffer[]
+  exportJournalFolder?: () => string
   ensureKeys: () => void
   authorizeAttach: (tenant: string) => Promise<void>
   pickFolder: (current: string) => Promise<string | null>
@@ -30,7 +32,7 @@ export class AppSourceService {
       const keys = this.host.keys()
       if (!keys.length) throw new Error("Import the matching recovery key to read this source store.")
       return keys
-    })
+    }, this.host.exportJournalFolder?.())
   }
   async list(raw: unknown): Promise<AppSourceState> {
     const tenant = this.tenant(raw)
@@ -42,6 +44,18 @@ export class AppSourceService {
     const folder = await this.host.pickFolder(this.host.folder(tenant))
     if (!folder) return false
     if (this.jobs.size) throw new Error("A source operation started while the folder picker was open. Retry after it finishes.")
+    this.tenant(tenant)
+    if (basename(folder).toLowerCase() === tenant) throw new Error("Choose the source store's parent folder, which contains the tenant folders, rather than this tenant's folder.")
+    for (const entry of await readdir(folder, { withFileTypes: true })) {
+      if (entry.name === "manifest.tvm") throw new Error("Choose the source store's root folder, rather than an individual stored package.")
+      if (entry.isDirectory() && /^[a-f0-9-]{36}$/i.test(entry.name)) {
+        try {
+          await lstat(join(folder, entry.name, "manifest.tvm"))
+        } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; throw error }
+        throw new Error("Choose the source store's parent folder, which contains the tenant folders, rather than a folder of stored packages.")
+      }
+    }
+    if (this.jobs.size) throw new Error("A source operation started while the folder was checked. Retry after it finishes.")
     this.tenant(tenant)
     this.host.setFolder(tenant, folder)
     return true
@@ -67,7 +81,7 @@ export class AppSourceService {
       if (!file) return false
       this.tenant(tenant); await this.host.authorizeAttach(tenant)
       const existing = await this.store(tenant).list(tenant)
-      if (existing.warnings.some(warning => warning.includes("could not be read"))) throw new Error("Import the matching recovery key before adding packages to this source store.")
+      if (existing.unreadableSources) throw new Error("Import the matching recovery key before adding packages to this source store.")
       this.host.ensureKeys()
       await this.store(tenant).attach(tenant, file, appName, signal)
       return true

@@ -22,15 +22,15 @@ The original file is copied into a separate encrypted source store. Changing bac
 
 Open **Stored versions**, find the package, then choose **Export original**. Choose a new file name. An existing destination is preserved, even if the operating system's file dialog offered to replace it.
 
-Export checks the encrypted chunks and complete file hash before publishing the destination. It does not rebuild the package or alter its contents. Stored versions remain browseable and exportable while signed out or without an active entitlement, provided the tenant is still configured and this device has the matching encryption key.
+Export requires a destination filesystem supporting hard links. On macOS and Linux, exported files initially have owner-only permissions. Export checks the encrypted chunks and complete file hash before publishing the destination. It does not rebuild the package or alter its contents. Stored versions remain browseable and exportable while signed out or without an active entitlement, provided the tenant is still configured and this device has the matching encryption key.
 
 ## Reconnect after moving to another computer
 
 Keep both the source folder and the [recovery key](/security/encryption/). The source folder contains the encrypted catalog as well as the encrypted artifacts; the recovery key alone does not contain the installers.
 
-On another installation, configure the same tenant, import the matching recovery key in **Settings → Storage and recovery**, then use **Reconnect source store** in App Backup to select the retained source folder. Each source is rebuilt from its encrypted manifest. Reconnecting changes the folder used for this tenant; it does not move or delete previous source folders.
+On another installation, configure the same tenant, import the matching recovery key in **Settings → Storage and recovery**, then use **Reconnect source store** in App Backup to select the root of the retained source folder, which contains the tenant GUID folders. Selecting a tenant folder or an individual package folder is refused. Listing and export can read a retained store without creating folders in it. Each source is rebuilt from its encrypted manifest. Reconnecting changes the folder used for this tenant; it does not move or delete previous source folders.
 
-Unreadable or incomplete sources are not silently counted. Interrupted imports stay out of the catalog. Owned staging left by a terminated process is reconciled when the folder is next read; uncertain staging is left unlisted with a notice. Export journals similarly track temporary plaintext so a later run on the original computer can remove interrupted exports. Keep the source folder accessible until interrupted work has been reconciled.
+Unreadable or incomplete sources are not silently counted. Interrupted imports stay out of the catalog. Owned staging left by a terminated process is reconciled when the folder is next read; uncertain staging is left unlisted with a notice. Encrypted export journals in local app data track temporary plaintext so a later run on the original computer can remove interrupted exports. Keep the source folder accessible until interrupted work has been reconciled.
 
 ## Coverage and device checks
 
