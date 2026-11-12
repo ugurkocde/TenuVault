@@ -200,6 +200,8 @@ try {
   await waitFor(`Boolean(document.querySelector('[role="dialog"]'))`)
   const fields = await evaluate(`[...document.querySelectorAll('[role="dialog"] textarea, [role="dialog"] input[type="email"]')].map(e => e.value)`)
   if (fields.length !== 3 || fields.some(Boolean)) throw new Error("Feedback fields must start empty")
+  await assertText("Page: Setup")
+  if (await evaluate(`document.querySelector('[role="dialog"]').innerText.includes("The app details could not be read")`)) throw new Error("Feedback snapshot is unavailable")
   await screenshot("sign-in-feedback-empty", true)
   console.log(`${shots.length} screenshots captured from the built Electron app`)
 } catch (error) {
