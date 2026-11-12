@@ -9,7 +9,7 @@ import LicensePage from "../../src/renderer/pages/LicensePage"
 const state = vi.hoisted(() => ({ choices: ["contoso", "fabrikam"], pending: ["contoso", "fabrikam"], choose: vi.fn(async (_id: string) => undefined), retry: vi.fn(async (_id: string) => undefined), refresh: vi.fn(async () => undefined), open: vi.fn(async () => undefined) }))
 vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { license: { chooseCommunity: state.choose, retry: state.retry, refresh: async () => undefined, open: state.open } } }))
 vi.mock("../../src/renderer/lib/license", async (original) => ({ ...await original<typeof import("../../src/renderer/lib/license")>(), useLicense: () => ({ status: { hasKey: true, keyState: "failed", persisted: true, tenants: [], communityChoiceTenantIds: state.choices, communityChoicePendingTenantIds: state.pending } as unknown as LicenseStatus, refresh: state.refresh }) }))
-vi.mock("~/contexts/TenantContext", () => ({ useTenants: () => [{ name: "Contoso", credentials: { tenantId: "contoso" } }, { name: "Fabrikam", credentials: { tenantId: "fabrikam" } }] }))
+vi.mock("~/contexts/TenantContext", () => ({ useSelectedTenant: () => ({ selectedTenantId: null, selectedTenant: undefined, setSelectedTenantId: () => {} }), useTenants: () => [{ name: "Contoso", credentials: { tenantId: "contoso" } }, { name: "Fabrikam", credentials: { tenantId: "fabrikam" } }] }))
 vi.mock("~/components/ConfirmDialog", () => ({ useConfirm: () => ({ confirm: async () => true, confirmDialog: null }) }))
 vi.mock("@desktop/components/LicenseAgreementDialog", () => ({ LicenseAgreementLink: () => null }))
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true

@@ -56,7 +56,7 @@ The sidebar shows **Community** for a machine using the Community plan, or **Key
 
 The neutral Community notice appears only on the start page: the **Dashboard** for one tenant, or the **All tenants** overview when several are connected. Click **Dismiss** to hide it on this machine for 30 days. License coverage, key expiry and offline verification warnings still appear on every page. The dashboard's **License** tile also opens the **License** page.
 
-The top card shows your plan, for example **Pro plan active**, and how many tenants your license covers and how many are active on this machine. Your key is shown masked, with only its last four characters visible.
+The top card shows your plan, for example **Pro plan active**, and how many tenants your license covers and how many are active on this machine. The sidebar chip next to **License** and the heading of the top card describe the tenant selected in the tenant switcher. When one tenant runs a Pro trial and the selected tenant is licensed through your organization, they show **Organization** and **Licensed through your organization**, not the other tenant's trial. The **Tenants** card below lists every tenant. Your key is shown masked, with only its last four characters visible.
 
 When the licensing service supplies a key expiry date, the top card also shows **License valid until** with the date. With several tenants, this is the earliest key expiry. Each tenant's License fact on the overview also shows its own **Valid until** date. Automatically renewing subscription keys may have no expiry date, so these lines stay hidden.
 

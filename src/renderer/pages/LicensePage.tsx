@@ -16,7 +16,7 @@ import {
   Sparkles,
   WifiOff,
 } from "lucide-react"
-import { useTenants } from "~/contexts/TenantContext"
+import { useSelectedTenant, useTenants } from "~/contexts/TenantContext"
 import { Alert, AlertDescription } from "~/components/ui/alert"
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
@@ -32,7 +32,7 @@ import { useClipboardLicenseKey } from "../lib/clipboard-key"
 import { openCheckout } from "../lib/purchase"
 import { bridge } from "../lib/bridge"
 import { useConfirm } from "~/components/ConfirmDialog"
-import { formatDate, formatDateTime, hasPaidLicense, isUnlicensed, licensePageTitle, planName, savedKeyNotNeededHere, tenantPlanName, trialDaysLeft, trialUsedUp, useLicense } from "../lib/license"
+import { formatDate, formatDateTime, hasPaidLicense, isUnlicensed, licensePageTitle, planName, savedKeyNotNeededHere, statusForTenant, tenantPlanName, trialDaysLeft, trialUsedUp, useLicense } from "../lib/license"
 
 type Busy = "activate" | "replace" | "deactivate" | `retry:${string}` | `share:${string}` | null
 
@@ -313,6 +313,7 @@ export default function LicensePage() {
   const { confirm, confirmDialog } = useConfirm()
   const { status, error: statusError, refresh } = useLicense()
   const tenants = useTenants()
+  const { selectedTenant } = useSelectedTenant()
   const [key, setKey] = useState("")
   const keyInput = useRef<HTMLInputElement>(null)
   const [trialKeyHint, setTrialKeyHint] = useState(false)
@@ -396,7 +397,6 @@ export default function LicensePage() {
       })
     }
   }
-  const activeKeyTenants = status.tenants.filter((t) => t.entitled && (t.source === "key" || !status.hasKey && t.source === "trial")).length
   const signedIn = status.tenants.filter((t) => t.signedIn).length
 
   const activate = () => activateKey(key.trim())
@@ -430,7 +430,17 @@ export default function LicensePage() {
         : "Other admins in this tenant can no longer use this license.",
     )
 
-  const title = licensePageTitle(status)
+  // The heading and its icon describe the selected tenant's coverage; the rows below list every tenant.
+  const summary = statusForTenant(status, selectedTenant?.credentials?.tenantId)
+  // Active tenants of the license the heading describes. A selected tenant trial covers that
+  // tenant alone; a selected key tenant shares the saved key with its other activations. Without a
+  // scoped summary: this machine's key, or its trials when no key is saved.
+  const scopedSource = summary !== status ? summary.tenants[0]?.source : undefined
+  const activeKeyTenants = scopedSource === "trial" ? 1
+    : status.tenants.filter((t) => t.entitled && (scopedSource
+      ? t.source === scopedSource
+      : t.source === "key" || !status.hasKey && t.source === "trial")).length
+  const title = licensePageTitle(summary)
   // A tenant row below already shows the refused trial key's message with Buy Pro.
   const trialKeyRefusedInRow = status.tenants.some(t => !t.entitled && t.message?.includes(TRIAL_USED_MESSAGE))
   // After a used trial the page offers Buy Pro once: not when the ended notice above the page,
@@ -462,7 +472,7 @@ export default function LicensePage() {
             <div>
               <CardTitle className="flex items-center gap-3 text-2xl font-medium">
                 <span className="flex size-10 flex-shrink-0 items-center justify-center rounded-full bg-secondary" aria-hidden="true">
-                  {status.plan ? (
+                  {summary.plan ? (
                     <BadgeCheck className="h-[18px] w-[18px] text-green-600" />
                   ) : (
                     <KeyRound className="h-[18px] w-[18px] text-gray-600" />
@@ -482,8 +492,8 @@ export default function LicensePage() {
                     : trialUsed
                       ? "Paste your license key, or buy Pro for daily backups, full restore and drift revert."
                       : "Paste the license key from your email, or start a free trial."
-                  : status.plan
-                    ? `Your license covers ${status.tenantLimit ?? 1} tenant${status.tenantLimit === 1 ? "" : "s"}. ${activeKeyTenants} ${activeKeyTenants === 1 ? "is" : "are"} active on this machine.`
+                  : summary.plan
+                    ? `Your license covers ${summary.tenantLimit ?? 1} tenant${summary.tenantLimit === 1 ? "" : "s"}. ${activeKeyTenants} ${activeKeyTenants === 1 ? "is" : "are"} active on this machine.`
                     : savedKeyNotNeededHere(status)
                       ? "A tenant admin shared their TenuVault license with your tenant."
                       : hasPaidLicense(status)
@@ -497,7 +507,7 @@ export default function LicensePage() {
                             : "Your organization license is not currently active. Sign in again and retry the license check below."}
               </CardDescription>
             </div>
-            {status.plan && <Badge variant="secondary">{status.trial ? "Pro trial" : planName(status.plan)}</Badge>}
+            {summary.plan && <Badge variant="secondary">{summary.trial ? "Pro trial" : planName(summary.plan)}</Badge>}
           </div>
         </CardHeader>
         <CardContent className="space-y-5 px-7 pb-7">

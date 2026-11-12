@@ -359,3 +359,34 @@ describe("license banners after tenant trials", () => {
     expect(container.textContent?.includes("Pro trial started")).toBe(route === "/portal/overview")
   })
 })
+
+describe("License badge in the sidebar", () => {
+  const TRIAL_ENDS = new Date(Date.now() + 13.5 * 86_400_000).toISOString()
+  // One tenant runs the Pro trial, the other is licensed through its organization (MSP).
+  const mixed = {
+    ...statusFor("pro"), hasKey: false, keyState: "none", plan: "pro", tenantLimit: 2, trial: true, trialEndsAt: TRIAL_ENDS,
+    tenants: [
+      { ...tenantEntry("t-trial", "pro"), source: "trial", trial: true, trialEndsAt: TRIAL_ENDS, validUntil: TRIAL_ENDS },
+      { ...tenantEntry("t-org", "msp"), source: "tenant", tenants: 10 },
+    ],
+  }
+  const badge = (container: HTMLElement) => container.querySelector(`a[href="/license"]`)?.textContent
+
+  it("shows the selected tenant's organization license, not the other tenant's trial", async () => {
+    licenseStatus.current = mixed
+    signedInIds.current = new Set(["t-trial", "t-org"])
+    selectedTenantState.current = { id: 2, name: "Fabrikam", credentials: { tenantId: "t-org", appId: "app-2", clientSecret: "" } }
+    const container = await render(createElement(DesktopLayout))
+    expect(badge(container)).toContain("Organization")
+    expect(badge(container)).not.toContain("Pro trial")
+  })
+
+  it("shows the trial and its days left for the tenant that runs it", async () => {
+    licenseStatus.current = mixed
+    signedInIds.current = new Set(["t-trial", "t-org"])
+    selectedTenantState.current = { id: 1, name: "Contoso", credentials: { tenantId: "t-trial", appId: "app-1", clientSecret: "" } }
+    const container = await render(createElement(DesktopLayout))
+    expect(badge(container)).toContain("Pro trial")
+    expect(badge(container)).toContain("14d")
+  })
+})

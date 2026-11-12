@@ -38,7 +38,7 @@ vi.mock("../../src/renderer/lib/license", async (original) => ({
   ...(await original<typeof import("../../src/renderer/lib/license")>()),
   useLicense: () => ({ status: state.status, error: null, refresh: async () => undefined }),
 }))
-vi.mock("~/contexts/TenantContext", () => ({ useTenants: () => [] }))
+vi.mock("~/contexts/TenantContext", () => ({ useSelectedTenant: () => ({ selectedTenantId: null, selectedTenant: undefined, setSelectedTenantId: () => {} }), useTenants: () => [] }))
 vi.mock("~/components/ConfirmDialog", () => ({ useConfirm: () => ({ confirm: async () => true, confirmDialog: null }) }))
 vi.mock("@desktop/components/LicenseAgreementDialog", () => ({ LicenseAgreementLink: () => null }))
 

@@ -145,9 +145,31 @@ export function savedKeyNotNeededHere(status: LicenseStatus): boolean {
     && signedIn.every(tenant => tenant.entitled)
 }
 
+/**
+ * The license summary as seen from one tenant. When that tenant is signed in and covered, the
+ * machine-wide plan, trial and tenant allowance are replaced by its own coverage, so a tenant
+ * licensed through its organization is not summarised as another tenant's trial. Otherwise, or
+ * without a tenant, the status is returned unchanged.
+ */
+export function statusForTenant(status: LicenseStatus, tenantId: string | undefined): LicenseStatus {
+  const tenant = tenantLicense(status, tenantId)
+  if (!tenant?.signedIn || !tenant.entitled || tenant.plan === "community") return status
+  const trial = tenant.source === "trial" || tenant.trial === true
+  const own = tenant.source !== "tenant"
+  return {
+    ...status,
+    plan: own ? tenant.plan : null,
+    tenantLimit: own ? tenant.tenants : null,
+    trial,
+    trialEndsAt: trial ? tenant.trialEndsAt ?? tenant.validUntil : null,
+    tenants: [tenant],
+  }
+}
+
 /** Community is a plan state; only a failed key or uncovered signed-in tenant is inactive. */
 export function licenseChipState(status: LicenseStatus): { label: string; tone: "neutral" | "inactive" | "trial"; daysLeft?: number } {
-  const trial = status.tenants.filter(t => t.entitled && t.source === "trial").sort((a, b) => Date.parse(a.trialEndsAt ?? a.validUntil ?? "") - Date.parse(b.trialEndsAt ?? b.validUntil ?? ""))[0]
+  // A tenant trial (source "trial") or an emailed trial key (source "key" with trial set).
+  const trial = status.tenants.filter(t => t.entitled && (t.source === "trial" || t.trial === true)).sort((a, b) => Date.parse(a.trialEndsAt ?? a.validUntil ?? "") - Date.parse(b.trialEndsAt ?? b.validUntil ?? ""))[0]
   if (trial) {
     const days = trialDaysLeft({ trial: true, trialEndsAt: trial.trialEndsAt ?? trial.validUntil ?? status.trialEndsAt }) ?? 0
     return { label: "Pro trial", tone: "trial", daysLeft: days }
