@@ -13,6 +13,7 @@ export interface AppSourceHost {
   ensureKeys: () => void
   authorizeAttach: (tenant: string) => Promise<void>
   pickFolder: (current: string) => Promise<string | null>
+  confirmNewStore: (tenant: string) => Promise<boolean>
   pickPackage: () => Promise<string | null>
   pickExport: (fileName: string) => Promise<string | null>
   checkDevice: (tenant: string) => Promise<RecoveryDeviceStatus>
@@ -21,6 +22,7 @@ export interface AppSourceHost {
 /** Local actions use configured tenant identity, never a live token or an entitlement bypass. */
 export class AppSourceService {
   private readonly jobs = new Map<string, { tenant: string; abort: AbortController }>()
+  private readonly deviceChecks = new Map<string, Promise<RecoveryDeviceStatus>>()
   constructor(private readonly host: AppSourceHost) {}
   private tenant(raw: unknown): string {
     const id = sourceTenant(raw)
@@ -55,6 +57,15 @@ export class AppSourceService {
         throw new Error("Choose the source store's parent folder, which contains the tenant folders, rather than a folder of stored packages.")
       }
     }
+    let existingTenant = false
+    try {
+      const candidate = await lstat(join(folder, tenant))
+      if (!candidate.isDirectory() || candidate.isSymbolicLink()) throw new Error("The selected source store's tenant folder must be a regular directory.")
+      existingTenant = true
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error }
+    if (!existingTenant && !await this.host.confirmNewStore(tenant)) return false
+    // Probe readability without creating directories or requiring a key to reconnect.
+    await new AppSourceStore(folder, () => this.host.keys()).list(tenant)
     if (this.jobs.size) throw new Error("A source operation started while the folder was checked. Retry after it finishes.")
     this.tenant(tenant)
     this.host.setFolder(tenant, folder)
@@ -106,7 +117,13 @@ export class AppSourceService {
     const job = this.jobs.get(id)
     if (job?.tenant === tenant) job.abort.abort()
   }
-  checkDevice(raw: unknown): Promise<RecoveryDeviceStatus> { return this.host.checkDevice(this.tenant(raw)) }
+  checkDevice(raw: unknown): Promise<RecoveryDeviceStatus> {
+    const tenant = this.tenant(raw), pending = this.deviceChecks.get(tenant)
+    if (pending) return pending
+    const check = Promise.resolve().then(() => this.host.checkDevice(tenant)).finally(() => { this.deviceChecks.delete(tenant) })
+    this.deviceChecks.set(tenant, check)
+    return check
+  }
   /** Used on process shutdown; disk journals reconcile interrupted operations on the next list. */
   close(): void { for (const job of this.jobs.values()) job.abort.abort() }
 }

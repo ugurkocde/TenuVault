@@ -6,6 +6,14 @@ import { createRendererBridge, unwrapPlanResult } from "../src/renderer/lib/plan
 import { FeatureApiError } from "../src/renderer/lib/feature-api"
 
 describe("plan errors across IPC and preload", () => {
+  it("preserves attach refusals through serialization without gating local list or export", async () => {
+    const refusal = JSON.parse(JSON.stringify(await withPlanError(() => { throw new CommunityLimitError("tenant", "Not covered", true) })))
+    const catalog = { storeName: "Sources", sources: [], warnings: [] }
+    const bridge = createRendererBridge({ appSources: { attach: async () => refusal, list: async () => catalog, export: async () => true } } as unknown as TenuVaultPreloadBridge)
+    await expect(bridge.appSources.attach("tenant", "operation", "App")).rejects.toMatchObject({ code: "community_tenant_limit", tenantId: "tenant", existingTenant: true })
+    await expect(bridge.appSources.list("tenant")).resolves.toBe(catalog)
+    await expect(bridge.appSources.export("tenant", "operation", "source")).resolves.toBe(true)
+  })
   it("surfaces the Community code and tenant after data serialization", async () => {
     const reply = await withPlanError(() => { throw new CommunityLimitError("tenant-id", "The tenant was not added. Original limit message.") })
     const serialized = JSON.parse(JSON.stringify(reply))

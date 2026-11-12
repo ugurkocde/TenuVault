@@ -1407,6 +1407,10 @@ async function bootstrap(): Promise<void> {
       const result = await dialog.showOpenDialog(mainWindow!, { title: "Choose or reconnect source store", defaultPath: current, properties: ["openDirectory", "createDirectory"] })
       return result.canceled ? null : result.filePaths[0] ?? null
     },
+    confirmNewStore: async () => {
+      const result = await dialog.showMessageBox(mainWindow!, { type: "question", title: "Use a new source folder?", message: "This folder has no source store for the selected tenant.", detail: "Use it for new attachments, or cancel and select the retained source store. Existing source folders stay where they are.", buttons: ["Cancel", "Use this folder"], defaultId: 0, cancelId: 0 })
+      return result.response === 1
+    },
     pickPackage: async () => {
       const result = await dialog.showOpenDialog(mainWindow!, { title: "Attach an existing Win32 package", filters: [{ name: "Intune Win32 package", extensions: ["intunewin"] }], properties: ["openFile"] })
       return result.canceled ? null : result.filePaths[0] ?? null
@@ -1425,7 +1429,7 @@ async function bootstrap(): Promise<void> {
   app.on("before-quit", () => appSources.close())
   handleTrusted("appSources:list", (_event, tenant: unknown) => appSources.list(tenant))
   handleTrusted("appSources:chooseStore", (_event, tenant: unknown) => appSources.chooseStore(tenant))
-  handleTrusted("appSources:attach", (_event, tenant: unknown, operation: unknown, name: unknown) => appSources.attach(tenant, operation, name))
+  handleTrusted("appSources:attach", (_event, tenant: unknown, operation: unknown, name: unknown) => withPlanError(() => appSources.attach(tenant, operation, name)))
   handleTrusted("appSources:export", (_event, tenant: unknown, operation: unknown, source: unknown) => appSources.export(tenant, operation, source))
   handleTrusted("appSources:cancel", (_event, tenant: unknown, operation: unknown) => appSources.cancel(tenant, operation))
   handleTrusted("appSources:deviceStatus", (_event, tenant: unknown) => appSources.checkDevice(tenant))

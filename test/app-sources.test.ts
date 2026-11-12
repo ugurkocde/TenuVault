@@ -215,7 +215,7 @@ describe("crash recovery", () => {
 describe("trusted local source actions", () => {
   async function setup() {
     const folder = await root(), input = await packageFile(folder)
-    const host: AppSourceHost = { knownTenant: id => id === tenant || id === other, folder: () => join(folder, "sources"), setFolder: vi.fn(), keys: () => [master], ensureKeys: vi.fn(), authorizeAttach: vi.fn(async () => {}), pickFolder: async () => folder, pickPackage: async () => input.file, pickExport: async () => null, checkDevice: vi.fn() }
+    const host: AppSourceHost = { knownTenant: id => id === tenant || id === other, folder: () => join(folder, "sources"), setFolder: vi.fn(), confirmNewStore: vi.fn(async () => false), keys: () => [master], ensureKeys: vi.fn(), authorizeAttach: vi.fn(async () => {}), pickFolder: async () => folder, pickPackage: async () => input.file, pickExport: async () => null, checkDevice: vi.fn() }
     return { folder, input, host, service: new AppSourceService(host) }
   }
   it.each(["tenant", "renamed-tenant", "artifact"])("refuses a reconnect at the wrong %s folder level", async kind => {
@@ -227,6 +227,38 @@ describe("trusted local source actions", () => {
     await expect(service.chooseStore(tenant)).rejects.toThrow("source store's")
     expect(host.setFolder).not.toHaveBeenCalled()
     expect((await readdir(selected)).includes(tenant)).toBe(false)
+  })
+  it("keeps the previous store unless a new empty folder is explicitly confirmed", async () => {
+    const { folder, host, service } = await setup(), selected = join(folder, "chosen")
+    await mkdir(selected); host.pickFolder = async () => selected
+    expect(await service.chooseStore(tenant)).toBe(false)
+    expect(host.confirmNewStore).toHaveBeenCalledWith(tenant)
+    expect(host.setFolder).not.toHaveBeenCalled()
+    host.confirmNewStore = async () => true
+    expect(await service.chooseStore(tenant)).toBe(true)
+    expect(host.setFolder).toHaveBeenCalledWith(tenant, selected)
+    expect(await readdir(selected)).toEqual([])
+  })
+  it("reconnects a retained folder without creating files or requiring new-store confirmation", async () => {
+    const { folder, host, service } = await setup(), selected = join(folder, "retained")
+    await mkdir(join(selected, tenant), { recursive: true }); host.pickFolder = async () => selected
+    expect(await service.chooseStore(tenant)).toBe(true)
+    expect(host.confirmNewStore).not.toHaveBeenCalled()
+    expect(await readdir(join(selected, tenant))).toEqual([])
+  })
+  it("deduplicates concurrent device checks per tenant and clears settled checks", async () => {
+    const { host, service } = await setup()
+    let finish!: (value: Awaited<ReturnType<AppSourceHost["checkDevice"]>>) => void
+    host.checkDevice = vi.fn(() => new Promise<Awaited<ReturnType<AppSourceHost["checkDevice"]>>>(resolve => { finish = resolve }))
+    const first = service.checkDevice(tenant), second = service.checkDevice(tenant)
+    expect(first).toBe(second)
+    await vi.waitFor(() => expect(host.checkDevice).toHaveBeenCalledTimes(1))
+    const value = { platform: "win32", enrollment: "unknown", certificate: "unknown", elevated: false, captureAvailable: false, reason: "Unavailable" } as const
+    finish(value); expect(await first).toBe(value)
+    expect(await second).toBe(value)
+    host.checkDevice = vi.fn(async () => value)
+    await service.checkDevice(tenant)
+    expect(host.checkDevice).toHaveBeenCalledTimes(1)
   })
   it("blocks attaching to an unreadable source store before minting keys", async () => {
     const { folder, host, service } = await setup(), directory = join(folder, "sources", tenant, randomUUID())
@@ -259,7 +291,7 @@ describe("trusted local source actions", () => {
   })
   it("keeps offline export independent of entitlement, rejects unknown/cross tenants, and never mints a key on an empty listing", async () => {
     const folder = await root(), input = await packageFile(folder), ensureKeys = vi.fn()
-    const host: AppSourceHost = { knownTenant: id => id === tenant || id === other, folder: () => join(folder, "sources"), setFolder: vi.fn(), keys: () => [master], ensureKeys, authorizeAttach: vi.fn(async () => {}), pickFolder: async () => null, pickPackage: async () => input.file, pickExport: async () => join(folder, "original.intunewin"), checkDevice: vi.fn() }
+    const host: AppSourceHost = { knownTenant: id => id === tenant || id === other, folder: () => join(folder, "sources"), setFolder: vi.fn(), confirmNewStore: vi.fn(async () => false), keys: () => [master], ensureKeys, authorizeAttach: vi.fn(async () => {}), pickFolder: async () => null, pickPackage: async () => input.file, pickExport: async () => join(folder, "original.intunewin"), checkDevice: vi.fn() }
     const service = new AppSourceService(host)
     expect((await service.list(tenant)).sources).toEqual([]); expect(ensureKeys).not.toHaveBeenCalled()
     await expect(service.list("not-a-tenant")).rejects.toThrow()

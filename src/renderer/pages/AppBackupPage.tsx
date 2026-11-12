@@ -6,6 +6,7 @@ import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
 import { cn } from "~/lib/utils"
 import { bridge } from "../lib/bridge"
+import { showCommunityLimitError, showFeaturePlanError } from "../lib/plan-dialog"
 import type { AppSourceState, RecoveryDeviceStatus } from "../../shared/app-sources/types"
 
 const size = (bytes: number) => new Intl.NumberFormat(undefined, { style: "unit", unit: bytes >= 1024 ** 2 ? "megabyte" : "kilobyte", maximumFractionDigits: 1 }).format(bytes / (bytes >= 1024 ** 2 ? 1024 ** 2 : 1024))
@@ -37,28 +38,30 @@ export function SourceWorkspace({ tenant }: { tenant: string }) {
   const [deviceBusy, setDeviceBusy] = useState(false)
   const [deviceError, setDeviceError] = useState("")
   const operation = useRef<string | null>(null)
+  const listGeneration = useRef(0)
   const alive = useRef(true)
   async function reload() {
+    const generation = ++listGeneration.current
     setLoading(true)
-    try { const value = await bridge.appSources.list(tenant); if (alive.current) { setState(value); setError("") } }
-    catch (e) { if (alive.current) { setState(null); setError(e instanceof Error ? e.message : "The source store could not be read.") } }
-    finally { if (alive.current) setLoading(false) }
+    try { const value = await bridge.appSources.list(tenant); if (alive.current && generation === listGeneration.current) { setState(value); setError("") } }
+    catch (e) { if (alive.current && generation === listGeneration.current) { setState(null); setError(e instanceof Error ? e.message : "The source store could not be read.") } }
+    finally { if (alive.current && generation === listGeneration.current) setLoading(false) }
   }
   useEffect(() => {
     alive.current = true
     void reload()
-    return () => { alive.current = false; if (operation.current) void bridge.appSources.cancel(tenant, operation.current).catch(() => {}) }
+    return () => { alive.current = false; listGeneration.current++; if (operation.current) void bridge.appSources.cancel(tenant, operation.current).catch(() => {}) }
   }, [tenant])
   async function run(action: (id: string) => Promise<boolean>, success: string) {
     const id = crypto.randomUUID(); operation.current = id
     setBusy(true); setError(""); setNotice("")
     try { const done = await action(id); if (alive.current && done) { setNotice(success); await reload() } }
-    catch (e) { if (alive.current) setError(e instanceof Error ? e.message : "The source operation failed.") }
+    catch (e) { if (alive.current && !showCommunityLimitError(e) && !showFeaturePlanError(e)) setError(e instanceof Error ? e.message : "The source operation failed.") }
     finally { operation.current = null; if (alive.current) setBusy(false) }
   }
   async function reconnect() {
     setError("")
-    try { if (await bridge.appSources.chooseStore(tenant)) await reload() }
+    try { if (await bridge.appSources.chooseStore(tenant) && alive.current) await reload() }
     catch (e) { if (alive.current) setError(e instanceof Error ? e.message : "The folder could not be connected.") }
   }
   const sources = (state?.sources ?? []).filter(source => `${source.appName} ${source.fileName}`.toLowerCase().includes(search.toLowerCase()))
@@ -79,7 +82,7 @@ export function SourceWorkspace({ tenant }: { tenant: string }) {
         <Button type="submit" disabled={busy}><Plus className="mr-2 size-4" aria-hidden="true" />Attach source</Button>
         <p className="basis-full text-xs text-gray-600">Choose an existing .intunewin package, up to 2 GiB. Its container is checked and the original bytes are encrypted in the source folder. Installation behavior is not tested.</p>
       </form>
-      {busy && <div role="status" className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-secondary p-4 text-sm"><span>Source operation in progress for this tenant…</span><Button variant="outline" onClick={() => { if (operation.current) void bridge.appSources.cancel(tenant, operation.current).catch(e => setError(String(e))) }}>Cancel operation</Button></div>}
+      {busy && <div role="status" className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-secondary p-4 text-sm"><span>Source operation in progress for this tenant…</span><Button variant="outline" onClick={() => { if (operation.current) void bridge.appSources.cancel(tenant, operation.current).catch(e => { if (alive.current) setError(e instanceof Error ? e.message : "Cancellation failed.") }) }}>Cancel operation</Button></div>}
       {error && <div role="alert" className="mt-4 rounded-2xl bg-red-50 p-4 text-sm text-red-900"><p>{error}</p><p className="mt-2">For a retained source folder, reconnect it and import its matching recovery key in Settings.</p></div>}
       {notice && <p role="status" className="mt-4 rounded-2xl bg-secondary p-4 text-sm text-gray-700">{notice}</p>}
       {state?.warnings.map(warning => <p role="status" key={warning} className="mt-4 rounded-2xl bg-amber-50 p-4 text-sm text-amber-900">{warning}</p>)}

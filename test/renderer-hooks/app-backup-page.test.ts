@@ -10,6 +10,8 @@ vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { appSources: api } })
 vi.mock("~/contexts/TenantContext", () => ({ useSelectedTenant: () => ({ selectedTenant: { id: state.selected, name: state.selected ? "Fabrikam" : "Contoso", credentials: { tenantId: ids[state.selected] } } }) }))
 vi.mock("react-router-dom", () => ({ useParams: () => ({ tabId: "versions" }), Link: (props: { to: string; children: React.ReactNode }) => createElement("a", { href: props.to }, props.children) }))
 import AppBackupPage from "../../src/renderer/pages/AppBackupPage"
+import { CommunityLimitError } from "../../src/shared/plan-errors"
+import { closePlanDialog, planDialogError } from "../../src/renderer/lib/plan-dialog"
 let root: Root | undefined
 const flush = async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) }) }
 async function mount() {
@@ -20,13 +22,33 @@ async function mount() {
  const node = document.createElement("div"); document.body.append(node); root = createRoot(node)
  await act(async () => root!.render(createElement(AppBackupPage))); await flush(); return node
 }
-afterEach(() => { if (root) act(() => root!.unmount()); root = undefined; document.body.innerHTML = ""; state.selected = 0; state.wait = null; vi.clearAllMocks() })
+afterEach(() => { if (root) act(() => root!.unmount()); root = undefined; document.body.innerHTML = ""; state.selected = 0; state.wait = null; closePlanDialog(); vi.clearAllMocks() })
 async function click(node: HTMLElement, text: string) {
  const button = [...node.querySelectorAll("button")].find(b => b.textContent?.trim() === text)
  if (!button) throw new Error(`Missing ${text}`)
  await act(async () => button.click()); await flush()
 }
 describe("App Backup local workspace", () => {
+ it.each(["success", "failure"])("ignores an older same-tenant list %s after a fresh post-attach reload", async mode => {
+  const node = await mount()
+  let finish!: (value: unknown) => void, fail!: (error: Error) => void
+  const old = new Promise((resolve, reject) => { finish = resolve; fail = reject })
+  api.list.mockImplementationOnce(() => old).mockResolvedValueOnce({ storeName: "Sources", warnings: [], sources: [{ id: "new-source", tenantId: ids[0], appName: "New package", fileName: "New.intunewin", bytes: 1024, createdAt: "2026-11-12T00:00:00Z", sha256: "abc" }] })
+  await click(node, "Refresh")
+  await act(async () => { node.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })) }); await flush()
+  expect(node.textContent).toContain("New.intunewin")
+  await act(async () => { if (mode === "failure") fail(new Error("stale failure")); else finish({ storeName: "Old", sources: [], warnings: [] }) }); await flush()
+  expect(node.textContent).toContain("New.intunewin")
+  expect(node.textContent).not.toContain("stale failure")
+  expect(node.textContent).not.toContain("Reading the source store")
+ })
+ it("opens the standard plan dialog for an attach entitlement refusal", async () => {
+  const node = await mount(), error = new CommunityLimitError(ids[0]!, "This tenant is not covered.", true)
+  api.attach.mockRejectedValueOnce(error)
+  await act(async () => { node.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })) }); await flush()
+  expect(planDialogError()).toBe(error)
+  expect(node.querySelector('[role="alert"]')).toBeNull()
+ })
  it("lists and exports without license or backup-history queries, with honest unknown coverage and unavailable recovery", async () => {
   const node = await mount()
   expect(node.textContent).toContain("Finance.intunewin")
