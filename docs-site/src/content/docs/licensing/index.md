@@ -12,11 +12,11 @@ TenuVault has three plans: Community, which is free, and the paid Pro and MSP pl
 | Price | Free, no license key needed | Paid subscription | Paid subscription |
 | Tenants | 1 | 2 (for example production and test) | The number of tenants in your subscription. New subscriptions include 5; existing subscriptions keep their quantity (minimum 3) |
 | Installations per tenant | | 5 | 5 |
-| Free trial | | Per tenant, no card | Through the Pro trial |
+| Free trial | | 14 days per tenant, no card and no email | Through the Pro trial |
 
 ## Free trial, no card needed
 
-When tenant trials are enabled, connecting a new tenant starts its Pro trial automatically, with no card and no email needed. The License page shows the end date and days remaining from the server. An existing Community tenant can choose **Try Pro free**. Each tenant can use one trial within the service's retention period. Another installation joins the running trial at its existing end date. An installation has a limited number of trials, so a new tenant can be refused when that limit is reached. The app explains: "This installation has already started its available tenant trials."
+Connecting a new tenant starts its 14 day Pro trial automatically, with no card and no email needed. The License page shows the end date and days remaining from the server. An existing Community tenant can choose **Try Pro free**. Each tenant can use one trial within the service's retention period. Another installation joins the running trial at its existing end date. An installation has a limited number of trials, so a new tenant can be refused when that limit is reached. The app explains: "This installation has already started its available tenant trials."
 
 In the last five days, or up to fourteen days after expiry, choose **Need more time? Extend your trial** on the License page. This extension is available once per tenant. After expiry, the extension starts from the time you request it.
 
@@ -24,7 +24,7 @@ The app reminds you five days and one day before the end, with the changes that 
 
 You can optionally submit an email address on the trial card or License page for setup tips and a reminder. The address is sent only when you press the button. Change it in the app during the trial, or choose **Remove the saved email address for this trial** on the License page of any installation that joined it, or use the unsubscribe link in each email at any time. See the [privacy policy](https://www.tenuvault.com/privacy).
 
-When tenant trials are unavailable, the existing email form remains available. It emails a thirty-day trial key. Existing email trial keys retain their original end dates and reminders.
+Only when tenant trials are unavailable does TenuVault offer the older email form instead. It emails a thirty-day trial key. Existing email trial keys retain their original end dates and reminders.
 
 ## Buy a plan
 

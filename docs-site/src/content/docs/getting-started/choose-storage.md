@@ -11,7 +11,7 @@ You can change the location later in **Settings** > **Sign-in** > **Change stora
 
 Above the storage options, the step shows **Signed in as &lt;your account&gt;** and the plan the tenant got at sign-in:
 
-* **This tenant uses Community, the free plan**: manual and weekly backups on this device, kept for 30 days. Next to it are **Try Pro free for 30 days, no card** and **I have a license key**, the same options as on the welcome screen. The trial form is filled in with your sign-in name when it is an email address. A trial key you copy from the email is saved by itself when you return to TenuVault. See [Start TenuVault for the first time](/getting-started/first-launch/#start-a-trial).
+* **This tenant uses Community, the free plan**: manual and weekly backups on this device, kept for 30 days. Next to it are **I have a license key** and, while the tenant can still start its trial, **Try Pro free** (no card, no email). When tenant trials are unavailable, the trial link is **Try Pro free for 30 days, no card** instead and opens the email trial form, filled in with your sign-in name when it is an email address. See [Start TenuVault for the first time](/getting-started/first-launch/#start-a-trial).
 * **This tenant uses Pro** or **MSP**, from your license key, **This tenant uses your Pro trial**, or **This tenant uses Pro, through the license your organization shares with it.**
 
 You can change the plan later on the **License** page.
