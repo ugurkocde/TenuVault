@@ -21,7 +21,7 @@ Check the [Requirements](/getting-started/requirements/) first. In short, you ne
 | Step | What you do | Where |
 | --- | --- | --- |
 | 1 | Download and install TenuVault. | [Install and update TenuVault](/getting-started/install/) |
-| 2 | Start TenuVault and select **Connect your tenant**. Optionally start the free Pro trial or enter a license key. | [Start TenuVault for the first time](/getting-started/first-launch/) |
+| 2 | Start TenuVault and select **Connect your tenant**. A new tenant starts a 14 day Pro trial by itself, no card or email; you can also enter a license key. | [Start TenuVault for the first time](/getting-started/first-launch/) |
 | 3 | On the **Connect** step, select **Set up with Microsoft sign-in** and sign in once with your own admin account. TenuVault creates the app registration in your tenant and signs you in. | [Create the app registration](/getting-started/app-registration/) |
 | 4 | Only when another administrator created the app registration: paste the two lines they sent and sign in to your tenant with your own admin account. | [Sign in to your tenant](/getting-started/connect-tenant/) |
 | 5 | Choose whether backups stay on this device or go to your Azure storage account. | [Choose where backups are stored](/getting-started/choose-storage/) |
