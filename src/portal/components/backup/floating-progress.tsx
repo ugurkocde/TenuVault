@@ -225,6 +225,7 @@ export function FloatingProgress() {
   const anyActive = activeJobs.some(job => !job.isComplete)
   const anyFailed = activeJobs.some(job => backupJobPhase(job) === "failed")
   const anySuccessful = activeJobs.some(job => job.isSuccessful)
+  const anyWarnings = activeJobs.some(job => completedWithWarnings(job))
   const finished = activeJobs.filter(job => job.isComplete)
 
   return (
@@ -235,6 +236,8 @@ export function FloatingProgress() {
             <LoaderCircle className="h-4 w-4 shrink-0 animate-spin text-coral-500" aria-hidden="true" />
           ) : anyFailed ? (
             <XCircle className="h-4 w-4 shrink-0 text-destructive" aria-hidden="true" />
+          ) : anyWarnings ? (
+            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-700" aria-hidden="true" />
           ) : anySuccessful ? (
             <CheckCircle2 className="h-4 w-4 shrink-0 text-green-600" aria-hidden="true" />
           ) : (

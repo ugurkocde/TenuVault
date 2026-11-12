@@ -115,6 +115,8 @@ export interface BackupResultsSummary {
   typesBackedUp: number
   /** Types still being listed while the job runs. */
   pending: number
+  /** Types a job that has ended never listed, because it stopped first. */
+  notReached: BackupTypeResult[]
   empty: BackupTypeResult[]
   skipped: BackupTypeResult[]
   unreadable: BackupTypeResult[]
@@ -134,6 +136,7 @@ export function summarizeBackupResults(results: BackupResults, finished = false)
     rows: policyTypes.filter((type) => (type.state === "saved" && (type.saved > 0 || type.failed > 0)) || (type.state === "reading" && (type.found ?? 0) > 0)),
     typesBackedUp: policyTypes.filter((type) => type.saved > 0).length,
     pending: finished ? 0 : types.filter((type) => type.state === "reading" && type.found === undefined).length,
+    notReached: finished ? types.filter((type) => type.state === "reading" && type.found === undefined) : [],
     empty: types.filter((type) => type.state === "empty" || (type.state === "saved" && type.saved === 0 && type.failed === 0)),
     skipped: types.filter((type) => type.state === "skipped"),
     unreadable: types.filter((type) => type.state === "unreadable"),

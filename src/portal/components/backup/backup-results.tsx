@@ -28,9 +28,9 @@ export function BackupResults({ job, compact = false, jobId }: BackupResultsProp
   const duration = formatBackupDuration(job.startTime, job.endTime)
   const rows = compact ? summary.rows.slice(0, COMPACT_ROWS) : summary.rows
   const hidden = summary.rows.length - rows.length
-  const problems = summary.unreadable.length + summary.skipped.length + summary.partial.length + summary.warnings.length
-  // Red for a failed run or a type that could not be read; a run the user cancelled stays amber.
-  const severe = job.status !== "Cancelled" && ((job.isComplete && job.status === "Failed") || summary.unreadable.length > 0)
+  const problems = summary.unreadable.length + summary.skipped.length + summary.partial.length + summary.warnings.length + summary.notReached.length
+  // Red only for a failed run; a run that completed with warnings or that the user cancelled stays amber.
+  const severe = job.isComplete && job.status === "Failed"
   const extras = summary.inventory.map((entry) => `${entry.count} ${entry.label}`)
 
   return (
@@ -59,8 +59,23 @@ export function BackupResults({ job, compact = false, jobId }: BackupResultsProp
             {summary.unreadable.map((type) => (
               <Problem key={type.folder} title={`Could not read ${type.label}`} detail={type.reason} compact={compact} />
             ))}
+            {summary.notReached.length > 0 && (
+              <Problem
+                title={`${summary.notReached.length} type${summary.notReached.length === 1 ? " was" : "s were"} not read before the backup stopped`}
+                detail={summary.notReached.map((type) => typeHeading(type.label)).join(", ")}
+                compact={compact}
+              />
+            )}
             {summary.partial.map((type) => (
-              <Problem key={type.folder} title={`${type.failed} of ${type.found ?? type.saved + type.failed} ${type.label} could not be saved`} items={type.errors} more={type.failed - (type.errors?.length ?? 0)} compact={compact} />
+              <Problem
+                key={type.folder}
+                title={type.state === "reading"
+                  ? `${type.failed} ${type.label} could not be saved before the backup stopped`
+                  : `${type.failed} of ${type.found ?? type.saved + type.failed} ${type.label} could not be saved`}
+                items={type.errors}
+                more={type.failed - (type.errors?.length ?? 0)}
+                compact={compact}
+              />
             ))}
             {summary.skipped.map((type) => (
               <Problem key={type.folder} title={`${typeHeading(type.label)} left out`} detail={type.reason} compact={compact} />
@@ -165,7 +180,7 @@ function Disclosure({ label, children }: { label: string; children: React.ReactN
         type="button"
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
-        aria-controls={id}
+        aria-controls={open ? id : undefined}
         className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
       >
         {open ? <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" /> : <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />}
@@ -183,6 +198,12 @@ function RawLog({ output, jobId, live, compact }: { output: string; jobId?: stri
   const id = useId()
   const log = useRef<HTMLPreElement>(null)
 
+  useEffect(() => {
+    if (!copied) return
+    const timer = setTimeout(() => setCopied(false), 2000)
+    return () => clearTimeout(timer)
+  }, [copied])
+
   // While the backup runs, an open log follows the newest line.
   useEffect(() => {
     if (open && live) log.current?.scrollTo({ top: log.current.scrollHeight })
@@ -192,7 +213,6 @@ function RawLog({ output, jobId, live, compact }: { output: string; jobId?: stri
     try {
       await navigator.clipboard.writeText(output)
       setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
     } catch {
       setCopied(false)
     }
@@ -205,7 +225,7 @@ function RawLog({ output, jobId, live, compact }: { output: string; jobId?: stri
           type="button"
           onClick={() => setOpen((value) => !value)}
           aria-expanded={open}
-          aria-controls={id}
+          aria-controls={open ? id : undefined}
           className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
         >
           <FileText className="h-3.5 w-3.5" aria-hidden="true" />

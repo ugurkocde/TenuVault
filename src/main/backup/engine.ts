@@ -684,8 +684,8 @@ export class BackupEngine {
       const retentionNetwork = new NetworkCircuit(3 * concurrency, signal, deadline)
       const retentionStorage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, retentionNetwork)
       try {
-        const result = await this.applyRetention(job, retentionStorage, backupFolder, restorableFolders(metadata), retentionNetwork.signal)
-        if (result > 0) retentionWarnings++
+        const unreadableOlder = await this.applyRetention(job, retentionStorage, backupFolder, restorableFolders(metadata), retentionNetwork.signal)
+        if (unreadableOlder > 0) retentionWarnings++
       } catch (error) {
         retentionWarnings++
         if (signal.aborted || Date.now() >= deadline) {

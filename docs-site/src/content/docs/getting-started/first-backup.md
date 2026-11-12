@@ -14,7 +14,7 @@ The **First backup** step is headed **Take a first backup** and shows **&lt;tena
 * It usually takes a few minutes, longer for large tenants.
 
 1. Select **Run first backup**.
-2. Watch the progress bar and the results. TenuVault first lists every Intune type (**Reading Intune configuration...**), then saves each object (**Backing up &lt;type&gt;**). Each type appears in the results list with its count when it is done. Select **Cancel backup** to stop it.
+2. Watch the progress bar and the results. TenuVault first lists every Intune type (**Reading Intune configuration...**), then saves each object (**Backing up &lt;type&gt;**). Each type appears in the results list as it is backed up, with its count. Select **Cancel backup** to stop it.
 3. When the backup succeeds, the step shows **Your first backup is done** and **Next steps**, described below.
 4. Select **Go to dashboard**.
 

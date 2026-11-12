@@ -500,11 +500,13 @@ export default function OnboardingPage() {
             )}
             {displayJob && (
               <div className="space-y-3">
-                <div className="flex items-center justify-between text-sm" role="status">
+                <div className="flex items-center justify-between text-sm">
                   <span className="flex items-center gap-2 text-gray-800">
                     <JobStateIcon job={displayJob} />
                     {displayJob.exception ?? displayJob.progressMessage}
                   </span>
+                  {/* Announces the result once, not every progress tick. */}
+                  <span role="status" className="sr-only">{displayJob.isComplete ? displayJob.exception ?? displayJob.progressMessage : ""}</span>
                   <span className="text-gray-500">{displayJob.progress}%</span>
                 </div>
                 <Progress value={displayJob.progress} />

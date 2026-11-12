@@ -105,6 +105,24 @@ describe("BackupResults", () => {
     expect(running).toContain("animate-spin")
   })
 
+  it("names the types a stopped run never read and words a partial type as stopped", () => {
+    const stopped: Results = { types: [type("A", { label: "compliance policies", state: "reading", found: 10, saved: 3, failed: 1, errors: ["X: denied"] }), type("B", { label: "apps", state: "reading" }), type("C", { label: "scripts", state: "reading" })], notices: [] }
+    expect(summarizeBackupResults(stopped, true).notReached.map((entry) => entry.folder)).toEqual(["B", "C"])
+    expect(summarizeBackupResults(stopped).notReached).toEqual([])
+    const html = renderToStaticMarkup(createElement(BackupResults, { job: { ...job, status: "Failed", results: stopped } }))
+    expect(html).toContain("2 types were not read before the backup stopped")
+    expect(html).toContain("Apps, Scripts")
+    expect(html).toContain("1 compliance policies could not be saved before the backup stopped")
+    expect(html).toContain("bg-red-50")
+  })
+
+  it("keeps the box amber for a completed run whose only problem is an unreadable type", () => {
+    const unreadable: Results = { types: [type("A", { found: 1, saved: 1 }), type("B", { state: "unreadable", reason: "Graph returned 500" })], notices: [] }
+    const html = renderToStaticMarkup(createElement(BackupResults, { job: { ...job, results: unreadable } }))
+    expect(html).toContain("bg-amber-50")
+    expect(html).not.toContain("bg-red-50")
+  })
+
   it("announces a type where nothing was saved as none saved", () => {
     const none: Results = { types: [type("A", { found: 2, saved: 0, failed: 2 })], notices: [] }
     expect(renderToStaticMarkup(createElement(BackupResults, { job: { ...job, results: none } }))).toContain("none saved, 2 failed")
