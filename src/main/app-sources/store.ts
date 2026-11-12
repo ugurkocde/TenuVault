@@ -120,15 +120,19 @@ export class AppSourceStore {
         } else if (current === folder && UUID.test(entry.name)) {
           try { const item = await this.manifest(tenant, entry.name); await noLink(join(item.directory, "artifact.tvs")); sources.push(item.value) } catch { unreadableSources = true; warnings.push("A stored source could not be read. Check the source folder and recovery key.") }
         } else if (/^\.export-[a-f0-9-]{36}\.tvm$/.test(entry.name)) {
+          const id = entry.name.slice(8, -4)
+          let record: { host: string; pid: number; temporary: string }
           try {
-            const id = entry.name.slice(8, -4)
-            const data = this.decode<{ host: string; pid: number; temporary: string }>(await readMetadata(join(current, entry.name)), tenant, id, "export")
-            if (abandoned(data.value)) {
-              if (basename(data.value.temporary) !== `.tenuvault-export-${id}.tmp`) throw new Error("Invalid export journal")
-              await rm(data.value.temporary, { force: true }); await rm(join(current, entry.name)); continue
-            }
-            warnings.push("An unfinished export belongs to another process or device and has not been reconciled.")
-          } catch { warnings.push("An unfinished export needs the matching recovery key to reconcile.") }
+            record = this.decode<typeof record>(await readMetadata(join(current, entry.name)), tenant, id, "export").value
+          } catch { warnings.push("An unfinished export journal could not be authenticated. Check its files and matching recovery key."); continue }
+          if (!record || typeof record.temporary !== "string" || basename(record.temporary) !== `.tenuvault-export-${id}.tmp`) {
+            warnings.push("An unfinished export journal is invalid and has not been reconciled."); continue
+          }
+          if (!abandoned(record)) { warnings.push("An unfinished export belongs to another process or device and has not been reconciled."); continue }
+          try { await rm(record.temporary, { force: true }) }
+          catch { warnings.push(`Plaintext temporary file ${basename(record.temporary)} may remain at the export destination. Check file access and refresh to retry cleanup.`); continue }
+          try { await rm(join(current, entry.name)) }
+          catch { warnings.push("The plaintext export temporary was removed, but its journal could not be removed. Refresh to retry cleanup.") }
         }
       }
     }
@@ -210,7 +214,8 @@ export class AppSourceStore {
         }
         await output.sync(); abort(signal)
       } finally { await output.close() }
-      // Atomic no-overwrite publication. A failed export never replaces an existing file.
+      // Atomic no-overwrite publication is the cancellation cutoff. Existing files are preserved.
+      abort(signal)
       await link(temporary, destination)
     } finally {
       try { await input.close() } finally {

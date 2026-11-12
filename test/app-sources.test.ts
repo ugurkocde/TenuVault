@@ -149,6 +149,23 @@ describe("streaming app source store", () => {
     expect((await readdir(folder)).some(n => n.startsWith(".tenuvault-export-"))).toBe(false)
     expect((await readdir(join(base, tenant))).some(n => n.startsWith(".export-"))).toBe(false)
   })
+  it("honors cancellation arriving while the verified export output is closing", async () => {
+    const folder = await root(), input = await packageFile(folder, { bytes: 128 }), base = join(folder, "store")
+    const store = new AppSourceStore(base, () => [master]), item = await store.attach(tenant, input.file, "App")
+    const destination = join(folder, "cancelled.intunewin"), control = new AbortController()
+    const check = control.signal.throwIfAborted.bind(control.signal); let calls = 0
+    vi.spyOn(control.signal, "throwIfAborted").mockImplementation(() => {
+      check()
+      // One data chunk: initial, data, footer, then post-sync check. The queued
+      // cancellation runs during the following asynchronous close.
+      if (++calls === 4) queueMicrotask(() => control.abort(new Error("cancelled during close")))
+    })
+    await expect(store.export(tenant, item.id, destination, control.signal)).rejects.toThrow("cancelled during close")
+    expect(control.signal.aborted).toBe(true)
+    await expect(lstat(destination)).rejects.toMatchObject({ code: "ENOENT" })
+    expect((await readdir(folder)).some(n => n.startsWith(".tenuvault-export-"))).toBe(false)
+    expect((await readdir(join(base, tenant))).some(n => n.startsWith(".export-"))).toBe(false)
+  })
   it.each(["../outside", "CON.txt", "IntuneWinPackage/Metadata/DETECTION.XML", "bad:stream"])("rejects unsafe or duplicate ZIP entry %s", async extra => {
     const folder = await root(), input = await packageFile(folder, { extra })
     await expect(new AppSourceStore(join(folder, "store"), () => [master]).attach(tenant, input.file, "App")).rejects.toThrow()
@@ -166,6 +183,29 @@ describe("crash recovery", () => {
     bundle = join(tmpdir(), `app-sources-${randomUUID()}.cjs`)
     await build({ entryPoints: ["src/main/app-sources/store.ts"], bundle: true, platform: "node", format: "cjs", outfile: bundle, logLevel: "silent" })
   })
+  it.each(["cleanup-failure", "wrong-key"])("distinguishes %s while reconciling an abandoned export", async mode => {
+    const folder = await root(), input = await packageFile(folder), base = join(folder, "store")
+    const store = new AppSourceStore(base, () => [master]), item = await store.attach(tenant, input.file, "App")
+    const script = `const {AppSourceStore}=require(${JSON.stringify(bundle)});let calls=0;new AppSourceStore(${JSON.stringify(base)},()=>[Buffer.from(${JSON.stringify(master.toString("hex"))},'hex')]).export(${JSON.stringify(tenant)},${JSON.stringify(item.id)},${JSON.stringify(join(folder, "original.intunewin"))},{throwIfAborted(){if(++calls===3)process.exit(37)}}).catch(()=>process.exit(9));`
+    expect(spawnSync(process.execPath, ["-e", script], { timeout: 4000 }).status).toBe(37)
+    const name = (await readdir(folder)).find(n => n.startsWith(".tenuvault-export-"))!, temporary = join(folder, name)
+    if (mode === "cleanup-failure") {
+      await rm(temporary); await mkdir(temporary); await writeFile(join(temporary, "plaintext"), "leftover")
+      const result = await store.list(tenant)
+      expect(result.warnings).toEqual([expect.stringContaining(`Plaintext temporary file ${name} may remain at the export destination`)])
+      expect(result.warnings.join()).not.toContain("recovery key")
+      expect(result.warnings.join()).not.toContain(folder)
+      expect(await readFile(join(temporary, "plaintext"), "utf8")).toBe("leftover")
+      expect((await readdir(join(base, tenant))).some(n => n.startsWith(".export-"))).toBe(true)
+      await rm(temporary, { recursive: true }); await store.list(tenant)
+      expect((await readdir(join(base, tenant))).some(n => n.startsWith(".export-"))).toBe(false)
+    } else {
+      const result = await new AppSourceStore(base, () => [randomBytes(32)]).list(tenant)
+      expect(result.warnings.join()).toContain("journal could not be authenticated")
+      expect(result.warnings.join()).not.toContain("Plaintext temporary file")
+      expect((await lstat(temporary)).isFile()).toBe(true)
+    }
+  }, 20_000)
   it("reconciles plaintext from a terminated export without touching an existing destination", async () => {
     const folder = await root(), input = await packageFile(folder), base = join(folder, "store")
     const store = new AppSourceStore(base, () => [master]), item = await store.attach(tenant, input.file, "App")

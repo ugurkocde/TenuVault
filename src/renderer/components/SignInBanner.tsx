@@ -16,7 +16,7 @@ const promptKey = (event: SignInRequiredEvent) => `${event.tenantId.toLowerCase(
  * Conditional Access step-up). Signing in never starts without the admin asking.
  * Prompts queue per tenant and scope, so one tenant's prompt never hides another's.
  */
-export function SignInBanner() {
+export function SignInBanner({ hidden = false }: { hidden?: boolean }) {
   const tenants = useTenants()
   const [queue, setQueue] = useState<SignInRequiredEvent[]>([])
   const [busy, setBusy] = useState(false)
@@ -25,7 +25,7 @@ export function SignInBanner() {
     setQueue((current) => (current.some((entry) => promptKey(entry) === promptKey(event)) ? current : [...current, event]))), [])
 
   const pending = queue[0]
-  if (!pending) return null
+  if (!pending || hidden) return null
   const others = queue.length - 1
   const resolve = () => setQueue((current) => current.filter((entry) => promptKey(entry) !== promptKey(pending)))
   const tenant = tenants.find((t) => t.credentials?.tenantId?.toLowerCase() === pending.tenantId.toLowerCase())

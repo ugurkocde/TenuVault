@@ -505,7 +505,7 @@ export function DesktopLayout() {
         {!appBackupPage && <TenantTrialNotices showWelcome={pathname !== "/portal/onboarding" && pathname !== "/license"} />}
         {!appBackupPage && !trialEndVisible(licenseStatus) && <CommunityChoiceBanner />}
         {!appBackupPage && !focus && <LicenseBanner />}
-        {!appBackupPage && !focus && <SignInBanner />}
+        {!focus && <SignInBanner hidden={appBackupPage} />}
         {[/portal\/backup/, /portal\/drift/, /portal\/audit/, /portal\/(governance|changes|operations|reports|alerts|sync)/].some(pattern => pattern.test(pathname)) && <TenantAccessNotice />}
         {/* Room to scroll the end of a page clear of the floating backup and activity panels while they show. */}
         <main className="pb-[calc(var(--floating-progress-offset,0px)+var(--background-tasks-offset,0px))]">
