@@ -1,20 +1,23 @@
 import type { Tenant } from "~/contexts/TenantContext"
 import type { TenantCredentials } from "../overrides/add-tenant-modal"
 
+/** A count is null when Microsoft Graph could not read it; it is never shown as zero. */
 interface TenantDetails {
   organization?: { displayName?: string; primaryDomain?: string }
   statistics?: {
-    userCount?: number
-    deviceCount?: number
-    complianceRate?: number
+    userCount?: number | null
+    deviceCount?: number | null
+    complianceRate?: number | null
     policies?: {
-      deviceConfigurations?: number
-      compliancePolicies?: number
-      configurationPolicies?: number
-      appProtectionPolicies?: number
+      deviceConfigurations?: number | null
+      compliancePolicies?: number | null
+      configurationPolicies?: number | null
+      appProtectionPolicies?: number | null
     }
   }
 }
+
+const known = (value: number | null | undefined): number | null => (typeof value === "number" ? value : null)
 
 /** Builds a tenant profile from Microsoft Graph details, without placeholder values. */
 export async function buildTenantProfile(credentials: TenantCredentials): Promise<Tenant> {
@@ -30,32 +33,36 @@ export async function buildTenantProfile(credentials: TenantCredentials): Promis
     // The profile still works; details refresh from the Tenants page.
   }
   const policies = details.statistics?.policies ?? {}
+  const deviceConfigurations = known(policies.deviceConfigurations)
+  const configurationPolicies = known(policies.configurationPolicies)
+  // Legacy device configurations and Settings Catalog policies together, or null when either is unknown.
+  const configuration = deviceConfigurations !== null && configurationPolicies !== null ? deviceConfigurations + configurationPolicies : null
   return {
     id: Date.now(),
     name: credentials.displayName || details.organization?.displayName || "New tenant",
     domain: details.organization?.primaryDomain ?? "",
     status: "healthy",
     lastBackup: "",
-    configCount: (policies.deviceConfigurations ?? 0) + (policies.configurationPolicies ?? 0),
+    configCount: configuration,
     storageUsed: "",
     client: "",
     license: "",
     region: "",
     tags: [],
-    users: details.statistics?.userCount ?? 0,
-    devices: details.statistics?.deviceCount ?? 0,
-    complianceRate: details.statistics?.complianceRate ?? 0,
+    users: known(details.statistics?.userCount),
+    devices: known(details.statistics?.deviceCount),
+    complianceRate: known(details.statistics?.complianceRate),
     industry: "",
     environment: "",
     lastSync: new Date().toISOString(),
     syncStatus: "idle",
     policies: {
-      compliance: policies.compliancePolicies ?? 0,
-      configuration: policies.deviceConfigurations ?? 0,
-      apps: policies.appProtectionPolicies ?? 0,
-      deviceConfigurations: policies.deviceConfigurations ?? 0,
-      configurationPolicies: policies.configurationPolicies ?? 0,
-      appProtectionPolicies: policies.appProtectionPolicies ?? 0,
+      compliance: known(policies.compliancePolicies),
+      configuration,
+      apps: known(policies.appProtectionPolicies),
+      deviceConfigurations,
+      configurationPolicies,
+      appProtectionPolicies: known(policies.appProtectionPolicies),
     },
     credentials: { tenantId: credentials.tenantId, appId: credentials.appId, clientSecret: credentials.clientSecret },
     resources: {

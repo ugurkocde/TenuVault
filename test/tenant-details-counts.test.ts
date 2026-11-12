@@ -17,7 +17,6 @@ describe("fetch-tenant-details counts", () => {
     const counts: Record<string, number> = {
       "/v1.0/deviceManagement/deviceConfigurations": 1200,
       "/v1.0/deviceManagement/deviceCompliancePolicies": 1100,
-      "/beta/deviceManagement/configurationPolicies": 1300,
       "/v1.0/deviceAppManagement/iosManagedAppProtections": 101,
       "/v1.0/deviceAppManagement/androidManagedAppProtections": 102,
       "/v1.0/deviceAppManagement/windowsInformationProtectionPolicies": 103,
@@ -40,6 +39,14 @@ describe("fetch-tenant-details counts", () => {
       if (parsed.pathname === "/v1.0/organization") {
         return Response.json({ value: [{ id: "org-1", displayName: "Contoso", verifiedDomains: [{ name: "contoso.com", isDefault: true }] }] })
       }
+      if (parsed.pathname === "/beta/deviceManagement/configurationPolicies") {
+        // Settings Catalog: no $count, at most 100 ids a page, @odata.count is the page size.
+        if (parsed.searchParams.has("$count")) return Response.json({ error: { message: "Query option 'Count' is not allowed." } }, { status: 400 })
+        const page = Number(parsed.searchParams.get("$skiptoken") ?? "0")
+        const rows = page < 13 ? 100 : 0
+        const next = page < 12 ? { "@odata.nextLink": `https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?$select=id&$top=100&$skiptoken=${page + 1}` } : {}
+        return Response.json({ "@odata.count": rows, value: Array.from({ length: rows }, () => ({ id: "p" })), ...next })
+      }
       const filtered = parsed.searchParams.get("$filter")
       const count = filtered ? 2000 : counts[parsed.pathname]
       if (count === undefined) return Response.json({ error: "unexpected" }, { status: 404 })
@@ -61,11 +68,15 @@ describe("fetch-tenant-details counts", () => {
       complianceRate: 80,
       policies: { deviceConfigurations: 1200, compliancePolicies: 1100, configurationPolicies: 1300, appProtectionPolicies: 410, total: 4010 },
     })
+    expect(body.unavailable).toEqual([])
     expect(body).not.toHaveProperty("storageUsed")
     expect(maxInFlight).toBeGreaterThan(1)
     const graphUrls = urls.map((entry) => new URL(entry))
-    const countUrls = graphUrls.filter((entry) => entry.pathname !== "/v1.0/organization")
-    expect(countUrls).toHaveLength(10)
+    const policyPages = graphUrls.filter((entry) => entry.pathname === "/beta/deviceManagement/configurationPolicies")
+    expect(policyPages).toHaveLength(13)
+    for (const entry of policyPages) expect(entry.searchParams.get("$select")).toBe("id")
+    const countUrls = graphUrls.filter((entry) => entry.pathname !== "/v1.0/organization" && !policyPages.includes(entry))
+    expect(countUrls).toHaveLength(9)
     for (const entry of countUrls) {
       expect(entry.searchParams.get("$count")).toBe("true")
       expect(entry.searchParams.get("$top")).toBe("1")
@@ -73,7 +84,7 @@ describe("fetch-tenant-details counts", () => {
     expect(graphUrls.filter((entry) => entry.pathname.endsWith("/managedDevices"))).toHaveLength(2)
   })
 
-  it("fails instead of reporting failed counts as zeros", async () => {
+  it("returns the organization with unreadable counts as null, never as zeros", async () => {
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = String(input instanceof Request ? input.url : input)
       if (url.includes("login.microsoftonline.com")) return Response.json({ access_token: "token" })
@@ -89,11 +100,36 @@ describe("fetch-tenant-details counts", () => {
       method: "POST",
       body: JSON.stringify({ tenantId: "tenant", appId: "app", clientSecret: "secret" }),
     }))
-    expect(response.status).toBe(502)
+    expect(response.status).toBe(200)
     const body = await response.json()
-    expect(body).not.toHaveProperty("statistics")
-    expect(String(body.error)).toContain("users")
-    expect(String(body.error)).toContain("compliant devices")
+    expect(body.organization).toMatchObject({ id: "org-1", displayName: "Contoso" })
+    expect(body.statistics).toMatchObject({ userCount: null, deviceCount: 5, complianceRate: null })
+    expect(body.unavailable).toEqual(expect.arrayContaining(["users", "compliant devices"]))
+  })
+
+  it("leaves Settings Catalog policies uncounted when a next link leaves Microsoft Graph", async () => {
+    const urls: string[] = []
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input instanceof Request ? input.url : input)
+      if (url.includes("login.microsoftonline.com")) return Response.json({ access_token: "token" })
+      urls.push(url)
+      const parsed = new URL(url)
+      if (parsed.pathname === "/v1.0/organization") return Response.json({ value: [{ id: "org-1", displayName: "Contoso" }] })
+      if (parsed.pathname === "/beta/deviceManagement/configurationPolicies") {
+        return Response.json({ value: [{ id: "p" }], "@odata.nextLink": "https://example.com/beta/deviceManagement/configurationPolicies?page=2" })
+      }
+      return Response.json({ "@odata.count": 5, value: [{}] })
+    })
+    vi.spyOn(console, "error").mockImplementation(() => undefined)
+
+    const response = await POST(new NextRequest("http://tenuvault.internal/api/fetch-tenant-details", {
+      method: "POST",
+      body: JSON.stringify({ tenantId: "tenant", appId: "app", clientSecret: "secret" }),
+    }))
+    const body = await response.json()
+    expect(body.statistics.policies).toMatchObject({ configurationPolicies: null, total: null })
+    expect(body.unavailable).toEqual(["configuration policies"])
+    expect(urls.some((url) => url.startsWith("https://example.com"))).toBe(false)
   })
 
   it("fails when the organization cannot be read", async () => {

@@ -56,6 +56,11 @@ import {
 
 
 // Inner component that uses useSearchParams
+/** A count read from Microsoft Graph, or n/a when Graph could not read it: never a made-up zero. */
+function GraphCount({ value }: { value: number | null | undefined }) {
+  return typeof value === "number" ? <>{value}</> : <span title="Microsoft Graph could not read this count">n/a</span>
+}
+
 function TenantsPageContent() {
   const { confirm, confirmDialog } = useConfirm()
   const { schedules, error: schedulesError } = useSchedules()
@@ -551,22 +556,29 @@ function TenantsPageContent() {
 
         // Update tenant with fresh data. The name is decided from the latest state, so a
         // rename made while this fetch was in flight is kept instead of reverted.
-        const latestName = tenantsRef.current.find((entry) => entry.id === tenant.id)?.name ?? tenant.name
+        const latest = tenantsRef.current.find((entry) => entry.id === tenant.id) ?? tenant
+        // A count Graph could not read arrives as null and keeps the value shown before.
+        const stats = details.statistics
+        const policies = stats.policies
+        const kept = <T,>(value: T | null | undefined, previous: T): T => value ?? previous
         updateTenant(tenant.id, {
-          name: nameAfterRefresh(latestName, details.organization.displayName),
+          name: nameAfterRefresh(latest.name, details.organization.displayName),
           domain: details.organization.primaryDomain,
           organizationId: details.organization.id,
-          users: details.statistics.userCount,
-          devices: details.statistics.deviceCount,
-          complianceRate: details.statistics.complianceRate,
-          configCount: details.statistics.policies.total,
+          users: kept(stats.userCount, latest.users),
+          devices: kept(stats.deviceCount, latest.devices),
+          complianceRate: kept(stats.complianceRate, latest.complianceRate),
+          configCount: kept(policies.total, latest.configCount),
           policies: {
-            compliance: details.statistics.policies.compliancePolicies,
-            configuration: details.statistics.policies.deviceConfigurations + details.statistics.policies.configurationPolicies,
-            apps: details.statistics.policies.appProtectionPolicies,
-            deviceConfigurations: details.statistics.policies.deviceConfigurations,
-            configurationPolicies: details.statistics.policies.configurationPolicies,
-            appProtectionPolicies: details.statistics.policies.appProtectionPolicies,
+            ...latest.policies,
+            compliance: kept(policies.compliancePolicies, latest.policies?.compliance),
+            configuration: policies.deviceConfigurations !== null && policies.configurationPolicies !== null
+              ? policies.deviceConfigurations + policies.configurationPolicies
+              : latest.policies?.configuration,
+            apps: kept(policies.appProtectionPolicies, latest.policies?.apps),
+            deviceConfigurations: kept(policies.deviceConfigurations, latest.policies?.deviceConfigurations),
+            configurationPolicies: kept(policies.configurationPolicies, latest.policies?.configurationPolicies),
+            appProtectionPolicies: kept(policies.appProtectionPolicies, latest.policies?.appProtectionPolicies),
           },
           lastSync: new Date().toISOString(),
           syncStatus: "success",
@@ -1040,11 +1052,11 @@ function TenantsPageContent() {
               <div className="grid grid-cols-2 gap-3 mb-4">
                 <div className="flex flex-col justify-between gap-1 rounded-2xl bg-gray-50 p-4">
                   <span className="block text-xs text-gray-500">Compliance Policies</span>
-                  <span className="mt-1 block text-2xl font-medium tracking-tight text-gray-900">{tenant.policies.compliance}</span>
+                  <span className="mt-1 block text-2xl font-medium tracking-tight text-gray-900"><GraphCount value={tenant.policies.compliance} /></span>
                 </div>
                 <div className="flex flex-col justify-between gap-1 rounded-2xl bg-gray-50 p-4">
                   <span className="block text-xs text-gray-500">Configuration Profiles</span>
-                  <span className="mt-1 block text-2xl font-medium tracking-tight text-gray-900">{tenant.policies.configuration}</span>
+                  <span className="mt-1 block text-2xl font-medium tracking-tight text-gray-900"><GraphCount value={tenant.policies.configuration} /></span>
                 </div>
               </div>
 
@@ -1315,9 +1327,9 @@ function TenantsPageContent() {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                       <div className="flex items-center gap-4">
-                        <span title="Compliance Policies">{tenant.policies.compliance}</span>
-                        <span title="Configuration Profiles">{tenant.policies.configuration}</span>
-                        <span title="App Protection">{tenant.policies.apps}</span>
+                        <span title="Compliance Policies"><GraphCount value={tenant.policies.compliance} /></span>
+                        <span title="Configuration Profiles"><GraphCount value={tenant.policies.configuration} /></span>
+                        <span title="App Protection"><GraphCount value={tenant.policies.apps} /></span>
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
