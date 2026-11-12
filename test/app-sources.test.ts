@@ -215,7 +215,7 @@ describe("crash recovery", () => {
 describe("trusted local source actions", () => {
   async function setup() {
     const folder = await root(), input = await packageFile(folder)
-    const host: AppSourceHost = { knownTenant: id => id === tenant || id === other, folder: () => join(folder, "sources"), setFolder: vi.fn(), confirmNewStore: vi.fn(async () => false), keys: () => [master], ensureKeys: vi.fn(), authorizeAttach: vi.fn(async () => {}), pickFolder: async () => folder, pickPackage: async () => input.file, pickExport: async () => null, checkDevice: vi.fn() }
+    const host: AppSourceHost = { knownTenant: id => id === tenant || id === other, folder: () => join(folder, "sources"), setFolder: vi.fn(), confirmNewStore: vi.fn(async () => false), keys: () => [master], ensureKeys: vi.fn(), pickFolder: async () => folder, pickPackage: async () => input.file, pickExport: async () => null, checkDevice: vi.fn(), signIn: vi.fn(async () => {}) }
     return { folder, input, host, service: new AppSourceService(host) }
   }
   it.each(["tenant", "renamed-tenant", "artifact"])("refuses a reconnect at the wrong %s folder level", async kind => {
@@ -260,6 +260,13 @@ describe("trusted local source actions", () => {
     await service.checkDevice(tenant)
     expect(host.checkDevice).toHaveBeenCalledTimes(1)
   })
+  it("allows App Backup Microsoft sign-in only for configured tenants without licensing", async () => {
+    const { host, service } = await setup()
+    await service.signIn(other)
+    expect(host.signIn).toHaveBeenCalledExactlyOnceWith(other)
+    expect(() => service.signIn("33333333-3333-3333-3333-333333333333")).toThrow("no longer configured")
+    expect(host.signIn).toHaveBeenCalledTimes(1)
+  })
   it("blocks attaching to an unreadable source store before minting keys", async () => {
     const { folder, host, service } = await setup(), directory = join(folder, "sources", tenant, randomUUID())
     await mkdir(directory, { recursive: true }); await writeFile(join(directory, "manifest.tvm"), "unreadable")
@@ -289,17 +296,16 @@ describe("trusted local source actions", () => {
     service.cancel(other, operation); pickedPackage(input.file)
     expect(await job).toBe(true)
   })
-  it("keeps offline export independent of entitlement, rejects unknown/cross tenants, and never mints a key on an empty listing", async () => {
+  it("attaches and exports offline for every configured tenant without entitlement, and never mints a key on an empty listing", async () => {
     const folder = await root(), input = await packageFile(folder), ensureKeys = vi.fn()
-    const host: AppSourceHost = { knownTenant: id => id === tenant || id === other, folder: () => join(folder, "sources"), setFolder: vi.fn(), confirmNewStore: vi.fn(async () => false), keys: () => [master], ensureKeys, authorizeAttach: vi.fn(async () => {}), pickFolder: async () => null, pickPackage: async () => input.file, pickExport: async () => join(folder, "original.intunewin"), checkDevice: vi.fn() }
+    const host: AppSourceHost = { knownTenant: id => id === tenant || id === other, folder: () => join(folder, "sources"), setFolder: vi.fn(), confirmNewStore: vi.fn(async () => false), keys: () => [master], ensureKeys, pickFolder: async () => null, pickPackage: async () => input.file, pickExport: async () => join(folder, "original.intunewin"), checkDevice: vi.fn(), signIn: vi.fn(async () => {}) }
     const service = new AppSourceService(host)
     expect((await service.list(tenant)).sources).toEqual([]); expect(ensureKeys).not.toHaveBeenCalled()
     await expect(service.list("not-a-tenant")).rejects.toThrow()
     expect(await service.attach(tenant, randomUUID(), "App")).toBe(true)
     const id = (await service.list(tenant)).sources[0]!.id
     await expect(service.export(other, randomUUID(), id)).rejects.toThrow("does not belong")
-    host.authorizeAttach = async () => { throw new Error("not entitled") }
-    await expect(service.attach(tenant, randomUUID(), "Not allowed")).rejects.toThrow("not entitled")
+    expect(await service.attach(other, randomUUID(), "Another tenant")).toBe(true)
     expect(await service.export(tenant, randomUUID(), id)).toBe(true)
     expect((await readFile(join(folder, "original.intunewin"))).equals(input.data)).toBe(true)
   })

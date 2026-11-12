@@ -2,7 +2,7 @@ import { CommunityTenantPicker } from "./components/CommunityTenantPicker"
 import "./lib/appearance"
 import { lazy, Suspense, useState, type ReactNode } from "react"
 import { QueryClientProvider } from "@tanstack/react-query"
-import { HashRouter, Navigate, Outlet, Route, Routes } from "react-router-dom"
+import { HashRouter, Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom"
 import { BackupProgressProvider } from "~/contexts/BackupProgressContext"
 import { TenantProvider } from "~/contexts/TenantContext"
 import { queryClient } from "~/lib/query-client"
@@ -18,6 +18,7 @@ import { isUnlicensed, LicenseProvider, useLicense } from "./lib/license"
 import { WhatsNewProvider } from "./lib/whats-new"
 import LicensePage from "./pages/LicensePage"
 import { hasOnboardingDraft } from "./lib/onboarding-draft"
+import { isAppBackupPath } from "./lib/app-backup-route"
 
 const AppBackupPage = lazy(() => import("./pages/AppBackupPage"))
 
@@ -59,9 +60,11 @@ function Home() {
  * the guided setup once the tenant is known. A setup already in progress skips the welcome.
  */
 function LicenseGate({ children }: { children: ReactNode }) {
+  const { pathname } = useLocation()
   const { status, error, refresh } = useLicense()
   const tenants = useTenants()
   const [signingIn, setSigningIn] = useState(hasOnboardingDraft)
+  if (isAppBackupPath(pathname)) return children
   if (!status) {
     if (error !== null) {
       return (
@@ -85,6 +88,11 @@ function LicenseGate({ children }: { children: ReactNode }) {
   return children
 }
 
+function BillingDialogs() {
+  const { pathname } = useLocation()
+  return isAppBackupPath(pathname) ? null : <><PlanDialogs /><CommunityTenantPicker /></>
+}
+
 export function App() {
   return (
     <QueryClientProvider client={queryClient}>
@@ -95,8 +103,8 @@ export function App() {
           <BackupProgressProvider>
             <DisclaimerHost />
             <ErrorBoundary>
-            <LicenseGate>
             <HashRouter>
+            <LicenseGate>
               <Suspense fallback={<Spinner />}>
                 <Routes>
                   <Route element={<DesktopLayout />}>
@@ -129,10 +137,9 @@ export function App() {
                   <Route path="*" element={<Home />} />
                 </Routes>
               </Suspense>
-              <PlanDialogs />
-              <CommunityTenantPicker />
-            </HashRouter>
+              <BillingDialogs />
             </LicenseGate>
+            </HashRouter>
             </ErrorBoundary>
           </BackupProgressProvider>
         </TenantProvider>

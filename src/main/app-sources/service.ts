@@ -11,15 +11,15 @@ export interface AppSourceHost {
   keys: () => Buffer[]
   exportJournalFolder?: () => string
   ensureKeys: () => void
-  authorizeAttach: (tenant: string) => Promise<void>
   pickFolder: (current: string) => Promise<string | null>
   confirmNewStore: (tenant: string) => Promise<boolean>
   pickPackage: () => Promise<string | null>
   pickExport: (fileName: string) => Promise<string | null>
   checkDevice: (tenant: string) => Promise<RecoveryDeviceStatus>
+  signIn: (tenant: string) => Promise<void>
 }
 
-/** Local actions use configured tenant identity, never a live token or an entitlement bypass. */
+/** Local actions are free for every configured tenant and need no live token. */
 export class AppSourceService {
   private readonly jobs = new Map<string, { tenant: string; abort: AbortController }>()
   private readonly deviceChecks = new Map<string, Promise<RecoveryDeviceStatus>>()
@@ -86,11 +86,10 @@ export class AppSourceService {
   attach(raw: unknown, operation: unknown, appName: unknown): Promise<boolean> {
     if (typeof appName !== "string" || appName.length > 200) return Promise.reject(new Error("Enter an app name of at most 200 characters."))
     return this.job(raw, operation, async (tenant, signal) => {
-      await this.host.authorizeAttach(tenant)
       const file = await this.host.pickPackage()
       signal.throwIfAborted()
       if (!file) return false
-      this.tenant(tenant); await this.host.authorizeAttach(tenant)
+      this.tenant(tenant)
       const existing = await this.store(tenant).list(tenant)
       if (existing.unreadableSources) throw new Error("Import the matching recovery key before adding packages to this source store.")
       this.host.ensureKeys()
@@ -124,6 +123,7 @@ export class AppSourceService {
     this.deviceChecks.set(tenant, check)
     return check
   }
+  signIn(raw: unknown): Promise<void> { return this.host.signIn(this.tenant(raw)) }
   /** Used on process shutdown; disk journals reconcile interrupted operations on the next list. */
   close(): void { for (const job of this.jobs.values()) job.abort.abort() }
 }

@@ -6,7 +6,6 @@ import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
 import { cn } from "~/lib/utils"
 import { bridge } from "../lib/bridge"
-import { showCommunityLimitError, showFeaturePlanError } from "../lib/plan-dialog"
 import type { AppSourceState, RecoveryDeviceStatus } from "../../shared/app-sources/types"
 
 const size = (bytes: number) => new Intl.NumberFormat(undefined, { style: "unit", unit: bytes >= 1024 ** 2 ? "megabyte" : "kilobyte", maximumFractionDigits: 1 }).format(bytes / (bytes >= 1024 ** 2 ? 1024 ** 2 : 1024))
@@ -19,7 +18,7 @@ export default function AppBackupPage() {
   useEffect(() => { window.scrollTo(0, 0) }, [tenant])
   // A tenant switch unmounts its operation view. Its cancellation stays bound to the old tenant.
   return <div className="mx-auto max-w-[1600px] space-y-6 p-6 lg:p-8">
-    <header><h1 className="text-4xl font-light tracking-tight text-gray-900">Win32 app backup</h1><p className="mt-2 text-sm text-gray-600">Keep an encrypted copy of your original installers. {selectedTenant ? `Tenant: ${selectedTenant.name}.` : ""}</p></header>
+    <header><h1 className="text-4xl font-light tracking-tight text-gray-900">Win32 app backup</h1><p className="mt-2 text-sm text-gray-600">Free encrypted installer storage for every configured tenant. {selectedTenant ? `Tenant: ${selectedTenant.name}.` : ""}</p></header>
     {tenant ? <SourceWorkspace key={tenant} tenant={tenant} /> : <div className="rounded-3xl bg-card p-6 text-sm text-gray-600">Select a configured tenant to view or store its installers.</div>}
   </div>
 }
@@ -56,7 +55,7 @@ export function SourceWorkspace({ tenant }: { tenant: string }) {
     const id = crypto.randomUUID(); operation.current = id
     setBusy(true); setError(""); setNotice("")
     try { const done = await action(id); if (alive.current && done) { setNotice(success); await reload() } }
-    catch (e) { if (alive.current && !showCommunityLimitError(e) && !showFeaturePlanError(e)) setError(e instanceof Error ? e.message : "The source operation failed.") }
+    catch (e) { if (alive.current) setError(e instanceof Error ? e.message : "The source operation failed.") }
     finally { operation.current = null; if (alive.current) setBusy(false) }
   }
   async function reconnect() {
@@ -64,13 +63,23 @@ export function SourceWorkspace({ tenant }: { tenant: string }) {
     try { if (await bridge.appSources.chooseStore(tenant) && alive.current) await reload() }
     catch (e) { if (alive.current) setError(e instanceof Error ? e.message : "The folder could not be connected.") }
   }
+  async function checkDevice(signIn = false) {
+    setDeviceBusy(true); setDevice(null); setDeviceError("")
+    try {
+      if (signIn) await bridge.appSources.signIn(tenant)
+      if (!alive.current) return
+      const value = await bridge.appSources.deviceStatus(tenant)
+      if (alive.current) setDevice(value)
+    } catch (e) { if (alive.current) setDeviceError(e instanceof Error ? e.message : "The device could not be checked.") }
+    finally { if (alive.current) setDeviceBusy(false) }
+  }
   const sources = (state?.sources ?? []).filter(source => `${source.appName} ${source.fileName}`.toLowerCase().includes(search.toLowerCase()))
   return <>
     <nav aria-label="App Backup sections" className="flex flex-wrap gap-2">
       {[{ id: "apps", label: "Win32 apps" }, { id: "versions", label: "Stored versions" }].map(item => <Link key={item.id} to={item.id === "apps" ? "/portal/app-backup" : "/portal/app-backup/versions"} aria-current={tab === item.id ? "page" : undefined} className={cn("flex h-10 items-center rounded-full px-4 text-sm font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring", tab === item.id ? "bg-primary text-primary-foreground" : "bg-card text-gray-700 hover:bg-secondary")}>{item.label}</Link>)}
     </nav>
     <section aria-label="Source coverage" className="rounded-3xl border bg-card p-6">
-      <div className="flex items-start gap-3"><Archive className="mt-0.5 size-5 shrink-0 text-gray-600" aria-hidden="true" /><div><h2 className="text-base font-semibold text-gray-900">Source coverage unavailable</h2><p className="mt-1 text-sm text-gray-600">Intune source coverage is unavailable in this version. Stored installers remain available to view and export while signed out. Attach requires access to this tenant.</p><p className="mt-2 text-sm text-gray-600">App names are labels you supply. Stored packages are administrator selected and are not linked to an Intune content version.</p></div></div>
+      <div className="flex items-start gap-3"><Archive className="mt-0.5 size-5 shrink-0 text-gray-600" aria-hidden="true" /><div><h2 className="text-base font-semibold text-gray-900">Source coverage unavailable</h2><p className="mt-1 text-sm text-gray-600">Intune source coverage is unavailable in this version. Attach, browse and export packages for any configured tenant, including while signed out. App Backup is completely free.</p><p className="mt-2 text-sm text-gray-600">App names are labels you supply. Stored packages are administrator selected and are not linked to an Intune content version.</p></div></div>
     </section>
     <section aria-labelledby="stored-sources-heading" className="rounded-3xl border bg-card p-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -93,7 +102,7 @@ export function SourceWorkspace({ tenant }: { tenant: string }) {
       </li>)}</ul> : <p className="py-8 text-sm text-gray-600">{!state ? "The source store is unavailable. Reconnect it and check the matching recovery key." : search ? "No stored packages match your search." : "No stored installers in this source folder yet. Attach a package to keep its original bytes."}</p>}
     </section>
     <section aria-labelledby="device-heading" className="rounded-3xl border bg-card p-6">
-      <div className="flex flex-wrap items-start justify-between gap-4"><div className="flex items-start gap-3"><Shield className="mt-1 size-5 text-gray-600" aria-hidden="true" /><div><h2 id="device-heading" className="text-base font-semibold text-gray-900">Recovery device check</h2><p className="mt-1 max-w-3xl text-sm text-gray-600">Recovery from Intune is not available in this version. This read-only check can compare Windows enrollment and public certificate metadata with the selected tenant. It does not access private keys or download content.</p></div></div><Button variant="outline" disabled={deviceBusy} onClick={() => { setDeviceBusy(true); setDevice(null); setDeviceError(""); void bridge.appSources.deviceStatus(tenant).then(value => { if (alive.current) setDevice(value) }).catch(e => { if (alive.current) setDeviceError(e instanceof Error ? e.message : "The device could not be checked.") }).finally(() => { if (alive.current) setDeviceBusy(false) }) }}>{deviceBusy ? "Checking…" : "Check this device"}</Button></div>
+      <div className="flex flex-wrap items-start justify-between gap-4"><div className="flex items-start gap-3"><Shield className="mt-1 size-5 text-gray-600" aria-hidden="true" /><div><h2 id="device-heading" className="text-base font-semibold text-gray-900">Recovery device check</h2><p className="mt-1 max-w-3xl text-sm text-gray-600">Recovery from Intune is not available in this version. This read-only check can compare Windows enrollment and public certificate metadata with the selected tenant. It does not access private keys or download content.</p></div></div><div className="flex flex-wrap gap-2"><Button variant="outline" disabled={deviceBusy} onClick={() => void checkDevice(true)}>Sign in for device check</Button><Button variant="outline" disabled={deviceBusy} onClick={() => void checkDevice()}>{deviceBusy ? "Checking…" : "Check this device"}</Button></div></div>
       {device ? <div role="status" className="mt-4 space-y-2 rounded-2xl bg-secondary/50 p-4 text-sm text-gray-700"><p>Enrollment: {enrollmentLabels[device.enrollment]}. Certificate: {certificateLabels[device.certificate]}.</p><p>{device.reason}</p></div> : <p className="mt-4 text-sm text-gray-600">{deviceBusy ? "Checking device metadata…" : "Device not checked."}</p>}
       {deviceError && <p role="alert" className="mt-4 text-sm text-red-800">{deviceError}</p>}
     </section>

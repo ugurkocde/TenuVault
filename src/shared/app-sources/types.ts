@@ -34,4 +34,5 @@ export interface AppSourcesBridge {
   export: (tenantId: string, operationId: string, sourceId: string) => Promise<boolean>
   cancel: (tenantId: string, operationId: string) => Promise<void>
   deviceStatus: (tenantId: string) => Promise<RecoveryDeviceStatus>
+  signIn: (tenantId: string) => Promise<void>
 }

@@ -3,6 +3,8 @@ title: "Store Win32 installers"
 description: Keep encrypted copies of original .intunewin packages and export their exact original bytes.
 ---
 
+**App Backup is completely free** for every configured tenant. No active license or Community tenant selection is required.
+
 **App Backup** keeps original Win32 installer packages separately from policy backups. Open it immediately below **Backup & Restore** in the desktop sidebar.
 
 This first version supports local source folders, attaching existing `.intunewin` packages, listing stored versions and exporting the original file. It does not download installers from Intune, upload apps, restore their content or associate a selected installer with a particular Intune content version.
@@ -14,7 +16,7 @@ This first version supports local source folders, attaching existing `.intunewin
 3. Choose **Attach source** and select an existing `.intunewin` file, up to 2 GiB. ZIP64 packages are not supported in this version.
 4. Wait until the operation completes. **Cancel operation** stops an active import.
 
-Adding a package requires access to the selected tenant. The file's container and bounded metadata XML are checked, but installation behavior and equivalence to Intune content are not tested. Sources are labelled **Administrator selected**. File names and app-name labels are not proof of an app's identity or content version.
+Attaching packages, browsing, reconnecting and exporting work while signed out, including for tenants outside license coverage. The file's container and bounded metadata XML are checked, but installation behavior and equivalence to Intune content are not tested. Sources are labelled **Administrator selected**. File names and app-name labels are not proof of an app's identity or content version.
 
 The original file is copied into a separate encrypted source store. Changing backup storage does not change this source store. The default source folder is **TenuVault App Sources** in Documents. Sources have no automatic retention or delete action in this version.
 
@@ -36,4 +38,4 @@ Unreadable or incomplete sources are not silently counted. Interrupted imports s
 
 **Source coverage unavailable** is expected in this version: this view does not yet compare stored sources with a live inventory or policy backup. A stored package does not establish restore readiness.
 
-**Recovery device check** is read-only. On Windows it can compare public enrollment/certificate metadata with the selected tenant's Intune account. It requires a signed-in, authorized tenant covered by this device’s Community or paid plan for the account read. An expired-plan tenant can be checked if it continues as the Community tenant. An uncovered tenant must be selected for Community or licensed before the check can run. Stored-source access and export remain available independently. It never uses a private key, requests installer content, elevates a process or enables recovery. A matched enrollment is not a statement that recovery is ready. Non-Windows and unconfirmed checks explain why their state is unavailable or unknown.
+**Recovery device check** is read-only. On Windows it can compare public enrollment/certificate metadata with the selected tenant's Intune account. It requires Microsoft sign-in and the appropriate Intune permissions for the selected tenant, but no product license or Community tenant selection. Use **Sign in for device check** to authenticate without a product-license check. Local source operations remain available while signed out. It never uses a private key, requests installer content, elevates a process or enables recovery. A matched enrollment is not a statement that recovery is ready. Non-Windows and unconfirmed checks explain why their state is unavailable or unknown.

@@ -1,6 +1,6 @@
 import { AppSourceService } from "./app-sources/service"
-import { sourceTenant } from "./app-sources/store"
 import { checkRecoveryDevice } from "./app-backup/device-check"
+import { readAppBackupAccount } from "./app-backup/account"
 import { AppRegistrationSetup, setupLoginHint } from "./auth/app-registration-setup"
 import { trialBackupObserver } from "./license/usage-actions"
 import { cachedTrialUsage, trialWorkflowsConfigured } from "./license/usage"
@@ -1402,7 +1402,6 @@ async function bootstrap(): Promise<void> {
     keys: () => backupKeys.existingKeyring(),
     exportJournalFolder: () => join(app.getPath("userData"), "app-source-export-jobs"),
     ensureKeys: () => { backupKeys.keyring() },
-    authorizeAttach: async (tenant) => { await license.requireEntitlement(tenant) },
     pickFolder: async (current) => {
       const result = await dialog.showOpenDialog(mainWindow!, { title: "Choose or reconnect source store", defaultPath: current, properties: ["openDirectory", "createDirectory"] })
       return result.canceled ? null : result.filePaths[0] ?? null
@@ -1419,20 +1418,22 @@ async function bootstrap(): Promise<void> {
       const result = await dialog.showSaveDialog(mainWindow!, { title: "Export original package, choose a new file name", defaultPath: join(app.getPath("documents"), fileName), filters: [{ name: "Intune Win32 package", extensions: ["intunewin"] }] })
       return result.canceled ? null : result.filePath ?? null
     },
-    checkDevice: (tenant) => checkRecoveryDevice(tenant, async () => {
-      const graph = await featureDeps.graph(tenant)
-      const response = await graph("GET", "/deviceManagement?$select=intuneAccountId")
-      if (response.status !== 200) throw new Error("Could not confirm the Intune account.")
-      return sourceTenant(response.body.intuneAccountId)
-    }),
+    checkDevice: (tenant) => checkRecoveryDevice(tenant, () => readAppBackupAccount(tenant,
+      async id => (await tokenFor(id, signedInClient(id), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch)),
+    signIn: async (tenant) => {
+      const profile = tenantProfile(tenant)
+      if (!profile || !isGuid(profile.clientId)) throw new Error("Configure this tenant's Microsoft app registration before signing in.")
+      await auth.reauthenticate(tenant, profile.clientId, RESOURCE_SCOPES.graph).finally(returnToApp)
+    },
   })
   app.on("before-quit", () => appSources.close())
   handleTrusted("appSources:list", (_event, tenant: unknown) => appSources.list(tenant))
   handleTrusted("appSources:chooseStore", (_event, tenant: unknown) => appSources.chooseStore(tenant))
-  handleTrusted("appSources:attach", (_event, tenant: unknown, operation: unknown, name: unknown) => withPlanError(() => appSources.attach(tenant, operation, name)))
+  handleTrusted("appSources:attach", (_event, tenant: unknown, operation: unknown, name: unknown) => appSources.attach(tenant, operation, name))
   handleTrusted("appSources:export", (_event, tenant: unknown, operation: unknown, source: unknown) => appSources.export(tenant, operation, source))
   handleTrusted("appSources:cancel", (_event, tenant: unknown, operation: unknown) => appSources.cancel(tenant, operation))
   handleTrusted("appSources:deviceStatus", (_event, tenant: unknown) => appSources.checkDevice(tenant))
+  handleTrusted("appSources:signIn", (_event, tenant: unknown) => appSources.signIn(tenant))
 
   handleTrusted("app:info", () => ({
     version: app.getVersion(),
