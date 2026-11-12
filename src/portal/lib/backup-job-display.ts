@@ -107,8 +107,9 @@ export function isBackupJobPollable(job: { isComplete: boolean; pollError?: stri
 /** What a backup's results section shows, worked out from the engine's per type results. */
 export interface BackupResultsSummary {
   /**
-   * Policy types with a row, in registry order: saved (some may have failed), being backed up, or,
-   * once the job has ended, stopped part way. Inventory such as Autopilot devices is in `inventory`.
+   * Types with a row, in registry order: saved policy types (some may have failed), and any type
+   * being backed up or, once the job has ended, stopped part way. Saved inventory such as Autopilot
+   * devices is listed in `inventory` instead.
    */
   rows: BackupTypeResult[]
   /** Policy types with at least one object saved. */
@@ -120,8 +121,10 @@ export interface BackupResultsSummary {
   empty: BackupTypeResult[]
   skipped: BackupTypeResult[]
   unreadable: BackupTypeResult[]
-  /** Types where some objects could not be saved. */
+  /** Types with objects that could not be saved, other than types the job stopped part way. */
   partial: BackupTypeResult[]
+  /** Types a job that has ended stopped part way, after listing them. */
+  stopped: BackupTypeResult[]
   policies: number
   inventory: Array<{ label: string; count: number }>
   warnings: string[]
@@ -132,17 +135,20 @@ export interface BackupResultsSummary {
 export function summarizeBackupResults(results: BackupResults, finished = false): BackupResultsSummary {
   const types = results.types
   const policyTypes = types.filter((type) => !type.inventory)
+  const listed = (type: BackupTypeResult) => type.state === "reading" && (type.found ?? 0) > 0
+  const stopped = finished ? types.filter(listed) : []
   return {
-    rows: policyTypes.filter((type) => (type.state === "saved" && (type.saved > 0 || type.failed > 0)) || (type.state === "reading" && (type.found ?? 0) > 0)),
+    rows: types.filter((type) => listed(type) || (!type.inventory && type.state === "saved" && (type.saved > 0 || type.failed > 0))),
     typesBackedUp: policyTypes.filter((type) => type.saved > 0).length,
     pending: finished ? 0 : types.filter((type) => type.state === "reading" && type.found === undefined).length,
     notReached: finished ? types.filter((type) => type.state === "reading" && type.found === undefined) : [],
     empty: types.filter((type) => type.state === "empty" || (type.state === "saved" && type.saved === 0 && type.failed === 0)),
     skipped: types.filter((type) => type.state === "skipped"),
     unreadable: types.filter((type) => type.state === "unreadable"),
-    partial: types.filter((type) => type.failed > 0),
+    partial: types.filter((type) => type.failed > 0 && !stopped.includes(type)),
+    stopped,
     policies: results.totalPolicies ?? policyTypes.reduce((sum, type) => sum + type.saved, 0),
-    inventory: types.filter((type) => type.inventory && type.saved > 0).map((type) => ({ label: type.label, count: type.saved })),
+    inventory: types.filter((type) => type.inventory && type.state === "saved" && type.saved > 0).map((type) => ({ label: type.label, count: type.saved })),
     warnings: results.notices.filter((notice) => notice.level === "warning").map((notice) => notice.message),
     info: results.notices.filter((notice) => notice.level === "info").map((notice) => notice.message),
   }

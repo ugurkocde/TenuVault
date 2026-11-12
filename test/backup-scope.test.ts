@@ -141,6 +141,8 @@ describe("BackupEngine with a scope", () => {
     const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account, scope: { excluded: ["Apps"] }, trigger: "scheduled" }).id)
     expect(job.status).toBe("Completed")
     expect(requested.some((path) => path.includes("mobileApps"))).toBe(false)
+    expect(job.log.join("\n")).toContain("types: Apps.")
+    expect(job.results!.notices).toContainEqual({ level: "info", message: "Left out by the backup scope: apps." })
     const names = (await store.list(account, "intune-backups")).map((blob) => blob.name.replace(/^backup-[\d-]+\//, "")).sort()
     // Names are chosen in list order, so parallel reads never swap which duplicate gets the suffix.
     expect(names).toEqual([".tenuvault-owner.json", "CompliancePolicySettings/Compliance policy settings.json", "DeviceConfigurations/Other.json", "DeviceConfigurations/Same (dc2).json", "DeviceConfigurations/Same.json", "metadata.json"])

@@ -28,7 +28,7 @@ export function BackupResults({ job, compact = false, jobId }: BackupResultsProp
   const duration = formatBackupDuration(job.startTime, job.endTime)
   const rows = compact ? summary.rows.slice(0, COMPACT_ROWS) : summary.rows
   const hidden = summary.rows.length - rows.length
-  const problems = summary.unreadable.length + summary.skipped.length + summary.partial.length + summary.warnings.length + summary.notReached.length
+  const problems = summary.unreadable.length + summary.skipped.length + summary.partial.length + summary.stopped.length + summary.warnings.length + summary.notReached.length
   // Red only for a failed run; a run that completed with warnings or that the user cancelled stays amber.
   const severe = job.isComplete && job.status === "Failed"
   const extras = summary.inventory.map((entry) => `${entry.count} ${entry.label}`)
@@ -66,12 +66,19 @@ export function BackupResults({ job, compact = false, jobId }: BackupResultsProp
                 compact={compact}
               />
             )}
+            {summary.stopped.map((type) => (
+              <Problem
+                key={type.folder}
+                title={`${type.found! - type.saved} of ${type.found} ${type.label} were not saved before the backup stopped`}
+                items={type.errors}
+                more={type.failed - (type.errors?.length ?? 0)}
+                compact={compact}
+              />
+            ))}
             {summary.partial.map((type) => (
               <Problem
                 key={type.folder}
-                title={type.state === "reading"
-                  ? `${type.failed} ${type.label} could not be saved before the backup stopped`
-                  : `${type.failed} of ${type.found ?? type.saved + type.failed} ${type.label} could not be saved`}
+                title={`${type.failed} of ${type.found ?? type.saved + type.failed} ${type.label} could not be saved`}
                 items={type.errors}
                 more={type.failed - (type.errors?.length ?? 0)}
                 compact={compact}
@@ -160,7 +167,7 @@ function Problem({ title, detail, items, more = 0, compact = false }: { title: s
   return (
     <li>
       <p className="font-medium">{title}</p>
-      {detail && !compact && <p className="text-muted-foreground">{detail}</p>}
+      {detail && <p className={cn("text-muted-foreground", compact && "line-clamp-2")} title={compact ? detail : undefined}>{detail}</p>}
       {items && items.length > 0 && !compact && (
         <ul className="mt-0.5 list-disc space-y-0.5 pl-4 text-muted-foreground">
           {items.slice(0, MAX_ITEM_ERRORS).map((item, index) => <li key={index} className="break-words">{item}</li>)}
@@ -194,13 +201,13 @@ function Disclosure({ label, children }: { label: string; children: React.ReactN
 
 function RawLog({ output, jobId, live, compact }: { output: string; jobId?: string | null; live: boolean; compact: boolean }) {
   const [open, setOpen] = useState(false)
-  const [copied, setCopied] = useState(false)
+  const [copied, setCopied] = useState<"" | "copied" | "failed">("")
   const id = useId()
   const log = useRef<HTMLPreElement>(null)
 
   useEffect(() => {
     if (!copied) return
-    const timer = setTimeout(() => setCopied(false), 2000)
+    const timer = setTimeout(() => setCopied(""), 2000)
     return () => clearTimeout(timer)
   }, [copied])
 
@@ -212,9 +219,9 @@ function RawLog({ output, jobId, live, compact }: { output: string; jobId?: stri
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(output)
-      setCopied(true)
+      setCopied("copied")
     } catch {
-      setCopied(false)
+      setCopied("failed")
     }
   }
 
@@ -237,11 +244,11 @@ function RawLog({ output, jobId, live, compact }: { output: string; jobId?: stri
             onClick={() => void copy()}
             className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
           >
-            {copied ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : <Copy className="h-3.5 w-3.5" aria-hidden="true" />}
-            {copied ? "Copied" : "Copy log"}
+            {copied === "copied" ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : <Copy className="h-3.5 w-3.5" aria-hidden="true" />}
+            {copied === "copied" ? "Copied" : copied === "failed" ? "Could not copy" : "Copy log"}
           </button>
         )}
-        <span className="sr-only" aria-live="polite">{copied ? "Log copied" : ""}</span>
+        <span className="sr-only" aria-live="polite">{copied === "copied" ? "Log copied" : copied === "failed" ? "Could not copy the log" : ""}</span>
       </div>
       {open && (
         <div id={id} className="space-y-1">

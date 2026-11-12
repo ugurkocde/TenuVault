@@ -467,7 +467,11 @@ export class BackupEngine {
       Object.assign(result(type.folder), { state: "skipped", reason })
       this.write(job, `Leaving out ${type.label}: ${reason.charAt(0).toLowerCase()}${reason.slice(1)}`)
     }
-    if (scope.excluded.length) this.write(job, `Leaving out ${scope.excluded.length} of ${INTUNE_TYPES.length} types: ${scope.excluded.join(", ")}.`, "info")
+    if (scope.excluded.length) {
+      this.write(job, `Leaving out ${scope.excluded.length} of ${INTUNE_TYPES.length} types: ${scope.excluded.join(", ")}.`)
+      // The notice names the types as people read them; the log keeps the folder names.
+      results.notices.push({ level: "info", message: `Left out by the backup scope: ${scope.excluded.map((folder) => typeForFolder(folder)?.label ?? folder).join(", ")}.` })
+    }
     for (const folder of notReadable) Object.assign(result(folder), { state: "skipped", reason: "The Backup Reader has no permission for this type. Manual backups include it." })
     if (notReadable.length) this.write(job, `Leaving out ${notReadable.length} type${notReadable.length === 1 ? "" : "s"} the Backup Reader has no permission for: ${notReadable.join(", ")}. Manual backups include them.`)
     // Only a Backup Reader run keeps a value Microsoft refuses to decrypt masked; with the admin's sign-in a refused read fails the object as before.

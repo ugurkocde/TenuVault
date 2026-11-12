@@ -112,8 +112,26 @@ describe("BackupResults", () => {
     const html = renderToStaticMarkup(createElement(BackupResults, { job: { ...job, status: "Failed", results: stopped } }))
     expect(html).toContain("2 types were not read before the backup stopped")
     expect(html).toContain("Apps, Scripts")
-    expect(html).toContain("1 compliance policies could not be saved before the backup stopped")
+    expect(html).toContain("7 of 10 compliance policies were not saved before the backup stopped")
+    expect(html).not.toContain("could not be saved")
     expect(html).toContain("bg-red-50")
+    // While the run goes on, a failed item is an ordinary failure, not a stop.
+    const running = renderToStaticMarkup(createElement(BackupResults, { job: { ...job, status: "Running", isComplete: false, results: stopped } }))
+    expect(running).toContain("1 of 10 compliance policies could not be saved")
+    expect(running).not.toContain("before the backup stopped")
+  })
+
+  it("keeps an inventory type a stopped run did not finish as a stopped row, saved or not", () => {
+    for (const saved of [0, 40]) {
+      const results: Results = { types: [type("Autopilot", { label: "Windows Autopilot devices", inventory: true, state: "reading", found: 200, saved })], notices: [] }
+      const summary = summarizeBackupResults(results, true)
+      expect(summary.rows.map((entry) => entry.folder)).toEqual(["Autopilot"])
+      expect(summary.inventory).toEqual([])
+      const html = renderToStaticMarkup(createElement(BackupResults, { job: { ...job, status: "Cancelled", results } }))
+      expect(html).toContain(`${200 - saved} of 200 Windows Autopilot devices were not saved before the backup stopped`)
+      expect(html).toContain(`${saved} of 200`)
+      expect(html).not.toContain("Also saved")
+    }
   })
 
   it("keeps the box amber for a completed run whose only problem is an unreadable type", () => {
