@@ -25,6 +25,9 @@ export class BackupKeys {
     return [key]
   }
 
+  /** Read-only: browsing a source folder must never mint new encryption keys. */
+  existingKeyring(): Buffer[] { return this.read() }
+
   exportRecoveryKey(): string {
     return BUNDLE_PREFIX + this.keyring().map((key) => key.toString("base64url")).join(".")
   }

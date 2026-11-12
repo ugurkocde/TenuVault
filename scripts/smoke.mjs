@@ -890,6 +890,24 @@ await check("several tenants get the overview, switcher and schedule tab", async
   await screenshot("09-schedule-cloud")
 })
 
+await check("App Backup keeps local stored access independent of sign-in and presents recovery as unavailable", async () => {
+  await go("#/portal/app-backup", "Win32 app backup")
+  await assertPageInMain("Source coverage unavailable", "App Backup")
+  assert(await waitForText("No stored installers"), "local source catalog did not load for signed-out configured tenant")
+  assert(await evaluate(`typeof window.tenuvault.appSources.list === "function" && typeof window.tenuvault.appSources.export === "function"`), "source IPC namespace missing")
+  assert(await evaluate(`document.querySelector('main').innerText.includes("Recovery from Intune is not available in this version")`), "recovery availability is misleading")
+  assert(!(await evaluate(`document.querySelector('main').innerText.includes("An active license is required for backup and restore operations")`)), "stored sources are behind the backup license notice")
+  await screenshot("09a-app-backup")
+  await go("#/portal/app-backup/versions", "Stored versions")
+  await assertPageInMain("Stored versions", "stored source versions")
+  await send("Emulation.setDeviceMetricsOverride", { width: 1024, height: 700, deviceScaleFactor: 1, mobile: false })
+  try {
+  await sleep(200)
+  assert(await evaluate(`document.documentElement.scrollWidth <= innerWidth + 1`), "App Backup overflows the supported minimum desktop window")
+  await screenshot("09b-app-backup-narrow")
+  } finally { await send("Emulation.clearDeviceMetricsOverride") }
+})
+
 await check("Backup Reader card offers setup with a guide link, and the schedule says who runs backups", async () => {
   await go("#/portal/settings?section=background", "Backup Reader")
   assert(await waitForText("Set up the Backup Reader"), "Backup Reader setup entry missing")

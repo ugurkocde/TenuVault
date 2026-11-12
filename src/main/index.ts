@@ -1,3 +1,6 @@
+import { AppSourceService } from "./app-sources/service"
+import { sourceTenant } from "./app-sources/store"
+import { checkRecoveryDevice } from "./app-backup/device-check"
 import { AppRegistrationSetup, setupLoginHint } from "./auth/app-registration-setup"
 import { trialBackupObserver } from "./license/usage-actions"
 import { cachedTrialUsage, trialWorkflowsConfigured } from "./license/usage"
@@ -1391,6 +1394,40 @@ async function bootstrap(): Promise<void> {
       (await tokenFor(tenantId, clientId, "https://storage.azure.com/.default")).accessToken,
     )
   })
+
+  const appSources = new AppSourceService({
+    knownTenant: (tenant) => connectedTenantIds().some(id => id.toLowerCase() === tenant),
+    folder: (tenant) => appStore.get(`app-sources.folder.${tenant}`) ?? join(app.getPath("documents"), "TenuVault App Sources"),
+    setFolder: (tenant, folder) => appStore.set(`app-sources.folder.${tenant}`, folder),
+    keys: () => backupKeys.existingKeyring(),
+    ensureKeys: () => { backupKeys.keyring() },
+    authorizeAttach: async (tenant) => { await license.requireEntitlement(tenant) },
+    pickFolder: async (current) => {
+      const result = await dialog.showOpenDialog(mainWindow!, { title: "Choose or reconnect source store", defaultPath: current, properties: ["openDirectory", "createDirectory"] })
+      return result.canceled ? null : result.filePaths[0] ?? null
+    },
+    pickPackage: async () => {
+      const result = await dialog.showOpenDialog(mainWindow!, { title: "Attach an existing Win32 package", filters: [{ name: "Intune Win32 package", extensions: ["intunewin"] }], properties: ["openFile"] })
+      return result.canceled ? null : result.filePaths[0] ?? null
+    },
+    pickExport: async (fileName) => {
+      const result = await dialog.showSaveDialog(mainWindow!, { title: "Export original package, choose a new file name", defaultPath: join(app.getPath("documents"), fileName), filters: [{ name: "Intune Win32 package", extensions: ["intunewin"] }] })
+      return result.canceled ? null : result.filePath ?? null
+    },
+    checkDevice: (tenant) => checkRecoveryDevice(tenant, async () => {
+      const graph = await featureDeps.graph(tenant)
+      const response = await graph("GET", "/deviceManagement?$select=intuneAccountId")
+      if (response.status !== 200) throw new Error("Could not confirm the Intune account.")
+      return sourceTenant(response.body.intuneAccountId)
+    }),
+  })
+  app.on("before-quit", () => appSources.close())
+  handleTrusted("appSources:list", (_event, tenant: unknown) => appSources.list(tenant))
+  handleTrusted("appSources:chooseStore", (_event, tenant: unknown) => appSources.chooseStore(tenant))
+  handleTrusted("appSources:attach", (_event, tenant: unknown, operation: unknown, name: unknown) => appSources.attach(tenant, operation, name))
+  handleTrusted("appSources:export", (_event, tenant: unknown, operation: unknown, source: unknown) => appSources.export(tenant, operation, source))
+  handleTrusted("appSources:cancel", (_event, tenant: unknown, operation: unknown) => appSources.cancel(tenant, operation))
+  handleTrusted("appSources:deviceStatus", (_event, tenant: unknown) => appSources.checkDevice(tenant))
 
   handleTrusted("app:info", () => ({
     version: app.getVersion(),

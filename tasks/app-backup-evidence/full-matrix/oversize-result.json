@@ -1,0 +1,10 @@
+{
+  "Detail": {
+    "Elevated": true,
+    "Message": "Package exceeds 256 MiB spike limit",
+    "ErrorType": "System.Management.Automation.RuntimeException"
+  },
+  "ExitCode": 1,
+  "Case": "OversizeMetadata",
+  "Injected": true
+}

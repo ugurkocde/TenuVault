@@ -1,0 +1,61 @@
+import { act, createElement } from "react"
+import { createRoot, type Root } from "react-dom/client"
+import { afterEach, describe, expect, it, vi } from "vitest"
+;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+window.scrollTo = vi.fn()
+const ids = ["11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222"]
+const state = vi.hoisted(() => ({ selected: 0, fail: false, wait: null as null | (() => Promise<boolean>) }))
+const api = vi.hoisted(() => ({ list: vi.fn(), attach: vi.fn(), export: vi.fn(), cancel: vi.fn(async () => {}), chooseStore: vi.fn(async () => false), deviceStatus: vi.fn(async () => ({ enrollment: "unknown", certificate: "unknown", reason: "Recovery from Intune is not available in this version.", captureAvailable: false })) }))
+vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { appSources: api } }))
+vi.mock("~/contexts/TenantContext", () => ({ useSelectedTenant: () => ({ selectedTenant: { id: state.selected, name: state.selected ? "Fabrikam" : "Contoso", credentials: { tenantId: ids[state.selected] } } }) }))
+vi.mock("react-router-dom", () => ({ useParams: () => ({ tabId: "versions" }), Link: (props: { to: string; children: React.ReactNode }) => createElement("a", { href: props.to }, props.children) }))
+import AppBackupPage from "../../src/renderer/pages/AppBackupPage"
+let root: Root | undefined
+const flush = async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) }) }
+async function mount() {
+ state.fail = false
+ api.list.mockImplementation(async (tenant: string) => { if (state.fail) throw new Error("Import the matching recovery key"); return { storeName: "Sources", warnings: [], sources: [{ id: "source", tenantId: tenant, appName: "Finance", fileName: "Finance.intunewin", bytes: 1024, createdAt: "2026-11-12T00:00:00Z", sha256: "abc" }] } })
+ api.attach.mockImplementation(() => state.wait ? state.wait() : Promise.resolve(true))
+ api.export.mockResolvedValue(true)
+ const node = document.createElement("div"); document.body.append(node); root = createRoot(node)
+ await act(async () => root!.render(createElement(AppBackupPage))); await flush(); return node
+}
+afterEach(() => { if (root) act(() => root!.unmount()); root = undefined; document.body.innerHTML = ""; state.selected = 0; state.wait = null; vi.clearAllMocks() })
+async function click(node: HTMLElement, text: string) {
+ const button = [...node.querySelectorAll("button")].find(b => b.textContent?.trim() === text)
+ if (!button) throw new Error(`Missing ${text}`)
+ await act(async () => button.click()); await flush()
+}
+describe("App Backup local workspace", () => {
+ it("lists and exports without license or backup-history queries, with honest unknown coverage and unavailable recovery", async () => {
+  const node = await mount()
+  expect(node.textContent).toContain("Finance.intunewin")
+  expect(node.textContent).toContain("Source coverage unavailable")
+  expect(node.textContent).toContain("Administrator selected")
+  expect(node.textContent).toContain("Recovery from Intune is not available")
+  expect(node.textContent).not.toContain("Ready to recover")
+  await click(node, "Export original")
+  expect(api.export).toHaveBeenCalledWith(ids[0], expect.any(String), "source")
+ })
+ it("keeps a store failure separate from device check availability", async () => {
+  const node = await mount(); state.fail = true
+  await click(node, "Refresh")
+  expect(node.textContent).toContain("Import the matching recovery key")
+  expect(node.textContent).toContain("Reconnect source store")
+  await click(node, "Check this device")
+  expect(api.deviceStatus).toHaveBeenCalledWith(ids[0])
+ })
+ it("cancels an old tenant's operation on switch and does not show its eventual success on the new tenant", async () => {
+  let resolve!: (value: boolean) => void
+  state.wait = () => new Promise(r => { resolve = r })
+  const node = await mount()
+  await act(async () => { node.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })) })
+  expect(node.textContent).toContain("Source operation in progress")
+  state.selected = 1
+  await act(async () => root!.render(createElement(AppBackupPage))); await flush()
+  expect(api.cancel).toHaveBeenCalledWith(ids[0], expect.any(String))
+  await act(async () => resolve(true)); await flush()
+  expect(node.textContent).not.toContain("Original package stored")
+  expect(api.list).toHaveBeenLastCalledWith(ids[1])
+ })
+})

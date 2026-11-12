@@ -19,6 +19,8 @@ import { WhatsNewProvider } from "./lib/whats-new"
 import LicensePage from "./pages/LicensePage"
 import { hasOnboardingDraft } from "./lib/onboarding-draft"
 
+const AppBackupPage = lazy(() => import("./pages/AppBackupPage"))
+
 // Desktop pages.
 const OnboardingPage = lazy(() => import("./pages/OnboardingPage"))
 const SettingsPage = lazy(() => import("./pages/SettingsPage"))
@@ -104,6 +106,7 @@ export function App() {
                       <Route path="dashboard" element={<DashboardPage />} />
                       <Route path="tenants" element={<TenantsPage />} />
                       <Route path="backup" element={<BackupPage />} />
+                      <Route path="app-backup/:tabId?" element={<AppBackupPage />} />
                       <Route path="drift" element={<DriftPage />} />
                       <Route path="sync" element={<SyncPage />} />
                       <Route path="audit" element={<AuditPage />} />

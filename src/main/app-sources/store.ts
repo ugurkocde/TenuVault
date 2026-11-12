@@ -1,0 +1,191 @@
+import { createCipheriv, createDecipheriv, createHash, createHmac, hkdfSync, randomBytes, randomUUID } from "node:crypto"
+import { constants } from "node:fs"
+import { hostname } from "node:os"
+import { basename, join, dirname } from "node:path"
+import { mkdir, open, readFile, readdir, rename, rm, link, lstat, realpath, type FileHandle } from "node:fs/promises"
+import type { StoredAppSource } from "../../shared/app-sources/types"
+import { inspectIntunewin } from "./package"
+
+const CHUNK = 1024 * 1024
+const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/
+const MAGIC = Buffer.from("TVS1")
+const MANIFEST = Buffer.from("TVM1")
+const flags = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)
+export function sourceTenant(value: unknown): string {
+  if (typeof value !== "string" || !UUID.test(value.toLowerCase())) throw new Error("Select a configured tenant.")
+  return value.toLowerCase()
+}
+const sourceId = (value: string) => { if (!UUID.test(value)) throw new Error("Invalid source identifier."); return value }
+const abort = (signal?: AbortSignal) => signal?.throwIfAborted()
+const key = (master: Buffer, tenant: string, purpose: string) => Buffer.from(hkdfSync("sha256", master, "TenuVault/app-sources/v1", `${tenant}/${purpose}`, 32))
+const aad = (tenant: string, id: string, type: number, index: number) => Buffer.from(JSON.stringify(["TVS1", tenant, id, type, index]))
+function seal(plain: Buffer, secret: Buffer, associated: Buffer): Buffer {
+  const nonce = randomBytes(12), cipher = createCipheriv("aes-256-gcm", secret, nonce)
+  cipher.setAAD(associated)
+  return Buffer.concat([nonce, cipher.update(plain), cipher.final(), cipher.getAuthTag()])
+}
+function unseal(bytes: Buffer, secret: Buffer, associated: Buffer): Buffer {
+  if (bytes.length < 28) throw new Error("The source is truncated.")
+  const decipher = createDecipheriv("aes-256-gcm", secret, bytes.subarray(0, 12))
+  decipher.setAAD(associated); decipher.setAuthTag(bytes.subarray(-16))
+  return Buffer.concat([decipher.update(bytes.subarray(12, -16)), decipher.final()])
+}
+async function exact(file: FileHandle, length: number): Promise<Buffer> {
+  const data = Buffer.alloc(length)
+  let at = 0
+  while (at < length) { const n = await file.read(data, at, length - at, null); if (!n.bytesRead) throw new Error("The source is truncated."); at += n.bytesRead }
+  return data
+}
+async function write(file: FileHandle, data: Buffer): Promise<void> {
+  let at = 0
+  while (at < data.length) { const n = await file.write(data, at, data.length - at); if (!n.bytesWritten) throw new Error("Could not write source data."); at += n.bytesWritten }
+}
+async function noLink(path: string): Promise<void> { if ((await lstat(path)).isSymbolicLink()) throw new Error("Source-store links are not supported.") }
+const owner = () => ({ host: hostname(), pid: process.pid })
+function abandoned(value: { host?: unknown; pid?: unknown }): boolean {
+  if (value.host !== hostname() || !Number.isInteger(value.pid) || Number(value.pid) <= 0) return false
+  try { process.kill(Number(value.pid), 0); return false } catch (e) { return (e as NodeJS.ErrnoException).code === "ESRCH" }
+}
+
+/** Streaming, tenant-bound source storage. A final directory rename is the catalog commit point. */
+export class AppSourceStore {
+  constructor(readonly root: string, private readonly keys: () => Buffer[]) {}
+  private async folder(tenant: string): Promise<string> {
+    sourceTenant(tenant)
+    await mkdir(this.root, { recursive: true, mode: 0o700 }); await noLink(this.root)
+    const directory = join(await realpath(this.root), tenant)
+    await mkdir(directory, { recursive: true, mode: 0o700 }); await noLink(directory)
+    return directory
+  }
+  private encode(value: unknown, tenant: string, id: string, purpose: string, master = this.keys()[0]!): Buffer {
+    return Buffer.concat([MANIFEST, seal(Buffer.from(JSON.stringify(value)), key(master, tenant, `${purpose}/${id}`), aad(tenant, id, 0, 0))])
+  }
+  private decode<T>(data: Buffer, tenant: string, id: string, purpose: string): { value: T; master: Buffer } {
+    if (!data.subarray(0, 4).equals(MANIFEST) || data.length > 64 * 1024) throw new Error("The source manifest is invalid.")
+    for (const master of this.keys()) {
+      try { return { value: JSON.parse(unseal(data.subarray(4), key(master, tenant, `${purpose}/${id}`), aad(tenant, id, 0, 0)).toString("utf8")) as T, master } } catch { /* Try rotated/imported keys. */ }
+    }
+    throw new Error("The source could not be authenticated. Check the source files and import the matching recovery key.")
+  }
+  private async manifest(tenant: string, id: string): Promise<{ value: StoredAppSource; master: Buffer; directory: string }> {
+    const directory = join(await this.folder(tenant), sourceId(id)); await noLink(directory)
+    const path = join(directory, "manifest.tvm"); await noLink(path)
+    const file = await open(path, flags)
+    let bytes: Buffer
+    try { if ((await file.stat()).size > 64 * 1024) throw new Error("The source manifest is too large."); bytes = await file.readFile() } finally { await file.close() }
+    const decoded = this.decode<StoredAppSource>(bytes, tenant, id, "manifest")
+    const v = decoded.value
+    if (!/^[a-f0-9]{24}$/.test(v.keyId) || v.id !== id || v.tenantId !== tenant || v.format !== "intunewin" || v.provenance !== "administrator-selected" || !Number.isSafeInteger(v.bytes) || v.bytes < 0 || v.bytes > 2 * 1024 ** 3 || !/^[a-f0-9]{64}$/.test(v.sha256) || typeof v.fileName !== "string" || v.fileName !== basename(v.fileName) || !/\.intunewin$/i.test(v.fileName) || typeof v.appName !== "string" || v.appName.length > 200 || !Number.isFinite(Date.parse(v.createdAt))) throw new Error("The source manifest is invalid.")
+    return { ...decoded, directory }
+  }
+  async list(tenant: string): Promise<{ sources: StoredAppSource[]; warnings: string[] }> {
+    const folder = await this.folder(tenant), sources: StoredAppSource[] = [], warnings: string[] = []
+    for (const entry of await readdir(folder, { withFileTypes: true })) {
+      if (entry.name.startsWith(".staging-")) {
+        const stage = join(folder, entry.name)
+        if (entry.isDirectory() && /^\.staging-[a-f0-9-]{36}$/.test(entry.name)) {
+          try { const data = this.decode<{ host: string; pid: number }>(await readFile(join(stage, "owner.tvm")), tenant, entry.name.slice(9), "owner"); if (abandoned(data.value)) { await rm(stage, { recursive: true }); continue } } catch { /* Unknown staging is quarantined, never listed. */ }
+        }
+        warnings.push("An import has not completed and is not counted as a stored source.")
+      } else if (UUID.test(entry.name)) {
+        try { const item = await this.manifest(tenant, entry.name); await noLink(join(item.directory, "artifact.tvs")); sources.push(item.value) } catch { warnings.push("A stored source could not be read. Check the source folder and recovery key.") }
+      } else if (/^\.export-[a-f0-9-]{36}\.tvm$/.test(entry.name)) {
+        try {
+          const id = entry.name.slice(8, -4)
+          const data = this.decode<{ host: string; pid: number; temporary: string }>(await readFile(join(folder, entry.name)), tenant, id, "export")
+          if (abandoned(data.value)) {
+            if (basename(data.value.temporary) !== `.tenuvault-export-${id}.tmp`) throw new Error("Invalid export journal")
+            await rm(data.value.temporary, { force: true }); await rm(join(folder, entry.name)); continue
+          }
+          warnings.push("An unfinished export belongs to another process or device and has not been reconciled.")
+        } catch { warnings.push("An unfinished export needs the matching recovery key to reconcile.") }
+      }
+    }
+    return { sources: sources.sort((a, b) => b.createdAt.localeCompare(a.createdAt)), warnings: [...new Set(warnings)] }
+  }
+  async attach(tenant: string, input: string, appName: string, signal?: AbortSignal): Promise<StoredAppSource> {
+    const folder = await this.folder(tenant), id = randomUUID(), stage = join(folder, `.staging-${id}`), master = this.keys()[0]!
+    if (typeof appName !== "string" || appName.trim().length > 200 || !/\.intunewin$/i.test(input)) throw new Error("Choose an .intunewin file and an app name of at most 200 characters.")
+    const file = await open(input, flags)
+    let made = false
+    try {
+      const before = await file.stat()
+      if (!before.isFile()) throw new Error("Choose a regular .intunewin file.")
+      await inspectIntunewin(file, before.size); abort(signal)
+      await mkdir(stage, { mode: 0o700 }); made = true
+      await this.privateWrite(join(stage, "owner.tvm"), this.encode(owner(), tenant, id, "owner", master))
+      const artifact = await open(join(stage, "artifact.tvs"), "wx", 0o600)
+      const secret = key(master, tenant, `artifact/${id}`), hash = createHash("sha256")
+      let size = 0, index = 0
+      try {
+        await write(artifact, MAGIC)
+        while (size < before.size) {
+          abort(signal)
+          const chunk = Buffer.alloc(Math.min(CHUNK, before.size - size)), n = await file.read(chunk, 0, chunk.length, size)
+          if (!n.bytesRead) throw new Error("The selected file changed during import.")
+          const plain = chunk.subarray(0, n.bytesRead); hash.update(plain)
+          await this.frame(artifact, plain, secret, tenant, id, 1, index++)
+          size += n.bytesRead
+        }
+        const after = await file.stat()
+        if (before.size !== after.size || before.mtimeMs !== after.mtimeMs) throw new Error("The selected file changed during import.")
+        const sha256 = hash.digest("hex")
+        await this.frame(artifact, Buffer.from(JSON.stringify({ size, sha256, chunks: index })), secret, tenant, id, 2, index)
+        await artifact.sync(); abort(signal)
+        const manifest: StoredAppSource = { id, tenantId: tenant, fileName: basename(input), appName: appName.trim() || basename(input, ".intunewin"), bytes: size, sha256, createdAt: new Date().toISOString(), provenance: "administrator-selected", format: "intunewin", keyId: createHmac("sha256", master).update("TenuVault/app-sources/key-id/v1").digest("hex").slice(0, 24) }
+        await this.privateWrite(join(stage, "manifest.tvm"), this.encode(manifest, tenant, id, "manifest", master))
+        await artifact.close(); abort(signal)
+        await rename(stage, join(folder, id))
+        return manifest
+      } finally { await artifact.close().catch(() => {}) }
+    } finally { await file.close(); if (made) await rm(stage, { recursive: true, force: true }) }
+  }
+  private async privateWrite(path: string, bytes: Buffer): Promise<void> {
+    const file = await open(path, "wx", 0o600)
+    try { await write(file, bytes); await file.sync() } finally { await file.close() }
+  }
+  private async frame(file: FileHandle, plain: Buffer, secret: Buffer, tenant: string, id: string, type: number, index: number): Promise<void> {
+    const encrypted = seal(plain, secret, aad(tenant, id, type, index)), header = Buffer.alloc(5)
+    header[0] = type; header.writeUInt32BE(encrypted.length, 1)
+    await write(file, header); await write(file, encrypted)
+  }
+  async export(tenant: string, id: string, destination: string, signal?: AbortSignal): Promise<void> {
+    const manifest = await this.manifest(tenant, id), folder = await this.folder(tenant), job = randomUUID()
+    const temporary = join(dirname(destination), `.tenuvault-export-${job}.tmp`), journal = join(folder, `.export-${job}.tvm`)
+    let ownsTemp = false, madeJournal = false
+    const input = await open(join(manifest.directory, "artifact.tvs"), flags)
+    try {
+      abort(signal)
+      await this.privateWrite(journal, this.encode({ ...owner(), temporary }, tenant, job, "export")); madeJournal = true
+      const output = await open(temporary, "wx", 0o600); ownsTemp = true
+      try {
+        if (!(await exact(input, 4)).equals(MAGIC)) throw new Error("The stored source format is invalid.")
+        const secret = key(manifest.master, tenant, `artifact/${id}`), hash = createHash("sha256")
+        let size = 0, index = 0
+        for (;;) {
+          abort(signal)
+          const header = await exact(input, 5), type = header[0]!, length = header.readUInt32BE(1)
+          if (![1, 2].includes(type) || length < 28 || length > CHUNK + 28) throw new Error("The source contains an invalid chunk.")
+          const plain = unseal(await exact(input, length), secret, aad(tenant, id, type, index))
+          if (type === 2) {
+            const footer = JSON.parse(plain.toString("utf8")) as { size: number; chunks: number; sha256: string }
+            const sha256 = hash.digest("hex"), extra = Buffer.alloc(1)
+            if (footer.size !== size || footer.chunks !== index || footer.sha256 !== sha256 || size !== manifest.value.bytes || sha256 !== manifest.value.sha256 || (await input.read(extra, 0, 1, null)).bytesRead) throw new Error("The source integrity check failed.")
+            break
+          }
+          size += plain.length; index++
+          if (!plain.length || size > manifest.value.bytes) throw new Error("The source length is invalid.")
+          hash.update(plain); await write(output, plain)
+        }
+        await output.sync(); abort(signal)
+      } finally { await output.close() }
+      // Atomic no-overwrite publication. A failed export never replaces an existing file.
+      await link(temporary, destination)
+    } finally {
+      try { await input.close() } finally {
+        if (ownsTemp) await rm(temporary, { force: true })
+        if (madeJournal) await rm(journal, { force: true })
+      }
+    }
+  }
+}

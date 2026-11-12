@@ -1,0 +1,14 @@
+{
+  "platform": "win32",
+  "containerAccepted": true,
+  "exactRoundTrip": true,
+  "catalogRebuilt": true,
+  "device": {
+    "platform": "win32",
+    "enrollment": "matched",
+    "certificate": "matched",
+    "elevated": true,
+    "captureAvailable": false,
+    "reason": "Recovery from Intune is not available in this version. Device checks are read-only."
+  }
+}

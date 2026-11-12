@@ -1,0 +1,19 @@
+[
+  {
+    "Rejected": true,
+    "Entry": "../outside.txt",
+    "SyntheticGuardOnly": true
+  },
+  {
+    "Rejected": true,
+    "ExceptionType": "System.Management.Automation.MethodInvocationException",
+    "Entry": "C:/outside.txt",
+    "SyntheticGuardOnly": true
+  },
+  {
+    "Rejected": true,
+    "ExceptionType": "System.Management.Automation.MethodInvocationException",
+    "Entry": "nested/file.txt:stream",
+    "SyntheticGuardOnly": true
+  }
+]

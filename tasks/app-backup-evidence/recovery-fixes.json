@@ -1,0 +1,101 @@
+[
+  {
+    "OwnedOutput": true,
+    "CleanupSucceeded": true,
+    "ExitCode": 1,
+    "Pass": true,
+    "Case": "digest",
+    "Stage": "verify",
+    "HttpStatus": 200
+  },
+  {
+    "OwnedOutput": true,
+    "CleanupSucceeded": true,
+    "ExitCode": 1,
+    "Pass": true,
+    "Case": "midstream",
+    "Stage": "download",
+    "HttpStatus": 200
+  },
+  {
+    "OwnedOutput": false,
+    "CleanupSucceeded": true,
+    "ExitCode": 1,
+    "Pass": true,
+    "Case": "http404",
+    "Stage": "gateway",
+    "HttpStatus": 404
+  },
+  {
+    "OwnedOutput": false,
+    "CleanupSucceeded": true,
+    "ExitCode": 1,
+    "Pass": true,
+    "Case": "http403",
+    "Stage": "gateway",
+    "HttpStatus": 403
+  },
+  {
+    "OwnedOutput": false,
+    "CleanupSucceeded": true,
+    "ExitCode": 1,
+    "Pass": true,
+    "Case": "collision",
+    "Stage": "gateway",
+    "HttpStatus": 200
+  },
+  {
+    "OwnedOutput": true,
+    "CleanupSucceeded": false,
+    "ExitCode": 1,
+    "Pass": true,
+    "Case": "cleanup-failure",
+    "Stage": "verify",
+    "HttpStatus": 200
+  },
+  {
+    "OwnedOutput": false,
+    "CleanupSucceeded": true,
+    "ExitCode": 1,
+    "Pass": true,
+    "Case": "missing-payload",
+    "Stage": "gateway",
+    "HttpStatus": 200
+  },
+  {
+    "OwnedOutput": false,
+    "CleanupSucceeded": true,
+    "ExitCode": 1,
+    "Pass": true,
+    "Case": "missing-content",
+    "Stage": "gateway",
+    "HttpStatus": 200
+  },
+  {
+    "OwnedOutput": false,
+    "CleanupSucceeded": true,
+    "ExitCode": 1,
+    "Pass": true,
+    "Case": "missing-decrypt",
+    "Stage": "gateway",
+    "HttpStatus": 200
+  },
+  {
+    "OwnedOutput": false,
+    "CleanupSucceeded": true,
+    "ExitCode": 1,
+    "Pass": true,
+    "Case": "payload-error",
+    "Stage": "gateway",
+    "HttpStatus": 200
+  },
+  {
+    "OwnedOutput": null,
+    "CleanupSucceeded": null,
+    "ExitCode": 0,
+    "Pass": true,
+    "Case": "success",
+    "Stage": null,
+    "HttpStatus": 200
+  }
+]

@@ -1,0 +1,38 @@
+[
+  {
+    "VerifiedEvidenceWritten": false,
+    "Case": "negative-cancelled-download",
+    "PartialPlaintextPresent": false,
+    "ExtractedPresent": false
+  },
+  {
+    "VerifiedEvidenceWritten": false,
+    "Case": "negative-changed-ciphertext",
+    "PartialPlaintextPresent": false,
+    "ExtractedPresent": false
+  },
+  {
+    "VerifiedEvidenceWritten": false,
+    "Case": "negative-changed-hmac",
+    "PartialPlaintextPresent": false,
+    "ExtractedPresent": false
+  },
+  {
+    "VerifiedEvidenceWritten": false,
+    "Case": "negative-changed-iv",
+    "PartialPlaintextPresent": false,
+    "ExtractedPresent": false
+  },
+  {
+    "VerifiedEvidenceWritten": false,
+    "Case": "negative-truncated-header",
+    "PartialPlaintextPresent": false,
+    "ExtractedPresent": false
+  },
+  {
+    "VerifiedEvidenceWritten": false,
+    "Case": "negative-wrong-plaintext-digest",
+    "PartialPlaintextPresent": true,
+    "ExtractedPresent": false
+  }
+]

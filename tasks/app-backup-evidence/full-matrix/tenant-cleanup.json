@@ -1,0 +1,18 @@
+{
+  "original": {
+    "status": 404,
+    "deletedVerified": true
+  },
+  "rebuilt": {
+    "status": 404,
+    "deletedVerified": true
+  },
+  "vendor": {
+    "activeContentVersion": "3",
+    "publishingState": "published"
+  },
+  "filter": {
+    "ruleUnchanged": true,
+    "lastModifiedDateTime": "2026-10-26T15:50:00.3204056Z"
+  }
+}

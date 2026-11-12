@@ -1,3 +1,4 @@
+import { Package } from "lucide-react"
 import { trialEndWhen, organizationLicenseRefusal } from "../../shared/trial-notices"
 import { Button } from "~/components/ui/button"
 import { openCheckout } from "../lib/purchase"
@@ -72,6 +73,7 @@ const allNavigation: NavItem[] = [
   { name: "Dashboard", href: "/portal/dashboard", icon: LayoutDashboard },
   { name: "Tenants", href: "/portal/tenants", icon: Building2 },
   { name: "Backup & Restore", href: "/portal/backup", icon: Database },
+  { name: "App Backup", href: "/portal/app-backup", icon: Package, hint: "Keep original Win32 installers in an encrypted source store" },
   { name: "Drift Detection", href: "/portal/drift", icon: GitCompare },
   { name: "Sync", href: "/portal/sync", icon: RefreshCw, hint: "Copy settings from one tenant to others" },
   { name: "Alerts", href: "/portal/alerts", icon: Siren, hint: "Teams, email and webhook alerts for backups and policy changes" },
