@@ -105,6 +105,9 @@ it("names Microsoft Graph Command Line Tools and the manual route when Condition
   const message = (setupSignInError(new Error("AADSTS53003: Access has been blocked by Conditional Access policies.")) as Error).message
   expect(message).toMatch(/^Conditional Access blocked the sign-in to Microsoft Graph Command Line Tools/)
   expect(message).toContain("(AADSTS53003)")
+  // The policy may be about the device or the location, which the manual route does not get around.
+  expect(message).toContain("If it asks for a compliant device or an allowed location, sign in from one and select Try again.")
+  expect(message).toContain("If it blocks Microsoft Graph Command Line Tools, create the app registration by hand")
   expect(suggestsCreatingByHand(message)).toBe(true)
   expect(message).toMatch(/Nothing was changed\.$/)
 })

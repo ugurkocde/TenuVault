@@ -29,7 +29,9 @@ export function setupSignInError(error: unknown): unknown {
     return nothingChanged(`This tenant does not let your account sign in to Microsoft Graph Command Line Tools, the Microsoft app that the setup and the setup script sign in through (${code}). Ask your Entra administrator to allow it for your account, or ${CREATE_BY_HAND} in the Entra admin center.`)
   }
   if (code === "AADSTS53003") {
-    return nothingChanged(`Conditional Access blocked the sign-in to Microsoft Graph Command Line Tools, the Microsoft app that the setup and the setup script sign in through (${code}). Check the sign-in logs in the Entra admin center for the policy. If it blocks that app, ${CREATE_BY_HAND} in the Entra admin center.`)
+    // A Conditional Access refusal may be about the device or the location, which the manual
+    // route does not get around either, so the message names both ways on.
+    return nothingChanged(`Conditional Access blocked the sign-in to Microsoft Graph Command Line Tools, the Microsoft app that the setup and the setup script sign in through (${code}). Check the sign-in logs in the Entra admin center for the policy that applied. If it asks for a compliant device or an allowed location, sign in from one and select Try again. If it blocks Microsoft Graph Command Line Tools, ${CREATE_BY_HAND} in the Entra admin center.`)
   }
   // Refusals about the tenant, the account and Conditional Access read the same for every sign-in.
   if (code && SHARED_SIGN_IN_CODES.has(code) || !code) {

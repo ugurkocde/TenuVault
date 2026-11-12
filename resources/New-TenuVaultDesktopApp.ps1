@@ -148,11 +148,17 @@ function Get-HttpFailure($Record) {
 # The script signs in through Microsoft Graph Command Line Tools, like the setup in TenuVault. Where
 # the tenant blocks that app for the account, only the manual route in the Entra admin center works.
 function Get-BlockedAppHint([string]$Message) {
-    if ($Message -match 'AADSTS(700016|7000112|50105|53003)') {
-        return " This tenant, or one of its Conditional Access policies, blocks Microsoft Graph Command Line Tools for your account, the Microsoft app this script signs in through. Create the app registration by hand instead: $manualGuide"
+    if ($Message -match 'AADSTS(700016|7000112|50105)') {
+        return " This tenant does not let your account sign in to Microsoft Graph Command Line Tools, the Microsoft app this script signs in through. Create the app registration by hand instead: $manualGuide"
+    }
+    # A Conditional Access refusal may be about the device, the location or the sign-in flow,
+    # which the manual route does not get around either.
+    if ($Message -match 'AADSTS53003') {
+        return " Check the sign-in logs in the Entra admin center for the Conditional Access policy that applied. If it asks for a compliant device or an allowed location, sign in from one and run the script again. If it blocks Microsoft Graph Command Line Tools, the Microsoft app this script signs in through, create the app registration by hand instead: $manualGuide"
     }
     ''
 }
+$expiredHint = "If Microsoft said that Microsoft Graph Command Line Tools is blocked, disabled or not assigned to you, create the app registration by hand instead: $manualGuide"
 function ConvertTo-Base64Url([byte[]]$Bytes) {
     [Convert]::ToBase64String($Bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 }
@@ -202,12 +208,12 @@ if ($UseDeviceCode) {
                 'authorization_pending' { continue }
                 'slow_down' { $interval += 5; continue }
                 'authorization_declined' { throw 'Device code sign-in was declined. Nothing was changed.' }
-                'expired_token' { throw 'Device code expired. Nothing was changed. Run the script again.' }
+                'expired_token' { throw "Device code expired. Nothing was changed. Run the script again. $expiredHint" }
                 default { throw "Device code sign-in failed. Conditional Access may block device code flow. $($failure.Message)$(Get-BlockedAppHint $failure.Message)" }
             }
         }
     }
-    if (-not $token) { throw 'Device code expired. Nothing was changed. Run the script again.' }
+    if (-not $token) { throw "Device code expired. Nothing was changed. Run the script again. $expiredHint" }
 } else {
     $listener = $null
     try {
@@ -220,7 +226,7 @@ if ($UseDeviceCode) {
             $listener.Prefixes.Add("http://localhost:$port/")
             try { $listener.Start(); break } catch { $listener.Close(); $listener = $null }
         }
-        if (-not $listener) { throw 'Could not start browser sign-in. Try -UseDeviceCode or the manual app registration guide.' }
+        if (-not $listener) { throw "Could not start browser sign-in. Try -UseDeviceCode, or create the app registration by hand: $manualGuide" }
         $redirectUri = "http://localhost:$port"
         $state = New-RandomToken
         $verifier = New-RandomToken
@@ -258,7 +264,7 @@ if ($UseDeviceCode) {
             Send-BrowserResponse $answer.Response 'You are signed in' 'Go back to PowerShell, where the setup continues. You can close this tab.'
             break
         }
-        if (-not $code) { throw "Sign-in was not completed within 15 minutes. Nothing was changed. Run the script again. If Microsoft said that Microsoft Graph Command Line Tools is blocked, disabled or not assigned to you, create the app registration by hand instead: $manualGuide" }
+        if (-not $code) { throw "Sign-in was not completed within 15 minutes. Nothing was changed. Run the script again. $expiredHint" }
     } finally {
         if ($listener) { $listener.Stop(); $listener.Close() }
     }

@@ -448,7 +448,7 @@ describe("in-app tenant setup", () => {
 
   it("explains the setup before it starts", async () => {
     const container = await render(createElement(OnboardingPage))
-    for (const text of ["One Microsoft sign-in.", "It lives in your tenant", "It acts only as you", "No secret to protect", "Backups stay with you", "Microsoft will ask you to approve Microsoft Graph Command Line Tools", "because the setup creates an app registration and grants admin consent", "GCC High, DoD and 21Vianet tenants are not supported", "Your administrator approves once", "Application.ReadWrite.All", "kept in memory only"]) expect(container.textContent).toContain(text)
+    for (const text of ["One Microsoft sign-in.", "It lives in your tenant", "It acts only as you", "No secret to protect", "Backups stay with you", "Microsoft will ask you to approve Microsoft Graph Command Line Tools", "because the setup creates an app registration and grants admin consent", "Your administrator approves once", "Application.ReadWrite.All", "kept in memory only"]) expect(container.textContent).toContain(text)
     // Claims the app cannot stand behind are not made: no time promise, and no "everything stays in your tenant".
     expect(container.textContent).not.toMatch(/about (a|one|two) minutes?|stays in your tenant|no background access/i)
     expect(container.querySelector("#setup-tenant")).not.toBeNull()
@@ -555,6 +555,23 @@ describe("in-app tenant setup", () => {
     // Once it exists, the admin goes on from the same place to enter its IDs.
     await act(async () => { button(alert, "I already have an app registration")!.click(); await settle() })
     expect(container.textContent).toContain("Sign in to your tenant")
+  })
+
+  it("says next to the button, not only in the collapsed details, that national cloud tenants are not supported", async () => {
+    const container = await render(createElement(OnboardingPage))
+    const note = [...container.querySelectorAll("p")].find(item => item.textContent?.includes("GCC High, DoD and 21Vianet tenants are not supported"))
+    expect(note).toBeDefined()
+    expect(note!.closest("details")).toBeNull()
+  })
+
+  it("offers both routes next to the timeout, because Microsoft's own error pages never come back", async () => {
+    state.createRegistration.mockRejectedValueOnce(new Error('The sign-in in the browser was not completed within 15 minutes. If Microsoft said that you need admin approval, use "Someone else is the admin?". If it said that Microsoft Graph Command Line Tools is blocked, disabled or not assigned to you, the setup script is blocked too: create the app registration by hand in the Entra admin center. Nothing was changed.'))
+    const container = await render(createElement(OnboardingPage))
+    await act(async () => { button(container, "Set up with Microsoft sign-in")!.click(); await settle() })
+    const alert = container.querySelector<HTMLElement>('[role="alert"]')!
+    expect(button(alert, "Create it by hand")).toBeDefined()
+    expect(button(alert, "I already have an app registration")).toBeDefined()
+    expect(button(container, "Someone else is the admin? Copy instructions")).toBeDefined()
   })
 
   it("does not offer the manual route next to an error it does not help with", async () => {

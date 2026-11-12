@@ -145,7 +145,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
                 <p className="text-xs text-gray-600">
                   If Microsoft says that Microsoft Graph Command Line Tools is blocked, disabled or not assigned to you, the setup
                   script is blocked too. Select Cancel and{" "}
-                  <button type="button" className="font-medium text-gray-900 underline underline-offset-2" onClick={openManualGuide}>
+                  <button type="button" className="rounded-sm font-medium text-gray-900 underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={openManualGuide}>
                     create the app registration by hand
                   </button>
                   .
@@ -183,7 +183,10 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
               <KeyRound className="mr-2 h-4 w-4" aria-hidden="true" />
               {error ? "Try again" : "Set up with Microsoft sign-in"}
             </Button>
-            <p className="text-xs text-gray-600">Sign in as a {CONSENT_ROLES_TEXT}, because the setup creates an app registration and grants admin consent.</p>
+            <p className="text-xs text-gray-600">
+              Sign in as a {CONSENT_ROLES_TEXT}, because the setup creates an app registration and grants admin consent. TenuVault
+              connects tenants in Microsoft&apos;s global cloud; GCC High, DoD and 21Vianet tenants are not supported.
+            </p>
             {trials && (
               <p className="flex items-center gap-2 text-sm text-gray-700">
                 <Sparkles className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
@@ -228,8 +231,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
               />
               <p id="setup-tenant-help" className="text-xs text-gray-600">
                 Only for guest and partner admins who set up a tenant other than their own. Leave it empty to use the tenant of the
-                account you sign in with. TenuVault connects tenants in Microsoft&apos;s global cloud; GCC High, DoD and 21Vianet
-                tenants are not supported.
+                account you sign in with.
               </p>
             </div>
             <Button type="button" variant="ghost" size="sm" onClick={() => void bridge.app.openExternal(APP_REGISTRATION_GUIDE_URL)}>

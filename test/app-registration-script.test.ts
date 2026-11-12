@@ -66,6 +66,7 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
         const target = new URL(redirect)
         target.searchParams.set("state", url.searchParams.get("state")!)
         if (scenario === "declined") { target.searchParams.set("error", "access_denied"); target.searchParams.set("error_description", "Consent was declined.") }
+        else if (scenario === "ca-blocked") { target.searchParams.set("error", "access_denied"); target.searchParams.set("error_description", "AADSTS53003: Access has been blocked by Conditional Access policies.") }
         else if (scenario === "app-disabled") { target.searchParams.set("error", "unauthorized_client"); target.searchParams.set("error_description", "AADSTS7000112: Application '14d82eec-204b-4c2f-b7e8-296a70dab67e'(Microsoft Graph Command Line Tools) is disabled.") }
         else target.searchParams.set("code", "test-code")
         if (scenario === "wrong-state") {
@@ -213,6 +214,14 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
     expect(result.code).toBe(1)
     expect(result.text).toContain("AADSTS7000112")
     expect(result.text).toContain("Create the app registration by hand instead: https://docs.tenuvault.com/getting-started/app-registration/#create-the-app-registration-manually")
+    expect(result.requests.some(r => r.path.includes("graph.microsoft.com"))).toBe(false)
+  }, 45000)
+  it("names both ways on when Conditional Access blocks the script's sign-in", async () => {
+    const result = await run("ca-blocked")
+    expect(result.code).toBe(1)
+    const text = result.text.replace(/\s+/g, " ")
+    expect(text).toContain("If it asks for a compliant device or an allowed location, sign in from one and run the script again.")
+    expect(text).toContain("create the app registration by hand instead: https://docs.tenuvault.com/getting-started/app-registration/#create-the-app-registration-manually")
     expect(result.requests.some(r => r.path.includes("graph.microsoft.com"))).toBe(false)
   }, 45000)
   it("rolls back when consent is forbidden and names the roles", async () => {
