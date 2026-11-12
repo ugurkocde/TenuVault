@@ -1,0 +1,125 @@
+name: Package managers
+
+# After a stable release: open the WinGet pull request for UgurLabs.TenuVault and update the
+# Homebrew cask in ugurkocde/homebrew-UgurLabs. The Release workflow calls this; run it by hand
+# to publish a stable release again (for example after a failed run).
+# Needs the secret PACKAGE_MANAGERS_TOKEN, see RELEASING.md.
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Stable release tag, such as v0.1.0
+        type: string
+        required: true
+    secrets:
+      PACKAGE_MANAGERS_TOKEN:
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Stable release tag, such as v0.1.0
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  KOMAC_VERSION: 2.17.2
+  KOMAC_SHA256: b03b020eec98acfb0b53e284a6e21815b884be33de6785b97e7a120f0e748966
+  WINGET_ID: UgurLabs.TenuVault
+  TAP_REPO: ugurkocde/homebrew-UgurLabs
+  CASK_PATH: Casks/tenuvault.rb
+
+jobs:
+  release:
+    name: Check the release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then echo "::error::$TAG is not a stable release tag"; exit 1; fi
+          version="${BASH_REMATCH[1]}"
+          release=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG")
+          if [ "$(jq -r '.draft or .prerelease' <<<"$release")" != "false" ]; then echo "::error::$TAG is not a published stable release"; exit 1; fi
+          for name in win-x64.exe win-arm64.exe win-x64.msi mac-arm64.dmg mac-x64.dmg; do
+            jq -e --arg n "TenuVault-$version-$name" '.assets | any(.name == $n and (.digest // "" | startswith("sha256:")))' <<<"$release" >/dev/null ||
+              { echo "::error::$TAG has no TenuVault-$version-$name with a SHA-256 digest"; exit 1; }
+          done
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  winget:
+    name: WinGet pull request
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Komac
+        run: |
+          set -euo pipefail
+          archive="komac-$KOMAC_VERSION-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL -o "$RUNNER_TEMP/$archive" "https://github.com/russellbanks/Komac/releases/download/v$KOMAC_VERSION/$archive"
+          echo "$KOMAC_SHA256  $RUNNER_TEMP/$archive" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" komac
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      # Komac takes the package metadata from the newest version in winget-pkgs and reads the
+      # installer details (type, product codes, checksums) from the files themselves.
+      - name: Submit the new version
+        env:
+          GITHUB_TOKEN: ${{ secrets.PACKAGE_MANAGERS_TOKEN }}
+          VERSION: ${{ needs.release.outputs.version }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GITHUB_TOKEN" ]; then echo "::error::The PACKAGE_MANAGERS_TOKEN secret is not set"; exit 1; fi
+          if komac list "$WINGET_ID" | grep -qx "$VERSION"; then
+            echo "$WINGET_ID $VERSION is already in winget-pkgs." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
+          komac update "$WINGET_ID" --version "$VERSION" \
+            --urls "$base/TenuVault-$VERSION-win-x64.exe" "$base/TenuVault-$VERSION-win-arm64.exe" "$base/TenuVault-$VERSION-win-x64.msi" \
+            --release-notes-url "https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG" \
+            --created-with "TenuVault Release workflow" --created-with-url "https://github.com/$GITHUB_REPOSITORY" \
+            --submit | tee "$RUNNER_TEMP/komac.log"
+          grep -o 'https://github.com/microsoft/winget-pkgs/pull/[0-9]*' "$RUNNER_TEMP/komac.log" | tail -1 |
+            sed 's/^/WinGet pull request: /' >> "$GITHUB_STEP_SUMMARY" || true
+
+  homebrew:
+    name: Homebrew cask
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/scripts
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      - name: Update the cask in the tap
+        env:
+          GH_TOKEN: ${{ secrets.PACKAGE_MANAGERS_TOKEN }}
+          VERSION: ${{ needs.release.outputs.version }}
+          TAG: ${{ inputs.tag }}
+          RELEASE_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then echo "::error::The PACKAGE_MANAGERS_TOKEN secret is not set"; exit 1; fi
+          GH_TOKEN="$RELEASE_TOKEN" gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq .assets > "$RUNNER_TEMP/assets.json"
+          node .github/scripts/homebrew-cask.mjs "$VERSION" "$RUNNER_TEMP/assets.json" > "$RUNNER_TEMP/tenuvault.rb"
+          current=$(gh api "repos/$TAP_REPO/contents/$CASK_PATH" 2>/dev/null || echo '{}')
+          if [ "$(jq -r '.content // "" | gsub("\n"; "") | @base64d' <<<"$current")" = "$(cat "$RUNNER_TEMP/tenuvault.rb")" ]; then
+            echo "The cask already installs TenuVault $VERSION." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          jq -n --arg message "TenuVault $VERSION" --arg sha "$(jq -r '.sha // ""' <<<"$current")" --rawfile content "$RUNNER_TEMP/tenuvault.rb" \
+            '{message: $message, content: ($content | @base64)} + (if $sha == "" then {} else {sha: $sha} end)' > "$RUNNER_TEMP/body.json"
+          gh api -X PUT "repos/$TAP_REPO/contents/$CASK_PATH" --input "$RUNNER_TEMP/body.json" --jq .commit.html_url |
+            sed 's/^/Homebrew cask updated: /' | tee -a "$GITHUB_STEP_SUMMARY"

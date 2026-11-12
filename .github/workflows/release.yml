@@ -401,3 +401,14 @@ jobs:
         run: |
           set -euo pipefail
           node .github/scripts/store-blob.mjs "$VERSION" "$RUNNER_TEMP/store" "$RUNNER_TEMP/assets.json"
+
+  # WinGet (UgurLabs.TenuVault) and Homebrew (ugurkocde/UgurLabs/tenuvault) follow every stable release.
+  package-managers:
+    name: Package managers
+    needs: [meta, publish]
+    if: ${{ !cancelled() && needs.publish.result == 'success' && needs.meta.outputs.channel == 'stable' }}
+    uses: ./.github/workflows/package-managers.yml
+    with:
+      tag: ${{ needs.meta.outputs.tag }}
+    secrets:
+      PACKAGE_MANAGERS_TOKEN: ${{ secrets.PACKAGE_MANAGERS_TOKEN }}

@@ -119,6 +119,34 @@ https://aip4uoqwpdmqzreb.public.blob.vercel-storage.com/desktop/v<version>/TenuV
   Vercel project (production). Without it, stable releases still publish on GitHub, but the
   `store` job fails.
 
+## WinGet and Homebrew
+
+Every stable release also goes to WinGet and Homebrew, through the `package-managers` job of the
+Release workflow (`.github/workflows/package-managers.yml`). Nightlies never do.
+
+- **WinGet**: Komac (pinned version and checksum) opens a pull request for `UgurLabs.TenuVault`
+  in `microsoft/winget-pkgs` with the x64 and arm64 EXE installers and the x64 MSI. It takes the
+  package metadata from the newest version already there and the installer details from the
+  files. The new version is installable once Microsoft's validation passes and the pull request
+  merges, usually within a day. `winget install TenuVault` installs TenuVault Desktop.
+- **Homebrew**: the job writes `Casks/tenuvault.rb` in
+  [`ugurkocde/homebrew-UgurLabs`](https://github.com/ugurkocde/homebrew-UgurLabs) with the
+  release's disk images and the SHA-256 digests GitHub recorded for them
+  (`.github/scripts/homebrew-cask.mjs`). Users install with
+  `brew install ugurkocde/UgurLabs/tenuvault`. The app updates itself, so the cask sets
+  `auto_updates true`.
+- Both steps skip a version that is already published, so re-running is safe. To publish a stable
+  release again, run `gh workflow run "Package managers" -f tag=v0.1.0`.
+- Secret `PACKAGE_MANAGERS_TOKEN`: a classic personal access token of the account that owns the
+  `winget-pkgs` fork (ugurkocde) with the `public_repo` scope. Komac pushes the manifest branch
+  to that fork and opens the pull request from it; the same token writes the cask. Without it,
+  stable releases still publish on GitHub, but the `package-managers` job fails.
+
+The earlier terminal app (TenuVault TUI, archived) used the same WinGet ID and cask name before
+0.5.1. Its WinGet versions 1.2.1 to 1.7.2 were submitted for removal on 2026-11-12, so that the
+desktop app is WinGet's newest version; until those removals merge, `winget install TenuVault`
+still picks 1.7.2.
+
 ## Signing secrets
 
 Every release is signed. Set these repository secrets once (Settings > Secrets and variables >
