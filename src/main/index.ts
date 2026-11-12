@@ -1,6 +1,7 @@
 import { AppSourceService } from "./app-sources/service"
 import { checkRecoveryDevice } from "./app-backup/device-check"
 import { readAppBackupAccount } from "./app-backup/account"
+import { readAppBackupApps } from "./app-backup/inventory"
 import { AppRegistrationSetup, setupLoginHint } from "./auth/app-registration-setup"
 import { trialBackupObserver } from "./license/usage-actions"
 import { cachedTrialUsage, trialWorkflowsConfigured } from "./license/usage"
@@ -1396,6 +1397,7 @@ async function bootstrap(): Promise<void> {
   })
 
   const appSources = new AppSourceService({
+    apps: (tenant) => readAppBackupApps(tenant, async id => (await tokenFor(id, signedInClient(id), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch),
     knownTenant: (tenant) => connectedTenantIds().some(id => id.toLowerCase() === tenant),
     folder: (tenant) => appStore.get(`app-sources.folder.${tenant}`) ?? join(app.getPath("documents"), "TenuVault App Sources"),
     setFolder: (tenant, folder) => appStore.set(`app-sources.folder.${tenant}`, folder),
@@ -1424,6 +1426,7 @@ async function bootstrap(): Promise<void> {
       const profile = tenantProfile(tenant)
       if (!profile || !isGuid(profile.clientId)) throw new Error("Configure this tenant's Microsoft app registration before signing in.")
       await auth.reauthenticate(tenant, profile.clientId, RESOURCE_SCOPES.graph).finally(returnToApp)
+      pushLicense()
     },
   })
   app.on("before-quit", () => appSources.close())
@@ -1434,6 +1437,7 @@ async function bootstrap(): Promise<void> {
   handleTrusted("appSources:cancel", (_event, tenant: unknown, operation: unknown) => appSources.cancel(tenant, operation))
   handleTrusted("appSources:deviceStatus", (_event, tenant: unknown) => appSources.checkDevice(tenant))
   handleTrusted("appSources:signIn", (_event, tenant: unknown) => appSources.signIn(tenant))
+  handleTrusted("appSources:apps", (_event, tenant: unknown) => appSources.apps(tenant))
 
   handleTrusted("app:info", () => ({
     version: app.getVersion(),

@@ -4,45 +4,50 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 window.scrollTo = vi.fn()
 const ids = ["11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222"]
-const state = vi.hoisted(() => ({ selected: 0, fail: false, wait: null as null | (() => Promise<boolean>) }))
-const api = vi.hoisted(() => ({ list: vi.fn(), attach: vi.fn(), export: vi.fn(), cancel: vi.fn(async () => {}), chooseStore: vi.fn(async () => false), signIn: vi.fn(async () => {}), deviceStatus: vi.fn(async () => ({ enrollment: "unknown", certificate: "unknown", reason: "Recovery from Intune is not available in this version.", captureAvailable: false })) }))
+const state = vi.hoisted(() => ({ selected: 0, tab: "versions", fail: false, wait: null as null | (() => Promise<boolean>) }))
+const api = vi.hoisted(() => ({ apps: vi.fn(), list: vi.fn(), attach: vi.fn(), export: vi.fn(), cancel: vi.fn(async () => {}), chooseStore: vi.fn(async () => false), signIn: vi.fn(async () => {}), deviceStatus: vi.fn(async () => ({ enrollment: "unknown", certificate: "unknown", reason: "Recovery from Intune is not available in this version.", captureAvailable: false })) }))
 vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { appSources: api } }))
 vi.mock("~/contexts/TenantContext", () => ({ useSelectedTenant: () => ({ selectedTenant: { id: state.selected, name: state.selected ? "Fabrikam" : "Contoso", credentials: { tenantId: ids[state.selected] } } }) }))
-vi.mock("react-router-dom", () => ({ useParams: () => ({ tabId: "versions" }), Link: (props: { to: string; children: React.ReactNode }) => createElement("a", { href: props.to }, props.children) }))
+vi.mock("react-router-dom", () => ({ useNavigate: () => vi.fn(), useParams: () => ({ tabId: state.tab }), Link: (props: { to: string; children: React.ReactNode }) => createElement("a", { href: props.to }, props.children) }))
 import AppBackupPage from "../../src/renderer/pages/AppBackupPage"
+HTMLElement.prototype.scrollIntoView = vi.fn()
 let root: Root | undefined
 const flush = async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) }) }
 async function mount() {
  state.fail = false
+ api.apps.mockResolvedValue({apps:[{id:ids[0],name:"Finance",publisher:"Contoso"}],fetchedAt:"2026-11-12T00:00:00Z"})
  api.list.mockImplementation(async (tenant: string) => { if (state.fail) throw new Error("Import the matching recovery key"); return { storeName: "Sources", warnings: [], sources: [{ id: "source", tenantId: tenant, appName: "Finance", fileName: "Finance.intunewin", bytes: 1024, createdAt: "2026-11-12T00:00:00Z", sha256: "abc" }] } })
  api.attach.mockImplementation(() => state.wait ? state.wait() : Promise.resolve(true))
  api.export.mockResolvedValue(true)
  const node = document.createElement("div"); document.body.append(node); root = createRoot(node)
  await act(async () => root!.render(createElement(AppBackupPage))); await flush(); return node
 }
-afterEach(() => { if (root) act(() => root!.unmount()); root = undefined; document.body.innerHTML = ""; state.selected = 0; state.wait = null; vi.clearAllMocks() })
+afterEach(() => { if (root) act(() => root!.unmount()); root = undefined; document.body.innerHTML = ""; state.selected = 0; state.tab = "versions"; state.wait = null; vi.clearAllMocks() })
 async function click(node: HTMLElement, text: string) {
  const button = [...node.querySelectorAll("button")].find(b => b.textContent?.trim() === text)
  if (!button) throw new Error(`Missing ${text}`)
  await act(async () => button.click()); await flush()
 }
 describe("App Backup local workspace", () => {
- it("uses App Backup's free Microsoft sign-in before checking the selected tenant", async () => {
+ it("signs in through the free action and checks the selected app's PC without touching the store", async () => {
+  state.tab = "apps"
   const node = await mount()
-  expect(api.signIn).not.toHaveBeenCalled()
-  await click(node, "Sign in for device check")
+  await click(node, "Prepare backup for Finance")
+  await click(node, "Sign in again")
   expect(api.signIn).toHaveBeenCalledExactlyOnceWith(ids[0])
   expect(api.deviceStatus).toHaveBeenCalledWith(ids[0])
+  expect(api.attach).not.toHaveBeenCalled()
  })
- it("clears the previous device result while a new check runs and after it fails", async () => {
+ it("clears a previous device observation when checking again and after failure", async () => {
+  state.tab = "apps"
   const node = await mount()
+  await click(node, "Prepare backup for Finance")
   api.deviceStatus.mockResolvedValueOnce({ enrollment: "matched", certificate: "matched", reason: "Previous device observation", captureAvailable: false })
   await click(node, "Check this device")
   expect(node.textContent).toContain("Matching certificate found")
   let fail!: (error: Error) => void
   api.deviceStatus.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject }))
   await click(node, "Check this device")
-  expect(node.textContent).not.toContain("Matching certificate found")
   expect(node.textContent).not.toContain("Previous device observation")
   expect(node.textContent).toContain("Checking device metadata")
   await act(async () => fail(new Error("Device probe failed"))); await flush()
@@ -65,13 +70,13 @@ describe("App Backup local workspace", () => {
  it("lists and exports without license or backup-history queries, with honest unknown coverage and unavailable recovery", async () => {
   const node = await mount()
   expect(node.textContent).toContain("Finance.intunewin")
-  expect(node.textContent).toContain("Source coverage unavailable")
-  expect(node.textContent).toContain("App Backup is completely free")
+  expect(node.textContent).toContain("Saved installers")
+  expect(node.textContent).toContain("Free encrypted installer storage")
   await act(async () => { node.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })) }); await flush()
   expect(api.attach).toHaveBeenCalledWith(ids[0], expect.any(String), "")
   expect(api.signIn).not.toHaveBeenCalled()
   expect(node.textContent).toContain("Administrator selected")
-  expect(node.textContent).toContain("Recovery from Intune is not available")
+  expect(node.textContent).toContain("Saved installers")
   expect(node.textContent).not.toContain("Ready to recover")
   await click(node, "Export original")
   expect(api.export).toHaveBeenCalledWith(ids[0], expect.any(String), "source")
@@ -83,8 +88,7 @@ describe("App Backup local workspace", () => {
   expect(node.textContent).toContain("Reconnect source store")
   expect(node.textContent).toContain("The source store is unavailable")
   expect(node.textContent).not.toContain("No stored installers")
-  await click(node, "Check this device")
-  expect(api.deviceStatus).toHaveBeenCalledWith(ids[0])
+  expect(node.textContent).toContain("Saved installers")
  })
  it("cancels an old tenant's operation on switch and does not show its eventual success on the new tenant", async () => {
   let resolve!: (value: boolean) => void

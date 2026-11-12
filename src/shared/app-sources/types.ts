@@ -25,9 +25,11 @@ export interface AppSourceState {
   storeName: string
   sources: StoredAppSource[]
   warnings: string[]
+  unreadableSources?: boolean
 }
 
 export interface AppSourcesBridge {
+  apps: (tenantId: string) => Promise<{ apps: IntuneBackupApp[]; fetchedAt: string }>
   list: (tenantId: string) => Promise<AppSourceState>
   chooseStore: (tenantId: string) => Promise<boolean>
   attach: (tenantId: string, operationId: string, appName: string) => Promise<boolean>
@@ -36,3 +38,5 @@ export interface AppSourcesBridge {
   deviceStatus: (tenantId: string) => Promise<RecoveryDeviceStatus>
   signIn: (tenantId: string) => Promise<void>
 }
+
+export interface IntuneBackupApp { id: string; name: string; publisher: string }

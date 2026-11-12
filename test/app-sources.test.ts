@@ -114,7 +114,10 @@ describe("streaming app source store", () => {
     if (mode === "wrong-key") chosen = new AppSourceStore(base, () => [randomBytes(32)])
     if (mode === "wrong-tenant") { await cp(join(base, tenant, item.id), join(base, other, item.id), { recursive: true }); selectedTenant = other }
     if (mode === "wrong-source") { selectedId = randomUUID(); await cp(join(base, tenant, item.id), join(base, tenant, selectedId), { recursive: true }) }
-    const destination = join(folder, "keep.intunewin"); await writeFile(destination, "keep")
+    const destination = join(folder, "keep.intunewin")
+    await expect(chosen.export(selectedTenant, selectedId, destination)).rejects.toThrow()
+    await expect(lstat(destination)).rejects.toMatchObject({ code: "ENOENT" })
+    await writeFile(destination, "keep")
     await expect(chosen.export(selectedTenant, selectedId, destination)).rejects.toThrow()
     expect(await readFile(destination, "utf8")).toBe("keep")
     expect((await readdir(folder)).filter(n => n.startsWith(".tenuvault-export-"))).toEqual([])
@@ -153,8 +156,8 @@ describe("streaming app source store", () => {
   it("cancels after the first plaintext export chunk and preserves the existing destination", async () => {
     const folder = await root(), input = await packageFile(folder), base = join(folder, "store")
     const store = new AppSourceStore(base, () => [master]), item = await store.attach(tenant, input.file, "App")
-    const destination = join(folder, "keep.intunewin"); await writeFile(destination, "keep"); let checks = 0
-    const signal = { throwIfAborted() { if (++checks === 3) throw new Error("cancelled midstream") } } as AbortSignal
+    const destination = join(folder, "keep.intunewin"); let checks = 0
+    const signal = { throwIfAborted() { if (++checks === 3) { writeFileSync(destination, "keep"); throw new Error("cancelled midstream") } } } as AbortSignal
     await expect(store.export(tenant, item.id, destination, signal)).rejects.toThrow("cancelled midstream")
     expect(await readFile(destination, "utf8")).toBe("keep")
     expect((await readdir(folder)).some(n => n.startsWith(".tenuvault-export-"))).toBe(false)
@@ -229,10 +232,11 @@ describe("crash recovery", () => {
   it("reconciles plaintext from a terminated export without touching an existing destination", async () => {
     const folder = await root(), input = await packageFile(folder), base = join(folder, "store")
     const store = new AppSourceStore(base, () => [master]), item = await store.attach(tenant, input.file, "App")
-    const destination = join(folder, "keep.intunewin"); await writeFile(destination, "keep")
+    const destination = join(folder, "keep.intunewin")
     const script = `const {AppSourceStore}=require(${JSON.stringify(bundle)});let calls=0;new AppSourceStore(${JSON.stringify(base)},()=>[Buffer.from(${JSON.stringify(master.toString("hex"))},'hex')]).export(${JSON.stringify(tenant)},${JSON.stringify(item.id)},${JSON.stringify(destination)},{throwIfAborted(){if(++calls===3)process.exit(37)}}).catch(()=>process.exit(9));`
     expect(spawnSync(process.execPath, ["-e", script], { timeout: 4000 }).status).toBe(37)
     expect((await readdir(folder)).some(n => n.startsWith(".tenuvault-export-"))).toBe(true)
+    await writeFile(destination, "keep")
     expect((await store.list(tenant)).sources).toHaveLength(1)
     await store.list(tenant)
     expect((await readdir(folder)).some(n => n.startsWith(".tenuvault-export-"))).toBe(false)
@@ -248,6 +252,15 @@ describe("crash recovery", () => {
     await store.list(tenant); await store.list(tenant)
     expect((await readdir(folder)).some(n => n.startsWith(".tenuvault-export-"))).toBe(false)
     expect((await readFile(destination)).equals(input.data)).toBe(true)
+  }, 20_000)
+  it("reports success after publication when plaintext cleanup fails, then retries its own journal", async () => {
+    const folder = await root(), input = await packageFile(folder), base = join(folder, "store"), destination = join(folder, "exported.intunewin")
+    const store = new AppSourceStore(base, () => [master]), item = await store.attach(tenant, input.file, "App")
+    const script = `const fs=require('node:fs/promises'),rm=fs.rm;let locked=true;fs.rm=async(path,...args)=>{if(locked&&String(path).includes('.tenuvault-export-'))throw Object.assign(new Error('locked'),{code:'EBUSY'});return rm(path,...args)};const {AppSourceStore}=require(${JSON.stringify(bundle)});const store=new AppSourceStore(${JSON.stringify(base)},()=>[Buffer.from(${JSON.stringify(master.toString("hex"))},'hex')]);(async()=>{await store.export(${JSON.stringify(tenant)},${JSON.stringify(item.id)},${JSON.stringify(destination)});const pending=await store.list(${JSON.stringify(tenant)});if(!pending.warnings.some(w=>w.includes('Plaintext temporary file')))throw Error('missing warning');locked=false;await store.list(${JSON.stringify(tenant)});const clean=await store.list(${JSON.stringify(tenant)});if(clean.warnings.length)throw Error('not reconciled')})().catch(e=>{console.error(e);process.exit(9)});`
+    const result = spawnSync(process.execPath, ["-e", script], { timeout: 4000 })
+    expect(result.status, result.stderr?.toString()).toBe(0)
+    expect((await readFile(destination)).equals(input.data)).toBe(true)
+    expect((await readdir(folder)).some(n => n.startsWith(".tenuvault-export-"))).toBe(false)
   }, 20_000)
   it("quarantines an incomplete import owned by another host", async () => {
     const folder = await root(), input = await packageFile(folder), base = join(folder, "store")
@@ -275,7 +288,7 @@ describe("crash recovery", () => {
 describe("trusted local source actions", () => {
   async function setup() {
     const folder = await root(), input = await packageFile(folder)
-    const host: AppSourceHost = { knownTenant: id => id === tenant || id === other, folder: () => join(folder, "sources"), setFolder: vi.fn(), confirmNewStore: vi.fn(async () => false), keys: () => [master], ensureKeys: vi.fn(), pickFolder: async () => folder, pickPackage: async () => input.file, pickExport: async () => null, checkDevice: vi.fn(), signIn: vi.fn(async () => {}) }
+    const host: AppSourceHost = { knownTenant: id => id === tenant || id === other, folder: () => join(folder, "sources"), setFolder: vi.fn(), confirmNewStore: vi.fn(async () => false), keys: () => [master], ensureKeys: vi.fn(), pickFolder: async () => folder, pickPackage: async () => input.file, pickExport: async () => null, checkDevice: vi.fn(), signIn: vi.fn(async () => {}), apps: vi.fn(async () => ({ apps: [], fetchedAt: new Date().toISOString() })) }
     return { folder, input, host, service: new AppSourceService(host) }
   }
   it.each(["tenant", "renamed-tenant", "artifact"])("refuses a reconnect at the wrong %s folder level", async kind => {
@@ -358,7 +371,7 @@ describe("trusted local source actions", () => {
   })
   it("attaches and exports offline for every configured tenant without entitlement, and never mints a key on an empty listing", async () => {
     const folder = await root(), input = await packageFile(folder), ensureKeys = vi.fn()
-    const host: AppSourceHost = { knownTenant: id => id === tenant || id === other, folder: () => join(folder, "sources"), setFolder: vi.fn(), confirmNewStore: vi.fn(async () => false), keys: () => [master], ensureKeys, pickFolder: async () => null, pickPackage: async () => input.file, pickExport: async () => join(folder, "original.intunewin"), checkDevice: vi.fn(), signIn: vi.fn(async () => {}) }
+    const host: AppSourceHost = { knownTenant: id => id === tenant || id === other, folder: () => join(folder, "sources"), setFolder: vi.fn(), confirmNewStore: vi.fn(async () => false), keys: () => [master], ensureKeys, pickFolder: async () => null, pickPackage: async () => input.file, pickExport: async () => join(folder, "original.intunewin"), checkDevice: vi.fn(), signIn: vi.fn(async () => {}), apps: vi.fn(async () => ({ apps: [], fetchedAt: new Date().toISOString() })) }
     const service = new AppSourceService(host)
     expect((await service.list(tenant)).sources).toEqual([]); expect(ensureKeys).not.toHaveBeenCalled()
     await expect(service.list("not-a-tenant")).rejects.toThrow()

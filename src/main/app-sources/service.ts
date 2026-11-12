@@ -1,7 +1,7 @@
 import { basename, join } from "node:path"
 import { lstat, readdir } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
-import type { AppSourceState, RecoveryDeviceStatus } from "../../shared/app-sources/types"
+import type { AppSourceState, RecoveryDeviceStatus, AppSourcesBridge } from "../../shared/app-sources/types"
 import { AppSourceStore, sourceTenant } from "./store"
 
 export interface AppSourceHost {
@@ -17,12 +17,14 @@ export interface AppSourceHost {
   pickExport: (fileName: string) => Promise<string | null>
   checkDevice: (tenant: string) => Promise<RecoveryDeviceStatus>
   signIn: (tenant: string) => Promise<void>
+  apps: (tenant: string) => ReturnType<AppSourcesBridge["apps"]>
 }
 
 /** Local actions are free for every configured tenant and need no live token. */
 export class AppSourceService {
   private readonly jobs = new Map<string, { tenant: string; abort: AbortController }>()
   private readonly deviceChecks = new Map<string, Promise<RecoveryDeviceStatus>>()
+  private readonly appLoads = new Map<string, ReturnType<AppSourcesBridge["apps"]>>()
   constructor(private readonly host: AppSourceHost) {}
   private tenant(raw: unknown): string {
     const id = sourceTenant(raw)
@@ -124,6 +126,13 @@ export class AppSourceService {
     return check
   }
   signIn(raw: unknown): Promise<void> { return this.host.signIn(this.tenant(raw)) }
+  apps(raw: unknown) {
+    const tenant = this.tenant(raw), pending = this.appLoads.get(tenant)
+    if (pending) return pending
+    const load = Promise.resolve().then(() => this.host.apps(tenant)).finally(() => this.appLoads.delete(tenant))
+    this.appLoads.set(tenant, load)
+    return load
+  }
   /** Used on process shutdown; disk journals reconcile interrupted operations on the next list. */
   close(): void { for (const job of this.jobs.values()) job.abort.abort() }
 }

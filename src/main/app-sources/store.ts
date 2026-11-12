@@ -90,6 +90,7 @@ async function readMetadata(path: string): Promise<Buffer> {
     throw new Error("Source metadata exceeds 64 KiB.")
   } finally { await file.close() }
 }
+const activeExports = new Set<string>()
 const owner = () => ({ host: hostname(), pid: process.pid })
 function abandoned(value: { host?: unknown; pid?: unknown }): boolean {
   if (value.host !== hostname() || !Number.isInteger(value.pid) || Number(value.pid) <= 0) return false
@@ -157,7 +158,7 @@ export class AppSourceStore {
           if (!record || typeof record.temporary !== "string" || basename(record.temporary) !== `.tenuvault-export-${id}.tmp`) {
             warnings.push("An unfinished export journal is invalid and has not been reconciled."); continue
           }
-          if (!abandoned(record)) { warnings.push("An unfinished export belongs to another process or device and has not been reconciled."); continue }
+          if (!abandoned(record) && !(record.host === hostname() && record.pid === process.pid && !activeExports.has(join(current, entry.name)))) { warnings.push("An unfinished export belongs to another process or device and has not been reconciled."); continue }
           try { await rm(record.temporary, { force: true }) }
           catch { warnings.push(`Plaintext temporary file ${basename(record.temporary)} may remain at the export destination. Check file access and refresh to retry cleanup.`); continue }
           try { await rm(join(current, entry.name)) }
@@ -217,8 +218,12 @@ export class AppSourceStore {
   async export(tenant: string, id: string, destination: string, signal?: AbortSignal): Promise<void> {
     const manifest = await this.manifest(tenant, id), folder = (await this.folder(tenant, true, this.exportRoot))!, job = randomUUID()
     const temporary = join(dirname(destination), `.tenuvault-export-${job}.tmp`), journal = join(folder, `.export-${job}.tvm`)
-    let ownsTemp = false, madeJournal = false
+    let ownsTemp = false, madeJournal = false, published = false
+    // Fail early for an existing destination; link() below still guards concurrent creation.
+    try { await lstat(destination); throw Object.assign(new Error("The export destination already exists."), { code: "EEXIST" }) }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error }
     const input = await open(join(manifest.directory, "artifact.tvs"), flags)
+    activeExports.add(journal)
     try {
       abort(signal)
       await this.privateWrite(journal, this.encode({ ...owner(), temporary }, tenant, job, "export")); madeJournal = true
@@ -247,11 +252,17 @@ export class AppSourceStore {
       // Atomic no-overwrite publication is the cancellation cutoff. Existing files are preserved.
       abort(signal)
       await link(temporary, destination)
+      published = true
     } finally {
-      try { await input.close() } finally {
-        if (ownsTemp) await rm(temporary, { force: true })
-        if (madeJournal) await rm(journal, { force: true })
+      // Publication is the success point. Keep the journal for a cleanup retry if needed.
+      // The following list returns its warning without misreporting a completed export.
+      const cleanup = async () => {
+        try { await input.close() } finally {
+          if (ownsTemp) await rm(temporary, { force: true })
+          if (madeJournal) await rm(journal, { force: true })
+        }
       }
+      await (published ? cleanup().catch(() => {}) : cleanup()).finally(() => activeExports.delete(journal))
     }
   }
 }

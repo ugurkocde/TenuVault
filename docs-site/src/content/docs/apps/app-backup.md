@@ -7,22 +7,25 @@ description: Keep encrypted copies of original .intunewin packages and export th
 
 **App Backup** keeps original Win32 installer packages separately from policy backups. Open it immediately below **Backup & Restore** in the desktop sidebar.
 
-This first version supports local source folders, attaching existing `.intunewin` packages, listing stored versions and exporting the original file. It does not download installers from Intune, upload apps, restore their content or associate a selected installer with a particular Intune content version.
+This first version lists your Intune Win32 apps, guides preparation, and supports local source folders, attaching existing `.intunewin` packages, listing stored versions and exporting the original file. It does not download installers from Intune, upload apps, restore their content or associate a selected installer with a particular Intune content version.
 
-## Attach a package
+## Start with an Intune app
 
-1. Select a configured tenant.
-2. Open **App Backup** and optionally enter an app-name label.
-3. Choose **Attach source** and select an existing `.intunewin` file, up to 2 GiB. ZIP64 packages are not supported in this version.
-4. Wait until the operation completes. **Cancel operation** stops an active import.
+Open **Intune apps**, sign in to Microsoft and choose a Win32 app. **Prepare backup** walks through three steps:
 
-Attaching packages, browsing, reconnecting and exporting work while signed out, including for tenants outside license coverage. The file's container and bounded metadata XML are checked, but installation behavior and equivalence to Intune content are not tested. Sources are labelled **Administrator selected**. File names and app-name labels are not proof of an app's identity or content version.
+1. Check that this Windows PC is enrolled in the selected tenant.
+2. Review the app’s targeting in Intune. Required assignments can install the app automatically. Use a dedicated test-device group, check filters and exclusions, and do not replace an existing Available assignment unnecessarily. This version does not verify group membership or effective assignment eligibility.
+3. Capture the original package, verify it and store an encrypted copy. **This capture step is unavailable in the current build.** The preparation screen does not start an installation, change assignments or extract installed program files.
 
-The original file is copied into a separate encrypted source store. Changing backup storage does not change this source store. The default source folder is **TenuVault App Sources** in Documents. Sources have no automatic retention or delete action in this version.
+The live list follows all Microsoft Graph beta pages and includes exact Win32 app types. A failed refresh does not show a partial inventory or infer that installers are missing. The app list is independent of saved files, so a sign-in or inventory failure does not block offline export.
+
+Already have the original `.intunewin` file? Choose **Save an installer I already have** in preparation, or open **Saved installers → Add an installer file manually**. Select a package up to 2 GiB. Its encrypted snapshot’s container and metadata are checked before publication. The app name is only an administrator-provided label; matching an Intune content version and installation behavior are not verified.
+
+The default encrypted store is **TenuVault App Sources** in Documents. Reconnect is available from Saved installers. Changing backup storage does not change this store. Sources have no automatic retention or delete action in this version.
 
 ## Export the original bytes
 
-Open **Stored versions**, find the package, then choose **Export original**. Choose a new file name. An existing destination is preserved, even if the operating system's file dialog offered to replace it.
+Open **Saved installers**, find the package, then choose **Export original**. Choose a new file name. An existing destination is preserved, even if the operating system's file dialog offered to replace it.
 
 Export requires a destination filesystem supporting hard links. On macOS and Linux, exported files initially have owner-only permissions. Export checks the encrypted chunks and complete file hash before publishing the destination. It does not rebuild the package or alter its contents. Stored versions remain browseable and exportable while signed out or without an active entitlement, provided the tenant is still configured and this device has the matching encryption key.
 
@@ -36,6 +39,6 @@ Unreadable or incomplete sources are not silently counted. Interrupted imports s
 
 ## Coverage and device checks
 
-**Source coverage unavailable** is expected in this version: this view does not yet compare stored sources with a live inventory or policy backup. A stored package does not establish restore readiness.
+The Intune app list is live metadata, not evidence of installer availability. Saved packages are not automatically matched to Intune versions. A stored package does not establish restore readiness.
 
-**Recovery device check** is read-only. On Windows it can compare public enrollment/certificate metadata with the selected tenant's Intune account. It requires Microsoft sign-in and the appropriate Intune permissions for the selected tenant, but no product license or Community tenant selection. Use **Sign in for device check** to authenticate without a product-license check. Local source operations remain available while signed out. It never uses a private key, requests installer content, elevates a process or enables recovery. A matched enrollment is not a statement that recovery is ready. Non-Windows and unconfirmed checks explain why their state is unavailable or unknown.
+**Check this PC** is read-only. On Windows it can compare public enrollment/certificate metadata with the selected tenant's Intune account. It requires Microsoft sign-in and the appropriate Intune permissions for the selected tenant, but no product license or Community tenant selection. Use **Sign in to Microsoft** on the app list or **Sign in again** in preparation to authenticate without a product-license check. Local source operations remain available while signed out. It never uses a private key, requests installer content, elevates a process or enables recovery. A matched enrollment is not a statement that recovery is ready. Non-Windows and unconfirmed checks explain why their state is unavailable or unknown.
