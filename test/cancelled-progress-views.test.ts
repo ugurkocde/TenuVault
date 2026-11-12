@@ -58,13 +58,13 @@ describe("a backup the user cancelled, in the progress views", () => {
   it("shows a grey icon and a neutral cancel message in the Backup Progress dialog, and red only for a failure", () => {
     state.jobs = [ended("Cancelled")]
     const cancelled = modal()
-    expect(cancelled).toContain("bg-gray-100 p-5 text-gray-500")
+    expect(cancelled).toContain("h-5 w-5 shrink-0 text-gray-500")
     expect(cancelled).toContain("Backup cancelled by you.")
     // Class tokens only: the shared button styles name aria-invalid:border-destructive for invalid fields.
     for (const red of ["bg-red-50", "text-destructive", "border-destructive", "text-red-700"]) expect(cancelled).not.toMatch(new RegExp(`(^|["\\s])${red}(["\\s/]|$)`))
     state.jobs = [ended("Failed")]
     const failed = modal()
-    expect(failed).toContain("bg-red-50 p-5 text-red-600")
+    expect(failed).toContain("h-5 w-5 shrink-0 text-red-600")
     expect(failed).toMatch(/(^|["\s])border-destructive\/50(["\s]|$)/)
   })
 

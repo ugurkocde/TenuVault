@@ -15,6 +15,7 @@ import type { BackupItems } from "../../shared/intune/backup-changes"
 import { EVERYTHING, includedTypes, normalizeScope, restorableFolders, type BackupScope } from "../../shared/intune/scope"
 import { canBackUp, describeRequirement, disabledFolders, moduleForFolder, SERVICES_PAGE, type ModuleId } from "../../shared/services/modules"
 import { grantedPermissions } from "../../shared/services/token"
+import { MAX_ITEM_ERRORS, type BackupNotice, type BackupResults, type BackupTypeResult } from "../../shared/backup-results"
 
 /**
  * Runs Intune backups from the desktop app as the signed-in admin.
@@ -52,6 +53,8 @@ export interface BackupJob {
   /** Set when the job failed because Microsoft or the storage account could not be reached, including timeouts. */
   unreachable?: boolean
   log: string[]
+  /** Per type results and notices for progress views, filled as the run goes; absent until the run starts. */
+  results?: BackupResults
 }
 
 export type BackupTrigger = "manual" | "scheduled" | "tray"
@@ -449,11 +452,23 @@ export class BackupEngine {
     const granted = await moduleGrants(tokens, includedTypes(scope).some((type) => !moduleOff.has(type.folder) && moduleForFolder(type.folder)?.module.optIn))
     const unpermitted = includedTypes(scope).filter((type) => !moduleOff.has(type.folder) && !readerExcluded.has(type.folder) && moduleForFolder(type.folder)?.module.optIn && granted && !canBackUp(type.folder, granted))
     const types = includedTypes(scope).filter((type) => !readerExcluded.has(type.folder) && !moduleOff.has(type.folder) && !unpermitted.includes(type))
+    // Results list every type this run covers or leaves out for a permission, in registry order.
+    const results: BackupResults = {
+      types: includedTypes(scope)
+        .filter((type) => !moduleOff.has(type.folder))
+        .map((type): BackupTypeResult => ({ folder: type.folder, label: type.label, area: type.area, ...(type.inventory ? { inventory: true } : {}), state: "reading", saved: 0, failed: 0 })),
+      notices: [],
+    }
+    job.results = results
+    const result = (folder: string) => results.types.find((entry) => entry.folder === folder)!
     for (const type of unpermitted) {
       const entry = moduleForFolder(type.folder)!
-      this.write(job, `Leaving out ${type.label}: the ${tokens.mode === "app-only" ? "Backup Reader" : "TenuVault app registration"} has no ${describeRequirement(entry.area.backup, granted?.permissions)} permission for ${entry.module.label}. ${SERVICES_PAGE} in Settings shows how to add it.`)
+      const reason = `The ${tokens.mode === "app-only" ? "Backup Reader" : "TenuVault app registration"} has no ${describeRequirement(entry.area.backup, granted?.permissions)} permission for ${entry.module.label}. ${SERVICES_PAGE} in Settings shows how to add it.`
+      Object.assign(result(type.folder), { state: "skipped", reason })
+      this.write(job, `Leaving out ${type.label}: ${reason.charAt(0).toLowerCase()}${reason.slice(1)}`)
     }
-    if (scope.excluded.length) this.write(job, `Leaving out ${scope.excluded.length} of ${INTUNE_TYPES.length} types: ${scope.excluded.join(", ")}.`)
+    if (scope.excluded.length) this.write(job, `Leaving out ${scope.excluded.length} of ${INTUNE_TYPES.length} types: ${scope.excluded.join(", ")}.`, "info")
+    for (const folder of notReadable) Object.assign(result(folder), { state: "skipped", reason: "The Backup Reader has no permission for this type. Manual backups include it." })
     if (notReadable.length) this.write(job, `Leaving out ${notReadable.length} type${notReadable.length === 1 ? "" : "s"} the Backup Reader has no permission for: ${notReadable.join(", ")}. Manual backups include them.`)
     // Only a Backup Reader run keeps a value Microsoft refuses to decrypt masked; with the admin's sign-in a refused read fails the object as before.
     const keepMasked = tokens.mode === "app-only" ? (error: unknown) => error instanceof GraphError && error.status === 403 : undefined
@@ -495,6 +510,7 @@ export class BackupEngine {
         if (duplicates) this.write(job, `Ignored ${duplicates} repeated ${type.label} entr${duplicates === 1 ? "y" : "ies"} in the listing.`)
         const skipped = all.length - filtered.length
         this.write(job, `Found ${items.length} ${type.label}${skipped ? ` (${skipped} built-in skipped)` : ""}.`)
+        Object.assign(result(type.folder), { found: items.length, ...(skipped ? { builtInSkipped: skipped } : {}), ...(items.length === 0 ? { state: "empty" } : {}) })
         lists[index] = { type, items }
       } catch (error) {
         // Access denied: the app registration lacks the permission or its admin consent (for example
@@ -509,15 +525,19 @@ export class BackupEngine {
         if (denied) {
           skippedTypes.push(type.folder)
           const module = moduleForFolder(type.folder)?.module
-          this.write(job, module?.optIn
-            ? `Skipped ${type.label}: access was denied. The app registration may lack the permission or admin consent, or your account may not have a role that can read ${module.label} (${module.roles.split(";")[0]}).`
-            : `Skipped ${type.label}: access was denied. The app registration may lack the permission or admin consent, or your Intune role may not allow it.`)
+          const reason = module?.optIn
+            ? `Access was denied. The app registration may lack the permission or admin consent, or your account may not have a role that can read ${module.label} (${module.roles.split(";")[0]}).`
+            : "Access was denied. The app registration may lack the permission or admin consent, or your Intune role may not allow it."
+          Object.assign(result(type.folder), { state: "skipped", reason })
+          this.write(job, `Skipped ${type.label}: ${reason.charAt(0).toLowerCase()}${reason.slice(1)}`)
           return
         }
         countAuthFailure(error)
         failures++
         failedTypes.push(type.folder)
-        this.write(job, `Could not read ${type.label}: ${error instanceof Error ? error.message : String(error)}`)
+        const reason = error instanceof Error ? error.message : String(error)
+        Object.assign(result(type.folder), { state: "unreadable", reason })
+        this.write(job, `Could not read ${type.label}: ${reason}`)
       }
     }, network.signal)
 
@@ -603,6 +623,7 @@ export class BackupEngine {
         }
         if (masked) maskedItems.push({ Folder: type.folder, Id: item.id, Name: displayName })
         counts[type.folder]!++
+        result(type.folder).saved++
         outcome.saved++
       } catch (error) {
         // Counted before any rethrow, so the job sees this cause whichever failure ends it.
@@ -614,13 +635,19 @@ export class BackupEngine {
         failures++
         const warning = `Could not back up "${displayName}": ${error instanceof Error ? error.message : String(error)}`
         if (error instanceof RequestTimeoutError) itemTimeoutWarnings.push(warning)
+        const entry = result(type.folder)
+        entry.failed++
+        if ((entry.errors ??= []).length < MAX_ITEM_ERRORS) entry.errors.push(`${displayName}: ${error instanceof Error ? error.message : String(error)}`)
         this.write(job, warning)
       }
       done++
       job.progress = Math.round(10 + (done / Math.max(work.length, 1)) * 85)
       const left = remaining.get(type.folder)! - 1
       remaining.set(type.folder, left)
-      if (left === 0) this.write(job, `Backed up ${counts[type.folder]} ${type.label}.`)
+      if (left === 0) {
+        result(type.folder).state = "saved"
+        this.write(job, `Backed up ${counts[type.folder]} ${type.label}.`)
+      }
     }, network.signal)
 
     const ended = this.now()
@@ -652,7 +679,7 @@ export class BackupEngine {
     // retention to every backup of the tenant, Backup Reader backups included, with the same protections.
     const deletesAllowed = local || tokens.mode === "delegated"
     if (!deletesAllowed && failures === 0 && (this.deps.retentionDays?.(job.tenantId) ?? 0) > 0) {
-      this.write(job, "Older backups were kept: the Backup Reader cannot delete from Azure Storage. The next backup made with an admin's sign-in removes expired ones.")
+      this.write(job, "Older backups were kept: the Backup Reader cannot delete from Azure Storage. The next backup made with an admin's sign-in removes expired ones.", "info")
     } else if (deletesAllowed && failures === 0 && (this.deps.retentionDays?.(job.tenantId) ?? 0) > 0) {
       const retentionNetwork = new NetworkCircuit(3 * concurrency, signal, deadline)
       const retentionStorage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, retentionNetwork)
@@ -662,27 +689,28 @@ export class BackupEngine {
       } catch (error) {
         retentionWarnings++
         if (signal.aborted || Date.now() >= deadline) {
-          this.write(job, "Retention was interrupted; older backups are cleaned up on the next run")
+          this.write(job, "Retention was interrupted; older backups are cleaned up on the next run", "warning")
         } else if (retentionNetwork.signal.aborted) {
-          this.write(job, "Old backups were not removed because the network stopped responding. They will be reconsidered on the next run.")
+          this.write(job, "Old backups were not removed because the network stopped responding. They will be reconsidered on the next run.", "warning")
         } else if (error instanceof InventoryDamagedError) {
           // The local store refuses every delete while the backup folder holds damaged files.
-          this.write(job, `Retention is paused. ${error.message}`)
+          this.write(job, `Retention is paused. ${error.message}`, "warning")
         } else {
-          this.write(job, `Could not remove old backups: ${(error instanceof Error ? error.message : String(error)).replace(/\.$/, "")}. They will be reconsidered on the next run.`)
+          this.write(job, `Could not remove old backups: ${(error instanceof Error ? error.message : String(error)).replace(/\.$/, "")}. They will be reconsidered on the next run.`, "warning")
         }
       }
     } else if (failures > 0) {
-      this.write(job, "Older backups were kept because this backup is incomplete.")
+      this.write(job, "Older backups were kept because this backup is incomplete.", "info")
     }
 
     job.failures = failures
     job.totalPolicies = totalPolicies
+    results.totalPolicies = totalPolicies
     job.failedTypes = [...failedTypes]
     job.status = failures > 0 && saved === 0 ? "Failed" : "Completed"
     if (job.status === "Failed" && !outcome.answered && !outcome.otherFailures) job.unreachable = true
     if (maskedItems.length) {
-      this.write(job, `Saved ${maskedItems.length} object${maskedItems.length === 1 ? "" : "s"} with encrypted OMA-URI values masked (****): Microsoft refused the plain-text read, so these copies cannot be restored. A manual backup with your sign-in captures them when Microsoft returns the values.`)
+      this.write(job, `Saved ${maskedItems.length} object${maskedItems.length === 1 ? "" : "s"} with encrypted OMA-URI values masked (****): Microsoft refused the plain-text read, so these copies cannot be restored. A manual backup with your sign-in captures them when Microsoft returns the values.`, "warning")
     }
     const warnings = failures + retentionWarnings + (maskedItems.length ? 1 : 0)
     job.progressMessage =
@@ -837,18 +865,20 @@ export class BackupEngine {
       }
       removed++
     }
-    if (removed > 0) this.write(job, `Removed ${removed} backup${removed === 1 ? "" : "s"} older than ${days} days.`)
-    if (kept > 0) this.write(job, `Kept ${kept} older backup${kept === 1 ? "" : "s"} because ${kept === 1 ? "it holds" : "they hold"} the newest copy of types this backup leaves out.`)
+    if (removed > 0) this.write(job, `Removed ${removed} backup${removed === 1 ? "" : "s"} older than ${days} days.`, "info")
+    if (kept > 0) this.write(job, `Kept ${kept} older backup${kept === 1 ? "" : "s"} because ${kept === 1 ? "it holds" : "they hold"} the newest copy of types this backup leaves out.`, "info")
     if (protectedKept > 0) {
-      this.write(job, `Kept ${protectedKept} older backup${protectedKept === 1 ? "" : "s"} protected by the storage account's immutability policy or legal hold.${partlyRemoved > 0 ? ` ${partlyRemoved} of them lost some files before the protected ones were reached, including ${partlyRemoved === 1 ? "its" : "their"} metadata, so ${partlyRemoved === 1 ? "it is" : "they are"} no longer offered as complete.` : ""}`)
+      this.write(job, `Kept ${protectedKept} older backup${protectedKept === 1 ? "" : "s"} protected by the storage account's immutability policy or legal hold.${partlyRemoved > 0 ? ` ${partlyRemoved} of them lost some files before the protected ones were reached, including ${partlyRemoved === 1 ? "its" : "their"} metadata, so ${partlyRemoved === 1 ? "it is" : "they are"} no longer offered as complete.` : ""}`, "info")
     }
-    if (unowned > 0) this.write(job, `Kept ${unowned} older backup${unowned === 1 ? "" : "s"} not recorded as this tenant's (another tenant's, without readable metadata, or from an earlier version in a container another tenant also uses).`)
-    if (unreadable.size > 0) this.write(job, `Could not read the metadata of ${unreadable.size} older backup${unreadable.size === 1 ? "" : "s"}: ${unreadableReason.replace(/\.$/, "")}. ${unreadable.size === 1 ? "It was" : "They were"} left in place.`)
+    if (unowned > 0) this.write(job, `Kept ${unowned} older backup${unowned === 1 ? "" : "s"} not recorded as this tenant's (another tenant's, without readable metadata, or from an earlier version in a container another tenant also uses).`, "info")
+    if (unreadable.size > 0) this.write(job, `Could not read the metadata of ${unreadable.size} older backup${unreadable.size === 1 ? "" : "s"}: ${unreadableReason.replace(/\.$/, "")}. ${unreadable.size === 1 ? "It was" : "They were"} left in place.`, "warning")
     return unreadable.size
   }
 
-  private write(job: BackupJob, line: string): void {
-    job.log.push(`[${this.now().toISOString().slice(11, 19)}] ${line}`)
+  /** Adds a line to the log, in local time; a level also lists it among the run's notices. */
+  private write(job: BackupJob, line: string, level?: BackupNotice["level"]): void {
+    job.log.push(`[${this.now().toTimeString().slice(0, 8)}] ${line}`)
+    if (level) job.results?.notices.push({ level, message: line })
   }
 
   private now(): Date {

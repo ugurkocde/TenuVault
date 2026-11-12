@@ -187,6 +187,24 @@ describe("BackupEngine", () => {
     expect(job.progressMessage).toBe("Backup completed with 1 warning")
     expect(job.log.join("\n")).toMatch(/Could not back up "Settings catalog": Access denied by Microsoft Graph/)
     expect(throttled).toBe(2)
+    // Progress views read the per type results instead of the log wording.
+    const types = job.results!.types
+    expect(types.find((type) => type.folder === "ConfigurationPolicies")).toMatchObject({ state: "saved", found: 1, saved: 0, failed: 1, errors: [expect.stringMatching(/^Settings catalog: Access denied/)] })
+    expect(types.find((type) => type.folder === "DeviceConfigurations")).toMatchObject({ state: "saved", found: 2, saved: 2, failed: 0 })
+    expect(types.find((type) => type.folder === "CompliancePolicies")).toMatchObject({ state: "saved", saved: 1 })
+    expect(types.filter((type) => type.state === "reading")).toEqual([])
+    expect(types.some((type) => type.state === "empty")).toBe(true)
+    expect(job.results!.totalPolicies).toBe(job.totalPolicies)
+    expect(jobStatus(job).results).toBe(job.results)
+  })
+
+  it("records an unreadable type with its reason and lists retention notes as notices", async () => {
+    const graph = fakeGraph({ "/beta/deviceManagement/deviceCompliancePolicies": () => Response.json({ error: { message: "Service unavailable" } }, { status: 400 }) })
+    const { engine } = setup(graph)
+    const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: localStorageAccountName(TENANT) }).id)
+    expect(job.status).toBe("Completed")
+    expect(job.results!.types.find((type) => type.folder === "CompliancePolicies")).toMatchObject({ state: "unreadable", reason: expect.any(String) })
+    expect(job.results!.notices).toContainEqual({ level: "info", message: "Older backups were kept because this backup is incomplete." })
   })
 
   it("fails the job with the reason when Graph cannot be read", async () => {
@@ -389,6 +407,7 @@ describe("retention after incomplete backups", () => {
     const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)
     expect(job.progressMessage).toBe("Backup completed successfully")
     expect(job.log.join("\n")).toMatch(/Skipped Windows PowerShell scripts: access was denied/)
+    expect(job.results!.types.find((type) => type.folder === "PowerShellScripts")).toMatchObject({ state: "skipped", reason: expect.stringMatching(/^Access was denied\./) })
     const metadata = JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/metadata.json`)).data.toString())
     expect(metadata).toMatchObject({ Status: "Success", Failures: 0, SkippedTypes: ["PowerShellScripts"] })
   })

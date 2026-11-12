@@ -6,8 +6,9 @@ import { useBackupProgress } from "~/contexts/BackupProgressContext"
 import { bridge } from "@desktop/lib/bridge"
 import { useTenantPlan } from "@desktop/lib/license"
 import { FirstBackupNote } from "@desktop/components/FirstBackupNote"
-import { resolveBackupJobDisplay, toBackupJobDisplay, type BackupJobDisplay } from "~/lib/backup-job-display"
+import { completedWithWarnings, resolveBackupJobDisplay, toBackupJobDisplay, type BackupJobDisplay } from "~/lib/backup-job-display"
 import { azureStoragePortalUrl } from "~/lib/azure-portal"
+import { BackupResults } from "~/components/backup/backup-results"
 import {
   Dialog,
   DialogContent,
@@ -23,8 +24,9 @@ import {
   CheckCircle2, 
   XCircle, 
   AlertCircle,
+  AlertTriangle,
   ExternalLink,
-  FileText,
+  LoaderCircle,
   Activity
 } from "lucide-react"
 
@@ -58,7 +60,6 @@ export function BackupProgressModal({
   resources,
   onComplete
 }: BackupProgressModalProps) {
-  const [showOutput, setShowOutput] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   const [cancelError, setCancelError] = useState("")
   const { addJob, updateJob, activeJobs } = useBackupProgress()
@@ -105,21 +106,6 @@ export function BackupProgressModal({
     latest.current.onComplete?.(tracked.isSuccessful)
   }, [tracked?.isComplete, tracked?.isSuccessful, jobId])
 
-  const formatTime = (dateString?: string) => {
-    if (!dateString) return "N/A"
-    return new Date(dateString).toLocaleTimeString()
-  }
-
-  const getDuration = () => {
-    if (!jobStatus?.startTime) return "N/A"
-    const start = new Date(jobStatus.startTime).getTime()
-    const end = jobStatus.endTime ? new Date(jobStatus.endTime).getTime() : Date.now()
-    const duration = Math.floor((end - start) / 1000)
-    const minutes = Math.floor(duration / 60)
-    const seconds = duration % 60
-    return `${minutes}m ${seconds}s`
-  }
-
   const handleRunInBackground = () => {
     if (jobId && credentials && resources) {
       // The job is already tracked by the shared store; show it in the floating panel.
@@ -135,6 +121,7 @@ export function BackupProgressModal({
         endTime: jobStatus?.endTime,
         exception: jobStatus?.exception,
         output: jobStatus?.output,
+        results: jobStatus?.results,
         isComplete: jobStatus?.isComplete || false,
         isSuccessful: jobStatus?.isSuccessful || false,
         credentials,
@@ -198,62 +185,25 @@ export function BackupProgressModal({
             </Alert>
           ) : jobStatus ? (
             <>
-              {/* Progress Bar */}
               <div className="space-y-2">
-                <div className="flex justify-between text-sm text-gray-600">
-                  <span>{jobStatus.progressMessage}</span>
-                  <span>{jobStatus.progress}%</span>
-                </div>
-                <Progress value={jobStatus.progress} className="h-2 bg-gray-100 [&>div]:bg-coral-500" />
-              </div>
-
-              {/* Status Icon */}
-              <div className="flex items-center justify-center py-4">
-                {jobStatus.isComplete ? (
-                  jobStatus.isSuccessful ? (
-                    <CheckCircle2 className="h-20 w-20 rounded-full bg-green-50 p-5 text-green-600" />
-                  ) : jobStatus.status === "Cancelled" ? (
-                    <Ban className="h-20 w-20 rounded-full bg-gray-100 p-5 text-gray-500" />
+                <div className="flex items-center gap-2.5" role="status">
+                  {jobStatus.isComplete ? (
+                    completedWithWarnings(jobStatus) ? (
+                      <AlertTriangle className="h-5 w-5 shrink-0 text-amber-700" aria-hidden="true" />
+                    ) : jobStatus.isSuccessful ? (
+                      <CheckCircle2 className="h-5 w-5 shrink-0 text-green-600" aria-hidden="true" />
+                    ) : jobStatus.status === "Cancelled" ? (
+                      <Ban className="h-5 w-5 shrink-0 text-gray-500" aria-hidden="true" />
+                    ) : (
+                      <XCircle className="h-5 w-5 shrink-0 text-red-600" aria-hidden="true" />
+                    )
                   ) : (
-                    <XCircle className="h-20 w-20 rounded-full bg-red-50 p-5 text-red-600" />
-                  )
-                ) : (
-                  <Activity className="h-20 w-20 rounded-full bg-blue-50 p-5 text-blue-700 animate-pulse" />
-                )}
-              </div>
-
-              {/* Job Details */}
-              <div className="space-y-2 rounded-2xl bg-gray-50 p-4 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Status:</span>
-                  <span className={`font-medium ${
-                    jobStatus.isSuccessful ? "text-green-600" : 
-                    jobStatus.status === "Failed" ? "text-destructive" : 
-                    ""
-                  }`}>
-                    {jobStatus.status}
-                  </span>
+                    <LoaderCircle className="h-5 w-5 shrink-0 animate-spin text-coral-500" aria-hidden="true" />
+                  )}
+                  <span className="min-w-0 flex-1 text-sm font-medium text-foreground">{jobStatus.progressMessage}</span>
+                  {!jobStatus.isComplete && <span className="shrink-0 text-sm tabular-nums text-muted-foreground">{jobStatus.progress}%</span>}
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Job ID:</span>
-                  <span className="font-mono text-xs">{jobId}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Start Time:</span>
-                  <span>{formatTime(jobStatus.startTime)}</span>
-                </div>
-                {jobStatus.isComplete && (
-                  <>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">End Time:</span>
-                      <span>{formatTime(jobStatus.endTime)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Duration:</span>
-                      <span>{getDuration()}</span>
-                    </div>
-                  </>
-                )}
+                {!jobStatus.isComplete && <Progress value={jobStatus.progress} aria-label="Backup progress" className="h-2 bg-gray-100 [&>div]:bg-coral-500" />}
               </div>
 
               {open && jobStatus.isComplete && jobStatus.isSuccessful && <FirstBackupNote key={jobId} plan={plan} />}
@@ -266,25 +216,7 @@ export function BackupProgressModal({
                 </Alert>
               )}
 
-              {/* Job Output */}
-              {jobStatus.output && (
-                <div className="space-y-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setShowOutput(!showOutput)}
-                    className="w-full"
-                  >
-                    <FileText className="mr-2 h-4 w-4" />
-                    {showOutput ? "Hide" : "Show"} Job Output
-                  </Button>
-                  {showOutput && (
-                    <div className="max-h-60 overflow-auto rounded-2xl bg-slate-950 p-4 text-xs">
-                      <pre className="text-slate-50">{jobStatus.output}</pre>
-                    </div>
-                  )}
-                </div>
-              )}
+              <BackupResults job={jobStatus} jobId={jobId} />
             </>
           ) : (
             <div className="flex items-center justify-center py-8">

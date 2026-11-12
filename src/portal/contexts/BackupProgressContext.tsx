@@ -6,6 +6,7 @@ import { useTenants, useTenantOperations } from "./TenantContext"
 import { backupCompletionUpdates } from "~/lib/backup-completion"
 import { isBackupJobPollable } from "~/lib/backup-job-display"
 import { createJobPoller } from "@desktop/lib/job-store"
+import type { BackupResults } from "../../shared/backup-results"
 
 export interface BackupJob {
   jobId: string
@@ -18,6 +19,7 @@ export interface BackupJob {
   endTime?: string
   exception?: string
   output?: string
+  results?: BackupResults
   isComplete: boolean
   isSuccessful: boolean
   /** Set when status polling failed and stopped; progress views show it so the admin can retry or skip. */
@@ -144,6 +146,7 @@ export function BackupProgressProvider({ children }: { children: ReactNode }) {
           endTime: data.endTime,
           exception: data.exception,
           output: data.output,
+          results: data.results,
           isComplete: data.isComplete,
           isSuccessful: data.isSuccessful,
           pollError: undefined

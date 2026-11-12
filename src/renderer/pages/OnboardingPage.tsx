@@ -24,6 +24,7 @@ import { clearOnboardingDraft, loadOnboardingDraft, saveOnboardingDraft } from "
 import type { StorageChoice } from "../lib/storage"
 import { desktopTenantCredentials, type TenantCredentials } from "../overrides/add-tenant-modal"
 import { resolveBackupJobDisplay, toBackupJobDisplay, type BackupJobDisplay } from "~/lib/backup-job-display"
+import { BackupResults } from "~/components/backup/backup-results"
 
 const STEPS = [
   { title: "Connect", icon: ShieldCheck },
@@ -79,7 +80,6 @@ export default function OnboardingPage() {
   // After the in-app setup: what it did, and the account the Sign in step signs in as by itself.
   const [setupNotice, setSetupNotice] = useState("")
   const [autoSignIn, setAutoSignIn] = useState<{ loginHint: string } | null>(null)
-  const logRef = useRef<HTMLPreElement>(null)
   const { addJob, removeJob, updateJob, activeJobs } = useBackupProgress()
   const completedBackup = useRef<string | null>(null)
   const handledPollError = useRef<string | null>(null)
@@ -343,10 +343,6 @@ export default function OnboardingPage() {
     }
   }
 
-  useEffect(() => {
-    logRef.current?.scrollTo({ top: logRef.current.scrollHeight })
-  }, [displayJob?.output])
-
   const finished = Boolean(displayJob?.isComplete)
   const succeeded = Boolean(displayJob?.isComplete && displayJob.isSuccessful)
 
@@ -517,11 +513,7 @@ export default function OnboardingPage() {
                   </Button>
                 )}
                 {succeeded && <FirstBackupNote plan={plan} />}
-                {displayJob.output && (
-                  <pre ref={logRef} className="max-h-48 overflow-auto rounded-2xl bg-slate-900 p-4 text-xs text-slate-100">
-                    {displayJob.output}
-                  </pre>
-                )}
+                <BackupResults job={displayJob} jobId={runningJobId} />
               </div>
             )}
             {succeeded && credentials && <TrialShortcuts tenantId={credentials.tenantId} />}
