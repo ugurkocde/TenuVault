@@ -1,6 +1,7 @@
 import { AppSourceService } from "./app-sources/service"
 import { checkRecoveryDevice } from "./app-backup/device-check"
 import { readAppBackupAccount } from "./app-backup/account"
+import { appBackupClientId } from "./app-backup/sign-in"
 import { readAppBackupApps } from "./app-backup/inventory"
 import { AppRegistrationSetup, setupLoginHint } from "./auth/app-registration-setup"
 import { trialBackupObserver } from "./license/usage-actions"
@@ -1423,9 +1424,8 @@ async function bootstrap(): Promise<void> {
     checkDevice: (tenant) => checkRecoveryDevice(tenant, () => readAppBackupAccount(tenant,
       async id => (await tokenFor(id, signedInClient(id), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch)),
     signIn: async (tenant) => {
-      const profile = tenantProfile(tenant)
-      if (!profile || !isGuid(profile.clientId)) throw new Error("Configure this tenant's Microsoft app registration before signing in.")
-      await auth.reauthenticate(tenant, profile.clientId, RESOURCE_SCOPES.graph).finally(returnToApp)
+      const clientId = appBackupClientId(tenant, appStore.get(`${RENDERER_STORAGE_PREFIX}tenuvault_tenants`))
+      await auth.reauthenticate(tenant, clientId, RESOURCE_SCOPES.graph).finally(returnToApp)
       pushLicense()
     },
   })

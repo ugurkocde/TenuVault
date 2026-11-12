@@ -23,6 +23,14 @@ export async function inspectIntunewin(file: PackageReader, size: number): Promi
   const count = tail.readUInt16LE(end + 10), length = tail.readUInt32LE(end + 12), offset = tail.readUInt32LE(end + 16)
   if (!count || count > 10_000 || length > 4 * 1024 ** 2 || offset + length > size - tail.length + end) throw new Error("The package directory is invalid or uses unsupported ZIP64 packaging.")
   const directory = await readAt(file, length, offset)
+  const entryData = async (local: number, compressed: number, label: string) => {
+    if (local + 30 > offset) throw new Error(`The package ${label} entry is invalid.`)
+    const header = await readAt(file, 30, local)
+    if (header.readUInt32LE(0) !== 0x04034b50) throw new Error(`The package ${label} header is invalid.`)
+    const start = local + 30 + header.readUInt16LE(26) + header.readUInt16LE(28)
+    if (start + compressed > offset) throw new Error(`The package ${label} data is invalid.`)
+    return start
+  }
   const seen = new Set<string>()
   let position = 0, metadata = false, content = false
   for (let i = 0; i < count; i++) {
@@ -38,10 +46,7 @@ export async function inspectIntunewin(file: PackageReader, size: number): Promi
     if (name.toLowerCase() === "intunewinpackage/metadata/detection.xml") {
       const compressed = directory.readUInt32LE(position + 20), expanded = directory.readUInt32LE(position + 24), local = directory.readUInt32LE(position + 42), method = directory.readUInt16LE(position + 10)
       if (compressed > 1024 ** 2 || expanded > 1024 ** 2 || local + 30 > size || directory.readUInt16LE(position + 8) & 1) throw new Error("The package metadata is too large or encrypted.")
-      const header = await readAt(file, 30, local)
-      if (header.readUInt32LE(0) !== 0x04034b50) throw new Error("The package metadata header is invalid.")
-      const start = local + 30 + header.readUInt16LE(26) + header.readUInt16LE(28)
-      if (start + compressed > offset) throw new Error("The package metadata is invalid.")
+      const start = await entryData(local, compressed, "metadata")
       const bytes = await readAt(file, compressed, start)
       const xmlBytes = method === 0 ? bytes : method === 8 ? inflateRawSync(bytes, { maxOutputLength: 1024 ** 2 }) : null
       if (!xmlBytes || xmlBytes.length !== expanded) throw new Error("The package metadata compression is unsupported.")
@@ -51,7 +56,10 @@ export async function inspectIntunewin(file: PackageReader, size: number): Promi
       if (document.documentElement?.nodeName !== "ApplicationInfo" || document.getElementsByTagName("EncryptionInfo").length !== 1) throw new Error("The package metadata is not an Intune package description.")
       metadata = true
     }
-    content ||= /^intunewinpackage\/contents\/[^/]+\.intunewin$/i.test(name)
+    if (/^intunewinpackage\/contents\/[^/]+\.intunewin$/i.test(name)) {
+      await entryData(directory.readUInt32LE(position + 42), directory.readUInt32LE(position + 20), "content")
+      content = true
+    }
     position = next
   }
   if (position !== length || !metadata || !content) throw new Error("Choose an .intunewin package made with the Microsoft Content Prep Tool.")

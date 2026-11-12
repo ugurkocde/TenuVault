@@ -201,6 +201,24 @@ describe("streaming app source store", () => {
     expect((await readdir(folder)).some(n => n.startsWith(".tenuvault-export-"))).toBe(false)
     expect((await readdir(join(base, tenant))).some(n => n.startsWith(".export-"))).toBe(false)
   })
+  it.each(["offset", "signature", "data-bounds"])("rejects a malformed content entry %s before publishing the package", async mode => {
+    const folder = await root(), input = await packageFile(folder, { bytes: 128 }), data = Buffer.from(input.data)
+    let position = data.readUInt32LE(data.length - 6)
+    for (;;) {
+      const names = data.readUInt16LE(position + 28), extra = data.readUInt16LE(position + 30), comment = data.readUInt16LE(position + 32)
+      const name = data.subarray(position + 46, position + 46 + names).toString("utf8")
+      if (name === "IntuneWinPackage/Contents/IntunePackage.intunewin") break
+      position += 46 + names + extra + comment
+    }
+    if (mode === "offset") data.writeUInt32LE(data.length, position + 42)
+    if (mode === "signature") data.writeUInt32LE(0, data.readUInt32LE(position + 42))
+    if (mode === "data-bounds") data.writeUInt32LE(data.length, position + 20)
+    await writeFile(input.file, data)
+    const store = new AppSourceStore(join(folder, "store"), () => [master])
+    await expect(store.attach(tenant, input.file, "App")).rejects.toThrow("package content")
+    expect((await store.list(tenant)).sources).toEqual([])
+    expect(await readdir(join(folder, "store", tenant))).toEqual([])
+  })
   it.each(["../outside", "CON.txt", "IntuneWinPackage/Metadata/DETECTION.XML", "bad:stream"])("rejects unsafe or duplicate ZIP entry %s", async extra => {
     const folder = await root(), input = await packageFile(folder, { extra })
     await expect(new AppSourceStore(join(folder, "store"), () => [master]).attach(tenant, input.file, "App")).rejects.toThrow()
