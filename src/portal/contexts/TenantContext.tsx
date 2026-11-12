@@ -26,26 +26,27 @@ interface Tenant {
   domain: string
   status: string
   lastBackup: string
-  configCount: number
+  /** Counts read from Microsoft Graph; null when Graph could not read them. */
+  configCount: number | null
   storageUsed: string
   client: string
   license: string
   region: string
   tags: string[]
-  users: number
-  devices: number
-  complianceRate: number
+  users: number | null
+  devices: number | null
+  complianceRate: number | null
   industry: string
   environment: string
   lastSync: string
   syncStatus: string
   policies: {
-    compliance: number
-    configuration: number
-    apps: number
-    deviceConfigurations?: number
-    configurationPolicies?: number
-    appProtectionPolicies?: number
+    compliance: number | null
+    configuration: number | null
+    apps: number | null
+    deviceConfigurations?: number | null
+    configurationPolicies?: number | null
+    appProtectionPolicies?: number | null
   }
   credentials?: TenantCredentials
   resources?: SelectedResources

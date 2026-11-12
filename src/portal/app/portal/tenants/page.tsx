@@ -56,6 +56,11 @@ import {
 
 
 // Inner component that uses useSearchParams
+/** A count read from Microsoft Graph, or n/a when Graph could not read it: never a made-up zero. */
+function GraphCount({ value }: { value: number | null | undefined }) {
+  return typeof value === "number" ? <>{value}</> : <span title="Microsoft Graph could not read this count">n/a</span>
+}
+
 function TenantsPageContent() {
   const { confirm, confirmDialog } = useConfirm()
   const { schedules, error: schedulesError } = useSchedules()
@@ -1047,11 +1052,11 @@ function TenantsPageContent() {
               <div className="grid grid-cols-2 gap-3 mb-4">
                 <div className="flex flex-col justify-between gap-1 rounded-2xl bg-gray-50 p-4">
                   <span className="block text-xs text-gray-500">Compliance Policies</span>
-                  <span className="mt-1 block text-2xl font-medium tracking-tight text-gray-900">{tenant.policies.compliance}</span>
+                  <span className="mt-1 block text-2xl font-medium tracking-tight text-gray-900"><GraphCount value={tenant.policies.compliance} /></span>
                 </div>
                 <div className="flex flex-col justify-between gap-1 rounded-2xl bg-gray-50 p-4">
                   <span className="block text-xs text-gray-500">Configuration Profiles</span>
-                  <span className="mt-1 block text-2xl font-medium tracking-tight text-gray-900">{tenant.policies.configuration}</span>
+                  <span className="mt-1 block text-2xl font-medium tracking-tight text-gray-900"><GraphCount value={tenant.policies.configuration} /></span>
                 </div>
               </div>
 
@@ -1322,9 +1327,9 @@ function TenantsPageContent() {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                       <div className="flex items-center gap-4">
-                        <span title="Compliance Policies">{tenant.policies.compliance}</span>
-                        <span title="Configuration Profiles">{tenant.policies.configuration}</span>
-                        <span title="App Protection">{tenant.policies.apps}</span>
+                        <span title="Compliance Policies"><GraphCount value={tenant.policies.compliance} /></span>
+                        <span title="Configuration Profiles"><GraphCount value={tenant.policies.configuration} /></span>
+                        <span title="App Protection"><GraphCount value={tenant.policies.apps} /></span>
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
