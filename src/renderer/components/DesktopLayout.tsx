@@ -49,8 +49,7 @@ import { useScoreInvalidation } from "../features/scores/invalidate"
 import { DriftScanIndicator, DriftScanNotifier } from "../lib/drift-jobs"
 import { SignInBanner } from "./SignInBanner"
 import { SupportDialog } from "./SupportDialog"
-import { FeedbackDialog } from "./FeedbackDialog"
-import { feedbackPageLabel, type FeedbackSnapshot } from "../../shared/feedback"
+import { FeedbackProvider, useOpenFeedback } from "./FeedbackProvider"
 import { TenantSwitcher } from "./TenantSwitcher"
 import { UpdateSidebarLabel } from "./UpdateSidebarLabel"
 import { WhatsNewAnnouncement, WhatsNewDialog } from "./WhatsNewDialog"
@@ -358,6 +357,16 @@ function useOverflowing(ref: RefObject<HTMLElement | null>): boolean {
 }
 
 export function DesktopLayout() {
+  const [supportOpen, setSupportOpen] = useState(false)
+  return (
+    <FeedbackProvider onOpenSupport={() => setSupportOpen(true)}>
+      <DesktopLayoutContent onOpenSupport={() => setSupportOpen(true)} />
+      <SupportDialog open={supportOpen} onOpenChange={setSupportOpen} />
+    </FeedbackProvider>
+  )
+}
+
+function DesktopLayoutContent({ onOpenSupport }: { onOpenSupport: () => void }) {
   const { status: licenseStatus } = useLicense()
   const { pathname } = useLocation()
   const appBackupPage = isAppBackupPath(pathname)
@@ -367,17 +376,7 @@ export function DesktopLayout() {
   const navigation =
     tenants.length > 1 ? [{ name: "All tenants", href: "/portal/overview", icon: LayoutGrid }, ...allNavigation] : allNavigation
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
-  const [supportOpen, setSupportOpen] = useState(false)
-  const [feedback, setFeedback] = useState<{ open: boolean; snapshot: FeedbackSnapshot | null }>({ open: false, snapshot: null })
-  const capturingFeedback = useRef(false)
-  // The window is captured before the dialog opens, so the dialog is not in the screenshot.
-  const openFeedback = async () => {
-    if (capturingFeedback.current || feedback.open) return
-    capturingFeedback.current = true
-    const snapshot = await bridge.feedback.capture(feedbackPageLabel(pathname)).catch(() => null)
-    capturingFeedback.current = false
-    setFeedback({ open: true, snapshot })
-  }
+  const openFeedback = useOpenFeedback()!
   const navRef = useRef<HTMLElement>(null)
   const navOverflowing = useOverflowing(navRef)
 
@@ -456,7 +455,7 @@ export function DesktopLayout() {
           <nav aria-label="Help" className="flex items-center gap-1">
             <Link to="/license" className={quiet}>License</Link>
             <button type="button" onClick={() => void openFeedback()} className={quiet}>Share feedback</button>
-            <button type="button" onClick={() => setSupportOpen(true)} className={quiet}>Support</button>
+            <button type="button" onClick={() => onOpenSupport()} className={quiet}>Support</button>
           </nav>
         </header>
       ) : (
@@ -494,7 +493,7 @@ export function DesktopLayout() {
             <MessageSquareHeart className="h-[18px] w-[18px]" />
             Share feedback
           </button>
-          <button type="button" onClick={() => setSupportOpen(true)} className={cn(linkClass(false), "w-full")}>
+          <button type="button" onClick={() => onOpenSupport()} className={cn(linkClass(false), "w-full")}>
             <LifeBuoy className="h-[18px] w-[18px]" />
             Support
           </button>
@@ -523,13 +522,6 @@ export function DesktopLayout() {
       <FrameworkJobNotifier />
       <CisJobNotifier />
       <DriftScanNotifier />
-      <SupportDialog open={supportOpen} onOpenChange={setSupportOpen} />
-      <FeedbackDialog
-        open={feedback.open}
-        onOpenChange={(open) => setFeedback((current) => ({ open, snapshot: open ? current.snapshot : null }))}
-        snapshot={feedback.snapshot}
-        onOpenSupport={() => setSupportOpen(true)}
-      />
       <WhatsNewAnnouncement />
     </div>
   )

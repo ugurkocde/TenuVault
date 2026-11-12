@@ -1,6 +1,11 @@
 import { ORGANIZATION_LICENSE_MESSAGE } from "./constants"
 import { TRIAL_USED_MESSAGE } from "./constants"
 
+/** Matches the refusal that offers purchasing actions instead of sign-in feedback. */
+export function isTrialKeyRefusal(message: string): boolean {
+  return message.includes(TRIAL_USED_MESSAGE)
+}
+
 export function trialKeyRefusalText(message: string): string {
   return message.replace(TRIAL_USED_MESSAGE, "This tenant already had a Pro trial.")
 }

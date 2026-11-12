@@ -43,7 +43,7 @@ function Question({ id, label, value, onChange, disabled, error }: { id: string;
  * Two questions, an optional reply-to address and an opt-in screenshot, sent to TenuVault only when
  * the admin clicks Send. The draft stays while the app runs, so closing the dialog loses nothing.
  */
-export function FeedbackDialog({ open, onOpenChange, snapshot, onOpenSupport }: {
+export function FeedbackDialog({ open, onOpenChange, snapshot, onOpenSupport, onCloseAutoFocus }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   /**
@@ -51,6 +51,7 @@ export function FeedbackDialog({ open, onOpenChange, snapshot, onOpenSupport }: 
    * the page. Send uses the same snapshot. Null when it could not be recorded.
    */
   snapshot: FeedbackSnapshot | null
+  onCloseAutoFocus?: (event: Event) => void
   onOpenSupport: () => void
 }) {
   const ids = useId()
@@ -139,7 +140,7 @@ export function FeedbackDialog({ open, onOpenChange, snapshot, onOpenSupport }: 
 
   return (
     <Dialog open={open} onOpenChange={close}>
-      <DialogContent className="max-h-[calc(100vh-2rem)] overflow-y-auto sm:max-w-lg">
+      <DialogContent onCloseAutoFocus={onCloseAutoFocus} className="max-h-[calc(100vh-2rem)] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Share feedback</DialogTitle>
           <DialogDescription>

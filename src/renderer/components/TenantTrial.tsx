@@ -1,5 +1,5 @@
 import { ORGANIZATION_LICENSE_GUIDANCE, ORGANIZATION_LICENSE_SETUP_GUIDANCE } from "../../shared/constants"
-import { organizationLicenseRefusal } from "../../shared/trial-notices"
+import { isTrialKeyRefusal, organizationLicenseRefusal } from "../../shared/trial-notices"
 import { useEffect, useState, type ReactNode } from "react"
 import { Link } from "react-router-dom"
 import { CalendarClock, GitCompareArrows, History, Hourglass, Info, Mail, ShieldCheck, Sparkles, X } from "lucide-react"
@@ -42,7 +42,7 @@ export function TrialUsage({ tenant }: { tenant: TenantLicenseStatus }) {
 }
 
 export function TrialKeyRefusalActions({ message, tenant, source }: { message: string; tenant?: TenantLicenseStatus; source: string }) {
-  return message.includes(TRIAL_USED_MESSAGE) ? <TrialActions tenant={tenant} source={source} /> : null
+  return isTrialKeyRefusal(message) ? <TrialActions tenant={tenant} source={source} /> : null
 }
 
 export function TrialActions({ tenant, source }: { tenant?: TenantLicenseStatus; source: string }) {
