@@ -1,6 +1,6 @@
 ---
 title: "Intune backup: run a backup"
-description: "Run an Intune backup with TenuVault: back up 40 Microsoft Intune object types with assignments, encrypted on your device or in your own Azure storage account."
+description: "Run an Intune backup with TenuVault: back up 41 Microsoft Intune object types with assignments, encrypted on your device or in your own Azure storage account."
 faq:
   - question: "How do I back up Microsoft Intune policies?"
     answer: "In TenuVault, select the tenant, open Backup & Restore and click Run Backup. Keep the saved backup choice or change it, then click Start backup. TenuVault reads the Intune configuration through Microsoft Graph with your own delegated sign-in and saves the objects in your backup choice, with their assignments where Intune has them."
