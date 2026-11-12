@@ -161,6 +161,18 @@ describe("License page heading", () => {
     expect(container.querySelector("[data-slot=card-header], .p-7")?.textContent).not.toContain("Pro trial")
   })
 
+  it("counts the active tenants of the license the heading describes, not every license on this machine", async () => {
+    const keyTenant = (id: string) => ({ ...entry, tenantId: id, source: "key" as const, plan: "msp" as const, tenants: 10, validUntil: null, displayKey: null })
+    const withKey: LicenseStatus = { ...mixed, hasKey: true, keyState: "active", plan: "msp", tenantLimit: 10, trial: false, trialEndsAt: null, tenants: [mixed.tenants[0]!, keyTenant("k-1"), keyTenant("k-2"), keyTenant("k-3")] }
+    state.status = withKey
+    state.refreshLicenses.mockResolvedValue(withKey)
+    state.selectedTenantId = "t-trial"
+    const { container } = renderPage()
+    await flush()
+    expect(heading(container)).toBe("Pro trial active")
+    expect(container.textContent).toContain("Your license covers 2 tenants. 1 is active on this machine.")
+  })
+
   it("describes the trial when the tenant that runs it is selected", async () => {
     state.status = mixed
     state.refreshLicenses.mockResolvedValue(mixed)
