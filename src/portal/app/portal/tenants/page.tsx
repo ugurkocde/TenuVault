@@ -551,22 +551,29 @@ function TenantsPageContent() {
 
         // Update tenant with fresh data. The name is decided from the latest state, so a
         // rename made while this fetch was in flight is kept instead of reverted.
-        const latestName = tenantsRef.current.find((entry) => entry.id === tenant.id)?.name ?? tenant.name
+        const latest = tenantsRef.current.find((entry) => entry.id === tenant.id) ?? tenant
+        // A count Graph could not read arrives as null and keeps the value shown before.
+        const stats = details.statistics
+        const policies = stats.policies
+        const kept = <T,>(value: T | null | undefined, previous: T): T => value ?? previous
         updateTenant(tenant.id, {
-          name: nameAfterRefresh(latestName, details.organization.displayName),
+          name: nameAfterRefresh(latest.name, details.organization.displayName),
           domain: details.organization.primaryDomain,
           organizationId: details.organization.id,
-          users: details.statistics.userCount,
-          devices: details.statistics.deviceCount,
-          complianceRate: details.statistics.complianceRate,
-          configCount: details.statistics.policies.total,
+          users: kept(stats.userCount, latest.users),
+          devices: kept(stats.deviceCount, latest.devices),
+          complianceRate: kept(stats.complianceRate, latest.complianceRate),
+          configCount: kept(policies.total, latest.configCount),
           policies: {
-            compliance: details.statistics.policies.compliancePolicies,
-            configuration: details.statistics.policies.deviceConfigurations + details.statistics.policies.configurationPolicies,
-            apps: details.statistics.policies.appProtectionPolicies,
-            deviceConfigurations: details.statistics.policies.deviceConfigurations,
-            configurationPolicies: details.statistics.policies.configurationPolicies,
-            appProtectionPolicies: details.statistics.policies.appProtectionPolicies,
+            ...latest.policies,
+            compliance: kept(policies.compliancePolicies, latest.policies?.compliance),
+            configuration: policies.deviceConfigurations !== null && policies.configurationPolicies !== null
+              ? policies.deviceConfigurations + policies.configurationPolicies
+              : latest.policies?.configuration,
+            apps: kept(policies.appProtectionPolicies, latest.policies?.apps),
+            deviceConfigurations: kept(policies.deviceConfigurations, latest.policies?.deviceConfigurations),
+            configurationPolicies: kept(policies.configurationPolicies, latest.policies?.configurationPolicies),
+            appProtectionPolicies: kept(policies.appProtectionPolicies, latest.policies?.appProtectionPolicies),
           },
           lastSync: new Date().toISOString(),
           syncStatus: "success",

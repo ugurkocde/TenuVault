@@ -91,7 +91,7 @@ export async function POST(request: NextRequest) {
       }
     };
 
-    // Counts come from $count with $top=1, so they stay correct above one Graph page and
+    // Most counts come from $count with $top=1, so they stay correct above one Graph page and
     // no collection is enumerated just to be counted. All reads run in parallel. A failed
     // read stays null: reporting it as zero would show a tenant with no users, no policies
     // or 0 percent compliant devices when the truth is that the count could not be read.
@@ -101,6 +101,26 @@ export async function POST(request: NextRequest) {
       return typeof count === "number" ? count : data.value?.length || 0;
     };
     const failed: string[] = [];
+    // Settings Catalog policies reject $count (400 "Query option 'Count' is not allowed") and
+    // report only the page size in @odata.count, so they are counted by reading their ids page
+    // by page. The next links stay on Microsoft Graph's beta endpoint, and a tenant with more
+    // policies than the page bound is left uncounted instead of undercounted.
+    const BETA = "https://graph.microsoft.com/beta";
+    const MAX_COUNT_PAGES = 100;
+    const pagedCount = async (endpoint: string, label: string): Promise<number | null> => {
+      let next: string | undefined = `${endpoint}?$select=id&$top=100`;
+      let total = 0;
+      for (let page = 0; next && page < MAX_COUNT_PAGES; page++) {
+        const data = await callGraphApi(next, true);
+        if (!data || !Array.isArray(data.value)) break;
+        total += data.value.length;
+        const link: unknown = data["@odata.nextLink"];
+        if (typeof link !== "string") return total;
+        next = link.startsWith(`${BETA}/`) ? link.slice(BETA.length) : undefined;
+      }
+      failed.push(label);
+      return null;
+    };
     const countEndpoint = (endpoint: string, label: string, useBeta: boolean = false): Promise<number | null> =>
       callGraphApi(`${endpoint}${endpoint.includes("?") ? "&" : "?"}$count=true&$top=1`, useBeta).then((data) => {
         const count = countOf(data);
@@ -125,7 +145,7 @@ export async function POST(request: NextRequest) {
       countEndpoint("/deviceManagement/deviceConfigurations", "device configurations"),
       countEndpoint("/deviceManagement/deviceCompliancePolicies", "compliance policies"),
       // Settings Catalog policies need the beta API for full results.
-      countEndpoint("/deviceManagement/configurationPolicies", "configuration policies", true),
+      pagedCount("/deviceManagement/configurationPolicies", "configuration policies"),
       countEndpoint("/deviceAppManagement/iosManagedAppProtections", "iOS app protection policies"),
       countEndpoint("/deviceAppManagement/androidManagedAppProtections", "Android app protection policies"),
       countEndpoint("/deviceAppManagement/windowsInformationProtectionPolicies", "Windows information protection policies"),
@@ -134,17 +154,23 @@ export async function POST(request: NextRequest) {
       countEndpoint("/deviceManagement/managedDevices?$filter=complianceState%20eq%20'compliant'", "compliant devices"),
       countEndpoint("/users", "users"),
     ]);
-    if (!orgData?.value?.[0]) failed.unshift("organization");
-    if (failed.length > 0) {
+    // The organization names the tenant, so without it the details are refused. A count that
+    // could not be read is returned as null and listed in `unavailable`, never as zero, and a
+    // total that depends on it is null too. The user count, for example, needs a directory
+    // permission the TenuVault app registration does not request.
+    if (!orgData?.value?.[0]) {
       return NextResponse.json(
-        { error: `Some tenant details could not be read from Microsoft Graph: ${failed.join(", ")}. Check the app registration permissions and try again.` },
+        { error: "The organization could not be read from Microsoft Graph. Check the app registration permissions and try again." },
         { status: 502 }
       );
     }
-    const organization = orgData!.value![0];
-    // Every count is present here: a failed read returned 502 above.
-    const appPolicyCount = iosAppPolicyCount! + androidAppPolicyCount! + windowsInfoPolicyCount! + mdmWindowsInfoPolicyCount!;
-    const complianceRate = totalDevices! > 0 ? Math.round((compliantDevices! / totalDevices!) * 100) : 0;
+    if (failed.length > 0) console.error(`Tenant details without: ${failed.join(", ")}`);
+    const organization = orgData.value[0];
+    const sum = (...counts: Array<number | null>): number | null =>
+      counts.every((count): count is number => count !== null) ? counts.reduce((a, b) => a + b, 0) : null;
+    const appPolicyCount = sum(iosAppPolicyCount, androidAppPolicyCount, windowsInfoPolicyCount, mdmWindowsInfoPolicyCount);
+    const complianceRate = totalDevices === null || compliantDevices === null ? null
+      : totalDevices > 0 ? Math.round((compliantDevices / totalDevices) * 100) : 0;
 
     // Prepare tenant details
     const tenantDetails = {
@@ -165,9 +191,10 @@ export async function POST(request: NextRequest) {
           compliancePolicies: compliancePolicyCount,
           configurationPolicies: configPolicyCount,
           appProtectionPolicies: appPolicyCount,
-          total: deviceConfigCount! + compliancePolicyCount! + configPolicyCount! + appPolicyCount,
+          total: sum(deviceConfigCount, compliancePolicyCount, configPolicyCount, appPolicyCount),
         },
       },
+      unavailable: failed,
     };
 
     return NextResponse.json(tenantDetails);
