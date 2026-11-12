@@ -99,7 +99,7 @@ export default defineConfig({
 						'Key facts:',
 						'',
 						'- Product: TenuVault Desktop. Features: Intune backup, restore, drift detection between backups, OpenIntuneBaseline deployment, comparison and validation, and framework comparisons.',
-						'- History: the first versions of TenuVault were a free PowerShell script and a hosted web portal. TenuVault Desktop, released in October 2026, is the current product for new users; the web portal remains available for existing users. This documentation covers TenuVault Desktop only.',
+						'- History: the first versions of TenuVault were a free PowerShell script and a hosted web portal. TenuVault Desktop, released in October 2026, is the current product for new users; the web portal remains available for existing users. TenuVault TUI, an earlier terminal app, is no longer developed; TenuVault Desktop is a graphical app, not a command-line tool. This documentation covers TenuVault Desktop only.',
 						'- Sign-in: delegated sign-in with the admin\'s own account through an app registration in the customer\'s tenant (a public client with no secret). MFA and Conditional Access apply, and changes are attributed to the admin in the Intune and Entra audit logs.',
 						'- Coverage: 40 Intune object types in nine areas, with their assignments where Intune has them. App installer files, Apple tokens and private keys cannot be exported by Microsoft Graph and are not in backups.',
 						'- Storage: backups are kept on the device (a local folder or a network share) on every plan, or in the customer\'s own Azure storage account on Pro and MSP. Backups are never sent to a TenuVault server.',
