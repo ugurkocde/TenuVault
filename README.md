@@ -125,7 +125,7 @@ For recovery, see [readiness and manual artifacts](docs/disaster-recovery.md), [
 ## Customer setup
 
 1. In the app, open **Set up TenuVault** and select **Set up with Microsoft sign-in** on the Connect step. A Global
-   Administrator, Privileged Role Administrator or Cloud Application Administrator signs in once in the browser, and the
+   Administrator, Cloud Application Administrator or Application Administrator signs in once in the browser, and the
    app creates the app registration through Microsoft Graph, grants admin consent and signs in. The setup sign-in goes
    through Microsoft's own Microsoft Graph Command Line Tools and is kept in memory only. A tenant that already has a
    TenuVault app registration that an administrator approved keeps it: the app uses it as it is instead of creating a

@@ -50,6 +50,7 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
     let spAttempts = 0
     let grantAttempts = 0
     let readFailures = 0
+    let page = ""
     const server = createServer(async (req, res) => {
       const url = new URL(req.url!, "http://localhost")
       const chunks: Buffer[] = []
@@ -66,11 +67,15 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
         const target = new URL(redirect)
         target.searchParams.set("state", url.searchParams.get("state")!)
         if (scenario === "declined") { target.searchParams.set("error", "access_denied"); target.searchParams.set("error_description", "Consent was declined.") }
+        else if (scenario === "ca-blocked") { target.searchParams.set("error", "access_denied"); target.searchParams.set("error_description", "AADSTS53003: Access has been blocked by Conditional Access policies.") }
+        else if (scenario === "app-disabled") { target.searchParams.set("error", "unauthorized_client"); target.searchParams.set("error_description", "AADSTS7000112: Application '14d82eec-204b-4c2f-b7e8-296a70dab67e'(Microsoft Graph Command Line Tools) is disabled.") }
         else target.searchParams.set("code", "test-code")
         if (scenario === "wrong-state") {
           const wrong = new URL(target); wrong.searchParams.set("state", "wrong")
           await fetch(wrong)
         }
+        // For a refusal, read the page the script shows in the browser instead of letting the browser follow.
+        if (scenario === "app-disabled") { page = await (await fetch(target)).text(); return send({}) }
         res.writeHead(302, { Location: target.toString() }); res.end(); return
       }
       if (url.pathname.endsWith("/devicecode")) return send({ device_code: "device", user_code: "ABCD", verification_uri: "https://microsoft.com/devicelogin", interval: 1, expires_in: 60 })
@@ -123,7 +128,7 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
         child.on("error", error => { clearTimeout(timeout); reject(error) })
         child.on("close", code => { clearTimeout(timeout); resolveRun({ code, text }) })
       })
-      return { ...output, requests, pkce, polls, spAttempts, clipboard: existsSync(clipboard) ? readFileSync(clipboard, "utf8") : "" }
+      return { ...output, page, requests, pkce, polls, spAttempts, clipboard: existsSync(clipboard) ? readFileSync(clipboard, "utf8") : "" }
     } finally { server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); rmSync(dir, { recursive: true, force: true }) }
   }
 
@@ -207,10 +212,28 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
     expect(result.text).toContain("Consent was declined.")
     expect(result.requests.some(r => r.path.includes("graph.microsoft.com"))).toBe(false)
   }, 45000)
+  it("points to the manual route when the tenant has turned Microsoft Graph Command Line Tools off", async () => {
+    const result = await run("app-disabled")
+    expect(result.code).toBe(1)
+    expect(result.text).toContain("AADSTS7000112")
+    expect(result.text).toContain("Create the app registration by hand instead: https://docs.tenuvault.com/getting-started/app-registration/#create-the-app-registration-manually")
+    expect(result.requests.some(r => r.path.includes("graph.microsoft.com"))).toBe(false)
+    // The browser page says the same, instead of asking for another run that cannot work.
+    expect(result.page).toContain("Create the app registration by hand instead")
+    expect(result.page).not.toContain("run the script again")
+  }, 45000)
+  it("names both ways on when Conditional Access blocks the script's sign-in", async () => {
+    const result = await run("ca-blocked")
+    expect(result.code).toBe(1)
+    const text = result.text.replace(/\s+/g, " ")
+    expect(text).toContain("If it asks for a compliant device or an allowed location, sign in from one and run the script again.")
+    expect(text).toContain("create the app registration by hand instead: https://docs.tenuvault.com/getting-started/app-registration/#create-the-app-registration-manually")
+    expect(result.requests.some(r => r.path.includes("graph.microsoft.com"))).toBe(false)
+  }, 45000)
   it("rolls back when consent is forbidden and names the roles", async () => {
     const result = await run("denied")
     expect(result.code).toBe(1)
     expect(result.requests.some(r => r.method === "DELETE" && r.path.endsWith("/applications/app-object"))).toBe(true)
-    for (const text of ["half-created app registration was removed again", "admin@example.test", "Global Administrator", "Privileged Role Administrator", "Cloud Application Administrator"]) expect(result.text).toContain(text)
+    for (const text of ["half-created app registration was removed again", "admin@example.test", "Global Administrator", "Cloud Application Administrator", "Application Administrator"]) expect(result.text).toContain(text)
   }, 45000)
 })

@@ -11,7 +11,7 @@ If someone else is the administrator who can grant consent, or you prefer to rea
 
 ## Set up with Microsoft sign-in
 
-You need an account with **Global Administrator**, **Privileged Role Administrator** or **Cloud Application Administrator**, because the setup grants tenant-wide admin consent.
+You need an account with **Global Administrator**, **Cloud Application Administrator** or **Application Administrator**, because the setup creates an app registration and grants tenant-wide admin consent. A Privileged Role Administrator can grant the consent, but can create the app registration only when users in the tenant may register applications, so the setup does not count on that role. TenuVault connects tenants in Microsoft's global cloud only; tenants in GCC High, DoD or Microsoft Azure operated by 21Vianet are not supported.
 
 1. On the **Connect** step, **Connect your tenant**, select **Set up with Microsoft sign-in**.
 2. Your browser opens. Choose your admin account. Microsoft asks you to approve **Microsoft Graph Command Line Tools** with two permissions, `Application.ReadWrite.All` and `DelegatedPermissionGrant.ReadWrite.All`. This is Microsoft's own sign-in app, the one Microsoft Graph PowerShell also signs in through. TenuVault uses it once, to create the app registration and grant consent. These two permissions are not permissions of the TenuVault app registration. If Microsoft also shows **Consent on behalf of your organization**, leave it unticked; the setup does not need it.
@@ -53,7 +53,8 @@ If your tenant does not list Azure Service Management or Azure Storage among its
 
 ### If something goes wrong
 
-* If your account cannot approve the setup, Microsoft says so in the browser, for example **Need admin approval**, and nothing comes back to TenuVault. Select **Cancel** on the Connect step and use one of the **Other ways to connect**: **Someone else is the admin? Copy instructions** for your Entra administrator, or **I already have an app registration**. If you decline Microsoft's request instead, TenuVault tells you which roles can approve it. Nothing is created in either case, and TenuVault stops waiting by itself after 15 minutes.
+* If your account cannot approve the setup, Microsoft says so in the browser, for example **Need admin approval**, and nothing comes back to TenuVault. Select **Cancel** on the Connect step and use one of the **Other ways to connect**: **Someone else is the admin? Copy instructions** for your Entra administrator, or **I already have an app registration**. If you decline Microsoft's request instead, TenuVault says that you declined it and offers **Try again** or **Someone else is the admin? Copy instructions**. If Microsoft refuses your approval, TenuVault names the roles that can give it. Nothing is created in any of these cases, and TenuVault stops waiting by itself after 15 minutes.
+* If the tenant blocks **Microsoft Graph Command Line Tools** for your account, for example by turning its sign-in off, limiting it to assigned users or with a Conditional Access policy, the setup cannot sign in. The setup script signs in through the same app, so it is blocked too. TenuVault says so and offers **Create it by hand**: [create the app registration manually](#create-the-app-registration-manually), then select **I already have an app registration** and enter its two IDs. When Microsoft shows its own error page instead, nothing comes back to TenuVault; select **Cancel** and take the same route.
 * If your account may sign in but lacks a role that can create app registrations or grant admin consent, the setup stops with a message that names the roles. If it had already created the app registration, it removes it again first.
 * If a step fails after TenuVault created the app registration, TenuVault removes it again and tells you why. If it cannot remove it, it names the app registration to delete in the Microsoft Entra admin center. An app registration that existed before is never deleted.
 * If the last sign-in fails or you cancel it, the **Sign in** step opens with the tenant ID and the client ID filled in. Select **Sign in with Microsoft** to try again. Nothing is created twice.
@@ -111,7 +112,8 @@ The script creates the same app registration from PowerShell and prints the two 
 
 Before you run it:
 
-* An account with **Global Administrator**, **Privileged Role Administrator** or **Cloud Application Administrator**, which can grant admin consent.
+* An account with **Global Administrator**, **Cloud Application Administrator** or **Application Administrator**, which can create the app registration and grant admin consent.
+* A tenant that lets your account sign in to **Microsoft Graph Command Line Tools**, which the script signs in through, like the setup in TenuVault. If the tenant blocks it, [create the app registration manually](#create-the-app-registration-manually) instead.
 * PowerShell: Windows PowerShell 5.1 or PowerShell 7 on Windows, PowerShell 7 (`pwsh`) on macOS. The script needs no PowerShell modules and installs nothing.
 * A browser on the same computer, which the script opens for the sign-in. In a remote shell without a browser, use `-UseDeviceCode` instead; Conditional Access often blocks device code flow.
 * Optional: the object ID of a security group, if only its members should be able to sign in.
@@ -123,7 +125,7 @@ On the **Connect** step, under **Other ways to connect**, select **Use the setup
 3. **Sign in in your browser.** The script opens your browser. Choose your admin account. Microsoft may first ask you to consent to Microsoft Graph Command Line Tools, which the script signs in through to create the app registration.
 4. **Return to TenuVault.** The script prints the Tenant id and the Application (client) id and copies them to your clipboard. TenuVault fills them in on the next step.
 
-The card names the roles that can run the script: Global Administrator, Privileged Role Administrator or Cloud Application Administrator. Expand **Permissions the app registration gets** to see the delegated permissions per API before anyone consents, and the tip to add `-AllowedGroupId` with a group's object ID to limit sign-in to a group of admins.
+The card names the roles that can run the script: Global Administrator, Cloud Application Administrator or Application Administrator. Expand **Permissions the app registration gets** to see the delegated permissions per API before anyone consents, and the tip to add `-AllowedGroupId` with a group's object ID to limit sign-in to a group of admins.
 
 The buttons under the checklist:
 
@@ -215,7 +217,7 @@ Each run creates a new app registration with a new client ID. It does not update
 
 ## Create the app registration manually
 
-If you cannot run PowerShell, you can create the same app registration in the [Microsoft Entra admin center](https://entra.microsoft.com). These steps reproduce every setting the script makes.
+If you cannot run PowerShell, or your tenant blocks Microsoft Graph Command Line Tools for your account, you can create the same app registration in the [Microsoft Entra admin center](https://entra.microsoft.com). These steps reproduce every setting the script makes.
 
 ### 1. Register the app
 

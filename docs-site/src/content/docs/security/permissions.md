@@ -27,15 +27,17 @@ While it grants admin consent, the script lists the delegated permissions per AP
 
 ### Who can run the setup
 
-Both the setup in TenuVault and the script need one of these roles, because they grant tenant-wide admin consent:
+Both the setup in TenuVault and the script need one of these roles, because they create the app registration and grant tenant-wide admin consent:
 
 * Global Administrator
-* Privileged Role Administrator
 * Cloud Application Administrator
+* Application Administrator
+
+A Privileged Role Administrator can grant the consent, but can create the app registration only when users in the tenant may register applications, so the setup does not count on that role.
 
 Both sign in through **Microsoft Graph Command Line Tools**, Microsoft's own sign-in app, with the delegated scopes `Application.ReadWrite.All` and `DelegatedPermissionGrant.ReadWrite.All`. They need them only to create the app registration and grant consent. With `-AllowedGroupId` the script also requests `AppRoleAssignment.ReadWrite.All`, to assign the group. TenuVault itself never uses these scopes: they are not permissions of the TenuVault app registration.
 
-TenuVault keeps the setup sign-in in memory only and drops it when the setup ends. The script needs no PowerShell modules and installs nothing. The approval of Microsoft Graph Command Line Tools stays in your tenant, for the account that gave it; to remove it, open **Entra admin center** > **Enterprise applications** > **Microsoft Graph Command Line Tools** > **Permissions**.
+TenuVault keeps the setup sign-in in memory only and drops it when the setup ends. The script needs no PowerShell modules and installs nothing. The approval of Microsoft Graph Command Line Tools stays in your tenant, for the account that gave it, as long as **Consent on behalf of your organization** was left unticked; to remove it, open **Entra admin center** > **Enterprise applications** > **Microsoft Graph Command Line Tools** > **Permissions**.
 
 To remove TenuVault's access to the tenant, delete **TenuVault Desktop** under **Entra admin center** > **App registrations**. Backups you already saved stay where they are.
 

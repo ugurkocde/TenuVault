@@ -20,10 +20,12 @@ TenuVault encrypts its saved data (sign-ins, license and backup key) with the op
 Someone must create the app registration TenuVault signs in with. TenuVault does this with one Microsoft sign-in, and a setup script does the same from PowerShell. The person who signs in needs one of these Microsoft Entra roles:
 
 * Global Administrator
-* Privileged Role Administrator
 * Cloud Application Administrator
+* Application Administrator
 
-The setup grants tenant-wide admin consent, so the account must be allowed to consent. See [Create the app registration](/getting-started/app-registration/).
+The setup creates the app registration and grants tenant-wide admin consent, so the account must be allowed to do both. A Privileged Role Administrator can grant the consent, but can create the app registration only when users in the tenant may register applications, so the setup does not count on that role.
+
+The setup and the setup script sign in through **Microsoft Graph Command Line Tools**, Microsoft's own sign-in app. If your tenant blocks it, [create the app registration manually](/getting-started/app-registration/#create-the-app-registration-manually) in the Entra admin center instead. See [Create the app registration](/getting-started/app-registration/).
 
 If you do not have one of these roles yourself, select **Someone else is the admin? Copy instructions** on the **Connect** step of **Set up TenuVault**. It copies a ready-to-send message for your Entra administrator with the script link, the command, the permissions and the two values to send back. TenuVault keeps your setup progress while you wait.
 
@@ -49,7 +51,7 @@ TenuVault signs in through your default browser on Windows and macOS, so you can
 
 ## Network
 
-TenuVault connects to the global Microsoft cloud endpoints below over HTTPS (TCP 443). Allow them through your proxy or firewall.
+TenuVault connects to the global Microsoft cloud endpoints below over HTTPS (TCP 443). Tenants in national clouds, such as GCC High, DoD or Microsoft Azure operated by 21Vianet, are not supported. Allow them through your proxy or firewall.
 
 | Destination | Used for | Required |
 | --- | --- | --- |

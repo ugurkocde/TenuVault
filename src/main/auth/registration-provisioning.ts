@@ -1,4 +1,4 @@
-import { CONSENT_ROLES, DESKTOP_APP_PERMISSIONS } from "../../shared/app-registration"
+import { CONSENT_ROLES_TEXT, DESKTOP_APP_PERMISSIONS } from "../../shared/app-registration"
 import { OPTIONAL_PERMISSIONS } from "../../shared/services/optional-permissions"
 import type { RegistrationResult, SetupProgress } from "../../shared/ipc"
 
@@ -111,7 +111,7 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
         await (cleanup ? sleep(pause) : wait(pause))
         continue
       }
-      if (response.status === 403) throw new Error(`The signed-in account ${username} lacks a role that can create app registrations and grant admin consent. Use a ${CONSENT_ROLES.join(", ")} (with consent rights). ${message}`)
+      if (response.status === 403) throw new Error(`The signed-in account ${username} lacks a role that can create app registrations and grant admin consent. Sign in as a ${CONSENT_ROLES_TEXT}. ${message}`)
       throw new Error(`Graph ${method} failed: ${message}`)
     }
   }

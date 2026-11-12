@@ -19,8 +19,8 @@
     Graph PowerShell also signs in through) and then calls Microsoft Graph directly. It
     waits up to 15 minutes for the sign-in.
 
-    Sign in with a Global Administrator, Privileged Role Administrator or Cloud Application
-    Administrator account, which can grant admin consent.
+    Sign in with a Global Administrator, Cloud Application Administrator or Application
+    Administrator account, which can create the app registration and grant admin consent.
 
     If a step fails after the app registration was created, the script removes it again.
 
@@ -145,6 +145,20 @@ function Get-HttpFailure($Record) {
     elseif ($detail.error) { $code = [string]$detail.error }
     [pscustomobject]@{ Status = $status; Code = $code; Message = $message; RetryAfter = $retryAfter }
 }
+# The script signs in through Microsoft Graph Command Line Tools, like the setup in TenuVault. Where
+# the tenant blocks that app for the account, only the manual route in the Entra admin center works.
+function Get-BlockedAppHint([string]$Message) {
+    if ($Message -match 'AADSTS(700016|7000112|50105)') {
+        return " This tenant does not let your account sign in to Microsoft Graph Command Line Tools, the Microsoft app this script signs in through. Create the app registration by hand instead: $manualGuide"
+    }
+    # A Conditional Access refusal may be about the device, the location or the sign-in flow,
+    # which the manual route does not get around either.
+    if ($Message -match 'AADSTS53003') {
+        return " Check the sign-in logs in the Entra admin center for the Conditional Access policy that applied. If it asks for a compliant device or an allowed location, sign in from one and run the script again. If it blocks Microsoft Graph Command Line Tools, the Microsoft app this script signs in through, create the app registration by hand instead: $manualGuide"
+    }
+    ''
+}
+$expiredHint = "If Microsoft said that Microsoft Graph Command Line Tools is blocked, disabled or not assigned to you, create the app registration by hand instead: $manualGuide"
 function ConvertTo-Base64Url([byte[]]$Bytes) {
     [Convert]::ToBase64String($Bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 }
@@ -172,12 +186,12 @@ $scope = 'https://graph.microsoft.com/Application.ReadWrite.All https://graph.mi
 if ($AllowedGroupId) { $scope += ' https://graph.microsoft.com/AppRoleAssignment.ReadWrite.All' }
 Write-Host ''
 Write-Host "Creating the app registration '$DisplayName' that TenuVault Desktop signs in with."
-Write-Host 'Sign in with an account that is Global Administrator, Privileged Role Administrator or'
-Write-Host 'Cloud Application Administrator. Nothing is installed on this computer.'
+Write-Host 'Sign in with an account that is Global Administrator, Cloud Application Administrator or'
+Write-Host 'Application Administrator. Nothing is installed on this computer.'
 Write-Host ''
 if ($UseDeviceCode) {
     try { $device = Invoke-RestMethod -Method Post -Uri "$authority/devicecode" -Body @{ client_id = $clientId; scope = $scope } }
-    catch { $failure = Get-HttpFailure $_; throw "Could not start device code sign-in. Nothing was changed. $($failure.Message)" }
+    catch { $failure = Get-HttpFailure $_; throw "Could not start device code sign-in. Nothing was changed. $($failure.Message)$(Get-BlockedAppHint $failure.Message)" }
     Write-Host "To sign in, open $($device.verification_uri) in a browser on any device and enter the code $($device.user_code)"
     Write-Host 'Waiting for you to sign in (Ctrl+C cancels)...'
     $deadline = [DateTime]::UtcNow.AddSeconds($device.expires_in)
@@ -194,12 +208,12 @@ if ($UseDeviceCode) {
                 'authorization_pending' { continue }
                 'slow_down' { $interval += 5; continue }
                 'authorization_declined' { throw 'Device code sign-in was declined. Nothing was changed.' }
-                'expired_token' { throw 'Device code expired. Nothing was changed. Run the script again.' }
-                default { throw "Device code sign-in failed. Conditional Access may block device code flow. $($failure.Message)" }
+                'expired_token' { throw "Device code expired. Nothing was changed. Run the script again. $expiredHint" }
+                default { throw "Device code sign-in failed. Conditional Access may block device code flow; run the script without -UseDeviceCode on a computer with a browser. $($failure.Message)$(Get-BlockedAppHint $failure.Message)" }
             }
         }
     }
-    if (-not $token) { throw 'Device code expired. Nothing was changed. Run the script again.' }
+    if (-not $token) { throw "Device code expired. Nothing was changed. Run the script again. $expiredHint" }
 } else {
     $listener = $null
     try {
@@ -212,7 +226,7 @@ if ($UseDeviceCode) {
             $listener.Prefixes.Add("http://localhost:$port/")
             try { $listener.Start(); break } catch { $listener.Close(); $listener = $null }
         }
-        if (-not $listener) { throw 'Could not start browser sign-in. Try -UseDeviceCode or the manual app registration guide.' }
+        if (-not $listener) { throw "Could not start browser sign-in. Try -UseDeviceCode, or create the app registration by hand: $manualGuide" }
         $redirectUri = "http://localhost:$port"
         $state = New-RandomToken
         $verifier = New-RandomToken
@@ -243,20 +257,24 @@ if ($UseDeviceCode) {
             if ($values['error']) {
                 $message = $values['error_description']
                 if (-not $message) { $message = $values['error'] }
-                Send-BrowserResponse $answer.Response 'Sign-in did not work' "$message Go back to PowerShell and run the script again."
-                throw "Browser sign-in failed. Nothing was changed. $message"
+                # The page says the same as PowerShell: running the script again does not help a blocked app.
+                $hint = Get-BlockedAppHint $message
+                $next = ' Go back to PowerShell and run the script again.'
+                if ($hint) { $next = " Go back to PowerShell.$hint" }
+                Send-BrowserResponse $answer.Response 'Sign-in did not work' "$message$next"
+                throw "Browser sign-in failed. Nothing was changed. $message$hint"
             }
             $code = $values['code']
             Send-BrowserResponse $answer.Response 'You are signed in' 'Go back to PowerShell, where the setup continues. You can close this tab.'
             break
         }
-        if (-not $code) { throw 'Sign-in was not completed within 15 minutes. Nothing was changed. Run the script again.' }
+        if (-not $code) { throw "Sign-in was not completed within 15 minutes. Nothing was changed. Run the script again. $expiredHint" }
     } finally {
         if ($listener) { $listener.Stop(); $listener.Close() }
     }
     try {
         $token = Invoke-RestMethod -Method Post -Uri "$authority/token" -Body @{ grant_type = 'authorization_code'; client_id = $clientId; code = $code; redirect_uri = $redirectUri; code_verifier = $verifier }
-    } catch { $failure = Get-HttpFailure $_; throw "Microsoft did not accept the sign-in. Nothing was changed. $($failure.Message)" }
+    } catch { $failure = Get-HttpFailure $_; throw "Microsoft did not accept the sign-in. Nothing was changed. $($failure.Message)$(Get-BlockedAppHint $failure.Message)" }
 }
 if (-not $token.access_token -or -not $token.id_token) { throw 'Sign-in did not return the tenant, user name and access token. Nothing was changed.' }
 $payload = $token.id_token.Split('.')[1].Replace('-', '+').Replace('_', '/')
@@ -293,7 +311,7 @@ function Invoke-Graph([string]$Method, [string]$Path, $Body, [switch]$Replicatio
                 continue
             }
             if ($failure.Status -eq 403 -or $failure.Code -eq 'Authorization_RequestDenied') {
-                throw "The signed-in account $username lacks a role that can create app registrations and grant admin consent. Use a Global Administrator, Privileged Role Administrator or Cloud Application Administrator (with consent rights). $($failure.Message)"
+                throw "The signed-in account $username lacks a role that can create app registrations and grant admin consent. Sign in as a Global Administrator, Cloud Application Administrator or Application Administrator. $($failure.Message)"
             }
             throw "Graph $Method $Path failed: $($failure.Message)"
         }
