@@ -155,6 +155,8 @@ describe("License page heading", () => {
     const { container } = renderPage()
     await flush()
     expect(heading(container)).toBe("Licensed through your organization")
+    expect(container.textContent).toContain("A tenant admin shared their TenuVault license with your tenant.")
+    expect(container.textContent).not.toContain("Your license covers 2 tenants")
   })
 
   it("describes the trial when the tenant that runs it is selected", async () => {

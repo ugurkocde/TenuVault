@@ -485,8 +485,8 @@ export default function LicensePage() {
                     : trialUsed
                       ? "Paste your license key, or buy Pro for daily backups, full restore and drift revert."
                       : "Paste the license key from your email, or start a free trial."
-                  : status.plan
-                    ? `Your license covers ${status.tenantLimit ?? 1} tenant${status.tenantLimit === 1 ? "" : "s"}. ${activeKeyTenants} ${activeKeyTenants === 1 ? "is" : "are"} active on this machine.`
+                  : summary.plan
+                    ? `Your license covers ${summary.tenantLimit ?? 1} tenant${summary.tenantLimit === 1 ? "" : "s"}. ${activeKeyTenants} ${activeKeyTenants === 1 ? "is" : "are"} active on this machine.`
                     : savedKeyNotNeededHere(status)
                       ? "A tenant admin shared their TenuVault license with your tenant."
                       : hasPaidLicense(status)
