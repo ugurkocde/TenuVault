@@ -173,6 +173,17 @@ describe("License page heading", () => {
     expect(container.textContent).toContain("Your license covers 2 tenants. 1 is active on this machine.")
   })
 
+  it("counts only the selected tenant for its own trial, not other tenants' separate trials", async () => {
+    const other = { ...mixed.tenants[0]!, tenantId: "t-trial-2" }
+    const twoTrials: LicenseStatus = { ...mixed, tenants: [mixed.tenants[0]!, other] }
+    state.status = twoTrials
+    state.refreshLicenses.mockResolvedValue(twoTrials)
+    state.selectedTenantId = "t-trial"
+    const { container } = renderPage()
+    await flush()
+    expect(container.textContent).toContain("Your license covers 2 tenants. 1 is active on this machine.")
+  })
+
   it("describes the trial when the tenant that runs it is selected", async () => {
     state.status = mixed
     state.refreshLicenses.mockResolvedValue(mixed)

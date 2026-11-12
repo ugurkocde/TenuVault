@@ -432,12 +432,14 @@ export default function LicensePage() {
 
   // The heading and its icon describe the selected tenant's coverage; the rows below list every tenant.
   const summary = statusForTenant(status, selectedTenant?.credentials?.tenantId)
-  // Active tenants of the license the heading describes: the selected tenant's kind of coverage,
-  // or, without a scoped summary, this machine's key (or its trials when no key is saved).
+  // Active tenants of the license the heading describes. A selected tenant trial covers that
+  // tenant alone; a selected key tenant shares the saved key with its other activations. Without a
+  // scoped summary: this machine's key, or its trials when no key is saved.
   const scopedSource = summary !== status ? summary.tenants[0]?.source : undefined
-  const activeKeyTenants = status.tenants.filter((t) => t.entitled && (scopedSource
-    ? t.source === scopedSource
-    : t.source === "key" || !status.hasKey && t.source === "trial")).length
+  const activeKeyTenants = scopedSource === "trial" ? 1
+    : status.tenants.filter((t) => t.entitled && (scopedSource
+      ? t.source === scopedSource
+      : t.source === "key" || !status.hasKey && t.source === "trial")).length
   const title = licensePageTitle(summary)
   // A tenant row below already shows the refused trial key's message with Buy Pro.
   const trialKeyRefusedInRow = status.tenants.some(t => !t.entitled && t.message?.includes(TRIAL_USED_MESSAGE))
