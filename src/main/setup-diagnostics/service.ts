@@ -86,8 +86,11 @@ function retryAfterMs(header: string | null, now: number): number | null {
 
 type Outcome = "done" | "retry" | "aborted"
 
-/** One request with the contract's answer rules: 2xx done, 400 and 413 dropped, everything else retried. */
-async function post(fetchImpl: typeof fetch, url: string, body: string, abort: AbortSignal, now: () => number, label: string): Promise<{ outcome: Outcome; retryAfter: number | null }> {
+/**
+ * One request with the contract's answer rules: `accepted` statuses are done, `dropped` statuses
+ * are never retried, everything else (including answers from a proxy) is retried.
+ */
+async function post(fetchImpl: typeof fetch, url: string, body: string, abort: AbortSignal, now: () => number, label: string, rules: { accepted: (status: number) => boolean; dropped: readonly number[] }): Promise<{ outcome: Outcome; retryAfter: number | null }> {
   try {
     const response = await fetchImpl(url, {
       method: "POST",
@@ -97,9 +100,9 @@ async function post(fetchImpl: typeof fetch, url: string, body: string, abort: A
       signal: AbortSignal.any([abort, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]),
     })
     void response.body?.cancel().catch(() => undefined)
-    if (response.ok) return { outcome: "done", retryAfter: null }
-    // A 400 or 413 is never accepted on a retry either.
-    if (response.status === 400 || response.status === 413) {
+    if (rules.accepted(response.status)) return { outcome: "done", retryAfter: null }
+    // A refused request is never accepted on a retry either.
+    if (rules.dropped.includes(response.status)) {
       console.warn(`[diagnostics] ${label} was refused (${response.status}) and dropped.`)
       return { outcome: "done", retryAfter: null }
     }
@@ -304,7 +307,7 @@ export class SetupDiagnostics {
     while (batch.length > 1 && Buffer.byteLength(body(batch)) > BODY_LIMIT) batch = batch.slice(0, Math.ceil(batch.length / 2))
     const controller = new AbortController()
     this.upload = controller
-    const { outcome, retryAfter } = await post(this.options.fetch, this.options.url, body(batch), controller.signal, this.now, "Setup diagnostics")
+    const { outcome, retryAfter } = await post(this.options.fetch, this.options.url, body(batch), controller.signal, this.now, "Setup diagnostics", { accepted: (status) => status >= 200 && status < 300, dropped: [400, 413] })
     if (this.upload === controller) this.upload = undefined
     // Withdrawn, ended or restarted with a new funnel ID while the request ran: nothing is kept.
     if (outcome === "aborted" || controller.signal.aborted || !this.active() || this.saved.funnelId !== funnelId) return
@@ -324,7 +327,11 @@ export class SetupDiagnostics {
     const funnelId = this.saved.pendingErase?.[0]
     if (this.erasing || !funnelId || !this.options.url) return
     this.erasing = true
-    const { outcome, retryAfter } = await post(this.options.fetch, `${this.options.url}/erase`, JSON.stringify({ schema: 1, funnelId }), new AbortController().signal, this.now, "The erase request")
+    const { outcome, retryAfter } = await post(this.options.fetch, `${this.options.url}/erase`, JSON.stringify({ schema: 1, funnelId }), new AbortController().signal, this.now, "The erase request", {
+      // Only the endpoint's own 202 confirms the deletion; any other answer, such as a 200 from a proxy, is retried.
+      accepted: (status) => status === 202,
+      dropped: [400],
+    })
     this.erasing = false
     if (outcome !== "done") {
       this.erasure.failed(retryAfter)

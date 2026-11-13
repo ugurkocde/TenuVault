@@ -274,6 +274,25 @@ describe("decline, opt-out and erasure", () => {
     expect(h.saved()).toEqual({ state: "declined" })
   })
 
+  it.each([
+    ["200", () => new Response(JSON.stringify({ erased: 1 }), { status: 200 })],
+    ["204", () => new Response(null, { status: 204 })],
+    ["an HTML page", () => new Response("<html>Sign in to the proxy</html>", { status: 200, headers: { "content-type": "text/html" } })],
+    ["413", () => new Response(null, { status: 413 })],
+  ])("keeps the pending erase after an unexpected %s and retries until a 202", async (_label, unexpected) => {
+    const h = harness({ eraseResponses: [unexpected()] })
+    const diagnostics = h.make()
+    diagnostics.consent("welcome")
+    const funnelId = h.saved().funnelId
+    diagnostics.decline()
+    await h.pass(1)
+    expect(h.erases).toHaveLength(1)
+    expect(h.saved().pendingErase).toEqual([funnelId])
+    await h.pass(30_000)
+    expect(h.erases).toHaveLength(2)
+    expect(h.saved()).toEqual({ state: "declined" })
+  })
+
   it("repeats a pending erase at the next start, and drops it on a 400", async () => {
     const h = harness({ url: null })
     const diagnostics = h.make()
