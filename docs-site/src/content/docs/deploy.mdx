@@ -119,7 +119,7 @@ If GitHub is blocked on your network, update checks fail and TenuVault keeps run
 
 ## Turn off setup diagnostics
 
-A new install asks once whether it may share [setup diagnostics](/security/data-flows/#setup-diagnostics): which setup steps worked and which Microsoft error codes stopped them, for 30 days after the admin agrees. To decide this for your organization, set the policy `DisableSetupDiagnostics`. TenuVault then never asks, sends nothing, and **Settings** > **About** shows **Share setup diagnostics** locked off with **Turned off by your organization.** An install that was already sharing deletes its random ID and anything still queued at its next start, and asks tenuvault.com to delete the events it already sent.
+A new install asks once whether it may share [setup diagnostics](/security/data-flows/#setup-diagnostics): which setup steps worked and which Microsoft error codes stopped them, for 30 days after the admin agrees. To decide this for your organization, set the policy `DisableSetupDiagnostics`. TenuVault then never asks, sends no events, and **Settings** > **About** shows **Share setup diagnostics** locked off with **Turned off by your organization.** An install that was already sharing deletes anything still queued at its next start and sends one erase request to tenuvault.com, with only its random ID, to delete the events it already sent. It keeps that ID, and nothing else, until tenuvault.com confirms the deletion, for at most 180 days.
 
 TenuVault reads the policy when it starts. Set it before the first launch so the question is never shown.
 

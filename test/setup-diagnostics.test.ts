@@ -293,6 +293,21 @@ describe("decline, opt-out and erasure", () => {
     expect(h.saved()).toEqual({ state: "declined" })
   })
 
+  it("reports a decline it could not save, and saves it on the next try", () => {
+    const base = memoryStore()
+    let failing = false
+    const store = { ...base, set: (key: string, value: string) => { if (failing) throw new Error("disk full"); base.set(key, value) } }
+    const h = harness({ store, url: null })
+    const diagnostics = h.make()
+    diagnostics.consent("welcome")
+    failing = true
+    expect(() => diagnostics.decline()).toThrow(/could not save/)
+    expect(JSON.parse(base.get(KEY)!).state).toBe("granted")
+    failing = false
+    expect(diagnostics.decline().state).toBe("declined")
+    expect(JSON.parse(base.get(KEY)!).state).toBe("declined")
+  })
+
   it("gives up an erase that was never confirmed 180 days after the withdrawal", async () => {
     const h = harness({ url: null })
     const diagnostics = h.make()
@@ -592,6 +607,25 @@ describe("sender", () => {
     expect(h.sent).toHaveLength(4)
     expect(new Set(h.sent.map((request) => JSON.stringify(request.body.events.map((event) => event.seq))))).toEqual(new Set(["[1,2]"]))
     expect(h.saved().queue).toEqual([])
+  })
+
+  it("waits for Retry-After even when an event was queued while the request ran", async () => {
+    let release!: (response: Response) => void
+    let calls = 0
+    const fetch = vi.fn(() => {
+      calls++
+      return calls === 1 ? new Promise<Response>((resolve) => { release = resolve }) : Promise.resolve(new Response(null, { status: 202 }))
+    }) as unknown as typeof globalThis.fetch
+    const h = harness({ fetch })
+    const diagnostics = granted(h)
+    await vi.advanceTimersByTimeAsync(SEND_DELAY_MS)
+    expect(calls).toBe(1)
+    diagnostics.record({ name: "welcome_continue" })
+    release(new Response(null, { status: 429, headers: { "Retry-After": "120" } }))
+    await vi.advanceTimersByTimeAsync(119_000)
+    expect(calls).toBe(1)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(calls).toBe(2)
   })
 
   it("an event during a backoff does not send before the backoff ends", async () => {

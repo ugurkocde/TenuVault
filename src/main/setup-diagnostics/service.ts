@@ -149,6 +149,9 @@ class Retrier {
     this.failures++
     const delay = retryAfter ?? Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** (this.failures - 1))
     this.until = this.now() + delay
+    // An earlier timer, set by an event queued during the request, must not run before the backoff.
+    clearTimeout(this.timer)
+    this.timer = undefined
     this.schedule(delay)
   }
 
@@ -181,6 +184,8 @@ export class SetupDiagnostics {
   private readonly uploads: Retrier
   private readonly erasure: Retrier
   private expiryTimer: ReturnType<typeof setTimeout> | undefined
+  /** The last save failed, so the stored state may still say an earlier answer. */
+  private unsaved = false
 
   constructor(private readonly options: SetupDiagnosticsOptions) {
     this.now = options.now ?? Date.now
@@ -261,6 +266,9 @@ export class SetupDiagnostics {
     this.pending = {}
     if (this.saved.state === "granted") this.withdraw("declined")
     else if (this.saved.state === "unasked") this.replace({ state: "declined", ...this.eraseFields() })
+    // Nothing more is sent in this session either way, but an unsaved answer would bring sharing
+    // back at the next start, so the caller is told and can try again.
+    if (this.unsaved && !this.save()) throw new Error("TenuVault could not save this choice. Try again.")
     return this.status()
   }
 
@@ -478,11 +486,16 @@ export class SetupDiagnostics {
     return decided
   }
 
-  private save(): void {
+  /** Returns whether the state reached the store. A failed save is retried by the next decline. */
+  private save(): boolean {
     try {
       this.options.store.set(KEY, JSON.stringify(this.saved))
+      this.unsaved = false
+      return true
     } catch (error) {
+      this.unsaved = true
       console.warn("[diagnostics] Could not save the setup diagnostics state.", error instanceof Error ? error.message : String(error))
+      return false
     }
   }
 }
