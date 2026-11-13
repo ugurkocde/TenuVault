@@ -1,5 +1,9 @@
 # Windows App Backup validation, 2026-11-13
 
+## Automatic assignment-check follow-up
+
+The packaged app now checks assignments automatically when a Windows app's Backup panel opens. Real delegated-session checks passed for device targeting (PowerShell), user targeting (Brave) and an include filter requiring review (7-Zip). No capture was started and neither retained backup changed. See the [assignment-check evidence and limits](app-backup-evidence/assignment-checks-2026-11-13/README.md).
+
 ## Current app-driven capture validation
 
 The Windows helper and Backup action are now implemented. A normal desktop session on the enrolled mini PC completed PowerShell capture through the real compiled helper after the administrator signed in and approved Windows consent. The app verified and stored a 123,779,448-byte payload. Native export produced the same SHA-256 as the independent earlier lab capture: `aab979dcb289d34da2b50328b67613a896ffac542154946b158e71a6f14df3da`.

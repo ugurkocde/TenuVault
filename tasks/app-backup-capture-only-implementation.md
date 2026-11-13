@@ -74,3 +74,9 @@ The renderer exposes Start backup on Windows for system-context Win32 apps, with
 Release builds enforce matching valid app/helper Authenticode publishers. Development/PR packages are unsigned. A signed release-pair test, broader EDR coverage and the remaining rollout controls are separate acceptance items. Restore, custom Intune RBAC roles, user-context capture and macOS retrieval remain unavailable.
 
 Current evidence is in [Windows validation](app-backup-windows-validation-2026-11-13.md). Earlier lab-adapter results above remain historical component evidence and are not relabelled as app captures.
+
+## Automatic assignment guidance
+
+Opening Backup now checks this PC's assignments before enabling Start backup. Read-only Graph beta requests load assignment targets, referenced groups and filters, and complete transitive device memberships when permissions allow. The local Entra device identity and public Intune enrollment must match the selected tenant. Guidance names the relevant group, exclusion or filter, respects same-intent device exclusions, and leaves hidden membership, user-based access and filter evaluation explicitly uncertain. No assignment or membership writes are implemented.
+
+Checks are advisory and refreshed before starting if older than one minute. Content authorization remains the helper's independent responsibility. Optional device/group read permissions are documented without expanding default consent. [Windows assignment-check evidence](app-backup-evidence/assignment-checks-2026-11-13/README.md) records three real delegated-session UI cases and the remaining limits.

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import { ChevronLeft, ChevronRight, HardDriveDownload, Info, RefreshCw } from "lucide-react"
 import { AppDetailsDialog, AppIcon } from "./AppDetailsDialog"
+import { AssignmentCheckPanel } from "./AssignmentCheckPanel"
 import { Fragment } from "react"
 import { Link } from "react-router-dom"
 import { Button } from "~/components/ui/button"
@@ -75,10 +76,10 @@ export function IntuneAppsView({ tenant, devicePanel, busy, feedback, platform, 
         <p className="mt-3 max-w-prose text-sm text-gray-600">Retrieve this app’s original installer content from Intune and save an encrypted backup on this PC. No local installer file is needed.</p>
         <ol className="mt-4 max-w-prose list-decimal space-y-2 pl-5 text-sm text-gray-600">
           <li>Use a PC enrolled in this tenant and an active Intune Administrator or Global Administrator account.</li>
-          <li>The app must be available to this device in the system context. If Intune refuses access, review Required targeting, including groups, exclusions and filters. Required assignments can install the app automatically; use a dedicated test-device group.</li>
+          <li>Review the automatic assignment check below. It shows device targeting, exclusions and filters, with next steps where a change or review is needed.</li>
           <li>Start Backup and approve the Windows prompt. TenuVault retrieves and verifies the installer, then saves it encrypted.</li>
         </ol>
-        {selected.installContext && selected.installContext !== "system" ? <p className="mt-4 text-sm text-gray-600">This preview supports system-context Win32 apps. This app uses another install context.</p> : <Button className="mt-5" disabled={busy || !onCapture} onClick={() => void onCapture?.(selected.id)}><HardDriveDownload className="mr-2 size-4" aria-hidden="true"/>{busy ? "Backing up…" : "Start backup"}</Button>}
+        {selected.installContext && selected.installContext !== "system" ? <p className="mt-4 text-sm text-gray-600">This preview supports system-context Win32 apps. This app uses another install context.</p> : <AssignmentCheckPanel key={`${tenant}/${selected.id}`} tenant={tenant} appId={selected.id} busy={busy} onCapture={onCapture} />}
         <p className="mt-3 max-w-prose text-xs text-gray-600">Windows preview · Up to 2 GiB · Backup does not change assignments or install the app. Keep your recovery key from Settings to recover encrypted backups on another computer.</p>
       </> : <p className="mt-3 max-w-prose text-sm text-gray-600">To back up this Win32 installer, open TenuVault on a Windows PC enrolled in this Intune tenant. You can browse apps and export existing backups on this computer. macOS installer capture is not available yet.</p>}
       {feedback}

@@ -3,7 +3,7 @@ import { act, createElement } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { it, expect, vi, afterEach } from "vitest"
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
-const api = vi.hoisted(() => ({ accounts: vi.fn(async () => [{tenantId:"tenant"}]), details:vi.fn(),apps: vi.fn(), signIn: vi.fn(async () => {}), openExternal: vi.fn() }))
+const api = vi.hoisted(() => ({ assignments: vi.fn(async (_tenant: string, appId: string) => ({ appId, checkedAt: new Date().toISOString(), status: "device-targeted", summary: "A device assignment includes this PC.", steps: [], warnings: [], assignments: [] })), accounts: vi.fn(async () => [{tenantId:"tenant"}]), details:vi.fn(),apps: vi.fn(), signIn: vi.fn(async () => {}), openExternal: vi.fn() }))
 vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { auth: {accounts:api.accounts}, appSources: api, app: { openExternal: api.openExternal } } }))
 import { IntuneAppsView } from "../../src/renderer/features/app-backup/IntuneAppsView"
 HTMLElement.prototype.scrollIntoView = vi.fn()
@@ -19,6 +19,7 @@ it("starts from the connected app list and offers a real capture without changin
   await act(async () => button.click())
   expect(node.textContent).toContain("original installer content from Intune")
   expect(node.textContent).toContain("No local installer file is needed")
+  expect(api.assignments).toHaveBeenCalledExactlyOnceWith("tenant", "11111111-1111-1111-1111-111111111111")
   const future = node.querySelector("details")!
   expect(future.open).toBe(false)
   expect(future.closest("tr")?.previousElementSibling?.textContent).toContain("Finance")
@@ -78,4 +79,5 @@ it("does not offer Win32 capture on a Mac and points to an enrolled Windows PC",
  expect(node.textContent).toContain("Windows PC enrolled in this Intune tenant")
  expect([...node.querySelectorAll("button")].some(b=>b.textContent?.includes("Start backup"))).toBe(false)
  expect(capture).not.toHaveBeenCalled()
+ expect(api.assignments).not.toHaveBeenCalled()
 })

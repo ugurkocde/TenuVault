@@ -41,24 +41,25 @@ export function evaluateDevice(tenant: string, intuneAccount: string, data: Enro
   return { ...state, enrollment: "matched", certificate: "matched" }
 }
 
+export function observeWindowsEnrollment(timeoutMs = 15_000): Promise<EnrollmentObservation> {
+  const executable = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+  return new Promise((resolve, reject) => {
+    const child = execFile(executable, ["-NoProfile", "-NonInteractive", "-Command", "-"], { timeout: timeoutMs, maxBuffer: 128 * 1024, windowsHide: true }, (error, stdout) => {
+      if (error) { reject(error); return }
+      try { resolve(JSON.parse(stdout) as EnrollmentObservation) } catch (error) { reject(error) }
+    })
+    child.stdin?.on("error", reject)
+    child.stdin?.end(`& {\n${DEVICE_CHECK_SCRIPT}\n}\n\n`)
+  })
+}
+
 export async function checkRecoveryDevice(tenant: string, account: () => Promise<string>, options: { platform?: RecoveryDeviceStatus["platform"]; probe?: () => Promise<EnrollmentObservation> } = {}): Promise<RecoveryDeviceStatus> {
   const platform = options.platform ?? process.platform as RecoveryDeviceStatus["platform"]
   sourceTenant(tenant)
   if (platform !== "win32") return { ...unknown(platform), reason: "Device checks require a Windows PC enrolled in the selected tenant. Installer access is checked when Backup starts." }
   try {
     const id = sourceTenant(await account())
-    const data = await (options.probe ?? (async () => {
-      const executable = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
-      return new Promise<EnrollmentObservation>((resolve, reject) => {
-        const child = execFile(executable, ["-NoProfile", "-NonInteractive", "-Command", "-"], { timeout: 15_000, maxBuffer: 128 * 1024, windowsHide: true }, (error, stdout) => {
-          if (error) { reject(error); return }
-          try { resolve(JSON.parse(stdout) as EnrollmentObservation) } catch (error) { reject(error) }
-        })
-        child.stdin?.on("error", reject)
-        // Windows PowerShell's stdin command mode needs a blank line to execute a block.
-        child.stdin?.end(`& {\n${DEVICE_CHECK_SCRIPT}\n}\n\n`)
-      })
-    }))()
+    const data = await (options.probe ?? observeWindowsEnrollment)()
     return evaluateDevice(tenant, id, data)
   } catch {
     return { ...unknown(platform), reason: "The device's enrollment could not be confirmed. Check Microsoft sign-in, Intune permissions and Windows enrollment, then retry. Installer access is checked when Backup starts." }

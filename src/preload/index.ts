@@ -21,6 +21,7 @@ function subscribe<T>(channel: string, listener: (payload: T) => void): () => vo
 
 const bridge: TenuVaultPreloadBridge = {
   appSources: {
+    assignments: (tenant, appId) => invoke("appSources:assignments", tenant, appId),
     capture: (tenant, operation, appId) => invoke("appSources:capture", tenant, operation, appId),
     captureProgress: (tenant, operation) => invoke("appSources:captureProgress", tenant, operation),
     details: (tenant, appId) => invoke("appSources:details", tenant, appId),

@@ -93,6 +93,8 @@ import { allows, effectiveRetentionDays, PlanRequired } from "../shared/plans"
 import { APP_STATE_START_OVER_BUTTON, APP_STATE_START_OVER_DETAIL, SecureStore, UnreadableStoreError, type Cipher } from "./storage/secure-store"
 import { Preferences } from "./preferences"
 import { AppTray } from "./tray"
+import { checkAppAssignments } from "./app-backup/assignments"
+import { readAssignmentDevice } from "./app-backup/assignment-device"
 import { installedBySetup, isNightly, Updates, updatesDisabledByPolicy } from "./updates"
 import { WhatsNew } from "./whats-new"
 import { featureRoutes, startFeatures } from "./features"
@@ -1425,6 +1427,10 @@ async function bootstrap(): Promise<void> {
       const result = await dialog.showSaveDialog(mainWindow!, { title: "Download app script", defaultPath: fileName, filters: [{ name: "PowerShell script", extensions: ["ps1"] }] })
       return result.canceled ? null : result.filePath ?? null
     }),
+    assignments: (tenant, appId) => checkAppAssignments(tenant, appId,
+      async id => (await auth.getAccessToken(id, signedInClient(id), RESOURCE_SCOPES.graph)).accessToken,
+      { fetch: bridgedFetch, device: () => readAssignmentDevice(tenant, () => readAppBackupAccount(tenant,
+        async id => (await auth.getAccessToken(id, signedInClient(id), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch)) }),
     apps: (tenant) => readAppBackupApps(tenant, async id => (await auth.getAccessToken(id, signedInClient(id), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch),
     knownTenant: (tenant) => connectedTenantIds().some(id => id.toLowerCase() === tenant),
     folder: (tenant) => appStore.get(`app-sources.folder.${tenant}`) ?? join(app.getPath("documents"), "TenuVault App Sources"),
@@ -1453,6 +1459,7 @@ async function bootstrap(): Promise<void> {
   })
   app.on("before-quit", () => appSources.close())
   handleTrusted("appSources:capture", (_event, tenant: unknown, operation: unknown, id: unknown) => appSources.capture(tenant, operation, id))
+  handleTrusted("appSources:assignments", (_event, tenant: unknown, id: unknown) => appSources.assignments(tenant, id))
   handleTrusted("appSources:captureProgress", (_event, tenant: unknown, operation: unknown) => appSources.captureProgress(tenant, operation))
   handleTrusted("appSources:list", (_event, tenant: unknown) => appSources.list(tenant))
   handleTrusted("appSources:chooseStore", (_event, tenant: unknown) => appSources.chooseStore(tenant))

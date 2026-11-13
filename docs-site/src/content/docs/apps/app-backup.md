@@ -28,6 +28,7 @@ The earlier manual-file workflow has been removed. Files already saved by an ear
 | View version, logo, description, installation settings, rules and assignments | Available when Intune returns the information |
 | Print app details or download available script content | Available; scripts are never executed |
 | Read public Windows enrollment metadata | Available on Windows; does not establish installer access |
+| Check this PC's app assignments before capture | Automatic on Windows; group membership needs optional directory-read permissions |
 | Browse, reconnect and export legacy archives | Available offline with the matching recovery key |
 | Retrieve Windows installer content from Intune | Windows preview, system context, up to 2 GiB |
 | Retrieve macOS PKG or DMG installer content from Intune | Not available in this build |
@@ -48,9 +49,10 @@ macOS support means retrieving the installer from Intune, not downloading a subs
 
 1. Open TenuVault on a Windows PC enrolled in the same Intune tenant. Use your existing Microsoft session with an active **Intune Administrator** or **Global Administrator** role. Custom Intune roles are not supported by this preview.
 2. Find the app and choose **Backup**. The preview supports **system-context** Win32 apps with one committed installer payload, up to **2 GiB**.
-3. Choose **Start backup** and approve the Windows prompt. The desktop app stays non-elevated; a temporary helper uses the enrollment key for this request.
-4. Wait while TenuVault downloads, verifies and encrypts the installer. Completion appears only after the encrypted backup is published.
-5. Open **Backups** to view the result or **Export installer**. Keep the [recovery key](/security/encryption/) from Settings safe.
+3. Review **Assignment check for this PC**, which runs automatically. It identifies device targeting, exclusions, user-only assignments and filters, with next steps. Use **Recheck assignments** after an intended change in Intune.
+4. Choose **Start backup** and approve the Windows prompt. The desktop app stays non-elevated; a temporary helper uses the enrollment key for this request. A check older than a minute refreshes first so you can review its updated guidance before starting.
+5. Wait while TenuVault downloads, verifies and encrypts the installer. Completion appears only after the encrypted backup is published.
+6. Open **Backups** to view the result or **Export installer**. Keep the [recovery key](/security/encryption/) from Settings safe.
 
 If the app record has no committed installer content, Backup explains this before asking for Windows approval. Choose an app whose installer has been uploaded to Intune.
 
@@ -59,6 +61,24 @@ No local installer file is required. Backup does not change assignments or start
 The helper reads the Intune agent's recently discovered service address. If it cannot find that address, sync the PC with Intune and retry. This preview requires your Windows account to be a local administrator. Approval with a different Windows account is not supported. Cancelling approval or the capture leaves no completed backup. If a Windows approval prompt remains after cancellation, dismiss it; its expired request cannot continue.
 
 Microsoft permissions remain separate from product licensing. The configured registration needs delegated `DeviceManagementApps.ReadWrite.All`, `DeviceManagementServiceConfig.Read.All` (or its read/write equivalent), and `User.Read`. TenuVault's standard setup includes these capabilities. No paid TenuVault license is required.
+
+### Understand the assignment check
+
+The check reads app assignments and matches this PC's local Entra identity and Intune enrollment to the selected tenant. It uses the device's reported transitive group memberships, including nested groups. Device identifiers stay in the main process; the app does not use the administrator's user membership as a substitute for the capture PC.
+
+| Result | What to do |
+| --- | --- |
+| A device assignment includes this PC | No device-targeting change is indicated. Start backup; Intune still decides whether content access is allowed. |
+| No assignments, or no device assignment found for this PC | Review the named targets. Add the PC to the intended device group or create a Required assignment to a dedicated device group containing it. |
+| This PC matches an app exclusion | Review the named exclusion and its intent. Another include assignment of that intent does not override a matching exclusion. Change scope only if the PC should receive the app. |
+| Only user targeting found | User-based access is not evaluated. To target the capture PC explicitly, use a dedicated device-group assignment; existing user assignments can remain. |
+| Filter needs review | Check the displayed filter name, mode and rule in Intune. For an include filter the PC must match; for an exclude filter it must not match. TenuVault does not reproduce Intune's filter evaluation. |
+| Install and uninstall targeting | Review the competing intents in Intune before changing targeting. The check does not predict a final install outcome. |
+| Check unavailable or membership unknown | Resolve the displayed enrollment, connectivity or permission issue and recheck. Incomplete results are never treated as an empty assignment list. |
+
+No assignment or group membership is changed automatically. Required assignments can cause Intune to install software; keep intended changes limited to a dedicated test-device group. After changing targeting, sync the PC and allow membership changes to propagate before rechecking. An assignment check is guidance, not proof of installer authorization, so an uncertain check still allows a deliberate Backup attempt.
+
+Device-group checks need optional delegated **`Device.Read.All`**. Reading names and visibility of referenced groups needs **`GroupMember.Read.All`** or an existing broader group-read permission. Filter details use **`DeviceManagementConfiguration.Read.All`** or its read/write equivalent, already included in the standard setup. For an existing registration, add only the needed read permissions in Entra, grant admin consent, reconnect Microsoft in TenuVault, then recheck. The default setup permissions are unchanged. All-devices and user-only targeting can be described without device-group reads.
 
 ## Backups and legacy archives
 

@@ -49,10 +49,28 @@ export interface AppSourceState {
   unreadableSources?: boolean
 }
 
+export interface AppAssignmentCheck {
+  appId: string
+  checkedAt: string
+  status: "device-targeted" | "review" | "unavailable" | "unsupported"
+  summary: string
+  steps: string[]
+  warnings: string[]
+  assignments: Array<{
+    id: string
+    intent: string
+    target: string
+    match: "included" | "excluded" | "not-member" | "user" | "unknown"
+    detail: string
+    filter: { name: string; mode: string; rule: string | null } | null
+  }>
+}
+
 export type AppCapturePhase = "authorizing" | "windows-approval" | "downloading" | "verifying"
 export interface AppCaptureProgress { phase: AppCapturePhase; receivedBytes: number; totalBytes: number | null }
 
 export interface AppSourcesBridge {
+  assignments: (tenantId: string, appId: string) => Promise<AppAssignmentCheck>
   capture: (tenantId: string, operationId: string, appId: string) => Promise<boolean>
   captureProgress: (tenantId: string, operationId: string) => Promise<AppCaptureProgress | null>
   details: (tenantId: string, appId: string) => Promise<IntuneAppDetails>

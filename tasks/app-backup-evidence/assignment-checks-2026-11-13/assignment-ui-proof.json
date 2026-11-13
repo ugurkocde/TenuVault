@@ -1,0 +1,58 @@
+{
+  "platform": "Windows",
+  "application": "Packaged test app, existing delegated Microsoft session",
+  "cases": [
+    {
+      "application": "PowerShell",
+      "expectedSummaryText": "A device assignment includes this PC.",
+      "loading": {
+        "observed": true,
+        "startDisabled": true
+      },
+      "expectedSummary": true,
+      "noChangeNotice": true,
+      "startEnabled": true,
+      "filterNeedsReview": false,
+      "hasFilterRule": false
+    },
+    {
+      "application": "Brave",
+      "expectedSummaryText": "Only user targeting was found.",
+      "loading": {
+        "observed": true,
+        "startDisabled": true
+      },
+      "expectedSummary": true,
+      "noChangeNotice": true,
+      "startEnabled": true,
+      "filterNeedsReview": false,
+      "hasFilterRule": false
+    },
+    {
+      "application": "7-Zip",
+      "expectedSummaryText": "Review this app's targeting before backup.",
+      "loading": {
+        "observed": true,
+        "startDisabled": true
+      },
+      "expectedSummary": true,
+      "noChangeNotice": true,
+      "startEnabled": true,
+      "filterNeedsReview": true,
+      "hasFilterRule": true
+    }
+  ],
+  "existingCatalogUnchanged": true,
+  "captureStarted": false,
+  "assignmentsChanged": false,
+  "verificationDate": "2026-11-13",
+  "sourceSha256": {
+    "src/main/app-backup/assignment-device.ts": "701f4dd0294fbdc6c775344891b3367a7364ffafe0e8ee1756d25dfb554bbd9e",
+    "src/main/app-backup/assignment-graph.ts": "449c2d60421010b267453358229bda512693228cc5d1c4cc5924af3ed8fa6f82",
+    "src/main/app-backup/assignments.ts": "b63c398887b9afb4da4543bba35745a819357a7d4da5cfef47ac6d552398bb7e",
+    "src/main/app-backup/device-check.ts": "1422e7f795640eb7d30976daf508eea97ef5e9cc42463327a0dca1a26330477b",
+    "src/renderer/features/app-backup/AssignmentCheckPanel.tsx": "570af734885820d9cad1aef4c9e7cba90f53ec03952d9f0d09b3faae8f567a76"
+  },
+  "securityFusesPassed": 6,
+  "desktopElevated": false
+}

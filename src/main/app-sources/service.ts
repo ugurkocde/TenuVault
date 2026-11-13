@@ -5,6 +5,7 @@ import type { AppCaptureProgress, AppSourceState, RecoveryDeviceStatus, AppSourc
 import { AppSourceStore, sourceTenant } from "./store"
 
 export interface AppSourceHost {
+  assignments?: (tenant: string, appId: string) => ReturnType<AppSourcesBridge["assignments"]>
   capture?: (tenant: string, appId: string, jobId: string, store: AppSourceStore, signal: AbortSignal, progress: (value: AppCaptureProgress) => void) => Promise<void>
   ensureKeys?: () => void
   knownTenant: (tenant: string) => boolean
@@ -28,6 +29,7 @@ export class AppSourceService {
   private readonly jobs = new Map<string, { tenant: string; abort: AbortController; progress?: AppCaptureProgress }>()
   private readonly deviceChecks = new Map<string, Promise<RecoveryDeviceStatus>>()
   private readonly appLoads = new Map<string, ReturnType<AppSourcesBridge["apps"]>>()
+  private readonly assignmentChecks = new Map<string, ReturnType<AppSourcesBridge["assignments"]>>()
   constructor(private readonly host: AppSourceHost) {}
   private tenant(raw: unknown): string {
     const id = sourceTenant(raw)
@@ -136,6 +138,16 @@ export class AppSourceService {
   }
   details(raw: unknown, app: unknown): Promise<IntuneAppDetails> {
     return this.host.details(this.tenant(raw), sourceTenant(app))
+  }
+  assignments(raw: unknown, app: unknown): ReturnType<AppSourcesBridge["assignments"]> {
+    const tenant = this.tenant(raw), appId = sourceTenant(app), key = `${tenant}/${appId}`
+    const pending = this.assignmentChecks.get(key)
+    if (pending) return pending
+    if (!this.host.assignments) return Promise.reject(new Error("Assignment checks are unavailable in this build."))
+    if (this.assignmentChecks.size >= 8) return Promise.reject(new Error("Assignment checks are busy. Wait a moment and recheck."))
+    const check = Promise.resolve().then(() => this.host.assignments!(tenant, appId)).then(value => { this.tenant(tenant); return value }).finally(() => { this.assignmentChecks.delete(key) })
+    this.assignmentChecks.set(key, check)
+    return check
   }
   async printDetails(raw: unknown, app: unknown): Promise<boolean> {
     const tenant = this.tenant(raw), id = sourceTenant(app)
