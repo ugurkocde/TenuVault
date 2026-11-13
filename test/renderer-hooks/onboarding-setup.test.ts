@@ -314,6 +314,7 @@ describe("OnboardingPage", () => {
     await flush()
     expect(state.trialAction).toHaveBeenCalledWith(TENANT, "acknowledge")
     expect(container.textContent).toContain("Take a first backup")
+    expect(container.textContent).toContain("A restore needs a backup from before the change, so this first backup cannot bring back a policy already lost. It protects what you back up from now on.")
   })
 
   it("does not mark the trial as seen when the tenant cannot be saved", async () => {
