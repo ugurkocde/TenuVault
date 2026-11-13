@@ -2,6 +2,7 @@ import { act, createElement } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { MemoryRouter } from "react-router-dom"
 import { afterEach, expect, it, vi } from "vitest"
+import { FIRST_SIGN_IN_TIMEOUT_MESSAGE } from "../../src/shared/app-registration"
 import { TRIAL_USED_MESSAGE } from "../../src/shared/constants"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -76,4 +77,12 @@ it("omits the action for the Community limit", async () => {
 })
 it("omits the action without a feedback host", async () => {
   await render(initial, false); await fail(); expect(button(label)).toBeUndefined()
+})
+
+it("keeps feedback available alongside timeout recovery actions", async () => {
+  await render(); await fail(FIRST_SIGN_IN_TIMEOUT_MESSAGE)
+  expect(button(label)).toBeTruthy()
+  expect(button("Try again")).toBeTruthy()
+  expect(button("Copy instructions for your admin")).toBeTruthy()
+  expect(mocks.capture).not.toHaveBeenCalled()
 })
