@@ -369,6 +369,43 @@ describe("tenant trials", () => {
     await license.refreshAll()
     expect(license.status([tenant]).trial).toBe(true)
   })
+  it("says why no automatic trial started, for setup diagnostics", async () => {
+    response = body => {
+      if (body.action === "activate") return Response.json({ reason: "tenant_not_licensed" }, { status: 403 })
+      throw new TypeError("fetch failed")
+    }
+    const failed = service()
+    await connect(failed)
+    expect(failed.trialSkipReason(tenant.toUpperCase())).toBe("trial_request_failed")
+
+    store = memoryStore()
+    store.set("license.installId", install)
+    response = body => body.action === "activate" ? Response.json({ reason: "tenant_not_licensed" }, { status: 403 }) : Response.json({ error: "trial_unavailable", reason: "used" }, { status: 403 })
+    const refused = service()
+    await connect(refused)
+    expect(refused.trialSkipReason(tenant)).toBe("used")
+
+    store = memoryStore()
+    store.set("license.installId", install)
+    response = () => Response.json({ reason: "revoked" }, { status: 403 })
+    const denied = service()
+    await connect(denied)
+    expect(denied.trialSkipReason(tenant)).toBe("revoked")
+
+    store = memoryStore()
+    store.set("license.installId", install)
+    response = undefined
+    enabled = false
+    const unavailable = service()
+    await connect(unavailable).catch(() => undefined)
+    expect(unavailable.trialSkipReason(tenant)).toBe("trials_unavailable")
+  })
+  it("names a failed activation as the reason", async () => {
+    response = () => { throw new TypeError("fetch failed") }
+    const offline = service()
+    await connect(offline).catch(() => undefined)
+    expect(offline.trialSkipReason(tenant)).toBe("activation_failed")
+  })
 
 })
 

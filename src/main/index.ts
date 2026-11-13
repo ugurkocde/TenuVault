@@ -90,7 +90,10 @@ import { allows, effectiveRetentionDays, PlanRequired } from "../shared/plans"
 import { APP_STATE_START_OVER_BUTTON, APP_STATE_START_OVER_DETAIL, SecureStore, UnreadableStoreError, type Cipher } from "./storage/secure-store"
 import { Preferences } from "./preferences"
 import { AppTray } from "./tray"
-import { installedBySetup, isNightly, Updates, updatesDisabledByPolicy } from "./updates"
+import { installedBySetup, isNightly, setupDiagnosticsDisabledByPolicy, Updates, updatesDisabledByPolicy } from "./updates"
+import { SetupDiagnostics } from "./setup-diagnostics/service"
+import { firstLaunchProps, isNetworkFolder, rendererEvent } from "./setup-diagnostics/events"
+import { firstBackupEvent, isSetupError, licenseEvent, licenseFailureEvent, signInEvent } from "./setup-diagnostics/hooks"
 import { WhatsNew } from "./whats-new"
 import { featureRoutes, startFeatures } from "./features"
 import { emitBackupOutcome, emitCredentialExpiring, emitDriftOutcome, emitLateBackup, emitRestoreOutcome } from "./features/notifications/producers"
@@ -207,6 +210,8 @@ async function bootstrap(): Promise<void> {
     app.quit()
     return
   }
+  // Read before anything writes: only an install without any saved state is asked about setup diagnostics.
+  const freshInstall = appStore.keys().length === 0
 
   // Proxy sign-ins: asked once per proxy in the window, remembered in the encrypted store
   // (for this session only without OS encryption).
@@ -426,7 +431,10 @@ async function bootstrap(): Promise<void> {
       failedAttempts.finished(job, request)
       // Manual backup outcomes notify here; scheduled and tray outcomes notify from the
       // scheduler path, which already suppresses repeated unreachable failures.
-      if ((request.trigger ?? "manual") === "manual") void notifyBackupOutcome(job, "manual")
+      if ((request.trigger ?? "manual") === "manual") {
+        void notifyBackupOutcome(job, "manual")
+        diagnostics.record(firstBackupEvent(job))
+      }
       tallyBackup(job, request)
     },
   })
@@ -876,6 +884,23 @@ async function bootstrap(): Promise<void> {
   updates.onLogin((authInfo, callback) => answerProxyLogin("updates", authInfo, callback))
   // The MSI is deployed and updated by the organization; updating it would add a per-user copy.
   const autoUpdateManaged = (app.isPackaged && !installedBySetup(process.execPath)) || (await updatesDisabledByPolicy())
+  // Setup diagnostics of new installs that agree to share them. An unpackaged build sends only to a test endpoint.
+  const diagnostics = new SetupDiagnostics({
+    store: appStore,
+    freshInstall,
+    policy: await setupDiagnosticsDisabledByPolicy(),
+    url: app.isPackaged ? `${LICENSE_API_BASE}/api/desktop-events` : process.env.TENUVAULT_DIAGNOSTICS_URL || null,
+    fetch: chromiumFetch,
+    envelope: { appVersion: app.getVersion(), os: process.platform, channel: isNightly(app.getVersion()) ? "nightly" : "stable" },
+    firstLaunch: () => firstLaunchProps(process.getSystemVersion(), process.arch, autoUpdateManaged),
+  })
+  diagnostics.start()
+  app.on("before-quit", () => diagnostics.stop())
+  handleTrusted("diagnostics:status", () => diagnostics.status())
+  handleTrusted("diagnostics:consent", (_event, where: unknown, step: unknown) => diagnostics.consent(where, step))
+  handleTrusted("diagnostics:decline", () => diagnostics.decline())
+  handleTrusted("diagnostics:reminderShown", () => diagnostics.reminderShown())
+  handleTrusted("diagnostics:record", (_event, name: unknown, props: unknown) => diagnostics.record(rendererEvent(name, props, () => isNetworkFolder(localFolder()))))
   const applyPreferences = (prefs: ReturnType<Preferences["get"]>) => {
     if (app.isPackaged) {
       app.setLoginItemSettings({ openAtLogin: prefs.startAtLogin, args: ["--hidden"] })
@@ -1100,8 +1125,11 @@ async function bootstrap(): Promise<void> {
   // fails, the new sign-in is removed so no tenant stays connected without a license.
   const requireForNewTenant = async (tenantId: string) => {
     try {
-      await license.checkNewTenant(tenantId)
+      const plan = await license.checkNewTenant(tenantId)
+      const checked = license.status([]).tenants.find((tenant) => tenant.tenantId === tenantId.toLowerCase())
+      diagnostics.record(licenseEvent(plan, checked?.source, license.trialSkipReason(tenantId)))
     } catch (error) {
+      diagnostics.record(licenseFailureEvent(error), "signin")
       // A tenant that is already connected keeps its sign-in; only a new one is rolled back.
       const connected = connectedTenantIds().some((id) => id.toLowerCase() === tenantId.toLowerCase())
       if (!connected) await auth.signOut(tenantId)
@@ -1121,6 +1149,7 @@ async function bootstrap(): Promise<void> {
       if (progress.phase === "registration" && progress.reused === undefined) returnToApp()
       mainWindow?.webContents.send("setup:progress", progress)
     },
+    report: event => diagnostics.record(event, isSetupError(event) ? "setup" : undefined),
   })
   // Creates (or finds) the tenant's app registration with a sign-in that is kept in memory only.
   // The sign-in that follows may skip the account picker once, for exactly this registration and
@@ -1137,7 +1166,12 @@ async function bootstrap(): Promise<void> {
     const expected = setupSignIn
     setupSignIn = null
     const loginHint = setupLoginHint(expected, tenant, clientId, options?.loginHint)
-    const account = await auth.signIn(tenant, clientId, loginHint ? { loginHint } : undefined).finally(returnToApp)
+    const account = await auth.signIn(tenant, clientId, loginHint ? { loginHint } : undefined).finally(returnToApp).catch((error: unknown) => {
+      const event = signInEvent(error)
+      diagnostics.record(event, isSetupError(event) ? "signin" : undefined)
+      throw error
+    })
+    diagnostics.record({ name: "signin", props: { result: "ok" } })
     await requireForNewTenant(account.tenantId)
     return account
   }))
@@ -1173,6 +1207,7 @@ async function bootstrap(): Promise<void> {
     if (result.canceled || !result.filePath) return { saved: false }
     const { writeFile } = await import("node:fs/promises")
     await writeFile(result.filePath, desktopSetupScript, "utf8")
+    diagnostics.record({ name: "script_saved" })
     return { saved: true, folder: dirname(result.filePath), fileName: basename(result.filePath) }
   })
 
@@ -1275,7 +1310,14 @@ async function bootstrap(): Promise<void> {
       event.returnValue = null
     }
   })
-  handleTrusted("storage:set", (_event, key: unknown, value: unknown) => appStore.set(RENDERER_STORAGE_PREFIX + rendererStorageKey(key), rendererStorageValue(value)))
+  handleTrusted("storage:set", (_event, key: unknown, value: unknown) => {
+    const name = rendererStorageKey(key)
+    const text = rendererStorageValue(value)
+    // The first tenant saved on this computer is the end of the setup.
+    const firstTenant = name === "tenuvault_tenants" && connectedTenantIds().length === 0
+    appStore.set(RENDERER_STORAGE_PREFIX + name, text)
+    if (firstTenant && connectedTenantIds().length > 0) diagnostics.record({ name: "tenant_added" })
+  })
   handleTrusted("storage:remove", (_event, key: unknown) => appStore.delete(RENDERER_STORAGE_PREFIX + rendererStorageKey(key)))
 
   let importingArchive = false

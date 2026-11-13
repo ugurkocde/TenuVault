@@ -8,6 +8,7 @@ import { APP_REGISTRATION_GUIDE_URL, CONSENT_ROLES_TEXT, MANUAL_APP_REGISTRATION
 import type { RegistrationResult, SetupProgress } from "../../shared/ipc"
 import { bridge } from "../lib/bridge"
 import { PermissionList, SetupScriptCard } from "./TenantSignInForm"
+import { recordSetup, SetupDiagnosticsReminder } from "./SetupDiagnostics"
 
 const CANCELLED = "Sign-in cancelled."
 
@@ -52,6 +53,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
   const start = async () => {
     if (busy.current) return
     busy.current = true
+    recordSetup({ name: "setup_route", props: { route: "auto" } })
     setRunning(true)
     setCancelling(false)
     setError("")
@@ -81,6 +83,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
 
   const copyHandoff = async () => {
     setError("")
+    recordSetup({ name: "setup_route", props: { route: "handoff" } })
     try {
       await navigator.clipboard.writeText(setupHandoffText())
       setCopied(true)
@@ -99,6 +102,14 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
   // The setup and the setup script sign in through the same Microsoft app. Where the tenant blocks
   // it, creating the app registration in the Entra admin center is the route that still works.
   const openManualGuide = () => void bridge.app.openExternal(MANUAL_APP_REGISTRATION_URL)
+  const manual = () => {
+    recordSetup({ name: "setup_route", props: { route: "manual" } })
+    onManual()
+  }
+  const toggleScript = () => {
+    if (!script) recordSetup({ name: "setup_route", props: { route: "script" } })
+    setScript(!script)
+  }
 
   return (
     <div data-tenant-connect className="grid items-start gap-5 text-sm text-gray-700 @3xl:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
@@ -113,12 +124,13 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
               {suggestsCreatingByHand(error) && (
                 <div className="mt-3 flex flex-wrap gap-2">
                   <Button type="button" variant="outline" size="sm" onClick={openManualGuide}>Create it by hand</Button>
-                  <Button type="button" variant="ghost" size="sm" onClick={onManual}>I already have an app registration</Button>
+                  <Button type="button" variant="ghost" size="sm" onClick={manual}>I already have an app registration</Button>
                 </div>
               )}
             </AlertDescription>
           </Alert>
         )}
+        {error && <SetupDiagnosticsReminder step="setup" />}
 
         {running ? (
           <div role="status" aria-live="polite" className="space-y-4 rounded-3xl bg-gray-50 p-5">
@@ -263,10 +275,10 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
             {copied ? <Check className="mr-2 h-4 w-4" aria-hidden="true" /> : <Send className="mr-2 h-4 w-4" aria-hidden="true" />}
             {copied ? "Copied" : "Someone else is the admin? Copy instructions"}
           </Button>
-          <Button type="button" variant="ghost" size="sm" disabled={running} onClick={() => setScript(!script)} aria-expanded={script}>
+          <Button type="button" variant="ghost" size="sm" disabled={running} onClick={toggleScript} aria-expanded={script}>
             Use the setup script instead
           </Button>
-          <Button type="button" variant="ghost" size="sm" disabled={running} onClick={onManual}>
+          <Button type="button" variant="ghost" size="sm" disabled={running} onClick={manual}>
             I already have an app registration
           </Button>
         </div>

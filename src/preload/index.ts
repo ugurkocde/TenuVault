@@ -150,6 +150,13 @@ const bridge: TenuVaultPreloadBridge = {
     info: () => invoke("app:info"),
     openExternal: (url) => invoke("app:openExternal", url),
   },
+  diagnostics: {
+    status: () => invoke("diagnostics:status"),
+    consent: (where, step) => invoke("diagnostics:consent", where, step),
+    decline: () => invoke("diagnostics:decline"),
+    reminderShown: () => invoke("diagnostics:reminderShown"),
+    record: (event) => invoke("diagnostics:record", event.name, "props" in event ? event.props : undefined),
+  },
   feedback: {
     capture: (page) => invoke("feedback:capture", page),
     send: (openingId, input) => invoke("feedback:send", openingId, input),

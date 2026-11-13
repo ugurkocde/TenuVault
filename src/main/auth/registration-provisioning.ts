@@ -111,8 +111,9 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
         await (cleanup ? sleep(pause) : wait(pause))
         continue
       }
-      if (response.status === 403) throw new Error(`The signed-in account ${username} lacks a role that can create app registrations and grant admin consent. Sign in as a ${CONSENT_ROLES_TEXT}. ${message}`)
-      throw new Error(`Graph ${method} failed: ${message}`)
+      // The status goes with the error, so setup diagnostics can report it without the message.
+      if (response.status === 403) throw Object.assign(new Error(`The signed-in account ${username} lacks a role that can create app registrations and grant admin consent. Sign in as a ${CONSENT_ROLES_TEXT}. ${message}`), { status: 403 })
+      throw Object.assign(new Error(`Graph ${method} failed: ${message}`), { status: response.status })
     }
   }
   async function list<T>(path: string): Promise<T[]> {
@@ -220,7 +221,7 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
     if (!created) throw error
     let removed = false
     try { await graph("DELETE", `/applications/${created.id}`, undefined, true, true); removed = true } catch { /* Best effort cleanup. */ }
-    throw new Error(`Setup did not finish. ${removed ? "The half-created app registration was removed again." : `Cleanup failed. Delete app registration TenuVault Desktop (client id ${created.appId}) in the Entra admin center.`} ${error instanceof Error ? error.message : String(error)}`)
+    throw new Error(`Setup did not finish. ${removed ? "The half-created app registration was removed again." : `Cleanup failed. Delete app registration TenuVault Desktop (client id ${created.appId}) in the Entra admin center.`} ${error instanceof Error ? error.message : String(error)}`, { cause: error })
   }
   // From here on the registration is complete. A cancel keeps it, and says so when this run made it.
   const kept = () => new Error(existing ? "Sign-in cancelled." : `Setup was cancelled. The app registration "${app!.displayName}" (client id ${app!.appId}) stays in your tenant, and the next setup uses it.`)

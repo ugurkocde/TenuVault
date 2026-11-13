@@ -77,7 +77,15 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 Put these in the next stable release's notes, then remove them here.
 
-None yet.
+- **Setup diagnostics.** New installs ask once on the welcome screen whether to share setup
+  diagnostics with `POST https://www.tenuvault.com/api/desktop-events` (schema 1). The website's
+  ingest endpoint and the privacy page's setup diagnostics section must be deployed before a
+  build with this feature ships, nightlies included; until then a sharing install retries with
+  backoff and drops its queue after 7 days. The event names and props are a contract with that
+  endpoint: they are add-only, and a new event or prop ships on the server before any app sends
+  it. Existing installs are never asked. Admins can turn it off with the `DisableSetupDiagnostics`
+  policy (Windows DWORD under `SOFTWARE\Policies\TenuVault`, macOS managed preference for
+  `com.tenuvault.desktop`).
 
 ## Cutting a stable release
 

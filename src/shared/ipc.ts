@@ -296,6 +296,27 @@ export interface FailedBackupAttempt {
   message: string
 }
 
+/** Whether this install shares setup diagnostics (see docs-site security/data-flows, Setup diagnostics). */
+export interface SetupDiagnosticsStatus {
+  /**
+   * unasked: a new install that has not answered; granted: shared; declined: "Don't share" or
+   * turned off in Settings; ineligible: installed before this feature, never asked; ended: 30 days
+   * after install, nothing more is sent.
+   */
+  state: "unasked" | "granted" | "declined" | "ineligible" | "ended"
+  /** Set by the DisableSetupDiagnostics policy: nothing is asked or sent and the toggle is locked off. */
+  policy: boolean
+  /** Whether the reminder may be shown next to the error of this step that the app just showed. */
+  reminder: { setup: boolean; signin: boolean }
+}
+
+/** The setup steps the renderer reports itself; the main process records the others where it knows the outcome. */
+export type RendererSetupEvent =
+  | { name: "welcome_continue" }
+  | { name: "setup_route"; props: { route: "auto" | "script" | "manual" | "handoff" } }
+  | { name: "script_saved" }
+  | { name: "storage"; props: { kind: "local" | "azure" } }
+
 export interface AppPreferences {
   /** Start TenuVault (hidden, in the tray) when the admin signs in to the computer. */
   startAtLogin: boolean
@@ -594,6 +615,18 @@ export interface TenuVaultBridge {
   app: {
     info: () => Promise<AppInfo>
     openExternal: (url: string) => Promise<void>
+  }
+  /** Setup diagnostics: asked once on the welcome screen, changed in Settings > About. */
+  diagnostics: {
+    status: () => Promise<SetupDiagnosticsStatus>
+    /** Agrees to share. From the reminder next to an error, `step` names it, so that error is shared too. */
+    consent: (where: "welcome" | "error" | "settings", step?: "setup" | "signin") => Promise<SetupDiagnosticsStatus>
+    /** "Don't share" or turned off: the random ID and anything queued are deleted. */
+    decline: () => Promise<SetupDiagnosticsStatus>
+    /** The reminder next to a setup error was shown; it is not shown again. */
+    reminderShown: () => Promise<void>
+    /** Reports a setup step the renderer knows about. Nothing is kept unless the admin agreed. */
+    record: (event: RendererSetupEvent) => Promise<void>
   }
   feedback: {
     /**

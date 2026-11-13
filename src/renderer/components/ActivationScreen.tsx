@@ -3,6 +3,7 @@ import { ArrowRight, DatabaseBackup, GitCompare, RotateCcw } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import { BrandMark } from "./BrandMark"
 import { TrialOrKey } from "./PlanChoice"
+import { recordSetup, SetupDiagnosticsCard } from "./SetupDiagnostics"
 
 const POINTS = [
   { icon: DatabaseBackup, text: "Back up your Intune policies, encrypted on this computer." },
@@ -41,7 +42,7 @@ export function ActivationScreen({ onSignIn }: { onSignIn: () => void }) {
         </ul>
 
         <div className="space-y-3">
-          <Button size="lg" className="w-full bg-blue-600 text-white hover:bg-blue-700" onClick={onSignIn}>
+          <Button size="lg" className="w-full bg-blue-600 text-white hover:bg-blue-700" onClick={() => { recordSetup({ name: "welcome_continue" }); onSignIn() }}>
             Connect your tenant <ArrowRight className="ml-2 h-4 w-4" aria-hidden="true" />
           </Button>
           <p className="text-xs text-gray-600">
@@ -51,13 +52,15 @@ export function ActivationScreen({ onSignIn }: { onSignIn: () => void }) {
           </p>
         </div>
 
+        <SetupDiagnosticsCard />
+
         <div className="border-t border-gray-100 pt-4">
           <TrialOrKey source="welcome" />
         </div>
 
         <p className="text-center text-xs text-gray-500">
           License checks go to tenuvault.com and send the license key or your Microsoft sign-in token, the tenant ID and a
-          random installation ID. Tenant configuration and backups are never sent. Trials store a keyed hash of the tenant ID. An optional email is sent only when you submit it.
+          random installation ID. Tenant configuration and backups are never sent. Trials store a keyed hash of the tenant ID. An optional email is sent only when you submit it. Setup diagnostics are sent only if you choose to share them.
         </p>
       </div>
     </div>

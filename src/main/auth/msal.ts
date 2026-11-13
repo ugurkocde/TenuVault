@@ -95,6 +95,9 @@ export class SignInCancelledError extends Error {
   }
 }
 
+/** A failed first sign-in the app explains in its own words, so setup diagnostics can tell it from an unexplained one. */
+export class ExplainedSignInError extends Error {}
+
 /** Microsoft's refusals of a first sign-in that the admin can fix, with what to do. */
 const FIRST_SIGN_IN_ERRORS: Record<string, string> = {
   AADSTS700016: "No app registration with this client ID exists in this tenant. Check the Application (client) id, and that the tenant is the one the app registration was created in. If it was created a moment ago, wait a minute and sign in again.",
@@ -117,11 +120,11 @@ const FIRST_SIGN_IN_ERRORS: Record<string, string> = {
  */
 export function firstSignInError(error: unknown): unknown {
   const consent = missingPermissionError(RESOURCE_SCOPES.graph, error)
-  if (consent) return consent
+  if (consent) return new ExplainedSignInError(consent.message)
   const message = error instanceof Error ? error.message : String(error)
   const code = /AADSTS\d+/.exec(message)?.[0]
-  if (code && FIRST_SIGN_IN_ERRORS[code]) return new Error(`${FIRST_SIGN_IN_ERRORS[code]} (${code})`)
-  if (/access_denied|user_cancelled|user_canceled|authentication_canceled/i.test(message) && !code) return new Error("The sign-in was cancelled in the browser. Sign in again to continue.")
+  if (code && FIRST_SIGN_IN_ERRORS[code]) return new ExplainedSignInError(`${FIRST_SIGN_IN_ERRORS[code]} (${code})`)
+  if (/access_denied|user_cancelled|user_canceled|authentication_canceled/i.test(message) && !code) return new ExplainedSignInError("The sign-in was cancelled in the browser. Sign in again to continue.")
   return error
 }
 
