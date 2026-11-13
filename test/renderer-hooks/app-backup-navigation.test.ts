@@ -18,30 +18,29 @@ function Layout() {
   return createElement(ErrorBoundary, { key: desktopRouteBoundaryKey(pathname), children: createElement(Outlet) })
 }
 afterEach(() => { act(() => root?.unmount()); root = undefined; document.body.innerHTML = ""; vi.clearAllMocks() })
-it.each(["save", "export"])("keeps an active %s running across the actual tab routes and caches the app list", async kind => {
+it("keeps an active export running across the actual tab routes and caches the app list", async () => {
   const node = document.createElement("div"); document.body.append(node); root = createRoot(node)
   api.accounts.mockResolvedValue([{tenantId:tenant}])
   api.apps.mockResolvedValue({apps:[{id:tenant,name:"Finance",publisher:"Contoso"}],fetchedAt:"2026-11-12T00:00:00Z"})
   api.list.mockResolvedValue({storeName:"Installers",warnings:[],sources:[{id:"source",appName:"Finance",fileName:"Finance.intunewin",bytes:1024,createdAt:"2026-11-12T00:00:00Z",sha256:"abc"}]})
   let finish!: (value: boolean) => void
-  api[kind === "save" ? "attach" : "export"].mockImplementationOnce(() => new Promise(resolve => {finish = resolve}))
+  api.export.mockImplementationOnce(() => new Promise(resolve => {finish = resolve}))
   await act(async () => root!.render(createElement(MemoryRouter, {initialEntries:["/portal/app-backup"]}, createElement(Routes, null,
     createElement(Route, {element:createElement(Layout)}, createElement(Route, {path:"/portal/app-backup/:tabId?",element:createElement(AppBackupPage)}))))))
   const tab = async (label: string) => { await act(async () => [...node.querySelectorAll('nav[aria-label="App Backup sections"] a')].find(link => link.textContent === label)!.dispatchEvent(new MouseEvent("click", {bubbles:true,cancelable:true,button:0}))) }
-  await tab("Saved installers")
+  await tab("Backups")
   await act(async () => {
-    if (kind === "save") node.querySelector("form")!.dispatchEvent(new Event("submit", {bubbles:true,cancelable:true}))
-    else [...node.querySelectorAll("button")].find(button => button.textContent?.trim() === "Export original")!.click()
+    [...node.querySelectorAll("button")].find(button => button.textContent?.trim() === "Export archive")!.click()
   })
-  expect(node.textContent).toContain(kind === "save" ? "Saving installer…" : "Exporting original…")
+  expect(node.textContent).toContain("Exporting installer…")
   await tab("Intune apps")
   expect(api.cancel).not.toHaveBeenCalled()
   expect(node.querySelector('nav a[aria-current="page"]')?.textContent).toBe("Intune apps")
-  expect(node.textContent).toContain(kind === "save" ? "Saving installer…" : "Exporting original…")
-  await tab("Saved installers")
+  expect(node.textContent).toContain("Exporting installer…")
+  await tab("Backups")
   expect(api.cancel).not.toHaveBeenCalled()
   expect(api.apps).toHaveBeenCalledTimes(1)
   await act(async () => finish(true))
-  expect(node.textContent).toContain(kind === "save" ? "Installer saved." : "Original package exported.")
+  expect(node.textContent).toContain("Installer exported.")
   expect(api.cancel).not.toHaveBeenCalled()
 })

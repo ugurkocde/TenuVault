@@ -1,5 +1,13 @@
 # App Backup: application, UI, and UX integration
 
+## Revision 13: capture-only product scope
+
+Ugur clarified that the sole purpose of App Backup is retrieving installers from Intune, for Windows and macOS. Manual selection of an installer from the administrator's filesystem does not belong in Backup and does not satisfy this feature. This supersedes the manual-attachment product scope in revisions 8–12. Restore must use artifacts captured by an earlier successful backup; arbitrary local packages are not an alternative source of restore eligibility. The current nightly's app browser and local archive are foundations, not a completed App Backup workflow.
+
+The next deliverable must demonstrate capture, authenticated verification, encrypted publication and exact payload export on real enrolled test devices. A Windows lab probe exists but is not the production helper. macOS retrieval remains unproven. Browsing app metadata may work across platforms; device capture availability must reflect the actual enrolled capture device, not the OS of the listed app alone. Do not guide assignment changes before a functioning capture path exists. Do not substitute vendor downloads, installed application folders or a local file picker for captured Intune content. Existing authorization, tenant isolation, cancellation and integrity requirements remain necessary. This scope correction is not a claim that the earlier execution prerequisites are implemented.
+
+See [capture implementation requirements](app-backup-capture-only-implementation.md).
+
 ## Revision 12: existing-session app table and details
 
 Ugur clarified that connected admins should not sign in again to browse their apps. The Intune apps table loads through the existing tenant session; a reconnect action appears only when needed. Rows show app logo/name/publisher/version/date, with Details and a right-side Backup action. Details expose read-only description, installation commands/context, available scripts, detection/requirement rules and assignment metadata. Native Print uses main-owned data and an isolated script-free document. Save PDF is absent. Download saves the displayed script through a native dialog after a main-owned refresh confirms its content identity; scripts are never executed. Backup opens the per-app file-saving guide; capture remains unavailable and assignment changes cannot enable it. Typed beta selections, collection paging, detail/assignment routes and failure behavior were checked read-only with Lokka. The lab connection is app-only, so delegated reauthentication is not inferred from those checks. No live active install-script example was found in the sampled apps; script schemas are additionally grounded in official beta documentation and fixtures.

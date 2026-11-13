@@ -19,7 +19,7 @@ async function mount() {
  api.apps.mockResolvedValue({apps:[{id:ids[0],name:"Finance",publisher:"Contoso"}],fetchedAt:"2026-11-12T00:00:00Z"})
  api.list.mockImplementation(async (tenant: string) => { if (state.fail) throw new Error("Import the matching recovery key"); return { storeName: "Sources", warnings: [], sources: state.empty ? [] : [{ id: "source", tenantId: tenant, appName: "Finance", fileName: "Finance.intunewin", bytes: 1024, createdAt: "2026-11-12T00:00:00Z", sha256: "abc" }] } })
  api.attach.mockImplementation(() => state.wait ? state.wait() : Promise.resolve(true))
- api.export.mockResolvedValue(true)
+ api.export.mockImplementation(() => state.wait ? state.wait() : Promise.resolve(true))
  const node = document.createElement("div"); document.body.append(node); root = createRoot(node)
  await act(async () => root!.render(createElement(AppBackupPage))); await flush(); return node
 }
@@ -56,31 +56,26 @@ describe("App Backup local workspace", () => {
   expect(node.textContent).toContain("Device probe failed")
   expect(node.textContent).not.toContain("Previous device observation")
  })
- it.each(["success", "failure"])("ignores an older same-tenant list %s after a fresh post-attach reload", async mode => {
+ it("refreshes the catalog after export while keeping legacy archives distinct from captures", async () => {
   const node = await mount()
-  let finish!: (value: unknown) => void, fail!: (error: Error) => void
-  const old = new Promise((resolve, reject) => { finish = resolve; fail = reject })
-  api.list.mockImplementationOnce(() => old).mockResolvedValueOnce({ storeName: "Sources", warnings: [], sources: [{ id: "new-source", tenantId: ids[0], appName: "New package", fileName: "New.intunewin", bytes: 1024, createdAt: "2026-11-12T00:00:00Z", sha256: "abc" }] })
-  await click(node, "Refresh")
-  await act(async () => { node.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })) }); await flush()
-  expect(node.textContent).toContain("New.intunewin")
-  await act(async () => { if (mode === "failure") fail(new Error("stale failure")); else finish({ storeName: "Old", sources: [], warnings: [] }) }); await flush()
-  expect(node.textContent).toContain("New.intunewin")
-  expect(node.textContent).not.toContain("stale failure")
-  expect(node.textContent).not.toContain("Reading the source store")
+  api.list.mockResolvedValueOnce({ storeName: "Sources", warnings: [], sources: [] })
+  await click(node, "Export archive")
+  expect(node.textContent).toContain("No Intune backups yet")
+  expect(node.textContent).toContain("Installer exported")
+  expect(api.attach).not.toHaveBeenCalled()
  })
  it("lists and exports without license or backup-history queries, with honest unknown coverage and unavailable recovery", async () => {
   const node = await mount()
   expect(node.textContent).toContain("Finance.intunewin")
-  expect(node.textContent).toContain("Saved installers")
-  expect(node.textContent).toContain("Free encrypted installer storage")
-  await act(async () => { node.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })) }); await flush()
-  expect(api.attach).toHaveBeenCalledWith(ids[0], expect.any(String), "")
+  expect(node.textContent).toContain("Installer backups")
+  expect(node.textContent).toContain("Completely free for every configured tenant")
+  await click(node, "Export archive")
+  expect(api.attach).not.toHaveBeenCalled()
   expect(api.signIn).not.toHaveBeenCalled()
-  expect(node.textContent).toContain("Administrator selected")
-  expect(node.textContent).toContain("Saved installers")
+  expect(node.textContent).toContain("Legacy local archive")
+  expect(node.textContent).toContain("Installer backups")
   expect(node.textContent).not.toContain("Ready to recover")
-  await click(node, "Export original")
+  await click(node, "Export archive")
   expect(api.export).toHaveBeenCalledWith(ids[0], expect.any(String), "source")
  })
  it("keeps a store failure separate from device check availability", async () => {
@@ -90,14 +85,14 @@ describe("App Backup local workspace", () => {
   expect(node.textContent).toContain("Choose installer folder")
   expect(node.textContent).toContain("The source store is unavailable")
   expect(node.textContent).not.toContain("No stored installers")
-  expect(node.textContent).toContain("Saved installers")
+  expect(node.textContent).toContain("Installer backups")
  })
  it("cancels an old tenant's operation on switch and does not show its eventual success on the new tenant", async () => {
   let resolve!: (value: boolean) => void
   state.wait = () => new Promise(r => { resolve = r })
   const node = await mount()
-  await act(async () => { node.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })) })
-  expect(node.textContent).toContain("Saving installer…")
+  await click(node, "Export archive")
+  expect(node.textContent).toContain("Exporting installer…")
   state.selected = 1
   await act(async () => root!.render(createElement(AppBackupPage))); await flush()
   expect(api.cancel).toHaveBeenCalledWith(ids[0], expect.any(String))
@@ -107,35 +102,31 @@ describe("App Backup local workspace", () => {
  })
 })
 
-it("makes saving visible immediately when the installer folder is empty", async () => {
+it("never offers a local file as a backup, including an empty folder", async () => {
  state.empty = true
  const node = await mount()
- expect(node.querySelector("form")!.closest("details")!.open).toBe(true)
- expect(node.textContent).toContain("No saved installers yet")
- expect([...node.querySelectorAll("button")].some(button => button.textContent?.trim() === "Save installer")).toBe(true)
+ expect(node.querySelector("form")).toBeNull()
+ expect(node.textContent).toContain("No Intune backups yet")
+ expect([...node.querySelectorAll("button")].some(button => button.textContent?.trim() === "Save installer")).toBe(false)
 })
-it("keeps an operation failure when an older catalog refresh completes", async () => {
+it("preserves the catalog and gives no unrelated recovery-key advice after an export failure", async () => {
  const node = await mount()
- let finish!: (value: unknown) => void
- api.list.mockImplementationOnce(() => new Promise(resolve => {finish = resolve}))
- await click(node, "Refresh")
- api.attach.mockRejectedValueOnce(new Error("Invalid installer package"))
- await act(async () => {node.querySelector("form")!.dispatchEvent(new Event("submit", {bubbles:true,cancelable:true}))}); await flush()
+ api.export.mockRejectedValueOnce(new Error("Invalid installer package"))
+ await click(node, "Export archive")
  expect(node.textContent).toContain("Invalid installer package")
- await act(async () => finish({storeName:"Sources",warnings:[],sources:[]})); await flush()
- expect(node.textContent).toContain("Invalid installer package")
+ expect(node.textContent).toContain("Finance.intunewin")
  expect(node.textContent).not.toContain("import its matching recovery key in Settings")
 })
 it("shows cancellation as a neutral notice and only requests cancellation once", async () => {
  let finish!: (value: boolean) => void
  state.wait = () => new Promise(resolve => {finish = resolve})
  const node = await mount()
- await act(async () => {node.querySelector("form")!.dispatchEvent(new Event("submit", {bubbles:true,cancelable:true}))})
+ await click(node, "Export archive")
  await click(node,"Cancel operation")
  expect([...node.querySelectorAll("button")].find(button => button.textContent === "Cancelling…")?.disabled).toBe(true)
  await act(async () => finish(false)); await flush()
  expect(node.querySelector('[role="alert"]')).toBeNull()
- expect(node.textContent).toContain("Save cancelled. No installer was stored.")
+ expect(node.textContent).toContain("Export cancelled. No destination file was published.")
  expect(api.cancel).toHaveBeenCalledTimes(1)
 })
 
@@ -154,7 +145,7 @@ it("shows the Windows-only check without opening sign-in on other platforms", as
 it("keeps export failures beside the file and avoids unrelated key advice", async () => {
  const node = await mount()
  api.export.mockRejectedValueOnce(new Error("A file with that name already exists. Choose a new name."))
- await click(node,"Export original")
+ await click(node,"Export archive")
  const alert = node.querySelector('[role="alert"]')!
  expect(alert.closest("li")?.textContent).toContain("Finance.intunewin")
  expect(alert.textContent).toContain("Choose a new name")
@@ -165,11 +156,11 @@ it("stops offering cancellation when the job finishes while its catalog refresh 
  const node=await mount()
  let finish!:(value:unknown)=>void
  api.list.mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve}))
- await click(node,"Export original")
+ await click(node,"Export archive")
  expect(node.textContent).toContain("Reading the source store")
  expect(node.textContent).not.toContain("Cancel operation")
  expect(node.textContent).not.toContain("Cancelling")
- expect(node.textContent).toContain("Original package exported")
+ expect(node.textContent).toContain("Installer exported")
  await act(async()=>finish({storeName:"Sources",warnings:[],sources:[]}));await flush()
  expect(api.cancel).not.toHaveBeenCalled()
 })

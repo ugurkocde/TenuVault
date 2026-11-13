@@ -1414,21 +1414,16 @@ async function bootstrap(): Promise<void> {
     setFolder: (tenant, folder) => appStore.set(`app-sources.folder.${tenant}`, folder),
     keys: () => backupKeys.existingKeyring(),
     exportJournalFolder: () => join(app.getPath("userData"), "app-source-export-jobs"),
-    ensureKeys: () => { backupKeys.keyring() },
     pickFolder: async (current) => {
       const result = await dialog.showOpenDialog(mainWindow!, { title: "Choose or reconnect source store", defaultPath: current, properties: ["openDirectory", "createDirectory"] })
       return result.canceled ? null : result.filePaths[0] ?? null
     },
     confirmNewStore: async () => {
-      const result = await dialog.showMessageBox(mainWindow!, { type: "question", title: "Use a new source folder?", message: "This folder has no source store for the selected tenant.", detail: "Use it for new attachments, or cancel and select the retained source store. Existing source folders stay where they are.", buttons: ["Cancel", "Use this folder"], defaultId: 0, cancelId: 0 })
+      const result = await dialog.showMessageBox(mainWindow!, { type: "question", title: "Use a new backup folder?", message: "This folder has no app backups for the selected tenant.", detail: "Connect it as an empty folder, or cancel and select the retained backup folder. Existing folders stay where they are.", buttons: ["Cancel", "Use this folder"], defaultId: 0, cancelId: 0 })
       return result.response === 1
     },
-    pickPackage: async () => {
-      const result = await dialog.showOpenDialog(mainWindow!, { title: "Attach an existing Win32 package", filters: [{ name: "Intune Win32 package", extensions: ["intunewin"] }], properties: ["openFile"] })
-      return result.canceled ? null : result.filePaths[0] ?? null
-    },
     pickExport: async (fileName) => {
-      const result = await dialog.showSaveDialog(mainWindow!, { title: "Export original package, choose a new file name", defaultPath: join(app.getPath("documents"), fileName), filters: [{ name: "Intune Win32 package", extensions: ["intunewin"] }] })
+      const result = await dialog.showSaveDialog(mainWindow!, { title: "Export installer, choose a new file name", defaultPath: join(app.getPath("documents"), fileName), filters: [{ name: "Installer payload", extensions: [fileName.endsWith(".zip") ? "zip" : "intunewin"] }] })
       return result.canceled ? null : result.filePath ?? null
     },
     checkDevice: (tenant) => checkRecoveryDevice(tenant, () => readAppBackupAccount(tenant,
@@ -1442,7 +1437,6 @@ async function bootstrap(): Promise<void> {
   app.on("before-quit", () => appSources.close())
   handleTrusted("appSources:list", (_event, tenant: unknown) => appSources.list(tenant))
   handleTrusted("appSources:chooseStore", (_event, tenant: unknown) => appSources.chooseStore(tenant))
-  handleTrusted("appSources:attach", (_event, tenant: unknown, operation: unknown, name: unknown) => appSources.attach(tenant, operation, name))
   handleTrusted("appSources:export", (_event, tenant: unknown, operation: unknown, source: unknown) => appSources.export(tenant, operation, source))
   handleTrusted("appSources:cancel", (_event, tenant: unknown, operation: unknown) => appSources.cancel(tenant, operation))
   handleTrusted("appSources:deviceStatus", (_event, tenant: unknown) => appSources.checkDevice(tenant))

@@ -3,8 +3,10 @@ import { constants } from "node:fs"
 import { hostname } from "node:os"
 import { basename, join, dirname } from "node:path"
 import { mkdir, open, readdir, rename, rm, link, lstat, realpath, type FileHandle } from "node:fs/promises"
-import type { StoredAppSource } from "../../shared/app-sources/types"
-import { inspectIntunewin, type PackageReader } from "./package"
+import type { StoredAppSource, LocalAppArchive, CapturedAppSource, CaptureIdentity } from "../../shared/app-sources/types"
+import { inspectIntunewin, inspectSourceZip, type PackageReader } from "./package"
+import { bindCapture } from "../app-backup/capture-identity"
+import { ingestContent, type ContentEncryption } from "../app-backup/content-stream"
 
 const CHUNK = 1024 * 1024
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/
@@ -131,7 +133,13 @@ export class AppSourceStore {
     const bytes = await readMetadata(join(directory, "manifest.tvm"))
     const decoded = this.decode<StoredAppSource>(bytes, tenant, id, "manifest")
     const v = decoded.value
-    if (!/^[a-f0-9]{24}$/.test(v.keyId) || v.id !== id || v.tenantId !== tenant || v.format !== "intunewin" || v.provenance !== "administrator-selected" || !Number.isSafeInteger(v.bytes) || v.bytes < 0 || v.bytes > 2 * 1024 ** 3 || !/^[a-f0-9]{64}$/.test(v.sha256) || typeof v.fileName !== "string" || v.fileName !== basename(v.fileName) || !/\.intunewin$/i.test(v.fileName) || typeof v.appName !== "string" || (v.appName.length > 200 && v.appName !== basename(v.fileName, ".intunewin")) || !Number.isFinite(Date.parse(v.createdAt))) throw new Error("The source manifest is invalid.")
+    if (!v || !/^[a-f0-9]{24}$/.test(v.keyId) || v.id !== id || v.tenantId !== tenant || !Number.isSafeInteger(v.bytes) || v.bytes < 0 || v.bytes > 2 * 1024 ** 3 || !/^[a-f0-9]{64}$/.test(v.sha256) || typeof v.fileName !== "string" || v.fileName !== basename(v.fileName) || typeof v.appName !== "string" || !Number.isFinite(Date.parse(v.createdAt))) throw new Error("The source manifest is invalid.")
+    if (v.provenance === "administrator-selected") {
+      if (v.format !== "intunewin" || !/\.intunewin$/i.test(v.fileName) || (v.appName.length > 200 && v.appName !== basename(v.fileName, ".intunewin"))) throw new Error("The source manifest is invalid.")
+    } else if (v.provenance === "intune-capture") {
+      if (v.format !== "win32-source-zip" || v.fileName !== `${v.id}.zip` || v.appName.length > 200 || !v.receipt || v.receipt.schema !== 1 || v.receipt.tenantId !== tenant || v.bytes < 22 || v.receipt.encryptedBytes !== 48 + (Math.floor(v.bytes / 16) + 1) * 16 || !/^[a-f0-9]{64}$/.test(v.receipt.encryptedSha256)) throw new Error("The capture receipt is invalid.")
+      bindCapture(v.receipt, v.receipt)
+    } else throw new Error("The source provenance is invalid.")
     // Earlier builds used an unbounded filename-derived label. Normalize only that
     // authenticated legacy value in memory, keeping retained/read-only stores usable.
     v.appName = v.appName.slice(0, 200)
@@ -171,7 +179,7 @@ export class AppSourceStore {
     }
     return { sources: sources.sort((a, b) => b.createdAt.localeCompare(a.createdAt)), warnings: [...new Set(warnings)], unreadableSources }
   }
-  async attach(tenant: string, input: string, appName: string, signal?: AbortSignal): Promise<StoredAppSource> {
+  async attach(tenant: string, input: string, appName: string, signal?: AbortSignal): Promise<LocalAppArchive> {
     const folder = (await this.folder(tenant, true))!, id = randomUUID(), stage = join(folder, `.staging-${id}`), master = this.keys()[0]!
     if (typeof appName !== "string" || appName.trim().length > 200 || !/\.intunewin$/i.test(input)) throw new Error("Choose an .intunewin file and an app name of at most 200 characters.")
     const file = await open(input, flags)
@@ -201,13 +209,71 @@ export class AppSourceStore {
         await artifact.sync(); abort(signal)
         // Inspect only the immutable encrypted snapshot that will be published, not the live input.
         await inspectIntunewin(snapshotReader(artifact, size, secret, tenant, id, signal), size); abort(signal)
-        const manifest: StoredAppSource = { id, tenantId: tenant, fileName: basename(input), appName: appName.trim() || basename(input).replace(/\.intunewin$/i, "").slice(0, 200), bytes: size, sha256, createdAt: new Date().toISOString(), provenance: "administrator-selected", format: "intunewin", keyId: createHmac("sha256", master).update("TenuVault/app-sources/key-id/v1").digest("hex").slice(0, 24) }
+        const manifest: LocalAppArchive = { id, tenantId: tenant, fileName: basename(input), appName: appName.trim() || basename(input).replace(/\.intunewin$/i, "").slice(0, 200), bytes: size, sha256, createdAt: new Date().toISOString(), provenance: "administrator-selected", format: "intunewin", keyId: createHmac("sha256", master).update("TenuVault/app-sources/key-id/v1").digest("hex").slice(0, 24) }
         await this.privateWrite(join(stage, "manifest.tvm"), this.encode(manifest, tenant, id, "manifest", master))
         await artifact.close(); abort(signal)
         await rename(stage, join(folder, id))
         return manifest
       } finally { await artifact.close().catch(() => {}) }
     } finally { await file.close(); if (made) await rm(stage, { recursive: true, force: true }) }
+  }
+  /**
+   * Internal ingestion seam for an authenticated device adapter. No renderer IPC.
+   * The adapter must authorize the requester and establish the returned identity;
+   * this store verifies binding and content integrity, not Microsoft permissions.
+   */
+  async capture(expected: CaptureIdentity, returned: CaptureIdentity, content: AsyncIterable<Uint8Array>, encryption: ContentEncryption, bytes: number, appName: string, signal?: AbortSignal): Promise<CapturedAppSource> {
+    const identity = bindCapture(expected, returned), tenant = identity.tenantId
+    if (typeof appName !== "string" || !appName.trim() || appName.trim().length > 200) throw new Error("Invalid captured app name.")
+    // Snapshot the helper metadata before any asynchronous work.
+    const profile = { ...encryption }
+    abort(signal)
+    if ((await this.list(tenant)).unreadableSources) throw new Error("Import the matching recovery key before capturing into this source store.")
+    abort(signal)
+    const master = this.keys()[0]
+    if (!master || master.length !== 32) throw new Error("A source-store encryption key is required.")
+    const folder = (await this.folder(tenant, true))!, id = randomUUID(), stage = join(folder, `.staging-${id}`)
+    const secret = key(master, tenant, `artifact/${id}`), pending = Buffer.alloc(CHUNK)
+    let made = false, artifact: FileHandle | undefined, used = 0, index = 0
+    try {
+      await mkdir(stage, { mode: 0o700 }); made = true
+      await this.privateWrite(join(stage, "owner.tvm"), this.encode(owner(), tenant, id, "owner", master))
+      artifact = await open(join(stage, "artifact.tvs"), "wx+", 0o600)
+      await write(artifact, MAGIC)
+      const integrity = await ingestContent(content, profile, bytes, async plain => {
+        for (let offset = 0; offset < plain.length;) {
+          abort(signal)
+          const count = Math.min(CHUNK - used, plain.length - offset)
+          plain.copy(pending, used, offset, offset + count); used += count; offset += count
+          if (used === CHUNK) { await this.frame(artifact!, pending, secret, tenant, id, 1, index++); pending.fill(0); used = 0 }
+        }
+      }, signal)
+      if (used) await this.frame(artifact, pending.subarray(0, used), secret, tenant, id, 1, index++)
+      pending.fill(0)
+      await this.frame(artifact, Buffer.from(JSON.stringify({ size: integrity.bytes, sha256: integrity.sha256, chunks: index })), secret, tenant, id, 2, index)
+      await artifact.sync(); abort(signal)
+      await inspectSourceZip(snapshotReader(artifact, integrity.bytes, secret, tenant, id, signal), integrity.bytes)
+      const manifest: CapturedAppSource = {
+        id, tenantId: tenant, fileName: `${id}.zip`, appName: appName.trim(), bytes: integrity.bytes, sha256: integrity.sha256,
+        createdAt: new Date().toISOString(), keyId: createHmac("sha256", master).update("TenuVault/app-sources/key-id/v1").digest("hex").slice(0, 24),
+        provenance: "intune-capture", format: "win32-source-zip",
+        receipt: { schema: 1, ...identity, encryptedSha256: integrity.encryptedSha256, encryptedBytes: integrity.encryptedBytes },
+      }
+      abort(signal)
+      await this.privateWrite(join(stage, "manifest.tvm"), this.encode(manifest, tenant, id, "manifest", master))
+      await artifact.close(); artifact = undefined; abort(signal)
+      await rename(stage, join(folder, id))
+      return manifest
+    } finally {
+      pending.fill(0); secret.fill(0)
+      try { await artifact?.close() } finally { if (made) await rm(stage, { recursive: true, force: true }) }
+    }
+  }
+  /** Content identity prerequisite only; restore still needs its codec and authorization. */
+  async capturedSource(tenant: string, id: string): Promise<CapturedAppSource> {
+    const { value } = await this.manifest(tenant, id)
+    if (value.provenance !== "intune-capture") throw new Error("Restore requires an earlier Intune capture. Local archives cannot be restored.")
+    return value
   }
   private async privateWrite(path: string, bytes: Buffer): Promise<void> {
     const file = await open(path, "wx", 0o600)

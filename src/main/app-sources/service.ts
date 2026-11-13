@@ -10,10 +10,8 @@ export interface AppSourceHost {
   setFolder: (tenant: string, folder: string) => void
   keys: () => Buffer[]
   exportJournalFolder?: () => string
-  ensureKeys: () => void
   pickFolder: (current: string) => Promise<string | null>
   confirmNewStore: (tenant: string) => Promise<boolean>
-  pickPackage: () => Promise<string | null>
   pickExport: (fileName: string) => Promise<string | null>
   checkDevice: (tenant: string) => Promise<RecoveryDeviceStatus>
   signIn: (tenant: string) => Promise<void>
@@ -87,20 +85,6 @@ export class AppSourceService {
       if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new Error("A file with that name already exists. Choose a new name; existing files are preserved.")
       throw error
     } finally { this.jobs.delete(id) }
-  }
-  attach(raw: unknown, operation: unknown, appName: unknown): Promise<boolean> {
-    if (typeof appName !== "string" || appName.length > 200) return Promise.reject(new Error("Enter an app name of at most 200 characters."))
-    return this.job(raw, operation, async (tenant, signal) => {
-      const file = await this.host.pickPackage()
-      signal.throwIfAborted()
-      if (!file) return false
-      this.tenant(tenant)
-      const existing = await this.store(tenant).list(tenant)
-      if (existing.unreadableSources) throw new Error("Import the matching recovery key before adding packages to this source store.")
-      this.host.ensureKeys()
-      await this.store(tenant).attach(tenant, file, appName, signal)
-      return true
-    })
   }
   export(raw: unknown, operation: unknown, source: unknown): Promise<boolean> {
     if (typeof source !== "string") return Promise.reject(new Error("Select a stored source."))

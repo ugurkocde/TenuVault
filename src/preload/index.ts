@@ -27,7 +27,6 @@ const bridge: TenuVaultPreloadBridge = {
     apps: (tenant) => invoke("appSources:apps", tenant),
     list: (tenant) => invoke("appSources:list", tenant),
     chooseStore: (tenant) => invoke("appSources:chooseStore", tenant),
-    attach: (tenant, operation, name) => invoke("appSources:attach", tenant, operation, name),
     export: (tenant, operation, source) => invoke("appSources:export", tenant, operation, source),
     cancel: (tenant, operation) => invoke("appSources:cancel", tenant, operation),
     deviceStatus: (tenant) => invoke("appSources:deviceStatus", tenant),

@@ -333,7 +333,7 @@ describe("crash recovery", () => {
 describe("trusted local source actions", () => {
   async function setup() {
     const folder = await root(), input = await packageFile(folder)
-    const host: AppSourceHost = { details: vi.fn(), printDetails: vi.fn(), downloadScript: vi.fn(), knownTenant: id => id === tenant || id === other, folder: () => join(folder, "sources"), setFolder: vi.fn(), confirmNewStore: vi.fn(async () => false), keys: () => [master], ensureKeys: vi.fn(), pickFolder: async () => folder, pickPackage: async () => input.file, pickExport: async () => null, checkDevice: vi.fn(), signIn: vi.fn(async () => {}), apps: vi.fn(async () => ({ apps: [], fetchedAt: new Date().toISOString() })) }
+    const host: AppSourceHost = { details: vi.fn(), printDetails: vi.fn(), downloadScript: vi.fn(), knownTenant: id => id === tenant || id === other, folder: () => join(folder, "sources"), setFolder: vi.fn(), confirmNewStore: vi.fn(async () => false), keys: () => [master], pickFolder: async () => folder, pickExport: async () => null, checkDevice: vi.fn(), signIn: vi.fn(async () => {}), apps: vi.fn(async () => ({ apps: [], fetchedAt: new Date().toISOString() })) }
     return { folder, input, host, service: new AppSourceService(host) }
   }
   it("guards app details and print targets without invoking paid or arbitrary-path operations", async () => {
@@ -409,19 +409,13 @@ describe("trusted local source actions", () => {
     expect(() => service.signIn("33333333-3333-3333-3333-333333333333")).toThrow("no longer configured")
     expect(host.signIn).toHaveBeenCalledTimes(1)
   })
-  it("blocks attaching to an unreadable source store before minting keys", async () => {
-    const { folder, host, service } = await setup(), directory = join(folder, "sources", tenant, randomUUID())
-    await mkdir(directory, { recursive: true }); await writeFile(join(directory, "manifest.tvm"), "unreadable")
-    await expect(service.attach(tenant, randomUUID(), "App")).rejects.toThrow("matching recovery key")
-    expect(host.ensureKeys).not.toHaveBeenCalled()
-    expect(await readdir(join(folder, "sources", tenant))).toHaveLength(1)
-  })
   it("locks store selection during jobs and rechecks after the picker returns", async () => {
-    const { folder, host, service } = await setup()
+    const { folder, input, host, service } = await setup()
+    const item = await new AppSourceStore(host.folder(tenant), () => [master]).attach(tenant, input.file, "App")
     let pickedFolder!: (value: string) => void, pickedPackage!: (value: null) => void
     host.pickFolder = vi.fn(() => new Promise<string>(resolve => { pickedFolder = resolve }))
-    host.pickPackage = () => new Promise(resolve => { pickedPackage = resolve })
-    const choice = service.chooseStore(tenant), job = service.attach(tenant, randomUUID(), "App")
+    host.pickExport = () => new Promise(resolve => { pickedPackage = resolve })
+    const choice = service.chooseStore(tenant), job = service.export(tenant, randomUUID(), item.id)
     await vi.waitFor(() => expect(pickedPackage).toBeTypeOf("function"))
     await expect(service.chooseStore(tenant)).rejects.toThrow("Finish or cancel")
     pickedFolder(folder)
@@ -430,24 +424,25 @@ describe("trusted local source actions", () => {
     pickedPackage(null); expect(await job).toBe(false)
   })
   it("ignores cancellation from a different tenant", async () => {
-    const { input, host, service } = await setup(), operation = randomUUID()
+    const { folder, input, host, service } = await setup(), operation = randomUUID()
+    const item = await new AppSourceStore(host.folder(tenant), () => [master]).attach(tenant, input.file, "App")
     let pickedPackage!: (value: string) => void
-    host.pickPackage = () => new Promise(resolve => { pickedPackage = resolve })
-    const job = service.attach(tenant, operation, "App")
+    host.pickExport = () => new Promise(resolve => { pickedPackage = resolve })
+    const job = service.export(tenant, operation, item.id)
     await vi.waitFor(() => expect(pickedPackage).toBeTypeOf("function"))
-    service.cancel(other, operation); pickedPackage(input.file)
+    service.cancel(other, operation); pickedPackage(join(folder, "export.intunewin"))
     expect(await job).toBe(true)
   })
-  it("attaches and exports offline for every configured tenant without entitlement, and never mints a key on an empty listing", async () => {
-    const folder = await root(), input = await packageFile(folder), ensureKeys = vi.fn()
-    const host: AppSourceHost = { details: vi.fn(), printDetails: vi.fn(), downloadScript: vi.fn(), knownTenant: id => id === tenant || id === other, folder: () => join(folder, "sources"), setFolder: vi.fn(), confirmNewStore: vi.fn(async () => false), keys: () => [master], ensureKeys, pickFolder: async () => null, pickPackage: async () => input.file, pickExport: async () => join(folder, "original.intunewin"), checkDevice: vi.fn(), signIn: vi.fn(async () => {}), apps: vi.fn(async () => ({ apps: [], fetchedAt: new Date().toISOString() })) }
+  it("exports legacy archives offline without entitlement and does not mint a key on an empty listing", async () => {
+    const folder = await root(), input = await packageFile(folder)
+    const host: AppSourceHost = { details: vi.fn(), printDetails: vi.fn(), downloadScript: vi.fn(), knownTenant: id => id === tenant || id === other, folder: () => join(folder, "sources"), setFolder: vi.fn(), confirmNewStore: vi.fn(async () => false), keys: () => [master], pickFolder: async () => null, pickExport: async () => join(folder, "original.intunewin"), checkDevice: vi.fn(), signIn: vi.fn(async () => {}), apps: vi.fn(async () => ({ apps: [], fetchedAt: new Date().toISOString() })) }
     const service = new AppSourceService(host)
-    expect((await service.list(tenant)).sources).toEqual([]); expect(ensureKeys).not.toHaveBeenCalled()
+    expect((await service.list(tenant)).sources).toEqual([])
     await expect(service.list("not-a-tenant")).rejects.toThrow()
-    expect(await service.attach(tenant, randomUUID(), "App")).toBe(true)
+    await new AppSourceStore(host.folder(tenant), () => [master]).attach(tenant, input.file, "App")
     const id = (await service.list(tenant)).sources[0]!.id
     await expect(service.export(other, randomUUID(), id)).rejects.toThrow("does not belong")
-    expect(await service.attach(other, randomUUID(), "Another tenant")).toBe(true)
+    await new AppSourceStore(host.folder(other), () => [master]).attach(other, input.file, "Another tenant")
     expect(await service.export(tenant, randomUUID(), id)).toBe(true)
     expect((await readFile(join(folder, "original.intunewin"))).equals(input.data)).toBe(true)
   })

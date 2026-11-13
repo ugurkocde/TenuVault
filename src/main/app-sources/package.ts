@@ -12,6 +12,15 @@ async function readAt(file: PackageReader, length: number, position: number): Pr
 
 /** Inspect the ZIP directory without buffering or extracting the installer. ZIP64 is deferred. */
 export async function inspectIntunewin(file: PackageReader, size: number): Promise<void> {
+  return inspectZip(file, size, false)
+}
+
+/** Inspect authenticated source ZIP bytes without extraction or execution. */
+export async function inspectSourceZip(file: PackageReader, size: number): Promise<void> {
+  return inspectZip(file, size, true)
+}
+
+async function inspectZip(file: PackageReader, size: number, source: boolean): Promise<void> {
   if (size < 22 || size > 2 * 1024 ** 3) throw new Error("Choose an .intunewin package smaller than 2 GiB.")
   const tailSize = Math.min(size, 65_557)
   const tail = await readAt(file, tailSize, size - tailSize)
@@ -34,7 +43,7 @@ export async function inspectIntunewin(file: PackageReader, size: number): Promi
     return start
   }
   const seen = new Set<string>()
-  let position = 0, metadata = false, content = false
+  let position = 0, metadata = false, content = false, files = 0
   for (let i = 0; i < count; i++) {
     if (position + 46 > length || directory.readUInt32LE(position) !== 0x02014b50) throw new Error("The package directory is damaged.")
     const names = directory.readUInt16LE(position + 28), extra = directory.readUInt16LE(position + 30), comment = directory.readUInt16LE(position + 32)
@@ -46,7 +55,13 @@ export async function inspectIntunewin(file: PackageReader, size: number): Promi
     const segments = name.split("/").filter(Boolean)
     if (segments.some(part => /[. ]$/.test(part) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part)) || seen.has(name.toLowerCase())) throw new Error("The package contains duplicate or unsupported entry names.")
     seen.add(name.toLowerCase())
-    if (name.toLowerCase() === "intunewinpackage/metadata/detection.xml") {
+    if (source) {
+      const mode = directory.readUInt32LE(position + 38) >>> 16, method = directory.readUInt16LE(position + 10)
+      if (!name || name.split("/").some(part => part === ".") || ((mode & 0xf000) && ![0x8000, 0x4000].includes(mode & 0xf000)) || directory.readUInt16LE(position + 8) & 1 || ![0, 8].includes(method)) throw new Error("The source ZIP contains an unsupported entry.")
+      await entryData(directory.readUInt32LE(position + 42), directory.readUInt32LE(position + 20), "source", encodedName)
+      if (!name.endsWith("/")) files++
+    }
+    if (!source && name.toLowerCase() === "intunewinpackage/metadata/detection.xml") {
       const compressed = directory.readUInt32LE(position + 20), expanded = directory.readUInt32LE(position + 24), local = directory.readUInt32LE(position + 42), method = directory.readUInt16LE(position + 10)
       if (compressed > 1024 ** 2 || expanded > 1024 ** 2 || local + 30 > size || directory.readUInt16LE(position + 8) & 1) throw new Error("The package metadata is too large or encrypted.")
       const start = await entryData(local, compressed, "metadata", encodedName)
@@ -59,11 +74,11 @@ export async function inspectIntunewin(file: PackageReader, size: number): Promi
       if (document.documentElement?.nodeName !== "ApplicationInfo" || document.getElementsByTagName("EncryptionInfo").length !== 1) throw new Error("The package metadata is not an Intune package description.")
       metadata = true
     }
-    if (/^intunewinpackage\/contents\/[^/]+\.intunewin$/i.test(name)) {
+    if (!source && /^intunewinpackage\/contents\/[^/]+\.intunewin$/i.test(name)) {
       await entryData(directory.readUInt32LE(position + 42), directory.readUInt32LE(position + 20), "content", encodedName)
       content = true
     }
     position = next
   }
-  if (position !== length || !metadata || !content) throw new Error("Choose an .intunewin package made with the Microsoft Content Prep Tool.")
+  if (position !== length || (source ? !files : !metadata || !content)) throw new Error(source ? "The captured source ZIP contains no installer files or has an invalid directory." : "Choose an .intunewin package made with the Microsoft Content Prep Tool.")
 }

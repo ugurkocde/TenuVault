@@ -1,5 +1,4 @@
-/** Local sources are administrator-selected files, never proof of Intune content equivalence. */
-export interface StoredAppSource {
+interface SourceDescriptor {
   id: string
   tenantId: string
   fileName: string
@@ -8,9 +7,29 @@ export interface StoredAppSource {
   keyId: string
   sha256: string
   createdAt: string
+}
+
+/** Local archives are not captured backups and must never become restore inputs. */
+export interface LocalAppArchive extends SourceDescriptor {
   provenance: "administrator-selected"
   format: "intunewin"
 }
+
+export interface CaptureIdentity {
+  tenantId: string
+  appId: string
+  appType: "#microsoft.graph.win32LobApp"
+  contentVersion: string
+  contentFileId: string
+}
+
+export interface CapturedAppSource extends SourceDescriptor {
+  provenance: "intune-capture"
+  format: "win32-source-zip"
+  receipt: CaptureIdentity & { schema: 1; encryptedSha256: string; encryptedBytes: number }
+}
+
+export type StoredAppSource = LocalAppArchive | CapturedAppSource
 
 export interface RecoveryDeviceStatus {
   platform: "win32" | "darwin" | "linux"
@@ -35,7 +54,6 @@ export interface AppSourcesBridge {
   apps: (tenantId: string) => Promise<{ apps: IntuneBackupApp[]; fetchedAt: string }>
   list: (tenantId: string) => Promise<AppSourceState>
   chooseStore: (tenantId: string) => Promise<boolean>
-  attach: (tenantId: string, operationId: string, appName: string) => Promise<boolean>
   export: (tenantId: string, operationId: string, sourceId: string) => Promise<boolean>
   cancel: (tenantId: string, operationId: string) => Promise<void>
   deviceStatus: (tenantId: string) => Promise<RecoveryDeviceStatus>
