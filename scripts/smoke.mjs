@@ -1156,7 +1156,9 @@ await check("tenant renames show Saved in both views and clear confirmation time
       const secondTenantTimer = await assertSaved(`Contoso ${view} second`)
       assert(await evaluate(`${saved}.length === 2 && window.__tenantRenameTimers.active.has(${firstTenantTimer}) && window.__tenantRenameTimers.active.has(${secondTenantTimer})`), "tenants did not keep independent confirmation timers")
       await go("#/portal/overview", "All tenants")
-      assert(await evaluate(`window.__tenantRenameTimers.cleared.has(${firstTenantTimer}) && window.__tenantRenameTimers.cleared.has(${secondTenantTimer})`), "unmount did not clear all confirmation timers")
+      // "All tenants" is also in the sidebar, so go() can return before React
+      // commits the new route and runs the old page's passive effect cleanup.
+      assert(await waitForCondition(`window.__tenantRenameTimers.cleared.has(${firstTenantTimer}) && window.__tenantRenameTimers.cleared.has(${secondTenantTimer})`, 4000), "unmount did not clear all confirmation timers")
       await go("#/portal/tenants", "Tenant Management")
       assert(await evaluate(`${saved}.length === 0`), "Saved lingered after remount")
       await startEditing(`Contoso ${view} first`)

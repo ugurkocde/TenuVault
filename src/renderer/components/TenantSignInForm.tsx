@@ -1,4 +1,5 @@
-import { trialKeyRefusalText } from "../../shared/trial-notices"
+import { useOpenFeedback } from "./FeedbackProvider"
+import { isTrialKeyRefusal, trialKeyRefusalText } from "../../shared/trial-notices"
 import { showCommunityLimitError } from "../lib/plan-dialog"
 import { TrialKeyRefusalActions } from "./TenantTrial"
 import { useEffect, useRef, useState, type ClipboardEvent, type ReactNode } from "react"
@@ -242,6 +243,7 @@ interface TenantSignInFormProps {
 
 /** Tenant, client id and optional display name, then interactive Microsoft sign-in. */
 export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Sign in with Microsoft", initial, autoSignIn, hidePaste = false }: TenantSignInFormProps) {
+  const openFeedback = useOpenFeedback()
   const [tenant, setTenant] = useState(initial?.tenant ?? "")
   const [clientId, setClientId] = useState(initial?.clientId ?? "")
   const [displayName, setDisplayName] = useState(initial?.displayName ?? "")
@@ -494,6 +496,15 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
           <AlertCircle className="h-4 w-4" />
           <AlertDescription>{trialKeyRefusalText(errors.form)}
             <TrialKeyRefusalActions message={errors.form} source="sign-in-trial-key-refused" />
+            {openFeedback && !isTrialKeyRefusal(errors.form) && (
+              // Open locally with no telemetry or counting. Never prefill errors or identity details;
+              // keep the existing snapshot and opt-in screenshot, and send only on explicit Send.
+              <div className="mt-2">
+                <Button type="button" variant="outline" size="sm" onClick={() => void openFeedback()}>
+                  Tell us what went wrong
+                </Button>
+              </div>
+            )}
             <SignInErrorActions message={errors.form} onTryAgain={() => void submit()} />
           </AlertDescription>
         </Alert>
