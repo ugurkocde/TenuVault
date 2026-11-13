@@ -222,7 +222,7 @@ describe("decline, opt-out and erasure", () => {
     expect(h.saved().queue).toHaveLength(3)
     diagnostics.decline()
     // Only the funnel ID of the pending erase is kept.
-    expect(h.saved()).toEqual({ state: "declined", pendingErase: [funnelId] })
+    expect(h.saved()).toEqual({ state: "declined", pendingErase: [funnelId], pendingEraseUntil: expect.any(Number) })
     diagnostics.record({ name: "setup_route", props: { route: "auto" } })
     await h.pass(60_000)
     expect(h.sent).toHaveLength(0)
@@ -291,6 +291,24 @@ describe("decline, opt-out and erasure", () => {
     await h.pass(30_000)
     expect(h.erases).toHaveLength(2)
     expect(h.saved()).toEqual({ state: "declined" })
+  })
+
+  it("gives up an erase that was never confirmed 180 days after the withdrawal", async () => {
+    const h = harness({ url: null })
+    const diagnostics = h.make()
+    diagnostics.consent("welcome")
+    diagnostics.decline()
+    expect(h.saved().pendingErase).toHaveLength(1)
+    const blocked = harness({ store: h.store })
+    blocked.setNow(START + 180 * 86_400_000 - 1)
+    blocked.make().start()
+    expect(blocked.saved().pendingErase).toHaveLength(1)
+    const later = harness({ store: h.store })
+    later.setNow(START + 180 * 86_400_000)
+    later.make().start()
+    await later.pass(SEND_DELAY_MS)
+    expect(later.erases).toHaveLength(0)
+    expect(later.saved()).toEqual({ state: "declined" })
   })
 
   it("repeats a pending erase at the next start, and drops it on a 400", async () => {
@@ -398,7 +416,7 @@ describe("policy", () => {
     const h = harness({ store: first.store, policy: true })
     const withPolicy = h.make()
     expect(withPolicy.status().state).toBe("declined")
-    expect(h.saved()).toEqual({ state: "declined", pendingErase: [funnelId] })
+    expect(h.saved()).toEqual({ state: "declined", pendingErase: [funnelId], pendingEraseUntil: expect.any(Number) })
     withPolicy.start()
     await h.pass(60_000)
     expect(h.sent).toHaveLength(0)

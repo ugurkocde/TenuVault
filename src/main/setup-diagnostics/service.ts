@@ -7,6 +7,8 @@ const KEY = "setupDiagnostics.state"
 const DAY_MS = 86_400_000
 /** Diagnostics cover 30 days from the moment the admin agreed, then the ID and queue are deleted. */
 export const WINDOW_MS = 30 * DAY_MS
+/** The server keeps events 180 days, so an erase still unconfirmed after that is pointless. */
+export const ERASE_GIVE_UP_MS = 180 * DAY_MS
 /** Events that could not be sent within a week are dropped. */
 export const MAX_EVENT_AGE_MS = 7 * DAY_MS
 export const QUEUE_LIMIT = 100
@@ -43,6 +45,11 @@ interface Saved {
   state: State
   /** Funnel IDs whose events the server is still asked to delete. Nothing else is kept for them. */
   pendingErase?: string[]
+  /**
+   * When an unconfirmed erase is given up (ms). By then the server has deleted those events
+   * after its own 180 days, so a blocked erase endpoint cannot keep a funnel ID on disk forever.
+   */
+  pendingEraseUntil?: number
   /** Only while sharing. */
   funnelId?: string
   consentAt?: number
@@ -187,6 +194,7 @@ export class SetupDiagnostics {
   /** At launch: counts a later day, sends what is still queued and repeats a pending erase. */
   start(): void {
     this.checkExpiry()
+    this.dropExpiredErase()
     if (this.saved.pendingErase?.length) this.erasure.schedule(SEND_DELAY_MS)
     if (!this.active()) return
     const day = calendarDays(this.saved.consentAt!, this.now())
@@ -227,7 +235,7 @@ export class SetupDiagnostics {
     this.pending = {}
     this.saved = {
       state: "granted",
-      ...(this.saved.pendingErase?.length ? { pendingErase: this.saved.pendingErase } : {}),
+      ...this.eraseFields(),
       funnelId: randomUUID(),
       consentAt: this.now(),
       nextSeq: 1,
@@ -249,7 +257,7 @@ export class SetupDiagnostics {
     this.checkExpiry()
     this.pending = {}
     if (this.saved.state === "granted") this.withdraw("declined")
-    else if (this.saved.state === "unasked") this.replace({ state: "declined", ...(this.saved.pendingErase?.length ? { pendingErase: this.saved.pendingErase } : {}) })
+    else if (this.saved.state === "unasked") this.replace({ state: "declined", ...this.eraseFields() })
     return this.status()
   }
 
@@ -287,7 +295,7 @@ export class SetupDiagnostics {
     this.pending = {}
     // The events already sent stay until the server deletes them after 180 days.
     this.abortUpload()
-    this.replace({ state: "ended", ...(this.saved.pendingErase?.length ? { pendingErase: this.saved.pendingErase } : {}) })
+    this.replace({ state: "ended", ...this.eraseFields() })
   }
 
   /** Sends up to 50 queued events. Resolves when the attempt is over; a failure schedules a retry. */
@@ -324,6 +332,7 @@ export class SetupDiagnostics {
 
   /** Asks the server to delete the events of a withdrawn funnel ID, until it answers 202. */
   async flushErase(): Promise<void> {
+    this.dropExpiredErase()
     const funnelId = this.saved.pendingErase?.[0]
     if (this.erasing || !funnelId || !this.options.url) return
     this.erasing = true
@@ -339,7 +348,10 @@ export class SetupDiagnostics {
     }
     const remaining = (this.saved.pendingErase ?? []).filter((id) => id !== funnelId)
     if (remaining.length) this.saved.pendingErase = remaining
-    else delete this.saved.pendingErase
+    else {
+      delete this.saved.pendingErase
+      delete this.saved.pendingEraseUntil
+    }
     this.save()
     this.erasure.succeeded()
     if (remaining.length) this.erasure.schedule(0)
@@ -402,8 +414,23 @@ export class SetupDiagnostics {
     const funnelId = this.saved.funnelId
     this.abortUpload()
     const pendingErase = [...(this.saved.pendingErase ?? []), ...(funnelId ? [funnelId] : [])]
-    this.replace({ state, ...(pendingErase.length ? { pendingErase } : {}) })
+    const pendingEraseUntil = funnelId ? this.now() + ERASE_GIVE_UP_MS : this.saved.pendingEraseUntil
+    this.replace({ state, ...(pendingErase.length ? { pendingErase, pendingEraseUntil } : {}) })
     if (funnelId) this.erasure.schedule(0)
+  }
+
+  /** The pending erase fields to carry over when the state changes. */
+  private eraseFields(): Pick<Saved, "pendingErase" | "pendingEraseUntil"> {
+    return this.saved.pendingErase?.length ? { pendingErase: this.saved.pendingErase, pendingEraseUntil: this.saved.pendingEraseUntil } : {}
+  }
+
+  /** Gives up an erase that was not confirmed within 180 days of the last withdrawal. */
+  private dropExpiredErase(): void {
+    if (!this.saved.pendingErase?.length) return
+    if (this.now() < (this.saved.pendingEraseUntil ?? Number.POSITIVE_INFINITY)) return
+    delete this.saved.pendingErase
+    delete this.saved.pendingEraseUntil
+    this.save()
   }
 
   private replace(saved: Saved): void {
@@ -421,7 +448,8 @@ export class SetupDiagnostics {
         const state = saved?.state
         if (["unasked", "granted", "declined", "ineligible", "ended"].includes(state)) {
           const pendingErase = Array.isArray(saved.pendingErase) ? saved.pendingErase.filter((id) => typeof id === "string") : []
-          const erase = pendingErase.length ? { pendingErase } : {}
+          const until = typeof saved.pendingEraseUntil === "number" && Number.isFinite(saved.pendingEraseUntil) ? saved.pendingEraseUntil : this.now() + ERASE_GIVE_UP_MS
+          const erase = pendingErase.length ? { pendingErase, pendingEraseUntil: until } : {}
           if (state !== "granted") return { state, ...erase }
           if (typeof saved.funnelId !== "string" || typeof saved.consentAt !== "number") return { state: "declined", ...erase }
           return {
