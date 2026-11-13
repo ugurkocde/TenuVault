@@ -259,6 +259,18 @@ jobs:
           npx electron-vite build
           npx electron-builder --config electron-builder.config.cjs ${{ matrix.target }} --publish never
 
+      - name: Verify Windows app and capture helper signatures
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          EXPECTED_PUBLISHER: ${{ secrets.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
+        run: |
+          $folders = @(Get-ChildItem dist -Directory -Filter 'win*unpacked')
+          if ($folders.Count -eq 0) { throw 'No packaged Windows app found.' }
+          foreach ($folder in $folders) {
+            ./scripts/check-capture-signatures.ps1 -AppDirectory $folder.FullName -ExpectedPublisher $env:EXPECTED_PUBLISHER
+          }
+
       - name: Remove signing key files
         if: always()
         shell: bash

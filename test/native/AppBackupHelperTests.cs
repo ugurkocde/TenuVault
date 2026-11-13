@@ -22,6 +22,14 @@ internal static class HelperTests {
         try {
             Expect(Environment.OSVersion.Version.Major >= 10);
             Expect(!Signature.Valid(System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName));
+            Refused(()=>Call("VerifyPublisher",System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName));
+            // Exercise the production role guard with fixtures, independently of the
+            // live delegated non-admin sign-in case that needs a separate test account.
+            Refused(()=>Call("RequireRequesterRole",new Dictionary<string,object>()));
+            foreach(var roles in new object[]{null,"3a2c62db-5318-420d-8d74-23affee5d9d5",new object[0],new object[]{"unknown"},new object[]{123}})
+                Refused(()=>Call("RequireRequesterRole",new Dictionary<string,object>{{"wids",roles}}));
+            foreach(var role in new[]{"62e90394-69f5-4237-9190-012177145e10","3a2c62db-5318-420d-8d74-23affee5d9d5"})
+                Expect(Call("RequireRequesterRole",new Dictionary<string,object>{{"wids",new object[]{role}}})==null);
             Expect((string)Call("CommittedVersion",new Dictionary<string,object>{{"committedContentVersion","1"}})=="1");
             foreach(var version in new object[]{null,"",0,"0","01","invalid","123456789012345678901"}) {
                 try {Call("CommittedVersion",new Dictionary<string,object>{{"committedContentVersion",version}});throw new Exception("Invalid content version accepted");}

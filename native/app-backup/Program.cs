@@ -166,6 +166,10 @@ internal static class Program {
         if(age>600||age< -60)throw new CaptureError("The Microsoft session is not recent enough for Backup. Reconnect Microsoft and check this PC's clock.");
         return claims; // Untrusted until Graph accepts this exact token in Capture().
     }
+    static void RequireRequesterRole(Dictionary<string,object> claims) {
+        var roles=claims.ContainsKey("wids") ? Rows(claims,"wids").OfType<string>() : Enumerable.Empty<string>();
+        if(!roles.Contains("62e90394-69f5-4237-9190-012177145e10")&&!roles.Contains("3a2c62db-5318-420d-8d74-23affee5d9d5"))throw new CaptureError("This preview requires an active Intune Administrator or Global Administrator role. Custom Intune roles are not supported yet.");
+    }
     static object Capture(Dictionary<string,object> request) {
         var tenant=GuidValue(request,"tenantId");var app=GuidValue(request,"appId");GuidValue(request,"jobId");
         var token=Str(request,"accessToken",32768);var claims=Claims(request);
@@ -174,8 +178,7 @@ internal static class Program {
             graph.DefaultRequestHeaders.Authorization=new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer",token);
             // Graph authenticates the token before any claims are trusted or private key is used.
             if(GuidValue(Get(graph,"me?$select=id"),"id")!=GuidValue(claims,"oid"))throw new CaptureError("The Microsoft requester could not be confirmed.");
-            var roles=claims.ContainsKey("wids") ? Rows(claims,"wids").OfType<string>() : Enumerable.Empty<string>();
-            if(!roles.Contains("62e90394-69f5-4237-9190-012177145e10")&&!roles.Contains("3a2c62db-5318-420d-8d74-23affee5d9d5"))throw new CaptureError("This preview requires an active Intune Administrator or Global Administrator role. Custom Intune roles are not supported yet.");
+            RequireRequesterRole(claims);
             account=GuidValue(Get(graph,"deviceManagement?$select=intuneAccountId"),"intuneAccountId");
             var row=Get(graph,"deviceAppManagement/mobileApps/"+app+"?$select=id,displayName,microsoft.graph.win32LobApp/committedContentVersion,microsoft.graph.win32LobApp/installExperience");
             if(Str(row,"@odata.type")!="#microsoft.graph.win32LobApp"||GuidValue(row,"id")!=app)throw new CaptureError("Select a Win32 app in this tenant.");

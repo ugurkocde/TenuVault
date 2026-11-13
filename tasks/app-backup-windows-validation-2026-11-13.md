@@ -1,5 +1,18 @@
 # Windows App Backup validation, 2026-11-13
 
+## Release verification follow-up
+
+The enrolled mini PC passed 32 compiled helper checks with `REQUIRE_SIGNATURE` enabled,
+including rejection of unsigned images and absent, malformed or unsupported requester
+roles. These role cases use fixtures, not a real non-admin Microsoft session. No non-admin
+test account is available, so that live case remains untested.
+
+Manual CI can now build a signed Windows verification artifact without publishing a release.
+Both manual verification and release packaging validate the app and helper's Authenticode
+signatures and expected matching publisher. Signed device capture remains pending until that
+artifact has been exercised on the mini PC. The signed remote capture switch remains a
+separate implementation gap; these tests do not complete that release prerequisite.
+
 ## Automatic assignment-check follow-up
 
 The packaged app now checks assignments automatically when a Windows app's Backup panel opens. Real delegated-session checks passed for device targeting (PowerShell), user targeting (Brave) and an include filter requiring review (7-Zip). No capture was started and neither retained backup changed. See the [assignment-check evidence and limits](app-backup-evidence/assignment-checks-2026-11-13/README.md).
