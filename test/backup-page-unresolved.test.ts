@@ -32,7 +32,7 @@ describe("Backup History", () => {
     state.damagedFiles = 0
     const markup = renderToStaticMarkup(createElement(BackupRestorePage))
     expect(markup).toContain("Restores need a backup from before the change; a change made before your first backup cannot be restored.")
-    expect(markup).toContain("Run a backup now, then set up automatic backups in Schedule to cover the next loss.")
+    expect(markup).toContain("Run a backup now, then set up automatic backups in Schedule. Only items captured in a backup can be restored.")
   })
 
   it("says how many backups could not be read, and nothing when all could", () => {

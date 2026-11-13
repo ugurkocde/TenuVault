@@ -46,7 +46,7 @@ describe("first backup next steps", () => {
   it("leaves the recovery key out for Azure storage, which does not depend on it", async () => {
     const container = await render(false)
     expect(container.textContent).toContain("Turn on automatic backups")
-    expect(container.textContent).toContain("Set up a scheduled backup so you have a restore point for the next loss.")
+    expect(container.textContent).toContain("Set up a scheduled backup to keep restore points for future losses. Only items captured in a backup can be restored.")
     expect(container.textContent).not.toContain("recovery key")
     expect(bridge.backups.settings).not.toHaveBeenCalled()
   })
