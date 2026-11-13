@@ -138,6 +138,22 @@ describe("dashboard trial card", () => {
     expect([...container.querySelectorAll("button")].find(b => b.textContent === "Start free trial")?.disabled).toBe(false)
   })
 
+  it("keeps a retryable error visible when the refresh makes the offer unavailable", async () => {
+    state.start.mockRejectedValueOnce(new Error("Tenant trials are currently unavailable."))
+    state.read.mockResolvedValueOnce(state.status)
+    // The health check failed in the meantime, so the refreshed status turns trials off.
+    state.refresh.mockImplementationOnce(async () => { state.status = { ...state.status!, tenantTrialsEnabled: false } })
+    await render()
+    await click("Start free trial")
+    await render()
+    const alert = container.querySelector('[role="alert"]')
+    expect(alert?.textContent).toContain("Tenant trials are currently unavailable.")
+    expect(alert?.textContent).toContain("You can try again later on the License page.")
+    expect(container.textContent).not.toContain(title)
+    await click("Close")
+    expect(container.querySelector('[role="alert"]')).toBeNull()
+  })
+
   describe("with a tenant switch while a start runs", () => {
     const second = "66666666-7777-4888-9999-000000000000"
     let finish: (error?: Error) => void = () => {}

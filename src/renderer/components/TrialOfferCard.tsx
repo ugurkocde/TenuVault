@@ -55,13 +55,17 @@ export function TrialOfferCard({ tenantId }: { tenantId: string }) {
     }
   }
 
-  if (feedback?.tenantId === id && feedback.kind === "refusal") {
-    return <div role="status" className="flex items-start gap-3 rounded-3xl border border-gray-200 bg-white px-5 py-4 text-sm text-gray-700">
-      <span className="min-w-0 flex-1">{feedback.text}</span>
-      <Button type="button" variant="ghost" size="icon" className="size-8 shrink-0 rounded-full" onClick={() => setFeedback(null)}><X aria-hidden="true" /><span className="sr-only">Close</span></Button>
-    </div>
+  const notice = (text: string, role: "status" | "alert") => <div role={role} className="flex items-start gap-3 rounded-3xl border border-gray-200 bg-white px-5 py-4 text-sm text-gray-700">
+    <span className="min-w-0 flex-1">{text}</span>
+    <Button type="button" variant="ghost" size="icon" className="size-8 shrink-0 rounded-full" onClick={() => setFeedback(null)}><X aria-hidden="true" /><span className="sr-only">Close</span></Button>
+  </div>
+  if (feedback?.tenantId === id && feedback.kind === "refusal") return notice(feedback.text, "status")
+  if (!hidden || !trialOfferEligible(status, id, hidden)) {
+    // A failed start that was not a refusal can leave the offer ineligible for now, for example when
+    // the trial service could not be reached. The error stays visible instead of vanishing with the card.
+    if (feedback?.tenantId === id && feedback.kind === "error") return notice(`${feedback.text} You can try again later on the License page.`, "alert")
+    return null
   }
-  if (!hidden || !trialOfferEligible(status, id, hidden)) return null
   const days = status?.tenantTrialPolicy?.days ?? 14
   const error = feedback?.tenantId === id && feedback.kind === "error" ? feedback.text : ""
   return <section aria-labelledby="trial-offer-title" className="overflow-hidden rounded-3xl border border-gray-200 bg-white">
