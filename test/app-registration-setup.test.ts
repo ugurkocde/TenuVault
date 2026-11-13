@@ -262,3 +262,21 @@ it("reports a cancelled sign-in, a cancelled provisioning and a timeout", async 
     expect(report).toHaveBeenLastCalledWith({ name: "setup_signin", props: { result: "timeout" } })
   } finally { vi.useRealTimers() }
 })
+
+it.each([
+  Object.assign(new Error("user_cancelled: User cancelled the flow."), { errorCode: "user_cancelled" }),
+  Object.assign(new Error("authentication_canceled"), { errorCode: "authentication_canceled" }),
+  new Error("access_denied: The user denied the request."),
+])("reports MSAL's own cancellation codes as cancelled, never as an error (%s)", async error => {
+  const report = vi.fn()
+  state.interactive.mockRejectedValueOnce(error)
+  await expect(new AppRegistrationSetup({ ...host(), report }).create()).rejects.toThrow()
+  expect(report.mock.calls.map(([event]) => event)).toEqual([{ name: "setup_signin", props: { result: "cancelled" } }])
+})
+
+it("reports access_denied with an AADSTS code as a failure", async () => {
+  const report = vi.fn()
+  state.interactive.mockRejectedValueOnce(new Error("access_denied: AADSTS65004 User declined to consent."))
+  await expect(new AppRegistrationSetup({ ...host(), report }).create()).rejects.toThrow()
+  expect(report).toHaveBeenCalledWith({ name: "setup_signin", props: { result: "failed", code: "AADSTS65004" } })
+})

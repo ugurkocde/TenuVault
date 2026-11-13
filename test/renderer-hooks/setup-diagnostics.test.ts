@@ -64,7 +64,7 @@ describe("welcome card", () => {
     const container = await render(createElement(SetupDiagnosticsCard))
     const text = container.textContent ?? ""
     expect(text).toContain("Help us make setup work in your environment")
-    expect(text).toContain("TenuVault can tell us which setup steps worked and which Microsoft error codes stopped them, for 30 days after install. Never sent: tenant names or IDs, account names, policies or backups. A random ID links the steps and is deleted after 30 days.")
+    expect(text).toContain("TenuVault can tell us which setup steps worked and which Microsoft error codes stopped them, for 30 days after you agree. Never sent: tenant names or IDs, account names, policies or backups. A random ID links the steps. It is deleted from this computer after 30 days, and we delete the events after 180 days.")
     expect(text).toContain("Change it anytime in Settings")
     expect(text).not.toMatch(/[\u2013\u2014]/)
     const share = button(container, "Share setup diagnostics")!
@@ -136,9 +136,10 @@ describe("error reminder", () => {
 describe("Settings toggle", () => {
   const checkbox = (container: HTMLElement) => container.querySelector<HTMLInputElement>("input[type=checkbox]")!
 
-  it("turns sharing on and off", async () => {
+  it("turns sharing on and off, and says turning it off deletes what was sent", async () => {
     state.status = status({ state: "declined" })
     const container = await render(createElement(SetupDiagnosticsSetting))
+    expect(container.textContent).toContain("Turning it off also deletes the events already sent.")
     expect(checkbox(container).checked).toBe(false)
     await click(checkbox(container))
     expect(state.consent).toHaveBeenCalledWith("settings")
@@ -160,7 +161,7 @@ describe("Settings toggle", () => {
     state.status = status({ state: "ended" })
     const container = await render(createElement(SetupDiagnosticsSetting))
     expect(checkbox(container).disabled).toBe(true)
-    expect(container.textContent).toContain("Ended 30 days after install")
+    expect(container.textContent).toContain("Ended 30 days after you agreed")
   })
 
   it("is not shown on an install from before setup diagnostics", async () => {

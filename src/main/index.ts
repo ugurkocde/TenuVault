@@ -23,7 +23,7 @@ import { rendererStorageKey, rendererStorageValue } from "./renderer-storage"
 import { prepareGeneratedFile, prepareSaveFile, type PreparedFile } from "./save-file"
 import { pdfBrandingFor, PdfBrandingPolicy, PdfBrandingStore, setPdfBrandingPolicy } from "./pdf-branding"
 import { prepareOibReportFile, printHtmlToPdf } from "./report-export"
-import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, net, Notification, safeStorage, session, shell } from "electron"
+import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, net, Notification, powerMonitor, safeStorage, session, shell } from "electron"
 import { createChromiumFetch } from "./chromium-fetch"
 import { ProxyAuth, ProxyPrompts, type ProxyAuthAttempt, type ProxyChallenge } from "./proxy-auth"
 import { basename, dirname, join } from "node:path"
@@ -149,7 +149,7 @@ function osCipher(): Cipher {
  * `startOver` says what starting over means for this store; the default fits the stores
  * that hold sign-ins and the license.
  */
-function openStore(filePath: string, cipher: Cipher, startOver = "your saved data is kept as a backup, and you sign in to your tenants and activate your license again.", startOverButton = "Start over"): SecureStore | null {
+function openStore(filePath: string, cipher: Cipher, startOver = "your saved data is kept as a backup, and you sign in to your tenants and activate your license again.", startOverButton = "Start over", onStartOver?: () => void): SecureStore | null {
   const store = new SecureStore(filePath, cipher)
   try {
     store.open()
@@ -171,6 +171,7 @@ function openStore(filePath: string, cipher: Cipher, startOver = "your saved dat
     })
     if (choice !== 1) return null
     console.warn(`[storage] Moved unreadable store to ${store.moveAside()}`)
+    onStartOver?.()
     return store
   }
 }
@@ -200,7 +201,9 @@ const chromiumFetch: typeof fetch = rejectProxyAuthResponses(createChromiumFetch
 async function bootstrap(): Promise<void> {
   const cipher = osCipher()
   const userData = app.getPath("userData")
-  const appStore = openStore(join(userData, "app-state.bin"), cipher, APP_STATE_START_OVER_DETAIL, APP_STATE_START_OVER_BUTTON)
+  // Starting over empties the app store, but the install is not new: it is never asked about setup diagnostics.
+  let startedOver = false
+  const appStore = openStore(join(userData, "app-state.bin"), cipher, APP_STATE_START_OVER_DETAIL, APP_STATE_START_OVER_BUTTON, () => { startedOver = true })
   const tokenStore = appStore && openStore(join(userData, "token-cache.bin"), cipher)
   // Records of the review, evidence and change workflows, kept apart so the app state stays small.
   const workspaceStore = tokenStore && openStore(join(userData, "workspace.bin"), cipher, "your saved review records (baselines, promotions and health reviews) are kept as a backup copy and start empty. Tenant access and your license are not affected.")
@@ -211,7 +214,7 @@ async function bootstrap(): Promise<void> {
     return
   }
   // Read before anything writes: only an install without any saved state is asked about setup diagnostics.
-  const freshInstall = appStore.keys().length === 0
+  const freshInstall = appStore.keys().length === 0 && !startedOver
 
   // Proxy sign-ins: asked once per proxy in the window, remembered in the encrypted store
   // (for this session only without OS encryption).
@@ -385,6 +388,22 @@ async function bootstrap(): Promise<void> {
 
   // Nightly builds keep following nightlies until the admin switches back to stable.
   const preferences = new Preferences(appStore, { nightlyUpdates: isNightly(app.getVersion()) })
+  // Setup diagnostics of new installs that agree to share them, created before anything can finish a
+  // backup. An unpackaged build sends only to a test endpoint.
+  const diagnostics = new SetupDiagnostics({
+    store: appStore,
+    freshInstall,
+    policy: await setupDiagnosticsDisabledByPolicy(),
+    url: app.isPackaged ? `${LICENSE_API_BASE}/api/desktop-events` : process.env.TENUVAULT_DIAGNOSTICS_URL || null,
+    fetch: chromiumFetch,
+    envelope: { appVersion: app.getVersion(), os: process.platform, channel: isNightly(app.getVersion()) ? "nightly" : "stable" },
+    // Read when the admin agrees, long after the update policy below is known.
+    firstLaunch: () => firstLaunchProps(process.getSystemVersion(), process.arch, autoUpdateManaged),
+  })
+  diagnostics.start()
+  app.on("before-quit", () => diagnostics.stop())
+  // A computer that slept past the end of the 30 days deletes the ID as soon as it wakes.
+  powerMonitor.on("resume", () => diagnostics.checkExpiry())
   // OpenIntuneBaseline runs keep the IDs they created and what they replaced, so they can be undone after a restart.
   if (canEncrypt()) setFrameworkStore(appStore)
   if (canEncrypt()) setNativeFrameworkStore(appStore)
@@ -431,10 +450,9 @@ async function bootstrap(): Promise<void> {
       failedAttempts.finished(job, request)
       // Manual backup outcomes notify here; scheduled and tray outcomes notify from the
       // scheduler path, which already suppresses repeated unreachable failures.
-      if ((request.trigger ?? "manual") === "manual") {
-        void notifyBackupOutcome(job, "manual")
-        diagnostics.record(firstBackupEvent(job))
-      }
+      if ((request.trigger ?? "manual") === "manual") void notifyBackupOutcome(job, "manual")
+      // Every trigger counts, until the first backup that works.
+      diagnostics.record(firstBackupEvent(job))
       tallyBackup(job, request)
     },
   })
@@ -884,18 +902,6 @@ async function bootstrap(): Promise<void> {
   updates.onLogin((authInfo, callback) => answerProxyLogin("updates", authInfo, callback))
   // The MSI is deployed and updated by the organization; updating it would add a per-user copy.
   const autoUpdateManaged = (app.isPackaged && !installedBySetup(process.execPath)) || (await updatesDisabledByPolicy())
-  // Setup diagnostics of new installs that agree to share them. An unpackaged build sends only to a test endpoint.
-  const diagnostics = new SetupDiagnostics({
-    store: appStore,
-    freshInstall,
-    policy: await setupDiagnosticsDisabledByPolicy(),
-    url: app.isPackaged ? `${LICENSE_API_BASE}/api/desktop-events` : process.env.TENUVAULT_DIAGNOSTICS_URL || null,
-    fetch: chromiumFetch,
-    envelope: { appVersion: app.getVersion(), os: process.platform, channel: isNightly(app.getVersion()) ? "nightly" : "stable" },
-    firstLaunch: () => firstLaunchProps(process.getSystemVersion(), process.arch, autoUpdateManaged),
-  })
-  diagnostics.start()
-  app.on("before-quit", () => diagnostics.stop())
   handleTrusted("diagnostics:status", () => diagnostics.status())
   handleTrusted("diagnostics:consent", (_event, where: unknown, step: unknown) => diagnostics.consent(where, step))
   handleTrusted("diagnostics:decline", () => diagnostics.decline())
@@ -1129,7 +1135,8 @@ async function bootstrap(): Promise<void> {
       const checked = license.status([]).tenants.find((tenant) => tenant.tenantId === tenantId.toLowerCase())
       diagnostics.record(licenseEvent(plan, checked?.source, license.trialSkipReason(tenantId)))
     } catch (error) {
-      diagnostics.record(licenseFailureEvent(error), "signin")
+      const event = licenseFailureEvent(error)
+      if (event) diagnostics.record(event, "signin")
       // A tenant that is already connected keeps its sign-in; only a new one is rolled back.
       const connected = connectedTenantIds().some((id) => id.toLowerCase() === tenantId.toLowerCase())
       if (!connected) await auth.signOut(tenantId)

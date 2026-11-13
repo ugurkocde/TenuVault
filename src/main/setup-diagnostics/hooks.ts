@@ -15,7 +15,8 @@ export function signInEvent(error: unknown): SetupEventInput {
 /** Whether a reported event is a setup error the app shows, which the reminder next to it may offer to share. */
 export function isSetupError(event: SetupEventInput): boolean {
   const result = event.props?.result ?? event.props?.outcome
-  return result === "failed" || result === "timeout" || result === "refused" || result === "unreachable"
+  // A reused registration without the consent TenuVault needs is shown as a problem too; one Microsoft is still publishing is not.
+  return result === "failed" || result === "timeout" || result === "refused" || result === "unreachable" || result === "missing_consent"
 }
 
 /** The first license decision for a tenant that was checked: its plan, and why no trial started when it is on Community. */
@@ -25,12 +26,15 @@ export function licenseEvent(plan: Plan, source: string | null | undefined, tria
   return { name: "license", props: { outcome: "community", ...(trialSkipReason ? { reason: reasonCode(trialSkipReason) } : {}) } }
 }
 
-/** A license check that did not let the tenant in: a refusal with its reason, or a service that could not be reached. */
-export function licenseFailureEvent(error: unknown): SetupEventInput {
+/**
+ * A license check that did not let the tenant in: a refusal with its reason, or a service that could
+ * not be reached. Null when the admin only has to choose the Community tenant, which is no refusal.
+ */
+export function licenseFailureEvent(error: unknown): SetupEventInput | null {
+  if (error instanceof CommunityChoicePendingError) return null
   const refused = (reason: string): SetupEventInput => ({ name: "license", props: { outcome: "refused", reason: reasonCode(reason) } })
   if (error instanceof LicenseDenied) return refused(error.reason)
   if (error instanceof CommunityLimitError) return refused("community_limit")
-  if (error instanceof CommunityChoicePendingError) return refused("community_choice_pending")
   const message = error instanceof Error ? error.message : String(error)
   if (message === LICENSE_REQUIRED) return refused("tenant_not_licensed")
   if (/licensing service could not be reached|licensing service is busy/.test(message)) return { name: "license", props: { outcome: "unreachable" } }

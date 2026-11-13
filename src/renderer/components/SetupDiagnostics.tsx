@@ -75,8 +75,8 @@ export function SetupDiagnosticsCard() {
           <h2 id="setup-diagnostics-title" className="text-sm font-medium text-gray-900">Help us make setup work in your environment</h2>
           <p className="text-xs text-gray-600">
             TenuVault can tell us which setup steps worked and which Microsoft error codes stopped them, for 30 days after
-            install. Never sent: tenant names or IDs, account names, policies or backups. A random ID links the steps and is
-            deleted after 30 days.
+            you agree. Never sent: tenant names or IDs, account names, policies or backups. A random ID links the steps. It is
+            deleted from this computer after 30 days, and we delete the events after 180 days.
           </p>
         </div>
       </div>
@@ -177,8 +177,8 @@ export function SetupDiagnosticsSetting() {
         {status.policy
           ? "Turned off by your organization."
           : status.state === "ended"
-            ? "Ended 30 days after install. Nothing more is sent."
-            : "Which setup steps worked and which Microsoft error codes stopped them, for 30 days after install. No tenant names or IDs, account names, policies or backups."}{" "}
+            ? "Ended 30 days after you agreed. Nothing more is sent."
+            : "Which setup steps worked and which Microsoft error codes stopped them, for 30 days after you agree. No tenant names or IDs, account names, policies or backups. Turning it off also deletes the events already sent."}{" "}
         <button type="button" className={linkClass} onClick={openDocs}>See exactly what is sent</button>
       </p>
       {error && <p role="alert" className="text-xs text-red-700">{error}</p>}

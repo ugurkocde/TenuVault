@@ -141,6 +141,11 @@ export function isNetworkFolder(folder: string, platform: NodeJS.Platform = proc
 /** How a setup sign-in or first sign-in ended, as `setup_signin` or `signin` reports it. */
 export function signInResult(error: unknown): "cancelled" | "timeout" | "failed" {
   if (error instanceof Error && (error.name === "SignInCancelledError" || error.message === "Sign-in cancelled." || error.message.startsWith("The sign-in was cancelled in the browser."))) return "cancelled"
+  // MSAL's own cancellation codes, as they arrive before any mapping: the browser tab was closed or
+  // the admin cancelled there. Without an AADSTS code, access_denied is a cancel too.
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : ""
+  const errorCode = error && typeof error === "object" ? (error as { errorCode?: unknown }).errorCode : undefined
+  if (!/AADSTS\d+/.test(message) && (/^(user_cancelled|user_canceled|authentication_canceled|access_denied)$/i.test(typeof errorCode === "string" ? errorCode : "") || /access_denied|user_cancelled|user_canceled|authentication_canceled/i.test(message))) return "cancelled"
   if (error instanceof Error && error.name === "SignInTimeoutError") return "timeout"
   return "failed"
 }

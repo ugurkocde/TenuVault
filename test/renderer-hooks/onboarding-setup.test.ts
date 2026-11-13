@@ -855,6 +855,16 @@ describe("setup diagnostics hooks", () => {
     expect(container.textContent).toContain("Share this error and the next setup steps with TenuVault")
   })
 
+  it("offers the reminder next to the notice of a reused registration that lacks admin consent", async () => {
+    state.diagnostics = { state: "unasked", policy: false, reminder: { setup: true, signin: false } }
+    state.createRegistration.mockResolvedValueOnce({ tenantId: TENANT, clientId: CLIENT, username: "admin@contoso.com", reused: true, ready: true, displayName: "TenuVault Desktop", candidateCount: 1, missingConsent: ["DeviceManagementApps.ReadWrite.All"] })
+    const container = await render(createElement(OnboardingPage))
+    await act(async () => { button(container, "Set up with Microsoft sign-in")!.click(); await settle() })
+    await flush()
+    expect(container.textContent).toContain("has no tenant-wide admin consent")
+    expect(container.textContent).toContain("Share this error and the next setup steps with TenuVault")
+  })
+
   it("reports the storage kind before the tenant is saved", async () => {
     const account = { tenantId: TENANT, clientId: CLIENT, username: "admin@contoso.com" }
     state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "", account, signedInAt: Date.now() }))
