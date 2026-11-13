@@ -4,6 +4,7 @@ import { ERROR_PAGE, firstSignInError, page, SIGN_IN_TIMEOUT_MS, SignInCancelled
 import { isGuid, isMicrosoftLoginUrl } from "../../shared/security"
 import { CONSENT_ROLES_TEXT, CREATE_BY_HAND } from "../../shared/app-registration"
 import { provisionRegistration } from "./registration-provisioning"
+import { loopbackSignIn } from "./loopback-sign-in"
 import type { RegistrationResult, SetupProgress } from "../../shared/ipc"
 import { diagnosticCode, signInResult, type SetupEventInput } from "../setup-diagnostics/events"
 
@@ -108,32 +109,38 @@ export class AppRegistrationSetup {
       auth: { clientId: "14d82eec-204b-4c2f-b7e8-296a70dab67e", authority: `https://login.microsoftonline.com/${encodeURIComponent(options?.tenant || "organizations")}` },
       system: { networkClient: fetchNetworkClient(this.host.fetch) },
     })
-    let cancelled = false
-    let abandon: (error: Error) => void = () => undefined
-    const cancellation = new Promise<never>((_resolve, reject) => {
-      abandon = (error) => { cancelled = true; reject(error) }
-      this.cancelWaiting = () => abandon(new SignInCancelledError())
-    })
+    // The browser wait of this run. Ending it closes the sign-in's own listener, so a browser tab
+    // finished later reaches nothing and no code is redeemed.
+    const waiting = new AbortController()
+    this.cancelWaiting = () => waiting.abort(new SignInCancelledError())
     // When Microsoft shows an error page of its own (admin approval needed, a blocked app,
     // Conditional Access), nothing returns to the app. Stop waiting after a while and say so.
-    const deadline = setTimeout(() => abandon(new SignInTimeoutError(`The sign-in in the browser was not completed within 15 minutes. If Microsoft said that you need admin approval, use "Someone else is the admin?". If it said that Microsoft Graph Command Line Tools is blocked, disabled or not assigned to you, or a Conditional Access policy blocks it, the setup script is blocked too: ${CREATE_BY_HAND} in the Entra admin center. Nothing was changed.`)), SETUP_SIGN_IN_TIMEOUT_MS)
+    const deadline = setTimeout(() => waiting.abort(new SignInTimeoutError(`The sign-in in the browser was not completed within 15 minutes. If Microsoft said that you need admin approval, use "Someone else is the admin?". If it said that Microsoft Graph Command Line Tools is blocked, disabled or not assigned to you, or a Conditional Access policy blocks it, the setup script is blocked too: ${CREATE_BY_HAND} in the Entra admin center. Nothing was changed.`)), SETUP_SIGN_IN_TIMEOUT_MS)
     try {
       this.host.progress({ phase: "signingIn" })
-      const interactive = app.acquireTokenInteractive({
+      const result = await loopbackSignIn({
+        app,
         scopes: ["https://graph.microsoft.com/Application.ReadWrite.All", "https://graph.microsoft.com/DelegatedPermissionGrant.ReadWrite.All"],
         prompt: "select_account",
         openBrowser: url => {
-          if (cancelled) throw new SignInCancelledError()
           if (!isMicrosoftLoginUrl(url)) throw new Error("Microsoft returned an unexpected sign-in address.")
           this.link = url
           return this.host.openBrowser(url)
         },
-        successTemplate: page("Go back to TenuVault", "You are signed in. TenuVault is setting up the app registration and continues there. You can close this tab."),
-        errorTemplate: ERROR_PAGE,
-      })
-      // A late browser answer after cancellation is never used and its memory cache is cleared.
-      void interactive.finally(() => { if (cancelled) app.clearCache() }).catch(() => undefined)
-      const result = await Promise.race([interactive, cancellation]).finally(() => { this.link = null }).catch(error => {
+        successPage: page("Go back to TenuVault", "You are signed in. TenuVault is setting up the app registration and continues there. You can close this tab."),
+        errorPage: ERROR_PAGE,
+        signal: waiting.signal,
+        // The browser answered and the code is redeemed now: the wait is over.
+        onAnswer: () => {
+          clearTimeout(deadline)
+          this.link = null
+          this.cancelWaiting = undefined
+        },
+      }).then(result => {
+        // A cancel of the whole setup while the code was redeemed: nothing is created.
+        if (controller.signal.aborted) throw new SignInCancelledError()
+        return result
+      }).finally(() => { this.link = null }).catch(error => {
         const result = signInResult(error)
         this.host.report?.({ name: "setup_signin", props: { result, ...(result === "failed" ? { code: diagnosticCode(error) } : {}) } })
         throw setupSignInError(error)

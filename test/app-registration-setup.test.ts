@@ -1,5 +1,6 @@
 import { beforeEach, expect, it, vi } from "vitest"
-import type { Configuration, InteractiveRequest } from "@azure/msal-node"
+import type { Configuration } from "@azure/msal-node"
+import type { LoopbackSignInRequest as InteractiveRequest } from "../src/main/auth/loopback-sign-in"
 
 const state = vi.hoisted(() => ({ interactive: vi.fn(), clear: vi.fn(async () => undefined), configuration: null as Configuration | null, provision: vi.fn() }))
 vi.mock("@azure/msal-node", async original => {
@@ -11,6 +12,12 @@ vi.mock("@azure/msal-node", async original => {
   } }
 })
 vi.mock("../src/main/auth/registration-provisioning", () => ({ provisionRegistration: state.provision }))
+// The browser part is tested in loopback-sign-in.test.ts; here `state.interactive` plays it.
+vi.mock("../src/main/auth/loopback-sign-in", async original => {
+  const actual = await original<typeof import("../src/main/auth/loopback-sign-in")>()
+  const { interactiveShim } = await import("./helpers/interactive-shim")
+  return { ...actual, loopbackSignIn: interactiveShim(request => state.interactive(request)) }
+})
 import { AppRegistrationSetup, SETUP_SIGN_IN_TIMEOUT_MS, setupLoginHint, setupSignInError } from "../src/main/auth/app-registration-setup"
 import { suggestsCreatingByHand } from "../src/shared/app-registration"
 const host = () => ({ fetch: vi.fn() as unknown as typeof fetch, openBrowser: vi.fn(async () => undefined), progress: vi.fn() })
@@ -22,15 +29,15 @@ it("uses an isolated memory client, setup scopes and the chosen tenant", async (
     expect(request.prompt).toBe("select_account")
     expect(request.scopes).toEqual(["https://graph.microsoft.com/Application.ReadWrite.All", "https://graph.microsoft.com/DelegatedPermissionGrant.ReadWrite.All"])
     // The browser is in front when the sign-in ends, so its page leads with what to do next.
-    expect(request.successTemplate).toContain("<h1 style=\"font-size:1.6rem;margin:0 0 .6rem\">Go back to TenuVault</h1>")
-    expect(request.successTemplate).toContain("TenuVault is setting up the app registration and continues there")
+    expect(request.successPage).toContain("<h1 style=\"font-size:1.6rem;margin:0 0 .6rem\">Go back to TenuVault</h1>")
+    expect(request.successPage).toContain("TenuVault is setting up the app registration and continues there")
     // A green tick that draws itself, drawn at once for people who prefer reduced motion.
-    expect(request.successTemplate).toContain('stroke="#16a34a"')
-    expect(request.successTemplate).toContain("prefers-reduced-motion:reduce")
-    expect(request.errorTemplate).toContain('stroke="#dc2626"')
-    expect(request.errorTemplate).not.toContain("#16a34a")
+    expect(request.successPage).toContain('stroke="#16a34a"')
+    expect(request.successPage).toContain("prefers-reduced-motion:reduce")
+    expect(request.errorPage).toContain('stroke="#dc2626"')
+    expect(request.errorPage).not.toContain("#16a34a")
     // The page loads nothing from anywhere: no script, no link, no image.
-    for (const template of [request.successTemplate, request.errorTemplate]) expect(template).not.toMatch(/<script|<link|<img|https?:/)
+    for (const template of [request.successPage, request.errorPage]) expect(template).not.toMatch(/<script|<link|<img|https?:/)
     return { account: { tenantId: "tenant", username: "admin" }, accessToken: "ephemeral" }
   })
   state.provision.mockResolvedValueOnce({ tenantId: "tenant", clientId: "client", username: "admin", reused: false, ready: true })
@@ -42,21 +49,22 @@ it("uses an isolated memory client, setup scopes and the chosen tenant", async (
   expect(result).not.toHaveProperty("token")
   expect(state.clear).toHaveBeenCalled()
 })
-it("cancels the browser wait, refuses a late browser open and clears a late answer", async () => {
-  let request!: InteractiveRequest
+it("cancels the browser wait and ignores a late answer", async () => {
   let finish!: (value: unknown) => void
-  state.interactive.mockImplementationOnce((value: InteractiveRequest) => { request = value; return new Promise(resolve => { finish = resolve }) })
+  let signal: AbortSignal | undefined
+  state.interactive.mockImplementationOnce((value: InteractiveRequest) => { signal = value.signal; return new Promise(resolve => { finish = resolve }) })
   const h = host()
   const setup = new AppRegistrationSetup(h)
   const pending = setup.create()
   setup.cancel()
   await expect(pending).rejects.toThrow("Sign-in cancelled.")
-  expect(() => request.openBrowser("https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize")).toThrow("Sign-in cancelled.")
+  // The sign-in's own listener is closed through this signal (see loopback-sign-in.test.ts).
+  expect(signal?.aborted).toBe(true)
   finish({ account: { tenantId: "late", username: "admin" }, accessToken: "late" })
   await Promise.resolve()
   expect(state.provision).not.toHaveBeenCalled()
   expect(h.openBrowser).not.toHaveBeenCalled()
-  expect(state.clear).toHaveBeenCalledTimes(2)
+  expect(state.clear).toHaveBeenCalledTimes(1)
 })
 it("refuses browser URLs outside Microsoft login", async () => {
   state.interactive.mockImplementationOnce(async (request: InteractiveRequest) => { await request.openBrowser("https://example.invalid/") })

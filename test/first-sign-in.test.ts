@@ -12,6 +12,12 @@ vi.mock("@azure/msal-node", async (importOriginal) => {
   }
   return { ...actual, PublicClientApplication }
 })
+// The browser part is tested in loopback-sign-in.test.ts; here `msal.interactive` plays it.
+vi.mock("../src/main/auth/loopback-sign-in", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/main/auth/loopback-sign-in")>()
+  const { interactiveShim } = await import("./helpers/interactive-shim")
+  return { ...actual, loopbackSignIn: interactiveShim((request) => msal.interactive(request)) }
+})
 
 const { AuthManager, SIGN_IN_TIMEOUT_MS, SignInCancelledError, firstSignInError } = await import("../src/main/auth/msal")
 const { signInEvent } = await import("../src/main/setup-diagnostics/hooks")
@@ -92,20 +98,6 @@ describe("AuthManager sign-in", () => {
 
     msal.interactive.mockResolvedValueOnce({ account: { tenantId: TENANT, username: "admin@contoso.com", homeAccountId: "home" } })
     await expect(auth.signIn(TENANT, CLIENT)).resolves.toMatchObject({ tenantId: TENANT, username: "admin@contoso.com" })
-  })
-
-  it("does not open the browser for a sign-in cancelled before MSAL opens it", async () => {
-    let request: { openBrowser: (url: string) => Promise<void> } | undefined
-    msal.interactive.mockImplementationOnce((value) => {
-      request = value as typeof request
-      return new Promise(() => undefined)
-    })
-    const auth = manager()
-    const waiting = auth.signIn(TENANT, CLIENT)
-    auth.cancelInteractive()
-    await expect(waiting).rejects.toThrow("Sign-in cancelled.")
-    await expect(request!.openBrowser("https://login.microsoftonline.com/")).rejects.toThrow("Sign-in cancelled.")
-    expect(openBrowser).not.toHaveBeenCalled()
   })
 
   it("leaves a reauthentication started elsewhere waiting when the first sign-in is cancelled", async () => {
@@ -216,7 +208,7 @@ describe("first sign-in recovery", () => {
     "http://login.microsoftonline.com/authorize",
     "https://login.microsoftonline.com.example.invalid/authorize",
     "https://user:secret@login.microsoftonline.com/authorize",
-  ])("never keeps an address that is not Microsoft's login (%s)", async (url) => {
+  ])("never opens or keeps an address that is not Microsoft's login (%s)", async (url) => {
     let request: { openBrowser: (url: string) => Promise<void> } | undefined
     msal.interactive.mockImplementationOnce((value) => {
       request = value as typeof request
@@ -225,7 +217,8 @@ describe("first sign-in recovery", () => {
     const auth = manager()
     const waiting = auth.signIn(TENANT, CLIENT)
     await Promise.resolve()
-    await request!.openBrowser(url)
+    expect(() => request!.openBrowser(url)).toThrow("Microsoft returned an unexpected sign-in address.")
+    expect(openBrowser).not.toHaveBeenCalledWith(url)
     expect(auth.signInLink()).toBeNull()
     auth.cancelInteractive()
     await expect(waiting).rejects.toThrow("Sign-in cancelled.")

@@ -5,13 +5,13 @@ import {
   type AccountInfo,
   type AuthenticationResult,
   type ICachePlugin,
-  type InteractiveRequest,
 } from "@azure/msal-node"
 import type { SignedInAccount } from "../../shared/ipc"
 import { RESOURCE_SCOPES } from "../../shared/constants"
 import { CONSENT_ROLES_TEXT, FIRST_SIGN_IN_TIMEOUT_MESSAGE } from "../../shared/app-registration"
 import { isMicrosoftLoginUrl } from "../../shared/security"
 import { fetchNetworkClient } from "./network-client"
+import { loopbackSignIn } from "./loopback-sign-in"
 
 export interface AuthHost {
   /**
@@ -354,43 +354,40 @@ export class AuthManager {
     const pending = this.interactive.get(key)
     if (pending) return pending
 
-    // MSAL opens the browser after a few awaits; a sign-in cancelled before then never opens it.
-    let cancelledEarly = false
+    // The app runs the browser sign-in itself (loopback-sign-in.ts), so ending an attempt closes
+    // its listener: a browser tab finished later reaches nothing and no code is redeemed. Only the
+    // first sign-in can be cancelled, so a reauthentication started elsewhere keeps waiting.
     const owner = {}
-    const request: InteractiveRequest = {
-      scopes: [scope],
-      authority: authority(tenant),
-      openBrowser: (url) => {
-        if (cancelledEarly) return Promise.reject(new SignInCancelledError())
-        if (cancellable && isMicrosoftLoginUrl(url)) this.link = { url, owner }
-        return this.host.openBrowser(url)
-      },
-      successTemplate: SUCCESS_PAGE,
-      errorTemplate: ERROR_PAGE,
-      ...(prompt ? { prompt } : {}),
-      ...(loginHint ? { loginHint } : {}),
+    const controller = new AbortController()
+    const cancel = (error: Error) => controller.abort(error)
+    const ended = () => {
+      clearTimeout(deadline)
+      if (this.link?.owner === owner) this.link = null
+      this.cancels.delete(cancel)
     }
-    // MSAL cannot abort a loopback sign-in, so a cancel stops waiting for it instead. A browser
-    // tab finished later only fills the token cache; its result is never used. Only the first
-    // sign-in can be cancelled, so a reauthentication started elsewhere keeps waiting.
-    let cancel: (error: Error) => void = () => {}
-    const cancelled = new Promise<never>((_resolve, reject) => {
-      cancel = (error) => {
-        cancelledEarly = true
-        reject(error)
-      }
-    })
     if (cancellable) this.cancels.set(cancel, key)
     // The first sign-in stops waiting after a while, like the setup sign-in.
     const deadline = cancellable ? setTimeout(() => cancel(new SignInTimeoutError(FIRST_SIGN_IN_TIMEOUT_MESSAGE)), SIGN_IN_TIMEOUT_MS) : undefined
-    const interactive = this.app(clientId).acquireTokenInteractive(request)
-    const promise = (cancellable ? Promise.race([interactive, cancelled]) : interactive)
-      .finally(() => {
-        clearTimeout(deadline)
-        if (this.link?.owner === owner) this.link = null
-        this.cancels.delete(cancel)
-        if (this.interactive.get(key) === promise) this.interactive.delete(key)
-      })
+    const promise = loopbackSignIn({
+      app: this.app(clientId),
+      scopes: [scope],
+      authority: authority(tenant),
+      ...(prompt ? { prompt } : {}),
+      ...(loginHint ? { loginHint } : {}),
+      openBrowser: (url) => {
+        if (!isMicrosoftLoginUrl(url)) throw new Error("Microsoft returned an unexpected sign-in address.")
+        if (cancellable) this.link = { url, owner }
+        return this.host.openBrowser(url)
+      },
+      successPage: SUCCESS_PAGE,
+      errorPage: ERROR_PAGE,
+      signal: controller.signal,
+      // The browser answered: the code is redeemed now, and a cancel or timeout no longer applies.
+      onAnswer: ended,
+    }).finally(() => {
+      ended()
+      if (this.interactive.get(key) === promise) this.interactive.delete(key)
+    })
     this.interactive.set(key, promise)
     return promise
   }
