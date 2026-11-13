@@ -339,7 +339,8 @@ export class LicenseService {
   private readonly tenantMutations = new Map<string, Promise<void>>()
   private readonly removedTenants = new Map<string, object>()
   private installId = ""
-  // Set by an install_limit refusal in this session; the stored marker carries it across restarts.
+  // Set by an install_limit refusal or the upgrade of an older one, for this process; the stored
+  // marker, tied to the installation ID, is what carries it across restarts.
   private trialInstallLimit = false
   private loaded = false
   private savedSeen = 0
@@ -706,6 +707,14 @@ export class LicenseService {
     } else {
       this.installId = randomUUID()
       store.set(INSTALL_ID_KEY, this.installId)
+    }
+    // Versions before the marker kept an install_limit refusal only in the tenant's record, which
+    // a removal or deactivation drops. Without any marker yet, such a record becomes the marker of
+    // this installation before anything can delete it. A marker of another installation ID stays
+    // as it is, so an ID change is not undone by an old record.
+    if (store.get(TRIAL_INSTALL_LIMIT_KEY) === null && Object.values(this.trialRecords).some(record => record.refusalReason === "install_limit")) {
+      this.trialInstallLimit = true
+      if (this.options.persist) store.set(TRIAL_INSTALL_LIMIT_KEY, this.installId)
     }
     if (!this.options.persist) return
 
@@ -2059,8 +2068,7 @@ export class LicenseService {
     return {
       tenantTrialPolicy: this.trialPolicy,
       tenantTrialsEnabled: this.trialsEnabled,
-      tenantTrialInstallLimit: this.trialInstallLimit || this.options.store.get(TRIAL_INSTALL_LIMIT_KEY) === this.installId ||
-        Object.values(this.trialRecords).some(record => record.refusalReason === "install_limit"),
+      tenantTrialInstallLimit: this.trialInstallLimit || this.options.store.get(TRIAL_INSTALL_LIMIT_KEY) === this.installId,
       hasKey: Boolean(key),
       keyState,
       keyMessage,
