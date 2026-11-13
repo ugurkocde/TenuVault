@@ -40,7 +40,7 @@ https://techcommunity.microsoft.com/blog/intunecustomersuccess/understanding-app
 
 ## Current execution blocker
 
-This Linux workspace has no accessible enrolled Mac or Windows device channel. The T3 `t3_environment_links` and `t3_environment_link` tools were attempted and are not callable in this session. Real device-side proof and helper validation require restoring access to the enrolled test devices. No successful production capture is claimed.
+The enrolled Windows mini PC is accessible through the previously authorized SSH connection. The T3 device-link tools remain unavailable, but they are not required for this Windows connection. Windows component and packaged-app tests are documented in [the mini PC validation report](app-backup-windows-validation-2026-11-13.md). Production end-to-end capture remains blocked by the missing helper and UI orchestration, not by device access. No enrolled Mac is available for macOS retrieval validation.
 
 ## Implementation progress, 2026-11-13
 
@@ -58,3 +58,7 @@ Remaining: authenticated/signed Windows helper, current requester authorization,
 Local validation: 5,244 tests passed, with two existing skips across 365 test files. Typecheck passed; lint reports the same four pre-existing warnings. The production app and docs builds passed, including all internal documentation links. The final renderer cleanup was also checked separately (13 tests passed). No live device capture, macOS installer retrieval or restore was performed by this implementation.
 
 The built Electron desktop smoke suite passed under Xvfb, including free access during a license-status failure, no attachment method in the preload bridge, offline catalog access and minimum-window layout. This is Linux UI evidence, not Windows/macOS device capture evidence.
+
+## Windows mini PC validation, 2026-11-13
+
+All 200 focused App Backup tests and the packaged desktop smoke suite passed on Windows. Public enrollment metadata matched under a limited user; private-key use was refused under that token. PowerShell and Git payloads were retrieved through the temporary lab adapter, then passed through the unchanged production ingestion/store/export modules with independent hash equality and live cancellation checks. These are component tests, not successful app-driven captures: the helper and capture action are absent, and the lab-supplied Graph file identity is not yet established by a production adapter. See the [complete results and acceptance blockers](app-backup-windows-validation-2026-11-13.md).

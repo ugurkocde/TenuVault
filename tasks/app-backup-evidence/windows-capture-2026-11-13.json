@@ -1,0 +1,153 @@
+{
+  "schema": 1,
+  "date": "2026-11-13",
+  "testedHead": "72f0ad5143a49f443b540923f64d9552aff13c49",
+  "device": {
+    "platform": "Windows 11",
+    "build": "26200",
+    "node": "26.7.0",
+    "enrolled": true,
+    "imeRunning": true
+  },
+  "productEndToEnd": "blocked: no production capture helper or capture IPC/UI action",
+  "focusedTests": {
+    "passed": 200,
+    "failed": 0,
+    "skipped": 0,
+    "files": 13,
+    "initialWorkerShutdownWarning": "app-sources fork teardown timed out after passing; isolated rerun passed 57 tests without a teardown warning"
+  },
+  "limitedDeviceCheck": {
+    "platform": "win32",
+    "enrollment": "matched",
+    "certificate": "matched",
+    "elevated": false,
+    "captureAvailable": false,
+    "reason": "Capture from Intune is not available in this version. Device checks are read-only."
+  },
+  "limitedPrivateKeyCheck": {
+    "elevated": false,
+    "canUsePrivateKey": false,
+    "certificateCandidates": 1,
+    "errorType": "System.Security.Cryptography.CryptographicException",
+    "hresult": -2146893804
+  },
+  "liveRetrieval": [
+    {
+      "application": "PowerShell",
+      "adapter": "lab authorization adapter with unchanged production ingestion modules",
+      "status": "passed",
+      "bytes": 123779448,
+      "sha256": "aab979dcb289d34da2b50328b67613a896ffac542154946b158e71a6f14df3da",
+      "format": "win32-source-zip",
+      "checks": {
+        "matchesIndependentEarlierCapture": true,
+        "exactExport": true,
+        "reconnectAndRotation": true,
+        "capturedSourceReceipt": true,
+        "wrongKeyRejected": true,
+        "wrongTenantRejected": true,
+        "existingDestinationPreserved": true,
+        "liveDownloadCancellation": true,
+        "cancelNotPublished": true,
+        "noStagingLeft": true,
+        "onlyEncryptedStoreFiles": true
+      },
+      "observation": {
+        "accountMatched": true,
+        "contentFileIdMatched": false,
+        "applicationMatched": true,
+        "enrollmentMatched": true,
+        "httpStatus": 200,
+        "versionMatched": true
+      },
+      "productEndToEnd": false,
+      "identityQualification": "Expected Graph file ID supplied by laboratory fixture, not established by a production helper. ContentInfo.DoFileId did not equal that file ID."
+    },
+    {
+      "application": "Git",
+      "adapter": "lab authorization adapter with unchanged production ingestion modules",
+      "status": "passed",
+      "bytes": 75817299,
+      "sha256": "c2701077a61e993038017443d59ebdb0b5a343485553d2ed923387af7183ab36",
+      "format": "win32-source-zip",
+      "checks": {
+        "matchesIndependentEarlierCapture": true,
+        "exactExport": true,
+        "reconnectAndRotation": true,
+        "capturedSourceReceipt": true,
+        "wrongKeyRejected": true,
+        "wrongTenantRejected": true,
+        "existingDestinationPreserved": true,
+        "liveDownloadCancellation": true,
+        "cancelNotPublished": true,
+        "noStagingLeft": true,
+        "onlyEncryptedStoreFiles": true
+      },
+      "observation": {
+        "accountMatched": true,
+        "contentFileIdMatched": false,
+        "applicationMatched": true,
+        "enrollmentMatched": true,
+        "httpStatus": 200,
+        "versionMatched": true
+      },
+      "productEndToEnd": false,
+      "identityQualification": "Expected Graph file ID supplied by laboratory fixture, not established by a production helper. ContentInfo.DoFileId did not equal that file ID."
+    }
+  ],
+  "liveRefusals": [
+    {
+      "case": "wrong-tenant",
+      "rejected": true,
+      "exitCode": 1,
+      "httpStatus": null,
+      "expectedFailure": true
+    },
+    {
+      "case": "wrong-account",
+      "rejected": true,
+      "exitCode": 1,
+      "httpStatus": null,
+      "expectedFailure": true
+    },
+    {
+      "case": "wrong-version",
+      "rejected": true,
+      "exitCode": 1,
+      "httpStatus": 404,
+      "expectedFailure": true
+    },
+    {
+      "case": "not-device-targeted",
+      "rejected": true,
+      "exitCode": 1,
+      "httpStatus": 403,
+      "expectedFailure": true
+    }
+  ],
+  "graphVerification": {
+    "client": "Lokka Microsoft",
+    "version": "beta",
+    "authentication": "app-only",
+    "liveAppAndCommittedFile": true,
+    "pagingFollowed": true,
+    "invalidUnqualifiedSelectStatus": 400,
+    "delegatedProductAuthenticationVerified": false
+  },
+  "packagedApp": {
+    "ciRun": "https://github.com/ugurkocde/TenuVault/actions/runs/43392091957",
+    "artifact": "tenuvault-desktop-Windows",
+    "executableSha256": "f1a1b3056d420e5cc06b4f3f2b131c3b11402ba7a07b2ed19abd49fca4923a07",
+    "appAsarSha256": "c91b54002317ed3e4d2ea5c4977714274cea61d562ea67dcd841f0dd22fdd281",
+    "desktopPrivilege": "limited",
+    "smokeStatus": "passed",
+    "exitCode": 0,
+    "smokeChecksPassed": 58
+  },
+  "tenantChanges": false,
+  "installedApplications": false,
+  "restoredApplications": false,
+  "testPayloadsRemoved": true,
+  "temporaryScheduledTasksRemoved": true
+}
