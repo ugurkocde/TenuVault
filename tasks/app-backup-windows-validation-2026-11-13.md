@@ -4,7 +4,21 @@
 
 The Windows helper and Backup action are now implemented. A normal desktop session on the enrolled mini PC completed PowerShell capture through the real compiled helper after the administrator signed in and approved Windows consent. The app verified and stored a 123,779,448-byte payload. Native export produced the same SHA-256 as the independent earlier lab capture: `aab979dcb289d34da2b50328b67613a896ffac542154946b158e71a6f14df3da`.
 
-The packaged app reopened that backup after restart with no catalog warnings. The selected Git fixture is user-context and was refused by the preview UI before helper launch. A 7-Zip attempt ended with Windows approval cancelled and left no new catalog item. A later approved attempt revealed that the selected duplicate app record had `committedContentVersion: null`, confirmed with Lokka beta. The refusal was safe but generic. The follow-up adds an explicit main-process refusal before Windows consent and independently handles the null field in the native helper, with regression tests. The rebuilt packaged app refused that record without Windows consent and preserved the catalog. This follow-up passed 224 focused Windows tests across 15 files, 23 native checks, 38 local focused tests and typecheck; all six packaged fuses remain correct. A second successful packaged capture, live HTTP 403 and cancellation after download begins remain pending.
+The packaged app reopened that backup after restart with no catalog warnings. The verified 7-Zip fixture then completed capture and native export in the packaged app at `ef1a704`. Its 11,959,010-byte export matched the independent lab capture SHA-256, `fcef456f07b73c6131c484eae363a0a8314076d55f0a6605077a5ce0037e8ff0`. The earlier PowerShell export remained unchanged. Restart reopened both encrypted captures with no catalog warnings.
+
+Negative app-driven cases:
+
+| Case | Observed result |
+| --- | --- |
+| Brave without device content access | Real HTTP 403 after user-approved helper consent; targeting guidance shown; both backups preserved |
+| PowerShell cancellation during download | Clicked the visible Cancel operation control after progress showed 619.2 kB of 118 MB; neutral cancellation message; no new backup |
+| Cancelled Windows approval | No new catalog item |
+| User-context Git fixture | Refused before helper launch by the preview UI |
+| Duplicate 7-Zip record with no committed content | Refused before Windows consent; catalog unchanged |
+
+After the HTTP 403 and download-cancellation cases, the store contained exactly the two existing encrypted artifacts and manifests, no staging directories and no unexpected files. No capture helper or consent process remained.
+
+The empty duplicate app record returned `committedContentVersion: null`, confirmed with Lokka beta. The follow-up replaces a generic helper failure with an explicit main-process refusal before Windows consent and independently handles the null field in the native helper. The rebuilt packaged app verified this refusal. The follow-up passed 224 focused Windows tests across 15 files, 23 native checks, 38 local focused tests and typecheck; all six packaged fuses remain correct.
 
 Local validation: 5,254 tests passed, two existing skips, 366 files; typecheck and app build passed; lint has four existing warnings. On the mini PC, 210 focused tests across 14 files and 15 compiled native helper checks passed. The native checks include token age/skew/tenant/scope refusals, bounded framing, first-instance pipe refusal and unsigned-image rejection.
 
@@ -12,9 +26,9 @@ The app’s actual delegated session passed live Graph beta authorization in the
 
 Release limits: this is an unsigned PR package. A signed app/helper pair, broader endpoint-protection coverage, a non-admin Microsoft requester refusal, user-context capture, macOS retrieval and restore are not established by these tests. Earlier laboratory results below are preserved as historical component evidence.
 
-Machine-readable results: [app-flow evidence](app-backup-evidence/windows-app-flow-2026-11-13.json). The screenshot shows the real retained PowerShell capture in the packaged app; only the tenant label and source identifier were redacted.
+Machine-readable results: [app-flow evidence](app-backup-evidence/windows-app-flow-2026-11-13.json). The screenshot shows the real retained 7-Zip and PowerShell captures in the packaged app; only the tenant label and source identifier were redacted.
 
-![Captured PowerShell in the packaged app](app-backup-evidence/windows-app-flow-2026-11-13/packaged-captured-powershell.png)
+![Captured installers in the packaged app](app-backup-evidence/windows-app-flow-2026-11-13/packaged-captured-installers.png)
 
 ## Historical component validation at 72f0ad5
 

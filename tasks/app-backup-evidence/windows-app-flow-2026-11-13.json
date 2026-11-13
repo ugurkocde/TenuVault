@@ -2,7 +2,7 @@
   "schema": 1,
   "date": "2026-11-13",
   "baseHead": "9fb40d3d6233635f6ae57f8443e64e419c121118",
-  "scope": "Working-tree Windows helper and capture action, subsequently committed with this evidence",
+  "scope": "Windows helper and capture evidence: baseline 3037d05, packaged follow-up ef1a704",
   "sourceHashes": {
     "native/app-backup/Program.cs": "18a70c23f36f9859f277a4bfe94a01cc627995527c3a44d20e62026061997e48",
     "native/app-backup/app.manifest": "8a9d3499b0d5cb8ba373c6587564e96159248d71cec52fc1c9951098f22595a1",
@@ -54,6 +54,34 @@
     {
       "application": "7-Zip fixture",
       "outcome": "Windows approval cancelled; no new published source"
+    },
+    {
+      "application": "Brave fixture",
+      "testedHead": "ef1a704057cc93bd5ab77da30e087c61811dd8ef",
+      "outcome": "real packaged Backup refused by Intune with HTTP 403 after user-approved helper consent; targeting guidance shown",
+      "existingCatalogPreserved": true,
+      "sourceDirectories": 2,
+      "manifestFiles": 2,
+      "artifactFiles": 2,
+      "stagingDirectories": 0,
+      "unexpectedFiles": 0,
+      "helperProcessesAfterCompletion": 0
+    },
+    {
+      "application": "PowerShell fixture",
+      "testedHead": "ef1a704057cc93bd5ab77da30e087c61811dd8ef",
+      "outcome": "real packaged Backup cancelled through visible Cancel operation control after positive download progress",
+      "progressShownBeforeCancel": "619.2 kB of 118 MB",
+      "uiResult": "Backup cancelled. No installer backup was stored.",
+      "existingCatalogPreserved": true,
+      "catalogWarnings": [],
+      "sourceDirectories": 2,
+      "manifestFiles": 2,
+      "artifactFiles": 2,
+      "stagingDirectories": 0,
+      "unexpectedFiles": 0,
+      "helperProcessesAfterCompletion": 0,
+      "consentProcessesAfterCompletion": 0
     }
   ],
   "automated": {
@@ -83,9 +111,6 @@
     "writes": false
   },
   "notYetVerified": [
-    "Packaged capture of a second installer",
-    "App-driven live HTTP 403 targeting refusal",
-    "App-driven cancellation after download starts",
     "Signed TenuVault app/helper release pair",
     "Live Microsoft non-admin role refusal",
     "Defender for Endpoint deployment",
@@ -114,5 +139,19 @@
       "src/main/index.ts": "69bd6080b80ec72cd8683d43e031543fdf5311b6a42cf7a62b3653fe8079569b",
       "src/main/app-backup/capture-preflight.ts": "af0e6468f9366e5237b0c630bbc3b85c4f2b096782c1153397545c2ca5dd12e7"
     }
-  }
+  },
+  "secondPackagedCapture": {
+    "testedHead": "ef1a704057cc93bd5ab77da30e087c61811dd8ef",
+    "application": "7-Zip",
+    "capture": "passed through packaged UI and real helper with user-approved consent",
+    "bytes": 11959010,
+    "sha256": "fcef456f07b73c6131c484eae363a0a8314076d55f0a6605077a5ce0037e8ff0",
+    "matchesIndependentLabCapture": true,
+    "contentVersion": "1",
+    "provenance": "intune-capture",
+    "catalogWarnings": [],
+    "nativeExport": "passed, identical hash; existing PowerShell export unchanged",
+    "restart": "packaged app reopened both captures with no warnings"
+  },
+  "latestProductHead": "ef1a704057cc93bd5ab77da30e087c61811dd8ef"
 }

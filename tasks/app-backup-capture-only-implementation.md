@@ -1,6 +1,6 @@
 # App Backup: capture-only implementation requirements
 
-Status: the Windows native helper, capture jobs and Backup action are implemented. A real app-driven PowerShell capture and native export passed on the enrolled mini PC. This is a Windows preview implementation record, not a general-release or macOS acceptance claim. See the current validation report for tested cases and outstanding release checks.
+Status: the Windows native helper, capture jobs and Backup action are implemented. Real app-driven PowerShell and 7-Zip capture, exact export and restart passed on the enrolled mini PC. The packaged app also passed live device-access refusal and cancellation during download, preserving the completed backups. This is a Windows preview implementation record, not a general-release or macOS acceptance claim. See the current validation report for tested cases and outstanding release checks.
 
 ## Product contract
 
