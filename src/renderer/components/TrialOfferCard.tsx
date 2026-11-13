@@ -63,7 +63,7 @@ export function TrialOfferCard({ tenantId }: { tenantId: string }) {
   if (!hidden || !trialOfferEligible(status, id, hidden)) {
     // A failed start that was not a refusal can leave the offer ineligible for now, for example when
     // the trial service could not be reached. The error stays visible instead of vanishing with the card.
-    if (feedback?.tenantId === id && feedback.kind === "error") return notice(`${feedback.text} You can try again later on the License page.`, "alert")
+    if (feedback?.tenantId === id && feedback.kind === "error" && !hidden?.includes(id)) return notice(`${feedback.text} You can try again later on the License page.`, "alert")
     return null
   }
   const days = status?.tenantTrialPolicy?.days ?? 14
@@ -84,7 +84,7 @@ export function TrialOfferCard({ tenantId }: { tenantId: string }) {
       </div>
       <div className="flex shrink-0 flex-wrap items-center gap-2">
         <Button type="button" className="bg-blue-600 text-white hover:bg-blue-700" disabled={startingFor !== null} onClick={() => void start()}>{startingFor === id ? "Starting trial..." : "Start free trial"}</Button>
-        <Button type="button" variant="outline" disabled={startingFor !== null} onClick={() => void hide(id)}>Not now</Button>
+        <Button type="button" variant="outline" disabled={startingFor !== null} onClick={() => { setFeedback(null); void hide(id) }}>Not now</Button>
       </div>
     </div>
   </section>

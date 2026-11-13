@@ -154,6 +154,17 @@ describe("dashboard trial card", () => {
     expect(container.querySelector('[role="alert"]')).toBeNull()
   })
 
+  it("shows nothing after Not now, also when a start failed before", async () => {
+    state.start.mockRejectedValueOnce(new Error("Network unavailable"))
+    state.read.mockResolvedValueOnce(state.status)
+    await render()
+    await click("Start free trial")
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe("Network unavailable")
+    await click("Not now")
+    await render()
+    expect(container.textContent).toBe("")
+  })
+
   describe("with a tenant switch while a start runs", () => {
     const second = "66666666-7777-4888-9999-000000000000"
     let finish: (error?: Error) => void = () => {}
