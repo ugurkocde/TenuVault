@@ -55,6 +55,48 @@ describe("tenant trials", () => {
     expect(calls.filter(c => c.action === "start_trial")).toHaveLength(count)
     expect(license.status([tenant]).tenants[0]?.trialRefusal).toBeTruthy()
     expect(license.status([]).tenantTrialsEnabled).toBe(!["disabled", "app_update_required"].includes(reason))
+    // The dashboard trial card reads this to stop offering trials on this installation.
+    expect(service().status([]).tenantTrialInstallLimit).toBe(reason === "install_limit")
+  })
+  it("keeps the installation's trial limit after tenant removal, deactivation and a restart", async () => {
+    response = body => body.action === "activate" ? Response.json({ reason: "tenant_not_licensed" }, { status: 403 }) : Response.json({ error: "trial_unavailable", reason: "install_limit" }, { status: 403 })
+    const license = service()
+    await connect(license)
+    expect(license.status([tenant]).tenantTrialInstallLimit).toBe(true)
+    await license.releaseTenant(tenant)
+    // The tenant's own trial record is gone; the installation marker is not.
+    expect(store.get("license.tenantTrials")).toBeNull()
+    expect(license.status([]).tenantTrialInstallLimit).toBe(true)
+    expect(service().status([]).tenantTrialInstallLimit).toBe(true)
+    await license.deactivate()
+    expect(license.status([]).tenantTrialInstallLimit).toBe(true)
+    expect(service().status([]).tenantTrialInstallLimit).toBe(true)
+    // The trial service counts per installation ID, so a new ID starts without the limit.
+    store.set("license.installId", "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d")
+    expect(service().status([]).tenantTrialInstallLimit).toBe(false)
+  })
+  describe("an install_limit refusal saved by an older version", () => {
+    const legacy = () => store.set("license.tenantTrials", JSON.stringify({ [tenant]: { stopped: true, refusal: "This installation has already started its available tenant trials.", refusalReason: "install_limit", refusalAt: start, refusalVersion: "0.4.0" } }))
+    it("becomes the installation's limit and survives removal, deactivation and restarts", async () => {
+      legacy()
+      const license = service()
+      expect(license.status([tenant]).tenantTrialInstallLimit).toBe(true)
+      expect(store.get("license.tenantTrialInstallLimit")).toBe(install)
+      await license.releaseTenant(tenant)
+      expect(store.get("license.tenantTrials")).toBeNull()
+      expect(license.status([]).tenantTrialInstallLimit).toBe(true)
+      expect(service().status([]).tenantTrialInstallLimit).toBe(true)
+      await license.deactivate()
+      expect(service().status([]).tenantTrialInstallLimit).toBe(true)
+    })
+    it("does not carry over to a new installation ID while the old record stays", () => {
+      legacy()
+      expect(service().status([tenant]).tenantTrialInstallLimit).toBe(true)
+      store.set("license.installId", "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d")
+      const restarted = service()
+      expect(restarted.status([tenant]).tenants[0]?.trialRefusal).toBeTruthy()
+      expect(restarted.status([tenant]).tenantTrialInstallLimit).toBe(false)
+    })
   })
   it("falls back on an old server", async () => {
     response = body => body.action === "activate" ? Response.json({ reason: "tenant_not_licensed" }, { status: 403 }) : Response.json({ reason: "bad_request" }, { status: 400 })

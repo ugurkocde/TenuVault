@@ -38,6 +38,7 @@ import { Alert, AlertDescription } from "~/components/ui/alert"
 import { bridge } from "@desktop/lib/bridge"
 import { tenantPlanName, tenantLicense, tenantPlan, useLicense, formatDateTime } from "@desktop/lib/license"
 import { PlanBadge } from "@desktop/components/UpgradeNote"
+import { TrialOfferCard } from "@desktop/components/TrialOfferCard"
 import type { Tenant } from "~/contexts/TenantContext"
 import { allows, type Plan } from "../../../../shared/plans"
 import { describeSchedule, formatWhen, useSchedules } from "@desktop/lib/schedules"
@@ -334,6 +335,8 @@ function DashboardContent() {
           )}
         </div>
       </header>
+
+      {tenantGuid && <TrialOfferCard tenantId={tenantGuid} />}
 
       {statsErrorMessage && (
         <Alert variant="destructive">

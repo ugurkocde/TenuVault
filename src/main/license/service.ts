@@ -223,6 +223,10 @@ const STATE_KEY = "license.state"
 // beside the state so a restart cannot make the retained token usable again.
 const REMOVED_TENANTS_KEY = "license.removedTenants"
 const INSTALL_ID_KEY = "license.installId"
+// The trial service counts tenant trials per installation ID. Its install_limit refusal is kept
+// here with that ID, apart from the tenant records that a tenant removal or deactivation drops,
+// so the app stops offering trials on this installation until the installation ID changes.
+const TRIAL_INSTALL_LIMIT_KEY = "license.tenantTrialInstallLimit"
 // Left behind by the offline TV1 license keys this service replaced.
 const LEGACY_KEYS = ["license.key", "license.trialStartedAt", "license.lastSeenAt", "license.tenants"]
 
@@ -335,6 +339,9 @@ export class LicenseService {
   private readonly tenantMutations = new Map<string, Promise<void>>()
   private readonly removedTenants = new Map<string, object>()
   private installId = ""
+  // Set by an install_limit refusal or the upgrade of an older one, for this process; the stored
+  // marker, tied to the installation ID, is what carries it across restarts.
+  private trialInstallLimit = false
   private loaded = false
   private savedSeen = 0
   private message: string | null = null
@@ -596,6 +603,10 @@ export class LicenseService {
     } catch (error) {
       if (error instanceof LicenseDenied) {
         this.trialRecords[tenant] = { ...this.trialRecords[tenant], stopped: ["used", "licensed", "install_limit"].includes(error.reason), refusal: error.message, refusalReason: error.reason, refusalAt: Date.now(), refusalVersion: this.options.appVersion }
+        if (error.reason === "install_limit") {
+          this.trialInstallLimit = true
+          if (this.options.persist) this.options.store.set(TRIAL_INSTALL_LIMIT_KEY, this.installId)
+        }
         if (["disabled", "app_update_required", "unknown_action"].includes(error.reason)) {
           this.trialsEnabled = false
           this.healthCheckedAt = 0
@@ -696,6 +707,14 @@ export class LicenseService {
     } else {
       this.installId = randomUUID()
       store.set(INSTALL_ID_KEY, this.installId)
+    }
+    // Versions before the marker kept an install_limit refusal only in the tenant's record, which
+    // a removal or deactivation drops. Without any marker yet, such a record becomes the marker of
+    // this installation before anything can delete it. A marker of another installation ID stays
+    // as it is, so an ID change is not undone by an old record.
+    if (store.get(TRIAL_INSTALL_LIMIT_KEY) === null && Object.values(this.trialRecords).some(record => record.refusalReason === "install_limit")) {
+      this.trialInstallLimit = true
+      if (this.options.persist) store.set(TRIAL_INSTALL_LIMIT_KEY, this.installId)
     }
     if (!this.options.persist) return
 
@@ -2049,6 +2068,7 @@ export class LicenseService {
     return {
       tenantTrialPolicy: this.trialPolicy,
       tenantTrialsEnabled: this.trialsEnabled,
+      tenantTrialInstallLimit: this.trialInstallLimit || this.options.store.get(TRIAL_INSTALL_LIMIT_KEY) === this.installId,
       hasKey: Boolean(key),
       keyState,
       keyMessage,
