@@ -20,6 +20,7 @@ import {
 } from "../../shared/app-registration"
 import { bridge } from "../lib/bridge"
 import { SetupDiagnosticsReminder } from "./SetupDiagnostics"
+import { SignInErrorActions, SignInRecoveryPanel, useWaitedLong } from "./SignInRecovery"
 
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const DOMAIN = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i
@@ -249,6 +250,13 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
   const [busy, setBusy] = useState(false)
   const [automatic, setAutomatic] = useState(false)
   const [cancelling, setCancelling] = useState(false)
+  // Each sign-in counts as a new attempt, so the recovery panel waits its 3 minutes again.
+  const [attempt, setAttempt] = useState(0)
+  const [retrying, setRetrying] = useState(false)
+  // Where the sign-in is after the browser step: Microsoft answered and the sign-in is completed,
+  // then the license check. Only the browser step before them offers the recovery panel.
+  const [afterBrowser, setAfterBrowser] = useState<"completing" | "license" | null>(null)
+  const waitedLong = useWaitedLong(busy && !afterBrowser, attempt)
   const [errors, setErrors] = useState<{ tenant?: string; clientId?: string; form?: string }>({})
   const notify = useRef(onFieldsChange)
   notify.current = onFieldsChange
@@ -259,6 +267,9 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
   // so the remount of React's StrictMode check does not stop the automatic sign-in.
   const active = useRef(true)
   const signingIn = useRef(false)
+  // Try again in the recovery panel: the cancelled sign-in starts once more when it has ended.
+  const restart = useRef(false)
+  useEffect(() => bridge.auth.onSignInPhase?.((phase) => { if (signingIn.current) setAfterBrowser(phase) }), [])
   useEffect(() => {
     active.current = true
     return () => {
@@ -339,21 +350,31 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
     setBusy(true)
     setAutomatic(Boolean(loginHint))
     setCancelling(false)
+    setAfterBrowser(null)
+    setAttempt((value) => value + 1)
+    let again = false
     try {
       const account = await (loginHint ? bridge.auth.signIn(tenant.trim(), clientId.trim(), { loginHint }) : bridge.auth.signIn(tenant.trim(), clientId.trim()))
       if (active.current) onSignedIn(account, displayName.trim())
     } catch (error) {
       if (!active.current) return
       const message = error instanceof Error ? error.message : "Sign-in failed."
+      again = message === CANCELLED && restart.current
       if (message !== CANCELLED && !showCommunityLimitError(error)) setErrors({ form: message })
     } finally {
       signingIn.current = false
+      restart.current = false
       if (active.current) {
         setBusy(false)
         setAutomatic(false)
         setCancelling(false)
+        setRetrying(false)
+        setAfterBrowser(null)
       }
     }
+    // The main process keeps the setup's account hint for one sign-in only, so the new one asks
+    // for the account.
+    if (again && active.current) void submit()
   }
 
   // Straight after the in-app setup: sign in once, without asking for a click.
@@ -373,6 +394,23 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
     } catch (error) {
       if (!active.current) return
       setCancelling(false)
+      setErrors({ form: error instanceof Error ? error.message : "Could not cancel the sign-in." })
+    }
+  }
+
+  // Cancels the browser wait and starts again. When the browser step has already ended, the main
+  // process has nothing to cancel and says so: the sign-in goes on and nothing restarts.
+  const tryAgain = async () => {
+    restart.current = true
+    setRetrying(true)
+    try {
+      if (await bridge.auth.cancelSignIn()) return
+      restart.current = false
+      if (active.current) setRetrying(false)
+    } catch (error) {
+      restart.current = false
+      if (!active.current) return
+      setRetrying(false)
       setErrors({ form: error instanceof Error ? error.message : "Could not cancel the sign-in." })
     }
   }
@@ -403,7 +441,9 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
   // first, because there the admin did not press a button on this step.
   const status = busy && (
     <div role="status" className="space-y-3 rounded-2xl bg-gray-50 px-4 py-3 text-sm text-gray-700">
-      {automatic
+      {afterBrowser === "completing"
+        ? <p className="flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />Completing sign-in...</p>
+        : automatic
         ? <>
             <p>Your browser opens once more to sign you in through the new app registration. There is nothing to enter this time. TenuVault then checks the license for this tenant.</p>
             <p className="text-xs text-gray-600">If Microsoft says it cannot find the application, it has not finished publishing the new app registration. Wait a minute, select Cancel sign-in and sign in again.</p>
@@ -418,6 +458,7 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
         <X className="mr-2 h-4 w-4" aria-hidden="true" />
         {cancelling ? "Cancelling..." : "Cancel sign-in"}
       </Button>
+      {waitedLong && <SignInRecoveryPanel kind="signin" onTryAgain={() => void tryAgain()} retrying={retrying} />}
     </div>
   )
 
@@ -453,6 +494,7 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
           <AlertCircle className="h-4 w-4" />
           <AlertDescription>{trialKeyRefusalText(errors.form)}
             <TrialKeyRefusalActions message={errors.form} source="sign-in-trial-key-refused" />
+            <SignInErrorActions message={errors.form} onTryAgain={() => void submit()} />
           </AlertDescription>
         </Alert>
       )}

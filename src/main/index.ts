@@ -8,6 +8,7 @@ import { downloadAppScript } from "./app-backup/script-download"
 import { appDetailsHtml } from "../shared/app-sources/details-report"
 import { readAppBackupApps } from "./app-backup/inventory"
 import { AppRegistrationSetup, setupLoginHint } from "./auth/app-registration-setup"
+import { copySignInLink } from "./auth/sign-in-link"
 import { trialBackupObserver } from "./license/usage-actions"
 import { cachedTrialUsage, trialWorkflowsConfigured } from "./license/usage"
 import { notifyTenantTrial, runTrialNotificationCheck } from "./license/notifications"
@@ -1169,16 +1170,22 @@ async function bootstrap(): Promise<void> {
     return result
   })
   handleTrusted("setup:cancelCreateRegistration", () => registrationSetup.cancel())
-  handleTrusted("auth:signIn", (_event, tenant: string, clientId: string, options?: { loginHint?: unknown }) => withPlanError(async () => {
+  // Try again on the setup sign-in: stops only a sign-in that still waits for the browser.
+  handleTrusted("setup:cancelSignIn", () => registrationSetup.cancelSignIn())
+  handleTrusted("auth:signIn", (event, tenant: string, clientId: string, options?: { loginHint?: unknown }) => withPlanError(async () => {
     const expected = setupSignIn
     setupSignIn = null
     const loginHint = setupLoginHint(expected, tenant, clientId, options?.loginHint)
-    const account = await auth.signIn(tenant, clientId, loginHint ? { loginHint } : undefined).finally(returnToApp).catch((error: unknown) => {
+    // The window hears when the browser step ends, as soon as Microsoft has answered, and again
+    // when the license check starts, so it stops offering ways to recover a browser sign-in.
+    const phase = (value: "completing" | "license") => { if (!event.sender.isDestroyed()) event.sender.send("auth:signInPhase", value) }
+    const account = await auth.signIn(tenant, clientId, { ...(loginHint ? { loginHint } : {}), onBrowserDone: () => phase("completing") }).finally(returnToApp).catch((error: unknown) => {
       const event = signInEvent(error)
       diagnostics.record(event, isSetupError(event) ? "signin" : undefined)
       throw error
     })
     diagnostics.record({ name: "signin", props: { result: "ok" } })
+    phase("license")
     await requireForNewTenant(account.tenantId)
     return account
   }))
@@ -1201,6 +1208,9 @@ async function bootstrap(): Promise<void> {
   handleTrusted("auth:accounts", () => auth.accounts())
   // Stops waiting for a sign-in the admin abandoned in the browser.
   handleTrusted("auth:cancelSignIn", () => auth.cancelInteractive())
+  // Copies the sign-in address a waiting sign-in opened, for another browser. Only whether it was
+  // copied goes back; the address goes from here to the clipboard.
+  handleTrusted("auth:copySignInLink", (_event, kind: unknown) => copySignInLink(kind, { signin: () => auth.signInLink(), setup: () => registrationSetup.signInLink() }, (text) => clipboard.writeText(text)))
   // The setup script leaves its two closing lines on the clipboard; only those two IDs are passed on.
   // Electron reads the clipboard asynchronously, so the text has to be awaited before it is parsed.
   handleTrusted("setup:clipboardIds", async () => setupIdsFromClipboard(await clipboard.readText()))

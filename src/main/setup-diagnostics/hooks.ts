@@ -8,7 +8,7 @@ import { diagnosticCode, reasonCode, signInResult, type SetupEventInput } from "
 /** How the first sign-in to the tenant's own app registration ended. */
 export function signInEvent(error: unknown): SetupEventInput {
   const result = signInResult(error)
-  if (result === "cancelled") return { name: "signin", props: { result } }
+  if (result !== "failed") return { name: "signin", props: { result } }
   return { name: "signin", props: { result, code: diagnosticCode(error), explained: error instanceof ExplainedSignInError } }
 }
 
