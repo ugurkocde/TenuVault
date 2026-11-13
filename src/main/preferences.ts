@@ -18,12 +18,24 @@ function validDismissalTimestamp(value: unknown): value is string {
   return typeof value === "string" && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value
 }
 
-// Changes come from the renderer: accept known preferences and validate the optional timestamp.
+// Tenant IDs are lowercase GUIDs. The list only grows by one tenant per dismissal, so a cap
+// far above any real tenant count keeps a malformed write from growing the store.
+const MAX_HIDDEN_TENANTS = 1000
+function validTenantIdList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.length <= MAX_HIDDEN_TENANTS &&
+    value.every(id => typeof id === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id))
+}
+
+// Changes come from the renderer: accept known preferences and validate the optional values.
 function checkChanges(changes: unknown): asserts changes is Partial<StoredPreferences> {
   if (typeof changes !== "object" || changes === null || Array.isArray(changes)) throw new Error("Invalid preferences.")
   for (const [key, value] of Object.entries(changes)) {
     if (key === "communityBannerDismissedAt" || key === "trialReminderDismissedAt") {
       if (!validDismissalTimestamp(value)) throw new Error(`Invalid value for ${key}.`)
+      continue
+    }
+    if (key === "trialOfferHiddenTenantIds") {
+      if (!validTenantIdList(value)) throw new Error(`Invalid value for ${key}.`)
       continue
     }
     if (!Object.hasOwn(DEFAULTS, key)) throw new Error(`Unknown preference: ${key}.`)
@@ -62,6 +74,7 @@ export class Preferences {
       if (typeof stored !== "object" || stored === null || Array.isArray(stored)) return {}
       if (!validDismissalTimestamp(stored.communityBannerDismissedAt)) delete stored.communityBannerDismissedAt
       if (!validDismissalTimestamp(stored.trialReminderDismissedAt)) delete stored.trialReminderDismissedAt
+      if (!validTenantIdList(stored.trialOfferHiddenTenantIds)) delete stored.trialOfferHiddenTenantIds
       return stored
     } catch {
       return {}

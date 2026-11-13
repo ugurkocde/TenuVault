@@ -153,6 +153,8 @@ export interface TenantLicenseStatus {
 export interface LicenseStatus {
   tenantTrialPolicy?: { days?: number; extensionDays?: number; extensionWindowDays?: number; extensionGraceDays?: number }
   tenantTrialsEnabled?: boolean
+  /** The trial service refused a tenant trial on this installation because it has started all trials it may. */
+  tenantTrialInstallLimit?: boolean
   hasKey: boolean
   /** Saved key outcome, separate from tenant coverage and sign-in guidance. */
   keyState: "none" | "pending" | "active" | "failed"
@@ -333,6 +335,8 @@ export interface AppPreferences {
   communityBannerDismissedAt?: string
   /** ISO timestamp of the last dismissal of a trial reminder on this machine. */
   trialReminderDismissedAt?: string
+  /** Lowercase tenant IDs whose Pro trial card on the dashboard was dismissed or refused by the trial service. */
+  trialOfferHiddenTenantIds?: string[]
   /** Set when an administrator turned automatic updates off by policy. */
   autoUpdateManaged: boolean
 }

@@ -2049,6 +2049,7 @@ export class LicenseService {
     return {
       tenantTrialPolicy: this.trialPolicy,
       tenantTrialsEnabled: this.trialsEnabled,
+      tenantTrialInstallLimit: Object.values(this.trialRecords).some(record => record.refusalReason === "install_limit"),
       hasKey: Boolean(key),
       keyState,
       keyMessage,

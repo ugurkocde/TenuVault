@@ -55,6 +55,8 @@ describe("tenant trials", () => {
     expect(calls.filter(c => c.action === "start_trial")).toHaveLength(count)
     expect(license.status([tenant]).tenants[0]?.trialRefusal).toBeTruthy()
     expect(license.status([]).tenantTrialsEnabled).toBe(!["disabled", "app_update_required"].includes(reason))
+    // The dashboard trial card reads this to stop offering trials on this installation.
+    expect(service().status([]).tenantTrialInstallLimit).toBe(reason === "install_limit")
   })
   it("falls back on an old server", async () => {
     response = body => body.action === "activate" ? Response.json({ reason: "tenant_not_licensed" }, { status: 403 }) : Response.json({ reason: "bad_request" }, { status: 400 })
