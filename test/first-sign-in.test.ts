@@ -13,7 +13,9 @@ vi.mock("@azure/msal-node", async (importOriginal) => {
   return { ...actual, PublicClientApplication }
 })
 
-const { AuthManager, SignInCancelledError, firstSignInError } = await import("../src/main/auth/msal")
+const { AuthManager, SIGN_IN_TIMEOUT_MS, SignInCancelledError, firstSignInError } = await import("../src/main/auth/msal")
+const { signInEvent } = await import("../src/main/setup-diagnostics/hooks")
+const { FIRST_SIGN_IN_TIMEOUT_MESSAGE, offersSignInHandoff } = await import("../src/shared/app-registration")
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
 const CLIENT = "33333333-3333-3333-3333-333333333333"
@@ -45,6 +47,9 @@ describe("firstSignInError", () => {
     ["AADSTS50105: The signed in user is not assigned to a role for the application", "not assigned to the TenuVault app registration"],
     ["AADSTS53000: Device is not in required device state: compliant", "compliant or registered device"],
     ["AADSTS53003: Access has been blocked by Conditional Access policies", "Conditional Access blocked this sign-in"],
+    ["AADSTS50076: Due to a configuration change made by your administrator, you must use multi-factor authentication", "complete the MFA prompt in the browser"],
+    ["AADSTS50079: Due to a configuration change made by your administrator, you are required to use multi-factor authentication", "no method registered for it yet"],
+    ["AADSTS90094: Administrator consent is required", "Ask a Global Administrator, Cloud Application Administrator or Application Administrator to grant admin consent"],
   ])("explains %s", (message, expected) => {
     const result = firstSignInError(new Error(message)) as Error
     expect(result.message).toContain(expected)
@@ -64,8 +69,9 @@ describe("firstSignInError", () => {
   })
 
   it("never uses an em dash", () => {
-    for (const code of ["AADSTS700016", "AADSTS90002", "AADSTS53003"]) {
-      expect((firstSignInError(new Error(code)) as Error).message).not.toContain("—")
+    for (const code of ["AADSTS700016", "AADSTS90002", "AADSTS53003", "AADSTS50076", "AADSTS50079", "AADSTS90094"]) {
+      const message = (firstSignInError(new Error(code)) as Error).message
+      expect(message).not.toMatch(/[\u2013\u2014]| - /)
     }
   })
 })
@@ -132,4 +138,128 @@ it.each([undefined, { loginHint: "admin@example.test" }])("uses the browser sess
 
 it.each(["access_denied", "user_cancelled", "user_canceled"])("explains browser cancellation (%s)", code => {
   expect((firstSignInError(new Error(code)) as Error).message).toBe("The sign-in was cancelled in the browser. Sign in again to continue.")
+})
+
+describe("first sign-in recovery", () => {
+  const URL = "https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/oauth2/v2.0/authorize?client_id=c&state=s"
+
+  it("stops waiting after 15 minutes with a timeout that diagnostics record as timeout", async () => {
+    vi.useFakeTimers()
+    try {
+      msal.interactive.mockImplementationOnce(() => new Promise(() => undefined))
+      const outcome = manager().signIn(TENANT, CLIENT).then(() => null, (caught: unknown) => caught as Error)
+      let settled = false
+      void outcome.then(() => { settled = true })
+      await vi.advanceTimersByTimeAsync(SIGN_IN_TIMEOUT_MS - 1)
+      expect(settled).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      const error = await outcome
+      expect(SIGN_IN_TIMEOUT_MS).toBe(15 * 60_000)
+      expect(error?.name).toBe("SignInTimeoutError")
+      expect(error?.message).toBe(FIRST_SIGN_IN_TIMEOUT_MESSAGE)
+      expect(error?.message).toContain("Try again")
+      expect(error?.message).toContain("copy the instructions for your admin")
+      expect(signInEvent(error)).toEqual({ name: "signin", props: { result: "timeout" } })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("does not time out a sign-in that finished in time", async () => {
+    vi.useFakeTimers()
+    try {
+      msal.interactive.mockResolvedValueOnce({ account: { tenantId: TENANT, username: "admin@contoso.com", homeAccountId: "home" } })
+      await expect(manager().signIn(TENANT, CLIENT)).resolves.toMatchObject({ tenantId: TENANT })
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("keeps the exact address it opened while the sign-in waits and forgets it when the sign-in ends", async () => {
+    let request: { openBrowser: (url: string) => Promise<void> } | undefined
+    let finish: (value: unknown) => void = () => undefined
+    msal.interactive.mockImplementationOnce((value) => {
+      request = value as typeof request
+      return new Promise((resolve) => { finish = resolve })
+    })
+    const auth = manager()
+    const waiting = auth.signIn(TENANT, CLIENT)
+    await Promise.resolve()
+    expect(auth.signInLink()).toBeNull()
+    await request!.openBrowser(URL)
+    expect(openBrowser).toHaveBeenLastCalledWith(URL)
+    expect(auth.signInLink()).toBe(URL)
+    finish({ account: { tenantId: TENANT, username: "admin@contoso.com", homeAccountId: "home" } })
+    await waiting
+    expect(auth.signInLink()).toBeNull()
+  })
+
+  it("forgets the address when the sign-in is cancelled", async () => {
+    let request: { openBrowser: (url: string) => Promise<void> } | undefined
+    msal.interactive.mockImplementationOnce((value) => {
+      request = value as typeof request
+      return new Promise(() => undefined)
+    })
+    const auth = manager()
+    const waiting = auth.signIn(TENANT, CLIENT)
+    await Promise.resolve()
+    await request!.openBrowser(URL)
+    expect(auth.signInLink()).toBe(URL)
+    auth.cancelInteractive()
+    await expect(waiting).rejects.toThrow("Sign-in cancelled.")
+    expect(auth.signInLink()).toBeNull()
+  })
+
+  it.each([
+    "https://example.invalid/authorize",
+    "http://login.microsoftonline.com/authorize",
+    "https://login.microsoftonline.com.example.invalid/authorize",
+    "https://user:secret@login.microsoftonline.com/authorize",
+  ])("never keeps an address that is not Microsoft's login (%s)", async (url) => {
+    let request: { openBrowser: (url: string) => Promise<void> } | undefined
+    msal.interactive.mockImplementationOnce((value) => {
+      request = value as typeof request
+      return new Promise(() => undefined)
+    })
+    const auth = manager()
+    const waiting = auth.signIn(TENANT, CLIENT)
+    await Promise.resolve()
+    await request!.openBrowser(url)
+    expect(auth.signInLink()).toBeNull()
+    auth.cancelInteractive()
+    await expect(waiting).rejects.toThrow("Sign-in cancelled.")
+  })
+
+  it("keeps no address for a reauthentication", async () => {
+    let request: { openBrowser: (url: string) => Promise<void> } | undefined
+    msal.interactive.mockImplementationOnce((value) => {
+      request = value as typeof request
+      return new Promise(() => undefined)
+    })
+    const auth = manager()
+    void auth.reauthenticate(TENANT, CLIENT)
+    await Promise.resolve()
+    await request!.openBrowser(URL)
+    expect(auth.signInLink()).toBeNull()
+  })
+})
+
+describe("offersSignInHandoff", () => {
+  const codes = ["AADSTS53000", "AADSTS53001", "AADSTS53003", "AADSTS65001", "AADSTS90094", "AADSTS50076", "AADSTS50079"]
+
+  it.each(codes)("offers the handoff for %s as the first sign-in explains it", (code) => {
+    const message = (firstSignInError(new Error(`${code}: refused`)) as Error).message
+    expect(offersSignInHandoff(message)).toBe(true)
+  })
+
+  it.each(["AADSTS700016", "AADSTS90002", "AADSTS900023", "AADSTS50011", "AADSTS7000218", "AADSTS50020", "AADSTS50105", "AADSTS65004", "AADSTS530030", "AADSTS500761"])("offers nothing for %s", (code) => {
+    const mapped = firstSignInError(new Error(`${code}: refused`))
+    expect(offersSignInHandoff(mapped instanceof Error ? mapped.message : String(mapped))).toBe(false)
+  })
+
+  it("offers nothing for errors without a code or the timeout", () => {
+    expect(offersSignInHandoff("network down")).toBe(false)
+    expect(offersSignInHandoff(FIRST_SIGN_IN_TIMEOUT_MESSAGE)).toBe(false)
+  })
 })

@@ -280,3 +280,47 @@ it("reports access_denied with an AADSTS code as a failure", async () => {
   await expect(new AppRegistrationSetup({ ...host(), report }).create()).rejects.toThrow()
   expect(report).toHaveBeenCalledWith({ name: "setup_signin", props: { result: "failed", code: "AADSTS65004" } })
 })
+
+it("keeps the Microsoft sign-in address only while the setup sign-in waits", async () => {
+  const url = "https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize?client_id=setup&state=s1"
+  let finish!: (value: unknown) => void
+  let opened!: () => void
+  const browserOpened = new Promise<void>(resolve => { opened = resolve })
+  state.interactive.mockImplementationOnce(async (request: InteractiveRequest) => {
+    await request.openBrowser(url)
+    opened()
+    return new Promise(resolve => { finish = resolve })
+  })
+  state.provision.mockResolvedValueOnce({ tenantId: "tenant", clientId: "client", username: "admin", reused: false, ready: true })
+  const setup = new AppRegistrationSetup(host())
+  expect(setup.signInLink()).toBeNull()
+  const pending = setup.create()
+  await browserOpened
+  expect(setup.signInLink()).toBe(url)
+  finish({ account: { tenantId: "tenant", username: "admin" }, accessToken: "ephemeral" })
+  await pending
+  expect(setup.signInLink()).toBeNull()
+})
+
+it("forgets the setup sign-in address when the sign-in is cancelled, and never keeps another address", async () => {
+  const url = "https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize?state=s2"
+  let opened!: () => void
+  const browserOpened = new Promise<void>(resolve => { opened = resolve })
+  state.interactive.mockImplementationOnce(async (request: InteractiveRequest) => {
+    await request.openBrowser(url)
+    opened()
+    return new Promise(() => undefined)
+  })
+  const setup = new AppRegistrationSetup(host())
+  const pending = setup.create()
+  await browserOpened
+  expect(setup.signInLink()).toBe(url)
+  setup.cancel()
+  await expect(pending).rejects.toThrow("Sign-in cancelled.")
+  expect(setup.signInLink()).toBeNull()
+
+  state.interactive.mockImplementationOnce(async (request: InteractiveRequest) => { await request.openBrowser("https://login.microsoftonline.com.example.invalid/authorize") })
+  const other = new AppRegistrationSetup(host())
+  await expect(other.create()).rejects.toThrow("unexpected sign-in address")
+  expect(other.signInLink()).toBeNull()
+})

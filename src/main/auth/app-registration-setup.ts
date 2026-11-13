@@ -1,6 +1,6 @@
 import { PublicClientApplication } from "@azure/msal-node"
 import { fetchNetworkClient } from "./network-client"
-import { ERROR_PAGE, firstSignInError, page, SignInCancelledError } from "./msal"
+import { ERROR_PAGE, firstSignInError, page, SIGN_IN_TIMEOUT_MS, SignInCancelledError, SignInTimeoutError } from "./msal"
 import { isGuid, isMicrosoftLoginUrl } from "../../shared/security"
 import { CONSENT_ROLES_TEXT, CREATE_BY_HAND } from "../../shared/app-registration"
 import { provisionRegistration } from "./registration-provisioning"
@@ -54,16 +54,9 @@ export function setupLoginHint(expected: { tenantId: string; clientId: string; u
 
 const SHARED_SIGN_IN_CODES = new Set(["AADSTS90002", "AADSTS900023", "AADSTS50020", "AADSTS53000", "AADSTS53001"])
 
-/** How long the setup waits for the sign-in in the browser. Microsoft's own error pages never come back to the app. */
-export const SETUP_SIGN_IN_TIMEOUT_MS = 15 * 60_000
-
-/** The setup sign-in in the browser did not come back in time. */
-export class SignInTimeoutError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = "SignInTimeoutError"
-  }
-}
+/** How long the setup waits for the sign-in in the browser, as long as the first sign-in does. */
+export const SETUP_SIGN_IN_TIMEOUT_MS = SIGN_IN_TIMEOUT_MS
+export { SignInTimeoutError }
 
 /** How the provisioning ended, as the `registration` setup diagnostics event reports it. */
 export function registrationEvent(outcome: { result: RegistrationResult } | { error: unknown; phase: SetupProgress["phase"]; cancelled: boolean }): SetupEventInput {
@@ -77,6 +70,8 @@ export function registrationEvent(outcome: { result: RegistrationResult } | { er
 
 export class AppRegistrationSetup {
   private cancelWaiting?: () => void
+  /** The Microsoft sign-in address the waiting setup sign-in opened, kept only while it waits. */
+  private link: string | null = null
   private controller?: AbortController
   private running = false
   constructor(private readonly host: {
@@ -88,6 +83,9 @@ export class AppRegistrationSetup {
   }) {}
 
   cancel(): void { this.controller?.abort(); this.cancelWaiting?.() }
+
+  /** The Microsoft sign-in address of the setup sign-in waiting for the browser, or null. */
+  signInLink(): string | null { return this.link }
 
   async create(options?: { tenant?: string }): Promise<RegistrationResult> {
     if (this.running) throw new Error("Setup is already running.")
@@ -117,6 +115,7 @@ export class AppRegistrationSetup {
         openBrowser: url => {
           if (cancelled) throw new SignInCancelledError()
           if (!isMicrosoftLoginUrl(url)) throw new Error("Microsoft returned an unexpected sign-in address.")
+          this.link = url
           return this.host.openBrowser(url)
         },
         successTemplate: page("Go back to TenuVault", "You are signed in. TenuVault is setting up the app registration and continues there. You can close this tab."),
@@ -124,7 +123,7 @@ export class AppRegistrationSetup {
       })
       // A late browser answer after cancellation is never used and its memory cache is cleared.
       void interactive.finally(() => { if (cancelled) app.clearCache() }).catch(() => undefined)
-      const result = await Promise.race([interactive, cancellation]).catch(error => {
+      const result = await Promise.race([interactive, cancellation]).finally(() => { this.link = null }).catch(error => {
         const result = signInResult(error)
         this.host.report?.({ name: "setup_signin", props: { result, ...(result === "failed" ? { code: diagnosticCode(error) } : {}) } })
         throw setupSignInError(error)
@@ -151,6 +150,7 @@ export class AppRegistrationSetup {
       }
     } finally {
       clearTimeout(deadline)
+      this.link = null
       this.cancelWaiting = undefined
       this.controller = undefined
       this.running = false

@@ -26,7 +26,7 @@ The **Connect** step, **Connect your tenant**, takes one Microsoft sign-in.
 
 1. Read the four points on the step. They say what you let in: one app registration that lives in your own tenant, acts only as you, has no secret, and leaves your backups with you. Above the button, the step tells you that Microsoft will ask you to approve Microsoft Graph Command Line Tools, Microsoft's own sign-in app, which TenuVault uses once to create the app registration.
 2. Select **Set up with Microsoft sign-in** and sign in as a Global Administrator, Cloud Application Administrator or Application Administrator. The setup creates an app registration and grants admin consent, which needs one of these roles. TenuVault connects tenants in Microsoft's global cloud only; GCC High, DoD and 21Vianet tenants are not supported. If the tenant blocks Microsoft Graph Command Line Tools, which the setup and the setup script sign in through, TenuVault offers **Create it by hand** instead. See [If something goes wrong](/getting-started/app-registration/#if-something-goes-wrong).
-3. Follow the list under **Setting up your tenant**. When it is done, your browser opens once more and signs you in to TenuVault, with nothing to enter. TenuVault skips the **Sign in** step and continues with **Storage**.
+3. Follow the list under **Setting up your tenant**. If the sign-in has not come back after 3 minutes, TenuVault shows [Still waiting for Microsoft?](#still-waiting-for-microsoft). When it is done, your browser opens once more and signs you in to TenuVault, with nothing to enter. TenuVault skips the **Sign in** step and continues with **Storage**.
 
 For what happens in each step, what is created and how to remove it, see [Create the app registration](/getting-started/app-registration/).
 
@@ -63,6 +63,18 @@ The sign-in opens in your default browser, on Windows and on macOS. When it fini
 
 If you abandoned the sign-in in the browser, select **Cancel sign-in** to stop waiting and start again.
 
+### Still waiting for Microsoft?
+
+When a sign-in has waited 3 minutes for the browser, on this step or during **Set up with Microsoft sign-in** on the **Connect** step, TenuVault shows **Still waiting for Microsoft?** under the waiting message:
+
+| Button | What it does |
+| --- | --- |
+| **Try again** | Stops waiting for the open sign-in and starts the same sign-in again in your default browser. |
+| **Copy sign-in link** | Copies the exact Microsoft sign-in address TenuVault opened, so you can paste it into another browser or browser profile, for example Microsoft Edge signed in to your work profile. Finish the sign-in there and it comes back to TenuVault as usual. The link only works while this sign-in waits; after it ends, TenuVault says **The sign-in link is no longer available.** and you select **Try again** for a new one. |
+| **Copy instructions for your admin** | Copies the same ready-to-send setup message as **Someone else is the admin? Copy instructions**, for an Entra administrator who can create the app registration. |
+
+TenuVault stops waiting after 15 minutes. The first sign-in then shows **The sign-in in the browser was not completed within 15 minutes.** with **Try again** and **Copy instructions for your admin** next to it.
+
 You can use a separate admin account. It does not have to be the account you are signed in to Windows or macOS with. Pick it in the Microsoft account list, choose **Use another account**, or start the sign-in while a browser profile signed in as that admin account is your default.
 
 Device-based Conditional Access, such as requiring a compliant or Entra-joined device, is checked in the browser. While TenuVault waits for the sign-in, it notes that Conditional Access needs a browser that passes the device identity, such as Microsoft Edge signed in to your work profile: make it your default browser, cancel and sign in again. On Windows it works in Microsoft Edge when you are signed in to the browser profile, in Chrome with the Microsoft Single Sign On extension or the `CloudAPAuthEnabled` policy, and in Firefox with Windows single sign-on turned on. On macOS it needs the Microsoft Enterprise SSO extension on the device, and Chrome there also needs the Microsoft Single Sign On extension, unless it is Chrome 135 or later on a Mac that stores the device key in the Secure Enclave.
@@ -96,10 +108,15 @@ If Microsoft refuses the first sign-in, TenuVault shows what to do, followed by 
 | `AADSTS7000218` | The app registration asks for a client secret, because `http://localhost` is registered for the **Web** platform. | Add `http://localhost` under **Mobile and desktop applications** on the app registration's **Authentication** page, or run the setup script again. |
 | `AADSTS50020` | The account does not belong to this tenant. | Sign in with an admin account of this tenant. |
 | `AADSTS50105` | Your account is not assigned to the TenuVault app registration. | Ask your Entra administrator to add you to the group that may sign in. |
+| `AADSTS50076` | Microsoft asks for multifactor authentication for this sign-in, because of a Conditional Access policy, per-user MFA or a new location, and it was not completed. | Sign in again and complete the MFA prompt in the browser. If no prompt appears, ask your Entra administrator to check the sign-in logs in the Entra admin center. |
+| `AADSTS50079` | Microsoft asks for multifactor authentication, but your account has no method registered for it yet. | Register a method at [My Sign-Ins security info](https://mysignins.microsoft.com/security-info) and sign in again. If your account signs in through another identity provider, ask your administrator. |
 | `AADSTS53000`, `AADSTS53001` | Conditional Access requires a compliant, registered or domain-joined device. | Make a browser that passes the device identity, such as Microsoft Edge signed in to your work profile, your default browser and try again. |
 | `AADSTS53003` | Conditional Access blocked the sign-in. | Check the sign-in logs in the Entra admin center for the policy, or sign in from a device and location it allows. |
 | `AADSTS65001`, `AADSTS650057` | The app registration has no admin consent for Microsoft Graph. | Add the Microsoft Graph permissions listed in [Delegated permissions](/getting-started/app-registration/#delegated-permissions), grant admin consent and sign in again. |
+| `AADSTS90094` | Administrator consent is required: the tenant does not let your account grant the permissions the TenuVault app registration asks for. | Ask a Global Administrator, Cloud Application Administrator or Application Administrator to grant admin consent for it, or send them the setup instructions. |
 | `AADSTS65004` | The consent was declined in the browser. | Sign in again and accept, or ask an administrator to run the setup script, which grants admin consent. |
+
+For the Conditional Access codes (`AADSTS53000`, `AADSTS53001`, `AADSTS53003`), missing consent or approval (`AADSTS65001`, `AADSTS90094`) and MFA (`AADSTS50076`, `AADSTS50079`), the message also offers **Copy instructions for your admin**, the setup message for another administrator, and **Create it by hand**, which opens the guide to [create the app registration manually](/getting-started/app-registration/#create-the-app-registration-manually).
 
 For other errors, TenuVault shows the error Microsoft returned. See [Troubleshooting](/troubleshooting/#sign-in).
 

@@ -9,6 +9,7 @@ import type { RegistrationResult, SetupProgress } from "../../shared/ipc"
 import { bridge } from "../lib/bridge"
 import { PermissionList, SetupScriptCard } from "./TenantSignInForm"
 import { recordSetup, SetupDiagnosticsReminder } from "./SetupDiagnostics"
+import { SignInRecoveryPanel, useWaitedLong } from "./SignInRecovery"
 
 const CANCELLED = "Sign-in cancelled."
 
@@ -44,31 +45,43 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
   const [script, setScript] = useState(false)
   const [copied, setCopied] = useState(false)
   const busy = useRef(false)
+  // Try again in the recovery panel: the cancelled setup starts once more when it has ended.
+  const restart = useRef(false)
+  const [retrying, setRetrying] = useState(false)
+  const [attempt, setAttempt] = useState(0)
+  const waitedLong = useWaitedLong(running && phase === "signingIn", attempt)
 
   useEffect(() => bridge.setup.onProgress((value) => {
     setPhase(value.phase)
     if (value.reused) setReused(true)
   }), [])
 
-  const start = async () => {
+  const start = async (again = false) => {
     if (busy.current) return
     busy.current = true
-    recordSetup({ name: "setup_route", props: { route: "auto" } })
+    // A restart from the recovery panel is the same route, not a new choice.
+    if (!again) recordSetup({ name: "setup_route", props: { route: "auto" } })
+    setAttempt((value) => value + 1)
     setRunning(true)
     setCancelling(false)
     setError("")
     setReused(false)
     setPhase("signingIn")
+    let restartNow = false
     try {
       onRegistered(await bridge.setup.createRegistration(tenant.trim() ? { tenant: tenant.trim() } : undefined))
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : String(caught)
+      restartNow = message === CANCELLED && restart.current
       // Cancelling is the admin's own choice, not something to report back to them.
       if (message !== CANCELLED) setError(message)
     } finally {
       busy.current = false
+      restart.current = false
       setRunning(false)
+      setRetrying(false)
     }
+    if (restartNow) void start(true)
   }
 
   const cancel = async () => {
@@ -76,9 +89,17 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
     try {
       await bridge.setup.cancelCreateRegistration()
     } catch (caught) {
+      restart.current = false
+      setRetrying(false)
       setCancelling(false)
       setError(caught instanceof Error ? caught.message : String(caught))
     }
+  }
+
+  const tryAgain = () => {
+    restart.current = true
+    setRetrying(true)
+    void cancel()
   }
 
   const copyHandoff = async () => {
@@ -177,8 +198,9 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
             )}
             <Button type="button" variant="outline" size="sm" onClick={() => void cancel()} disabled={cancelling}>
               <X className="mr-2 h-4 w-4" aria-hidden="true" />
-              {cancelling ? "Cancelling..." : "Cancel"}
+              {cancelling && !retrying ? "Cancelling..." : "Cancel"}
             </Button>
+            {waitedLong && <SignInRecoveryPanel kind="setup" onTryAgain={tryAgain} retrying={retrying} />}
           </div>
         ) : (
           <div className="space-y-3">

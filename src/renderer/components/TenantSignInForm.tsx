@@ -20,6 +20,7 @@ import {
 } from "../../shared/app-registration"
 import { bridge } from "../lib/bridge"
 import { SetupDiagnosticsReminder } from "./SetupDiagnostics"
+import { SignInErrorActions, SignInRecoveryPanel, useWaitedLong } from "./SignInRecovery"
 
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const DOMAIN = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i
@@ -249,6 +250,10 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
   const [busy, setBusy] = useState(false)
   const [automatic, setAutomatic] = useState(false)
   const [cancelling, setCancelling] = useState(false)
+  // Each sign-in counts as a new attempt, so the recovery panel waits its 3 minutes again.
+  const [attempt, setAttempt] = useState(0)
+  const [retrying, setRetrying] = useState(false)
+  const waitedLong = useWaitedLong(busy, attempt)
   const [errors, setErrors] = useState<{ tenant?: string; clientId?: string; form?: string }>({})
   const notify = useRef(onFieldsChange)
   notify.current = onFieldsChange
@@ -259,6 +264,8 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
   // so the remount of React's StrictMode check does not stop the automatic sign-in.
   const active = useRef(true)
   const signingIn = useRef(false)
+  // Try again in the recovery panel: the cancelled sign-in starts once more when it has ended.
+  const restart = useRef(false)
   useEffect(() => {
     active.current = true
     return () => {
@@ -339,21 +346,29 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
     setBusy(true)
     setAutomatic(Boolean(loginHint))
     setCancelling(false)
+    setAttempt((value) => value + 1)
+    let again = false
     try {
       const account = await (loginHint ? bridge.auth.signIn(tenant.trim(), clientId.trim(), { loginHint }) : bridge.auth.signIn(tenant.trim(), clientId.trim()))
       if (active.current) onSignedIn(account, displayName.trim())
     } catch (error) {
       if (!active.current) return
       const message = error instanceof Error ? error.message : "Sign-in failed."
+      again = message === CANCELLED && restart.current
       if (message !== CANCELLED && !showCommunityLimitError(error)) setErrors({ form: message })
     } finally {
       signingIn.current = false
+      restart.current = false
       if (active.current) {
         setBusy(false)
         setAutomatic(false)
         setCancelling(false)
+        setRetrying(false)
       }
     }
+    // The main process keeps the setup's account hint for one sign-in only, so the new one asks
+    // for the account.
+    if (again && active.current) void submit()
   }
 
   // Straight after the in-app setup: sign in once, without asking for a click.
@@ -371,10 +386,18 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
     try {
       await bridge.auth.cancelSignIn()
     } catch (error) {
+      restart.current = false
       if (!active.current) return
       setCancelling(false)
+      setRetrying(false)
       setErrors({ form: error instanceof Error ? error.message : "Could not cancel the sign-in." })
     }
+  }
+
+  const tryAgain = () => {
+    restart.current = true
+    setRetrying(true)
+    void cancel()
   }
 
   const field = (id: string, label: string, value: string, set: (v: string) => void, placeholder: string, error?: string, paste = false) => (
@@ -416,8 +439,9 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
       </p>
       <Button type="button" variant="outline" size="sm" onClick={() => void cancel()} disabled={cancelling}>
         <X className="mr-2 h-4 w-4" aria-hidden="true" />
-        {cancelling ? "Cancelling..." : "Cancel sign-in"}
+        {cancelling && !retrying ? "Cancelling..." : "Cancel sign-in"}
       </Button>
+      {waitedLong && <SignInRecoveryPanel kind="signin" onTryAgain={tryAgain} retrying={retrying} />}
     </div>
   )
 
@@ -453,6 +477,7 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
           <AlertCircle className="h-4 w-4" />
           <AlertDescription>{trialKeyRefusalText(errors.form)}
             <TrialKeyRefusalActions message={errors.form} source="sign-in-trial-key-refused" />
+            <SignInErrorActions message={errors.form} onTryAgain={() => void submit()} />
           </AlertDescription>
         </Alert>
       )}

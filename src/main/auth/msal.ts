@@ -9,6 +9,8 @@ import {
 } from "@azure/msal-node"
 import type { SignedInAccount } from "../../shared/ipc"
 import { RESOURCE_SCOPES } from "../../shared/constants"
+import { CONSENT_ROLES_TEXT, FIRST_SIGN_IN_TIMEOUT_MESSAGE } from "../../shared/app-registration"
+import { isMicrosoftLoginUrl } from "../../shared/security"
 import { fetchNetworkClient } from "./network-client"
 
 export interface AuthHost {
@@ -95,6 +97,17 @@ export class SignInCancelledError extends Error {
   }
 }
 
+/** How long a sign-in waits for the browser. Microsoft's own error pages never come back to the app. */
+export const SIGN_IN_TIMEOUT_MS = 15 * 60_000
+
+/** A sign-in in the browser did not come back in time. Setup diagnostics report it as `timeout`. */
+export class SignInTimeoutError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "SignInTimeoutError"
+  }
+}
+
 /** A failed first sign-in the app explains in its own words, so setup diagnostics can tell it from an unexplained one. */
 export class ExplainedSignInError extends Error {}
 
@@ -110,6 +123,9 @@ const FIRST_SIGN_IN_ERRORS: Record<string, string> = {
   AADSTS53000: "Conditional Access requires a compliant or registered device. Use a browser that passes the device identity, such as Microsoft Edge signed in to your work profile, as the default browser and try again.",
   AADSTS53001: "Conditional Access requires a domain-joined device. Use a browser that passes the device identity, such as Microsoft Edge signed in to your work profile, as the default browser and try again.",
   AADSTS53003: "Conditional Access blocked this sign-in. Check the sign-in logs in the Entra admin center for the policy, or sign in from a device and location it allows.",
+  AADSTS50076: "Microsoft asks for multifactor authentication for this sign-in, because of a Conditional Access policy, per-user MFA or a new location, and it was not completed. Sign in again and complete the MFA prompt in the browser. If no prompt appears, ask your Entra administrator to check the sign-in logs in the Entra admin center.",
+  AADSTS50079: "Microsoft asks for multifactor authentication, but your account has no method registered for it yet. Register one at https://mysignins.microsoft.com/security-info and sign in again. If your account signs in through another identity provider, ask your administrator.",
+  AADSTS90094: `Administrator consent is required: this tenant does not let your account grant the permissions the TenuVault app registration asks for. Ask a ${CONSENT_ROLES_TEXT} to grant admin consent for it, or send them the setup instructions.`,
   AADSTS65004: "The consent was declined in the browser. Sign in again and accept, or ask an administrator to run the setup script, which grants admin consent.",
 }
 
@@ -183,6 +199,11 @@ export const ERROR_PAGE = page("Sign-in failed", "Go back to TenuVault for detai
  */
 export class AuthManager {
   private readonly apps = new Map<string, PublicClientApplication>()
+  /**
+   * The Microsoft sign-in address the waiting first sign-in opened, so the admin can copy it into
+   * another browser. Kept only while that sign-in waits.
+   */
+  private link: { url: string; owner: object } | null = null
   /** Rejects the first sign-ins (signIn) waiting for the browser, for cancelInteractive. */
   private readonly cancels = new Map<(error: Error) => void, string>()
   private readonly interactive = new Map<string, Promise<AuthenticationResult>>()
@@ -335,10 +356,15 @@ export class AuthManager {
 
     // MSAL opens the browser after a few awaits; a sign-in cancelled before then never opens it.
     let cancelledEarly = false
+    const owner = {}
     const request: InteractiveRequest = {
       scopes: [scope],
       authority: authority(tenant),
-      openBrowser: (url) => cancelledEarly ? Promise.reject(new SignInCancelledError()) : this.host.openBrowser(url),
+      openBrowser: (url) => {
+        if (cancelledEarly) return Promise.reject(new SignInCancelledError())
+        if (cancellable && isMicrosoftLoginUrl(url)) this.link = { url, owner }
+        return this.host.openBrowser(url)
+      },
       successTemplate: SUCCESS_PAGE,
       errorTemplate: ERROR_PAGE,
       ...(prompt ? { prompt } : {}),
@@ -355,14 +381,23 @@ export class AuthManager {
       }
     })
     if (cancellable) this.cancels.set(cancel, key)
+    // The first sign-in stops waiting after a while, like the setup sign-in.
+    const deadline = cancellable ? setTimeout(() => cancel(new SignInTimeoutError(FIRST_SIGN_IN_TIMEOUT_MESSAGE)), SIGN_IN_TIMEOUT_MS) : undefined
     const interactive = this.app(clientId).acquireTokenInteractive(request)
     const promise = (cancellable ? Promise.race([interactive, cancelled]) : interactive)
       .finally(() => {
+        clearTimeout(deadline)
+        if (this.link?.owner === owner) this.link = null
         this.cancels.delete(cancel)
         if (this.interactive.get(key) === promise) this.interactive.delete(key)
       })
     this.interactive.set(key, promise)
     return promise
+  }
+
+  /** The Microsoft sign-in address of the first sign-in waiting for the browser, or null. */
+  signInLink(): string | null {
+    return this.link?.url ?? null
   }
 
   /** Stops waiting for the first sign-ins open in the browser; they fail with SignInCancelledError. */

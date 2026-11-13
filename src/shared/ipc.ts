@@ -433,6 +433,12 @@ export interface TenuVaultBridge {
     onSignInRequired: (listener: (event: SignInRequiredEvent) => void) => () => void
     /** Stops waiting for a sign-in open in the browser; the waiting call fails with "Sign-in cancelled." */
     cancelSignIn: () => Promise<void>
+    /**
+     * Copies the Microsoft sign-in address the waiting first sign-in (`signin`) or setup sign-in
+     * (`setup`) opened to the clipboard. Returns whether there was one; the address itself stays in
+     * the main process.
+     */
+    copySignInLink: (kind: "signin" | "setup") => Promise<boolean>
   }
   /** Sign-in for a proxy that requires authentication. */
   proxy: {
