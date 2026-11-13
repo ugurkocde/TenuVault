@@ -354,7 +354,7 @@ export default function BackupRestorePage() {
                   <Download className="h-6 w-6 text-gray-500" />
                 </div>
                 <p className="font-medium text-gray-900">{backupList.damagedFiles > 0 ? "No readable backups found for this tenant" : "No backups found for this tenant"}</p>
-                <p className="mt-1 text-sm text-gray-500">{backupList.damagedFiles > 0 ? "Some backups may be missing because of the files described above." : "Run a backup to see it appear here"}</p>
+                <p className="mt-1 text-sm text-gray-500">{backupList.damagedFiles > 0 ? "Some backups may be missing because of the files described above." : "Restores need a backup from before the change; a change made before your first backup cannot be restored. Run a backup now, then set up automatic backups in Schedule to cover the next loss."}</p>
               </div>
             ) : (
               <div className="-mx-2 space-y-1">
