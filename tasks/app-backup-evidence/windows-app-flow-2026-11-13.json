@@ -91,5 +91,28 @@
     "Defender for Endpoint deployment",
     "macOS retrieval, no enrolled Mac available",
     "Restore, not implemented"
-  ]
+  ],
+  "preflightFollowup": {
+    "reason": "Live duplicate 7-Zip record returned committedContentVersion null; generic helper error replaced by specific refusal before Windows consent",
+    "packagedLiveRefusal": "passed, exact no-committed-content message and unchanged catalog without consent",
+    "windowsFocused": {
+      "passed": 224,
+      "files": 15,
+      "skipped": 0
+    },
+    "windowsNativeChecks": 23,
+    "localFocused": {
+      "passed": 38,
+      "files": 4
+    },
+    "typecheck": "passed",
+    "lint": "four existing warnings",
+    "packagedSecurityFuses": 6,
+    "helperSha256": "564987896ea5d7e1720690d2a2af6f795e6db89c80168774d5293e60e2f87c13",
+    "sourceHashes": {
+      "native/app-backup/Program.cs": "e69ee0dceeff4498919f4594800643e0943aa58ce934736472c1c0cae00c2c22",
+      "src/main/index.ts": "69bd6080b80ec72cd8683d43e031543fdf5311b6a42cf7a62b3653fe8079569b",
+      "src/main/app-backup/capture-preflight.ts": "af0e6468f9366e5237b0c630bbc3b85c4f2b096782c1153397545c2ca5dd12e7"
+    }
+  }
 }

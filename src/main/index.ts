@@ -1,4 +1,5 @@
 import { requestWindowsContent } from "./app-backup/windows-helper"
+import { checkCaptureMetadata } from "./app-backup/capture-preflight"
 import { downloadCapturedContent } from "./app-backup/capture-download"
 import { AppSourceService } from "./app-sources/service"
 import { checkRecoveryDevice } from "./app-backup/device-check"
@@ -1409,6 +1410,8 @@ async function bootstrap(): Promise<void> {
       if (process.platform !== "win32") throw new Error("Back up Win32 installers on a Windows PC enrolled in this Intune tenant.")
       progress({ phase: "authorizing", receivedBytes: 0, totalBytes: null })
       const token = await auth.getAccessToken(tenant, signedInClient(tenant), RESOURCE_SCOPES.graph, true)
+      signal.throwIfAborted()
+      await checkCaptureMetadata(appId, token.accessToken, bridgedFetch)
       signal.throwIfAborted()
       progress({ phase: "windows-approval", receivedBytes: 0, totalBytes: null })
       const helper = app.isPackaged ? join(process.resourcesPath, "app-backup", "TenuVault.Capture.exe") : join(app.getAppPath(), "out", "helper", "TenuVault.Capture.exe")

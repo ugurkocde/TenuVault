@@ -52,6 +52,8 @@ macOS support means retrieving the installer from Intune, not downloading a subs
 4. Wait while TenuVault downloads, verifies and encrypts the installer. Completion appears only after the encrypted backup is published.
 5. Open **Backups** to view the result or **Export installer**. Keep the [recovery key](/security/encryption/) from Settings safe.
 
+If the app record has no committed installer content, Backup explains this before asking for Windows approval. Choose an app whose installer has been uploaded to Intune.
+
 No local installer file is required. Backup does not change assignments or start an installation. Intune must allow this device to retrieve the content. If it refuses access, review the app's Required targeting, including group membership, exclusions and filters. Required assignments can install software automatically; use a dedicated test-device group. A successful enrollment check alone does not prove content access.
 
 The helper reads the Intune agent's recently discovered service address. If it cannot find that address, sync the PC with Intune and retry. This preview requires your Windows account to be a local administrator. Approval with a different Windows account is not supported. Cancelling approval or the capture leaves no completed backup. If a Windows approval prompt remains after cancellation, dismiss it; its expired request cannot continue.

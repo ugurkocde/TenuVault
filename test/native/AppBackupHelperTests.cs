@@ -22,6 +22,11 @@ internal static class HelperTests {
         try {
             Expect(Environment.OSVersion.Version.Major >= 10);
             Expect(!Signature.Valid(System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName));
+            Expect((string)Call("CommittedVersion",new Dictionary<string,object>{{"committedContentVersion","1"}})=="1");
+            foreach(var version in new object[]{null,"",0,"0","01","invalid","123456789012345678901"}) {
+                try {Call("CommittedVersion",new Dictionary<string,object>{{"committedContentVersion",version}});throw new Exception("Invalid content version accepted");}
+                catch(TargetInvocationException e){Expect(e.InnerException.Message.Contains("no committed installer content"));}
+            }
             // Claims is a refusal-only preflight. These synthetic tokens are never accepted
             // for capture: Capture independently requires Graph to authenticate the exact token.
             Expect(Call("Claims",Request())!=null);

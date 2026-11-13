@@ -136,6 +136,12 @@ internal static class Program {
         }
     }
     sealed class CaptureError:Exception { public CaptureError(string text):base(text){} }
+    static string CommittedVersion(Dictionary<string,object> row) {
+        object value;
+        if(!row.TryGetValue("committedContentVersion",out value)||!(value is string)||!Regex.IsMatch((string)value,@"^[1-9][0-9]{0,19}$"))
+            throw new CaptureError("This app has no committed installer content in Intune. Choose an app with an uploaded installer.");
+        return (string)value;
+    }
     static Dictionary<string,object> Get(HttpClient client,string path) {
         using(var response=client.GetAsync("https://graph.microsoft.com/beta/"+path,HttpCompletionOption.ResponseHeadersRead).GetAwaiter().GetResult()) {
             if(response.StatusCode!=HttpStatusCode.OK)throw new CaptureError("Microsoft authorization or app metadata could not be confirmed (HTTP "+(int)response.StatusCode+"). Reconnect the tenant and retry.");
@@ -174,7 +180,7 @@ internal static class Program {
             var row=Get(graph,"deviceAppManagement/mobileApps/"+app+"?$select=id,displayName,microsoft.graph.win32LobApp/committedContentVersion,microsoft.graph.win32LobApp/installExperience");
             if(Str(row,"@odata.type")!="#microsoft.graph.win32LobApp"||GuidValue(row,"id")!=app)throw new CaptureError("Select a Win32 app in this tenant.");
             if(Str(Obj(row["installExperience"]),"runAsAccount")!="system")throw new CaptureError("This preview supports apps installed in the system context only.");
-            version=Str(row,"committedContentVersion",20);if(!Regex.IsMatch(version,@"^[1-9][0-9]{0,19}$"))throw new CaptureError("This app has no committed installer content.");
+            version=CommittedVersion(row);
             appName=Str(row,"displayName",300);
             var files=Get(graph,"deviceAppManagement/mobileApps/"+app+"/microsoft.graph.win32LobApp/contentVersions/"+version+"/files?$select=id,size,isCommitted,isDependency");
             var candidates=Rows(files,"value").Select(Obj).Where(f=>f.ContainsKey("isCommitted")&&f["isCommitted"] is bool&&(bool)f["isCommitted"]&&(!f.ContainsKey("isDependency")||f["isDependency"] is bool&&!(bool)f["isDependency"])).ToArray();
