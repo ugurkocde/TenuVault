@@ -56,6 +56,11 @@ macOS support means retrieving the installer from Intune, not downloading a subs
 
 If the app record has no committed installer content, Backup explains this before asking for Windows approval. Choose an app whose installer has been uploaded to Intune.
 
+New captures also require an online check of TenuVault's signed capture control. Capture can
+be paused if the preview's Intune integration needs a fix, or an app update may be required.
+This check is free and sends no Microsoft token, tenant ID or license key. An unavailable
+control service prevents a new capture; existing backups remain available to export offline.
+
 No local installer file is required. Backup does not change assignments or start an installation. Intune must allow this device to retrieve the content. If it refuses access, review the app's Required targeting, including group membership, exclusions and filters. Required assignments can install software automatically; use a dedicated test-device group. A successful enrollment check alone does not prove content access.
 
 The helper reads the Intune agent's recently discovered service address. If it cannot find that address, sync the PC with Intune and retry. This preview requires your Windows account to be a local administrator. Approval with a different Windows account is not supported. Cancelling approval or the capture leaves no completed backup. If a Windows approval prompt remains after cancellation, dismiss it; its expired request cannot continue.

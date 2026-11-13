@@ -1,5 +1,26 @@
 # App Backup: application, UI, and UX integration
 
+## Revision 15: signed release verification and capture control
+
+Release verification adds an explicit signed Windows CI artifact, checks both app and helper
+publishers, and signs the helper's packaged copy before installer creation. The first signed
+verification run caught an unsigned bundled helper; ordinary unsigned PR tests did not cover it.
+
+Every new capture must obtain a fresh Ed25519-signed response from the free public capture
+control endpoint before acquiring a Microsoft token or launching the helper. A random per-job
+challenge prevents replay, the claim expires after five minutes, and an explicit enable state
+and version floor govern new jobs. The control uses the existing public-key trust set but a
+separate signature-purpose prefix and no entitlement, tenant ID or Microsoft credential.
+Offline, disabled, missing and invalid responses refuse new capture. Existing jobs may finish;
+stored backups remain exportable. The signed desktop process enforces this policy and the
+native helper independently enforces Microsoft and device authorization.
+
+The companion service defaults to disabled. Deployment, a live signed control check and
+signed Windows capture are required before calling this release verification complete.
+The real non-admin requester test remains unavailable because there is no test account;
+the compiled role-refusal fixtures do not replace that evidence. This revision makes no new
+claim about macOS capture, restore, broader EDR testing or legal/terms review.
+
 ## Revision 14: implement and test the Windows capture helper
 
 On 2026-11-13, Ugur explicitly requested implementing the helper and capture action and testing the full backup flow on the Windows mini PC. This supersedes revision 8's restriction to foundations. This PR implements a free Windows preview, not a macOS adapter or restore. The actual flow is app selection, a fresh delegated Microsoft session, temporary Windows elevation, device-authorized content retrieval, authenticated streaming into the encrypted store, publication and export. No local-file backup action, assignment write or automatic installation is introduced.

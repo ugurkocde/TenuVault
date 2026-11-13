@@ -10,8 +10,18 @@ test account is available, so that live case remains untested.
 Manual CI can now build a signed Windows verification artifact without publishing a release.
 Both manual verification and release packaging validate the app and helper's Authenticode
 signatures and expected matching publisher. Signed device capture remains pending until that
-artifact has been exercised on the mini PC. The signed remote capture switch remains a
-separate implementation gap; these tests do not complete that release prerequisite.
+artifact has been exercised on the mini PC.
+
+The first signed CI run found a real packaging failure: the app was signed but the helper
+under `resources/app-backup` was not. An explicit packaging hook now signs that copy for
+each Windows architecture, with regression tests for signing failure and unsigned PR builds.
+The signed build must pass and run on the PC before this item is closed.
+
+The signed remote control now has desktop and companion-service implementations. Thirty
+desktop policy tests and 17 service cases cover signature, purpose, nonce replay, expiry,
+explicit disable, version floors, malformed replies and network refusal. The actual server
+and desktop modules also passed an enable/disable/version-floor contract check. These are
+local tests; deployed control verification and signed app capture remain pending.
 
 ## Automatic assignment-check follow-up
 
