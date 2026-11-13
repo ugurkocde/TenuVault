@@ -187,6 +187,9 @@ export class SetupDiagnostics {
     this.uploads = new Retrier(this.now, () => void this.flush())
     this.erasure = new Retrier(this.now, () => void this.flushErase())
     this.saved = this.load()
+    // A pending erase loaded without a deadline gets one now; saving it keeps later restarts
+    // from granting another 180 days.
+    if (this.saved.pendingErase?.length) this.save()
     if (options.policy && this.saved.state === "granted") this.withdraw("declined")
     this.checkExpiry()
   }

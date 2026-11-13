@@ -311,6 +311,21 @@ describe("decline, opt-out and erasure", () => {
     expect(later.saved()).toEqual({ state: "declined" })
   })
 
+  it("saves a deadline for a pending erase stored without one, so restarts do not extend it", async () => {
+    const h = harness({ url: null })
+    h.store.set(KEY, JSON.stringify({ state: "declined", pendingErase: ["7f1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f"] }))
+    h.make()
+    expect(h.saved().pendingEraseUntil).toBe(START + 180 * 86_400_000)
+    const restart = harness({ store: h.store, url: null })
+    restart.setNow(START + 179 * 86_400_000)
+    restart.make().start()
+    expect(restart.saved().pendingEraseUntil).toBe(START + 180 * 86_400_000)
+    const last = harness({ store: h.store, url: null })
+    last.setNow(START + 180 * 86_400_000)
+    last.make().start()
+    expect(last.saved()).toEqual({ state: "declined" })
+  })
+
   it("repeats a pending erase at the next start, and drops it on a 400", async () => {
     const h = harness({ url: null })
     const diagnostics = h.make()
