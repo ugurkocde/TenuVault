@@ -89,17 +89,25 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
     try {
       await bridge.setup.cancelCreateRegistration()
     } catch (caught) {
-      restart.current = false
-      setRetrying(false)
       setCancelling(false)
       setError(caught instanceof Error ? caught.message : String(caught))
     }
   }
 
-  const tryAgain = () => {
+  // Cancels only the browser wait and starts again. When the sign-in has already come back, the main
+  // process has nothing to cancel and says so: the setup goes on and nothing restarts.
+  const tryAgain = async () => {
     restart.current = true
     setRetrying(true)
-    void cancel()
+    try {
+      if (await bridge.setup.cancelSignIn()) return
+      restart.current = false
+      setRetrying(false)
+    } catch (caught) {
+      restart.current = false
+      setRetrying(false)
+      setError(caught instanceof Error ? caught.message : String(caught))
+    }
   }
 
   const copyHandoff = async () => {
@@ -198,9 +206,9 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
             )}
             <Button type="button" variant="outline" size="sm" onClick={() => void cancel()} disabled={cancelling}>
               <X className="mr-2 h-4 w-4" aria-hidden="true" />
-              {cancelling && !retrying ? "Cancelling..." : "Cancel"}
+              {cancelling ? "Cancelling..." : "Cancel"}
             </Button>
-            {waitedLong && <SignInRecoveryPanel kind="setup" onTryAgain={tryAgain} retrying={retrying} />}
+            {waitedLong && <SignInRecoveryPanel kind="setup" onTryAgain={() => void tryAgain()} retrying={retrying} />}
           </div>
         ) : (
           <div className="space-y-3">

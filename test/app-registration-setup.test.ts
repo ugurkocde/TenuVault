@@ -324,3 +324,25 @@ it("forgets the setup sign-in address when the sign-in is cancelled, and never k
   await expect(other.create()).rejects.toThrow("unexpected sign-in address")
   expect(other.signInLink()).toBeNull()
 })
+
+it("Try again stops only a setup sign-in that waits for the browser, never the provisioning after it", async () => {
+  let provisioned!: () => void
+  const provisioning = new Promise<void>(resolve => { provisioned = resolve })
+  let finishProvisioning!: (value: unknown) => void
+  let signedIn!: (value: unknown) => void
+  state.interactive.mockImplementationOnce(() => new Promise(resolve => { signedIn = resolve }))
+  state.provision.mockImplementationOnce(() => new Promise(resolve => { finishProvisioning = resolve; provisioned() }))
+  const setup = new AppRegistrationSetup(host())
+  expect(setup.cancelSignIn()).toBe(false)
+  const pending = setup.create()
+  signedIn({ account: { tenantId: "tenant", username: "admin" }, accessToken: "ephemeral" })
+  await provisioning
+  expect(setup.cancelSignIn()).toBe(false)
+  finishProvisioning({ tenantId: "tenant", clientId: "client", username: "admin", reused: false, ready: true })
+  await expect(pending).resolves.toMatchObject({ clientId: "client" })
+
+  state.interactive.mockImplementationOnce(() => new Promise(() => undefined))
+  const waiting = setup.create()
+  expect(setup.cancelSignIn()).toBe(true)
+  await expect(waiting).rejects.toThrow("Sign-in cancelled.")
+})

@@ -8,7 +8,9 @@ import type { SignedInAccount } from "../../src/shared/ipc"
 
 const state = vi.hoisted(() => ({
   signIn: vi.fn<(tenant: string, clientId: string, options?: { loginHint?: string }) => Promise<SignedInAccount>>(),
-  cancelSignIn: vi.fn(async () => undefined),
+  cancelSignIn: vi.fn(async () => false),
+  setupCancelSignIn: vi.fn(async () => false),
+  phase: null as null | ((phase: "license") => void),
   copySignInLink: vi.fn(async (_kind: "signin" | "setup") => true),
   createRegistration: vi.fn(),
   cancelCreateRegistration: vi.fn(async () => undefined),
@@ -18,8 +20,8 @@ const state = vi.hoisted(() => ({
 
 vi.mock("../../src/renderer/lib/bridge", () => ({
   bridge: {
-    auth: { signIn: state.signIn, cancelSignIn: state.cancelSignIn, copySignInLink: state.copySignInLink, accounts: async () => [] },
-    setup: { createRegistration: state.createRegistration, cancelCreateRegistration: state.cancelCreateRegistration, onProgress: () => () => undefined, clipboardIds: async () => null, saveScript: async () => ({ saved: false }) },
+    auth: { signIn: state.signIn, cancelSignIn: state.cancelSignIn, copySignInLink: state.copySignInLink, accounts: async () => [], onSignInPhase: (listener: (phase: "license") => void) => { state.phase = listener; return () => { state.phase = null } } },
+    setup: { createRegistration: state.createRegistration, cancelCreateRegistration: state.cancelCreateRegistration, cancelSignIn: state.setupCancelSignIn, onProgress: () => () => undefined, clipboardIds: async () => null, saveScript: async () => ({ saved: false }) },
     license: { clipboardKey: async () => null },
     app: { openExternal: state.openExternal },
     diagnostics: { record: state.record, status: async () => ({ state: "ineligible", policy: false, reminder: { setup: false, signin: false } }), reminderShown: async () => undefined, consent: async () => undefined, decline: async () => undefined },
@@ -45,6 +47,12 @@ const roots: Root[] = []
 const writeText = vi.fn(async (_text: string) => undefined)
 
 beforeEach(() => {
+  // Leftover one-time answers from an earlier test must not reach the next one.
+  for (const mock of [state.signIn, state.cancelSignIn, state.setupCancelSignIn, state.copySignInLink, state.createRegistration, state.cancelCreateRegistration]) mock.mockReset()
+  state.cancelSignIn.mockResolvedValue(false)
+  state.setupCancelSignIn.mockResolvedValue(false)
+  state.copySignInLink.mockResolvedValue(true)
+  state.cancelCreateRegistration.mockResolvedValue(undefined)
   vi.useFakeTimers()
   vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } })
 })
@@ -79,7 +87,7 @@ const button = (container: HTMLElement, label: string) =>
 function waitingSignIn() {
   let reject: (error: Error) => void = () => undefined
   state.signIn.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail }))
-  state.cancelSignIn.mockImplementationOnce(async () => { reject(new Error("Sign-in cancelled.")) })
+  state.cancelSignIn.mockImplementationOnce(async () => { reject(new Error("Sign-in cancelled.")); return true })
 }
 
 async function startSignIn() {
@@ -118,6 +126,44 @@ describe("recovery panel on the first sign-in", () => {
     expect(container.textContent).not.toContain(PANEL)
     await advance(RECOVERY_DELAY_MS)
     expect(container.textContent).toContain(PANEL)
+  })
+
+  it("Try again leaves a sign-in alone whose browser step ended just before", async () => {
+    let finish: (account: SignedInAccount) => void = () => undefined
+    state.signIn.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    // The browser step ended: the main process has nothing to cancel.
+    state.cancelSignIn.mockResolvedValueOnce(false)
+    const onSignedIn = vi.fn()
+    const container = await render(createElement(TenantSignInForm, { onSignedIn, initial: { tenant: TENANT, clientId: CLIENT } }))
+    await act(async () => { button(container, "Sign in with Microsoft")!.click() })
+    await advance(RECOVERY_DELAY_MS)
+    await act(async () => { button(container, "Try again")!.click() })
+    await advance(0)
+    expect(state.cancelSignIn).toHaveBeenCalledTimes(1)
+    expect(button(container, "Try again")!.disabled).toBe(false)
+    finish({ tenantId: TENANT, clientId: CLIENT, username: "admin@contoso.example" })
+    await advance(0)
+    expect(onSignedIn).toHaveBeenCalledTimes(1)
+    expect(state.signIn).toHaveBeenCalledTimes(1)
+  })
+
+  it("shows no panel while a slow license check runs after the browser step", async () => {
+    state.signIn.mockImplementationOnce(() => new Promise(() => undefined))
+    const container = await startSignIn()
+    await advance(1000)
+    act(() => state.phase?.("license"))
+    await advance(RECOVERY_DELAY_MS * 2)
+    expect(container.textContent).not.toContain(PANEL)
+    expect(container.textContent).toContain("Waiting for sign-in...")
+  })
+
+  it("hides the panel when the browser step ends while it shows", async () => {
+    state.signIn.mockImplementationOnce(() => new Promise(() => undefined))
+    const container = await startSignIn()
+    await advance(RECOVERY_DELAY_MS)
+    expect(container.textContent).toContain(PANEL)
+    act(() => state.phase?.("license"))
+    expect(container.textContent).not.toContain(PANEL)
   })
 
   it("copies the sign-in link through the main process and the handoff text", async () => {
@@ -177,7 +223,7 @@ describe("recovery panel on the setup sign-in", () => {
     let reject: (error: Error) => void = () => undefined
     const waiting = () => {
       state.createRegistration.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail }))
-      state.cancelCreateRegistration.mockImplementationOnce(async () => { reject(new Error("Sign-in cancelled.")) })
+      state.setupCancelSignIn.mockImplementationOnce(async () => { reject(new Error("Sign-in cancelled.")); return true })
     }
     waiting()
     const container = await render(createElement(ConnectTenantSetup, { trials: false, onManual: vi.fn(), onRegistered: vi.fn() }))
@@ -193,11 +239,28 @@ describe("recovery panel on the setup sign-in", () => {
     waiting()
     await act(async () => { button(container, "Try again")!.click() })
     await advance(0)
-    expect(state.cancelCreateRegistration).toHaveBeenCalledTimes(1)
+    expect(state.setupCancelSignIn).toHaveBeenCalledTimes(1)
+    expect(state.cancelCreateRegistration).not.toHaveBeenCalled()
     expect(state.createRegistration).toHaveBeenCalledTimes(2)
     expect(container.querySelector('[role="alert"]')).toBeNull()
     expect(container.textContent).not.toContain(PANEL)
     // The restart is the same route, so it is counted once.
     expect(state.record.mock.calls.filter(([event]) => (event as { props?: { route?: string } }).props?.route === "auto")).toHaveLength(1)
+  })
+})
+
+describe("Try again on the setup sign-in after the browser step", () => {
+  it("does not stop a setup whose sign-in came back just before", async () => {
+    state.createRegistration.mockImplementationOnce(() => new Promise(() => undefined))
+    state.setupCancelSignIn.mockResolvedValueOnce(false)
+    const container = await render(createElement(ConnectTenantSetup, { trials: false, onManual: vi.fn(), onRegistered: vi.fn() }))
+    await act(async () => { button(container, "Set up with Microsoft sign-in")!.click() })
+    await advance(RECOVERY_DELAY_MS)
+    await act(async () => { button(container, "Try again")!.click() })
+    await advance(0)
+    expect(state.setupCancelSignIn).toHaveBeenCalledTimes(1)
+    expect(state.cancelCreateRegistration).not.toHaveBeenCalled()
+    expect(state.createRegistration).toHaveBeenCalledTimes(1)
+    expect(button(container, "Try again")!.disabled).toBe(false)
   })
 })

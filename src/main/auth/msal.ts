@@ -124,7 +124,7 @@ const FIRST_SIGN_IN_ERRORS: Record<string, string> = {
   AADSTS53001: "Conditional Access requires a domain-joined device. Use a browser that passes the device identity, such as Microsoft Edge signed in to your work profile, as the default browser and try again.",
   AADSTS53003: "Conditional Access blocked this sign-in. Check the sign-in logs in the Entra admin center for the policy, or sign in from a device and location it allows.",
   AADSTS50076: "Microsoft asks for multifactor authentication for this sign-in, because of a Conditional Access policy, per-user MFA or a new location, and it was not completed. Sign in again and complete the MFA prompt in the browser. If no prompt appears, ask your Entra administrator to check the sign-in logs in the Entra admin center.",
-  AADSTS50079: "Microsoft asks for multifactor authentication, but your account has no method registered for it yet. Register one at https://mysignins.microsoft.com/security-info and sign in again. If your account signs in through another identity provider, ask your administrator.",
+  AADSTS50079: "Microsoft requires multifactor authentication for this sign-in, because of a Conditional Access policy, per-user MFA or a new location, and your account cannot complete it yet. If your account is managed in Entra ID, register your security info at https://mysignins.microsoft.com/security-info and sign in again. If your account signs in through another identity provider (a federated account), that provider must supply the MFA claim: ask your administrator to set it up.",
   AADSTS90094: `Administrator consent is required: this tenant does not let your account grant the permissions the TenuVault app registration asks for. Ask a ${CONSENT_ROLES_TEXT} to grant admin consent for it, or send them the setup instructions.`,
   AADSTS65004: "The consent was declined in the browser. Sign in again and accept, or ask an administrator to run the setup script, which grants admin consent.",
 }
@@ -400,14 +400,19 @@ export class AuthManager {
     return this.link?.url ?? null
   }
 
-  /** Stops waiting for the first sign-ins open in the browser; they fail with SignInCancelledError. */
-  cancelInteractive(): void {
+  /**
+   * Stops waiting for the first sign-ins open in the browser; they fail with SignInCancelledError.
+   * Returns whether one was waiting. A sign-in whose browser step has ended is no longer waiting,
+   * so a late cancel leaves it, and the license check after it, alone.
+   */
+  cancelInteractive(): boolean {
     const pending = [...this.cancels]
     this.cancels.clear()
     for (const [cancel, key] of pending) {
       this.interactive.delete(key)
       cancel(new SignInCancelledError())
     }
+    return pending.length > 0
   }
 
   private app(clientId: string): PublicClientApplication {

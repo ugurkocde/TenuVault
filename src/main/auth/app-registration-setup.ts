@@ -84,6 +84,16 @@ export class AppRegistrationSetup {
 
   cancel(): void { this.controller?.abort(); this.cancelWaiting?.() }
 
+  /**
+   * Stops waiting for the setup sign-in in the browser only, for Try again. Returns whether it was
+   * waiting; once the sign-in is over, the provisioning that follows is left alone.
+   */
+  cancelSignIn(): boolean {
+    if (!this.cancelWaiting) return false
+    this.cancelWaiting()
+    return true
+  }
+
   /** The Microsoft sign-in address of the setup sign-in waiting for the browser, or null. */
   signInLink(): string | null { return this.link }
 

@@ -9,32 +9,42 @@ import { recordSetup } from "./SetupDiagnostics"
 export const RECOVERY_DELAY_MS = 3 * 60_000
 
 /**
- * Whether a sign-in has waited for the browser for `RECOVERY_DELAY_MS`. A new `attempt` starts the
- * wait again, so Try again does not show the panel straight away.
+ * Whether a sign-in has waited for the browser for `RECOVERY_DELAY_MS`. The wait belongs to one
+ * `attempt`: a new attempt hides the panel in the same render that starts it, so Try again never
+ * shows the old panel for a frame, and its own 3 minutes start again.
  */
 export function useWaitedLong(waiting: boolean, attempt: number): boolean {
-  const [waited, setWaited] = useState(false)
+  const [waitedAttempt, setWaitedAttempt] = useState<number | null>(null)
   useEffect(() => {
-    setWaited(false)
     if (!waiting) return
-    const timer = setTimeout(() => setWaited(true), RECOVERY_DELAY_MS)
+    const timer = setTimeout(() => setWaitedAttempt(attempt), RECOVERY_DELAY_MS)
     return () => clearTimeout(timer)
   }, [waiting, attempt])
-  return waiting && waited
+  return waiting && waitedAttempt === attempt
 }
 
 type Copied = "link" | "handoff" | "no-link" | null
 
 function useCopyNote(): [Copied, (value: Copied) => void, string, (value: string) => void] {
   const [copied, setCopied] = useState<Copied>(null)
-  const [error, setError] = useState("")
+  const [error, setErrorState] = useState("")
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
-  useEffect(() => () => clearTimeout(timer.current), [])
+  // A copy answers after an await; once the panel is gone, its answer changes nothing and starts no timer.
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+      clearTimeout(timer.current)
+    }
+  }, [])
   const show = (value: Copied) => {
+    if (!mounted.current) return
     setCopied(value)
     clearTimeout(timer.current)
     if (value) timer.current = setTimeout(() => setCopied(null), 5000)
   }
+  const setError = (value: string) => { if (mounted.current) setErrorState(value) }
   return [copied, show, error, setError]
 }
 
@@ -52,7 +62,8 @@ async function copyHandoff(show: (value: Copied) => void, setError: (value: stri
 
 function HandoffButton({ copied, onCopy }: { copied: boolean; onCopy: () => void }) {
   return (
-    <Button type="button" variant="outline" size="sm" onClick={onCopy}>
+    // Inside an error alert the text colour is red; the buttons keep their own.
+    <Button type="button" variant="outline" size="sm" className="text-foreground" onClick={onCopy}>
       {copied ? <Check className="mr-2 h-4 w-4" aria-hidden="true" /> : <Send className="mr-2 h-4 w-4" aria-hidden="true" />}
       {copied ? "Copied" : "Copy instructions for your admin"}
     </Button>
@@ -103,7 +114,7 @@ export function SignInRecoveryPanel({ kind, onTryAgain, retrying = false }: {
           <RotateCcw className="mr-2 h-4 w-4" aria-hidden="true" />
           {retrying ? "Starting again..." : "Try again"}
         </Button>
-        <Button type="button" variant="outline" size="sm" onClick={() => void copyLink()}>
+        <Button type="button" variant="outline" size="sm" className="text-foreground" onClick={() => void copyLink()}>
           {copied === "link" ? <Check className="mr-2 h-4 w-4" aria-hidden="true" /> : <Copy className="mr-2 h-4 w-4" aria-hidden="true" />}
           {copied === "link" ? "Copied" : "Copy sign-in link"}
         </Button>
@@ -134,7 +145,7 @@ export function SignInErrorActions({ message, onTryAgain }: { message: string; o
         )}
         <HandoffButton copied={copied === "handoff"} onCopy={() => void copyHandoff(show, setError)} />
         {!timeout && (
-          <Button type="button" variant="ghost" size="sm" onClick={() => void bridge.app.openExternal(MANUAL_APP_REGISTRATION_URL)}>
+          <Button type="button" variant="ghost" size="sm" className="text-foreground" onClick={() => void bridge.app.openExternal(MANUAL_APP_REGISTRATION_URL)}>
             <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />
             Create it by hand
           </Button>

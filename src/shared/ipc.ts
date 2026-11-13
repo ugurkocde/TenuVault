@@ -431,8 +431,16 @@ export interface TenuVaultBridge {
     reauthenticate: (tenantId: string, clientId: string, scope?: string) => Promise<SignedInAccount>
     /** Called when a background request needs the admin to sign in again. Returns an unsubscribe function. */
     onSignInRequired: (listener: (event: SignInRequiredEvent) => void) => () => void
-    /** Stops waiting for a sign-in open in the browser; the waiting call fails with "Sign-in cancelled." */
-    cancelSignIn: () => Promise<void>
+    /**
+     * Stops waiting for a sign-in open in the browser; the waiting call fails with "Sign-in cancelled."
+     * Resolves with whether a sign-in was waiting for the browser.
+     */
+    cancelSignIn: () => Promise<boolean>
+    /**
+     * Called when the first sign-in's browser step is over and the license check starts, so the
+     * window stops offering ways to recover the browser sign-in. Returns an unsubscribe function.
+     */
+    onSignInPhase: (listener: (phase: "license") => void) => () => void
     /**
      * Copies the Microsoft sign-in address the waiting first sign-in (`signin`) or setup sign-in
      * (`setup`) opened to the clipboard. Returns whether there was one; the address itself stays in
@@ -464,6 +472,8 @@ export interface TenuVaultBridge {
     createRegistration: (options?: { tenant?: string }) => Promise<RegistrationResult>
     /** Stops waiting for the setup sign-in in the browser. */
     cancelCreateRegistration: () => Promise<void>
+    /** Stops only a setup sign-in that still waits for the browser. Resolves with whether one was. */
+    cancelSignIn: () => Promise<boolean>
     /** Called as the setup moves on. Returns an unsubscribe function. */
     onProgress: (listener: (progress: SetupProgress) => void) => () => void
     /**

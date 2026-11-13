@@ -48,7 +48,7 @@ describe("firstSignInError", () => {
     ["AADSTS53000: Device is not in required device state: compliant", "compliant or registered device"],
     ["AADSTS53003: Access has been blocked by Conditional Access policies", "Conditional Access blocked this sign-in"],
     ["AADSTS50076: Due to a configuration change made by your administrator, you must use multi-factor authentication", "complete the MFA prompt in the browser"],
-    ["AADSTS50079: Due to a configuration change made by your administrator, you are required to use multi-factor authentication", "no method registered for it yet"],
+    ["AADSTS50079: Due to a configuration change made by your administrator, you are required to use multi-factor authentication", "Microsoft requires multifactor authentication for this sign-in"],
     ["AADSTS90094: Administrator consent is required", "Ask a Global Administrator, Cloud Application Administrator or Application Administrator to grant admin consent"],
   ])("explains %s", (message, expected) => {
     const result = firstSignInError(new Error(message)) as Error
@@ -261,5 +261,35 @@ describe("offersSignInHandoff", () => {
   it("offers nothing for errors without a code or the timeout", () => {
     expect(offersSignInHandoff("network down")).toBe(false)
     expect(offersSignInHandoff(FIRST_SIGN_IN_TIMEOUT_MESSAGE)).toBe(false)
+  })
+})
+
+describe("AADSTS50079", () => {
+  it("states the MFA requirement first, then the remedy for managed and for federated accounts", () => {
+    const message = (firstSignInError(new Error("AADSTS50079: MFA registration required")) as Error).message
+    expect(message.indexOf("requires multifactor authentication")).toBe(message.indexOf("Microsoft requires") + "Microsoft ".length)
+    expect(message.indexOf("requires multifactor authentication")).toBeLessThan(message.indexOf("register your security info"))
+    expect(message).toContain("If your account is managed in Entra ID, register your security info at https://mysignins.microsoft.com/security-info")
+    expect(message).toContain("that provider must supply the MFA claim")
+  })
+})
+
+describe("cancelInteractive", () => {
+  it("says whether a first sign-in was waiting for the browser", async () => {
+    msal.interactive.mockImplementationOnce(() => new Promise(() => undefined))
+    const auth = manager()
+    expect(auth.cancelInteractive()).toBe(false)
+    const waiting = auth.signIn(TENANT, CLIENT)
+    await Promise.resolve()
+    expect(auth.cancelInteractive()).toBe(true)
+    await expect(waiting).rejects.toThrow("Sign-in cancelled.")
+    expect(auth.cancelInteractive()).toBe(false)
+  })
+
+  it("cancels nothing once the browser step has ended", async () => {
+    msal.interactive.mockResolvedValueOnce({ account: { tenantId: TENANT, username: "admin@contoso.com", homeAccountId: "home" } })
+    const auth = manager()
+    await expect(auth.signIn(TENANT, CLIENT)).resolves.toMatchObject({ tenantId: TENANT })
+    expect(auth.cancelInteractive()).toBe(false)
   })
 })

@@ -1170,7 +1170,9 @@ async function bootstrap(): Promise<void> {
     return result
   })
   handleTrusted("setup:cancelCreateRegistration", () => registrationSetup.cancel())
-  handleTrusted("auth:signIn", (_event, tenant: string, clientId: string, options?: { loginHint?: unknown }) => withPlanError(async () => {
+  // Try again on the setup sign-in: stops only a sign-in that still waits for the browser.
+  handleTrusted("setup:cancelSignIn", () => registrationSetup.cancelSignIn())
+  handleTrusted("auth:signIn", (event, tenant: string, clientId: string, options?: { loginHint?: unknown }) => withPlanError(async () => {
     const expected = setupSignIn
     setupSignIn = null
     const loginHint = setupLoginHint(expected, tenant, clientId, options?.loginHint)
@@ -1180,6 +1182,8 @@ async function bootstrap(): Promise<void> {
       throw error
     })
     diagnostics.record({ name: "signin", props: { result: "ok" } })
+    // The browser step is over; the window stops offering ways to recover a browser sign-in.
+    if (!event.sender.isDestroyed()) event.sender.send("auth:signInPhase", "license")
     await requireForNewTenant(account.tenantId)
     return account
   }))

@@ -253,7 +253,10 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
   // Each sign-in counts as a new attempt, so the recovery panel waits its 3 minutes again.
   const [attempt, setAttempt] = useState(0)
   const [retrying, setRetrying] = useState(false)
-  const waitedLong = useWaitedLong(busy, attempt)
+  // The browser step of the sign-in, before the license check that follows it in the same call.
+  // Only this step offers the recovery panel.
+  const [licensePhase, setLicensePhase] = useState(false)
+  const waitedLong = useWaitedLong(busy && !licensePhase, attempt)
   const [errors, setErrors] = useState<{ tenant?: string; clientId?: string; form?: string }>({})
   const notify = useRef(onFieldsChange)
   notify.current = onFieldsChange
@@ -266,6 +269,7 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
   const signingIn = useRef(false)
   // Try again in the recovery panel: the cancelled sign-in starts once more when it has ended.
   const restart = useRef(false)
+  useEffect(() => bridge.auth.onSignInPhase?.(() => { if (signingIn.current) setLicensePhase(true) }), [])
   useEffect(() => {
     active.current = true
     return () => {
@@ -346,6 +350,7 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
     setBusy(true)
     setAutomatic(Boolean(loginHint))
     setCancelling(false)
+    setLicensePhase(false)
     setAttempt((value) => value + 1)
     let again = false
     try {
@@ -364,6 +369,7 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
         setAutomatic(false)
         setCancelling(false)
         setRetrying(false)
+        setLicensePhase(false)
       }
     }
     // The main process keeps the setup's account hint for one sign-in only, so the new one asks
@@ -386,18 +392,27 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
     try {
       await bridge.auth.cancelSignIn()
     } catch (error) {
-      restart.current = false
       if (!active.current) return
       setCancelling(false)
-      setRetrying(false)
       setErrors({ form: error instanceof Error ? error.message : "Could not cancel the sign-in." })
     }
   }
 
-  const tryAgain = () => {
+  // Cancels the browser wait and starts again. When the browser step has already ended, the main
+  // process has nothing to cancel and says so: the sign-in goes on and nothing restarts.
+  const tryAgain = async () => {
     restart.current = true
     setRetrying(true)
-    void cancel()
+    try {
+      if (await bridge.auth.cancelSignIn()) return
+      restart.current = false
+      if (active.current) setRetrying(false)
+    } catch (error) {
+      restart.current = false
+      if (!active.current) return
+      setRetrying(false)
+      setErrors({ form: error instanceof Error ? error.message : "Could not cancel the sign-in." })
+    }
   }
 
   const field = (id: string, label: string, value: string, set: (v: string) => void, placeholder: string, error?: string, paste = false) => (
@@ -439,9 +454,9 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
       </p>
       <Button type="button" variant="outline" size="sm" onClick={() => void cancel()} disabled={cancelling}>
         <X className="mr-2 h-4 w-4" aria-hidden="true" />
-        {cancelling && !retrying ? "Cancelling..." : "Cancel sign-in"}
+        {cancelling ? "Cancelling..." : "Cancel sign-in"}
       </Button>
-      {waitedLong && <SignInRecoveryPanel kind="signin" onTryAgain={tryAgain} retrying={retrying} />}
+      {waitedLong && <SignInRecoveryPanel kind="signin" onTryAgain={() => void tryAgain()} retrying={retrying} />}
     </div>
   )
 
