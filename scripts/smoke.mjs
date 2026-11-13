@@ -1060,9 +1060,17 @@ await check("the whole dashboard License tile opens License with the keyboard", 
 
 await check("tenant renames show Saved in both views and clear confirmation timers", async () => {
   await go("#/portal/tenants", "Tenant Management")
+  const originalTenants = await evaluate(`window.tenuvault.storage.getItemSync('tenuvault_tenants')`)
+  let completed = false
   const editor = `document.querySelector('main input[type="text"]:not([aria-label="Search tenants"])')`
   const saved = `[...document.querySelectorAll('main [role="status"]')].filter(s => s.textContent.trim() === 'Saved')`
   const noCloudSync = `!document.querySelector('[title="Syncing to cloud..."]') && !document.querySelector('main .lucide-cloud-upload') && !document.querySelector('main').innerText.includes('Syncing to cloud')`
+  const leaveTenants = async () => {
+    await go("#/portal/overview", "All tenants")
+    // The sidebar always says "All tenants". Wait for the route to commit before
+    // asserting effect cleanup or navigating back, which could cancel the unmount.
+    await assertPageInMain("All tenants", "tenant overview after rename")
+  }
   const startEditing = async name => {
     await evaluate(`document.querySelector(${JSON.stringify(`button[aria-label="Rename tenant: ${name}"]`)}).click()`)
     assert(await waitForCondition(`${editor}?.value === ${JSON.stringify(name)}`), "rename editor did not open")
@@ -1156,21 +1164,30 @@ await check("tenant renames show Saved in both views and clear confirmation time
       await saveName(`Contoso ${view} second`)
       const secondTenantTimer = await assertSaved(`Contoso ${view} second`)
       assert(await evaluate(`${saved}.length === 2 && window.__tenantRenameTimers.active.has(${firstTenantTimer}) && window.__tenantRenameTimers.active.has(${secondTenantTimer})`), "tenants did not keep independent confirmation timers")
-      await go("#/portal/overview", "All tenants")
-      assert(await evaluate(`window.__tenantRenameTimers.cleared.has(${firstTenantTimer}) && window.__tenantRenameTimers.cleared.has(${secondTenantTimer})`), "unmount did not clear all confirmation timers")
+      await leaveTenants()
+      assert(await waitForCondition(`window.__tenantRenameTimers.cleared.has(${firstTenantTimer}) && window.__tenantRenameTimers.cleared.has(${secondTenantTimer})`, 4000), "unmount did not clear all confirmation timers")
       await go("#/portal/tenants", "Tenant Management")
       assert(await evaluate(`${saved}.length === 0`), "Saved lingered after remount")
       await startEditing(`Contoso ${view} first`)
       await saveName("Contoso 1")
       await startEditing(`Contoso ${view} second`)
       await saveName("Contoso 2")
-      await go("#/portal/overview", "All tenants")
+      await leaveTenants()
       await go("#/portal/tenants", "Tenant Management")
     }
     // Let the restored names finish their metadata updates before the tag check.
     assert(await waitForCondition(`window.__tenantRenameTimers.active.size === 0`, 4000), "restored tenant names still had pending metadata timers")
+    completed = true
   } finally {
-    await evaluate(`window.setTimeout = window.__tenantRenameSetTimeout; window.clearTimeout = window.__tenantRenameClearTimeout; delete window.__tenantRenameSetTimeout; delete window.__tenantRenameClearTimeout; delete window.__tenantRenameTimers`)
+    await evaluate(`for (const timer of window.__tenantRenameTimers.active) window.__tenantRenameClearTimeout(timer); window.setTimeout = window.__tenantRenameSetTimeout; window.clearTimeout = window.__tenantRenameClearTimeout; delete window.__tenantRenameSetTimeout; delete window.__tenantRenameClearTimeout; delete window.__tenantRenameTimers`)
+    if (!completed) {
+      // A failed assertion must not leave renamed tenants behind and make unrelated
+      // selection, schedule and dashboard checks fail on their fixture names.
+      await evaluate(`window.tenuvault.storage.setItem('tenuvault_tenants', ${JSON.stringify(originalTenants)})`)
+      await evaluate(`location.hash = '#/portal/tenants'; location.reload()`)
+      assert(await waitForText("Tenant Management"), "tenant fixture did not recover after rename failure")
+      await disableAnimations()
+    }
   }
 })
 
