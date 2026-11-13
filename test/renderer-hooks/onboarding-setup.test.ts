@@ -26,6 +26,8 @@ const state = vi.hoisted(() => ({
   addJob: vi.fn(),
   activeJobs: [] as { jobId: string; isComplete: boolean; isSuccessful: boolean; status: string; progress: number }[],
   openExternal: vi.fn(async (_url: string) => undefined),
+  record: vi.fn(async (_event: unknown) => undefined),
+  diagnostics: { state: "ineligible", policy: false, reminder: { setup: false, signin: false } } as import("../../src/shared/ipc").SetupDiagnosticsStatus,
 }))
 
 vi.mock("../../src/renderer/lib/bridge", () => ({
@@ -42,6 +44,7 @@ vi.mock("../../src/renderer/lib/bridge", () => ({
     schedules: { list: async () => [] },
     backups: { settings: async () => ({ recoveryExported: true }) },
     app: { openExternal: state.openExternal },
+    diagnostics: { record: state.record, status: async () => state.diagnostics, reminderShown: async () => undefined, consent: async () => state.diagnostics, decline: async () => state.diagnostics },
   },
 }))
 vi.mock("../../src/renderer/lib/license", () => ({
@@ -90,6 +93,7 @@ beforeEach(() => {
   state.storageChoice = null
   state.license = null
   state.activeJobs = []
+  state.diagnostics = { state: "ineligible", policy: false, reminder: { setup: false, signin: false } }
 })
 
 afterEach(async () => {
@@ -314,6 +318,7 @@ describe("OnboardingPage", () => {
     await flush()
     expect(state.trialAction).toHaveBeenCalledWith(TENANT, "acknowledge")
     expect(container.textContent).toContain("Take a first backup")
+    expect(container.textContent).toContain("A restore needs a backup from before the change, so this first backup cannot bring back a policy already lost. It protects what you back up from now on.")
   })
 
   it("does not mark the trial as seen when the tenant cannot be saved", async () => {
@@ -822,4 +827,60 @@ it("explains the consent checkbox in both setup notes", async () => {
   const text = (container.textContent ?? "").replace(/\s+/g, " ")
   expect(text).toContain('Leave "Consent on behalf of your organization" unticked; the setup does not need it.')
   expect(text).toContain('stays with your account, as long as you leave "Consent on behalf of your organization" unticked; the setup does not need it.')
+})
+
+describe("setup diagnostics hooks", () => {
+  const settle = () => new Promise(resolve => setTimeout(resolve, 20))
+  it("reports each setup route the admin chooses", async () => {
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText: async () => undefined } })
+    state.createRegistration.mockRejectedValueOnce(new Error("Graph POST failed. Nothing was changed."))
+    const container = await render(createElement(OnboardingPage))
+    await act(async () => { button(container, "Set up with Microsoft sign-in")!.click(); await settle() })
+    await act(async () => { button(container, "Someone else is the admin? Copy instructions")!.click(); await settle() })
+    await act(async () => { button(container, "Use the setup script instead")!.click(); await settle() })
+    await act(async () => { [...container.querySelectorAll("button")].filter((item) => item.textContent?.trim() === "I already have an app registration").at(-1)!.click(); await settle() })
+    expect(state.record.mock.calls.map(([event]) => event)).toEqual([
+      { name: "setup_route", props: { route: "auto" } },
+      { name: "setup_route", props: { route: "handoff" } },
+      { name: "setup_route", props: { route: "script" } },
+      { name: "setup_route", props: { route: "manual" } },
+    ])
+  })
+
+  it("offers the reminder next to a setup error main holds for it", async () => {
+    state.diagnostics = { state: "unasked", policy: false, reminder: { setup: true, signin: false } }
+    state.createRegistration.mockRejectedValueOnce(new Error("Conditional Access blocked the sign-in (AADSTS53003). Nothing was changed."))
+    const container = await render(createElement(OnboardingPage))
+    await act(async () => { button(container, "Set up with Microsoft sign-in")!.click(); await settle() })
+    await flush()
+    expect(container.textContent).toContain("Share this error and the next setup steps with TenuVault")
+  })
+
+  it("offers the reminder next to the notice of a reused registration that lacks admin consent", async () => {
+    state.diagnostics = { state: "unasked", policy: false, reminder: { setup: true, signin: false } }
+    state.createRegistration.mockResolvedValueOnce({ tenantId: TENANT, clientId: CLIENT, username: "admin@contoso.com", reused: true, ready: true, displayName: "TenuVault Desktop", candidateCount: 1, missingConsent: ["DeviceManagementApps.ReadWrite.All"] })
+    const container = await render(createElement(OnboardingPage))
+    await act(async () => { button(container, "Set up with Microsoft sign-in")!.click(); await settle() })
+    await flush()
+    expect(container.textContent).toContain("has no tenant-wide admin consent")
+    expect(container.textContent).toContain("Share this error and the next setup steps with TenuVault")
+  })
+
+  it("reports the storage kind before the tenant is saved", async () => {
+    const account = { tenantId: TENANT, clientId: CLIENT, username: "admin@contoso.com" }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "", account, signedInAt: Date.now() }))
+    state.accounts.mockResolvedValueOnce([account])
+    state.storageChoice = { kind: "local" }
+    state.checkNewTenant.mockResolvedValueOnce({ tenants: [{ tenantId: TENANT, plan: "community" }] })
+    const order: string[] = []
+    state.record.mockImplementation(async () => { order.push("record") })
+    state.addTenant.mockImplementation(() => { order.push("addTenant") })
+    const container = await render(createElement(OnboardingPage))
+    await act(async () => { button(container, "Continue")!.click() })
+    await flush()
+    expect(state.record).toHaveBeenCalledWith({ name: "storage", props: { kind: "local" } })
+    expect(order).toEqual(["record", "addTenant"])
+    state.record.mockImplementation(async () => undefined)
+    state.addTenant.mockImplementation(() => undefined)
+  })
 })

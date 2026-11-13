@@ -96,6 +96,7 @@ export function FirstBackupNextSteps({ tenantId, plan, local }: { tenantId: stri
           ) : (
             <>
               <p>
+                Set up a scheduled backup to keep restore points for future losses. Only items captured in a backup can be restored.
                 TenuVault backs up while it is open or in the tray. A backup missed while the computer was off runs the next
                 time TenuVault starts.
               </p>

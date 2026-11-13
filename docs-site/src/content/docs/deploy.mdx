@@ -117,6 +117,37 @@ To deploy it with Intune:
 If GitHub is blocked on your network, update checks fail and TenuVault keeps running the installed version. Backup and restore are not affected. See [Network connections and data flows](/security/data-flows/).
 :::
 
+## Turn off setup diagnostics
+
+A new install asks once whether it may share [setup diagnostics](/security/data-flows/#setup-diagnostics): which setup steps worked and which Microsoft error codes stopped them, for 30 days after the admin agrees. To decide this for your organization, set the policy `DisableSetupDiagnostics`. TenuVault then never asks, sends no events, and **Settings** > **About** shows **Share setup diagnostics** locked off with **Turned off by your organization.** An install that was already sharing deletes anything still queued at its next start and sends one erase request to tenuvault.com, with only its random ID, to delete the events it already sent. It keeps that ID, and nothing else, until tenuvault.com confirms the deletion, for at most 180 days.
+
+TenuVault reads the policy when it starts. Set it before the first launch so the question is never shown.
+
+<Tabs>
+<TabItem label="Windows">
+
+Set a DWORD value `DisableSetupDiagnostics` = `1` under `HKEY_LOCAL_MACHINE\SOFTWARE\Policies\TenuVault` (all users on the device) or `HKEY_CURRENT_USER\SOFTWARE\Policies\TenuVault` (one user). With an Intune platform script, as for updates above:
+
+```powershell
+$key = "HKLM:\SOFTWARE\Policies\TenuVault"
+New-Item -Path $key -Force | Out-Null
+New-ItemProperty -Path $key -Name "DisableSetupDiagnostics" -PropertyType DWord -Value 1 -Force | Out-Null
+```
+
+</TabItem>
+
+<TabItem label="macOS">
+
+Set the managed preference `DisableSetupDiagnostics` to `true` (boolean) for the preference domain `com.tenuvault.desktop`. Add the key to the same preference file as `DisableAutoUpdate`, or deploy a file with only this key:
+
+```xml
+<key>DisableSetupDiagnostics</key>
+<true/>
+```
+
+</TabItem>
+</Tabs>
+
 ## Restrict who can sign in
 
 By default, any user in the tenant can sign in through the TenuVault app registration. What they can do is still limited by their own Intune and Azure roles, because every permission is delegated.

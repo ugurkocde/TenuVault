@@ -654,7 +654,7 @@ export default function LicensePage() {
       <p className="text-xs text-gray-500">
         Tenant trials store a keyed hash of the tenant ID. An optional trial email is sent only when you submit it. License checks send the license key, your Microsoft sign-in (ID) token or both: the token proves the tenant for an
         organization license, a tenant trial or for sharing the license with it, is verified and only its tenant ID used, never stored. They also send a random installation ID, the tenant ID, the app
-        registration client ID and the app version. Tenant configuration and backups are never sent.
+        registration client ID and the app version. Tenant configuration and backups are never sent. Setup diagnostics, which new installs may choose to share, carry no license key, tenant ID or installation ID.
         {!status.persisted &&
           " Secure storage is not available on this system, so the license is kept in memory only and must be entered again after a restart."}
       </p>

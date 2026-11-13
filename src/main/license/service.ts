@@ -324,6 +324,8 @@ export class LicenseService {
   private state: StoredLicense | null = null
   private trialPolicy: NonNullable<LicenseStatus["tenantTrialPolicy"]> = {}
   private trialsEnabled = false
+  /** Why the last automatic trial attempt per tenant did not reach the trial service, in memory only. */
+  private readonly autoTrialSkips = new Map<string, string>()
   private healthCheckedAt = 0
   private healthCheck: Promise<void> | null = null
   private healthRetryAt = 0
@@ -546,10 +548,24 @@ export class LicenseService {
         this.saveTrials()
         return
       } catch (error) {
-        if (!(error instanceof LicenseDenied) || error.reason !== "tenant_not_licensed") return
+        if (!(error instanceof LicenseDenied) || error.reason !== "tenant_not_licensed") {
+          this.autoTrialSkips.set(tenant, error instanceof LicenseDenied ? error.reason : error instanceof NoIdToken ? "no_id_token" : "activation_failed")
+          return
+        }
       }
       await this.startTenantTrialCurrent(tenant, "auto")
+    } else {
+      this.autoTrialSkips.set(tenant, "trials_unavailable")
     }
+  }
+
+  /**
+   * Why no automatic trial started for a tenant, for setup diagnostics: the trial service's
+   * refusal reason, or why it was not asked (trials unavailable, no ID token, a failed request).
+   */
+  trialSkipReason(tenantId: string): string | undefined {
+    const tenant = tenantId.toLowerCase()
+    return this.trialRecords[tenant]?.refusalReason ?? this.autoTrialSkips.get(tenant)
   }
 
   async startTenantTrial(tenantId: string): Promise<void> {
@@ -586,6 +602,8 @@ export class LicenseService {
           this.healthRetryAt = Date.now() + 2 * 60_000
         }
         this.saveTrials()
+      } else if (source === "auto") {
+        this.autoTrialSkips.set(tenant, "trial_request_failed")
       }
       if (source === "opt-in") throw error
     }

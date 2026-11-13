@@ -198,3 +198,85 @@ it("passes cancellation through after the browser sign-in has finished", async (
   await expect(pending).rejects.toThrow("Sign-in cancelled.")
   expect(state.clear).toHaveBeenCalled()
 })
+
+it("reports how the setup sign-in and the provisioning ended, with codes and never messages", async () => {
+  const report = vi.fn()
+  const result = { tenantId: "tenant", clientId: "client", username: "admin@contoso.com", reused: true, ready: true, displayName: "TenuVault Desktop", candidateCount: 1, missingConsent: [] }
+  state.interactive.mockResolvedValueOnce({ account: { tenantId: "tenant", username: "admin@contoso.com" }, accessToken: "ephemeral" })
+  state.provision.mockResolvedValueOnce(result)
+  await new AppRegistrationSetup({ ...host(), report }).create()
+  expect(report.mock.calls.map(([event]) => event)).toEqual([
+    { name: "setup_signin", props: { result: "ok" } },
+    { name: "registration", props: { result: "reused" } },
+  ])
+
+  report.mockClear()
+  state.interactive.mockRejectedValueOnce(new Error("AADSTS53003: Access has been blocked for admin@contoso.com."))
+  await expect(new AppRegistrationSetup({ ...host(), report }).create()).rejects.toThrow("Conditional Access")
+  expect(report.mock.calls.map(([event]) => event)).toEqual([{ name: "setup_signin", props: { result: "failed", code: "AADSTS53003" } }])
+
+  report.mockClear()
+  state.interactive.mockResolvedValueOnce({ account: { tenantId: "tenant", username: "admin" }, accessToken: "ephemeral" })
+  state.provision.mockImplementationOnce(async ({ progress }: { progress: (value: { phase: string }) => void }) => {
+    progress({ phase: "consent" })
+    throw Object.assign(new Error("Graph POST failed: Insufficient privileges for contoso"), { status: 403 })
+  })
+  await expect(new AppRegistrationSetup({ ...host(), report }).create()).rejects.toThrow("Insufficient privileges")
+  expect(report.mock.calls.at(-1)?.[0]).toEqual({ name: "registration", props: { result: "failed", phase: "consent", code: "HTTP_403" } })
+
+  report.mockClear()
+  state.interactive.mockResolvedValueOnce({ account: { tenantId: "tenant" }, accessToken: "ephemeral" })
+  await expect(new AppRegistrationSetup({ ...host(), report }).create()).rejects.toThrow("did not return the tenant")
+  expect(report.mock.calls.map(([event]) => event)).toEqual([{ name: "setup_signin", props: { result: "failed", code: "other" } }])
+})
+
+it("reports a cancelled sign-in, a cancelled provisioning and a timeout", async () => {
+  const report = vi.fn()
+  state.interactive.mockImplementationOnce(() => new Promise(() => {}))
+  const cancelled = new AppRegistrationSetup({ ...host(), report })
+  const pending = cancelled.create()
+  cancelled.cancel()
+  await expect(pending).rejects.toThrow("Sign-in cancelled.")
+  expect(report).toHaveBeenLastCalledWith({ name: "setup_signin", props: { result: "cancelled" } })
+
+  state.interactive.mockResolvedValueOnce({ account: { tenantId: "tenant", username: "admin" }, accessToken: "ephemeral" })
+  let started!: () => void
+  const provisioning = new Promise<void>(resolve => { started = resolve })
+  state.provision.mockImplementationOnce(({ signal }: { signal: AbortSignal }) => new Promise((_resolve, reject) => {
+    signal.addEventListener("abort", () => reject(new Error("Sign-in cancelled.")), { once: true })
+    started()
+  }))
+  const stopped = new AppRegistrationSetup({ ...host(), report })
+  const running = stopped.create()
+  await provisioning
+  stopped.cancel()
+  await expect(running).rejects.toThrow("Sign-in cancelled.")
+  expect(report).toHaveBeenLastCalledWith({ name: "registration", props: { result: "cancelled", phase: "registration" } })
+
+  vi.useFakeTimers()
+  try {
+    state.interactive.mockImplementationOnce(() => new Promise(() => {}))
+    const outcome = new AppRegistrationSetup({ ...host(), report }).create().then(() => null, caught => caught as Error)
+    await vi.advanceTimersByTimeAsync(SETUP_SIGN_IN_TIMEOUT_MS)
+    expect((await outcome)?.name).toBe("SignInTimeoutError")
+    expect(report).toHaveBeenLastCalledWith({ name: "setup_signin", props: { result: "timeout" } })
+  } finally { vi.useRealTimers() }
+})
+
+it.each([
+  Object.assign(new Error("user_cancelled: User cancelled the flow."), { errorCode: "user_cancelled" }),
+  Object.assign(new Error("authentication_canceled"), { errorCode: "authentication_canceled" }),
+  new Error("access_denied: The user denied the request."),
+])("reports MSAL's own cancellation codes as cancelled, never as an error (%s)", async error => {
+  const report = vi.fn()
+  state.interactive.mockRejectedValueOnce(error)
+  await expect(new AppRegistrationSetup({ ...host(), report }).create()).rejects.toThrow()
+  expect(report.mock.calls.map(([event]) => event)).toEqual([{ name: "setup_signin", props: { result: "cancelled" } }])
+})
+
+it("reports access_denied with an AADSTS code as a failure", async () => {
+  const report = vi.fn()
+  state.interactive.mockRejectedValueOnce(new Error("access_denied: AADSTS65004 User declined to consent."))
+  await expect(new AppRegistrationSetup({ ...host(), report }).create()).rejects.toThrow()
+  expect(report).toHaveBeenCalledWith({ name: "setup_signin", props: { result: "failed", code: "AADSTS65004" } })
+})
