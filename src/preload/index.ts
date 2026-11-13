@@ -41,7 +41,7 @@ const bridge: TenuVaultPreloadBridge = {
     reauthenticate: (tenantId, clientId, scope) => invoke("auth:reauthenticate", tenantId, clientId, scope),
     cancelSignIn: () => invoke("auth:cancelSignIn"),
     copySignInLink: (kind) => invoke("auth:copySignInLink", kind),
-    onSignInPhase: (listener) => subscribe<"license">("auth:signInPhase", listener),
+    onSignInPhase: (listener) => subscribe<"completing" | "license">("auth:signInPhase", listener),
     onSignInRequired: (listener) => {
       const handler = (_event: Electron.IpcRendererEvent, payload: SignInRequiredEvent) => listener(payload)
       ipcRenderer.on("auth:signInRequired", handler)

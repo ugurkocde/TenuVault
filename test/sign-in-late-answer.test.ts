@@ -114,10 +114,10 @@ describe("first sign-in", () => {
     expect(auth.signInLink()).toBeNull()
   })
 
-  it("closes the listener after an error answer and after a mismatched state", async () => {
+  it("closes the listener after an error answer, and keeps waiting through a mismatched state", async () => {
     const { auth } = manager()
-    let browser = browserOpens()
     const settle = (promise: Promise<unknown>) => promise.then(() => null, (error: unknown) => error as Error)
+    let browser = browserOpens()
     let waiting = settle(auth.signIn(TENANT, CLIENT))
     let url = await browser
     await answer(url, { error: "invalid_request", error_description: "AADSTS50011: The redirect URI does not match.", state: new URL(url).searchParams.get("state")! })
@@ -127,21 +127,27 @@ describe("first sign-in", () => {
     browser = browserOpens()
     waiting = settle(auth.signIn(TENANT, CLIENT))
     url = await browser
-    await answer(url, { code: "c", state: "other" })
-    expect((await waiting)?.message).toContain("does not belong to this sign-in")
-    expect(await listenerClosed(url)).toBe(true)
+    expect((await answer(url, { code: "c", state: "other" })).status).toBe(400)
+    expect(await listenerClosed(url)).toBe(false)
     expect(msal.acquireTokenByCode).not.toHaveBeenCalled()
+    auth.cancelInteractive()
+    expect((await waiting)?.message).toBe("Sign-in cancelled.")
+    expect(await listenerClosed(url)).toBe(true)
   })
 
-  it("does not cancel a sign-in whose code is being redeemed", async () => {
+  it("says the browser step is over as soon as Microsoft answers, and does not cancel a sign-in whose code is being redeemed", async () => {
     let release!: () => void
     msal.acquireTokenByCode.mockImplementationOnce(() => new Promise((resolve) => { release = () => resolve({ account: ACCOUNT, accessToken: "token" }) }))
     const { auth } = manager()
     const browser = browserOpens()
-    const waiting = auth.signIn(TENANT, CLIENT)
+    const onBrowserDone = vi.fn()
+    const waiting = auth.signIn(TENANT, CLIENT, { onBrowserDone })
     const url = await browser
     await answer(url, codeAnswer(url))
     await vi.waitFor(() => expect(msal.acquireTokenByCode).toHaveBeenCalled())
+    // The slow redemption is still running, and the window already knows the browser step is over.
+    expect(onBrowserDone).toHaveBeenCalledOnce()
+    expect(auth.signInLink()).toBeNull()
     expect(auth.cancelInteractive()).toBe(false)
     release()
     await expect(waiting).resolves.toMatchObject({ tenantId: TENANT })
@@ -171,6 +177,24 @@ describe("setup sign-in", () => {
     expect(msal.acquireTokenByCode).not.toHaveBeenCalled()
     expect(provision).not.toHaveBeenCalled()
     expect(msal.clearCache).toHaveBeenCalledTimes(2)
+  })
+
+  it("reports the end of the browser step while a slow setup sign-in is still completed", async () => {
+    let release!: () => void
+    msal.acquireTokenByCode.mockImplementationOnce(() => new Promise((resolve) => { release = () => resolve({ account: { tenantId: "tenant", username: "admin" }, accessToken: "ephemeral" }) }))
+    provision.mockResolvedValueOnce({ tenantId: "tenant", clientId: "client", username: "admin", reused: false, ready: true, missingConsent: [] })
+    const progress = vi.fn()
+    const setup = new AppRegistrationSetup({ fetch: vi.fn() as never, openBrowser, progress })
+    const browser = browserOpens()
+    const running = setup.create()
+    const url = await browser
+    await answer(url, codeAnswer(url))
+    await vi.waitFor(() => expect(msal.acquireTokenByCode).toHaveBeenCalled())
+    expect(progress).toHaveBeenLastCalledWith({ phase: "signingIn", completing: true })
+    expect(setup.cancelSignIn()).toBe(false)
+    expect(setup.signInLink()).toBeNull()
+    release()
+    await expect(running).resolves.toMatchObject({ clientId: "client" })
   })
 
   it("provisions after a live setup sign-in, in its own memory client", async () => {

@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { AuthorizationUrlRequest, PublicClientApplication } from "@azure/msal-node"
-import { loopbackSignIn, sameState, SignInStateMismatchError, type LoopbackSignInRequest } from "../src/main/auth/loopback-sign-in"
+import { connect } from "node:net"
+import { loopbackSignIn, MAX_ANSWER_BYTES, sameState, validAnswer, type LoopbackSignInRequest } from "../src/main/auth/loopback-sign-in"
 import { firstSignInError } from "../src/main/auth/msal"
 import { signInResult } from "../src/main/setup-diagnostics/events"
-import { answer, authCodeUrl, codeAnswer, listenerClosed } from "./helpers/fake-browser"
+import { answer, authCodeUrl, codeAnswer, listenerClosed, loopbackOf } from "./helpers/fake-browser"
 
 const RESULT = { accessToken: "token", account: { tenantId: "tenant", username: "admin@contoso.example", homeAccountId: "home" } }
 
@@ -43,7 +44,7 @@ describe("loopbackSignIn", () => {
     const url = await browser
     const request = app.getAuthCodeUrl.mock.lastCall![0]
     expect(request.redirectUri).toMatch(/^http:\/\/localhost:\d+$/)
-    expect(request).toMatchObject({ codeChallengeMethod: "S256", responseMode: "query", prompt: "select_account", authority: "https://login.microsoftonline.com/tenant" })
+    expect(request).toMatchObject({ codeChallengeMethod: "S256", responseMode: "form_post", prompt: "select_account", authority: "https://login.microsoftonline.com/tenant" })
     expect(request.state!.length).toBeGreaterThanOrEqual(43)
 
     const page = await answer(url, codeAnswer(url))
@@ -68,22 +69,25 @@ describe("loopbackSignIn", () => {
     await outcome
   })
 
-  it("rejects an answer with another state and redeems nothing", async () => {
-    const { app, browser, settled } = start()
+  it.each([
+    ["another state", (state: string) => `code=stolen&state=not-${state}`],
+    ["no state", () => "code=junk"],
+    ["two states", (state: string) => `code=c&state=${state}&state=${state}`],
+    ["two codes", (state: string) => `code=a&code=b&state=${state}`],
+    ["an empty code", (state: string) => `code=&state=${state}`],
+    ["a code and an error", (state: string) => `code=c&error=access_denied&state=${state}`],
+    ["neither code nor error", (state: string) => `state=${state}`],
+  ])("refuses an answer with %s with 400 and keeps waiting for the real one", async (_name, body) => {
+    const { app, browser, outcome } = start()
     const url = await browser
-    const page = await answer(url, { code: "stolen", state: "not-this-sign-in" })
-    expect(await page.text()).toBe("<p>failed</p>")
-    expect(await settled).toBeInstanceOf(SignInStateMismatchError)
+    const state = new URL(url).searchParams.get("state")!
+    const refused = await answer(url, new URLSearchParams(body(encodeURIComponent(state))))
+    expect(refused.status).toBe(400)
     expect(app.acquireTokenByCode).not.toHaveBeenCalled()
-    expect(await listenerClosed(url)).toBe(true)
-  })
-
-  it("rejects an answer without a state", async () => {
-    const { app, browser, settled } = start()
-    const url = await browser
-    await answer(url, { code: "no-state" })
-    expect(await settled).toBeInstanceOf(SignInStateMismatchError)
-    expect(app.acquireTokenByCode).not.toHaveBeenCalled()
+    expect(await listenerClosed(url)).toBe(false)
+    await answer(url, codeAnswer(url))
+    await expect(outcome).resolves.toBe(RESULT)
+    expect(app.acquireTokenByCode).toHaveBeenCalledOnce()
   })
 
   it("maps Microsoft's error answers as before, and redeems nothing", async () => {
@@ -110,17 +114,73 @@ describe("loopbackSignIn", () => {
     expect((firstSignInError(error) as Error).message).toBe("The sign-in was cancelled in the browser. Sign in again to continue.")
   })
 
-  it("ignores unrelated requests without ending the sign-in", async () => {
+  it("ignores other requests without ending the sign-in, and never takes a code from an address", async () => {
     const { app, browser, outcome } = start()
     const url = await browser
-    const loopback = new URL(new URL(url).searchParams.get("redirect_uri")!).port
-    expect((await fetch(`http://127.0.0.1:${loopback}/favicon.ico`)).status).toBe(404)
-    expect((await fetch(`http://127.0.0.1:${loopback}/`)).status).toBe(404)
-    expect((await answer(url, codeAnswer(url), "/other")).status).toBe(404)
-    expect((await fetch(`http://127.0.0.1:${loopback}/?${new URLSearchParams(codeAnswer(url))}`, { method: "POST" })).status).toBe(404)
+    const base = loopbackOf(url)
+    expect((await fetch(`${base}/favicon.ico`)).status).toBe(404)
+    expect((await fetch(`${base}/`)).status).toBe(405)
+    expect((await fetch(`${base}/?${new URLSearchParams(codeAnswer(url))}`)).status).toBe(405)
+    expect((await answer(url, codeAnswer(url), { path: "/other" })).status).toBe(404)
+    expect((await answer(url, codeAnswer(url), { contentType: "application/json" })).status).toBe(415)
+    expect((await answer(url, codeAnswer(url), { contentType: "text/plain" })).status).toBe(415)
+    expect(app.acquireTokenByCode).not.toHaveBeenCalled()
+    const page = await answer(url, codeAnswer(url), { contentType: "application/x-www-form-urlencoded; charset=UTF-8" })
+    expect(page.status).toBe(200)
+    await expect(outcome).resolves.toBe(RESULT)
+  })
+
+  it("refuses a body over 16 KB with 413 and keeps waiting", async () => {
+    const { app, browser, outcome } = start()
+    const url = await browser
+    expect(MAX_ANSWER_BYTES).toBe(16 * 1024)
+    const large = { ...codeAnswer(url), padding: "x".repeat(MAX_ANSWER_BYTES) }
+    expect((await answer(url, large)).status).toBe(413)
+    // The same without a Content-Length header, streamed in chunks.
+    const chunked = new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode(new URLSearchParams(large).toString())); controller.close() } })
+    const streamed = await fetch(`${loopbackOf(url)}/`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: chunked, duplex: "half" } as RequestInit)
+    expect(streamed.status).toBe(413)
     expect(app.acquireTokenByCode).not.toHaveBeenCalled()
     await answer(url, codeAnswer(url))
     await expect(outcome).resolves.toBe(RESULT)
+  })
+
+  it("answers malformed requests with 400 and keeps waiting, without an exception in the main process", async () => {
+    const { browser, outcome } = start()
+    const url = await browser
+    const port = Number(new URL(loopbackOf(url)).port)
+    const raw = (text: string) => new Promise<string>((resolve) => {
+      const socket = connect(port, "127.0.0.1", () => socket.write(text))
+      let received = ""
+      socket.on("data", (data) => { received += data.toString() })
+      socket.on("close", () => resolve(received))
+      socket.on("error", () => resolve(received))
+    })
+    expect(await raw("GET //[ HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")).toMatch(/^HTTP\/1\.1 40\d/)
+    expect(await raw("POST //[?code=x HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")).toMatch(/^HTTP\/1\.1 40\d/)
+    expect(await raw("NOT A REQUEST\r\n\r\n")).toMatch(/^HTTP\/1\.1 400/)
+    expect(await raw("POST / HTTP/1.1\r\nHost: localhost\r\nBroken header line\r\n\r\n")).toMatch(/^HTTP\/1\.1 400/)
+    expect(await listenerClosed(url)).toBe(false)
+    await answer(url, codeAnswer(url))
+    await expect(outcome).resolves.toBe(RESULT)
+  })
+
+  it("drops a half open connection when the attempt is abandoned", async () => {
+    const controller = new AbortController()
+    const { browser, settled } = start({ signal: controller.signal })
+    const url = await browser
+    const port = Number(new URL(loopbackOf(url)).port)
+    const socket = connect(port, "127.0.0.1")
+    await new Promise((resolve) => socket.once("connect", resolve))
+    // A request that never finishes: the body it announces does not arrive.
+    socket.write("POST / HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 500\r\n\r\nstate=")
+    const closed = new Promise<void>((resolve) => socket.once("close", () => resolve()))
+    socket.on("error", () => undefined)
+    controller.abort(new Error("Sign-in cancelled."))
+    expect((await settled)?.message).toBe("Sign-in cancelled.")
+    await closed
+    expect(socket.destroyed).toBe(true)
+    expect(await listenerClosed(url)).toBe(true)
   })
 
   it("takes one answer only", async () => {
@@ -181,5 +241,13 @@ describe("loopbackSignIn", () => {
     expect(sameState("abc", "abd")).toBe(false)
     expect(sameState("abc", "abcd")).toBe(false)
     expect(sameState("abc", null)).toBe(false)
+  })
+
+  it("takes only answers with one matching state and one code or error", () => {
+    expect(validAnswer(new URLSearchParams("code=c&state=s"), "s")).toBe(true)
+    expect(validAnswer(new URLSearchParams("error=access_denied&state=s"), "s")).toBe(true)
+    expect(validAnswer(new URLSearchParams("code=c&state=s&state=s"), "s")).toBe(false)
+    expect(validAnswer(new URLSearchParams("code=c"), "s")).toBe(false)
+    expect(validAnswer(new URLSearchParams("code=c&state=t"), "s")).toBe(false)
   })
 })

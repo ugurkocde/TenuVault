@@ -82,7 +82,12 @@ export interface ApiResponse {
 }
 
 /** Where the in-app setup is; `reused` once an existing TenuVault app registration was found. */
-export type SetupProgress = { phase: "signingIn" | "registration" | "consent" | "publishing"; reused?: boolean }
+export type SetupProgress = {
+  phase: "signingIn" | "registration" | "consent" | "publishing"
+  reused?: boolean
+  /** Set with `signingIn` once Microsoft has answered and the sign-in is completed: the browser step is over. */
+  completing?: boolean
+}
 /** The app registration the in-app setup made or found. `ready` is false while Microsoft's sign-in service does not know it yet. */
 export interface RegistrationResult {
   displayName: string
@@ -437,10 +442,11 @@ export interface TenuVaultBridge {
      */
     cancelSignIn: () => Promise<boolean>
     /**
-     * Called when the first sign-in's browser step is over and the license check starts, so the
-     * window stops offering ways to recover the browser sign-in. Returns an unsubscribe function.
+     * Called as the first sign-in leaves the browser step: `completing` as soon as Microsoft has
+     * answered and the code is redeemed, `license` when the license check starts. The window then
+     * stops offering ways to recover the browser sign-in. Returns an unsubscribe function.
      */
-    onSignInPhase: (listener: (phase: "license") => void) => () => void
+    onSignInPhase: (listener: (phase: "completing" | "license") => void) => () => void
     /**
      * Copies the Microsoft sign-in address the waiting first sign-in (`signin`) or setup sign-in
      * (`setup`) opened to the clipboard. Returns whether there was one; the address itself stays in

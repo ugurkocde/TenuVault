@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
-import type { AddressInfo } from "node:net"
+import type { AddressInfo, Socket } from "node:net"
+import { setTimeout } from "node:timers"
 import { randomBytes, timingSafeEqual } from "node:crypto"
 import { CryptoProvider, ServerError, type AuthenticationResult, type PublicClientApplication } from "@azure/msal-node"
 
@@ -36,15 +37,11 @@ export interface LoopbackSignInRequest {
 /** The parameters of the one answer the listener accepted. */
 type Answer = URLSearchParams
 
-/** Thrown when the answer's state does not belong to this attempt. Nothing is redeemed. */
-export class SignInStateMismatchError extends Error {
-  constructor() {
-    super("The answer from the browser does not belong to this sign-in, so it was not used. Nothing was signed in. Sign in again.")
-    this.name = "SignInStateMismatchError"
-  }
-}
-
 const HEADERS = { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", Connection: "close" }
+/** The largest answer body the listener reads. Microsoft's form_post answer is a few kilobytes. */
+export const MAX_ANSWER_BYTES = 16 * 1024
+/** How long the page for the accepted answer may take to reach the browser before its connection is dropped. */
+const FLUSH_MS = 2000
 
 /** Whether two strings are equal, in time that does not depend on where they differ. */
 export function sameState(expected: string, received: string | null): boolean {
@@ -55,31 +52,99 @@ export function sameState(expected: string, received: string | null): boolean {
 }
 
 /**
- * A listener on 127.0.0.1 and a random free port for one sign-in. It takes the first GET on `/`
- * that carries a code or an error, answers it with the matching page and closes. Other requests,
- * such as the browser asking for a favicon, get a 404 and leave the attempt waiting.
+ * Whether a posted answer belongs to this attempt and is one Microsoft sends: exactly one state,
+ * equal to ours, and exactly one code or one error. Anything else leaves the attempt waiting.
+ */
+export function validAnswer(params: URLSearchParams, state: string): boolean {
+  const states = params.getAll("state")
+  const codes = params.getAll("code")
+  const errors = params.getAll("error")
+  return states.length === 1 && sameState(state, states[0]!) && codes.length + errors.length === 1 && (codes.length === 0 || codes[0] !== "")
+}
+
+/**
+ * A listener on 127.0.0.1 and a random free port for one sign-in. Microsoft posts its answer to
+ * `/` as a form (response_mode form_post, as MSAL's own interactive flow asks for), so the code and
+ * the state never appear in an address or the browser history. The listener takes the first posted
+ * answer that belongs to this attempt, answers it with the matching page and closes. Everything
+ * else gets an error status and leaves the attempt waiting: other paths and methods, a wrong
+ * content type, a body over MAX_ANSWER_BYTES, a missing, wrong or repeated state, and requests it
+ * cannot parse.
  */
 export async function openLoopback(pages: { successPage: string; errorPage: string }, state: string): Promise<{ port: number; answer: Promise<Answer>; close: () => void }> {
   let settle: (answer: Answer) => void = () => undefined
   const answer = new Promise<Answer>((resolve) => { settle = resolve })
-  let answered = false
-  const server: Server = createServer((request: IncomingMessage, response: ServerResponse) => {
-    const url = new URL(request.url ?? "/", "http://localhost")
-    const params = url.searchParams
-    if (answered || request.method !== "GET" || url.pathname !== "/" || (!params.has("code") && !params.has("error"))) {
-      response.writeHead(404, HEADERS).end()
-      return
+  let accepted: Socket | null = null
+  const sockets = new Set<Socket>()
+  const reply = (response: ServerResponse, status: number) => {
+    if (response.headersSent) return response.end()
+    response.writeHead(status, HEADERS).end()
+  }
+
+  const handle = (request: IncomingMessage, response: ServerResponse) => {
+    const target = request.url ?? ""
+    const path = target.split("?", 1)[0]
+    if (accepted || path !== "/") return reply(response, 404)
+    if (request.method !== "POST") return reply(response, 405)
+    if (request.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase() !== "application/x-www-form-urlencoded") return reply(response, 415)
+    if (Number(request.headers["content-length"] ?? 0) > MAX_ANSWER_BYTES) {
+      request.resume()
+      return reply(response, 413)
     }
-    answered = true
-    const ok = !params.has("error") && sameState(state, params.get("state"))
-    response.writeHead(200, HEADERS).end(ok ? pages.successPage : pages.errorPage, () => close())
-    settle(params)
+    const chunks: Buffer[] = []
+    let size = 0
+    let refused = false
+    request.on("data", (chunk: Buffer) => {
+      if (refused) return
+      size += chunk.length
+      if (size > MAX_ANSWER_BYTES) {
+        refused = true
+        reply(response, 413)
+        return
+      }
+      chunks.push(chunk)
+    })
+    request.on("error", () => reply(response, 400))
+    request.on("end", () => {
+      if (refused) return
+      try {
+        const params = new URLSearchParams(Buffer.concat(chunks).toString("utf8"))
+        if (accepted || !validAnswer(params, state)) return reply(response, accepted ? 404 : 400)
+        accepted = request.socket
+        response.writeHead(200, HEADERS).end(params.has("error") ? pages.errorPage : pages.successPage, () => close())
+        settle(params)
+      } catch {
+        reply(response, 400)
+      }
+    })
+  }
+
+  const server: Server = createServer((request, response) => {
+    // Nothing a request carries may throw out of here: an exception would end the main process.
+    try {
+      handle(request, response)
+    } catch {
+      reply(response, 400)
+    }
   })
-  // Stops accepting connections and drops idle ones; a page being sent still reaches the browser.
+  server.on("connection", (socket: Socket) => {
+    sockets.add(socket)
+    socket.once("close", () => sockets.delete(socket))
+  })
+  // Requests the HTTP parser rejects get a 400 and the connection is dropped.
+  server.on("clientError", (_error, socket) => {
+    if (socket.writable) socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
+    else socket.destroy()
+  })
+
+  // Stops listening and drops every connection, open or half open. Only the connection that
+  // carries the page for the accepted answer may finish sending it, for a short while.
   const close = () => {
-    if (!server.listening) return
-    server.close()
-    server.closeIdleConnections()
+    if (server.listening) server.close()
+    for (const socket of sockets) {
+      if (socket === accepted) setTimeout(() => socket.destroy(), FLUSH_MS).unref()
+      else socket.destroy()
+    }
   }
   try {
     await new Promise<void>((resolve, reject) => {
@@ -128,7 +193,7 @@ export async function loopbackSignIn(request: LoopbackSignInRequest): Promise<Au
         codeChallenge: challenge,
         codeChallengeMethod: "S256",
         state,
-        responseMode: "query",
+        responseMode: "form_post",
         ...(request.authority ? { authority: request.authority } : {}),
         ...(request.prompt ? { prompt: request.prompt } : {}),
         ...(request.loginHint ? { loginHint: request.loginHint } : {}),
@@ -137,7 +202,6 @@ export async function loopbackSignIn(request: LoopbackSignInRequest): Promise<Au
     await unlessStopped(() => request.openBrowser(url), stop)
     const answer = await Promise.race([listener.answer, stop])
     listener.close()
-    if (!sameState(state, answer.get("state"))) throw new SignInStateMismatchError()
     const error = answer.get("error")
     if (error) throw new ServerError(error, "", answer.get("error_description") ?? undefined, answer.get("error_subcode") ?? undefined)
     const code = answer.get("code")

@@ -253,10 +253,10 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
   // Each sign-in counts as a new attempt, so the recovery panel waits its 3 minutes again.
   const [attempt, setAttempt] = useState(0)
   const [retrying, setRetrying] = useState(false)
-  // The browser step of the sign-in, before the license check that follows it in the same call.
-  // Only this step offers the recovery panel.
-  const [licensePhase, setLicensePhase] = useState(false)
-  const waitedLong = useWaitedLong(busy && !licensePhase, attempt)
+  // Where the sign-in is after the browser step: Microsoft answered and the sign-in is completed,
+  // then the license check. Only the browser step before them offers the recovery panel.
+  const [afterBrowser, setAfterBrowser] = useState<"completing" | "license" | null>(null)
+  const waitedLong = useWaitedLong(busy && !afterBrowser, attempt)
   const [errors, setErrors] = useState<{ tenant?: string; clientId?: string; form?: string }>({})
   const notify = useRef(onFieldsChange)
   notify.current = onFieldsChange
@@ -269,7 +269,7 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
   const signingIn = useRef(false)
   // Try again in the recovery panel: the cancelled sign-in starts once more when it has ended.
   const restart = useRef(false)
-  useEffect(() => bridge.auth.onSignInPhase?.(() => { if (signingIn.current) setLicensePhase(true) }), [])
+  useEffect(() => bridge.auth.onSignInPhase?.((phase) => { if (signingIn.current) setAfterBrowser(phase) }), [])
   useEffect(() => {
     active.current = true
     return () => {
@@ -350,7 +350,7 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
     setBusy(true)
     setAutomatic(Boolean(loginHint))
     setCancelling(false)
-    setLicensePhase(false)
+    setAfterBrowser(null)
     setAttempt((value) => value + 1)
     let again = false
     try {
@@ -369,7 +369,7 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
         setAutomatic(false)
         setCancelling(false)
         setRetrying(false)
-        setLicensePhase(false)
+        setAfterBrowser(null)
       }
     }
     // The main process keeps the setup's account hint for one sign-in only, so the new one asks
@@ -441,7 +441,9 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
   // first, because there the admin did not press a button on this step.
   const status = busy && (
     <div role="status" className="space-y-3 rounded-2xl bg-gray-50 px-4 py-3 text-sm text-gray-700">
-      {automatic
+      {afterBrowser === "completing"
+        ? <p className="flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />Completing sign-in...</p>
+        : automatic
         ? <>
             <p>Your browser opens once more to sign you in through the new app registration. There is nothing to enter this time. TenuVault then checks the license for this tenant.</p>
             <p className="text-xs text-gray-600">If Microsoft says it cannot find the application, it has not finished publishing the new app registration. Wait a minute, select Cancel sign-in and sign in again.</p>

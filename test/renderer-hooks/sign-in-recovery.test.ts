@@ -10,7 +10,8 @@ const state = vi.hoisted(() => ({
   signIn: vi.fn<(tenant: string, clientId: string, options?: { loginHint?: string }) => Promise<SignedInAccount>>(),
   cancelSignIn: vi.fn(async () => false),
   setupCancelSignIn: vi.fn(async () => false),
-  phase: null as null | ((phase: "license") => void),
+  phase: null as null | ((phase: "completing" | "license") => void),
+  progress: null as null | ((value: import("../../src/shared/ipc").SetupProgress) => void),
   copySignInLink: vi.fn(async (_kind: "signin" | "setup") => true),
   createRegistration: vi.fn(),
   cancelCreateRegistration: vi.fn(async () => undefined),
@@ -20,8 +21,8 @@ const state = vi.hoisted(() => ({
 
 vi.mock("../../src/renderer/lib/bridge", () => ({
   bridge: {
-    auth: { signIn: state.signIn, cancelSignIn: state.cancelSignIn, copySignInLink: state.copySignInLink, accounts: async () => [], onSignInPhase: (listener: (phase: "license") => void) => { state.phase = listener; return () => { state.phase = null } } },
-    setup: { createRegistration: state.createRegistration, cancelCreateRegistration: state.cancelCreateRegistration, cancelSignIn: state.setupCancelSignIn, onProgress: () => () => undefined, clipboardIds: async () => null, saveScript: async () => ({ saved: false }) },
+    auth: { signIn: state.signIn, cancelSignIn: state.cancelSignIn, copySignInLink: state.copySignInLink, accounts: async () => [], onSignInPhase: (listener: (phase: "completing" | "license") => void) => { state.phase = listener; return () => { state.phase = null } } },
+    setup: { createRegistration: state.createRegistration, cancelCreateRegistration: state.cancelCreateRegistration, cancelSignIn: state.setupCancelSignIn, onProgress: (listener: typeof state.progress) => { state.progress = listener; return () => { state.progress = null } }, clipboardIds: async () => null, saveScript: async () => ({ saved: false }) },
     license: { clipboardKey: async () => null },
     app: { openExternal: state.openExternal },
     diagnostics: { record: state.record, status: async () => ({ state: "ineligible", policy: false, reminder: { setup: false, signin: false } }), reminderShown: async () => undefined, consent: async () => undefined, decline: async () => undefined },
@@ -157,6 +158,22 @@ describe("recovery panel on the first sign-in", () => {
     expect(container.textContent).toContain("Waiting for sign-in...")
   })
 
+  it("hides the panel as soon as Microsoft answers and shows that the sign-in is being completed", async () => {
+    state.signIn.mockImplementationOnce(() => new Promise(() => undefined))
+    const container = await startSignIn()
+    await advance(RECOVERY_DELAY_MS)
+    expect(container.textContent).toContain(PANEL)
+    // A slow redemption: the main process says the browser step is over before it finishes.
+    act(() => state.phase?.("completing"))
+    expect(container.textContent).not.toContain(PANEL)
+    expect(container.textContent).toContain("Completing sign-in...")
+    expect(container.textContent).not.toContain("Complete the sign-in in your browser.")
+    await advance(RECOVERY_DELAY_MS * 2)
+    expect(container.textContent).not.toContain(PANEL)
+    act(() => state.phase?.("license"))
+    expect(container.textContent).not.toContain("Completing sign-in...")
+  })
+
   it("hides the panel when the browser step ends while it shows", async () => {
     state.signIn.mockImplementationOnce(() => new Promise(() => undefined))
     const container = await startSignIn()
@@ -262,5 +279,35 @@ describe("Try again on the setup sign-in after the browser step", () => {
     expect(state.cancelCreateRegistration).not.toHaveBeenCalled()
     expect(state.createRegistration).toHaveBeenCalledTimes(1)
     expect(button(container, "Try again")!.disabled).toBe(false)
+  })
+})
+
+describe("setup sign-in that Microsoft answered", () => {
+  it("hides the panel and shows that the sign-in is being completed during a slow redemption", async () => {
+    state.createRegistration.mockImplementationOnce(() => new Promise(() => undefined))
+    const container = await render(createElement(ConnectTenantSetup, { trials: false, onManual: vi.fn(), onRegistered: vi.fn() }))
+    await act(async () => { button(container, "Set up with Microsoft sign-in")!.click() })
+    await advance(RECOVERY_DELAY_MS)
+    expect(container.textContent).toContain(PANEL)
+    act(() => state.progress?.({ phase: "signingIn", completing: true }))
+    expect(container.textContent).not.toContain(PANEL)
+    expect(container.textContent).toContain("Completing sign-in...")
+    await advance(RECOVERY_DELAY_MS * 2)
+    expect(container.textContent).not.toContain(PANEL)
+    act(() => state.progress?.({ phase: "registration" }))
+    expect(container.textContent).not.toContain("Completing sign-in...")
+  })
+
+  it("starts a fresh setup without the completing state", async () => {
+    let reject: (error: Error) => void = () => undefined
+    state.createRegistration.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail }))
+    const container = await render(createElement(ConnectTenantSetup, { trials: false, onManual: vi.fn(), onRegistered: vi.fn() }))
+    await act(async () => { button(container, "Set up with Microsoft sign-in")!.click() })
+    act(() => state.progress?.({ phase: "signingIn", completing: true }))
+    await act(async () => { reject(new Error("Sign-in cancelled.")) })
+    state.createRegistration.mockImplementationOnce(() => new Promise(() => undefined))
+    await act(async () => { button(container, "Set up with Microsoft sign-in")!.click() })
+    expect(container.textContent).not.toContain("Completing sign-in...")
+    expect(container.textContent).toContain("Choose your admin account in the browser")
   })
 })

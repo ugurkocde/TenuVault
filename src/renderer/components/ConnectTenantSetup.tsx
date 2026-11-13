@@ -49,10 +49,13 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
   const restart = useRef(false)
   const [retrying, setRetrying] = useState(false)
   const [attempt, setAttempt] = useState(0)
-  const waitedLong = useWaitedLong(running && phase === "signingIn", attempt)
+  // Microsoft answered and the setup sign-in is completed: the browser step, and the panel, are over.
+  const [completing, setCompleting] = useState(false)
+  const waitedLong = useWaitedLong(running && phase === "signingIn" && !completing, attempt)
 
   useEffect(() => bridge.setup.onProgress((value) => {
     setPhase(value.phase)
+    setCompleting(value.phase === "signingIn" && Boolean(value.completing))
     if (value.reused) setReused(true)
   }), [])
 
@@ -67,6 +70,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
     setError("")
     setReused(false)
     setPhase("signingIn")
+    setCompleting(false)
     let restartNow = false
     try {
       onRegistered(await bridge.setup.createRegistration(tenant.trim() ? { tenant: tenant.trim() } : undefined))
@@ -176,7 +180,12 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
                 </li>
               ))}
             </ol>
-            {phase === "signingIn" ? (
+            {phase === "signingIn" && completing ? (
+              <p className="flex items-center gap-2 border-t border-gray-200 pt-4">
+                <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin" aria-hidden="true" />
+                Completing sign-in...
+              </p>
+            ) : phase === "signingIn" ? (
               <div className="space-y-3 border-t border-gray-200 pt-4">
                 <p>Choose your admin account in the browser and approve the request. Nothing is created before you are signed in.</p>
                 <p className="text-xs text-gray-600">

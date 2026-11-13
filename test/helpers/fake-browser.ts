@@ -20,9 +20,16 @@ export function loopbackOf(url: string): string {
   return `http://127.0.0.1:${redirect.port}`
 }
 
-/** Plays the browser coming back from Microsoft: a GET on the redirect address with `params`. */
-export async function answer(url: string, params: Record<string, string>, path = "/"): Promise<Response> {
-  return fetch(`${loopbackOf(url)}${path}?${new URLSearchParams(params)}`)
+/**
+ * Plays the browser coming back from Microsoft: the form Microsoft's page posts to the redirect
+ * address (response_mode form_post) with `params`.
+ */
+export async function answer(url: string, params: Record<string, string> | URLSearchParams, init: { path?: string; contentType?: string } = {}): Promise<Response> {
+  return fetch(`${loopbackOf(url)}${init.path ?? "/"}`, {
+    method: "POST",
+    headers: { "Content-Type": init.contentType ?? "application/x-www-form-urlencoded" },
+    body: new URLSearchParams(params).toString(),
+  })
 }
 
 /** The answer Microsoft sends for a successful sign-in, with the state of `url`. */

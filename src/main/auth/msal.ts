@@ -214,8 +214,12 @@ export class AuthManager {
    * Interactive sign-in used when a tenant is added. `tenant` may be a tenant id or
    * a verified domain; the returned account always carries the tenant id.
    */
-  async signIn(tenant: string, clientId: string, options?: { loginHint?: string }): Promise<SignedInAccount> {
-    const result = await this.acquireInteractive(clientId, tenant, RESOURCE_SCOPES.graph, options?.loginHint ? undefined : "select_account", options?.loginHint, true).catch((error: unknown) => {
+  async signIn(tenant: string, clientId: string, options?: {
+    loginHint?: string
+    /** Called when the browser has answered and the code is being redeemed: the browser step is over. */
+    onBrowserDone?: () => void
+  }): Promise<SignedInAccount> {
+    const result = await this.acquireInteractive(clientId, tenant, RESOURCE_SCOPES.graph, options?.loginHint ? undefined : "select_account", options?.loginHint, true, options?.onBrowserDone).catch((error: unknown) => {
       throw firstSignInError(error)
     })
     const account = result.account
@@ -349,6 +353,7 @@ export class AuthManager {
     prompt?: string,
     loginHint?: string,
     cancellable = false,
+    onBrowserDone?: () => void,
   ): Promise<AuthenticationResult> {
     const key = `${clientId}|${tenant.toLowerCase()}|${scope}|${prompt ?? ""}|${loginHint ?? ""}`
     const pending = this.interactive.get(key)
@@ -383,7 +388,10 @@ export class AuthManager {
       errorPage: ERROR_PAGE,
       signal: controller.signal,
       // The browser answered: the code is redeemed now, and a cancel or timeout no longer applies.
-      onAnswer: ended,
+      onAnswer: () => {
+        ended()
+        onBrowserDone?.()
+      },
     }).finally(() => {
       ended()
       if (this.interactive.get(key) === promise) this.interactive.delete(key)

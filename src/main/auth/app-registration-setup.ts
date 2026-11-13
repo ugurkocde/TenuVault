@@ -135,6 +135,7 @@ export class AppRegistrationSetup {
           clearTimeout(deadline)
           this.link = null
           this.cancelWaiting = undefined
+          this.host.progress({ phase: "signingIn", completing: true })
         },
       }).then(result => {
         // A cancel of the whole setup while the code was redeemed: nothing is created.

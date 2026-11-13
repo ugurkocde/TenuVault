@@ -1176,14 +1176,16 @@ async function bootstrap(): Promise<void> {
     const expected = setupSignIn
     setupSignIn = null
     const loginHint = setupLoginHint(expected, tenant, clientId, options?.loginHint)
-    const account = await auth.signIn(tenant, clientId, loginHint ? { loginHint } : undefined).finally(returnToApp).catch((error: unknown) => {
+    // The window hears when the browser step ends, as soon as Microsoft has answered, and again
+    // when the license check starts, so it stops offering ways to recover a browser sign-in.
+    const phase = (value: "completing" | "license") => { if (!event.sender.isDestroyed()) event.sender.send("auth:signInPhase", value) }
+    const account = await auth.signIn(tenant, clientId, { ...(loginHint ? { loginHint } : {}), onBrowserDone: () => phase("completing") }).finally(returnToApp).catch((error: unknown) => {
       const event = signInEvent(error)
       diagnostics.record(event, isSetupError(event) ? "signin" : undefined)
       throw error
     })
     diagnostics.record({ name: "signin", props: { result: "ok" } })
-    // The browser step is over; the window stops offering ways to recover a browser sign-in.
-    if (!event.sender.isDestroyed()) event.sender.send("auth:signInPhase", "license")
+    phase("license")
     await requireForNewTenant(account.tenantId)
     return account
   }))
