@@ -135,9 +135,8 @@ it("shows the Windows-only check without opening sign-in on other platforms", as
  const node = await mount()
  await click(node,"Backup for Finance")
  const button = [...node.querySelectorAll("button")].find(button => button.textContent === "Check Windows enrollment")!
- expect(button.disabled).toBe(true)
- expect(node.textContent).toContain("Windows only.")
- await act(async () => button.click())
+ expect(button).toBeUndefined()
+ expect(node.textContent).toContain("Windows PC enrolled in this Intune tenant")
  expect(api.signIn).not.toHaveBeenCalled()
  expect(api.deviceStatus).not.toHaveBeenCalled()
 })

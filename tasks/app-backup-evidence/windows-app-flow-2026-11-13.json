@@ -1,0 +1,95 @@
+{
+  "schema": 1,
+  "date": "2026-11-13",
+  "baseHead": "9fb40d3d6233635f6ae57f8443e64e419c121118",
+  "scope": "Working-tree Windows helper and capture action, subsequently committed with this evidence",
+  "sourceHashes": {
+    "native/app-backup/Program.cs": "18a70c23f36f9859f277a4bfe94a01cc627995527c3a44d20e62026061997e48",
+    "native/app-backup/app.manifest": "8a9d3499b0d5cb8ba373c6587564e96159248d71cec52fc1c9951098f22595a1",
+    "src/main/app-backup/windows-helper.ts": "c959c0f88952d9deb65995481c5f005a932b307a3d34debf811664dfa69b594a",
+    "src/main/app-backup/capture-download.ts": "e69ab460058aad4de4a411e469e761ac42d358554244b3c4c05e16e5045d0ee7",
+    "src/main/app-backup/capture-identity.ts": "1f14591b41fd68998f9dc6aec45f7e2c34970f7fc9751a97a99055c347717468",
+    "src/main/app-backup/device-check.ts": "035227dbd6cba89b939f6571ac8a0c2a67dcb04cf166ee18c2f193cadfc98785",
+    "src/main/app-sources/service.ts": "26dc2b8805fe1e995b8a864165d97d58c2d26dd2e6caa5e2ee245abc0eb6627d",
+    "src/main/index.ts": "2d5584b43f7344bd3d9cc7250b9cac9bbd3351e3aedc53e9efb6fe387f930f34",
+    "src/preload/index.ts": "b40909ac32431272d0f5f1b93aee3fb5f39313e3bf8d6e8972d02cd9814040ca",
+    "src/renderer/features/app-backup/IntuneAppsView.tsx": "2ac62fa93df432cc1a43f248b65aad612fc834f40629e8b5f94b2a35d75b469f",
+    "src/renderer/pages/AppBackupPage.tsx": "2de0ac2d5cacd97d127ff36924aff1734f4ef2736d441c8a7ba4b3485f488748",
+    "src/shared/app-sources/types.ts": "ac9426598a35076f2220cc434c94473174cdb871c55b0a60e42b818499cb1926"
+  },
+  "device": {
+    "platform": "Windows 11",
+    "build": "26200",
+    "node": "26.7.0",
+    "enrolled": true,
+    "desktopRunLevel": "limited",
+    "profile": "isolated test profile; installed app profile unchanged"
+  },
+  "actualAppFlow": {
+    "application": "PowerShell",
+    "authorization": "real delegated Microsoft session, active administrator role; user-approved Windows elevation for native worker",
+    "capture": "passed",
+    "bytes": 123779448,
+    "sha256": "aab979dcb289d34da2b50328b67613a896ffac542154946b158e71a6f14df3da",
+    "matchesIndependentLabCapture": true,
+    "provenance": "intune-capture",
+    "contentVersion": "1",
+    "serviceIdentifier": "SHA-256 fingerprint of opaque service identifier, not a claimed Graph file GUID",
+    "nativeExport": "passed, identical hash",
+    "restart": "packaged app reopened capture with no warnings"
+  },
+  "packaging": {
+    "x64UnpackedBuild": "passed",
+    "securityFuses": 6,
+    "helperBytes": 47616,
+    "helperSha256": "042f9df0be638d340d9dc1120eb4d1da9bb0bf94cfd65adf8159236c3c5a4f95",
+    "helperMatchesCompiledImage": true,
+    "signed": false
+  },
+  "negativeAppCases": [
+    {
+      "application": "Git fixture",
+      "outcome": "user-context app refused before launch; no Start backup action"
+    },
+    {
+      "application": "7-Zip fixture",
+      "outcome": "Windows approval cancelled; no new published source"
+    }
+  ],
+  "automated": {
+    "fullSuite": {
+      "passed": 5254,
+      "skipped": 2,
+      "files": 366
+    },
+    "windowsFocused": {
+      "passed": 210,
+      "skipped": 0,
+      "files": 14
+    },
+    "windowsNativeChecks": 15,
+    "typecheck": "passed",
+    "lint": "four pre-existing warnings",
+    "docsBuild": "49 pages; internal links valid",
+    "packagedSmoke": {
+      "status": "passed",
+      "desktopRunLevel": "limited",
+      "tenantFixture": "synthetic for general desktop smoke; real capture tested separately"
+    }
+  },
+  "graphVerification": {
+    "lokka": "beta, app-only, read-only; endpoint/shape/paging/error verification",
+    "appHelper": "actual delegated beta authorization passed before enrollment-key use",
+    "writes": false
+  },
+  "notYetVerified": [
+    "Packaged capture of a second installer",
+    "App-driven live HTTP 403 targeting refusal",
+    "App-driven cancellation after download starts",
+    "Signed TenuVault app/helper release pair",
+    "Live Microsoft non-admin role refusal",
+    "Defender for Endpoint deployment",
+    "macOS retrieval, no enrolled Mac available",
+    "Restore, not implemented"
+  ]
+}

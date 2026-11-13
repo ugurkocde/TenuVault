@@ -20,6 +20,7 @@ export interface CaptureIdentity {
   appId: string
   appType: "#microsoft.graph.win32LobApp"
   contentVersion: string
+  /** SHA-256 of the opaque device service DoFileId, prefixed sha256:. Never a Graph file-ID claim. */
   contentFileId: string
 }
 
@@ -36,6 +37,7 @@ export interface RecoveryDeviceStatus {
   enrollment: "matched" | "different-tenant" | "not-enrolled" | "unknown"
   certificate: "matched" | "missing" | "ambiguous" | "access-denied" | "unknown"
   elevated: boolean
+  /** Metadata-only checks cannot establish content authorization; do not gate Backup on this value. */
   captureAvailable: false
   reason: string
 }
@@ -47,7 +49,12 @@ export interface AppSourceState {
   unreadableSources?: boolean
 }
 
+export type AppCapturePhase = "authorizing" | "windows-approval" | "downloading" | "verifying"
+export interface AppCaptureProgress { phase: AppCapturePhase; receivedBytes: number; totalBytes: number | null }
+
 export interface AppSourcesBridge {
+  capture: (tenantId: string, operationId: string, appId: string) => Promise<boolean>
+  captureProgress: (tenantId: string, operationId: string) => Promise<AppCaptureProgress | null>
   details: (tenantId: string, appId: string) => Promise<IntuneAppDetails>
   printDetails: (tenantId: string, appId: string) => Promise<boolean>
   downloadScript: (tenantId: string, appId: string, scriptId: string) => Promise<boolean>

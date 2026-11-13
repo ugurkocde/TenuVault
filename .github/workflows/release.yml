@@ -267,6 +267,10 @@ jobs:
           rm -f "$RUNNER_TEMP/apple-api-key.p8" "$RUNNER_TEMP/signing.p12"
           if [ "$RUNNER_OS" = "macOS" ]; then security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true; fi
 
+      - name: Test Windows capture helper
+        if: runner.os == 'Windows'
+        run: node scripts/test-app-backup-helper.mjs
+
       - name: Verify packaged security fuses
         run: node scripts/check-fuses.cjs "${{ matrix.app }}"
 

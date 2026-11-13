@@ -1,3 +1,5 @@
+import { requestWindowsContent } from "./app-backup/windows-helper"
+import { downloadCapturedContent } from "./app-backup/capture-download"
 import { AppSourceService } from "./app-sources/service"
 import { checkRecoveryDevice } from "./app-backup/device-check"
 import { readAppBackupAccount } from "./app-backup/account"
@@ -1402,6 +1404,18 @@ async function bootstrap(): Promise<void> {
   })
 
   const appSources = new AppSourceService({
+    ensureKeys: () => { backupKeys.keyring() },
+    capture: async (tenant, appId, jobId, store, signal, progress) => {
+      if (process.platform !== "win32") throw new Error("Back up Win32 installers on a Windows PC enrolled in this Intune tenant.")
+      progress({ phase: "authorizing", receivedBytes: 0, totalBytes: null })
+      const token = await auth.getAccessToken(tenant, signedInClient(tenant), RESOURCE_SCOPES.graph, true)
+      signal.throwIfAborted()
+      progress({ phase: "windows-approval", receivedBytes: 0, totalBytes: null })
+      const helper = app.isPackaged ? join(process.resourcesPath, "app-backup", "TenuVault.Capture.exe") : join(app.getAppPath(), "out", "helper", "TenuVault.Capture.exe")
+      const content = await requestWindowsContent(helper, { tenantId: tenant, appId, jobId, accessToken: token.accessToken }, signal)
+      signal.throwIfAborted()
+      await downloadCapturedContent(store, content.identity, content, content.appName, { signal, fetch: bridgedFetch, progress })
+    },
     details: (tenant, id) => readAppBackupDetails(tenant, id, async tid => (await auth.getAccessToken(tid, signedInClient(tid), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch),
     printDetails: details => printAppDetails(appDetailsHtml(details), options => new BrowserWindow(options)),
     downloadScript: script => downloadAppScript(script, async fileName => {
@@ -1435,6 +1449,8 @@ async function bootstrap(): Promise<void> {
     },
   })
   app.on("before-quit", () => appSources.close())
+  handleTrusted("appSources:capture", (_event, tenant: unknown, operation: unknown, id: unknown) => appSources.capture(tenant, operation, id))
+  handleTrusted("appSources:captureProgress", (_event, tenant: unknown, operation: unknown) => appSources.captureProgress(tenant, operation))
   handleTrusted("appSources:list", (_event, tenant: unknown) => appSources.list(tenant))
   handleTrusted("appSources:chooseStore", (_event, tenant: unknown) => appSources.chooseStore(tenant))
   handleTrusted("appSources:export", (_event, tenant: unknown, operation: unknown, source: unknown) => appSources.export(tenant, operation, source))

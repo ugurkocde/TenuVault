@@ -336,6 +336,41 @@ describe("trusted local source actions", () => {
     const host: AppSourceHost = { details: vi.fn(), printDetails: vi.fn(), downloadScript: vi.fn(), knownTenant: id => id === tenant || id === other, folder: () => join(folder, "sources"), setFolder: vi.fn(), confirmNewStore: vi.fn(async () => false), keys: () => [master], pickFolder: async () => folder, pickExport: async () => null, checkDevice: vi.fn(), signIn: vi.fn(async () => {}), apps: vi.fn(async () => ({ apps: [], fetchedAt: new Date().toISOString() })) }
     return { folder, input, host, service: new AppSourceService(host) }
   }
+  it("captures only configured app IDs, isolates progress and cancellation, and rejects concurrent jobs", async () => {
+    const { host, service } = await setup(), appId = randomUUID(), job = randomUUID()
+    let started!: () => void, finish!: () => void
+    const ready = new Promise<void>(resolve => { started = resolve })
+    let signal!: AbortSignal
+    host.ensureKeys = vi.fn()
+    host.capture = vi.fn(async (_tenant, _app, _job, _store, abort, progress) => {
+      signal = abort
+      progress({ phase: "windows-approval", receivedBytes: 0, totalBytes: null })
+      started()
+      await new Promise<void>(resolve => { finish = resolve })
+      abort.throwIfAborted()
+    })
+    const pending = service.capture(tenant, job, appId)
+    await ready
+    expect(host.ensureKeys).toHaveBeenCalledOnce()
+    expect(service.captureProgress(tenant, job)?.phase).toBe("windows-approval")
+    expect(service.captureProgress(other, job)).toBeNull()
+    service.cancel(other, job)
+    expect(signal.aborted).toBe(false)
+    await expect(service.capture(tenant, randomUUID(), appId)).rejects.toThrow("already running")
+    service.cancel(tenant, job); finish()
+    await expect(pending).rejects.toThrow("Source operation cancelled")
+    expect(service.captureProgress(tenant, job)).toBeNull()
+    await expect(service.capture(randomUUID(), randomUUID(), appId)).rejects.toThrow("configured")
+    expect(() => service.capture(tenant, randomUUID(), "../../file")).toThrow()
+    expect(host.capture).toHaveBeenCalledOnce()
+  })
+  it("refuses capture into an unreadable retained store before minting a key or invoking the helper", async () => {
+    const { host, service, folder, input } = await setup()
+    await new AppSourceStore(join(folder, "sources"), () => [randomBytes(32)]).attach(tenant, input.file, "Retained")
+    host.ensureKeys = vi.fn(); host.capture = vi.fn()
+    await expect(service.capture(tenant, randomUUID(), randomUUID())).rejects.toThrow("matching recovery key")
+    expect(host.ensureKeys).not.toHaveBeenCalled(); expect(host.capture).not.toHaveBeenCalled()
+  })
   it("guards app details and print targets without invoking paid or arbitrary-path operations", async () => {
     const {host,service}=await setup(),appId=randomUUID()
     host.details=vi.fn(async()=>({id:appId,name:"Finance"}) as never)

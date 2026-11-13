@@ -1,10 +1,12 @@
 import { basename, join } from "node:path"
 import { lstat, readdir } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
-import type { AppSourceState, RecoveryDeviceStatus, AppSourcesBridge, IntuneAppDetails, IntuneAppScript } from "../../shared/app-sources/types"
+import type { AppCaptureProgress, AppSourceState, RecoveryDeviceStatus, AppSourcesBridge, IntuneAppDetails, IntuneAppScript } from "../../shared/app-sources/types"
 import { AppSourceStore, sourceTenant } from "./store"
 
 export interface AppSourceHost {
+  capture?: (tenant: string, appId: string, jobId: string, store: AppSourceStore, signal: AbortSignal, progress: (value: AppCaptureProgress) => void) => Promise<void>
+  ensureKeys?: () => void
   knownTenant: (tenant: string) => boolean
   folder: (tenant: string) => string
   setFolder: (tenant: string, folder: string) => void
@@ -23,7 +25,7 @@ export interface AppSourceHost {
 
 /** Local actions are free for every configured tenant and need no live token. */
 export class AppSourceService {
-  private readonly jobs = new Map<string, { tenant: string; abort: AbortController }>()
+  private readonly jobs = new Map<string, { tenant: string; abort: AbortController; progress?: AppCaptureProgress }>()
   private readonly deviceChecks = new Map<string, Promise<RecoveryDeviceStatus>>()
   private readonly appLoads = new Map<string, ReturnType<AppSourcesBridge["apps"]>>()
   constructor(private readonly host: AppSourceHost) {}
@@ -85,6 +87,26 @@ export class AppSourceService {
       if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new Error("A file with that name already exists. Choose a new name; existing files are preserved.")
       throw error
     } finally { this.jobs.delete(id) }
+  }
+  capture(raw: unknown, operation: unknown, app: unknown): Promise<boolean> {
+    const appId = sourceTenant(app)
+    return this.job(raw, operation, async (tenant, signal) => {
+      if (!this.host.capture) throw new Error("Installer capture requires the Windows capture helper.")
+      const store = this.store(tenant)
+      if ((await store.list(tenant)).unreadableSources) throw new Error("Import the matching recovery key before creating a backup in this folder.")
+      signal.throwIfAborted()
+      this.host.ensureKeys?.()
+      const id = sourceTenant(operation)
+      await this.host.capture(tenant, appId, id, store, signal, value => {
+        const job = this.jobs.get(id)
+        if (job?.tenant === tenant) job.progress = value
+      })
+      return true
+    })
+  }
+  captureProgress(raw: unknown, operation: unknown): AppCaptureProgress | null {
+    const tenant = this.tenant(raw), job = this.jobs.get(sourceTenant(operation))
+    return job?.tenant === tenant ? job.progress ?? null : null
   }
   export(raw: unknown, operation: unknown, source: unknown): Promise<boolean> {
     if (typeof source !== "string") return Promise.reject(new Error("Select a stored source."))

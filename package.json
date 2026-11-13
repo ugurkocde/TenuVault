@@ -16,7 +16,7 @@
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint",
-    "test": "vitest run",
+    "test": "node scripts/test-app-backup-helper.mjs && vitest run",
     "test:coverage": "vitest run --coverage",
     "dist": "electron-vite build && electron-builder --config electron-builder.config.cjs --publish never",
     "dist:win": "electron-vite build && electron-builder --config electron-builder.config.cjs --win --publish never",

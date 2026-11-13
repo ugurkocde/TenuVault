@@ -13,11 +13,13 @@ interface Props {
   tenant: string
   devicePanel: React.ReactNode
   busy: boolean
+  platform?: string
+  onCapture?: (appId: string) => Promise<boolean>
   feedback?: React.ReactNode
   active?: boolean
 }
 
-export function IntuneAppsView({ tenant, devicePanel, busy, feedback, active = true }: Props) {
+export function IntuneAppsView({ tenant, devicePanel, busy, feedback, platform, onCapture, active = true }: Props) {
   const [apps, setApps] = useState<IntuneBackupApp[]>([])
   const [detailsApp, setDetailsApp] = useState<IntuneBackupApp | null>(null)
   const [page,setPage] = useState(0)
@@ -69,14 +71,22 @@ export function IntuneAppsView({ tenant, devicePanel, busy, feedback, active = t
         <h3 ref={panel} tabIndex={-1} className="min-w-0 rounded break-words text-lg font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">Back up {selected.name}</h3>
         <Button variant="ghost" disabled={busy} onClick={() => { setSelected(null); if (trigger.current?.isConnected) trigger.current.focus() }}>Close</Button>
       </div>
-      <p className="mt-3 max-w-prose text-sm text-gray-600">App Backup retrieves installer content from Intune. Capture is not available in this build, so a backup cannot start yet.</p>
-      <p className="mt-3 max-w-prose text-sm text-gray-600">No local installer file is needed. Changing assignments or installing this app will not enable capture in this build.</p>
+      {platform === "win32" ? <>
+        <p className="mt-3 max-w-prose text-sm text-gray-600">Retrieve this app’s original installer content from Intune and save an encrypted backup on this PC. No local installer file is needed.</p>
+        <ol className="mt-4 max-w-prose list-decimal space-y-2 pl-5 text-sm text-gray-600">
+          <li>Use a PC enrolled in this tenant and an active Intune Administrator or Global Administrator account.</li>
+          <li>The app must be available to this device in the system context. If Intune refuses access, review Required targeting, including groups, exclusions and filters. Required assignments can install the app automatically; use a dedicated test-device group.</li>
+          <li>Start Backup and approve the Windows prompt. TenuVault retrieves and verifies the installer, then saves it encrypted.</li>
+        </ol>
+        {selected.installContext && selected.installContext !== "system" ? <p className="mt-4 text-sm text-gray-600">This preview supports system-context Win32 apps. This app uses another install context.</p> : <Button className="mt-5" disabled={busy || !onCapture} onClick={() => void onCapture?.(selected.id)}><HardDriveDownload className="mr-2 size-4" aria-hidden="true"/>{busy ? "Backing up…" : "Start backup"}</Button>}
+        <p className="mt-3 max-w-prose text-xs text-gray-600">Windows preview · Up to 2 GiB · Backup does not change assignments or install the app. Keep your recovery key from Settings to recover encrypted backups on another computer.</p>
+      </> : <p className="mt-3 max-w-prose text-sm text-gray-600">To back up this Win32 installer, open TenuVault on a Windows PC enrolled in this Intune tenant. You can browse apps and export existing backups on this computer. macOS installer capture is not available yet.</p>}
       {feedback}
-      <details className="mt-6 border-t pt-4">
-        <summary className="cursor-pointer rounded text-sm font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">Windows device information (optional)</summary>
-        <p className="mt-3 max-w-prose text-sm text-gray-600">A matching enrollment alone does not prove installer access or enable capture. No assignment change is needed for this check.</p>
+      {platform === "win32" && <details className="mt-6 border-t pt-4">
+        <summary className="cursor-pointer rounded text-sm font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">Check this PC’s enrollment</summary>
+        <p className="mt-3 max-w-prose text-sm text-gray-600">This optional check reads enrollment metadata. Intune checks installer access when Backup starts.</p>
         <div className="mt-4">{devicePanel}</div>
-      </details>
+      </details>}
       <Button className="mt-4" variant="outline" onClick={() => { const link = adminCenterLink("Apps", selected.id); if (link) void bridge.app.openExternal(link.url) }}>View app in Intune</Button>
     </section>
   return <>
@@ -114,7 +124,7 @@ export function IntuneAppsView({ tenant, devicePanel, busy, feedback, active = t
         </table>
       </div>
       {loading?<p role="status" className="p-8 text-sm text-muted-foreground">Loading your Intune apps…</p>:!visible.length&&<p className="p-8 text-sm text-muted-foreground">{fetchedAt?(search?"No apps match your search.":"No Win32 apps were returned for this tenant."):"Connect the tenant’s Microsoft session to view its current apps."}</p>}
-      <div className="flex flex-wrap items-center justify-between gap-3 p-6 text-xs text-muted-foreground"><p>App Backup is completely free. Installer capture is not available in this build.</p>{pages>1&&<div className="flex items-center gap-2"><Button variant="outline" size="sm" disabled={!currentPage||busy} onClick={()=>{setPage(currentPage-1);setSelected(null)}}><ChevronLeft className="size-4" aria-hidden="true"/><span className="sr-only">Previous page</span></Button><span>Page {currentPage+1} of {pages}</span><Button variant="outline" size="sm" disabled={currentPage>=pages-1||busy} onClick={()=>{setPage(currentPage+1);setSelected(null)}}><ChevronRight className="size-4" aria-hidden="true"/><span className="sr-only">Next page</span></Button></div>}</div>
+      <div className="flex flex-wrap items-center justify-between gap-3 p-6 text-xs text-muted-foreground"><p>App Backup is completely free. Windows capture requires an enrolled PC.</p>{pages>1&&<div className="flex items-center gap-2"><Button variant="outline" size="sm" disabled={!currentPage||busy} onClick={()=>{setPage(currentPage-1);setSelected(null)}}><ChevronLeft className="size-4" aria-hidden="true"/><span className="sr-only">Previous page</span></Button><span>Page {currentPage+1} of {pages}</span><Button variant="outline" size="sm" disabled={currentPage>=pages-1||busy} onClick={()=>{setPage(currentPage+1);setSelected(null)}}><ChevronRight className="size-4" aria-hidden="true"/><span className="sr-only">Next page</span></Button></div>}</div>
     </section>
     {active&&detailsApp&&<AppDetailsDialog key={`${tenant}/${detailsApp.id}`} tenant={tenant} app={detailsApp} onClose={()=>setDetailsApp(null)} returnFocus={()=>{if(focusBackupOnClose.current){focusBackupOnClose.current=false;requestAnimationFrame(()=>panel.current?.focus())}else if(detailsTrigger.current?.isConnected)detailsTrigger.current.focus()}} onBackup={app=>{focusBackupOnClose.current=true;setDetailsApp(null);backup(app)}}/>}
   </>

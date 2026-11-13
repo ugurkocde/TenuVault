@@ -64,6 +64,15 @@ describe("authenticated Intune content stream", () => {
   })
 })
 
+it("retains only a fingerprint of opaque service identifiers, with exact response binding", () => {
+  const opaque = "service-content-".repeat(15), fingerprint = `sha256:${createHash("sha256").update(opaque).digest("hex")}`
+  const expected = { ...identity, contentFileId: fingerprint }
+  expect(bindCapture(expected, expected).contentFileId).toBe(fingerprint)
+  expect(JSON.stringify(bindCapture(expected, expected))).not.toContain(opaque)
+  expect(() => bindCapture(expected, { ...expected, contentFileId: `sha256:${"0".repeat(64)}` })).toThrow("does not match")
+  expect(() => bindCapture(expected, { ...expected, contentFileId: opaque })).toThrow("Invalid")
+})
+
 describe("captured installer publication", () => {
   it("publishes authenticated content with its identity, survives reconnect and exports the payload exactly", async () => {
     const { folder, base, master, store } = await workspace(), plain = await zipFile(), { wire, profile } = encrypt(plain)

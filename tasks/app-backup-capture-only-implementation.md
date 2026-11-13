@@ -1,6 +1,6 @@
 # App Backup: capture-only implementation requirements
 
-Status: capture ingestion and the corrected UI are implemented locally; the production device adapters are not implemented. This is an internal implementation record, not a release announcement.
+Status: the Windows native helper, capture jobs and Backup action are implemented. A real app-driven PowerShell capture and native export passed on the enrolled mini PC. This is a Windows preview implementation record, not a general-release or macOS acceptance claim. See the current validation report for tested cases and outstanding release checks.
 
 ## Product contract
 
@@ -38,11 +38,11 @@ https://techcommunity.microsoft.com/blog/intunecustomersuccess/understanding-app
 - UI tests on Mac and Windows show only valid capture actions. Tests exercise the actual helper/adapter, not only mocked metadata.
 - Restore is unavailable until captured-artifact compatibility is demonstrated. No tenant writes are authorized by this requirements document.
 
-## Current execution blocker
+## Device availability
 
-The enrolled Windows mini PC is accessible through the previously authorized SSH connection. The T3 device-link tools remain unavailable, but they are not required for this Windows connection. Windows component and packaged-app tests are documented in [the mini PC validation report](app-backup-windows-validation-2026-11-13.md). Production end-to-end capture remains blocked by the missing helper and UI orchestration, not by device access. No enrolled Mac is available for macOS retrieval validation.
+The enrolled Windows mini PC is accessible through the previously authorized SSH connection. The T3 device-link tools remain unavailable, but they are not required for this Windows connection. Windows component and packaged-app tests are documented in [the mini PC validation report](app-backup-windows-validation-2026-11-13.md). The Windows helper and app orchestration now run on that PC with the existing delegated Microsoft session and explicit Windows consent. No enrolled Mac is available for macOS retrieval validation.
 
-## Implementation progress, 2026-11-13
+## Initial ingestion milestone, before the Windows helper
 
 - `content-stream.ts` validates ProfileVersion1 framing, HMAC-SHA256, AES-256-CBC padding, exact sizes and plaintext SHA-256. Transient plaintext goes only to the unpublished encrypting writer; no plaintext staging file is created.
 - `capture-download.ts` accepts content details only from an internal adapter, performs a bounded HTTPS download without Graph credentials or device certificates, rejects redirects and unsupported destinations, and streams into the encrypted store. It has no renderer IPC entry point and does not implement device authorization or CMS unwrap.
@@ -53,12 +53,24 @@ The enrolled Windows mini PC is accessible through the previously authorized SSH
 
 Read-only Lokka beta verification was repeated on 2026-11-13: macOS DMG/PKG filtered inventory returned a continuation, following it returned another page, and a deliberately invalid selected field returned HTTP 400. The inspected DMG content file was committed, with a manifest but no download URI or returned encryption information. This does not establish that an enrolled Mac cannot retrieve it. The inspected manifest contains app/bundle detection arguments, with no encryption key or download URL. A Windows Win32 read also confirmed the committed-content-version field and committed file identity used by the new capture contract. No tenant changes or installer retrieval were performed.
 
-Remaining: authenticated/signed Windows helper, current requester authorization, trustworthy helper content identity, CMS unwrap, production endpoint discovery, release controls, full restore metadata/packaging, a proven macOS adapter, and real-device end-to-end evidence. Synthetic encrypted fixtures verify the ingestion implementation only.
+At that initial milestone the helper, capture orchestration, release controls, restore and macOS adapter remained outstanding. The following Windows implementation supersedes the helper and orchestration blockers; synthetic fixtures alone are still not live-device evidence.
 
 Local validation: 5,244 tests passed, with two existing skips across 365 test files. Typecheck passed; lint reports the same four pre-existing warnings. The production app and docs builds passed, including all internal documentation links. The final renderer cleanup was also checked separately (13 tests passed). No live device capture, macOS installer retrieval or restore was performed by this implementation.
 
 The built Electron desktop smoke suite passed under Xvfb, including free access during a license-status failure, no attachment method in the preload bridge, offline catalog access and minimum-window layout. This is Linux UI evidence, not Windows/macOS device capture evidence.
 
-## Windows mini PC validation, 2026-11-13
+## Earlier Windows component validation, 2026-11-13
 
 All 200 focused App Backup tests and the packaged desktop smoke suite passed on Windows. Public enrollment metadata matched under a limited user; private-key use was refused under that token. PowerShell and Git payloads were retrieved through the temporary lab adapter, then passed through the unchanged production ingestion/store/export modules with independent hash equality and live cancellation checks. These are component tests, not successful app-driven captures: the helper and capture action are absent, and the lab-supplied Graph file identity is not yet established by a production adapter. See the [complete results and acceptance blockers](app-backup-windows-validation-2026-11-13.md).
+
+## Windows helper and app capture
+
+The app now starts a compiled, single-request helper through trusted IPC. The ordinary desktop process stays non-elevated. The helper checks the actual parent and local named-pipe peer, obtains explicit Windows consent, authenticates the fresh delegated session through Graph beta, and requires an active Intune Administrator or Global Administrator role. Certificate selection binds the enrollment to the selected tenant and Intune account. The helper does not write or download installer bytes.
+
+The normal main process downloads and authenticates the returned content, encrypts it while streaming and publishes only after complete verification. The device response must match the live app/version and committed payload size. Its opaque content identifier is retained only as a SHA-256 fingerprint; it is not claimed to equal the Graph file GUID. Cancellation and parent death stop abandoned helper work; encrypted staging and export journals reconcile on restart.
+
+The renderer exposes Start backup on Windows for system-context Win32 apps, with inline progress and cancellation. Existing Microsoft sign-in is reused and no license gate is called. There is no file-picker fallback for Backup. Other platforms explain the enrolled-Windows requirement.
+
+Release builds enforce matching valid app/helper Authenticode publishers. Development/PR packages are unsigned. A signed release-pair test, broader EDR coverage and the remaining rollout controls are separate acceptance items. Restore, custom Intune RBAC roles, user-context capture and macOS retrieval remain unavailable.
+
+Current evidence is in [Windows validation](app-backup-windows-validation-2026-11-13.md). Earlier lab-adapter results above remain historical component evidence and are not relabelled as app captures.

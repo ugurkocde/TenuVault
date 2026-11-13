@@ -1,5 +1,13 @@
 # App Backup: application, UI, and UX integration
 
+## Revision 14: implement and test the Windows capture helper
+
+On 2026-11-13, Ugur explicitly requested implementing the helper and capture action and testing the full backup flow on the Windows mini PC. This supersedes revision 8's restriction to foundations. This PR implements a free Windows preview, not a macOS adapter or restore. The actual flow is app selection, a fresh delegated Microsoft session, temporary Windows elevation, device-authorized content retrieval, authenticated streaming into the encrypted store, publication and export. No local-file backup action, assignment write or automatic installation is introduced.
+
+The initial requester policy is restricted to an active Entra Intune Administrator or Global Administrator role, with a freshly refreshed Graph token and delegated app-write scope. Graph must authenticate the exact token before its tenant, requester and role claims authorize private-key use. Custom scoped Intune roles are deferred. Native peer PID checks, a local first-instance pipe with a user/SYSTEM ACL, a random single-use challenge and strict request lifetime replace the unused standalone signed-ticket fixture as the implemented transport contract. Release builds require valid matching app/helper Authenticode publishers. Unsigned development/PR builds remain explicitly preview test artifacts.
+
+The service content identifier is retained as `contentFileId` in the capture receipt and contains a `sha256:` fingerprint of the opaque `DoFileId`, not a Graph content-file ID. The helper checks the current Graph app/version and committed payload size, then requires the content service to return the same app/version. This is a live-app capture binding, not historical metadata-backup equivalence. Restore remains unavailable. The earlier legal/terms, signed remote kill-switch and broader endpoint/EDR release-review items are not claimed completed by this implementation or by a successful lab run.
+
 ## Revision 13: capture-only product scope
 
 Ugur clarified that the sole purpose of App Backup is retrieving installers from Intune, for Windows and macOS. Manual selection of an installer from the administrator's filesystem does not belong in Backup and does not satisfy this feature. This supersedes the manual-attachment product scope in revisions 8–12. Restore must use artifacts captured by an earlier successful backup; arbitrary local packages are not an alternative source of restore eligibility. The current nightly's app browser and local archive are foundations, not a completed App Backup workflow.

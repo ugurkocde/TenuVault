@@ -1,4 +1,4 @@
-import type { CaptureIdentity, CapturedAppSource } from "../../shared/app-sources/types"
+import type { AppCaptureProgress, CaptureIdentity, CapturedAppSource } from "../../shared/app-sources/types"
 import type { AppSourceStore } from "../app-sources/store"
 import { bindCapture } from "./capture-identity"
 import { MAX_CAPTURE_BYTES, type ContentEncryption } from "./content-stream"
@@ -12,7 +12,7 @@ export interface DeviceContent {
 }
 
 /** Final download/store stage. Device authorization and CMS unwrap happen upstream. */
-export async function downloadCapturedContent(store: AppSourceStore, expected: CaptureIdentity, content: DeviceContent, appName: string, options: { signal?: AbortSignal; fetch?: typeof fetch } = {}): Promise<CapturedAppSource> {
+export async function downloadCapturedContent(store: AppSourceStore, expected: CaptureIdentity, content: DeviceContent, appName: string, options: { signal?: AbortSignal; fetch?: typeof fetch; progress?: (value: AppCaptureProgress) => void } = {}): Promise<CapturedAppSource> {
   const identity = bindCapture(expected, content.identity), bytes = content.bytes, encryption = { ...content.encryption }
   const target = new URL(content.downloadUrl)
   if (target.protocol !== "https:" || !/(^|\.)manage\.microsoft\.com$/.test(target.hostname) || target.username || target.password || target.port || target.hash) throw new Error("The device returned an unsupported content download address.")
@@ -41,16 +41,21 @@ export async function downloadCapturedContent(store: AppSourceStore, expected: C
     }
     reader = response.body?.getReader()
     if (!reader) throw new Error("The installer download returned no content.")
+    let receivedBytes = 0, lastReport = 0
+    options.progress?.({ phase: "downloading", receivedBytes, totalBytes: expectedEncryptedBytes })
     async function* chunks() {
       for (;;) {
         signal.throwIfAborted()
         let part: ReadableStreamReadResult<Uint8Array>
         try { part = await reader!.read() } catch { signal.throwIfAborted(); throw new Error("The installer download was interrupted. Retry the capture.") }
         if (part.done) break
+        receivedBytes += part.value.byteLength
+        if (Date.now() - lastReport > 200) { options.progress?.({ phase: "downloading", receivedBytes, totalBytes: expectedEncryptedBytes }); lastReport = Date.now() }
         yield part.value
       }
+      options.progress?.({ phase: "verifying", receivedBytes, totalBytes: expectedEncryptedBytes })
     }
-    return await store.capture(identity, identity, chunks(), encryption, bytes, appName, signal)
+    return await store.capture(identity, identity, chunks(), encryption, bytes, appName.slice(0, 200), signal)
   } finally {
     controller.abort()
     try { await reader?.cancel() } catch { /* Transport already closed. */ }

@@ -9,19 +9,22 @@ import { IntuneAppsView } from "../../src/renderer/features/app-backup/IntuneApp
 HTMLElement.prototype.scrollIntoView = vi.fn()
 let root: Root
 afterEach(() => { act(() => root?.unmount()); document.body.innerHTML = ""; vi.clearAllMocks() })
-it("starts from the actual app list and explains preparation without enabling capture or changing assignments", async () => {
+it("starts from the connected app list and offers a real capture without changing assignments", async () => {
   api.apps.mockResolvedValue({ apps: [{ id: "11111111-1111-1111-1111-111111111111", name: "Finance", publisher: "Contoso" }], fetchedAt: new Date().toISOString() })
+  const capture = vi.fn(async () => true)
   const node = document.createElement("div"); document.body.append(node); root = createRoot(node)
-  await act(async () => root.render(createElement(MemoryRouter, null, createElement(IntuneAppsView, { tenant: "tenant", busy: false, devicePanel: createElement("div", null, "Check this PC") }))))
+  await act(async () => root.render(createElement(MemoryRouter, null, createElement(IntuneAppsView, { tenant: "tenant", busy: false, platform: "win32", onCapture: capture, devicePanel: createElement("div", null, "Check this PC") }))))
   expect(node.textContent).toContain("Finance")
   const button = [...node.querySelectorAll("button")].find(b => b.textContent?.startsWith("Backup"))!
   await act(async () => button.click())
-  expect(node.textContent).toContain("App Backup retrieves installer content from Intune")
+  expect(node.textContent).toContain("original installer content from Intune")
   expect(node.textContent).toContain("No local installer file is needed")
   const future = node.querySelector("details")!
   expect(future.open).toBe(false)
   expect(future.closest("tr")?.previousElementSibling?.textContent).toContain("Finance")
-  expect(node.textContent).toContain("Changing assignments or installing this app will not enable capture")
+  expect(node.textContent).toContain("Backup does not change assignments or install the app")
+  await act(async () => [...node.querySelectorAll("button")].find(b => b.textContent?.includes("Start backup"))!.click())
+  expect(capture).toHaveBeenCalledExactlyOnceWith("11111111-1111-1111-1111-111111111111")
   expect(node.querySelector("section[aria-label^='Backup'] button")?.textContent).toBe("Close")
   expect([...node.querySelectorAll("button")].find(b => b.textContent === "Choose installer file")).toBeUndefined()
   expect(api.signIn).not.toHaveBeenCalled()
@@ -65,4 +68,14 @@ it("closes a details portal when the cached apps view becomes inactive", async (
  expect(document.querySelector('[role="dialog"]')).toBeNull()
  await act(async()=>root.render(createElement(MemoryRouter,null,createElement(IntuneAppsView,{...props,active:true}))))
  expect(document.querySelector('[role="dialog"]')).toBeNull()
+})
+
+it("does not offer Win32 capture on a Mac and points to an enrolled Windows PC", async () => {
+ api.apps.mockResolvedValue({apps:[{id:"app",name:"Finance",publisher:"Contoso"}],fetchedAt:new Date().toISOString()})
+ const capture=vi.fn(async()=>true),node=document.createElement("div");document.body.append(node);root=createRoot(node)
+ await act(async()=>root.render(createElement(MemoryRouter,null,createElement(IntuneAppsView,{tenant:"tenant",busy:false,platform:"darwin",onCapture:capture,devicePanel:null}))))
+ await act(async()=>[...node.querySelectorAll("button")].find(b=>b.textContent?.startsWith("Backup"))!.click())
+ expect(node.textContent).toContain("Windows PC enrolled in this Intune tenant")
+ expect([...node.querySelectorAll("button")].some(b=>b.textContent?.includes("Start backup"))).toBe(false)
+ expect(capture).not.toHaveBeenCalled()
 })

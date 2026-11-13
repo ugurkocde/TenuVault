@@ -897,14 +897,14 @@ await check("several tenants get the overview, switcher and schedule tab", async
   await screenshot("09-schedule-cloud")
 })
 
-await check("App Backup keeps local stored access independent of sign-in and presents recovery as unavailable", async () => {
+await check("App Backup keeps stored access independent of sign-in and exposes guarded capture", async () => {
   await go("#/portal/app-backup", "Installer backups from Intune")
   await assertPageInMain("Your Win32 apps in Intune", "App Backup")
   await go("#/portal/app-backup/versions", "Installer backups")
   await assertPageInMain("Completely free for every configured tenant", "free App Backup")
   assert(!(await evaluate(`document.body.innerText.includes("Choose your Community tenant") || document.body.innerText.includes("Try Pro free with no card or email")`)), "App Backup displayed license-selection or upgrade prompts")
   assert(await waitForText("No Intune backups yet"), "backup catalog did not load for signed-out configured tenant")
-  assert(await evaluate(`typeof window.tenuvault.appSources.list === "function" && typeof window.tenuvault.appSources.export === "function" && typeof window.tenuvault.appSources.signIn === "function"`), "source IPC namespace missing")
+  assert(await evaluate(`typeof window.tenuvault.appSources.list === "function" && typeof window.tenuvault.appSources.export === "function" && typeof window.tenuvault.appSources.signIn === "function" && typeof window.tenuvault.appSources.capture === "function" && typeof window.tenuvault.appSources.captureProgress === "function"`), "source IPC namespace missing")
   assert(await evaluate(`typeof window.tenuvault.appSources.attach === "undefined" && !document.querySelector('main').innerText.includes("Choose installer file")`), "manual attachment is still exposed as backup")
   assert(await evaluate(`!document.querySelector('main').innerText.includes("Ready to recover")`), "recovery availability is misleading")
   assert(!(await evaluate(`document.querySelector('main').innerText.includes("An active license is required for backup and restore operations")`)), "stored sources are behind the backup license notice")

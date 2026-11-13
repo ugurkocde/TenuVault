@@ -162,6 +162,10 @@ jobs:
           npx electron-vite build
           npx electron-builder --config electron-builder.config.cjs ${{ matrix.target }} --publish never
 
+      - name: Test Windows capture helper
+        if: runner.os == 'Windows'
+        run: node scripts/test-app-backup-helper.mjs
+
       - name: Verify packaged security fuses
         run: node scripts/check-fuses.cjs "${{ matrix.app }}"
 

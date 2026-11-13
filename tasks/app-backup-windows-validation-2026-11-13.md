@@ -1,6 +1,24 @@
 # Windows App Backup validation, 2026-11-13
 
-**Product acceptance: blocked.** The current app cannot start an Intune installer capture. The Windows tests below validate the packaged UI, enrollment checks and capture-ingestion components; they do not establish a working user-facing backup or restore.
+## Current app-driven capture validation
+
+The Windows helper and Backup action are now implemented. A normal desktop session on the enrolled mini PC completed PowerShell capture through the real compiled helper after the administrator signed in and approved Windows consent. The app verified and stored a 123,779,448-byte payload. Native export produced the same SHA-256 as the independent earlier lab capture: `aab979dcb289d34da2b50328b67613a896ffac542154946b158e71a6f14df3da`.
+
+The packaged app reopened that backup after restart with no catalog warnings. The selected Git fixture is user-context and was refused by the preview UI before helper launch. A 7-Zip attempt ended with Windows approval cancelled and left no new catalog item. A second successful packaged capture, live HTTP 403 and cancellation after download begins remain pending.
+
+Local validation: 5,254 tests passed, two existing skips, 366 files; typecheck and app build passed; lint has four existing warnings. On the mini PC, 210 focused tests across 14 files and 15 compiled native helper checks passed. The native checks include token age/skew/tenant/scope refusals, bounded framing, first-instance pipe refusal and unsigned-image rejection.
+
+The app’s actual delegated session passed live Graph beta authorization in the helper. Lokka beta checks remain app-only and supplement this evidence with endpoint, field, paging and error verification. No tenant assignments or installed applications were changed.
+
+Release limits: this is an unsigned PR package. A signed app/helper pair, broader endpoint-protection coverage, a non-admin Microsoft requester refusal, user-context capture, macOS retrieval and restore are not established by these tests. Earlier laboratory results below are preserved as historical component evidence.
+
+Machine-readable results: [app-flow evidence](app-backup-evidence/windows-app-flow-2026-11-13.json). The screenshot shows the real retained PowerShell capture in the packaged app; only the tenant label and source identifier were redacted.
+
+![Captured PowerShell in the packaged app](app-backup-evidence/windows-app-flow-2026-11-13/packaged-captured-powershell.png)
+
+## Historical component validation at 72f0ad5
+
+**Acceptance at that earlier commit: blocked.** That app could not start an Intune installer capture. The Windows tests below validate the packaged UI, enrollment checks and capture-ingestion components; they do not establish a working user-facing backup or restore.
 
 Tested commit: `72f0ad5143a49f443b540923f64d9552aff13c49`, PR #352. The tests ran on the enrolled Windows mini PC over the existing authorized SSH connection. Windows build 26200, Node 26.7.0, and the Intune Management Extension were present. The installed app was older, so testing used an isolated checkout and the exact x64 package from [CI run 43392091957](https://github.com/ugurkocde/TenuVault/actions/runs/43392091957), without replacing the installed app or its profile.
 
@@ -36,7 +54,7 @@ For each payload, exact-byte export, retained-key reads after rotation, wrong-ke
 
 Read-only Lokka Microsoft `/beta` calls confirmed both app records and their committed file IDs/sizes. A paged Win32 listing and its continuation succeeded. An unqualified subtype property in `$select` returned 400; the qualified property succeeded. These checks used Lokka's app-only connection. No existing Microsoft session was established in the isolated app profile, so delegated product authentication was not validated.
 
-## Remaining acceptance blockers
+## Acceptance blockers at that earlier commit
 
 1. Implement the production Windows helper and authenticated main/helper channel, including requester authorization and trustworthy app/version/file binding.
 2. Add capture jobs, cancellation and crash recovery across the real helper boundary, and connect the Backup action to those jobs.

@@ -40,7 +40,7 @@ module.exports = {
     output: "dist",
     buildResources: "build",
   },
-  files: ["out/**/*", "package.json", "resources/tray*.png"],
+  files: ["out/**/*", "!out/helper/**/*", "package.json", "resources/tray*.png"],
   extraResources: [
     { from: "resources/framework-NOTICES.txt", to: "framework-NOTICES.txt" },
     { from: "resources/licenses", to: "licenses" },
@@ -51,6 +51,7 @@ module.exports = {
   artifactName: "${productName}-${version}-${os}-${arch}.${ext}",
 
   win: {
+    extraResources: [{ from: "out/helper/TenuVault.Capture.exe", to: "app-backup/TenuVault.Capture.exe" }],
     target: [
       { target: "nsis", arch: ["x64", "arm64"] },
       // MSI for deployment through Intune or Configuration Manager.
