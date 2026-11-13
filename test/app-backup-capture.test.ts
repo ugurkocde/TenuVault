@@ -35,7 +35,7 @@ describe("authenticated Intune content stream", () => {
   it.each([1, 15, 16, 17, 31, 48, 49, 997, 2 * 1024 * 1024])("handles header/cipher boundaries with %i-byte reads", async chunk => {
     const plain = randomBytes(chunk === 1 ? 128 : 129031), { wire, profile } = encrypt(plain), written: Buffer[] = []
     const result = await ingestContent(stream(wire, chunk), profile, plain.length, async part => { expect(part.length).toBeLessThanOrEqual(65536); written.push(Buffer.from(part)) })
-    expect(Buffer.concat(written)).toEqual(plain)
+    expect(Buffer.concat(written).equals(plain)).toBe(true)
     expect(result).toEqual({ bytes: plain.length, encryptedBytes: wire.length, sha256: createHash("sha256").update(plain).digest("hex"), encryptedSha256: createHash("sha256").update(wire).digest("hex") })
   })
   it.each(["mac", "iv", "ciphertext", "digest", "key", "short-header", "truncated", "extra", "size", "algorithm", "base64"])("rejects %s without returning a receipt", async mode => {
@@ -82,7 +82,8 @@ describe("captured installer publication", () => {
     expect((await reconnect.list(tenant)).sources).toEqual([item])
     expect(await reconnect.capturedSource(tenant, item.id)).toEqual(item)
     await reconnect.export(tenant, item.id, join(folder, "sources.zip"))
-    expect(await readFile(join(folder, "sources.zip"))).toEqual(plain)
+    // Compare every byte without the object matcher's costly per-index traversal.
+    expect((await readFile(join(folder, "sources.zip"))).equals(plain)).toBe(true)
     const artifact = await readFile(join(base, tenant, item.id, "artifact.tvs"))
     expect(artifact.includes(plain.subarray(0, 100))).toBe(false)
     const serialized = JSON.stringify(item)
@@ -148,7 +149,7 @@ describe("captured installer publication", () => {
     if (published) {
       const item = (await store.list(tenant)).sources[0]!
       await store.export(tenant, item.id, join(folder, "result.zip"))
-      expect(await readFile(join(folder, "result.zip"))).toEqual(plain)
+      expect((await readFile(join(folder, "result.zip"))).equals(plain)).toBe(true)
     }
   }, 20000)
 })
