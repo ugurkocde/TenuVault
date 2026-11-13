@@ -223,6 +223,10 @@ const STATE_KEY = "license.state"
 // beside the state so a restart cannot make the retained token usable again.
 const REMOVED_TENANTS_KEY = "license.removedTenants"
 const INSTALL_ID_KEY = "license.installId"
+// The trial service counts tenant trials per installation ID. Its install_limit refusal is kept
+// here with that ID, apart from the tenant records that a tenant removal or deactivation drops,
+// so the app stops offering trials on this installation until the installation ID changes.
+const TRIAL_INSTALL_LIMIT_KEY = "license.tenantTrialInstallLimit"
 // Left behind by the offline TV1 license keys this service replaced.
 const LEGACY_KEYS = ["license.key", "license.trialStartedAt", "license.lastSeenAt", "license.tenants"]
 
@@ -335,6 +339,8 @@ export class LicenseService {
   private readonly tenantMutations = new Map<string, Promise<void>>()
   private readonly removedTenants = new Map<string, object>()
   private installId = ""
+  // Set by an install_limit refusal in this session; the stored marker carries it across restarts.
+  private trialInstallLimit = false
   private loaded = false
   private savedSeen = 0
   private message: string | null = null
@@ -596,6 +602,10 @@ export class LicenseService {
     } catch (error) {
       if (error instanceof LicenseDenied) {
         this.trialRecords[tenant] = { ...this.trialRecords[tenant], stopped: ["used", "licensed", "install_limit"].includes(error.reason), refusal: error.message, refusalReason: error.reason, refusalAt: Date.now(), refusalVersion: this.options.appVersion }
+        if (error.reason === "install_limit") {
+          this.trialInstallLimit = true
+          if (this.options.persist) this.options.store.set(TRIAL_INSTALL_LIMIT_KEY, this.installId)
+        }
         if (["disabled", "app_update_required", "unknown_action"].includes(error.reason)) {
           this.trialsEnabled = false
           this.healthCheckedAt = 0
@@ -2049,7 +2059,8 @@ export class LicenseService {
     return {
       tenantTrialPolicy: this.trialPolicy,
       tenantTrialsEnabled: this.trialsEnabled,
-      tenantTrialInstallLimit: Object.values(this.trialRecords).some(record => record.refusalReason === "install_limit"),
+      tenantTrialInstallLimit: this.trialInstallLimit || this.options.store.get(TRIAL_INSTALL_LIMIT_KEY) === this.installId ||
+        Object.values(this.trialRecords).some(record => record.refusalReason === "install_limit"),
       hasKey: Boolean(key),
       keyState,
       keyMessage,

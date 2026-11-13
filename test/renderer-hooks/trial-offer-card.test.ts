@@ -44,21 +44,21 @@ beforeEach(() => {
 })
 afterEach(() => { act(() => root.unmount()); container.remove() })
 
-async function render() { await act(async () => root.render(createElement(TrialOfferCard, { tenantId: id }))) }
+async function render(tenantId = id) { await act(async () => root.render(createElement(TrialOfferCard, { tenantId }))) }
 async function remount() { act(() => root.unmount()); root = createRoot(container); await render() }
 async function click(text: string) {
   const button = [...container.querySelectorAll("button")].find(b => b.textContent === text)
   expect(button).toBeTruthy()
   await act(async () => button!.click())
 }
-const title = "Try Pro free for 14 days on this tenant"
+const title = "Try Pro free for up to 14 days on this tenant"
 
 describe("dashboard trial card", () => {
   it("offers the trial to an eligible Community tenant with neutral copy", async () => {
     await render()
     expect(container.textContent).toContain(title)
     expect(container.textContent).toContain("Pro adds daily backups, full restore, replace in place, drift revert, Azure storage, the audit log and white-label PDF reports.")
-    expect(container.textContent).toContain("Nothing in Community changes. After 14 days this tenant goes back to Community unless you add a license.")
+    expect(container.textContent).toContain("Nothing in Community changes. When the trial ends, this tenant continues on Community Free unless another tenant uses Community by then, in which case it needs a license; backups and settings are kept.")
     expect([...container.querySelectorAll("button")].map(b => b.textContent)).toEqual(["Start free trial", "Not now"])
   })
 
@@ -136,6 +136,57 @@ describe("dashboard trial card", () => {
     expect(container.textContent).toContain(title)
     expect(state.set).not.toHaveBeenCalled()
     expect([...container.querySelectorAll("button")].find(b => b.textContent === "Start free trial")?.disabled).toBe(false)
+  })
+
+  describe("with a tenant switch while a start runs", () => {
+    const second = "66666666-7777-4888-9999-000000000000"
+    let finish: (error?: Error) => void = () => {}
+    beforeEach(() => {
+      state.status!.tenants.push({ ...tenant, tenantId: second })
+      state.start.mockImplementationOnce(() => new Promise<void>((resolve, reject) => { finish = error => error ? reject(error) : resolve() }))
+    })
+
+    it("drops a late error for the tenant that is no longer shown", async () => {
+      state.read.mockResolvedValueOnce(state.status)
+      await render()
+      await click("Start free trial")
+      await render(second)
+      // The other tenant's card shows no progress of its own and cannot start a second request.
+      const button = [...container.querySelectorAll("button")].find(b => b.textContent === "Start free trial")
+      expect(button?.disabled).toBe(true)
+      await act(async () => finish(new Error("The licensing service could not be reached.")))
+      expect(container.querySelector('[role="alert"]')).toBeNull()
+      expect(container.textContent).toContain(title)
+      await render()
+      expect(container.querySelector('[role="alert"]')).toBeNull()
+    })
+
+    it("hides a refused tenant without showing its refusal on another tenant", async () => {
+      const refusal = "This tenant already had a Pro trial."
+      state.read.mockResolvedValueOnce({ ...state.status, tenants: [{ ...tenant, trialRefusal: refusal }, { ...tenant, tenantId: second }] })
+      await render()
+      await click("Start free trial")
+      await render(second)
+      await act(async () => finish(new Error(refusal)))
+      expect(container.textContent).not.toContain(refusal)
+      expect(container.textContent).toContain(title)
+      expect(state.saved.trialOfferHiddenTenantIds).toEqual([id])
+      await render()
+      expect(container.textContent).toBe("")
+    })
+
+    it("clears a refusal notice when another tenant is selected", async () => {
+      const refusal = "This tenant already had a Pro trial."
+      state.read.mockResolvedValueOnce({ ...state.status, tenants: [{ ...tenant, trialRefusal: refusal }] })
+      await render()
+      await click("Start free trial")
+      await act(async () => finish(new Error(refusal)))
+      expect(container.textContent).toContain(refusal)
+      await render(second)
+      expect(container.textContent).not.toContain(refusal)
+      await render()
+      expect(container.textContent).toBe("")
+    })
   })
 
   it("starts once for two quick clicks", async () => {

@@ -175,7 +175,7 @@ try {
     await setTheme(theme)
     await evaluate(`location.hash = "#/portal/dashboard"; location.reload()`)
     await sleep(1500)
-    await assertText("Try Pro free for 14 days on this tenant", 30000)
+    await assertText("Try Pro free for up to 14 days on this tenant", 30000)
     await disableAnimations()
     await sleep(1000)
     await screenshot(`trial-card-${theme}`)

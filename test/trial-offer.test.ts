@@ -1,9 +1,11 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { Preferences } from "../src/main/preferences"
 import { ORGANIZATION_LICENSE_MESSAGE, TRIAL_USED_MESSAGE } from "../src/shared/constants"
 import type { LicenseStatus, TenantLicenseStatus } from "../src/shared/ipc"
 import { trialOfferEligible, trialOfferRefusal } from "../src/renderer/lib/trial-offer"
 import { memoryStore } from "./helpers"
+
+vi.mock("../src/renderer/lib/bridge", () => ({ bridge: {} }))
 
 const id = "11111111-2222-4333-8444-555555555555"
 const other = "66666666-7777-4888-9999-000000000000"
@@ -41,6 +43,8 @@ describe("trial card eligibility", () => {
     ["a refusal by the trial service", status(community({ trialRefusal: "This tenant already had a Pro trial." }))],
     ["an organization license this sign-in cannot use", status(community({ trialRefusal: ORGANIZATION_LICENSE_MESSAGE }))],
     ["a trial used on another installation", status(community({ message: TRIAL_USED_MESSAGE }))],
+    ["a tenant whose Community choice is pending", status(community(), { communityChoicePendingTenantIds: [id] })],
+    ["an unanswered Community picker", status(community(), { communityChoicePendingTenantIds: [id, other] })],
   ])("is not shown for %s", (_case, value) => {
     expect(trialOfferEligible(value, id, [])).toBe(false)
   })
