@@ -19,6 +19,7 @@ import {
   setupHandoffText,
 } from "../../shared/app-registration"
 import { bridge } from "../lib/bridge"
+import { SetupDiagnosticsReminder } from "./SetupDiagnostics"
 
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const DOMAIN = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i
@@ -455,6 +456,7 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
           </AlertDescription>
         </Alert>
       )}
+      {errors.form && <SetupDiagnosticsReminder step="signin" />}
       <Button onClick={() => void submit()} disabled={busy || !tenant || !clientId} className="w-full bg-blue-600 hover:bg-blue-700">
         {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <KeyRound className="mr-2 h-4 w-4" />}
         {busy ? "Waiting for sign-in..." : submitLabel}

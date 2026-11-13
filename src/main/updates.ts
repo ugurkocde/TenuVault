@@ -11,24 +11,34 @@ const { autoUpdater } = electronUpdater
 const CHECK_EVERY_MS = 6 * 60 * 60 * 1000
 
 /**
- * True when an administrator disabled automatic updates for managed deployments:
- *   Windows: DWORD DisableAutoUpdate = 1 under HKLM or HKCU\SOFTWARE\Policies\TenuVault
- *   macOS:   managed preference DisableAutoUpdate = true for com.tenuvault.desktop
+ * True when an administrator set a TenuVault policy for managed deployments:
+ *   Windows: DWORD <name> = 1 under HKLM or HKCU\SOFTWARE\Policies\TenuVault
+ *   macOS:   managed preference <name> = true for com.tenuvault.desktop
  */
-export async function updatesDisabledByPolicy(): Promise<boolean> {
-  if (process.platform === "darwin") return systemPreferences.getUserDefault("DisableAutoUpdate", "boolean") === true
+export async function policyEnabled(name: "DisableAutoUpdate" | "DisableSetupDiagnostics"): Promise<boolean> {
+  if (process.platform === "darwin") return systemPreferences.getUserDefault(name, "boolean") === true
   if (process.platform !== "win32") return false
   // By absolute path, so a reg.exe earlier on PATH or in the working directory is never run.
   const reg = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "reg.exe")
   for (const hive of ["HKLM", "HKCU"]) {
     try {
-      const { stdout } = await promisify(execFile)(reg, ["query", `${hive}\\SOFTWARE\\Policies\\TenuVault`, "/v", "DisableAutoUpdate"])
-      if (/DisableAutoUpdate\s+REG_DWORD\s+0x0*1\b/i.test(stdout)) return true
+      const { stdout } = await promisify(execFile)(reg, ["query", `${hive}\\SOFTWARE\\Policies\\TenuVault`, "/v", name])
+      if (new RegExp(`${name}\\s+REG_DWORD\\s+0x0*1\\b`, "i").test(stdout)) return true
     } catch {
       // Key or value not present.
     }
   }
   return false
+}
+
+/** True when an administrator disabled automatic updates (DisableAutoUpdate) for managed deployments. */
+export function updatesDisabledByPolicy(): Promise<boolean> {
+  return policyEnabled("DisableAutoUpdate")
+}
+
+/** True when an administrator turned setup diagnostics off (DisableSetupDiagnostics): nothing is asked or sent. */
+export function setupDiagnosticsDisabledByPolicy(): Promise<boolean> {
+  return policyEnabled("DisableSetupDiagnostics")
 }
 
 /**

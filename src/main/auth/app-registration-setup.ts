@@ -5,6 +5,7 @@ import { isGuid, isMicrosoftLoginUrl } from "../../shared/security"
 import { CONSENT_ROLES_TEXT, CREATE_BY_HAND } from "../../shared/app-registration"
 import { provisionRegistration } from "./registration-provisioning"
 import type { RegistrationResult, SetupProgress } from "../../shared/ipc"
+import { diagnosticCode, signInResult, type SetupEventInput } from "../setup-diagnostics/events"
 
 /**
  * Microsoft's refusals of the setup sign-in, in words that fit this step: the account declined
@@ -56,6 +57,24 @@ const SHARED_SIGN_IN_CODES = new Set(["AADSTS90002", "AADSTS900023", "AADSTS5002
 /** How long the setup waits for the sign-in in the browser. Microsoft's own error pages never come back to the app. */
 export const SETUP_SIGN_IN_TIMEOUT_MS = 15 * 60_000
 
+/** The setup sign-in in the browser did not come back in time. */
+export class SignInTimeoutError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "SignInTimeoutError"
+  }
+}
+
+/** How the provisioning ended, as the `registration` setup diagnostics event reports it. */
+export function registrationEvent(outcome: { result: RegistrationResult } | { error: unknown; phase: SetupProgress["phase"]; cancelled: boolean }): SetupEventInput {
+  if ("result" in outcome) {
+    const { result } = outcome
+    return { name: "registration", props: { result: result.missingConsent.length ? "missing_consent" : !result.ready ? "not_ready" : result.reused ? "reused" : "created" } }
+  }
+  if (outcome.cancelled) return { name: "registration", props: { result: "cancelled", phase: outcome.phase } }
+  return { name: "registration", props: { result: "failed", phase: outcome.phase, code: diagnosticCode(outcome.error) } }
+}
+
 export class AppRegistrationSetup {
   private cancelWaiting?: () => void
   private controller?: AbortController
@@ -64,6 +83,8 @@ export class AppRegistrationSetup {
     fetch: typeof fetch
     openBrowser: (url: string) => Promise<void>
     progress: (progress: SetupProgress) => void
+    /** How the setup sign-in and the provisioning ended, for setup diagnostics. */
+    report?: (event: SetupEventInput) => void
   }) {}
 
   cancel(): void { this.controller?.abort(); this.cancelWaiting?.() }
@@ -87,7 +108,7 @@ export class AppRegistrationSetup {
     })
     // When Microsoft shows an error page of its own (admin approval needed, a blocked app,
     // Conditional Access), nothing returns to the app. Stop waiting after a while and say so.
-    const deadline = setTimeout(() => abandon(new Error(`The sign-in in the browser was not completed within 15 minutes. If Microsoft said that you need admin approval, use "Someone else is the admin?". If it said that Microsoft Graph Command Line Tools is blocked, disabled or not assigned to you, or a Conditional Access policy blocks it, the setup script is blocked too: ${CREATE_BY_HAND} in the Entra admin center. Nothing was changed.`)), SETUP_SIGN_IN_TIMEOUT_MS)
+    const deadline = setTimeout(() => abandon(new SignInTimeoutError(`The sign-in in the browser was not completed within 15 minutes. If Microsoft said that you need admin approval, use "Someone else is the admin?". If it said that Microsoft Graph Command Line Tools is blocked, disabled or not assigned to you, or a Conditional Access policy blocks it, the setup script is blocked too: ${CREATE_BY_HAND} in the Entra admin center. Nothing was changed.`)), SETUP_SIGN_IN_TIMEOUT_MS)
     try {
       this.host.progress({ phase: "signingIn" })
       const interactive = app.acquireTokenInteractive({
@@ -103,15 +124,31 @@ export class AppRegistrationSetup {
       })
       // A late browser answer after cancellation is never used and its memory cache is cleared.
       void interactive.finally(() => { if (cancelled) app.clearCache() }).catch(() => undefined)
-      const result = await Promise.race([interactive, cancellation]).catch(error => { throw setupSignInError(error) })
+      const result = await Promise.race([interactive, cancellation]).catch(error => {
+        const result = signInResult(error)
+        this.host.report?.({ name: "setup_signin", props: { result, ...(result === "failed" ? { code: diagnosticCode(error) } : {}) } })
+        throw setupSignInError(error)
+      })
       clearTimeout(deadline)
       this.cancelWaiting = undefined
-      if (!result.account?.tenantId || !result.account.username || !result.accessToken) throw new Error("Microsoft did not return the tenant, user name and access token. Nothing was changed.")
-      return await provisionRegistration({
-        fetch: this.host.fetch, token: result.accessToken,
-        tenantId: result.account.tenantId.toLowerCase(), username: result.account.username,
-        progress: this.host.progress, signal: controller.signal,
-      })
+      if (!result.account?.tenantId || !result.account.username || !result.accessToken) {
+        this.host.report?.({ name: "setup_signin", props: { result: "failed", code: "other" } })
+        throw new Error("Microsoft did not return the tenant, user name and access token. Nothing was changed.")
+      }
+      this.host.report?.({ name: "setup_signin", props: { result: "ok" } })
+      let phase: SetupProgress["phase"] = "registration"
+      try {
+        const registration = await provisionRegistration({
+          fetch: this.host.fetch, token: result.accessToken,
+          tenantId: result.account.tenantId.toLowerCase(), username: result.account.username,
+          progress: (progress) => { phase = progress.phase; this.host.progress(progress) }, signal: controller.signal,
+        })
+        this.host.report?.(registrationEvent({ result: registration }))
+        return registration
+      } catch (error) {
+        this.host.report?.(registrationEvent({ error, phase, cancelled: controller.signal.aborted }))
+        throw error
+      }
     } finally {
       clearTimeout(deadline)
       this.cancelWaiting = undefined

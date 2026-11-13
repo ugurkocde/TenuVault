@@ -57,6 +57,31 @@ export class ProxyAuthRequiredError extends Error {
 /** Chromium's codes for a proxy that asked for credentials it did not get or did not accept. */
 const PROXY_AUTH_CODE = /PROXY_AUTH|UNEXPECTED_PROXY_AUTH/
 
+/** What kind of transport failure a request met, as setup diagnostics report it. */
+export type NetworkFailureKind = "proxy_auth" | "tls" | "proxy" | "timeout" | "unreachable"
+
+/** The cause code of a request that got no HTTP response, from Chromium's message or Node's error.cause. */
+function failureCode(error: unknown): string | undefined {
+  const cause = error instanceof Error ? (error.cause as { code?: unknown } | undefined) : undefined
+  return (error instanceof Error ? error.message.match(/\bERR_[A-Z0-9_]+\b/)?.[0] : undefined)
+    ?? (typeof cause?.code === "string" ? cause.code : undefined)
+}
+
+/**
+ * The kind of a request failure that got no HTTP response, or null when the error does not look
+ * like a transport failure at all (so a caller can tell the network apart from other errors).
+ */
+export function networkFailureKind(error: unknown): NetworkFailureKind | null {
+  if (!(error instanceof Error)) return null
+  if (error.name === "ProxyAuthRequiredError") return "proxy_auth"
+  const code = failureCode(error)
+  if (code && PROXY_AUTH_CODE.test(code)) return "proxy_auth"
+  if (code && /CERT|SSL|TLS|SIGNATURE|ISSUER/.test(code)) return "tls"
+  if (code && /PROXY|TUNNEL|PAC_/.test(code)) return "proxy"
+  if (error.name === "TimeoutError" || /TIMED_OUT|TIMEDOUT|TIMEOUT/.test(code ?? "")) return "timeout"
+  return code || error.name === "NetworkUnreachableError" || error.message === "fetch failed" ? "unreachable" : null
+}
+
 /**
  * Explains a request that got no HTTP response (proxy, TLS inspection, DNS, firewall).
  *
@@ -64,17 +89,16 @@ const PROXY_AUTH_CODE = /PROXY_AUTH|UNEXPECTED_PROXY_AUTH/
  * Node's fetch says only "fetch failed" and keeps the cause code on `error.cause`.
  */
 export function networkFailure(error: unknown, host: string): { code: string | undefined; guidance: string } {
-  const cause = error instanceof Error ? (error.cause as { code?: unknown } | undefined) : undefined
-  const code = (error instanceof Error ? error.message.match(/\bERR_[A-Z0-9_]+\b/)?.[0] : undefined)
-    ?? (typeof cause?.code === "string" ? cause.code : undefined)
+  const code = failureCode(error)
   if (error instanceof Error && error.name === "ProxyAuthRequiredError") return { code: code ?? "HTTP 407", guidance: proxyAuthGuidance(host) }
-  const guidance = code && PROXY_AUTH_CODE.test(code)
+  const kind = networkFailureKind(error)
+  const guidance = kind === "proxy_auth"
     ? proxyAuthGuidance(host)
-    : code && /CERT|SSL|TLS|SIGNATURE|ISSUER/.test(code)
+    : kind === "tls"
       ? `Ask IT to check this device's trusted certificates and HTTPS inspection for ${host}.`
-      : code && /PROXY|TUNNEL|PAC_/.test(code)
+      : kind === "proxy"
         ? `Check this device's proxy settings and ask IT to allow HTTPS requests to ${host}.`
-        : error instanceof Error && (error.name === "TimeoutError" || /TIMED_OUT|TIMEDOUT|TIMEOUT/.test(code ?? ""))
+        : kind === "timeout"
           ? "The request timed out. Check your connection and retry."
           : `Check your connection and ask IT to allow HTTPS requests to ${host}.`
   return { code, guidance }
