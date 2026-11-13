@@ -32,6 +32,7 @@ import { ServicesSettings } from "../components/ServicesSettings"
 import { WhatsNewDialog, WhatsNewEntryNotes } from "../components/WhatsNewDialog"
 import { useWhatsNew } from "../lib/whats-new"
 import { useConfirm } from "~/components/ConfirmDialog"
+import { SetupDiagnosticsSetting } from "../components/SetupDiagnostics"
 
 function RestoreWrites({ active }: { active: boolean }) {
   const tenants = useTenants().filter(tenant => tenant.credentials?.tenantId)
@@ -793,9 +794,10 @@ function About({ active }: { active: boolean }) {
         <p>TenuVault Desktop {info?.version ?? ""}</p>
         <p>
           TenuVault talks to Microsoft (sign-in, Graph, Azure), to GitHub for the Open Intune Baseline catalog and for
-          updates, and to tenuvault.com for license checks and for feedback you choose to send. No tenant configuration
-          or backup is ever sent to TenuVault, apart from feedback you send: the text you write and, only if you tick it,
-          a screenshot that may show tenant, policy or user names.
+          updates, and to tenuvault.com for license checks, for feedback you choose to send and, on new installs that
+          share them, for setup diagnostics. No tenant configuration or backup is ever sent to TenuVault, apart from
+          feedback you send: the text you write and, only if you tick it, a screenshot that may show tenant, policy or
+          user names.
         </p>
         <p>
           <Link to="/license" className="text-blue-600 hover:underline">License</Link>
@@ -806,6 +808,7 @@ function About({ active }: { active: boolean }) {
             Website and support
           </button>
         </p>
+        <SetupDiagnosticsSetting />
       </CardContent>
     </Card>
   )

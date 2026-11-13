@@ -61,6 +61,7 @@ TenuVault talks to its own server, tenuvault.com, to check your license and, onl
 | Your operating system (Windows or macOS) and the TenuVault version | When a tenant is activated, and with organization license checks. |
 | A Microsoft ID token for your sign-in | When a license is shared with your tenant, or when you use a license your organization shared. The token contains identity claims such as your name and user principal name. The licensing service verifies it with Microsoft's public signing keys to confirm which tenant and app registration you signed in to, and does not store it. |
 | Your public IP address | As with any web request. The licensing service uses it only to rate limit requests. |
+| Setup diagnostics, if a new install chooses to share them | For 30 days after you agree: which setup steps worked, Microsoft error codes such as `AADSTS53003`, app version, operating system and a random ID that links the steps. Never tenant names or IDs, account names, client IDs, error messages, policies or backups. Kept 180 days. Turning it off deletes the events already sent; only the random ID is kept for 180 days, as a marker so late uploads are discarded. See [Setup diagnostics](/security/data-flows/#setup-diagnostics). |
 | Feedback you send | Only when you click **Send feedback** in **Share feedback**: your answers, the reply-to email if you enter one, app version, operating system, plan, page name and a random message ID. A screenshot of the window only if you tick it; it may show tenant, policy or user names. Stored up to 12 months; the email copy to support is kept as support correspondence. A keyed hash of your IP address is kept 24 hours for rate limiting. See [Feedback](/security/data-flows/#feedback). |
 
 If you buy a plan, the purchase itself is handled by Polar, the payment provider, which holds your billing details. Your license key and its activations are managed there.
@@ -75,7 +76,7 @@ Apart from what you write in feedback and a feedback screenshot you choose to at
 | Your backup recovery key | It is created on your machine and only leaves it when you save it to a file yourself. |
 | Your storage account contents | TenuVault has no access to your Azure subscription. |
 
-TenuVault contains no telemetry, analytics or crash reporting. Feedback you choose to send is the only other thing it sends to TenuVault.
+TenuVault contains no analytics or crash reporting. Apart from license checks, it sends TenuVault only feedback you choose to send and, on a new install that chooses to share them, [setup diagnostics](/security/data-flows/#setup-diagnostics) for 30 days after it agrees: which setup steps worked and which Microsoft error codes stopped them, never tenant names or IDs, account names, policies or backups.
 
 ## Control and revoke access
 

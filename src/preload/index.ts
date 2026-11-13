@@ -40,6 +40,8 @@ const bridge: TenuVaultPreloadBridge = {
     accounts: () => invoke("auth:accounts"),
     reauthenticate: (tenantId, clientId, scope) => invoke("auth:reauthenticate", tenantId, clientId, scope),
     cancelSignIn: () => invoke("auth:cancelSignIn"),
+    copySignInLink: (kind) => invoke("auth:copySignInLink", kind),
+    onSignInPhase: (listener) => subscribe<"completing" | "license">("auth:signInPhase", listener),
     onSignInRequired: (listener) => {
       const handler = (_event: Electron.IpcRendererEvent, payload: SignInRequiredEvent) => listener(payload)
       ipcRenderer.on("auth:signInRequired", handler)
@@ -57,6 +59,7 @@ const bridge: TenuVaultPreloadBridge = {
   setup: {
     createRegistration: (options) => invoke("setup:createRegistration", options),
     cancelCreateRegistration: () => invoke("setup:cancelCreateRegistration"),
+    cancelSignIn: () => invoke("setup:cancelSignIn"),
     onProgress: (listener) => subscribe("setup:progress", listener),
     clipboardIds: () => invoke("setup:clipboardIds"),
     saveScript: () => invoke("setup:saveScript"),
@@ -149,6 +152,13 @@ const bridge: TenuVaultPreloadBridge = {
   app: {
     info: () => invoke("app:info"),
     openExternal: (url) => invoke("app:openExternal", url),
+  },
+  diagnostics: {
+    status: () => invoke("diagnostics:status"),
+    consent: (where, step) => invoke("diagnostics:consent", where, step),
+    decline: () => invoke("diagnostics:decline"),
+    reminderShown: () => invoke("diagnostics:reminderShown"),
+    record: (event) => invoke("diagnostics:record", event.name, "props" in event ? event.props : undefined),
   },
   feedback: {
     capture: (page) => invoke("feedback:capture", page),

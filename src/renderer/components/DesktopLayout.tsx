@@ -39,6 +39,7 @@ import { BrandMark } from "./BrandMark"
 import { ErrorBoundary } from "./ErrorBoundary"
 import { communityBannerVisible, earliestExpiringTenant, formatDate, formatDateTime, hasPaidLicense, inactiveTenantNotice, isUnlicensed, licenseChipState, licenseExpiryWarning, offlineDeadline, statusForTenant, trialEndedNotice, trialReminder, unlicensedTenants, useLicense } from "../lib/license"
 import { PlanPromptButton } from "./PlanPromptButton"
+import { trialOfferEligible, useTrialOfferHidden } from "../lib/trial-offer"
 import { PurchaseKeyWatcher } from "./PurchaseKeyWatcher"
 import { toast, Toaster } from "../lib/toast"
 import { bridge } from "../lib/bridge"
@@ -195,6 +196,9 @@ function LicenseBanner() {
   const [trialDismissedAt, setTrialDismissedAt] = useState<string>()
   const [preferencesLoaded, setPreferencesLoaded] = useState(false)
   const [dismissing, setDismissing] = useState(false)
+  const tenants = useTenants()
+  const { selectedTenant } = useSelectedTenant()
+  const trialOfferHidden = useTrialOfferHidden()
   useEffect(() => {
     let active = true
     void bridge.preferences.get().then((preferences) => {
@@ -236,6 +240,12 @@ function LicenseBanner() {
     // The start pages only: the all-tenants overview, or the dashboard for a single tenant.
     const startPage = pathname === "/portal/overview" || pathname === "/portal/dashboard"
     if (!startPage || !preferencesLoaded || !communityBannerVisible(dismissedAt)) return null
+    // The dashboard's trial card makes the same offer for the tenant shown there, so the banner
+    // waits for the dismissed tenants and stays away while the card is offered.
+    if (pathname === "/portal/dashboard") {
+      const shown = (selectedTenant ?? tenants[0])?.credentials?.tenantId ?? ""
+      if (!trialOfferHidden || trialOfferEligible(status, shown, trialOfferHidden)) return null
+    }
     return (
       <BannerLink tone="neutral" icon={<Sparkles className="h-4 w-4" />} onDismiss={() => void dismiss()} dismissing={dismissing}>
         {status.tenantTrialsEnabled && status.tenants.some(t => t.signedIn && !t.entitled && organizationLicenseRefusal(t))

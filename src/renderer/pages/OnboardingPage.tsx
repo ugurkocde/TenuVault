@@ -17,6 +17,7 @@ import { FirstBackupNextSteps } from "../components/FirstBackupNextSteps"
 import { PlanContext, TrialOrKey } from "../components/PlanChoice"
 import { tenantLicense, tenantPlan, useLicense, useTenantPlan } from "../lib/license"
 import { ConnectTenantSetup } from "../components/ConnectTenantSetup"
+import { recordSetup, SetupDiagnosticsReminder } from "../components/SetupDiagnostics"
 import { TenantSignInForm, type SignInFields } from "../components/TenantSignInForm"
 import { bridge } from "../lib/bridge"
 import { buildTenantProfile } from "../lib/desktop-tenant"
@@ -263,6 +264,7 @@ export default function OnboardingPage() {
     try {
       const creds = desktopTenantCredentials(account, fields.displayName, choice)
       const tenant = await buildTenantProfile(creds)
+      recordSetup({ name: "storage", props: { kind: choice.kind } })
       addTenant(tenant)
       setSelectedTenantId(tenant.id)
       setCredentials(creds)
@@ -410,6 +412,8 @@ export default function OnboardingPage() {
                 <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" /> {setupNotice}
               </p>
             )}
+            {/* Shown only when the setup ended with a problem it reported, such as missing admin consent. */}
+            {setupNotice && !account && <SetupDiagnosticsReminder step="setup" />}
             {addError && (
               <div role="alert" className="space-y-3 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700">
                 <p className="flex items-start gap-2"><XCircle className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" /> {addError.license ? trialKeyRefusalText(addError.message) : addError.message}</p>
@@ -490,6 +494,7 @@ export default function OnboardingPage() {
                   <li>It reads your Intune policies, scripts and settings, and changes nothing in your tenant.</li>
                   <li>Apps are left out by default to keep it quick. You can change what is backed up later in the backup scope.</li>
                   <li>It usually takes a few minutes, longer for large tenants.</li>
+                  <li>A restore needs a backup from before the change, so this first backup cannot bring back a policy already lost. It protects what you back up from now on.</li>
                 </ul>
               </div>
             )}

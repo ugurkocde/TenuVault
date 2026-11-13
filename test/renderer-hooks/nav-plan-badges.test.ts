@@ -347,7 +347,8 @@ describe("license banners after tenant trials", () => {
     status.validUntil = active.validUntil
     status.tenants = [active, past]
     licenseStatus.current = status; selectTenant()
-    const container = await render(createElement(DesktopLayout))
+    // On the dashboard the trial card for t-1 takes the Community notice's place; the overview keeps it.
+    const container = await render(createElement(DesktopLayout), mode === "community" ? "/portal/overview" : undefined)
     const expected = { community: "You are on Community, the free plan.", "not-covered": "not covered by your", offline: "could not reach the licensing service", "organization-expiry": "The license shared by your organization" }[mode]!
     expect(container.textContent).toContain(expected)
   })

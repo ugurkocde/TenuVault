@@ -8,6 +8,8 @@ import { APP_REGISTRATION_GUIDE_URL, CONSENT_ROLES_TEXT, MANUAL_APP_REGISTRATION
 import type { RegistrationResult, SetupProgress } from "../../shared/ipc"
 import { bridge } from "../lib/bridge"
 import { PermissionList, SetupScriptCard } from "./TenantSignInForm"
+import { recordSetup, SetupDiagnosticsReminder } from "./SetupDiagnostics"
+import { SignInRecoveryPanel, useWaitedLong } from "./SignInRecovery"
 
 const CANCELLED = "Sign-in cancelled."
 
@@ -43,30 +45,47 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
   const [script, setScript] = useState(false)
   const [copied, setCopied] = useState(false)
   const busy = useRef(false)
+  // Try again in the recovery panel: the cancelled setup starts once more when it has ended.
+  const restart = useRef(false)
+  const [retrying, setRetrying] = useState(false)
+  const [attempt, setAttempt] = useState(0)
+  // Microsoft answered and the setup sign-in is completed: the browser step, and the panel, are over.
+  const [completing, setCompleting] = useState(false)
+  const waitedLong = useWaitedLong(running && phase === "signingIn" && !completing, attempt)
 
   useEffect(() => bridge.setup.onProgress((value) => {
     setPhase(value.phase)
+    setCompleting(value.phase === "signingIn" && Boolean(value.completing))
     if (value.reused) setReused(true)
   }), [])
 
-  const start = async () => {
+  const start = async (again = false) => {
     if (busy.current) return
     busy.current = true
+    // A restart from the recovery panel is the same route, not a new choice.
+    if (!again) recordSetup({ name: "setup_route", props: { route: "auto" } })
+    setAttempt((value) => value + 1)
     setRunning(true)
     setCancelling(false)
     setError("")
     setReused(false)
     setPhase("signingIn")
+    setCompleting(false)
+    let restartNow = false
     try {
       onRegistered(await bridge.setup.createRegistration(tenant.trim() ? { tenant: tenant.trim() } : undefined))
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : String(caught)
+      restartNow = message === CANCELLED && restart.current
       // Cancelling is the admin's own choice, not something to report back to them.
       if (message !== CANCELLED) setError(message)
     } finally {
       busy.current = false
+      restart.current = false
       setRunning(false)
+      setRetrying(false)
     }
+    if (restartNow) void start(true)
   }
 
   const cancel = async () => {
@@ -79,8 +98,25 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
     }
   }
 
+  // Cancels only the browser wait and starts again. When the sign-in has already come back, the main
+  // process has nothing to cancel and says so: the setup goes on and nothing restarts.
+  const tryAgain = async () => {
+    restart.current = true
+    setRetrying(true)
+    try {
+      if (await bridge.setup.cancelSignIn()) return
+      restart.current = false
+      setRetrying(false)
+    } catch (caught) {
+      restart.current = false
+      setRetrying(false)
+      setError(caught instanceof Error ? caught.message : String(caught))
+    }
+  }
+
   const copyHandoff = async () => {
     setError("")
+    recordSetup({ name: "setup_route", props: { route: "handoff" } })
     try {
       await navigator.clipboard.writeText(setupHandoffText())
       setCopied(true)
@@ -99,6 +135,14 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
   // The setup and the setup script sign in through the same Microsoft app. Where the tenant blocks
   // it, creating the app registration in the Entra admin center is the route that still works.
   const openManualGuide = () => void bridge.app.openExternal(MANUAL_APP_REGISTRATION_URL)
+  const manual = () => {
+    recordSetup({ name: "setup_route", props: { route: "manual" } })
+    onManual()
+  }
+  const toggleScript = () => {
+    if (!script) recordSetup({ name: "setup_route", props: { route: "script" } })
+    setScript(!script)
+  }
 
   return (
     <div data-tenant-connect className="grid items-start gap-5 text-sm text-gray-700 @3xl:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
@@ -113,12 +157,13 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
               {suggestsCreatingByHand(error) && (
                 <div className="mt-3 flex flex-wrap gap-2">
                   <Button type="button" variant="outline" size="sm" onClick={openManualGuide}>Create it by hand</Button>
-                  <Button type="button" variant="ghost" size="sm" onClick={onManual}>I already have an app registration</Button>
+                  <Button type="button" variant="ghost" size="sm" onClick={manual}>I already have an app registration</Button>
                 </div>
               )}
             </AlertDescription>
           </Alert>
         )}
+        {error && <SetupDiagnosticsReminder step="setup" />}
 
         {running ? (
           <div role="status" aria-live="polite" className="space-y-4 rounded-3xl bg-gray-50 p-5">
@@ -135,7 +180,12 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
                 </li>
               ))}
             </ol>
-            {phase === "signingIn" ? (
+            {phase === "signingIn" && completing ? (
+              <p className="flex items-center gap-2 border-t border-gray-200 pt-4">
+                <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin" aria-hidden="true" />
+                Completing sign-in...
+              </p>
+            ) : phase === "signingIn" ? (
               <div className="space-y-3 border-t border-gray-200 pt-4">
                 <p>Choose your admin account in the browser and approve the request. Nothing is created before you are signed in.</p>
                 <p className="text-xs text-gray-600">
@@ -167,6 +217,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
               <X className="mr-2 h-4 w-4" aria-hidden="true" />
               {cancelling ? "Cancelling..." : "Cancel"}
             </Button>
+            {waitedLong && <SignInRecoveryPanel kind="setup" onTryAgain={() => void tryAgain()} retrying={retrying} />}
           </div>
         ) : (
           <div className="space-y-3">
@@ -263,10 +314,10 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
             {copied ? <Check className="mr-2 h-4 w-4" aria-hidden="true" /> : <Send className="mr-2 h-4 w-4" aria-hidden="true" />}
             {copied ? "Copied" : "Someone else is the admin? Copy instructions"}
           </Button>
-          <Button type="button" variant="ghost" size="sm" disabled={running} onClick={() => setScript(!script)} aria-expanded={script}>
+          <Button type="button" variant="ghost" size="sm" disabled={running} onClick={toggleScript} aria-expanded={script}>
             Use the setup script instead
           </Button>
-          <Button type="button" variant="ghost" size="sm" disabled={running} onClick={onManual}>
+          <Button type="button" variant="ghost" size="sm" disabled={running} onClick={manual}>
             I already have an app registration
           </Button>
         </div>

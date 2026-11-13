@@ -25,6 +25,25 @@ export function suggestsCreatingByHand(message: string): boolean {
   return message.toLowerCase().includes(CREATE_BY_HAND)
 }
 
+/** What the first sign-in says when the browser did not come back within 15 minutes. */
+export const FIRST_SIGN_IN_TIMEOUT_MESSAGE = "The sign-in in the browser was not completed within 15 minutes. Select Try again to sign in again. If Microsoft showed an error in the browser, such as a Conditional Access block, an MFA prompt you could not complete or a request for admin approval, copy the instructions for your admin and send them the setup."
+
+/** Whether a first sign-in error is the 15 minute timeout. */
+export function isSignInTimeout(message: string): boolean {
+  return message.includes(FIRST_SIGN_IN_TIMEOUT_MESSAGE)
+}
+
+/**
+ * The first sign-in refusals another administrator or the manual setup can get around: Conditional
+ * Access (53000, 53001, 53003), missing consent or approval (65001, 90094) and MFA (50076, 50079).
+ */
+export const HANDOFF_SIGN_IN_CODES: readonly string[] = ["AADSTS53000", "AADSTS53001", "AADSTS53003", "AADSTS65001", "AADSTS90094", "AADSTS50076", "AADSTS50079"]
+
+/** Whether a first sign-in error names one of the codes the sign-in form offers the handoff for. */
+export function offersSignInHandoff(message: string): boolean {
+  return (message.match(/AADSTS\d+/g) ?? []).some((code) => HANDOFF_SIGN_IN_CODES.includes(code))
+}
+
 /** The delegated permissions the setup script grants admin consent for by default, per API. */
 export const DESKTOP_APP_PERMISSIONS: readonly { api: string; appId: string; permissions: readonly string[]; purpose: string }[] = [
   {

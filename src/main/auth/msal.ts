@@ -5,11 +5,13 @@ import {
   type AccountInfo,
   type AuthenticationResult,
   type ICachePlugin,
-  type InteractiveRequest,
 } from "@azure/msal-node"
 import type { SignedInAccount } from "../../shared/ipc"
 import { RESOURCE_SCOPES } from "../../shared/constants"
+import { CONSENT_ROLES_TEXT, FIRST_SIGN_IN_TIMEOUT_MESSAGE } from "../../shared/app-registration"
+import { isMicrosoftLoginUrl } from "../../shared/security"
 import { fetchNetworkClient } from "./network-client"
+import { loopbackSignIn } from "./loopback-sign-in"
 
 export interface AuthHost {
   /**
@@ -95,6 +97,20 @@ export class SignInCancelledError extends Error {
   }
 }
 
+/** How long a sign-in waits for the browser. Microsoft's own error pages never come back to the app. */
+export const SIGN_IN_TIMEOUT_MS = 15 * 60_000
+
+/** A sign-in in the browser did not come back in time. Setup diagnostics report it as `timeout`. */
+export class SignInTimeoutError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "SignInTimeoutError"
+  }
+}
+
+/** A failed first sign-in the app explains in its own words, so setup diagnostics can tell it from an unexplained one. */
+export class ExplainedSignInError extends Error {}
+
 /** Microsoft's refusals of a first sign-in that the admin can fix, with what to do. */
 const FIRST_SIGN_IN_ERRORS: Record<string, string> = {
   AADSTS700016: "No app registration with this client ID exists in this tenant. Check the Application (client) id, and that the tenant is the one the app registration was created in. If it was created a moment ago, wait a minute and sign in again.",
@@ -107,6 +123,9 @@ const FIRST_SIGN_IN_ERRORS: Record<string, string> = {
   AADSTS53000: "Conditional Access requires a compliant or registered device. Use a browser that passes the device identity, such as Microsoft Edge signed in to your work profile, as the default browser and try again.",
   AADSTS53001: "Conditional Access requires a domain-joined device. Use a browser that passes the device identity, such as Microsoft Edge signed in to your work profile, as the default browser and try again.",
   AADSTS53003: "Conditional Access blocked this sign-in. Check the sign-in logs in the Entra admin center for the policy, or sign in from a device and location it allows.",
+  AADSTS50076: "Microsoft asks for multifactor authentication for this sign-in, because of a Conditional Access policy, per-user MFA or a new location, and it was not completed. Sign in again and complete the MFA prompt in the browser. If no prompt appears, ask your Entra administrator to check the sign-in logs in the Entra admin center.",
+  AADSTS50079: "Microsoft requires multifactor authentication for this sign-in, because of a Conditional Access policy, per-user MFA or a new location, and your account cannot complete it yet. If your account is managed in Entra ID, register your security info at https://mysignins.microsoft.com/security-info and sign in again. If your account signs in through another identity provider (a federated account), that provider must supply the MFA claim: ask your administrator to set it up.",
+  AADSTS90094: `Administrator consent is required: this tenant does not let your account grant the permissions the TenuVault app registration asks for. Ask a ${CONSENT_ROLES_TEXT} to grant admin consent for it, or send them the setup instructions.`,
   AADSTS65004: "The consent was declined in the browser. Sign in again and accept, or ask an administrator to run the setup script, which grants admin consent.",
 }
 
@@ -117,11 +136,11 @@ const FIRST_SIGN_IN_ERRORS: Record<string, string> = {
  */
 export function firstSignInError(error: unknown): unknown {
   const consent = missingPermissionError(RESOURCE_SCOPES.graph, error)
-  if (consent) return consent
+  if (consent) return new ExplainedSignInError(consent.message)
   const message = error instanceof Error ? error.message : String(error)
   const code = /AADSTS\d+/.exec(message)?.[0]
-  if (code && FIRST_SIGN_IN_ERRORS[code]) return new Error(`${FIRST_SIGN_IN_ERRORS[code]} (${code})`)
-  if (/access_denied|user_cancelled|user_canceled|authentication_canceled/i.test(message) && !code) return new Error("The sign-in was cancelled in the browser. Sign in again to continue.")
+  if (code && FIRST_SIGN_IN_ERRORS[code]) return new ExplainedSignInError(`${FIRST_SIGN_IN_ERRORS[code]} (${code})`)
+  if (/access_denied|user_cancelled|user_canceled|authentication_canceled/i.test(message) && !code) return new ExplainedSignInError("The sign-in was cancelled in the browser. Sign in again to continue.")
   return error
 }
 
@@ -180,6 +199,11 @@ export const ERROR_PAGE = page("Sign-in failed", "Go back to TenuVault for detai
  */
 export class AuthManager {
   private readonly apps = new Map<string, PublicClientApplication>()
+  /**
+   * The Microsoft sign-in address the waiting first sign-in opened, so the admin can copy it into
+   * another browser. Kept only while that sign-in waits.
+   */
+  private link: { url: string; owner: object } | null = null
   /** Rejects the first sign-ins (signIn) waiting for the browser, for cancelInteractive. */
   private readonly cancels = new Map<(error: Error) => void, string>()
   private readonly interactive = new Map<string, Promise<AuthenticationResult>>()
@@ -190,8 +214,12 @@ export class AuthManager {
    * Interactive sign-in used when a tenant is added. `tenant` may be a tenant id or
    * a verified domain; the returned account always carries the tenant id.
    */
-  async signIn(tenant: string, clientId: string, options?: { loginHint?: string }): Promise<SignedInAccount> {
-    const result = await this.acquireInteractive(clientId, tenant, RESOURCE_SCOPES.graph, options?.loginHint ? undefined : "select_account", options?.loginHint, true).catch((error: unknown) => {
+  async signIn(tenant: string, clientId: string, options?: {
+    loginHint?: string
+    /** Called when the browser has answered and the code is being redeemed: the browser step is over. */
+    onBrowserDone?: () => void
+  }): Promise<SignedInAccount> {
+    const result = await this.acquireInteractive(clientId, tenant, RESOURCE_SCOPES.graph, options?.loginHint ? undefined : "select_account", options?.loginHint, true, options?.onBrowserDone).catch((error: unknown) => {
       throw firstSignInError(error)
     })
     const account = result.account
@@ -325,51 +353,71 @@ export class AuthManager {
     prompt?: string,
     loginHint?: string,
     cancellable = false,
+    onBrowserDone?: () => void,
   ): Promise<AuthenticationResult> {
     const key = `${clientId}|${tenant.toLowerCase()}|${scope}|${prompt ?? ""}|${loginHint ?? ""}`
     const pending = this.interactive.get(key)
     if (pending) return pending
 
-    // MSAL opens the browser after a few awaits; a sign-in cancelled before then never opens it.
-    let cancelledEarly = false
-    const request: InteractiveRequest = {
+    // The app runs the browser sign-in itself (loopback-sign-in.ts), so ending an attempt closes
+    // its listener: a browser tab finished later reaches nothing and no code is redeemed. Only the
+    // first sign-in can be cancelled, so a reauthentication started elsewhere keeps waiting.
+    const owner = {}
+    const controller = new AbortController()
+    const cancel = (error: Error) => controller.abort(error)
+    const ended = () => {
+      clearTimeout(deadline)
+      if (this.link?.owner === owner) this.link = null
+      this.cancels.delete(cancel)
+    }
+    if (cancellable) this.cancels.set(cancel, key)
+    // The first sign-in stops waiting after a while, like the setup sign-in.
+    const deadline = cancellable ? setTimeout(() => cancel(new SignInTimeoutError(FIRST_SIGN_IN_TIMEOUT_MESSAGE)), SIGN_IN_TIMEOUT_MS) : undefined
+    const promise = loopbackSignIn({
+      app: this.app(clientId),
       scopes: [scope],
       authority: authority(tenant),
-      openBrowser: (url) => cancelledEarly ? Promise.reject(new SignInCancelledError()) : this.host.openBrowser(url),
-      successTemplate: SUCCESS_PAGE,
-      errorTemplate: ERROR_PAGE,
       ...(prompt ? { prompt } : {}),
       ...(loginHint ? { loginHint } : {}),
-    }
-    // MSAL cannot abort a loopback sign-in, so a cancel stops waiting for it instead. A browser
-    // tab finished later only fills the token cache; its result is never used. Only the first
-    // sign-in can be cancelled, so a reauthentication started elsewhere keeps waiting.
-    let cancel: (error: Error) => void = () => {}
-    const cancelled = new Promise<never>((_resolve, reject) => {
-      cancel = (error) => {
-        cancelledEarly = true
-        reject(error)
-      }
+      openBrowser: (url) => {
+        if (!isMicrosoftLoginUrl(url)) throw new Error("Microsoft returned an unexpected sign-in address.")
+        if (cancellable) this.link = { url, owner }
+        return this.host.openBrowser(url)
+      },
+      successPage: SUCCESS_PAGE,
+      errorPage: ERROR_PAGE,
+      signal: controller.signal,
+      // The browser answered: the code is redeemed now, and a cancel or timeout no longer applies.
+      onAnswer: () => {
+        ended()
+        onBrowserDone?.()
+      },
+    }).finally(() => {
+      ended()
+      if (this.interactive.get(key) === promise) this.interactive.delete(key)
     })
-    if (cancellable) this.cancels.set(cancel, key)
-    const interactive = this.app(clientId).acquireTokenInteractive(request)
-    const promise = (cancellable ? Promise.race([interactive, cancelled]) : interactive)
-      .finally(() => {
-        this.cancels.delete(cancel)
-        if (this.interactive.get(key) === promise) this.interactive.delete(key)
-      })
     this.interactive.set(key, promise)
     return promise
   }
 
-  /** Stops waiting for the first sign-ins open in the browser; they fail with SignInCancelledError. */
-  cancelInteractive(): void {
+  /** The Microsoft sign-in address of the first sign-in waiting for the browser, or null. */
+  signInLink(): string | null {
+    return this.link?.url ?? null
+  }
+
+  /**
+   * Stops waiting for the first sign-ins open in the browser; they fail with SignInCancelledError.
+   * Returns whether one was waiting. A sign-in whose browser step has ended is no longer waiting,
+   * so a late cancel leaves it, and the license check after it, alone.
+   */
+  cancelInteractive(): boolean {
     const pending = [...this.cancels]
     this.cancels.clear()
     for (const [cancel, key] of pending) {
       this.interactive.delete(key)
       cancel(new SignInCancelledError())
     }
+    return pending.length > 0
   }
 
   private app(clientId: string): PublicClientApplication {

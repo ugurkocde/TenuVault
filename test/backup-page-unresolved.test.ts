@@ -27,6 +27,14 @@ vi.mock("~/components/backup/restore-wizard", () => ({ RestoreWizard: () => null
 const cancelled = { id: "backup-2026-10-16-020000", timestamp: "2026-10-16T02:00:00Z", type: "manual", status: "Cancelled", totalPolicies: 2, counts: {}, scope: null, size: 1, duration: 4, changes: null, comparedWith: null }
 
 describe("Backup History", () => {
+  it("explains the first backup recovery limit and points to existing backup and schedule actions", () => {
+    state.backups = []
+    state.damagedFiles = 0
+    const markup = renderToStaticMarkup(createElement(BackupRestorePage))
+    expect(markup).toContain("Restores need a backup from before the change; a change made before your first backup cannot be restored.")
+    expect(markup).toContain("Run a backup now, then set up automatic backups in Schedule. Only items captured in a backup can be restored.")
+  })
+
   it("says how many backups could not be read, and nothing when all could", () => {
     state.unresolved = 2
     expect(renderToStaticMarkup(createElement(BackupRestorePage))).toContain("2 backups could not be read. Select Refresh to try again.")
@@ -51,7 +59,7 @@ describe("Backup History", () => {
     expect(markup).toContain("Some backups may be missing from this list")
     expect(markup).toContain("No readable backups found for this tenant")
     expect(markup).toContain("Some backups may be missing because of the files described above.")
-    expect(markup).not.toContain("Run a backup to see it appear here")
+    expect(markup).not.toContain("a change made before your first backup cannot be restored")
     state.damagedFiles = 0
   })
 })
