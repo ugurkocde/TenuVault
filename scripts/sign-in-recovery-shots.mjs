@@ -91,16 +91,6 @@ try {
   const windowsReady = `(() => { try { const r = process.getBuiltinModule("module").createRequire(process.cwd() + "/x.cjs"); return r("electron").BrowserWindow.getAllWindows().length } catch { return 0 } })()`
   for (let i = 0; i < 60 && !(await main.evaluate(windowsReady)); i++) await sleep(500)
   await sleep(1000) // bootstrap registers the IPC handlers before it creates the window
-  const diagnosticsStatus = (value) => main.evaluate(`(() => {
-    const req = process.getBuiltinModule("module").createRequire(process.cwd() + "/x.cjs")
-    const { ipcMain } = req("electron")
-    for (const channel of ["diagnostics:status", "diagnostics:reminderShown", "diagnostics:consent", "diagnostics:decline"]) ipcMain.removeHandler(channel)
-    const value = ${JSON.stringify(value)}
-    ipcMain.handle("diagnostics:status", () => value)
-    ipcMain.handle("diagnostics:reminderShown", () => undefined)
-    ipcMain.handle("diagnostics:consent", () => ({ ...value, state: "granted" }))
-    ipcMain.handle("diagnostics:decline", () => ({ ...value, state: "declined" }))
-  })()`)
 
   // 2. Renderer: seed the tenant profiles in the app's own store, then reload with the demo data.
   page = await connect(await target(`http://127.0.0.1:${port}/json/list`, (t) => t.type === "page"))
@@ -136,8 +126,6 @@ try {
     })()`)
   const setTheme = (theme) =>
     evaluate(`localStorage.setItem("tenuvault-appearance", "${theme}"); document.documentElement.classList.toggle("dark", ${theme === "dark"})`)
-  const scrollAll = (to) =>
-    evaluate(`[document.scrollingElement, ...document.querySelectorAll("*")].filter(e => e && (e === document.scrollingElement || (e.scrollHeight > e.clientHeight + 4 && getComputedStyle(e).overflowY !== "visible"))).forEach(e => { e.scrollTop = ${to} })`)
   const shots = []
   const screenshot = async (name, expectedVerificationFailure = false) => {
     await evaluate(`document.activeElement?.blur?.()`)
