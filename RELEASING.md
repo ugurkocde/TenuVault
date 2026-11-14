@@ -113,6 +113,20 @@ Put these in the next stable release's notes, then remove them here.
   `Organization.Read.All` and `Policy.Read.All`). When sign-in to the enterprise application of
   such a registration is turned off, setup stops instead of creating another one.
 
+- **Backup coverage and outcomes.** A backup's `metadata.json` gains two fields: `Coverage`
+  (`Complete` or `Incomplete`) and `Outcomes` (one entry per selected type: saved, not configured,
+  skipped with a cause, or failed). `Status`, `Failures`, `SkippedTypes`, `FailedTypes` and every
+  other field keep their meaning and their values, so the result of a backup, scheduled retries,
+  notifications and retention do not change for a tenant that backs up what it did before. What
+  is new to see: a backup with a type that was left out (for example one the app registration is
+  denied, or one the Backup Reader does not read) shows "Coverage incomplete" in the backup result
+  and in Backup Details. Versions before 0.6 ignore both fields and import such a backup as
+  before. A backup that holds a type those versions do not know is refused there as a whole
+  ("Unsupported backup item"). Backups made before 0.6 import into 0.6 and show no coverage.
+- **Restore capability.** Every type has a restore capability, and a type without one is never
+  written to a tenant by restore, revert, change sets, Sync, baselines or the copy to another
+  tenant. Every type of earlier versions keeps what it could do.
+
 ## Cutting a stable release
 
 Either promote the newest nightly (recommended, it ships exactly what nightly users ran):
