@@ -270,7 +270,7 @@ describe("backup runs", () => {
   const outcomes = (runId: string, endedAt: string, types: Array<Record<string, unknown>>, authMode: "delegated" | "app-only" = "delegated") =>
     ({ runId, tenantId: TENANT, authMode, trigger: "manual" as const, startedAt: endedAt, endedAt, status: "Success", coverage: "complete" as const, types: types as never })
   const saved = (folder: string) => ({ folder, service: "intune", outcome: "saved", saved: 1 })
-  const denied = (folder: string) => ({ folder, service: "intune", outcome: "skipped", cause: "permission", reason: "Access was denied.", status: 403 })
+  const denied = (folder: string, cause: "permission" | "role" = "permission") => ({ folder, service: "intune", outcome: "skipped", cause, reason: "Access was denied.", status: 403 })
 
   it("are kept under the connection and the account that ran them", () => {
     const { health, state, stored, now, changed } = setup()
@@ -300,16 +300,16 @@ describe("backup runs", () => {
     expect(health.report(TENANT).services[0]!.areas.find((area) => area.id === "apps")!.verified).toEqual({ state: "verified", at: now(), notVerified: [] })
     pass(DAY)
     const firstRefusal = now()
-    health.recordRun(outcomes("desktop-2", now(), [denied("Apps"), saved("DeviceConfigurations")]), request)
+    health.recordRun(outcomes("desktop-2", now(), [denied("Apps", "role"), saved("DeviceConfigurations")]), request)
     expect(health.report(TENANT).changes).toEqual([])
     // The same run handed over again is still one run.
-    health.recordRun(outcomes("desktop-2", now(), [denied("Apps"), saved("DeviceConfigurations")]), request)
+    health.recordRun(outcomes("desktop-2", now(), [denied("Apps", "role"), saved("DeviceConfigurations")]), request)
     expect(health.report(TENANT).changes).toEqual([])
     pass(DAY)
-    health.recordRun(outcomes("desktop-3", now(), [denied("Apps"), saved("DeviceConfigurations")]), request)
+    health.recordRun(outcomes("desktop-3", now(), [denied("Apps", "role"), saved("DeviceConfigurations")]), request)
     const report = health.report(TENANT)
-    // The admin's token carries the permission for apps, so what the refusals leave is the account's role.
-    expect(report.changes).toEqual([{ kind: "lostAccess", service: "intune", area: "apps", cause: "role", folders: ["Apps"], since: firstRefusal }])
+    // The cause is the one the runs found with the token they had: it carried the permission, so they named the account's role.
+    expect(report.changes).toEqual([{ kind: "lostAccess", service: "intune", area: "apps", cause: "role", mode: "delegated", folders: ["Apps"], since: firstRefusal }])
     expect(report.services[0]!.areas.find((area) => area.id === "configuration")).toMatchObject({ lostAccess: false, verified: { state: "verified" } })
   })
 
@@ -348,6 +348,26 @@ describe("backup runs", () => {
     health.recordRun(outcomes("desktop-11", now(), [saved("Apps")]), request)
     expect(apps()).toMatchObject({ lostAccess: false, verified: { state: "verified", at: now() } })
     expect(health.report(TENANT).changes).toEqual([])
+  })
+
+  it("keep the cause they found, and say not verified yet once the permission a run lacked is there", async () => {
+    const { health, tokens, pass, now } = setup()
+    const request = { tenantId: TENANT, clientId: CLIENT }
+    const apps = () => health.report(TENANT).services[0]!.areas.find((area) => area.id === "apps")!
+    tokens.mockResolvedValueOnce(fresh(WITHOUT_APPS))
+    await health.check(TENANT, "launch")
+    pass(DAY)
+    const refusedAt = now()
+    health.recordRun(outcomes("desktop-1", now(), [denied("Apps"), saved("DeviceConfigurations")]), request)
+    expect(apps()).toMatchObject({ permissions: "missing", verified: { state: "notVerified", cause: "permission" } })
+    // The permission is added to the app registration, and a check sees it. No backup ran since.
+    pass(DAY)
+    await health.check(TENANT, "again")
+    expect(apps()).toMatchObject({ permissions: "present", verified: { state: "notVerified", at: refusedAt, cause: "notVerifiedYet", mode: "delegated", notVerified: ["Apps"] } })
+    // The next backup reads the type.
+    pass(DAY)
+    health.recordRun(outcomes("desktop-2", now(), [saved("Apps"), saved("DeviceConfigurations")]), request)
+    expect(apps().verified).toEqual({ state: "verified", at: now(), notVerified: [] })
   })
 
   it("of another admin count for nothing once someone else signed in", async () => {
@@ -514,8 +534,9 @@ describe("with the backup engine", () => {
     await backups.run()
     await settled()
     const report = health.report(TENANT)
-    // The token carries the permission and the read was refused: what is left is the role.
-    expect(report.changes).toMatchObject([{ kind: "lostAccess", service: "intune", area: "apps", cause: "role", folders: ["AppCategories"] }])
+    // A denied Intune read does not say whether the permission or the account's role was missing, and the runs
+    // recorded no role. The token carries the permission, so that much is known: present, and not verified.
+    expect(report.changes).toMatchObject([{ kind: "lostAccess", service: "intune", area: "apps", cause: "notVerifiedYet", mode: "delegated", folders: ["AppCategories"] }])
     expect(JSON.stringify(base.stored())).not.toContain("contoso")
   })
 })

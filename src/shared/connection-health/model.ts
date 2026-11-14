@@ -188,12 +188,22 @@ export interface ReaderHealth {
 export type PermissionState = "present" | "missing" | "unknown"
 
 /**
+ * Why access to a type was lost: the cause the refused runs found with the token they had
+ * (license also covers a product never set up), or notVerifiedYet: a run of the admin lacked a
+ * permission that the admin's token carries now, so that cause is gone, and whether the read works
+ * shows when a backup reads the type. The token of today never turns a cause into another one.
+ */
+export type LossCause = RefusalCause | "notVerifiedYet"
+
+/**
  * Why the last backup did not read a type:
- * - permission, role, license: Microsoft refused the read (license also covers a product never set up).
+ * - permission, role, license, notVerifiedYet: Microsoft refused the read (see LossCause).
  * - signedIn: only a signed-in admin can read it, and only the Backup Reader ran.
+ * - reader: only the Backup Reader ran, and it leaves the type out by design. Nothing was asked of
+ *   Microsoft and nothing is to fix.
  * - notRead: the read failed for another reason.
  */
-export type HealthCause = "permission" | "role" | "license" | "signedIn" | "notRead"
+export type HealthCause = LossCause | "signedIn" | "reader" | "notRead"
 
 export interface VerifiedHealth {
   /**
@@ -250,7 +260,8 @@ export type HealthChange =
   | { kind: "registrationReplaced"; previousClientId: string; lacks: string[] }
   /** The backup permissions of a service (every area that is on), or of one area, arrived. */
   | { kind: "becameReady"; service: ModuleId; area?: string }
-  | { kind: "lostAccess"; service: ModuleId; area: string; cause: HealthCause; folders: string[]; since: string }
+  /** `cause` and `mode` are those of the connection that lost access: what its own refusals found, and whose sign-in it is. */
+  | { kind: "lostAccess"; service: ModuleId; area: string; cause: LossCause; mode: ConnectionMode; folders: string[]; since: string }
 
 export interface ConnectionHealthReport {
   tenantId: string

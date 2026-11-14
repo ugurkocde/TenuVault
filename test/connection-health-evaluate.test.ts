@@ -319,9 +319,11 @@ describe.each(MODULES.map((module) => [module.label, module] as const))("%s", (_
 
   const refusedReads: Array<[cause: string, outcome: Partial<RunObservation>, granted: string[]]> = [
     ["permission", { refused: [refusal(folder, "permission")] }, []],
-    // The token carries the permission and the read was refused all the same: the account's role.
-    ["role", { refused: [refusal(folder, "permission")] }, scopes],
+    // The run lacked a permission that the token carries now: that cause is gone, and nothing says the role is what is left.
+    ["notVerifiedYet", { refused: [refusal(folder, "permission")] }, scopes],
+    // The cause a run found with its own token stays, whatever the token of today carries.
     ["role", { refused: [refusal(folder, "role")] }, []],
+    ["role", { refused: [refusal(folder, "role")] }, scopes],
     ["license", { refused: [refusal(folder, "license")] }, scopes],
     ["notRead", { unread: [folder] }, scopes],
   ]
@@ -334,6 +336,13 @@ describe.each(MODULES.map((module) => [module.label, module] as const))("%s", (_
   it("says a signed-in admin is required when only the Backup Reader ran and left the type out for that", () => {
     const report = evaluate([readerConnection({ runs: [readerRun("r1", 1, { excluded: [{ folder, cause: "signedIn" }] })] })], { settings: on, reader: readerFacts(), readerClientId: READER }).report
     expect(area(report, module.id, first.id).verified).toEqual({ state: "notVerified", at: ago(DAY), cause: "signedIn", mode: "app-only", notVerified: [folder] })
+  })
+
+  it("says the Backup Reader leaves the type out by design when only it ran, which is no refusal", () => {
+    const report = evaluate([readerConnection({ runs: [readerRun("r1", 3, { excluded: [{ folder, cause: "reader" }] }), readerRun("r2", 1, { excluded: [{ folder, cause: "reader" }] })] })], { settings: on, reader: readerFacts(), readerClientId: READER }).report
+    expect(area(report, module.id, first.id).verified).toEqual({ state: "notVerified", at: ago(DAY), cause: "reader", mode: "app-only", notVerified: [folder] })
+    expect(area(report, module.id, first.id).lostAccess).toBe(false)
+    expect(report.changes).toEqual([])
   })
 
   it("keeps an admin's read when a later Backup Reader run left the type out by design", () => {
@@ -354,7 +363,7 @@ describe.each(MODULES.map((module) => [module.label, module] as const))("%s", (_
     const baseline = evaluate([delegated({ runs: runs.slice(0, 1) })], { settings: on }).baseline!
     const { report } = evaluate([delegated({ runs, snapshot: baseline })], { settings: on })
     expect(area(report, module.id, first.id)).toMatchObject({ lostAccess: true, verified: { state: "notVerified", cause: "permission" } })
-    expect(report.changes).toEqual([{ kind: "lostAccess", service: module.id, area: first.id, cause: "permission", folders: [folder], since: ago(3 * DAY) }])
+    expect(report.changes).toEqual([{ kind: "lostAccess", service: module.id, area: first.id, cause: "permission", mode: "delegated", folders: [folder], since: ago(3 * DAY) }])
   })
 
   it("is outside what backups cover when it is turned off: nothing verified, nothing lost", () => {
@@ -413,7 +422,7 @@ describe("lost access", () => {
   it("needs two refusals", () => {
     expect(lost([read("r1", 5), refused("r2", 1)])).toEqual([])
     expect(lost([read("r1", 5), refused("r2", 3), refused("r3", 1)])).toEqual([
-      { kind: "lostAccess", service: "intune", area: "configuration", cause: "permission", folders: [FOLDER], since: ago(3 * DAY) },
+      { kind: "lostAccess", service: "intune", area: "configuration", cause: "permission", mode: "delegated", folders: [FOLDER], since: ago(3 * DAY) },
     ])
   })
 
@@ -484,7 +493,26 @@ describe("lost access", () => {
       readerConnection({ runs: [readerRun("r1", 9, { read: [FOLDER] }), readerRun("r2", 5, { refused: [refusal(FOLDER, "license")] }), readerRun("r3", 3, { refused: [refusal(FOLDER, "license")] })] }),
     ]
     const { report } = evaluate(connections, { reader: readerFacts(), readerClientId: READER })
-    expect(report.changes).toEqual([{ kind: "lostAccess", service: "intune", area: "configuration", cause: "license", folders: [FOLDER], since: ago(5 * DAY) }])
+    expect(report.changes).toEqual([{ kind: "lostAccess", service: "intune", area: "configuration", cause: "license", mode: "app-only", folders: [FOLDER], since: ago(5 * DAY) }])
+  })
+
+  it("names the cause and the sign-in of the connection that lost access, not what a later backup of the other one ran into", () => {
+    // The Backup Reader read the type and was refused twice. After that a backup of the admin failed to read it for another reason.
+    const readerRuns = [readerRun("r1", 9, { read: [FOLDER] }), readerRun("r2", 5, { refused: [refusal(FOLDER, "role")] }), readerRun("r3", 3, { refused: [refusal(FOLDER, "role")] })]
+    const connections = [delegated({ graph: healthy(), runs: [run("manual", 1, { unread: [FOLDER] })], snapshot: BEFORE }), readerConnection({ runs: readerRuns })]
+    const { report } = evaluate(connections, { reader: readerFacts(), readerClientId: READER })
+    expect(report.changes).toEqual([{ kind: "lostAccess", service: "intune", area: "configuration", cause: "role", mode: "app-only", folders: [FOLDER], since: ago(5 * DAY) }])
+    // What the last backup said about the type is a statement of its own.
+    expect(area(report, "intune", "configuration")).toMatchObject({ lostAccess: true, verified: { state: "notVerified", cause: "notRead", mode: "delegated" } })
+  })
+
+  it("names the connection that lost access first when both did", () => {
+    const connections = [
+      delegated({ runs: [read("a1", 20), refused("a2", 8), refused("a3", 6)], snapshot: BEFORE }),
+      readerConnection({ runs: [readerRun("r1", 9, { read: [FOLDER] }), readerRun("r2", 5, { refused: [refusal(FOLDER, "license")] }), readerRun("r3", 3, { refused: [refusal(FOLDER, "license")] })] }),
+    ]
+    const { report } = evaluate(connections, { reader: readerFacts(), readerClientId: READER })
+    expect(report.changes).toEqual([{ kind: "lostAccess", service: "intune", area: "configuration", cause: "permission", mode: "delegated", folders: [FOLDER], since: ago(8 * DAY) }])
   })
 
   it("is not lost when the admin read the type after the Backup Reader was refused", () => {
@@ -543,9 +571,25 @@ describe("lost access", () => {
     expect(area(report, "intune", "configuration").verified).toEqual({ state: "noBackup", notVerified: [] })
   })
 
-  it("names the role as the cause when the token still carries the permission", () => {
-    const [change] = lost([read("r1", 9), refused("r2", 5), refused("r3", 3)], { graph: healthy() })
-    expect(change).toMatchObject({ cause: "role" })
+  it("keeps the cause the refused runs found, and never works out a role from the token of today", () => {
+    const WITHOUT = DEFAULT_SCOPES.filter((permission) => !permission.startsWith("DeviceManagementConfiguration"))
+    const refusedFor = (cause: "permission" | "role" | "license") => [read("r1", 9), refused("r2", 5, { refused: [refusal(FOLDER, cause)] }), refused("r3", 3, { refused: [refusal(FOLDER, cause)] })]
+    // The runs found the role with the token they had.
+    expect(lost(refusedFor("role"), { graph: healthy() })).toMatchObject([{ cause: "role", mode: "delegated" }])
+    expect(lost(refusedFor("role"), { graph: healthy(WITHOUT) })).toMatchObject([{ cause: "role" }])
+    expect(lost(refusedFor("license"), { graph: healthy() })).toMatchObject([{ cause: "license" }])
+    // The runs lacked the permission. While it is missing, or not known, that is the cause.
+    expect(lost(refusedFor("permission"), { graph: healthy(WITHOUT) })).toMatchObject([{ cause: "permission" }])
+    expect(lost(refusedFor("permission"))).toMatchObject([{ cause: "permission" }])
+    // Once the token carries it, the cause is gone and the type waits for a backup to read it.
+    expect(lost(refusedFor("permission"), { graph: healthy() })).toMatchObject([{ cause: "notVerifiedYet", mode: "delegated" }])
+  })
+
+  it("never takes the admin's token for what the Backup Reader may read", () => {
+    const readerRuns = [readerRun("r1", 9, { read: [FOLDER] }), readerRun("r2", 5, { refused: [refusal(FOLDER)] }), readerRun("r3", 3, { refused: [refusal(FOLDER)] })]
+    const { report } = evaluate([delegated({ graph: healthy(), snapshot: BEFORE }), readerConnection({ runs: readerRuns })], { reader: readerFacts(), readerClientId: READER })
+    expect(report.changes).toMatchObject([{ kind: "lostAccess", cause: "permission", mode: "app-only" }])
+    expect(area(report, "intune", "configuration").verified).toMatchObject({ cause: "permission", mode: "app-only" })
   })
 
   it("is reported once: looking at the changes makes it the state, and losing it again is news", () => {
