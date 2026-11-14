@@ -86,6 +86,14 @@ const bridge: TenuVaultPreloadBridge = {
   services: {
     status: (tenantId, clientId, refresh) => invoke("services:status", tenantId, clientId, refresh === true),
     setEnabled: (tenantId, clientId, id, enabled) => invoke("services:setEnabled", tenantId, clientId, id, enabled),
+    setAccess: (tenantId, id, access) => invoke("services:setAccess", tenantId, id, access),
+    setArea: (tenantId, id, area, enabled) => invoke("services:setArea", tenantId, id, area, enabled),
+  },
+  health: {
+    report: (tenantId) => invoke("health:report", tenantId),
+    check: (tenantId, again) => invoke("health:check", tenantId, again === true),
+    acknowledge: (tenantId) => invoke("health:acknowledge", tenantId),
+    onChanged: (listener) => subscribe<string>("health:changed", listener),
   },
   license: {
     trialWorkflowsConfigured: (tenantId) => invoke("license:trialWorkflowsConfigured", tenantId),
