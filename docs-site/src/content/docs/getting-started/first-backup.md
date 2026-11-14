@@ -46,6 +46,13 @@ When a schedule is already on or the key is already saved, the step says so inst
 
 For more on manual backups, see [Run a backup](/backups/).
 
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/backup-scope.webp" aria-label="Open full-size screenshot: backup scope">
+    <img src="/images/screenshots/backup-scope.webp" alt="Run Backup opens the scope picker before anything starts" width="1632" height="708" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Run Backup opens the scope picker before anything starts. Example tenant data. Select the image to view it full size.</figcaption>
+</figure>
+
 ## Read the result
 
 | Result | Meaning |

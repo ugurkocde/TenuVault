@@ -639,9 +639,16 @@ try {
   const screenshot = async (name) => {
     await evaluate(`document.activeElement?.blur?.()`)
     await sleep(400)
-    const toast = await evaluate(`[...document.querySelectorAll('[role="status"], [role="alert"]')].map(e => e.innerText).join(" | ")`)
+    const toast = await evaluate(`[...document.querySelectorAll('[role="status"], [role="alert"]')].filter(e => e.checkVisibility()).map(e => e.innerText).join(" | ")`)
     if (/fail|error|could not|unavailable/i.test(toast)) throw new Error(`Error visible before ${name}: ${toast}`)
-    const { data } = await send("Page.captureScreenshot", { format: "png" })
+    // Documentation dialogs are captured with a small surrounding margin for legibility.
+    const clip = process.env.DOCS_SHOTS === "1" ? await evaluate(`(() => {
+      const dialog = [...document.querySelectorAll('[role="dialog"]')].find(e => e.checkVisibility())
+      if (!dialog) return null
+      const r = dialog.getBoundingClientRect(), x = Math.max(0, r.x - 24), y = Math.max(0, r.y - 24)
+      return {x, y, width: Math.min(innerWidth - x, r.width + 48), height: Math.min(innerHeight - y, r.height + 48), scale: 1}
+    })()`) : null
+    const { data } = await send("Page.captureScreenshot", { format: "png", ...(clip ? {clip} : {}) })
     const file = join(shotsDir, `${name}.png`)
     writeFileSync(file, Buffer.from(data, "base64"))
     shots.push(name)
@@ -678,7 +685,10 @@ try {
     await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: Number(process.env.MARKETING_SCALE), mobile: false })
   }
 
-  if (process.env.MAA_SHOTS === "1") {
+  if (process.env.DOCS_SHOTS === "1") {
+    const { captureDocs } = await import("./docs-shots.mjs")
+    await captureDocs({ main, send, evaluate, go, click, assertText, scrollAll, screenshot, sleep })
+  } else if (process.env.MAA_SHOTS === "1") {
     await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1120, deviceScaleFactor: Number(process.env.MARKETING_SCALE ?? 1), mobile: false })
     await go("#/portal/backup?tab=restore", "Choose a backup")
     await evaluate(`document.querySelector('[role="option"]').click()`)

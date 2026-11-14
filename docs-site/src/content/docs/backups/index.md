@@ -62,12 +62,12 @@ The **Back up** dialog offers three choices:
 | Choice | What it covers |
 | --- | --- |
 | **Everything except apps** | "Policies, scripts, updates, enrollment and tenant settings." Every type except apps. App categories, policy sets, app configuration and app protection policies are still included. |
-| **Everything** | "Also app details and assignments. Installer files are never included." All 41 types. |
+| **Everything** | "Also app details and assignments. Installer files are never included." All selectable types. |
 | **Custom** | "Choose areas and individual types." |
 
 With **Custom**, TenuVault lists the areas (for example **Device configuration** or **Enrollment**). Tick an area to include all of its types, or expand it to tick individual types. When the tenant has an earlier backup, each area and type shows how many items it held last time, and the dialog estimates the total number of items.
 
-The line under the choices shows how many of the 41 types the backup covers. **Start backup** is unavailable until at least one type is ticked ("Choose at least one type.").
+The line under the choices shows how many of the selectable types the backup covers. **Start backup** is unavailable until at least one type is ticked ("Choose at least one type.").
 
 When apps are included, a note explains that apps are saved as their Intune details and assignments, which makes them the slowest type to back up. Installer files are not downloaded by this configuration-backup workflow; [App Backup](/apps/app-backup/) handles supported installer captures separately.
 
@@ -80,6 +80,13 @@ Each tenant has a saved backup choice. Automatic backups, **Back up all tenants 
 * To change it without running a backup, open **Backup & Restore**, then the **Schedule** tab, and edit **What to back up**. See [Schedule backups](/backups/schedules/#choose-what-automatic-backups-cover).
 
 A backup that leaves out types never ages out the only copy of those types. See [Retention](/backups/storage/#retention).
+
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/backup-scope.webp" aria-label="Open full-size screenshot: backup scope">
+    <img src="/images/screenshots/backup-scope.webp" alt="Choose Everything except apps, Everything or Custom before starting" width="1632" height="708" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Choose Everything except apps, Everything or Custom before starting. Example tenant data. Select the image to view it full size.</figcaption>
+</figure>
 
 ## Follow a running backup
 
@@ -104,7 +111,7 @@ The log lists what TenuVault did, with a time stamp per line. Typical lines:
 
 | Log line | Meaning |
 | --- | --- |
-| "Leaving out N of 41 types: ..." | The backup choice excludes these types |
+| "Leaving out N of 44 types: ..." | The backup choice excludes these types |
 | "Found N ... (N built-in skipped)." | Items found for a type. Built-in objects Intune recreates itself are skipped. |
 | "Backed up N ..." | All items of a type are saved |
 | "Skipped ...: access was denied. The app registration may lack the permission or admin consent, or your Intune role may not allow it." | Microsoft Graph refused access to this type: a permission or its admin consent is missing, or your Intune role does not cover it. The backup continues without it. |
@@ -149,7 +156,7 @@ The **Backup History** tab of **Backup & Restore** shows the **Backup Timeline**
 Each entry shows:
 
 * the date and time
-* what the backup covered: **Everything**, **Everything except apps**, or the number of types, for example "12 of 41 types"
+* what the backup covered: **Everything**, **Everything except apps**, or the number of types, for example "12 of 44 types"
 * how it started: **Manual**, **Scheduled** or **From tray**
 * the result, when it is not **Complete**
 * **Items**, **Size**, **Duration** and **Changes** since the previous backup (see [Compare backups](/backups/compare/))
@@ -167,6 +174,13 @@ Click an entry to open its **Backup Details**:
 | **About this backup** | **Status**, **Started** (how it started), **Included**, **Stored** and **Backup ID** |
 
 **Restore from this backup** is unavailable while a backup is running or when it holds no items.
+
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/backup-history.webp" aria-label="Open full-size screenshot: backup history">
+    <img src="/images/screenshots/backup-history.webp" alt="Backup History shows the saved scope, item count, size, duration and changes for each backup" width="2880" height="2000" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Backup History shows the saved scope, item count, size, duration and changes for each backup. Example tenant data. Select the image to view it full size.</figcaption>
+</figure>
 
 ## Where to see backups at a glance
 

@@ -110,6 +110,13 @@ On **Choose what to restore**, expand **Recovery readiness for N objects**. For 
 
 "Readiness unavailable. Retry loading the backup." means TenuVault could not assess the object. A missing assessment is not a pass. The report assumes the harder cross-tenant case, so some items flagged for review restore without extra work in their own tenant. No tenant changes happen while you review it.
 
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/restore-selection.webp" aria-label="Open full-size screenshot: restore selection">
+    <img src="/images/screenshots/restore-selection.webp" alt="Inspect recovery readiness in the Items step before a recovery exercise" width="2880" height="2000" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Inspect recovery readiness in the Items step before a recovery exercise. Example backup contents; no restore was performed. Select the image to view it full size.</figcaption>
+</figure>
+
 ## Handle external artifacts
 
 Backup metadata cannot recreate private keys, installer payloads or Apple credentials that the Microsoft Graph API does not export.

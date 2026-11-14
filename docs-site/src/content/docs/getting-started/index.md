@@ -16,6 +16,13 @@ Check the [Requirements](/getting-started/requirements/) first. In short, you ne
 * Someone who can create an app registration and grant admin consent in Microsoft Entra ID, once per tenant.
 * Outbound HTTPS access to Microsoft and to `www.tenuvault.com`.
 
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/dashboard.webp" aria-label="Open full-size screenshot: dashboard">
+    <img src="/images/screenshots/dashboard.webp" alt="After setup: the dashboard brings backup status, protected policies and drift into one view" width="2880" height="2000" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>After setup: the dashboard brings backup status, protected policies and drift into one view. Example tenant data. Select the image to view it full size.</figcaption>
+</figure>
+
 ## Setup checklist
 
 | Step | What you do | Where |

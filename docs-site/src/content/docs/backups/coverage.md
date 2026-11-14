@@ -25,7 +25,7 @@ Installer content stays separate from this metadata. The free [App Backup Window
 ## How to read the tables
 
 * **Assignments**: whether the backup holds the object's assignments (the groups and filters it targets). Restoring assignments is a separate choice. See [Restore modes and assignments](/restore/modes/).
-* **Everything except apps**: every type is included in this choice except **Apps**. **Everything** includes all 41 types.
+* **Everything except apps**: every type is included in this choice except **Apps**. **Everything** includes all selectable types. The picker also counts the three optional Entra Conditional Access types; their service must be enabled before they are backed up.
 * Built-in objects that Intune creates itself are skipped. The backup log reports how many were skipped.
 
 ## Device configuration

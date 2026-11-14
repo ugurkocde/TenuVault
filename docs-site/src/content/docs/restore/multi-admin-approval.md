@@ -56,9 +56,23 @@ When the tenant has an access policy, the **Review** step of the restore wizard 
 
 The field does not appear when TenuVault cannot read the access policies (your Intune role lacks the Multi Admin Approval read permission), or when the tenant has none yet. The second case matters when you restore **Multi admin approval policies** themselves: creating the first access policy always needs approval. A protected item then ends as **Approval required**, nothing is sent yet, and you send it from **Waiting for approval** with a justification.
 
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/maa-confirm.webp" aria-label="Open full-size screenshot: maa confirm">
+    <img src="/images/screenshots/maa-confirm.webp" alt="An approval-protected restore asks for a justification at Review" width="2880" height="2240" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>An approval-protected restore asks for a justification at Review. Simulated approval state; no request was sent to Intune. Select the image to view it full size.</figcaption>
+</figure>
+
 ### 2. Run the restore
 
 Unprotected items are restored as usual. Each protected item is sent to Intune as an approval request and shows **Submitted for approval** in the results. Nothing is written for it yet.
+
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/maa-submitted.webp" aria-label="Open full-size screenshot: maa submitted">
+    <img src="/images/screenshots/maa-submitted.webp" alt="Protected items can finish the submission step as pending approval" width="2880" height="2240" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Protected items can finish the submission step as pending approval. Simulated result, not a completed restore. Select the image to view it full size.</figcaption>
+</figure>
 
 ### 3. A second admin approves in Intune
 

@@ -28,6 +28,13 @@ To buy a license or ask for an invoice, use the **License** page after setup. Se
 
 The first tenant you sign in to without a key starts its 14 day Pro trial, unless that tenant already had one. If your organization shares a TenuVault license with that tenant, TenuVault picks it up when you sign in, and the tenant uses that plan instead. You can also start the trial or enter a key later, on the **Storage** step of the setup or on the **License** page.
 
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/welcome.webp" aria-label="Open full-size screenshot: welcome">
+    <img src="/images/screenshots/welcome.webp" alt="The welcome screen offers Connect your tenant, setup diagnostics and license-key entry" width="1440" height="891" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>The welcome screen offers Connect your tenant, setup diagnostics and license-key entry. Captured from the desktop app. Select the image to view it full size.</figcaption>
+</figure>
+
 ## Start a trial
 
 There is nothing to start: connecting a new tenant starts its 14 day Pro trial automatically, with no card and no email. The **Storage** step of the setup shows the trial with its end date. The trial ends without a charge, can be extended once, and afterwards one tenant continues on Community. See [Free trial, no card needed](/licensing/#free-trial-no-card-needed).

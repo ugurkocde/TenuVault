@@ -109,6 +109,13 @@ The file contains the key fingerprint and the recovery key, which starts with `T
 
 The **Key fingerprint** shown in Settings is a short, non-secret identifier of the current key. Use it to tell keys apart; it cannot be used to decrypt anything.
 
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/settings-storage.webp" aria-label="Open full-size screenshot: settings storage">
+    <img src="/images/screenshots/settings-storage.webp" alt="Save recovery key and Import recovery key are under Storage and recovery" width="2880" height="2000" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Save recovery key and Import recovery key are under Storage and recovery. Only the controls are shown, never the key. Select the image to view it full size.</figcaption>
+</figure>
+
 ### Import a recovery key on another machine
 
 1. Open **Settings** and go to **Storage and recovery**.

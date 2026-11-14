@@ -54,6 +54,13 @@ If no backup qualifies, the wizard shows **No backups to restore from** and asks
 
 Click a backup to continue.
 
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/restore-backup.webp" aria-label="Open full-size screenshot: restore backup">
+    <img src="/images/screenshots/restore-backup.webp" alt="The restore wizard starts with a backup from the selected tenant" width="2880" height="2000" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>The restore wizard starts with a backup from the selected tenant. Example backup history. Select the image to view it full size.</figcaption>
+</figure>
+
 ## Step 2: Choose what to restore
 
 TenuVault reads the backup (**Reading the backup...**) and lists its items grouped by area (for example **Device configuration**, **Compliance**, **Apps**) and then by type.
@@ -85,6 +92,13 @@ Above the list, **Recovery readiness for N objects** expands into a read-only re
 The report is conservative because it assumes a copy into another tenant. Nothing changes in your tenant while you read it. See [Disaster recovery](/restore/disaster-recovery/) for how to act on it.
 
 Click **Next** when your selection is ready, or **Other backup** to go back.
+
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/restore-selection.webp" aria-label="Open full-size screenshot: restore selection">
+    <img src="/images/screenshots/restore-selection.webp" alt="Choose individual items and inspect recovery readiness before continuing" width="2880" height="2000" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Choose individual items and inspect recovery readiness before continuing. Example backup contents. Select the image to view it full size.</figcaption>
+</figure>
 
 ## Step 3: How to restore
 
@@ -145,6 +159,13 @@ Next to the restore button, **Validate backup (no changes)** runs a dry run over
 * **Assignment references**: recorded assignments point at valid targets.
 
 The result lists, per policy type, how many items passed and failed, and names every failing item with the check that failed. A valid backup reports that all items passed. Nothing is written to your tenant, to Microsoft Graph or to a change set, and no restore starts. Run it when you want to prove a backup is restorable before you need it, or to find the exact item that is missing or corrupt. Validating a whole backup is included in TenuVault Pro and MSP, like restoring several items at once.
+
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/restore-review.webp" aria-label="Open full-size screenshot: restore review">
+    <img src="/images/screenshots/restore-review.webp" alt="Review names the destination, the action on each item and the read-only validation option" width="2880" height="2000" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Review names the destination, the action on each item and the read-only validation option. Example plan; no restore was performed. Select the image to view it full size.</figcaption>
+</figure>
 
 ## Step 5: Restore
 

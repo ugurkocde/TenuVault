@@ -29,6 +29,13 @@ Reports generated on a paid plan stay readable and can still be saved as PDF, Ma
 
 The report runs in the background and shows in the activity panel, so you can open another page meanwhile. It needs two complete backups. Backups that failed, are still running or completed with warnings are not offered by the first three periods; with **Choose two backups** you can pick a backup that completed with warnings, and items it could not read may then show as deleted or added.
 
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/reports.webp" aria-label="Open full-size screenshot: reports">
+    <img src="/images/screenshots/reports.webp" alt="Choose a period under New change report; email and automation are configured below" width="2880" height="2000" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Choose a period under New change report; email and automation are configured below. Initial workspace with no generated reports. Select the image to view it full size.</figcaption>
+</figure>
+
 ## Read a report
 
 Click a report in the **Reports** list to open it. It has these parts, in the app and in every saved format:

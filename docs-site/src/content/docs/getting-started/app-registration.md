@@ -68,6 +68,13 @@ For the messages TenuVault shows, see [Troubleshooting](/troubleshooting/).
 
 Delete **TenuVault Desktop** under **Entra admin center** > **App registrations**. That removes the sign-in and the consent. Backups you already saved stay where they are, on this computer or in your Azure storage.
 
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/setup-connect.webp" aria-label="Open full-size screenshot: setup connect">
+    <img src="/images/screenshots/setup-connect.webp" alt="The built-in connection screen explains the app registration before you start Microsoft sign-in" width="2880" height="2000" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>The built-in connection screen explains the app registration before you start Microsoft sign-in. Example tenant data. Select the image to view it full size.</figcaption>
+</figure>
+
 ## What the setup creates
 
 | Setting | Value |

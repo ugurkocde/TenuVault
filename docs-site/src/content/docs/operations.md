@@ -52,6 +52,13 @@ A review reads stored evidence, so a review on its own does not make old evidenc
 
 The readiness tile shows whether scheduling is **Ready**, **Off**, **Sign-in required** or **Not licensed**, with the reason and the next due time. Reviews run only while TenuVault runs; the last review time is always shown, so a review that could not run is visible instead of silent.
 
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/operations.webp" aria-label="Open full-size screenshot: operations">
+    <img src="/images/screenshots/operations.webp" alt="Health review groups review status, scheduling and notifications" width="2880" height="2000" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Health review groups review status, scheduling and notifications. Initial workspace with no review run or notifications configured. Select the image to view it full size.</figcaption>
+</figure>
+
 ## Work through findings
 
 The **Findings** list shows each open finding with its severity, title, reason, and when it was first seen, last checked, and the date of its evidence: when backups were read, or when a work signal was collected, such as the backup a hygiene scan read. **Open** after the reason goes to the screen the finding comes from. If the findings cannot be read, the list shows the error with **Retry** instead of an empty list. When no finding is open, the list says whether no review has run yet, or names the time of the latest review and whether it completed or could only read part of the evidence. Click **Export CSV** or **Export JSON** above the list to save the findings currently shown, including resolved findings only while they are shown.
