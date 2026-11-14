@@ -237,8 +237,8 @@ export class BackupReaderService {
     let usable = verified
     // A run asks for a token before every request, so the roles are compared once per set of roles.
     let seen: string | undefined
-    const token = async (resource: "graph" | "storage") => {
-      const acquired = await this.acquire(app, RESOURCE_SCOPES[resource]).catch((error: unknown) => {
+    const token = async (resource: "graph" | "storage", fresh = false) => {
+      const acquired = await (fresh ? this.acquire(app, RESOURCE_SCOPES[resource], { fresh: true }) : this.acquire(app, RESOURCE_SCOPES[resource])).catch((error: unknown) => {
         // A network failure or a transient refusal stays as it is, so the backup is retried.
         throw refused(error, { permanentOnly: true }) ?? error
       })
@@ -254,7 +254,7 @@ export class BackupReaderService {
     }
     return {
       mode: "app-only",
-      graph: () => token("graph"),
+      graph: (options) => token("graph", options?.fresh),
       storage: () => token("storage"),
       // Answered from the roles in the reader's token, so a run leaves out the types of a role that was removed before it asks for them.
       excludedTypes: async () => {

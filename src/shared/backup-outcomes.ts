@@ -128,6 +128,15 @@ const NOT_AVAILABLE = /licen[cs]e|not onboarded|is not active|requires feature|n
 const TOKEN_REFUSED = /InvalidAuthenticationToken|token (has |is )?expired|token validation/i
 
 /**
+ * Whether a refused read says that Microsoft no longer accepts the sign-in itself: a 401 that names
+ * a token error. No type is at fault then. Every read after it fails the same way, so it ends the
+ * backup, whichever service it came from.
+ */
+export function signInRefused(answer: RefusedAnswer): boolean {
+  return answer.status === 401 && TOKEN_REFUSED.test(`${answer.code ?? ""} ${answer.message ?? ""}`)
+}
+
+/**
  * What a refused read means for the type it belongs to. The rules follow the answers recorded from
  * the lab tenant (test/fixtures/graph-answers.ts): Microsoft Graph does not answer a missing
  * permission the same way everywhere, and it answers a missing license or a setting that was never
@@ -139,7 +148,7 @@ export function classifyAnswer(answer: RefusedAnswer, context: AnswerContext): V
   if (answer.status === 401) {
     if (/app-only/i.test(said)) return { outcome: "skipped", cause: "signedIn" }
     // Some endpoints answer a missing permission with 401, one of them with an HTML page.
-    return TOKEN_REFUSED.test(said) ? { outcome: "failed" } : { outcome: "skipped", cause: "permission" }
+    return signInRefused(answer) ? { outcome: "failed" } : { outcome: "skipped", cause: "permission" }
   }
   if ((answer.status === 403 || answer.status === 400) && NOT_AVAILABLE.test(said)) return { outcome: "skipped", cause: "license" }
   if (answer.status !== 403) return { outcome: "failed" }

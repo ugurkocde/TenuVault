@@ -1,5 +1,6 @@
 import { retryDelay, retryableStatus, sleep } from "../graph-retry"
 import { FetchApplicationError } from "../api/network-error"
+import { signInRefused } from "../../shared/backup-outcomes"
 import type { NetworkCircuit } from "./engine"
 import { GRAPH, MAX_LIST_PAGES, REQUEST_ATTEMPTS, GraphError, GraphPauseError, GraphUnansweredError, RequestTimeoutError, TokenError, graphFailure, requestFailure, withRequestTimeout } from "./request"
 
@@ -12,8 +13,9 @@ export interface GraphSessionOptions {
    * The session of a service that isolates its failures (see ServiceModule.isolated). A pause longer
    * than the bound fails the request that got it and leaves the other readers of the service alone.
    * Requests that get no answer count for this service only: too many in a row stop the service,
-   * never the job. Without it, the pause stops every reader of the session and unanswered requests
-   * count toward the job's circuit, as they always have.
+   * never the job. A 401 that names no token error is asked once more with a new token before it
+   * counts as the endpoint's own answer. Without it, the pause stops every reader of the session
+   * and unanswered requests count toward the job's circuit, as they always have.
    */
   isolated?: boolean
 }
@@ -44,7 +46,8 @@ export class GraphSession {
 
   constructor(
     private readonly fetchImpl: typeof fetch,
-    private readonly token: () => Promise<string>,
+    /** `fresh`: a token Microsoft issues now instead of a cached one. */
+    private readonly token: (options?: { fresh: true }) => Promise<string>,
     private readonly network: NetworkCircuit,
     private readonly options: GraphSessionOptions = {},
   ) {}
@@ -76,6 +79,9 @@ export class GraphSession {
 
   /** GET with bounded retries for throttling, transient status codes and network failures. */
   async get<T = Record<string, unknown>>(url: string, headers?: Readonly<Record<string, string>>): Promise<T> {
+    // Set when the request is asked once more with a new token (see the 401 below).
+    let confirming = false
+    let fresh: string | undefined
     for (let attempt = 0; ; attempt++) {
       this.network.signal.throwIfAborted()
       if (this.stopped) throw this.stopped
@@ -85,7 +91,7 @@ export class GraphSession {
       let attempted = false
       try {
         return await withRequestTimeout(async (signal) => {
-          const token = await this.token()
+          const token = confirming ? (fresh ??= await this.token({ fresh: true })) : await this.token()
           signal.throwIfAborted()
           if (this.throttleError) throw this.throttleError
           if (this.resumeAt > Date.now()) throw new GraphPauseError()
@@ -109,6 +115,15 @@ export class GraphSession {
           continue
         }
         if (this.throttleError && error === this.throttleError) throw error
+        // Some endpoints of a service that isolates its failures answer 401 on their own, for a missing permission
+        // or to a Backup Reader. A sign-in that just ended is answered the same way. The request is asked once more
+        // with a token Microsoft issues now: a sign-in that ended gets none, which ends the backup, and only an
+        // answer to the new token is taken as the endpoint's own.
+        if (this.options.isolated && !confirming && error instanceof GraphError && error.status === 401 && !signInRefused({ status: 401, ...error.answer })) {
+          confirming = true
+          attempt = -1
+          continue
+        }
         if (error instanceof FetchApplicationError || error instanceof TokenError || (error instanceof GraphError && !retryableStatus(error.status))) throw error
         let delay: number
         try {

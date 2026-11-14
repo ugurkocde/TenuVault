@@ -303,6 +303,145 @@ describe("an Entra ID or Defender endpoint that does not answer", () => {
   })
 })
 
+describe("a sign-in that ended during a backup", () => {
+  const expired = refusal(401, "InvalidAuthenticationToken", "Access token has expired or is not yet valid.")
+  const html = () => new Response("<html><title>401 - Unauthorized: Access is denied due to invalid credentials.</title></html>", { status: 401, headers: { "content-type": "text/html" } })
+  /** The sign-in as the engine asks for it: the cached token, or one Microsoft issues now. */
+  const signIn = (fresh: () => Promise<string> = async () => "fresh") => {
+    const asked: boolean[] = []
+    return { asked, getToken: async (_tenant: string, _client: string, _scope: string, wantsFresh?: boolean) => (asked.push(wantsFresh === true), wantsFresh ? fresh() : "token") }
+  }
+
+  it("ends the backup when an Entra ID or Defender list is answered with a token error, like an Intune one", async () => {
+    const { run, requests, manifest } = fixture(tenant({ "/beta/policies/tokenLifetimePolicies": expired }))
+    const job = await run()
+    expect(job.status).toBe("Failed")
+    expect(job.exception).toBe("Access token has expired or is not yet valid.")
+    // Not a type that was left out or failed on its own: the run stopped.
+    expect(outcomeOf(job, "TokenLifetimePolicies")).toMatchObject({ outcome: "failed", error: "The backup stopped before this type was read in full." })
+    expect(job.outcomes).toMatchObject({ status: "Failed", coverage: "incomplete" })
+    expect(requests.filter((request) => request.path === "/beta/policies/tokenLifetimePolicies")).toHaveLength(1)
+    // No object was asked for with a sign-in Microsoft refused.
+    expect(requests.some((request) => request.path.startsWith("/beta/directory/administrativeUnits/"))).toBe(false)
+    expect(await manifest(job).catch(() => null)).toBeNull()
+  })
+
+  it("ends the backup at the first object of an Entra ID type that is answered with a token error, instead of failing each object", async () => {
+    const { run, requests, manifest } = fixture(tenant(Object.fromEntries(units.map((unit) => [`/beta/directory/administrativeUnits/${unit.id}`, expired]))), { concurrency: 1 })
+    const job = await run()
+    expect(job.status).toBe("Failed")
+    expect(job.exception).toBe("Access token has expired or is not yet valid.")
+    expect(requests.filter((request) => request.path.startsWith("/beta/directory/administrativeUnits/")).map((request) => request.path)).toEqual(["/beta/directory/administrativeUnits/au1"])
+    expect(await manifest(job)).toMatchObject({ Status: "Failed", Error: "Access token has expired or is not yet valid." })
+  })
+
+  it("ends the backup when the token error comes after the type had already ended", async () => {
+    // The first unit is refused, which ends the type; the unit read next to it is answered with a token error a moment later.
+    let secondAsked: () => void = () => undefined
+    const bothUnderWay = new Promise<void>((resolve) => { secondAsked = resolve })
+    const { run, requests } = fixture(tenant({
+      "/beta/directory/administrativeUnits/au1": async () => {
+        await bothUnderWay
+        return refusal(403, "Authorization_RequestDenied", "Insufficient privileges to complete the operation.")()
+      },
+      "/beta/directory/administrativeUnits/au2": async () => {
+        secondAsked()
+        await new Promise((resolve) => setTimeout(resolve, 50))
+        return expired()
+      },
+    }), { concurrency: 2 })
+    const job = await run()
+    expect(requests.some((request) => request.path === "/beta/directory/administrativeUnits/au3")).toBe(false)
+    expect(job.status).toBe("Failed")
+    expect(job.exception).toBe("Access token has expired or is not yet valid.")
+  })
+
+  it("takes a 401 without a token error as the endpoint's own answer once the same request got it again with a new token", async () => {
+    const { asked, getToken } = signIn()
+    const { run, requests, files, manifest } = fixture(tenant({ "/beta/policies/tokenLifetimePolicies": html }), { getToken })
+    const job = await run()
+    expect(job.status).toBe("Completed")
+    const sent = requests.filter((request) => request.path === "/beta/policies/tokenLifetimePolicies")
+    expect(sent.map((request) => request.headers.get("Authorization"))).toEqual(["Bearer token", "Bearer fresh"])
+    // One new token for the one repeat, and the cached sign-in for everything else.
+    expect(asked.filter(Boolean)).toHaveLength(1)
+    expect(outcomeOf(job, "TokenLifetimePolicies")).toMatchObject({ outcome: "skipped", cause: "permission", status: 401 })
+    await intuneSaved(await files(job))
+    expect(await manifest(job)).toMatchObject({ Status: "Success", SkippedTypes: ["TokenLifetimePolicies"], Coverage: "Incomplete" })
+  })
+
+  it("ends the backup as a sign-in failure when no new token can be had after such a 401", async () => {
+    const { getToken } = signIn(async () => { throw new Error("AADSTS700082: The refresh token has expired due to inactivity.") })
+    const { run, requests } = fixture(tenant({ "/beta/policies/tokenLifetimePolicies": html }), { getToken })
+    const job = await run()
+    expect(job.status).toBe("Failed")
+    expect(job.exception).toContain("AADSTS700082")
+    // The type was not left out for a permission it may well have.
+    expect(outcomeOf(job, "TokenLifetimePolicies")).toMatchObject({ outcome: "failed", error: "The backup stopped before this type was read in full." })
+    expect(requests.filter((request) => request.path === "/beta/policies/tokenLifetimePolicies")).toHaveLength(1)
+  })
+
+  it("reads the type after all when the new token is answered, because the 401 was the old token's", async () => {
+    const { getToken } = signIn()
+    const { run, files } = fixture(tenant({
+      "/beta/policies/tokenLifetimePolicies": (request: Request) => (request.headers.get("Authorization") === "Bearer fresh" ? Response.json({ value: [{ id: "tl1", displayName: "Lifetime" }] }) : html()),
+    }), { getToken })
+    const job = await run()
+    expect(await files(job)).toContain("TokenLifetimePolicies/Lifetime.json")
+    expect(outcomeOf(job, "TokenLifetimePolicies")).toMatchObject({ outcome: "saved", saved: 1 })
+  })
+
+  it("ends the backup when the new token is answered with a token error", async () => {
+    const { getToken } = signIn()
+    const { run } = fixture(tenant({
+      "/beta/policies/tokenLifetimePolicies": (request: Request) => (request.headers.get("Authorization") === "Bearer fresh" ? expired() : html()),
+    }), { getToken })
+    const job = await run()
+    expect(job.status).toBe("Failed")
+    expect(job.exception).toBe("Access token has expired or is not yet valid.")
+  })
+
+  it("asks an object read and a sub-read once more in the same way, and ends the type on the confirmed answer", async () => {
+    const { asked, getToken } = signIn()
+    const { run, requests, files } = fixture(tenant({ "/beta/directory/administrativeUnits/au1/members?$select=id": html }), { getToken, concurrency: 1 })
+    const job = await run()
+    expect(job.status).toBe("Completed")
+    expect(requests.filter((request) => request.path.includes("/members")).map((request) => [request.path, request.headers.get("Authorization")])).toEqual([
+      ["/beta/directory/administrativeUnits/au1/members?$select=id", "Bearer token"],
+      ["/beta/directory/administrativeUnits/au1/members?$select=id", "Bearer fresh"],
+    ])
+    expect(asked.filter(Boolean)).toHaveLength(1)
+    expect(outcomeOf(job, "AdministrativeUnits")).toMatchObject({ outcome: "skipped", cause: "permission", status: 401 })
+    await intuneSaved(await files(job))
+  })
+
+  it("asks the Backup Reader for a new token in the same way", async () => {
+    const asked: Array<{ fresh?: boolean } | undefined> = []
+    const { run, requests } = fixture(tenant({ "/beta/security/rules/detectionRules": html }), {
+      unattendedTokens: () => ({
+        mode: "app-only",
+        graph: async (options) => (asked.push(options), options?.fresh ? "fresh" : "opaque"),
+        storage: async () => "storage",
+      }),
+    })
+    const job = await run({ trigger: "scheduled" })
+    expect(job.status).toBe("Completed")
+    expect(asked.filter((options) => options?.fresh)).toHaveLength(1)
+    expect(requests.filter((request) => request.path === "/beta/security/rules/detectionRules").map((request) => request.headers.get("Authorization"))).toEqual(["Bearer opaque", "Bearer fresh"])
+    expect(outcomeOf(job, "DefenderCustomDetectionRules")).toMatchObject({ outcome: "skipped", cause: "permission" })
+  })
+
+  it("never asks an Intune read once more: any 401 ends the backup as before", async () => {
+    const { asked, getToken } = signIn()
+    const { run, requests } = fixture(tenant({ "/beta/deviceManagement/deviceCategories": html }), { getToken })
+    const job = await run()
+    expect(job.status).toBe("Failed")
+    expect(job.exception).toBe("Microsoft Graph returned 401")
+    expect(requests.filter((request) => request.path === "/beta/deviceManagement/deviceCategories")).toHaveLength(1)
+    expect(asked.some(Boolean)).toBe(false)
+  })
+})
+
 describe("Intune and Conditional Access", () => {
   it("still end the backup on a 401, also in a tenant with Entra ID and Defender", async () => {
     const { run, manifest } = fixture(tenant({ "/beta/deviceManagement/deviceCategories": refusal(401, "InvalidAuthenticationToken", "Access token has expired or is not yet valid.") }))

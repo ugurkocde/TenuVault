@@ -303,6 +303,9 @@ describe("BackupReaderService", () => {
     expect(acquire.mock.calls.at(-1)![2]).toEqual({ fresh: true })
     await reader.tokens(scheduled)!.graph()
     expect(acquire.mock.calls.at(-1)![2]).toBeUndefined()
+    // A backup asks for a new token to tell a sign-in that ended from an endpoint's own refusal.
+    await reader.tokens(scheduled)!.graph({ fresh: true })
+    expect(acquire.mock.calls.at(-1)![2]).toEqual({ fresh: true })
   })
 
   it("discards a renewal that was not uploaded and keeps the active certificate", async () => {

@@ -17,7 +17,7 @@ import { EVERYTHING, includedTypes, normalizeScope, restorableFolders, type Back
 import { canBackUp, DEFAULT_SELECTION, describeRequirement, disabledFolders, MODULES, moduleForFolder, SERVICES_PAGE, signedInOnly, type ServiceSelection, type SignInMode } from "../../shared/services/modules"
 import { grantedPermissions } from "../../shared/services/token"
 import { MAX_ITEM_ERRORS, type BackupNotice, type BackupResults, type BackupTypeResult } from "../../shared/backup-results"
-import { classifyAnswer, coverageOf, manifestOutcomes, skipReason, type Coverage, type RunOutcomes, type SkipCause, type TypeOutcome } from "../../shared/backup-outcomes"
+import { classifyAnswer, coverageOf, manifestOutcomes, signInRefused, skipReason, type Coverage, type RunOutcomes, type SkipCause, type TypeOutcome } from "../../shared/backup-outcomes"
 
 /**
  * Runs Intune backups from the desktop app as the signed-in admin.
@@ -74,7 +74,8 @@ export type BackupAuthMode = "delegated" | "app-only"
 /** The tokens one backup run uses for Microsoft Graph and Azure Storage, chosen once when it starts. */
 export interface RunTokens {
   mode: BackupAuthMode
-  graph: () => Promise<string>
+  /** `fresh`: a token Microsoft issues now instead of a cached one, which proves that the sign-in still works. */
+  graph: (options?: { fresh?: boolean }) => Promise<string>
   storage: () => Promise<string>
   /**
    * Type folders these tokens have no permission for by design; the run leaves them out and records
@@ -98,7 +99,8 @@ export interface BackupRequest {
 export interface BackupEngineDeps {
   /** The main-process fetch (bridged, so local storage accounts are served from disk). */
   fetch: typeof fetch
-  getToken: (tenantId: string, clientId: string, scope: string) => Promise<string>
+  /** `fresh`: a token Microsoft issues now instead of a cached one. */
+  getToken: (tenantId: string, clientId: string, scope: string, fresh?: boolean) => Promise<string>
   /**
    * The tenant's Backup Reader tokens, or null when it has none. Asked only for scheduled backups:
    * manual and tray backups, where an admin is present, always use the admin's own sign-in.
@@ -435,7 +437,7 @@ export class BackupEngine {
     if (unattended) return unattended
     return {
       mode: "delegated",
-      graph: () => this.deps.getToken(request.tenantId, request.clientId, `${GRAPH}/.default`),
+      graph: (options) => (options?.fresh ? this.deps.getToken(request.tenantId, request.clientId, `${GRAPH}/.default`, true) : this.deps.getToken(request.tenantId, request.clientId, `${GRAPH}/.default`)),
       storage: () => this.deps.getToken(request.tenantId, request.clientId, "https://storage.azure.com/.default"),
     }
   }
@@ -471,7 +473,7 @@ export class BackupEngine {
     this.write(job, `Backup folder: ${backupFolder}`)
     if (tokens.mode === "app-only") this.write(job, "Reading as the tenant's Backup Reader (app-only, read-only).")
 
-    const graphToken = () => tokenOrStop(tokens.graph, outcome)
+    const graphToken = (options?: { fresh: true }) => tokenOrStop(() => (options ? tokens.graph(options) : tokens.graph()), outcome)
     const storageToken = local ? async () => "" : () => tokenOrStop(tokens.storage, outcome)
 
     const concurrency = this.deps.concurrency ?? CONCURRENCY
@@ -598,6 +600,8 @@ export class BackupEngine {
     }
     // Types of a service that isolates its failures which ended before every object was read; their remaining objects are not read.
     const endedTypes = new Set<string>()
+    // Microsoft no longer accepts the sign-in. No type is at fault: every read after it fails the same way, for every service.
+    const signInEnded = (error: unknown) => error instanceof TokenError || (error instanceof GraphError && signInRefused({ status: error.status, ...error.answer }))
     /**
      * Ends a type of a service that isolates its failures, by what the failed read means: the type was
      * never set up, the sign-in may not read it, or it could not be read. The backup goes on with the
@@ -656,7 +660,7 @@ export class BackupEngine {
         lists[index] = { type, items }
       } catch (error) {
         // A sign-in that failed fails every read of the run, and a run that was stopped is over: both still end the backup.
-        if (service.isolated && !(error instanceof TokenError) && !network.signal.aborted) {
+        if (service.isolated && !signInEnded(error) && !network.signal.aborted) {
           endType(type, error)
           return
         }
@@ -790,7 +794,7 @@ export class BackupEngine {
         result(type.folder).saved++
         outcome.saved++
       } catch (error) {
-        if (service.isolated && !(error instanceof TokenError) && !network.signal.aborted) {
+        if (service.isolated && !signInEnded(error) && !network.signal.aborted) {
           // A refusal, a pause longer than the bound or a request without an answer holds for every object of the type: the type ends, the backup goes on.
           const refused = error instanceof GraphError && classifyAnswer({ status: error.status, ...error.answer }, { mode: tokens.mode }).outcome === "skipped"
           if (refused || error instanceof RetryDelayError || error instanceof GraphUnansweredError || endedTypes.has(type.folder)) {
@@ -804,7 +808,7 @@ export class BackupEngine {
         network.signal.throwIfAborted()
         if (!service.isolated) countAuthFailure(error, service.id)
         // An expired sign-in fails every remaining item the same way, so it stops the backup once.
-        if (error instanceof TokenError || (!service.isolated && error instanceof GraphError && error.status === 401)) throw error
+        if (signInEnded(error) || (!service.isolated && error instanceof GraphError && error.status === 401)) throw error
         failures++
         const warning = `Could not back up "${displayName}": ${error instanceof Error ? error.message : String(error)}`
         if (error instanceof RequestTimeoutError) itemTimeoutWarnings.push(warning)

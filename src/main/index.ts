@@ -318,7 +318,7 @@ async function bootstrap(): Promise<void> {
   // tokenFor and preferences are declared below; they are only called once the app runs.
   const backupAccess = backupAuthorization({
     license,
-    tokenFor: (tenantId, clientId, scope) => tokenFor(tenantId, clientId, scope),
+    tokenFor: (tenantId, clientId, scope, forceRefresh) => tokenFor(tenantId, clientId, scope, forceRefresh),
     // Community keeps 30 days of history; Pro and MSP keep what the admin chooses (0 keeps everything).
     retentionDays: (tenantId) => effectiveRetentionDays(preferences.get().retentionDays, license.plan(tenantId)),
   })
@@ -440,9 +440,9 @@ async function bootstrap(): Promise<void> {
       if (!reader) return null
       return {
         ...reader,
-        graph: async () => {
+        graph: async (options) => {
           await license.requireEntitlement(request.tenantId)
-          return reader.graph()
+          return reader.graph(options)
         },
         storage: async () => {
           await license.requireEntitlement(request.tenantId)
