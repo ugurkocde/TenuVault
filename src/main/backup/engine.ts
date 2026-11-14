@@ -13,7 +13,7 @@ import { listSnapshot, readObject, withMaskedSecrets } from "../../shared/intune
 import { comparableSnapshot } from "../../shared/intune/compare"
 import type { BackupItems } from "../../shared/intune/backup-changes"
 import { EVERYTHING, includedTypes, normalizeScope, restorableFolders, type BackupScope } from "../../shared/intune/scope"
-import { canBackUp, DEFAULT_SELECTION, describeRequirement, disabledFolders, moduleForFolder, SERVICES_PAGE, type ServiceSelection } from "../../shared/services/modules"
+import { canBackUp, DEFAULT_SELECTION, describeRequirement, disabledFolders, MODULES, moduleForFolder, SERVICES_PAGE, type ServiceSelection } from "../../shared/services/modules"
 import { grantedPermissions } from "../../shared/services/token"
 import { MAX_ITEM_ERRORS, type BackupNotice, type BackupResults, type BackupTypeResult } from "../../shared/backup-results"
 
@@ -469,6 +469,11 @@ export class BackupEngine {
       Object.assign(result(type.folder), { state: "skipped", reason })
       this.write(job, `Leaving out ${type.label}: ${reason.charAt(0).toLowerCase()}${reason.slice(1)}`)
     }
+    // A service that is normally on but was turned off for the tenant is named, so a smaller or empty backup explains itself.
+    for (const module of MODULES) {
+      if (!module.defaultOn || selection.services.includes(module.id) || !includedTypes(scope).some((type) => moduleForFolder(type.folder)?.module === module)) continue
+      this.write(job, `${module.label} is turned off for this tenant, so its types are not backed up. ${SERVICES_PAGE} in Settings turns it on again.`, "info")
+    }
     if (scope.excluded.length) {
       this.write(job, `Leaving out ${scope.excluded.length} of ${INTUNE_TYPES.length} types: ${scope.excluded.join(", ")}.`)
       // The notice names the types as people read them; the log keeps the folder names.
@@ -486,7 +491,7 @@ export class BackupEngine {
     }
 
     // List everything first so progress reflects the real amount of work.
-    job.progressMessage = "Reading Intune configuration..."
+    job.progressMessage = types.some((type) => moduleForFolder(type.folder)?.module.id === "intune") ? "Reading Intune configuration..." : "Reading configuration..."
     const counts: Record<string, number> = Object.fromEntries(types.map((type) => [type.folder, 0]))
     const lists: Array<{ type: IntuneType; items: GraphItem[] } | null> = Array.from({ length: types.length }, () => null)
     // Types left out for a missing permission count as skipped, like a type whose read was denied.
