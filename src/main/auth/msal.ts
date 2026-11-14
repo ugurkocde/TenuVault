@@ -40,15 +40,26 @@ export interface AuthHost {
  * shows a prompt and calls `reauthenticate` when the admin agrees.
  */
 export class SignInRequiredError extends Error {
+  /**
+   * Microsoft's error number and OAuth error of a refused silent request, as MSAL reports them.
+   * Connection health reads these; the message is worded for the admin and is never parsed.
+   */
+  declare readonly errorNo?: string
+  declare readonly errorCode?: string
+
   constructor(
     readonly tenantId: string,
     readonly clientId: string,
     reason: string,
     /** The resource scope that needs the sign-in, so signing in again requests that scope. */
     readonly scope: string = RESOURCE_SCOPES.graph,
+    /** Microsoft's refusal behind it, when there was one. */
+    refusal?: { errorNo?: unknown; errorCode?: unknown },
   ) {
     super(reason)
     this.name = "SignInRequiredError"
+    if (typeof refusal?.errorNo === "string" || typeof refusal?.errorNo === "number") this.errorNo = String(refusal.errorNo)
+    if (typeof refusal?.errorCode === "string") this.errorCode = refusal.errorCode
   }
 }
 
@@ -261,7 +272,7 @@ export class AuthManager {
       if (result) return result
     } catch (error) {
       if (error instanceof InteractionRequiredAuthError) {
-        throw new SignInRequiredError(tenantId, clientId, signInAgainMessage(stored.username, scope, error), scope)
+        throw new SignInRequiredError(tenantId, clientId, signInAgainMessage(stored.username, scope, error), scope, error)
       }
       throw error
     }
