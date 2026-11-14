@@ -51,7 +51,7 @@ function setup(options: { decrypt?: boolean; retentionDays?: number; excludedTyp
       throw new Error(`unexpected ${url}`)
     }) as typeof fetch,
     getToken: async () => "admin",
-    unattendedTokens: () => ({ mode: "app-only", graph: async () => "reader", storage: async () => "", excludedTypes: options.excludedTypes }) satisfies RunTokens,
+    unattendedTokens: () => ({ mode: "app-only", graph: async () => "reader", storage: async () => "", excludedTypes: async () => options.excludedTypes ?? [] }) satisfies RunTokens,
     retentionDays: () => options.retentionDays ?? 0,
     // Every run gets its own backup folder.
     now: () => new Date((clock += 60_000)),

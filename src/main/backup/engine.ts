@@ -70,8 +70,11 @@ export interface RunTokens {
   mode: BackupAuthMode
   graph: () => Promise<string>
   storage: () => Promise<string>
-  /** Type folders these tokens have no permission for by design; the run leaves them out and records why. */
-  excludedTypes?: string[]
+  /**
+   * Type folders these tokens have no permission for by design; the run leaves them out and records
+   * why. Asked once when the run starts: a Backup Reader answers from the roles in its token.
+   */
+  excludedTypes?: () => Promise<string[]>
 }
 
 export interface BackupRequest {
@@ -241,7 +244,7 @@ export class NetworkCircuit {
   }
 }
 
-async function tokenOrStop(get: () => Promise<string>, outcome: RunOutcome): Promise<string> {
+async function tokenOrStop<T>(get: () => Promise<T>, outcome: RunOutcome): Promise<T> {
   try {
     return await get()
   } catch (error) {
@@ -445,7 +448,8 @@ export class BackupEngine {
     if (local || tokens.mode === "delegated") await storage.ensureContainer()
 
     const scope = normalizeScope(request.scope ?? EVERYTHING)
-    const readerExcluded = new Set(tokens.excludedTypes ?? [])
+    // The answer needs the reader's token, so a reader Microsoft refuses stops the run here as it would at the first read.
+    const readerExcluded = new Set(tokens.excludedTypes ? await tokenOrStop(tokens.excludedTypes, outcome) : [])
     const selection = this.deps.services?.(request.tenantId) ?? DEFAULT_SELECTION
     const moduleOff = new Set(disabledFolders(selection))
     const notReadable = includedTypes(scope).filter((type) => readerExcluded.has(type.folder) && !moduleOff.has(type.folder)).map((type) => type.folder)

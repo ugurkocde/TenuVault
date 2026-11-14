@@ -115,7 +115,7 @@ describe("BackupReaderService", () => {
 
     const tokens = reader.tokens(scheduled)!
     expect(tokens.mode).toBe("app-only")
-    expect(tokens.excludedTypes).toEqual([...DEVICE_INVENTORY_TYPES, ...CONDITIONAL_ACCESS_TYPES])
+    expect(await tokens.excludedTypes!()).toEqual([...DEVICE_INVENTORY_TYPES, ...CONDITIONAL_ACCESS_TYPES])
     expect(await tokens.graph()).toBe(graphToken())
     expect(await tokens.storage()).toBe(storageToken())
   })
@@ -143,22 +143,47 @@ describe("BackupReaderService", () => {
     expect(reader.tokens(scheduled)).toBeNull()
   })
 
-  it("keeps running when a role was removed after verification, leaves its types to Microsoft Graph and asks for a new verification", async () => {
-    const { reader, setGraph } = service({ graph: () => graphToken({ roles: [...READER_REQUIRED_ROLES, DEVICE_INVENTORY_ROLE] }) })
+  it("keeps running when a role was removed after verification, leaves its types out and asks for a new verification", async () => {
+    const { reader, setGraph } = service({ selection: { services: ["intune"] }, graph: () => graphToken({ roles: [...READER_REQUIRED_ROLES, DEVICE_INVENTORY_ROLE] }) })
     reader.prepare(TENANT, "LAPTOP-1")
-    await reader.verify(TENANT, READER)
+    expect((await reader.verify(TENANT, READER)).excludedTypes).toEqual([])
     expect(reader.status(TENANT)!.roleChange).toBeNull()
+    expect(await reader.tokens(scheduled)!.excludedTypes!()).toEqual([])
     setGraph(() => graphToken())
     // The scheduled backup still gets the reader's token: it never moves to the admin's sign-in by itself.
     const tokens = reader.tokens(scheduled)!
     expect(tokens.mode).toBe("app-only")
+    // The run is told to leave out what the removed role read, so it never asks Microsoft Graph for a type Graph would refuse.
+    expect(await tokens.excludedTypes!()).toEqual(DEVICE_INVENTORY_TYPES)
     expect(await tokens.graph()).toBe(graphToken())
+    // The card shows the removed role and the types scheduled backups now leave out.
     expect(reader.status(TENANT)!.roleChange).toEqual({ added: [], removed: [DEVICE_INVENTORY_ROLE], at: "2026-10-26T12:00:00.000Z" })
+    expect(reader.status(TENANT)!.excludedTypes).toEqual(DEVICE_INVENTORY_TYPES)
+    expect(reader.status(TENANT)!.verifiedRoles).toContain(DEVICE_INVENTORY_ROLE)
     expect(reader.status(TENANT)!.state).toBe("verified")
+    // Once the role is back on the app, its types are read again without a new verification.
+    setGraph(() => graphToken({ roles: [...READER_REQUIRED_ROLES, DEVICE_INVENTORY_ROLE] }))
+    expect(await reader.tokens(scheduled)!.excludedTypes!()).toEqual([])
+    expect(reader.status(TENANT)!.excludedTypes).toEqual([])
+    setGraph(() => graphToken())
+    await reader.tokens(scheduled)!.graph()
     // Verifying again in place takes the roles as they are now and ends the notice.
     const verified = await reader.verify(TENANT, READER)
     expect(verified.roleChange).toBeNull()
-    expect(verified.excludedTypes).toEqual([...DEVICE_INVENTORY_TYPES, ...CONDITIONAL_ACCESS_TYPES])
+    expect(verified.excludedTypes).toEqual(DEVICE_INVENTORY_TYPES)
+  })
+
+  it("reads with the roles that are both verified and still on the app: one removed and one added at once", async () => {
+    const { reader, setGraph } = service({ graph: () => graphToken({ roles: [...READER_REQUIRED_ROLES, DEVICE_INVENTORY_ROLE] }) })
+    reader.prepare(TENANT, "LAPTOP-1")
+    expect((await reader.verify(TENANT, READER)).excludedTypes).toEqual(CONDITIONAL_ACCESS_TYPES)
+    // The device inventory role is taken off the app and the Conditional Access one is put on it.
+    setGraph(() => graphToken({ roles: [...READER_REQUIRED_ROLES, CONDITIONAL_ACCESS_ROLE] }))
+    const tokens = reader.tokens(scheduled)!
+    // The removed role reads nothing any more, and the added one is held but not used until it is verified.
+    expect(await tokens.excludedTypes!()).toEqual([...DEVICE_INVENTORY_TYPES, ...CONDITIONAL_ACCESS_TYPES])
+    expect(reader.status(TENANT)).toMatchObject({ roleChange: { added: [CONDITIONAL_ACCESS_ROLE], removed: [DEVICE_INVENTORY_ROLE] }, excludedTypes: [...DEVICE_INVENTORY_TYPES, ...CONDITIONAL_ACCESS_TYPES] })
+    expect((await reader.verify(TENANT, READER)).excludedTypes).toEqual(DEVICE_INVENTORY_TYPES)
   })
 
   it("does not bring the notice back from a backup that started before the admin verified again", async () => {
@@ -172,7 +197,7 @@ describe("BackupReaderService", () => {
     await running.graph()
     expect(reader.status(TENANT)!.roleChange).toBeNull()
     // The running backup still reads only what was verified when it started.
-    expect(running.excludedTypes).toEqual([...DEVICE_INVENTORY_TYPES, ...CONDITIONAL_ACCESS_TYPES])
+    expect(await running.excludedTypes!()).toEqual([...DEVICE_INVENTORY_TYPES, ...CONDITIONAL_ACCESS_TYPES])
   })
 
   it("forgets a noted change once the roles match the verified ones again", async () => {
@@ -381,9 +406,9 @@ describe("Backup Reader per service", () => {
     const tokens = reader.tokens(scheduled)!
     expect(tokens.mode).toBe("app-only")
     expect(await tokens.graph()).toBe(graphToken({ roles: entraRoles }))
-    expect(tokens.excludedTypes).toEqual(verified.excludedTypes)
     // Verifying and the token for the run ask Microsoft for tokens only; no Intune request is part of either.
     expect(acquire.mock.calls.map(([, scope]) => scope)).toEqual(["https://graph.microsoft.com/.default", "https://graph.microsoft.com/.default"])
+    expect(await tokens.excludedTypes!()).toEqual(verified.excludedTypes)
   })
 
   it("tests an Entra-only reader with an Entra read, never an Intune one", () => {
@@ -411,7 +436,7 @@ describe("Backup Reader per service", () => {
     const tokens = reader.tokens(scheduled)!
     expect(await tokens.graph()).toBe(graphToken({ roles }))
     expect(await tokens.storage()).toBe(storageToken())
-    expect(tokens.excludedTypes).toEqual(excluded)
+    expect(await tokens.excludedTypes!()).toEqual(excluded)
     // Nothing about the stored reader changed by using it.
     expect(JSON.parse(backing.get(`backupReader.${TENANT}`)!)).toEqual(record)
   })
@@ -450,7 +475,7 @@ describe("Backup Reader per service", () => {
     const tokens = reader.tokens(scheduled)!
     expect(await tokens.graph()).toBe(graphToken({ roles: widened }))
     // The run still reads only what was verified: the new roles wait for the admin.
-    expect(tokens.excludedTypes).toEqual(before.excludedTypes)
+    expect(await tokens.excludedTypes!()).toEqual(before.excludedTypes)
     const noted = reader.status(TENANT)!
     expect(noted.state).toBe("verified")
     expect(noted.roleChange).toEqual({ added: [...entraRoles].sort(), removed: [], at: "2026-10-26T12:00:00.000Z" })

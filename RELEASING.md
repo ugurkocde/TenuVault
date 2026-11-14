@@ -102,7 +102,8 @@ Put these in the next stable release's notes, then remove them here.
   stop on that computer. A reader shared by several computers must not get Entra ID or Defender
   permissions before every one of them runs 0.6. A reader verified before the update keeps
   working unchanged. A change of its permissions no longer stops scheduled backups: they keep
-  running with the verified permissions and the Backup Reader card asks for a new verification.
+  running with the verified permissions the reader still has, leave out what a removed permission
+  read, and the Backup Reader card asks for a new verification.
 - **Setup script parameters.** `New-TenuVaultDesktopApp.ps1` takes `-Services`, `-RestoreAccess`
   and `-Areas`. Without them it requests exactly the permissions it requested before, and every
   existing switch works as before. Quick setup still reuses an app registration that has

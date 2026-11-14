@@ -115,7 +115,8 @@ export class BackupReaderService {
       exportedCertificate: exported && exported.thumbprintSha256 === shown.thumbprintSha256 ? { fileName: exported.fileName, at: exported.at } : null,
       lastTest: credential.lastTest ?? null,
       lastRun: credential.lastRun ?? null,
-      excludedTypes: readerExcludedFolders(credential.verifiedRoles, this.services(credential.tenantId)),
+      // A verified role the last token no longer carried reads nothing, so its types are named as left out.
+      excludedTypes: readerExcludedFolders(credential.verifiedRoles && credential.verifiedRoles.filter((role) => !credential.roleChange?.removed.includes(role)), this.services(credential.tenantId)),
       roleChange: credential.roleChange ?? null,
       renewalPending: !!credential.active && !!credential.pending,
     }
@@ -219,10 +220,10 @@ export class BackupReaderService {
    * before use: right tenant, app and audience, app-only, and no role outside read-only backup.
    *
    * Roles that changed since the verification do not stop the backup. It reads only what the
-   * verified roles cover: a role added since then is not used, a role removed leaves its types out,
-   * and the change is kept for the Backup Reader card to ask for a new verification. A reader that
-   * can read nothing the tenant backs up is refused; the backup never moves to the admin's sign-in
-   * on its own.
+   * verified roles its token still carries cover: a role added since then is not used, a role
+   * removed leaves its types out, and the change is kept for the Backup Reader card to ask for a
+   * new verification. A reader that can read nothing the tenant backs up is refused; the backup
+   * never moves to the admin's sign-in on its own.
    */
   tokens(request: BackupRequest): RunTokens | null {
     const credential = this.read(request.tenantId)
@@ -231,6 +232,9 @@ export class BackupReaderService {
     const app = { tenantId: credential.tenantId, clientId: credential.clientId, certificate: credential.active }
     const verified = credential.verifiedRoles
     const selection = this.services(credential.tenantId)
+    // What the run may read with: the verified roles the reader's token still carries. Microsoft
+    // Graph refuses a read whose role was removed from the app, whatever was verified.
+    let usable = verified
     // A run asks for a token before every request, so the roles are compared once per set of roles.
     let seen: string | undefined
     const token = async (resource: "graph" | "storage") => {
@@ -242,11 +246,21 @@ export class BackupReaderService {
       if (resource === "graph" && roles.join(" ") !== seen) {
         seen = roles.join(" ")
         this.noteRoleChange(credential.tenantId, roles)
-        requireSomethingToRead(roles.filter((role) => verified.includes(role)), selection)
+        usable = verified.filter((role) => roles.includes(role))
+        requireSomethingToRead(usable, selection)
       }
       return acquired.accessToken
     }
-    return { mode: "app-only", graph: () => token("graph"), storage: () => token("storage"), excludedTypes: readerExcludedFolders(verified, selection) }
+    return {
+      mode: "app-only",
+      graph: () => token("graph"),
+      storage: () => token("storage"),
+      // Answered from the roles in the reader's token, so a run leaves out the types of a role that was removed before it asks for them.
+      excludedTypes: async () => {
+        await token("graph")
+        return readerExcludedFolders(usable, selection)
+      },
+    }
   }
 
   /**
