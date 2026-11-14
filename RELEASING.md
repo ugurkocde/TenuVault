@@ -94,6 +94,19 @@ Put these in the next stable release's notes, then remove them here.
   downgrade backs up Intune again for a tenant that had it off. Restore history now needs access
   to a service the tenant backs up (Intune while it is on), and its refusal message no longer
   names Intune.
+- **Backup Reader per service.** A Backup Reader now follows the services its tenant backs up. The
+  five Intune permissions are required only while Intune is on, and the reader may hold the read
+  permission of any service (`New-TenuVaultBackupReader.ps1 -Services`, `-Areas`). Versions
+  before 0.6 know only the Intune permissions and `Policy.Read.All`: they refuse a reader that
+  holds any other permission ("permissions beyond read-only backup"), and its scheduled backups
+  stop on that computer. A reader shared by several computers must not get Entra ID or Defender
+  permissions before every one of them runs 0.6. A reader verified before the update keeps
+  working unchanged. A change of its permissions no longer stops scheduled backups: they keep
+  running with the verified permissions and the Backup Reader card asks for a new verification.
+- **Setup script parameters.** `New-TenuVaultDesktopApp.ps1` takes `-Services`, `-RestoreAccess`
+  and `-Areas`. Without them it requests exactly the permissions it requested before, and every
+  existing switch works as before. Quick setup reuses an app registration that has tenant-wide
+  admin consent for a permission of any service, not only an Intune one.
 
 ## Cutting a stable release
 

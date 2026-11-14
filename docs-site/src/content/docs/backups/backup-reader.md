@@ -19,7 +19,7 @@ Before you add it, check whether a policy change is simpler: see [Conditional Ac
 | | Backup Reader |
 | --- | --- |
 | Read Intune configuration | Yes, all of it in the tenant, including script contents. Intune role scope tags do not limit it. |
-| Change Intune | No. TenuVault refuses a reader with any permission beyond the read list below, and stops using it when its permissions change. |
+| Change Intune | No. TenuVault refuses a reader with any permission beyond the read lists below. It uses only the permissions you verified: when they change, scheduled backups keep running with what was verified, and the card asks you to verify again. |
 | Write backups to Azure Storage | Yes, into the backup container only. |
 | Delete backups | No, provided it has only the **TenuVault Backup Writer** role (see [Permissions](#permissions)). That role has no delete permission, and if the reader overwrites a blob, blob versioning keeps the previous version for 30 days (`-VersionRetentionDays`), long enough to notice and recover it. A broader storage role assigned to the reader by hand would override this; the storage script warns about such roles and step 3 below includes the IAM check. |
 | Read encrypted OMA-URI values in plain text | Yes. Microsoft documents `DeviceManagementConfiguration.Read.All` as enough to read them, so the certificate gives access to those secret values too. If Microsoft refuses the read, the scheduled backup stores the value masked (`****`) and marks the profile as not restorable from that backup. A manual backup with your sign-in captures it when Microsoft returns the value; if Microsoft refuses that read too, the manual backup fails for that profile. |
@@ -39,6 +39,43 @@ Microsoft Graph application permissions, read-only:
 | `DeviceManagementRBAC.Read.All` | Intune roles, role assignments, scope tags, multi admin approval policies. |
 | `DeviceManagementManagedDevices.Read.All` (optional) | Device categories and device clean-up rules. Off by default, because it also exposes the managed device inventory (device names, serial numbers, primary users). Add it with `-IncludeDeviceCategories`. |
 | `Policy.Read.All` (optional) | Entra Conditional Access policies, named locations and authentication strengths, when the [Conditional Access service](/backups/conditional-access/) is on for the tenant. Off by default, because it reads every policy of the organization. Add it with `-IncludeConditionalAccess`. The reader never gets permission to change Conditional Access. |
+
+These are the permissions for Intune, which the script grants when you name no service. The reader needs them as long as the tenant backs up Intune.
+
+#### Entra ID and Defender
+
+For a tenant that backs up Entra ID or Defender, name the services with `-Services` when you run the setup script, for example `-Services Intune,Entra`. The reader then gets the read permissions of each service you name and no others. For a tenant without Intune, leave Intune out: its five permissions are then neither granted nor needed. The command on the **Backup Reader** card already names the services the tenant backs up.
+
+**Entra ID**
+
+<!-- permissions:entra:begin -->
+| Area | Application permissions |
+| --- | --- |
+| Tenant settings | `Policy.Read.All`, `Policy.Read.PermissionGrant`, `Policy.Read.DeviceConfiguration`, `GroupSettings.Read.All`, `Organization.Read.All`, `Domain.Read.All` |
+| Authentication | `Policy.Read.All`, `AuthenticationContext.Read.All`, `Organization.Read.All`, `PublicKeyInfrastructure.Read.All` |
+| External identities | `Policy.Read.All`, `Policy.Read.B2BManagementPolicy`, `IdentityProvider.Read.All`, `IdentityUserFlow.Read.All`, `EventListener.Read.All`, `CustomAuthenticationExtension.Read.All`, `APIConnectors.Read.All`, `MultiTenantOrganization.Read.All` |
+| Roles and PIM | `RoleManagement.Read.Directory`, `PrivilegedEligibilitySchedule.Read.AzureADGroup`, `PrivilegedAssignmentSchedule.Read.AzureADGroup`, `RoleManagementAlert.Read.Directory`, `AdministrativeUnit.Read.All`, `CustomSecAttributeDefinition.Read.All` |
+| Governance | `EntitlementManagement.Read.All`, `AccessReview.Read.All`, `Policy.Read.All`, `LifecycleWorkflows.Read.All`, `Agreement.Read.All` |
+| Groups (only with `-Areas`) | `Group.Read.All`, `Directory.Read.All` |
+| Users and devices (only with `-Areas`) | `User.Read.All`, `Device.Read.All`, `OrgContact.Read.All` |
+| Applications (only with `-Areas`) | `Application.Read.All`, `Synchronization.Read.All`, `Directory.Read.All` |
+<!-- permissions:entra:end -->
+
+**Defender**
+
+<!-- permissions:defender:begin -->
+| Area | Application permissions |
+| --- | --- |
+| Detection and response | `CustomDetection.Read.All`, `CaseManagement.Read.All` |
+| Email and collaboration | `AttackSimulation.Read.All`, `ThreatSubmission.Read.All` |
+| Identity | `SecurityIdentitiesSensors.Read.All`, `SecurityIdentitiesAutoConfig.Read.All` |
+| Posture and access | `SecurityEvents.Read.All`, `RoleManagement.Read.Defender` |
+<!-- permissions:defender:end -->
+
+* Groups, users and devices, and applications are read only when you add the area with `-Areas`, for example `-Areas Groups,Applications`. Groups and users and devices hold personal data, so agree on them like on the device inventory permission.
+* A permission the reader lacks for Entra ID or Defender only leaves the policies out that need it. Scheduled backups list them as not readable by the Backup Reader, and manual backups include them.
+* Mobile device management and mobile application management enrollment policies, the on-premises synchronization settings and the ownerless group policy are left out of every scheduled backup: Microsoft Graph lets only a signed-in admin read them.
+* A reader with permissions for Entra ID or Defender is refused by TenuVault versions before 0.6, which know only the permissions for Intune and Conditional Access. Update TenuVault on every computer that uses the reader before you add a service to it.
 
 For Azure Storage, the custom role **TenuVault Backup Writer** allows reading and writing blobs, assigned on the `intune-backups` container only. It has no delete permission and cannot create containers.
 
@@ -102,7 +139,7 @@ Having these values ready saves a round of messages with each administrator:
 
 Send them the saved `.cer` file, the script (**Copy setup script** on the card, or the [download](/downloads/New-TenuVaultBackupReader.ps1)), and whether you agreed on `-IncludeDeviceCategories`. You can copy and adjust this request:
 
-> Please create the "TenuVault Backup Reader" app registration for scheduled Intune backups. The attached `.cer` file is a public certificate only; the private key stays on my computer. Run: `./New-TenuVaultBackupReader.ps1 -CertificatePath <file> -TenantId <our tenant>` (add `-IncludeDeviceCategories` only if we agreed on it). The script creates a single-tenant app registration with exactly five read-only Graph application permissions, uploads the certificate, removes any other permission on that app, and grants admin consent. Details and the permission list: https://docs.tenuvault.com/backups/backup-reader/ Please send me the application (client) ID and certificate thumbprint it prints.
+> Please create the "TenuVault Backup Reader" app registration for scheduled backups. The attached `.cer` file is a public certificate only; the private key stays on my computer. Run: `./New-TenuVaultBackupReader.ps1 -CertificatePath <file> -TenantId <our tenant>` (add `-IncludeDeviceCategories` only if we agreed on it). The script creates a single-tenant app registration with read-only Microsoft Graph application permissions only (five for Intune; the page below lists them for every service), uploads the certificate, removes any other permission on that app, and grants admin consent. Details and the permission list: https://docs.tenuvault.com/backups/backup-reader/ Please send me the application (client) ID and certificate thumbprint it prints.
 
 They run:
 
@@ -112,7 +149,7 @@ They run:
 
 What they can check afterwards in Entra ID > **App registrations** > **TenuVault Backup Reader**:
 
-* **API permissions:** exactly the five (or six) read permissions from the table below, type **Application**, status **Granted**. Nothing else.
+* **API permissions:** exactly the five (or six) read permissions from the [permissions table](#permissions) for Intune, or the read permissions of the services you named, type **Application**, status **Granted**. Nothing else.
 * **Certificates & secrets:** your certificate with its thumbprint and expiry date, and no client secret. The script never creates one; if a secret appears there, someone added it by hand.
 * **Owners:** add the agreed owner here, so the registration is not tied to one person's account.
 * Under **Enterprise applications**, an entry of the same name exists. Its token requests later appear in **Sign-in logs** > **Service principal sign-ins** (grouped by Microsoft; a cached token can serve several backups, so there is not one entry per backup).
@@ -134,7 +171,7 @@ They run the command from the request. The role assignment to the Backup Reader 
 
 ### Step 4, you: verify and confirm the first backup
 
-1. Back in TenuVault, enter the application ID and select **Verify**. TenuVault asks Microsoft for a token with the certificate, checks the tenant, the app and its permissions, and records them. It then runs the confidence test: one real Intune read with the reader's token, and for backups in Azure Storage a check that the backup container exists and the reader may use it, with a warning if step 3 has not run yet. The card keeps the result as a checklist (certificate and permissions, read test, storage, last run), and **Test now** reruns it at any time, so tonight's backup does not have to be the first proof. The card also shows the certificate thumbprint exactly as Entra ID and the script print it, with a copy button. New certificates and permissions can take a few minutes to apply, so a refusal right after the scripts usually means "wait and verify again", not a re-run.
+1. Back in TenuVault, enter the application ID and select **Verify**. TenuVault asks Microsoft for a token with the certificate, checks the tenant, the app and its permissions, and records them. It then runs the confidence test: one real read of a service the tenant backs up with the reader's token (an Intune read while the tenant backs up Intune, and never one for a tenant that does not), and for backups in Azure Storage a check that the backup container exists and the reader may use it, with a warning if step 3 has not run yet. The card keeps the result as a checklist (certificate and permissions, read test, storage, last run), and **Test now** reruns it at any time, so tonight's backup does not have to be the first proof. The card also shows the certificate thumbprint exactly as Entra ID and the script print it, with a copy button. New certificates and permissions can take a few minutes to apply, so a refusal right after the scripts usually means "wait and verify again", not a re-run.
 2. Wait for the next scheduled backup, or check the backup log of that run: it shows "Reading as the tenant's Backup Reader (app-only, read-only)." Your Entra administrator can usually confirm a successful token request around that time under **Service principal sign-ins**; entries are grouped and a cached token may cover several runs, so a missing new entry alone does not mean the backup did not run app-only. The backup log line above is the reliable sign.
 3. Record in your ticket or inventory: tenant, application (client) ID, each computer's certificate thumbprint (shown on the card, same value as in Entra ID) and expiry date, the agreed `-IncludeDeviceCategories` choice, the storage account (if any), and the owner. This list is what a colleague needs for a renewal or an emergency removal when you are away.
 
@@ -159,7 +196,7 @@ Renewal needs your Entra administrator again, for each computer separately. Star
    ./New-TenuVaultBackupReader.ps1 -CertificatePath ./renewal.cer -AppId <application ID>
    ```
 
-   If the reader has the device inventory permission, add `-IncludeDeviceCategories` again: the script sets exactly the permissions you ask for, and every computer using the reader would otherwise stop until it is verified again. The command on the **Backup Reader** card already includes it.
+   If the reader has the device inventory permission, add `-IncludeDeviceCategories` again, and name its services and areas again if it was set up with `-Services` or `-Areas`: the script sets exactly the permissions you ask for, and every computer using the reader would otherwise read less until it is verified again. The command on the **Backup Reader** card already includes them.
 
 3. Select **Verify**. TenuVault switches to the new certificate once Microsoft accepts it; until then it keeps using the old one, and the expiry reminder stays on. **Verify again** keeps checking the certificate in use, and **Cancel renewal** discards a renewal certificate you did not upload.
 
@@ -182,6 +219,7 @@ Keep this list with your setup record. Most later work is small, but almost none
 | Computer retired, lost or stolen | Tell your Entra administrator immediately; select **Remove** on the computer if you still have it | Entra administrator: delete that computer's certificate from the app registration. This blocks the lost computer at once and does not affect the others. |
 | You now want device categories in scheduled backups (or want them gone) | Agree the change, then **Verify again** on every computer | Entra administrator: rerun the script with (or without) `-IncludeDeviceCategories`. Security approver for adding it, because it exposes the device inventory. |
 | TenuVault reports changed or extra permissions | Read the message; do not verify blindly | Entra administrator: check **API permissions** on the app registration, find who changed them, rerun the script to reset them to the read-only list. Then you verify again. |
+| The tenant now also backs up Entra ID or Defender (or no longer does) | Update TenuVault on every computer that uses the reader, agree the change, then **Verify again** on each | Entra administrator: rerun the script with `-AppId` and the services in `-Services`. Until you verify, scheduled backups keep running with the permissions you verified before. |
 | Scheduled backups fail with a storage access error | Note the message and time | Azure administrator: check the **TenuVault Backup Writer** assignment on the container, the storage firewall, and whether broader roles were removed or the account was replaced |
 | Microsoft refuses the reader with AADSTS53003 | Note the time and the network the computer used | Conditional Access administrator: check the workload identity policy that applies to the Backup Reader |
 | Suspicious reader activity | Note backup times that look wrong | Entra or security administrator: review **Service principal sign-ins**, and in an emergency delete the computer's certificate or disable the enterprise application to stop the reader tenant-wide |
@@ -207,7 +245,8 @@ When a computer is retired or lost, remove its certificate from the app registra
 | Microsoft refused the Backup Reader (AADSTS53003) | A Conditional Access policy for workload identities blocked it, for example from this network. | Check the policy and the network the computer uses. | Conditional Access administrator |
 | The Backup Reader has permissions beyond read-only backup | Someone added a permission, for example a write permission. | Run the setup script again; it removes other permissions. Then verify again. | Entra administrator; you verify |
 | The Backup Reader is missing permissions or their admin consent | A permission was removed or consent is missing. | Run the setup script again, then verify again. | Entra administrator; you verify |
-| The Backup Reader's Microsoft Graph permissions changed since they were verified | The permissions differ from the last verification, even by a read permission. | Check the change, then select **Verify again**. | Entra administrator confirms the change was intended; you verify |
+| The Backup Reader's Microsoft Graph permissions changed since they were verified | A notice on the card: the permissions differ from the last verification. Scheduled backups keep running. They use no permission that was added since, and leave out the policies a removed permission was needed for. | Check the change, then select **Verify again**. | Entra administrator confirms the change was intended; you verify |
+| The Backup Reader has no permission to read a service, which is all this tenant backs up | The reader was set up for other services than the tenant backs up, for example for Intune in a tenant that backs up Entra ID only. Scheduled backups stop with this message; they do not use your sign-in instead. | Run the setup script with the services the message names, then verify again. | Entra administrator runs the script; you verify |
 | Container not found or access denied when writing to Azure Storage | The storage script has not run with `-BackupReaderAppId`, or the role assignment has not applied yet. | Run the storage script with `-BackupReaderAppId` and wait a few minutes. | Azure administrator |
 
 A refusal that retrying cannot fix (an unknown or expired certificate, a missing or disabled app registration, or a workload identity policy) stops that night's backup without retries, notifies you once and tries again at the next scheduled time. Network failures and transient refusals from Microsoft are retried like any other failed scheduled backup.

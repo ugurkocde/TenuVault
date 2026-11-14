@@ -77,6 +77,47 @@ Delegated permissions let an app act on behalf of a signed-in user. They never g
 **About `Policy.Read.All`:** only the opt-in Conditional Access service uses it, to read Conditional Access policies, named locations and authentication strengths. If you do not turn that service on and your security review requires it, you can remove this permission from the app registration.
 :::
 
+### Entra ID and Defender
+
+The setup requests the permissions above unless you choose other services. When you choose **Entra ID** or **Defender**, with `-Services` on the [setup script](/getting-started/app-registration/#parameters), the app registration gets the read permissions of that service, and its write permissions only for a service you also name in `-RestoreAccess`. A service you leave out brings no permission. Every permission below is a delegated Microsoft Graph permission.
+
+**Entra ID**
+
+<!-- permissions:entra:begin -->
+| Area | Backup | Restore adds |
+| --- | --- | --- |
+| Tenant settings | `Policy.Read.All`, `Policy.Read.PermissionGrant`, `GroupSettings.Read.All`, `Organization.Read.All`, `Domain.Read.All`, `OnPremDirectorySynchronization.Read.All` | `Policy.ReadWrite.Authorization`, `Policy.ReadWrite.SecurityDefaults`, `Policy.ReadWrite.ConsentRequest`, `Policy.ReadWrite.PermissionGrant`, `Policy.ReadWrite.ApplicationConfiguration`, `Policy.ReadWrite.DeviceConfiguration`, `Policy.ReadWrite.MobilityManagement`, `GroupSettings.ReadWrite.All`, `Organization.ReadWrite.All`, `Domain-InternalFederation.ReadWrite.All` |
+| Authentication | `Policy.Read.All`, `AuthenticationContext.Read.All`, `Organization.Read.All`, `PublicKeyInfrastructure.Read.All` | `Policy.ReadWrite.AuthenticationMethod`, `Policy.ReadWrite.AuthenticationFlows`, `AuthenticationContext.ReadWrite.All`, `Organization.ReadWrite.All`, `PublicKeyInfrastructure.ReadWrite.All`, `Policy.ReadWrite.FedTokenValidation` |
+| External identities | `Policy.Read.All`, `IdentityProvider.Read.All`, `IdentityUserFlow.Read.All`, `EventListener.Read.All`, `CustomAuthenticationExtension.Read.All`, `APIConnectors.Read.All`, `MultiTenantOrganization.Read.All` | `Policy.ReadWrite.CrossTenantAccess`, `Policy.ReadWrite.ExternalIdentities`, `Policy.ReadWrite.B2BManagementPolicy`, `IdentityProvider.ReadWrite.All`, `IdentityUserFlow.ReadWrite.All`, `EventListener.ReadWrite.All`, `CustomAuthenticationExtension.ReadWrite.All`, `APIConnectors.ReadWrite.All` |
+| Roles and PIM | `RoleManagement.Read.Directory`, `PrivilegedEligibilitySchedule.Read.AzureADGroup`, `PrivilegedAssignmentSchedule.Read.AzureADGroup`, `RoleManagementAlert.Read.Directory`, `AdministrativeUnit.Read.All`, `CustomSecAttributeDefinition.Read.All` | `RoleManagement.ReadWrite.Directory`, `PrivilegedEligibilitySchedule.ReadWrite.AzureADGroup`, `PrivilegedAssignmentSchedule.ReadWrite.AzureADGroup`, `RoleManagementAlert.ReadWrite.Directory`, `AdministrativeUnit.ReadWrite.All`, `CustomSecAttributeDefinition.ReadWrite.All` |
+| Governance | `EntitlementManagement.Read.All`, `AccessReview.Read.All`, `Policy.Read.All`, `LifecycleWorkflows.Read.All`, `Agreement.Read.All` | `EntitlementManagement.ReadWrite.All`, `AccessReview.ReadWrite.All`, `Policy.ReadWrite.AccessReview`, `LifecycleWorkflows.ReadWrite.All`, `Agreement.ReadWrite.All` |
+| Groups (only when you turn the area on) | `Group.Read.All`, `Directory.Read.All` | `Group.ReadWrite.All` |
+| Users and devices (only when you turn the area on) | `User.Read.All`, `Device.Read.All`, `OrgContact.Read.All` | `User.ReadWrite.All` |
+| Applications (only when you turn the area on) | `Application.Read.All`, `Synchronization.Read.All`, `Directory.Read.All` | `Application.ReadWrite.All`, `AppRoleAssignment.ReadWrite.All`, `DelegatedPermissionGrant.ReadWrite.All` |
+<!-- permissions:entra:end -->
+
+**Defender**
+
+<!-- permissions:defender:begin -->
+| Area | Backup | Restore adds |
+| --- | --- | --- |
+| Detection and response | `CustomDetection.Read.All`, `CaseManagement.Read.All` | `CustomDetection.ReadWrite.All` |
+| Email and collaboration | `AttackSimulation.Read.All`, `ThreatSubmission.Read.All` | `ThreatSubmissionPolicy.ReadWrite.All` |
+| Identity | `SecurityIdentitiesSensors.Read.All`, `SecurityIdentitiesAutoConfig.Read.All` | `SecurityIdentitiesSensors.ReadWrite.All`, `SecurityIdentitiesAutoConfig.ReadWrite.All` |
+| Posture and access | `SecurityEvents.Read.All`, `RoleManagement.Read.Defender` | `SecurityEvents.ReadWrite.All`, `RoleManagement.ReadWrite.Defender` |
+<!-- permissions:defender:end -->
+
+How to read the tables:
+
+* **Backup** is what reading the area needs. No write permission is ever requested to back up.
+* **Restore adds** is what restore access adds to it. A write permission also covers reading, so with restore access the read permission of the same name is not requested as well.
+* Groups, users and devices, and applications are backed up only when you turn the area on, with `-Areas`. Groups and users and devices hold personal data.
+* `Directory.Read.All` is part of the Groups and Applications areas because Microsoft offers no narrower permission for group expiration policies and for delegated permission grants. It also reads users, groups and applications.
+* Two write permissions are never requested, because they reach far beyond the settings they would restore: `Directory.ReadWrite.All`, which restoring group expiration policies needs, and `Policy.ReadWrite.ConditionalAccess` for the legacy continuous access evaluation policy. For Intune, `DeviceManagementManagedDevices.ReadWrite.All` stays out in the same way. Add one by hand if you want to restore those settings.
+* What a signed-in admin can do also depends on their Entra role: Global Reader reads these settings, and a restore needs the administrator role of the setting, such as Security Administrator or Privileged Role Administrator.
+
+Some settings stay out because Microsoft publishes no read permission TenuVault could request for them: service principal creation policies, the setting that restricts access to the Entra admin center, the directory role access review policy, feature rollout policies, on-premises authentication policies, application proxy connector groups, and in Defender cloud scopes, workbooks and content repositories.
+
 ### Check what the app registration allows
 
 **Settings** > **Services and permissions** lists each service TenuVault covers (Intune, which is on until you turn it off, and Entra Conditional Access, which is off until you turn it on) with whether the tenant's app registration may back it up and restore it, and which permission is missing. With several tenants it starts with an overview of every tenant and service. For a missing permission it offers a link to the app registration's API permissions in Entra and, where TenuVault knows the permission's ID, Azure CLI commands that add it to the existing app registration. A backup type left out or a restore stopped for a missing permission links to this card.
@@ -144,7 +185,7 @@ The Azure watcher uses the application role `AuditLog.Read.All` instead. Its set
 
 ## Optional: the Backup Reader
 
-The app registration above never changes. If Conditional Access session controls stop scheduled backups at night, you can add a second, separate app registration, the **TenuVault Backup Reader**, with `New-TenuVaultBackupReader.ps1`. It has read-only Microsoft Graph application permissions (`DeviceManagementConfiguration.Read.All`, `DeviceManagementApps.Read.All`, `DeviceManagementServiceConfig.Read.All`, `DeviceManagementScripts.Read.All`, `DeviceManagementRBAC.Read.All`, and optionally `DeviceManagementManagedDevices.Read.All` and `Policy.Read.All`) and a certificate credential, never a secret. Only scheduled backups use it, and TenuVault refuses it when its Microsoft Graph token carries any other Graph permission. TenuVault cannot see application permissions for other APIs or Azure role assignments, so review those in Entra ID and on the storage account; `New-TenuVaultStorage.ps1` warns about broader roles on the storage account but does not remove them. See [Backup Reader for scheduled backups](/backups/backup-reader/) for what it can and cannot do, and [Conditional Access and TenuVault](/security/conditional-access/) for options that need no application permissions.
+The app registration above never changes. If Conditional Access session controls stop scheduled backups at night, you can add a second, separate app registration, the **TenuVault Backup Reader**, with `New-TenuVaultBackupReader.ps1`. It has read-only Microsoft Graph application permissions (`DeviceManagementConfiguration.Read.All`, `DeviceManagementApps.Read.All`, `DeviceManagementServiceConfig.Read.All`, `DeviceManagementScripts.Read.All`, `DeviceManagementRBAC.Read.All`, and optionally `DeviceManagementManagedDevices.Read.All` and `Policy.Read.All`) and a certificate credential, never a secret. For a tenant that backs up Entra ID or Defender, it gets the read permissions of those services instead or as well; the [Backup Reader page](/backups/backup-reader/#permissions) lists them. Only scheduled backups use it, and TenuVault refuses it when its Microsoft Graph token carries any other Graph permission. TenuVault cannot see application permissions for other APIs or Azure role assignments, so review those in Entra ID and on the storage account; `New-TenuVaultStorage.ps1` warns about broader roles on the storage account but does not remove them. See [Backup Reader for scheduled backups](/backups/backup-reader/) for what it can and cannot do, and [Conditional Access and TenuVault](/security/conditional-access/) for options that need no application permissions.
 
 ## Restrict sign-in to a group
 
