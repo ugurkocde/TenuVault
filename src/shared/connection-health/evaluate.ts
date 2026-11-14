@@ -127,7 +127,12 @@ function readerFailureState(failure: SignInFailure): ReaderHealthState {
 
 function readerHealth(facts: ReaderObservation | null, connection: ConnectionRecord | undefined, now: Date): ReaderHealth {
   if (!facts) return { state: "notSetUp", checkedAt: null }
-  const token = connection?.graph && recent(connection.graph.at, TOKEN_MAX_AGE_MS, now) ? connection.graph : undefined
+  const answered = connection?.graph && recent(connection.graph.at, TOKEN_MAX_AGE_MS, now) ? connection.graph : undefined
+  // A verification asks Microsoft for a new token of the credential in use and succeeds only with one, so it
+  // is a newer answer than a refusal from before it. It has to count here: no ordinary check asks the reader
+  // for a token, so nothing else would replace the refusal.
+  const verified = facts.state === "verified" && !!answered?.failure && recent(facts.verifiedAt ?? undefined, TOKEN_MAX_AGE_MS, now) && Date.parse(facts.verifiedAt!) > Date.parse(answered.at)
+  const token: TokenObservation | undefined = verified ? { at: facts.verifiedAt! } : answered
   const expires = Date.parse(facts.notAfter)
   const daysLeft = Math.ceil((expires - now.getTime()) / 86_400_000)
   const known = { checkedAt: token?.at ?? null, notAfter: facts.notAfter, daysLeft, ...(facts.roleChange ? { roleChange: facts.roleChange } : {}) }

@@ -266,6 +266,25 @@ describe("the Backup Reader in a check", () => {
   })
 })
 
+describe("the Backup Reader after a refusal", () => {
+  it("is healthy again once the admin verified it, without another check asking for its token", async () => {
+    const { health, state, readerToken, pass, now } = setup()
+    state.reader = { clientId: READER, facts: READER_FACTS }
+    // 11:50: Microsoft does not know the certificate.
+    readerToken.mockRejectedValueOnce(new BackupReaderError("Microsoft refused the Backup Reader (AADSTS700027).", { cause: Object.assign(new Error("invalid_client"), { errorCode: "invalid_client", errorNo: "700027" }) }))
+    expect((await health.check(TENANT, "again")).reader).toMatchObject({ state: "refused", code: "AADSTS700027", checkedAt: START.toISOString() })
+    // 11:59: the admin uploaded the right certificate and verified, which asked Microsoft for a new token and got one.
+    pass(9 * MINUTE)
+    const verifiedAt = now()
+    state.reader = { clientId: READER, facts: { ...READER_FACTS, verifiedAt } }
+    // 12:00: a page opens. An ordinary check asks the reader for no token, and the verification stands for the refusal before it.
+    pass(MINUTE)
+    expect((await health.check(TENANT, "opened")).reader).toMatchObject({ state: "healthy", checkedAt: verifiedAt })
+    expect(health.report(TENANT).reader.state).toBe("healthy")
+    expect(readerToken).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe("backup runs", () => {
   const outcomes = (runId: string, endedAt: string, types: Array<Record<string, unknown>>, authMode: "delegated" | "app-only" = "delegated") =>
     ({ runId, tenantId: TENANT, authMode, trigger: "manual" as const, startedAt: endedAt, endedAt, status: "Success", coverage: "complete" as const, types: types as never })

@@ -173,7 +173,7 @@ export interface SignInHealth {
 
 export interface ReaderHealth {
   state: ReaderHealthState
-  /** When Microsoft last answered a token request of the reader for a check; null when it never did. */
+  /** When Microsoft last answered a token request of the reader, for a check or for a verification that came after a refused check; null when it never did. */
   checkedAt: string | null
   class?: FailureClass
   code?: string

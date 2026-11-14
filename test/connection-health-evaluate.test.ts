@@ -260,6 +260,19 @@ describe("the state of the Backup Reader", () => {
     expect(reader(readerFacts({ state: "pending", notAfter: ago(DAY) }), refused).state).toBe("pending")
   })
 
+  it("lets a verification that is newer than a refusal replace it", () => {
+    // A check was refused the certificate ten minutes ago. The admin uploaded the right one and verified a minute ago.
+    const refused = failed({ class: "credential", code: "AADSTS700027" }, ago(10 * MINUTE))
+    expect(reader(readerFacts({ verifiedAt: ago(MINUTE) }), refused)).toEqual({ state: "healthy", checkedAt: ago(MINUTE), notAfter: ago(-200 * DAY), daysLeft: 200 })
+    // What this device knows about the verified reader still shows.
+    expect(reader(readerFacts({ verifiedAt: ago(MINUTE), notAfter: ago(-10 * DAY) }), refused)).toMatchObject({ state: "certificateExpiring", checkedAt: ago(MINUTE) })
+    // A refusal that came after the verification stands, and so does one whose verification is dated ahead of the clock.
+    expect(reader(readerFacts({ verifiedAt: ago(11 * MINUTE) }), refused)).toMatchObject({ state: "refused", checkedAt: ago(10 * MINUTE), code: "AADSTS700027" })
+    expect(reader(readerFacts({ verifiedAt: ago(-DAY) }), refused)).toMatchObject({ state: "refused", checkedAt: ago(10 * MINUTE) })
+    // An answer that was no refusal keeps its own time.
+    expect(reader(readerFacts({ verifiedAt: ago(MINUTE) }), healthy([], ago(10 * MINUTE))).checkedAt).toBe(ago(10 * MINUTE))
+  })
+
   it("forgets a refusal that expired, and falls back to what this device knows", () => {
     expect(reader(readerFacts(), failed({ class: "application", code: "AADSTS7000112" }, ago(8 * DAY)))).toEqual({ state: "healthy", checkedAt: null, notAfter: ago(-200 * DAY), daysLeft: 200 })
   })
