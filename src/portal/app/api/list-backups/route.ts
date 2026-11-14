@@ -7,6 +7,7 @@ import { BACKUP_OWNER_FILE, LOCAL_STORAGE_PREFIX, MAX_BACKUP_ARCHIVE_BYTES } fro
 import { mapLimit } from "../../../../shared/map-limit"
 import { MetadataCache } from "~/lib/storage/metadata-cache"
 import { manifestStatus } from "../../../../shared/intune/backup-status"
+import { manifestCoverage } from "../../../../shared/backup-outcomes"
 import { backupFoldersIn, parseBackupName } from "../../../../shared/intune/backup-names"
 import { isLegacyOtherTenantError, isLegacySealedError } from "../../../../shared/legacy-sealed"
 import { oversizedOwnershipFile, resolveBackupOwnership, type OwnershipFile } from "../../../../shared/backup-ownership"
@@ -183,6 +184,8 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
     failures: typeof metadata?.Failures === 'number' ? metadata.Failures : 0,
     skippedTypes: Array.isArray(metadata?.SkippedTypes) ? metadata.SkippedTypes : [],
     failedTypes: Array.isArray(metadata?.FailedTypes) ? metadata.FailedTypes : [],
+    // Whether the backup holds every type it was asked to cover; null for backups made before this was recorded.
+    ...manifestCoverage(metadata),
     size,
     sizeFormatted: formatBytes(size),
     duration: typeof metadata?.DurationSeconds === 'number' ? metadata.DurationSeconds : metadata?.Duration ?? metadata?.duration ?? null,

@@ -579,7 +579,7 @@ function BackupDetails({ backup, first, storageAccountName, downloading, exporti
         </div>
       </div>
 
-      {(kind === "warning" || kind === "failed" || kind === "cancelled" || (backup.skippedTypes?.length ?? 0) > 0) && (
+      {(kind === "warning" || kind === "failed" || kind === "cancelled" || (backup.skippedTypes?.length ?? 0) > 0 || backup.coverage === "incomplete") && (
         <div className={cn("mb-6 flex gap-3 rounded-2xl px-4 py-3 text-sm", kind === "failed" ? "bg-red-50 text-red-800" : kind === "cancelled" ? "bg-gray-100 text-gray-800" : "bg-amber-50 text-amber-900")}>
           <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
           <div className="space-y-1">
@@ -588,6 +588,7 @@ function BackupDetails({ backup, first, storageAccountName, downloading, exporti
             {backup.status !== "incomplete" && !unavailable && kind === "failed" && backup.totalPolicies > 0 && <p>This backup failed before it finished. It holds only the policies it saved and is never used as a complete backup.</p>}
             {kind === "cancelled" && <p>This backup was cancelled before it finished. It holds only the policies it saved and is never used as a complete backup.</p>}
             {backup.status === "unknown" && <p>{backup.error ?? "This backup does not record whether it finished."} Until its details can be read, whether it finished is not known and drift detection does not offer it.</p>}
+            {backup.coverage === "incomplete" && (backup.notRead?.length ?? 0) > 0 && <p>Coverage incomplete. This backup does not hold every type it was asked to cover. Not read in full: {backup.notRead!.map(typeLabel).join(", ")}.</p>}
             {(backup.failures ?? 0) > 0 && <p>{backup.failures} item{backup.failures === 1 ? "" : "s"} or type{backup.failures === 1 ? "" : "s"} could not be read. The backup log lists them.</p>}
             {(backup.failedTypes?.length ?? 0) > 0 && <p>Not read: {backup.failedTypes!.map(typeLabel).join(", ")}.</p>}
             {(backup.skippedTypes?.length ?? 0) > 0 && <p>Left out because the app registration or your role does not allow reading them: {backup.skippedTypes!.map(typeLabel).join(", ")}. <LinkedMessage text={`${SERVICES_PAGE} in Settings shows which permission is missing and how to add it.`} /> Also check that your Intune or Entra role covers these items.</p>}

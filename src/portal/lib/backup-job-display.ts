@@ -119,6 +119,8 @@ export interface BackupResultsSummary {
   /** Types a job that has ended never listed, because it stopped first. */
   notReached: BackupTypeResult[]
   empty: BackupTypeResult[]
+  /** Types the tenant never set up: nothing to save, and nothing missing. */
+  notConfigured: BackupTypeResult[]
   skipped: BackupTypeResult[]
   unreadable: BackupTypeResult[]
   /** Types with objects that could not be saved, other than types the job stopped part way. */
@@ -129,6 +131,11 @@ export interface BackupResultsSummary {
   inventory: Array<{ label: string; count: number }>
   warnings: string[]
   info: string[]
+  /**
+   * Set once the job has ended with a selected type that was not read in full: how many of the
+   * selected types that is. A backup can complete and still not hold everything it was asked to cover.
+   */
+  coverageGap?: { notRead: number; selected: number }
 }
 
 /** `finished` once the job has ended: a type it never finished then counts as stopped, not running. */
@@ -137,12 +144,14 @@ export function summarizeBackupResults(results: BackupResults, finished = false)
   const policyTypes = types.filter((type) => !type.inventory)
   const listed = (type: BackupTypeResult) => type.state === "reading" && (type.found ?? 0) > 0
   const stopped = finished ? types.filter(listed) : []
+  const notRead = types.filter((type) => type.state === "skipped" || type.state === "unreadable" || type.state === "reading" || type.failed > 0).length
   return {
     rows: types.filter((type) => listed(type) || (!type.inventory && type.state === "saved" && (type.saved > 0 || type.failed > 0))),
     typesBackedUp: policyTypes.filter((type) => type.saved > 0).length,
     pending: finished ? 0 : types.filter((type) => type.state === "reading" && type.found === undefined).length,
     notReached: finished ? types.filter((type) => type.state === "reading" && type.found === undefined) : [],
     empty: types.filter((type) => type.state === "empty" || (type.state === "saved" && type.saved === 0 && type.failed === 0)),
+    notConfigured: types.filter((type) => type.state === "notConfigured"),
     skipped: types.filter((type) => type.state === "skipped"),
     unreadable: types.filter((type) => type.state === "unreadable"),
     partial: types.filter((type) => type.failed > 0 && !stopped.includes(type)),
@@ -151,6 +160,7 @@ export function summarizeBackupResults(results: BackupResults, finished = false)
     inventory: types.filter((type) => type.inventory && type.state === "saved" && type.saved > 0).map((type) => ({ label: type.label, count: type.saved })),
     warnings: results.notices.filter((notice) => notice.level === "warning").map((notice) => notice.message),
     info: results.notices.filter((notice) => notice.level === "info").map((notice) => notice.message),
+    ...(finished && results.coverage === "incomplete" ? { coverageGap: { notRead, selected: types.length } } : {}),
   }
 }
 

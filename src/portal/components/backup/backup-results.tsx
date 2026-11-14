@@ -56,6 +56,13 @@ export function BackupResults({ job, compact = false, jobId }: BackupResultsProp
             Needs attention
           </p>
           <ul className="mt-2 space-y-1.5 text-xs text-foreground">
+            {summary.coverageGap && (
+              <Problem
+                title={`Coverage incomplete: ${summary.coverageGap.notRead} of ${summary.coverageGap.selected} selected types ${summary.coverageGap.notRead === 1 ? "was" : "were"} not read in full`}
+                detail="This backup does not hold them, or not all of them. The reason for each follows."
+                compact={compact}
+              />
+            )}
             {summary.unreadable.map((type) => (
               <Problem key={type.folder} title={`Could not read ${type.label}`} detail={type.reason} compact={compact} />
             ))}
@@ -85,7 +92,8 @@ export function BackupResults({ job, compact = false, jobId }: BackupResultsProp
               />
             ))}
             {summary.skipped.map((type) => (
-              <Problem key={type.folder} title={`${typeHeading(type.label)} left out`} detail={type.reason} compact={compact} />
+              // A type whose read was refused part way keeps what it saved until then.
+              <Problem key={type.folder} title={type.saved > 0 ? `${typeHeading(type.label)} not read in full, ${type.saved} saved` : `${typeHeading(type.label)} left out`} detail={type.reason} compact={compact} />
             ))}
             {summary.warnings.map((message, index) => (
               <Problem key={index} title={message} />
@@ -110,6 +118,12 @@ export function BackupResults({ job, compact = false, jobId }: BackupResultsProp
       {!compact && job.isComplete && summary.empty.length > 0 && (
         <Disclosure label={`${summary.empty.length} type${summary.empty.length === 1 ? "" : "s"} had nothing to back up`}>
           <p className="text-xs text-muted-foreground">{summary.empty.map((type) => typeHeading(type.label)).join(", ")}.</p>
+        </Disclosure>
+      )}
+
+      {!compact && job.isComplete && summary.notConfigured.length > 0 && (
+        <Disclosure label={`${summary.notConfigured.length} type${summary.notConfigured.length === 1 ? " is" : "s are"} not set up in this tenant`}>
+          <p className="text-xs text-muted-foreground">{summary.notConfigured.map((type) => typeHeading(type.label)).join(", ")}. Nothing is missing from the backup: Microsoft answered that there is nothing to save.</p>
         </Disclosure>
       )}
 
