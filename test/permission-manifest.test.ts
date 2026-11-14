@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   areaPermissions, checkedChoice, DEFAULT_READER_CHOICE, DEFAULT_SETUP_CHOICE, graphPermissions, knownPermissions, missingForChoice, READER_ALLOWED_ROLES, readerChoice,
-  readerExcludedFolders, readerRequiredRoles, readerRoles, readerScriptArguments, readerSetupArguments, requestedPermissions, servicePermissions, setupScriptArguments, type PermissionChoice,
+  readerExcludedFolders, readerRequiredRoles, readerRoles, readerScriptArguments, readerSetupArguments, requestedPermissions, setupScriptArguments, showsApproval, type PermissionChoice,
 } from "../src/shared/services/manifest"
 import { areaNeed, backupNeed, canBackUp, checkModules, DEFAULT_SELECTION, MODULES, MODULE_BY_ID, restorePermissionBlocker, type AccessLevel, type GrantedPermissions, type ModuleId } from "../src/shared/services/modules"
 import { OPTIONAL_PERMISSIONS } from "../src/shared/services/optional-permissions"
@@ -125,6 +125,12 @@ describe("What a choice of services, areas and access levels asks for", () => {
     expect(MODULES.flatMap((module) => module.areas.flatMap((area) => area.parts.filter((part) => part.restoreNotRequested).flatMap((part) => part.folders)))).toEqual(["DeviceCategories", "DeviceCleanupRules", "ContinuousAccessEvaluationPolicy", "GroupLifecyclePolicies"])
     // Restoring Entra ID never brings the permission that changes Conditional Access policies.
     expect(graphPermissions({ entra: { access: "restore", areas: ["groups", "usersAndDevices", "applications"] } }, "delegated")).not.toContain("Policy.ReadWrite.ConditionalAccess")
+  })
+
+  it("stays within the length Microsoft allows for one consent grant, even with everything chosen", () => {
+    // Microsoft Graph refuses a delegated permission grant whose scope is longer than 3,850 characters.
+    const everything: PermissionChoice = Object.fromEntries(MODULES.map((module) => [module.id, { access: "restore", areas: module.areas.filter((area) => area.optIn).map((area) => area.id) }]))
+    expect(graphPermissions(everything, "delegated", OPTIONAL_PERMISSIONS.map((entry) => entry.id)).join(" ").length).toBeLessThan(3850)
   })
 
   it("adds the optional permissions of single features only when asked, after the services", () => {
@@ -267,10 +273,39 @@ describe("Permissions TenuVault knows", () => {
     expect(knownPermissions("application").map((api) => api.api)).toEqual(["Microsoft Graph"])
   })
 
-  it("count a service's permissions as proof of an approved registration, and the ones every sign-in has not", () => {
-    const service = servicePermissions("delegated")
-    for (const permission of ["DeviceManagementApps.ReadWrite.All", "DeviceManagementApps.Read.All", "Policy.Read.All", "Policy.ReadWrite.ConditionalAccess", "Domain.Read.All", "SecurityEvents.Read.All"]) expect(service.has(permission), permission).toBe(true)
-    for (const permission of ["User.Read", "Organization.Read.All", "Mail.Send", "AuditLog.Read.All", "user_impersonation"]) expect(service.has(permission), permission).toBe(false)
+  describe("as proof that an administrator approved a registration", () => {
+    const approved = (...permissions: string[]) => showsApproval(new Set(permissions))
+    const backup = (id: ModuleId) => graphPermissions({ [id]: { access: "backup" } }, "delegated").slice(2)
+
+    it("take one Intune permission, as before, whether it reads or writes", () => {
+      for (const permission of ["DeviceManagementApps.ReadWrite.All", "DeviceManagementApps.Read.All", "DeviceManagementManagedDevices.Read.All", "DeviceManagementRBAC.ReadWrite.All"]) expect(approved(permission), permission).toBe(true)
+      expect(approved("User.Read", "Organization.Read.All", "DeviceManagementScripts.Read.All")).toBe(true)
+    })
+
+    it("take most of what backing up Entra ID or Defender asks for, and not a part of it that many apps hold", () => {
+      const entra = backup("entra")
+      const defender = backup("defender")
+      expect(approved(...entra)).toBe(true)
+      expect(approved(...defender)).toBe(true)
+      // A registration made by an earlier version that lacks a few newer permissions still counts.
+      expect(approved(...entra.slice(0, Math.floor(entra.length / 2) + 1))).toBe(true)
+      expect(approved(...entra.slice(0, Math.floor(entra.length / 2)))).toBe(false)
+      expect(approved(...defender.slice(0, 5))).toBe(true)
+      expect(approved(...defender.slice(0, 4))).toBe(false)
+      // A write permission that also reads counts for the read it stands in for.
+      expect(approved(...graphPermissions({ defender: { access: "restore" } }, "delegated").slice(2))).toBe(true)
+      for (const few of [["Policy.Read.All"], ["Domain.Read.All"], ["SecurityEvents.Read.All", "CustomDetection.Read.All"], ["Policy.Read.All", "Domain.Read.All", "RoleManagement.Read.Directory"]]) expect(approved(...few), few.join(" ")).toBe(false)
+    })
+
+    it("never take the permissions every sign-in has, the broad directory reads, an optional permission or Conditional Access alone", () => {
+      expect(approved()).toBe(false)
+      expect(approved("User.Read", "Organization.Read.All")).toBe(false)
+      // The opt-in areas of Entra ID are made of permissions many apps are given.
+      expect(approved("User.Read.All", "Group.Read.All", "GroupMember.Read.All", "Directory.Read.All", "Application.Read.All", "Device.Read.All", "Policy.Read.All")).toBe(false)
+      expect(approved(...OPTIONAL_PERMISSIONS.flatMap((entry) => entry.permissions))).toBe(false)
+      expect(approved("User.Read", "Organization.Read.All", "Policy.Read.All", "Policy.ReadWrite.ConditionalAccess")).toBe(false)
+      expect(approved("Mail.Read", "Sites.Read.All", "Files.Read.All")).toBe(false)
+    })
   })
 })
 

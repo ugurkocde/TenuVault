@@ -1,5 +1,5 @@
 import { CONSENT_ROLES_TEXT } from "../../shared/app-registration"
-import { DEFAULT_SETUP_CHOICE, GRAPH_APP_ID, knownPermissions, requestedPermissions, servicePermissions, type ApiPermissions, type PermissionChoice } from "../../shared/services/manifest"
+import { DEFAULT_SETUP_CHOICE, GRAPH_APP_ID, knownPermissions, requestedPermissions, showsApproval, type ApiPermissions, type PermissionChoice } from "../../shared/services/manifest"
 import type { RegistrationResult, SetupProgress } from "../../shared/ipc"
 
 interface Application {
@@ -143,15 +143,15 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
     resources.push({ ...resource, principal: (await list<Principal>(`/servicePrincipals?$filter=${encodeURIComponent(`appId eq '${resource.appId}'`)}&${principalFields}`))[0] })
   }
   // An existing registration is used only when an administrator has already given it tenant-wide
-  // consent for a permission TenuVault backs up or restores a service with, whichever service
-  // that is. The permissions every sign-in has say nothing. Any member of a tenant may create app
+  // consent for TenuVault's work: for an Intune permission, or for most of what backing up
+  // another service asks for (see showsApproval). One permission that many apps are given, or
+  // the ones every sign-in has, say nothing. Any member of a tenant may create app
   // registrations, with any name and note, and remains their owner. Granting consent to such a
   // registration would hand its owner an app that administrators sign in through. Tenant-wide
   // consent can only come from an administrator, so it is the proof that one trusted it before.
   // Even then the setup writes nothing to it: it only ever gives consent to the one it creates.
   const graphResource = resources.find(resource => resource.appId === GRAPH_APP_ID)!
   const graphPrincipalId = graphResource.principal?.id
-  const service = servicePermissions("delegated")
   // For choosing among several, only permissions TenuVault knows count: everything the permission
   // manifest names. Consent for anything else says nothing about which one the admins use.
   const known = new Map(knownPermissions("delegated").flatMap(api => {
@@ -164,7 +164,7 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
     if (!principal) continue
     const grants = await list<Grant>(`/oauth2PermissionGrants?$filter=${encodeURIComponent(`clientId eq '${principal.id}'`)}`)
     const tenantWide = grants.filter(grant => grant.consentType === "AllPrincipals")
-    if (!tenantWide.some(grant => grant.resourceId === graphPrincipalId && grant.scope.split(/\s+/).some(scope => service.has(scope)))) continue
+    if (!showsApproval(new Set(tenantWide.filter(grant => grant.resourceId === graphPrincipalId).flatMap(grant => grant.scope.split(/\s+/))))) continue
     const score = new Set(tenantWide.flatMap(grant => grant.scope.split(/\s+/).filter(scope => known.get(grant.resourceId)?.has(scope)).map(scope => `${grant.resourceId}:${scope}`))).size
     candidates.push({ app: candidate, principal, grants, disabled: principal.accountEnabled === false, score })
   }

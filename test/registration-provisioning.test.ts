@@ -412,11 +412,13 @@ describe("a choice of services, areas and access levels", () => {
     expect(created(f).declared).toEqual(DESKTOP_APP_PERMISSIONS[0]!.permissions.map((_, i) => `Microsoft Graph-${i}`))
   })
 
+  const entraOnly = graphPermissions({ entra: { access: "backup" } }, "delegated").filter(permission => !permission.startsWith("DeviceManagement"))
+  const defenderOnly = graphPermissions({ defender: { access: "backup" } }, "delegated").slice(2)
   it.each([
-    ["Entra ID permissions only", "Policy.Read.All Domain.Read.All RoleManagement.Read.Directory"],
-    ["one Entra ID permission and the sign-in ones", "User.Read Organization.Read.All Policy.Read.All"],
-    ["Defender permissions only", "SecurityEvents.Read.All CustomDetection.Read.All"],
-    ["the Conditional Access write permission only", "Policy.ReadWrite.ConditionalAccess"],
+    ["the Entra ID permissions only", entraOnly.join(" ")],
+    ["most of the Entra ID permissions, as an earlier version may have requested them", entraOnly.slice(2, 20).join(" ")],
+    ["the Defender permissions only", defenderOnly.join(" ")],
+    ["one Intune read permission only", "DeviceManagementScripts.Read.All"],
   ])("uses a registration an administrator gave tenant-wide consent for %s, and writes nothing to it", async (_name, scope) => {
     const f = fixture({ appPrincipal: { id: "app-sp" }, apps: [own], grants: [consent(scope)], choice: { entra: { access: "backup" } } })
     const result = await f.run()
@@ -431,6 +433,12 @@ describe("a choice of services, areas and access levels", () => {
     ["the permissions every sign-in has", "User.Read Organization.Read.All"],
     ["an optional permission of one feature", "User.Read Mail.Send AuditLog.Read.All"],
     ["a permission TenuVault does not use", "Mail.Read Sites.Read.All"],
+    // Permissions administrators grant to many apps prove nothing about this one.
+    ["one Entra ID permission and the sign-in ones", "User.Read Organization.Read.All Policy.Read.All"],
+    ["the broad directory reads", "User.Read.All Group.Read.All Directory.Read.All Application.Read.All Device.Read.All Policy.Read.All"],
+    ["a few Entra ID permissions", "Policy.Read.All Domain.Read.All RoleManagement.Read.Directory"],
+    ["two Defender permissions", "SecurityEvents.Read.All CustomDetection.Read.All"],
+    ["Conditional Access alone", "User.Read Organization.Read.All Policy.Read.All Policy.ReadWrite.ConditionalAccess"],
   ])("does not take tenant-wide consent for %s as approval, and creates its own registration", async (_name, scope) => {
     const f = fixture({
       apps: [{ ...own, id: "planted-app", appId: "planted" }], choice: { entra: { access: "backup" } },

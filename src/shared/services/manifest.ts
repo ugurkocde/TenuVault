@@ -126,11 +126,25 @@ export function knownPermissions(mode: SignInMode): ApiPermissions[] {
 }
 
 /**
- * The Microsoft Graph permissions that back up or restore a service. Consent for one of them shows
- * that a registration was approved for TenuVault's work; the permissions every sign-in has do not.
+ * Whether tenant-wide consent for these delegated Microsoft Graph permissions shows that an
+ * administrator approved a registration for TenuVault's work.
+ *
+ * One permission of Intune does, as it always did: they are used for Intune alone. For any other
+ * service it takes more than half of what backing the service up asks for, opt-in areas left out.
+ * A single permission of those services, such as User.Read.All or Policy.Read.All, is something
+ * administrators grant to many apps, so it proves nothing; neither do the permissions every
+ * sign-in has. A service that asks for fewer than three permissions, which is Conditional Access,
+ * therefore never counts by itself.
  */
-export function servicePermissions(mode: SignInMode): ReadonlySet<string> {
-  return new Set(namedByServices(mode).filter((permission) => !BASE_PERMISSIONS.includes(permission)))
+export function showsApproval(consented: ReadonlySet<string>): boolean {
+  return MODULES.some((module) => {
+    const areas = module.areas.filter((area) => !area.optIn)
+    if (module.id === "intune") return areas.some((area) => area.parts.some((part) => [part.backup.delegated, part.restore.delegated].some((needed) => needed !== "unsupported" && needed.some((group) => consented.has(group[0]!)))))
+    const own = (permissions: string[]) => unique(permissions).filter((permission) => !BASE_PERMISSIONS.includes(permission))
+    const asked = own(areas.flatMap((area) => areaPermissions(area, "backup", "delegated")))
+    const lacking = own(areas.flatMap((area) => areaPermissions(area, "backup", "delegated", consented)))
+    return asked.length >= 3 && (asked.length - lacking.length) * 2 > asked.length
+  })
 }
 
 /** The Microsoft Graph permissions to add so the granted ones cover a choice; empty when they do. */

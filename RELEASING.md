@@ -105,8 +105,11 @@ Put these in the next stable release's notes, then remove them here.
   running with the verified permissions and the Backup Reader card asks for a new verification.
 - **Setup script parameters.** `New-TenuVaultDesktopApp.ps1` takes `-Services`, `-RestoreAccess`
   and `-Areas`. Without them it requests exactly the permissions it requested before, and every
-  existing switch works as before. Quick setup reuses an app registration that has tenant-wide
-  admin consent for a permission of any service, not only an Intune one.
+  existing switch works as before. Quick setup still reuses an app registration that has
+  tenant-wide admin consent for an Intune permission, and now also one whose consent covers more
+  than half of the permissions that backing up Entra ID or Defender asks for. A registration for
+  Conditional Access alone is not reused; enter its client ID under "I already have an app
+  registration".
 
 ## Cutting a stable release
 

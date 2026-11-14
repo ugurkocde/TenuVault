@@ -87,7 +87,7 @@ describe("The setup in the app", () => {
     const provisioning = read("src/main/auth/registration-provisioning.ts")
     expect(provisioning.match(/"[A-Za-z-]+(\.[A-Za-z]+)*\.(Read|ReadWrite|Send)(\.[A-Za-z]+)*"/g)).toBeNull()
     expect(provisioning).not.toContain("DeviceManagement")
-    for (const call of ["requestedPermissions(options.choice ?? DEFAULT_SETUP_CHOICE, \"delegated\")", "knownPermissions(\"delegated\")", "servicePermissions(\"delegated\")"]) expect(provisioning).toContain(call)
+    for (const call of ["requestedPermissions(options.choice ?? DEFAULT_SETUP_CHOICE, \"delegated\")", "knownPermissions(\"delegated\")", "showsApproval("]) expect(provisioning).toContain(call)
     const reader = read("src/main/auth/backup-reader.ts")
     expect(reader.match(/"[A-Za-z-]+(\.[A-Za-z]+)*\.(Read|ReadWrite)(\.[A-Za-z]+)*"/g)).toBeNull()
   })
