@@ -127,7 +127,7 @@ export type SignInHealthState =
   | "local"
   /** Microsoft refused with a code TenuVault has no meaning for; the code is given. */
   | "unknown"
-  | Exclude<SignInErrorState, "certificateExpired" | "refused">
+  | Exclude<SignInErrorState, "refused">
 
 export type ReaderHealthState =
   | "notSetUp"
@@ -135,6 +135,7 @@ export type ReaderHealthState =
   | "pending"
   | "healthy"
   | "certificateExpiring"
+  /** By the certificate's own date. No answer of Microsoft leads here. */
   | "certificateExpired"
   /** The reader's permissions changed since the verification; it waits to be verified again. */
   | "rolesChanged"

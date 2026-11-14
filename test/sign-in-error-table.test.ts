@@ -32,14 +32,14 @@ const ROWS: Array<[code: string, errorClass: string, state: string, texts: strin
   ["AADSTS650057", "consent", "consentMissing", "noConsent"],
   ["AADSTS65004", "consent", "consentMissing", "firstSignIn setup"],
   ["AADSTS90094", "consent", "consentMissing", "firstSignIn setup"],
-  ["AADSTS700016", "registration", "registrationNotFound", "firstSignIn setup reader"],
+  ["AADSTS700016", "registration", "registrationNotFoundInTenant", "firstSignIn setup reader"],
   ["AADSTS50011", "registration", "registrationMisconfigured", "firstSignIn"],
   ["AADSTS7000218", "registration", "registrationMisconfigured", "firstSignIn"],
   ["AADSTS7000112", "application", "applicationDisabled", "setup reader"],
   ["AADSTS7000229", "application", "servicePrincipalMissing", "reader"],
   ["AADSTS50105", "assignment", "notAssigned", "firstSignIn setup"],
   ["AADSTS50057", "account", "accountDisabled", ""],
-  ["AADSTS50053", "account", "accountDisabled", ""],
+  ["AADSTS50053", "account", "accountLockedOrBlocked", ""],
   ["AADSTS50020", "tenant", "wrongTenantOrAccount", "firstSignIn setup"],
   ["AADSTS50034", "tenant", "wrongTenantOrAccount", ""],
   ["AADSTS90072", "tenant", "wrongTenantOrAccount", ""],
@@ -52,7 +52,7 @@ const ROWS: Array<[code: string, errorClass: string, state: string, texts: strin
   ["AADSTS90090", "unavailable", "unreachable", ""],
   ["AADSTS90024", "unavailable", "unreachable", ""],
   ["AADSTS700027", "credential", "refused", "reader"],
-  ["AADSTS7000222", "credential", "certificateExpired", "reader"],
+  ["AADSTS7000222", "credential", "refused", "reader"],
   ["AADSTS700024", "credential", "refused", ""],
 ]
 
@@ -80,11 +80,28 @@ describe("the sign-in error table", () => {
     for (const row of SIGN_IN_ERRORS) expect(row.code).toMatch(/^AADSTS\d{4,9}$/)
   })
 
-  it("leads every class to one state, apart from the classes that name what is wrong with the registration, the application or the certificate", () => {
+  it("leads every class to one state, apart from the classes that name what is wrong with the registration, the application or the account", () => {
     const states = new Map<string, Set<string>>()
     for (const row of SIGN_IN_ERRORS) states.set(row.class, (states.get(row.class) ?? new Set()).add(row.state))
     const several = [...states].filter(([, found]) => found.size > 1).map(([name]) => name).sort()
-    expect(several).toEqual(["application", "credential", "registration"])
+    expect(several).toEqual(["account", "application", "registration"])
+  })
+
+  // Three codes Microsoft describes more widely than their first rows did (reference and lookup page, checked 2026-11-14).
+  it("says no more about a code than Microsoft's description of it proves", () => {
+    // One code for a locked account and for a sign-in blocked by its address, on purpose.
+    const locked = signInErrorRow("AADSTS50053")!
+    expect(locked.state).not.toBe("accountDisabled")
+    expect(locked.meaning).toMatch(/locked/)
+    expect(locked.meaning).toMatch(/blocked/)
+    // Expired client secret keys: it says nothing about a certificate, so no code leads to an expired certificate.
+    expect(signInErrorRow("AADSTS7000222")!.meaning).toMatch(/client secret/)
+    expect(SIGN_IN_ERRORS.map((row) => row.state as string)).not.toContain("certificateExpired")
+    // Not found in the tenant the request went to, which is not the same as deleted.
+    const notFound = signInErrorRow("AADSTS700016")!
+    expect(notFound.meaning).toMatch(/tenant/)
+    expect(notFound.meaning).toMatch(/wrong tenant/)
+    expect(`${notFound.state} ${notFound.meaning}`).not.toMatch(/delet|removed/i)
   })
 
   it("words a code for the setup like a first sign-in only when the first sign-in has a text for it", () => {

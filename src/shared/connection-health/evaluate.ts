@@ -90,7 +90,7 @@ const WITH_TYPES = new Set(INTUNE_TYPES.map((type) => moduleForFolder(type.folde
 export function signInState(failure: SignInFailure): SignInHealthState {
   const row = signInErrorRow(failure.code)
   // A refusal of a certificate is never an answer to an admin's sign-in.
-  if (row) return row.state === "certificateExpired" || row.state === "refused" ? "unknown" : row.state
+  if (row) return row.state === "refused" ? "unknown" : row.state
   switch (failure.class) {
     case "session": return "signInNeeded"
     case "mfa": return "mfaRequired"
@@ -114,11 +114,9 @@ function signInHealth(observation: TokenObservation | undefined, now: Date): Sig
   return { state: signInState(observation.failure), checkedAt: observation.at, ...named(observation.failure) }
 }
 
-/** The state a refused token request of the Backup Reader leads to. */
+/** The state a refused token request of the Backup Reader leads to. Never an expired certificate: that shows by the certificate's own date. */
 function readerFailureState(failure: SignInFailure): ReaderHealthState {
-  const row = signInErrorRow(failure.code)
-  if (row?.state === "certificateExpired") return "certificateExpired"
-  const failed = row?.class ?? failure.class
+  const failed = signInErrorRow(failure.code)?.class ?? failure.class
   if (failed === "throttled") return "throttled"
   if (failed === "unavailable" || failed === "unreachable") return "unreachable"
   return "refused"

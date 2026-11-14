@@ -72,9 +72,17 @@ describe("the state of the admin's sign-in", () => {
   it("covers every state an admin's sign-in can be in", () => {
     const fromCodes = new Set(SIGN_IN_ERRORS.filter((row) => row.class !== "credential").map((row) => row.state))
     expect([...fromCodes].sort()).toEqual([
-      "accountDisabled", "applicationDisabled", "blockedByConditionalAccess", "consentMissing", "mfaRequired", "notAssigned", "registrationMisconfigured",
-      "registrationNotFound", "servicePrincipalMissing", "signInNeeded", "throttled", "unreachable", "wrongTenantOrAccount",
+      "accountDisabled", "accountLockedOrBlocked", "applicationDisabled", "blockedByConditionalAccess", "consentMissing", "mfaRequired", "notAssigned", "registrationMisconfigured",
+      "registrationNotFoundInTenant", "servicePrincipalMissing", "signInNeeded", "throttled", "unreachable", "wrongTenantOrAccount",
     ])
+  })
+
+  it("keeps both readings of a locked account or a blocked sign-in, and shows the code", () => {
+    expect(evaluate([delegated({ graph: failed({ class: "account", code: "AADSTS50053" }) })]).report.graph).toEqual({
+      state: "accountLockedOrBlocked", checkedAt: ago(MINUTE), class: "account", code: "AADSTS50053", link: "https://login.microsoftonline.com/error?code=50053",
+    })
+    // A disabled account is its own code and its own state.
+    expect(evaluate([delegated({ graph: failed({ class: "account", code: "AADSTS50057" }) })]).report.graph.state).toBe("accountDisabled")
   })
 
   // A failure without a code Microsoft gave: the class alone decides.
@@ -107,7 +115,7 @@ describe("the state of the admin's sign-in", () => {
 
   it("follows the code when the class stored with it says something else", () => {
     expect(evaluate([delegated({ graph: failed({ class: "session", code: "AADSTS53003" }) })]).report.graph.state).toBe("blockedByConditionalAccess")
-    expect(evaluate([delegated({ graph: failed({ class: "unreachable", code: "AADSTS700016" }) })]).report.graph.state).toBe("registrationNotFound")
+    expect(evaluate([delegated({ graph: failed({ class: "unreachable", code: "AADSTS700016" }) })]).report.graph.state).toBe("registrationNotFoundInTenant")
   })
 
   it("lets an answer expire", () => {
@@ -195,6 +203,13 @@ describe("the state of the Backup Reader", () => {
     expect(reader(readerFacts({ notAfter: ago(0) }), undefined, new Date(NOW.getTime() - DAY)).state).toBe("certificateExpiring")
   })
 
+  it("says the certificate expired by the certificate's own date alone, never from an answer of Microsoft", () => {
+    // Microsoft describes AADSTS7000222 as expired client secret keys. The certificate is good for 200 more days.
+    const found = reader(readerFacts(), failed({ class: "credential", code: "AADSTS7000222" }))
+    expect(found).toMatchObject({ state: "refused", code: "AADSTS7000222", daysLeft: 200 })
+    for (const row of SIGN_IN_ERRORS) expect(reader(readerFacts(), failed({ class: row.class, code: row.code })).state).not.toBe("certificateExpired")
+  })
+
   it("waits for a new verification when its permissions changed", () => {
     const roleChange = { added: ["Policy.Read.All"], removed: [], at: ago(DAY) }
     expect(reader(readerFacts({ roleChange }), healthy([]))).toMatchObject({ state: "rolesChanged", roleChange })
@@ -203,7 +218,7 @@ describe("the state of the Backup Reader", () => {
   it.each([
     [{ class: "credential", code: "AADSTS700027" }, "refused"],
     [{ class: "credential", code: "AADSTS700024" }, "refused"],
-    [{ class: "credential", code: "AADSTS7000222" }, "certificateExpired"],
+    [{ class: "credential", code: "AADSTS7000222" }, "refused"],
     [{ class: "registration", code: "AADSTS700016" }, "refused"],
     [{ class: "application", code: "AADSTS7000112" }, "refused"],
     [{ class: "application", code: "AADSTS7000229" }, "refused"],

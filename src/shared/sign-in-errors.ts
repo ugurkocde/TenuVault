@@ -26,7 +26,7 @@ import { CONSENT_ROLES_TEXT, CREATE_BY_HAND } from "./app-registration"
  * - registration: the app registration is missing or set up wrongly.
  * - application: the registration's enterprise application is turned off or missing.
  * - assignment: the account is not assigned to the application.
- * - account: the account itself is disabled or locked.
+ * - account: the account is disabled or locked, or Microsoft blocked its sign-in.
  * - tenant: the tenant or the account is not the one the sign-in was meant for.
  * - credential: Microsoft does not accept the Backup Reader's certificate.
  * - throttled: Microsoft asks to slow down.
@@ -52,16 +52,28 @@ export type SignInErrorState =
   | "mfaRequired"
   | "blockedByConditionalAccess"
   | "consentMissing"
-  | "registrationNotFound"
+  /**
+   * Microsoft found no application with this client ID in the tenant the request went to. That is
+   * all the code proves: the app registration may have been removed, it may never have been
+   * installed or consented to in this tenant, or the request went to another tenant than the one
+   * it is registered in. It is never to be shown as "deleted".
+   */
+  | "registrationNotFoundInTenant"
   | "registrationMisconfigured"
   | "applicationDisabled"
   | "servicePrincipalMissing"
   | "notAssigned"
   | "accountDisabled"
+  /**
+   * The account is locked after too many failed sign-ins, or Microsoft blocked the sign-in because
+   * of the address it came from. Microsoft answers both with one code on purpose, so the state
+   * keeps both readings and is shown with the code; the tenant's sign-in log tells them apart.
+   */
+  | "accountLockedOrBlocked"
   | "wrongTenantOrAccount"
   | "throttled"
   | "unreachable"
-  | "certificateExpired"
+  /** Microsoft does not accept the Backup Reader's credential. An expired certificate is told by the certificate's own date, never by a code. */
   | "refused"
 
 export interface SignInErrorRow {
@@ -168,7 +180,7 @@ const ROWS: readonly Row[] = [
 
   // The app registration.
   {
-    code: "AADSTS700016", class: "registration", state: "registrationNotFound", meaning: "The application was not found in the tenant.",
+    code: "AADSTS700016", class: "registration", state: "registrationNotFoundInTenant", meaning: "No application with this identifier was found in the tenant the request went to: it is not installed or consented to there, the identifier is wrong, or the request went to the wrong tenant.",
     firstSignIn: "No app registration with this client ID exists in this tenant. Check the Application (client) id, and that the tenant is the one the app registration was created in. If it was created a moment ago, wait a minute and sign in again.",
     setup: setupToolsRefused("AADSTS700016"),
     reader: "No app registration with this application ID exists in the tenant.",
@@ -200,7 +212,7 @@ const ROWS: readonly Row[] = [
     setup: setupToolsRefused("AADSTS50105"),
   },
   { code: "AADSTS50057", class: "account", state: "accountDisabled", meaning: "The user account is disabled." },
-  { code: "AADSTS50053", class: "account", state: "accountDisabled", meaning: "The account is locked, or the sign-in came from an address with malicious activity." },
+  { code: "AADSTS50053", class: "account", state: "accountLockedOrBlocked", meaning: "The account is locked after too many failed sign-ins, or the sign-in was blocked because it came from an address with malicious activity. One code stands for both." },
 
   // The wrong tenant or account.
   {
@@ -234,8 +246,9 @@ const ROWS: readonly Row[] = [
     code: "AADSTS700027", class: "credential", state: "refused", meaning: "The client assertion failed signature validation: Microsoft does not accept the certificate that signed it.",
     reader: "Microsoft does not know this certificate. Upload the exported certificate with the setup script, then verify again.",
   },
+  // Microsoft words this code for client secret keys, so it does not prove that the certificate expired.
   {
-    code: "AADSTS7000222", class: "credential", state: "certificateExpired", meaning: "The client credential of the application has expired.",
+    code: "AADSTS7000222", class: "credential", state: "refused", meaning: "The client secret keys that were provided for the application have expired.",
     reader: "The certificate has expired. Create a renewal certificate in Settings and upload it.",
   },
   // May pass on a retry, for example after a clock correction, so the Backup Reader keeps trying.
