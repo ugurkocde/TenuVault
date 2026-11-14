@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { fixture, jwt, refusal, registerTestTypes, scriptedGraph, testType } from "./helpers/backup-fixture"
 import { detailPath, listPath, readObject, type GraphReader } from "../src/shared/intune/read"
 import type { Item } from "../src/shared/intune/registry"
+import { MODULES, type ServiceModule } from "../src/shared/services/modules"
 
 /**
  * What a type can declare so the engine can read Entra ID and Defender: a Graph version, request
@@ -50,6 +51,8 @@ const TYPES = {
   }),
   // Only a signed-in admin can read it: the permission manifest says so for this folder.
   mdm: testType("MdmEnrollmentPolicies", "policies/mobileDeviceManagementPolicies"),
+  // A list whose refusal means the feature was never set up.
+  discovery: testType("HomeRealmDiscoveryPolicies", "policies/homeRealmDiscoveryPolicies", { notConfigured: [{ status: 403, code: "Forbidden" }] }),
   // Keeps only some of its own properties, never stores one of them and a part of another, and reads its members apart.
   domains: testType("Domains", "domains", {
     apiVersion: "v1.0",
@@ -78,6 +81,7 @@ function graph(routes: Record<string, unknown> = {}) {
     "/beta/policies/externalIdentitiesPolicy": { value: [{ id: "externalIdentitiesPolicy", allowExternalIdentitiesToLeave: true }] },
     "/v1.0/policies/federatedTokenValidationPolicy": refusal(404, "Request_ResourceNotFound", "Resource '' does not exist or one of its queried reference-property objects are not present."),
     "/beta/policies/mobileDeviceManagementPolicies": { value: [] },
+    "/beta/policies/homeRealmDiscoveryPolicies": { value: [] },
     "/v1.0/domains": { value: [] },
     "/v1.0/policies/claimsMappingPolicies": { value: [] },
     ...routes,
@@ -372,6 +376,59 @@ describe("a type the tenant never set up", () => {
     // Attempted and not missing: the backup covers the type, with the answer that there is nothing.
     expect(metadata.Scope.Included).toContain("FederatedTokenValidationPolicy")
     expect(job.log.join("\n")).toContain("FederatedTokenValidationPolicy (test) is not set up in this tenant.")
+  })
+
+  it("is recorded the same way for a service that ends a backup on its refusals, as Intune and Conditional Access do", async () => {
+    const entra = MODULES.find((module) => module.id === "entra") as ServiceModule
+    entra.isolated = false
+    try {
+      const { run, manifest } = fixture(graph())
+      const job = await run()
+      expect(job.status).toBe("Completed")
+      expect(outcome(job, "FederatedTokenValidationPolicy")).toEqual({ folder: "FederatedTokenValidationPolicy", service: "entra", outcome: "notConfigured" })
+      expect(await manifest(job)).toMatchObject({ Status: "Success", Failures: 0, SkippedTypes: [], FailedTypes: [], Coverage: "Complete" })
+      // The same answer from a type that does not declare it still fails that type.
+      const undeclared = fixture(graph({ "/v1.0/policies/authorizationPolicy": refusal(404, "Request_ResourceNotFound", "Resource '' does not exist.") }))
+      expect(outcome(await undeclared.run(), "AuthorizationPolicy")).toMatchObject({ outcome: "failed", status: 404 })
+    } finally {
+      entra.isolated = true
+    }
+  })
+
+  it("is recorded from the read of the type itself only: an object that answers the same way after others were saved is not read, not unset", async () => {
+    const { run, files, manifest } = fixture(graph({
+      "/beta/policies/homeRealmDiscoveryPolicies": { value: [{ id: "h1", displayName: "First" }, { id: "h2", displayName: "Second" }] },
+      "/beta/policies/homeRealmDiscoveryPolicies/h1": { id: "h1", displayName: "First" },
+      "/beta/policies/homeRealmDiscoveryPolicies/h2": refusal(403, "Forbidden", "Access denied."),
+    }), { concurrency: 1 })
+    const job = await run()
+    expect(await files(job)).toContain("HomeRealmDiscoveryPolicies/First.json")
+    expect(outcome(job, "HomeRealmDiscoveryPolicies")).toMatchObject({ outcome: "skipped", cause: "permission", saved: 1 })
+    expect(job.results!.types.find((type) => type.folder === "HomeRealmDiscoveryPolicies")).toMatchObject({ state: "skipped", saved: 1 })
+    expect(await manifest(job)).toMatchObject({ SkippedTypes: ["HomeRealmDiscoveryPolicies"], Coverage: "Incomplete" })
+    // The list answering that way is the type's own answer.
+    const unset = fixture(graph({ "/beta/policies/homeRealmDiscoveryPolicies": refusal(403, "Forbidden", "The feature is not enabled.") }))
+    expect(outcome(await unset.run(), "HomeRealmDiscoveryPolicies")).toMatchObject({ outcome: "notConfigured" })
+  })
+
+  it("never takes a sign-in Microsoft no longer accepts for the answer a type declares, in either kind of service", async () => {
+    // The type declares any 401 of its list as not set up; a token error is not the list's answer.
+    const declared = TYPES.discovery.notConfigured
+    const entra = MODULES.find((module) => module.id === "entra") as ServiceModule
+    ;(TYPES.discovery as { notConfigured?: unknown }).notConfigured = [{ status: 401 }]
+    try {
+      for (const isolated of [true, false]) {
+        entra.isolated = isolated
+        const { run } = fixture(graph({ "/beta/policies/homeRealmDiscoveryPolicies": refusal(401, "InvalidAuthenticationToken", "Access token has expired or is not yet valid.") }))
+        const job = await run()
+        expect(job.status).toBe("Failed")
+        expect(job.exception).toBe("Access token has expired or is not yet valid.")
+        expect(outcome(job, "HomeRealmDiscoveryPolicies")).toMatchObject({ outcome: "failed" })
+      }
+    } finally {
+      entra.isolated = true
+      ;(TYPES.discovery as { notConfigured?: unknown }).notConfigured = declared
+    }
   })
 
   it("fails the type for a 404 it does not declare, so a wrong path never reads as not configured", async () => {

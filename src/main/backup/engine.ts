@@ -603,24 +603,25 @@ export class BackupEngine {
     // Microsoft no longer accepts the sign-in. No type is at fault: every read after it fails the same way, for every service.
     const signInEnded = (error: unknown) => error instanceof TokenError || (error instanceof GraphError && signInRefused({ status: error.status, ...error.answer }))
     /**
-     * Ends a type of a service that isolates its failures, by what the failed read means: the type was
-     * never set up, the sign-in may not read it, or it could not be read. The backup goes on with the
-     * other types. A read that fails after an earlier one ended the type changes nothing.
+     * Whether a type's own read was answered the way the type declares for a tenant that never set it
+     * up. Only the read of the type itself can say so: an object that answers the same way after
+     * others were saved is a failed read.
+     */
+    const notSetUp = (type: IntuneType, error: unknown) =>
+      error instanceof GraphError && !!type.notConfigured && classifyAnswer({ status: error.status, ...error.answer }, { notConfigured: type.notConfigured, mode: tokens.mode }).outcome === "notConfigured"
+    /**
+     * Ends a type of a service that isolates its failures, by what the failed read means: the sign-in
+     * may not read it, or it could not be read. The backup goes on with the other types. A read that
+     * fails after an earlier one ended the type changes nothing.
      */
     const endType = (type: IntuneType, error: unknown): void => {
       if (endedTypes.has(type.folder)) return
       endedTypes.add(type.folder)
       const { module } = serviceOf(type)
       const answer = error instanceof GraphError ? { status: error.status, ...error.answer } : null
-      const verdict = answer ? classifyAnswer(answer, { notConfigured: type.notConfigured, held: granted ? canBackUp(type.folder, granted) : undefined, mode: tokens.mode }) : { outcome: "failed" as const }
+      const verdict = answer ? classifyAnswer(answer, { held: granted ? canBackUp(type.folder, granted) : undefined, mode: tokens.mode }) : { outcome: "failed" as const }
       const evidence = answer ? { status: answer.status, ...(answer.code ? { code: answer.code } : {}) } : {}
       const entry = result(type.folder)
-      if (verdict.outcome === "notConfigured") {
-        entry.state = "notConfigured"
-        settle(type.folder, { outcome: "notConfigured" })
-        this.write(job, `${type.label.charAt(0).toUpperCase()}${type.label.slice(1)} is not set up in this tenant.`)
-        return
-      }
       if (verdict.outcome === "skipped") {
         const reason = skipReason(verdict.cause, { service: module?.label ?? "this service", roles: module?.roles, mode: tokens.mode, settingsPage: SERVICES_PAGE }, answer?.message)
         skippedTypes.push(type.folder)
@@ -659,6 +660,14 @@ export class BackupEngine {
         Object.assign(result(type.folder), { found: items.length, ...(skipped ? { builtInSkipped: skipped } : {}), ...(items.length === 0 ? { state: "empty" } : {}) })
         lists[index] = { type, items }
       } catch (error) {
+        // The answer the type declares for a tenant that never set it up: nothing to save, and nothing missing.
+        // A sign-in Microsoft no longer accepts is never that answer, whatever status the type declares.
+        if (!network.signal.aborted && !signInEnded(error) && notSetUp(type, error)) {
+          result(type.folder).state = "notConfigured"
+          settle(type.folder, { outcome: "notConfigured" })
+          this.write(job, `${type.label.charAt(0).toUpperCase()}${type.label.slice(1)} is not set up in this tenant.`)
+          return
+        }
         // A sign-in that failed fails every read of the run, and a run that was stopped is over: both still end the backup.
         if (service.isolated && !signInEnded(error) && !network.signal.aborted) {
           endType(type, error)
