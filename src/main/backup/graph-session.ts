@@ -1,7 +1,7 @@
 import { retryDelay, retryableStatus, sleep } from "../graph-retry"
 import { FetchApplicationError } from "../api/network-error"
 import type { NetworkCircuit } from "./engine"
-import { GRAPH, MAX_LIST_PAGES, REQUEST_ATTEMPTS, GraphError, GraphPauseError, RequestTimeoutError, TokenError, graphFailure, requestFailure, withRequestTimeout } from "./request"
+import { GRAPH, MAX_LIST_PAGES, REQUEST_ATTEMPTS, GraphError, GraphPauseError, GraphUnansweredError, RequestTimeoutError, TokenError, graphFailure, requestFailure, withRequestTimeout } from "./request"
 
 export type GraphItem = Record<string, unknown> & { id: string }
 
@@ -9,8 +9,11 @@ export interface GraphSessionOptions {
   /** The service the session reads for. Its auth failures are counted apart from other services'. */
   service?: string
   /**
-   * A pause longer than the bound fails the request that got it and leaves the other readers of
-   * the service alone. Without it, the pause stops every reader of the session, as it always has.
+   * The session of a service that isolates its failures (see ServiceModule.isolated). A pause longer
+   * than the bound fails the request that got it and leaves the other readers of the service alone.
+   * Requests that get no answer count for this service only: too many in a row stop the service,
+   * never the job. Without it, the pause stops every reader of the session and unanswered requests
+   * count toward the job's circuit, as they always have.
    */
   isolated?: boolean
 }
@@ -35,6 +38,9 @@ const filtersOf = (link: URL) => [...link.searchParams].filter(([name]) => /^\$?
 export class GraphSession {
   private resumeAt = 0
   private throttleError: Error | undefined
+  /** A service that isolates its failures: its requests in a row without an answer, and the error once they stopped it. */
+  private unanswered = 0
+  private stopped: GraphUnansweredError | undefined
 
   constructor(
     private readonly fetchImpl: typeof fetch,
@@ -72,6 +78,7 @@ export class GraphSession {
   async get<T = Record<string, unknown>>(url: string, headers?: Readonly<Record<string, string>>): Promise<T> {
     for (let attempt = 0; ; attempt++) {
       this.network.signal.throwIfAborted()
+      if (this.stopped) throw this.stopped
       while (this.resumeAt > Date.now() && !this.throttleError) await sleep(this.resumeAt - Date.now(), this.network.signal)
       if (this.throttleError) throw this.throttleError
       let response: Response | undefined
@@ -88,14 +95,15 @@ export class GraphSession {
           if (response.ok) {
             const result = (await response.json()) as T
             signal.throwIfAborted()
-            this.network.succeeded("Microsoft Graph", this.options.service)
+            this.answered()
             return result
           }
           throw await graphFailure(response)
         }, this.network.signal)
       } catch (error) {
         this.network.signal.throwIfAborted()
-        if ((attempted || error instanceof RequestTimeoutError) && requestFailure(error) === "network") this.network.failed("Microsoft Graph", error)
+        const unanswered = (attempted || error instanceof RequestTimeoutError) && requestFailure(error) === "network"
+        if (unanswered) this.notAnswered(error)
         if (error instanceof GraphPauseError) {
           attempt--
           continue
@@ -113,10 +121,31 @@ export class GraphSession {
         if (response?.status === 429) this.resumeAt = Math.max(this.resumeAt, Date.now() + delay)
         if (attempt >= REQUEST_ATTEMPTS - 1) {
           if (!attempted && error instanceof RequestTimeoutError) throw new TokenError(error.message, { cause: error })
+          // Named, so the backup ends the type this request belongs to instead of asking for each of its objects in vain.
+          if (this.options.isolated && unanswered) throw new GraphUnansweredError(error instanceof Error ? error.message : String(error), { cause: error })
           throw error
         }
         await sleep(delay, this.network.signal)
       }
     }
+  }
+
+  /** A request was answered: the streak of unanswered ones is over, for the job or for this service alone. */
+  private answered(): void {
+    if (!this.options.isolated) return this.network.succeeded("Microsoft Graph", this.options.service)
+    this.network.signal.throwIfAborted()
+    this.unanswered = 0
+  }
+
+  /**
+   * A request got no answer. For a service that isolates its failures it counts for that service
+   * only, with the job's own limit: at the limit the service stops and its remaining requests are
+   * not sent, while the other services read on. For any other service it counts toward the job's circuit.
+   */
+  private notAnswered(error: unknown): void {
+    if (!this.options.isolated) return this.network.failed("Microsoft Graph", error)
+    if (++this.unanswered < this.network.threshold) return
+    this.stopped ??= new GraphUnansweredError(`Microsoft Graph did not respond for ${this.unanswered} consecutive requests of this service, so the rest of the service was not read.`, { cause: error })
+    throw this.stopped
   }
 }

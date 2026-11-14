@@ -5,7 +5,7 @@ import { BACKUP_CANCELLED_MESSAGE, BACKUP_OWNER_FILE } from "../../shared/consta
 import { resolveBackupOwnership, type OwnershipFile } from "../../shared/backup-ownership"
 import { BlobWriter } from "./blob-writer"
 import { GraphSession, type GraphItem } from "./graph-session"
-import { GRAPH, BlobClaimError, GraphError, InventoryDamagedError, ProtectedBlobError, RequestTimeoutError, StorageError, TokenError, isUnreachable } from "./request"
+import { GRAPH, BlobClaimError, GraphError, GraphUnansweredError, InventoryDamagedError, ProtectedBlobError, RequestTimeoutError, StorageError, TokenError, isUnreachable } from "./request"
 import { RetryDelayError } from "../graph-retry"
 import { isLocalAccount } from "../storage/blob-emulator"
 import { FetchApplicationError } from "../api/network-error"
@@ -222,7 +222,8 @@ export class NetworkCircuit {
   /** The service whose failures opened the circuit. */
   stoppedBy: NetworkService | null = null
 
-  constructor(private readonly threshold: number, signal?: AbortSignal, private readonly deadline?: number) {
+  /** `threshold`: the consecutive requests without an answer that stop the job. */
+  constructor(readonly threshold: number, signal?: AbortSignal, private readonly deadline?: number) {
     this.combined = signal ? AbortSignal.any([signal, this.controller.signal]) : this.controller.signal
   }
 
@@ -790,9 +791,9 @@ export class BackupEngine {
         outcome.saved++
       } catch (error) {
         if (service.isolated && !(error instanceof TokenError) && !network.signal.aborted) {
-          // A refusal, or a pause longer than the bound, holds for every object of the type: the type ends, the backup goes on.
+          // A refusal, a pause longer than the bound or a request without an answer holds for every object of the type: the type ends, the backup goes on.
           const refused = error instanceof GraphError && classifyAnswer({ status: error.status, ...error.answer }, { mode: tokens.mode }).outcome === "skipped"
-          if (refused || error instanceof RetryDelayError || endedTypes.has(type.folder)) {
+          if (refused || error instanceof RetryDelayError || error instanceof GraphUnansweredError || endedTypes.has(type.folder)) {
             endType(type, error)
             done++
             return

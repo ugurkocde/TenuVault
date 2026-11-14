@@ -47,6 +47,13 @@ export class GraphError extends Error {
 /** Another reader extended the shared pause while this reader acquired its token. */
 export class GraphPauseError extends Error {}
 
+/**
+ * A request of a service that isolates its failures got no answer from Microsoft Graph in any of
+ * its attempts, or was not sent because the service had stopped answering. It ends the type it
+ * belongs to, never the backup; `cause` is the connection failure.
+ */
+export class GraphUnansweredError extends Error {}
+
 export class StorageError extends Error {}
 /**
  * Local storage refused because files in the backup folder are damaged: a backup that is

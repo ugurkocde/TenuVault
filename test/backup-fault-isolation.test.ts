@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest"
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 import { CONSECUTIVE_AUTH_FAILURE_LIMIT, NetworkCircuit } from "../src/main/backup/engine"
 import { GraphSession } from "../src/main/backup/graph-session"
 import { MODULES, type ModuleId, type ServiceModule } from "../src/shared/services/modules"
@@ -33,7 +33,30 @@ function withIsolation(id: ModuleId, isolated: boolean): void {
 }
 afterEach(() => {
   for (const module of MODULES) (module as ServiceModule).isolated = ORIGINAL.get(module.id)!
+  vi.useRealTimers()
 })
+
+const realTimeout = setTimeout
+/**
+ * Waits for `work` while the test's clock runs a hundred times faster than the real one, so the
+ * seconds between the attempts of a request cost none. The store still writes real files, which
+ * the real pause between the steps leaves time for.
+ */
+async function elapse<T>(work: () => Promise<T>): Promise<T> {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] })
+  let settled = false
+  const result = work()
+  result.then(() => (settled = true), () => (settled = true))
+  while (!settled) {
+    await vi.advanceTimersByTimeAsync(100)
+    await new Promise((resolve) => realTimeout(resolve, 1))
+  }
+  return result
+}
+
+const noAnswer = () => {
+  throw new TypeError("Connection reset")
+}
 
 const units = Array.from({ length: UNITS }, (_, index) => ({ id: `au${index + 1}`, displayName: `Unit ${index + 1}` }))
 
@@ -182,6 +205,101 @@ describe("a failing Entra ID or Defender endpoint", () => {
     const job = await run()
     expect(job.status).toBe("Failed")
     expect(await manifest(job)).toMatchObject({ Status: "Failed", Failures: 2, Coverage: "Incomplete" })
+  })
+})
+
+describe("an Entra ID or Defender endpoint that does not answer", () => {
+  it("ends its type after the attempts of one request; Intune, the rest of Entra ID and Defender are saved", async () => {
+    const { run, files, manifest, requests } = fixture(tenant({ "/beta/policies/tokenLifetimePolicies": noAnswer }), { concurrency: 2 })
+    const job = await elapse(run)
+    expect(job.status).toBe("Completed")
+    expect(job.exception).toBeUndefined()
+    expect(requests.filter((request) => request.path === "/beta/policies/tokenLifetimePolicies")).toHaveLength(3)
+    const saved = await files(job)
+    await intuneSaved(saved)
+    expect(saved.filter((name) => name.startsWith("AdministrativeUnits/"))).toHaveLength(UNITS)
+    expect(saved).toContain("DefenderSecureScoreControlStates/MFA.json")
+    expect(outcomeOf(job, "TokenLifetimePolicies")).toMatchObject({ outcome: "failed", error: "Connection reset", saved: 0, service: "entra" })
+    expect(await manifest(job)).toMatchObject({ Status: "CompletedWithWarnings", Failures: 1, FailedTypes: ["TokenLifetimePolicies"], SkippedTypes: [], Coverage: "Incomplete" })
+  })
+
+  it("does not end the backup after three failures with one reader, as the same failures of an Intune endpoint do", async () => {
+    // With one reader, three requests in a row without an answer stop a backup.
+    const entra = fixture(tenant({ "/beta/policies/tokenLifetimePolicies": noAnswer }), { concurrency: 1 })
+    const job = await elapse(entra.run)
+    expect(job.status).toBe("Completed")
+    expect(job.exception).toBeUndefined()
+    const saved = await entra.files(job)
+    await intuneSaved(saved)
+    expect(saved).toContain("DefenderSecureScoreControlStates/MFA.json")
+    expect(saved).toContain("DefenderCustomDetectionRules/Rule.json")
+    // The limit is the service's own now: Entra ID stopped, and nothing more was asked of it.
+    expect(outcomeOf(job, "TokenLifetimePolicies")).toMatchObject({ outcome: "failed", error: "Microsoft Graph did not respond for 3 consecutive requests of this service, so the rest of the service was not read." })
+    expect(outcomeOf(job, "AdministrativeUnits")).toMatchObject({ outcome: "failed", saved: 0 })
+    expect(entra.requests.filter((request) => request.path.startsWith("/beta/directory/administrativeUnits/"))).toHaveLength(0)
+    expect(await entra.manifest(job)).toMatchObject({ Status: "CompletedWithWarnings", Failures: 2, FailedTypes: ["TokenLifetimePolicies", "AdministrativeUnits"] })
+
+    const intune = fixture(tenant({ "/beta/deviceManagement/deviceCategories": noAnswer }), { concurrency: 1 })
+    const stopped = await elapse(intune.run)
+    expect(stopped.status).toBe("Failed")
+    expect(stopped.exception).toBe("Backup stopped: Microsoft Graph did not respond for 3 consecutive requests. Earlier policies in this run were saved; the backup is incomplete.")
+  })
+
+  it("stops the service, and only it, after as many unanswered requests in a row as stop a backup", async () => {
+    const { run, files, manifest, requests } = fixture(tenant({ "/beta/directory/administrativeUnits": noAnswer, "/beta/policies/tokenLifetimePolicies": noAnswer }), { concurrency: 2 })
+    const job = await elapse(run)
+    expect(job.status).toBe("Completed")
+    expect(job.exception).toBeUndefined()
+    // Two readers, three attempts each: the sixth unanswered request in a row is the last one sent to Entra ID.
+    expect(requests.filter((request) => request.path.startsWith("/beta/directory") || request.path.startsWith("/beta/policies"))).toHaveLength(6)
+    const saved = await files(job)
+    await intuneSaved(saved)
+    expect(saved).toContain("DefenderSecureScoreControlStates/MFA.json")
+    expect(outcomeOf(job, "AdministrativeUnits")).toMatchObject({ outcome: "failed", saved: 0 })
+    expect(outcomeOf(job, "TokenLifetimePolicies")).toMatchObject({ outcome: "failed", saved: 0 })
+    expect(outcomeOf(job, "DefenderSecureScoreControlStates")).toMatchObject({ outcome: "saved", saved: 1 })
+    expect(await manifest(job)).toMatchObject({ Status: "CompletedWithWarnings", Failures: 2, Coverage: "Incomplete" })
+  })
+
+  it("ends its type when an object read gets no answer, keeps what was saved before and asks for no further object of it", async () => {
+    const slow = (unit: { id: string }) => () => new Promise<Response>((resolve) => setTimeout(() => resolve(Response.json(unit)), 2_000))
+    const { run, files, manifest, requests } = fixture(tenant({
+      ...Object.fromEntries(units.map((unit) => [`/beta/directory/administrativeUnits/${unit.id}`, slow(unit)])),
+      "/beta/directory/administrativeUnits/au3": noAnswer,
+    }), { concurrency: 2 })
+    const job = await elapse(run)
+    expect(job.status).toBe("Completed")
+    expect(requests.filter((request) => request.path === "/beta/directory/administrativeUnits/au3")).toHaveLength(3)
+    // The other reader got a unit or two further in the three seconds the attempts took; the rest was never asked for.
+    const asked = new Set(requests.filter((request) => /administrativeUnits\/au\d+$/.test(request.path)).map((request) => request.path.split("/").pop()))
+    expect(asked.size).toBeLessThan(10)
+    const saved = (await files(job)).filter((name) => name.startsWith("AdministrativeUnits/"))
+    expect(saved).toContain("AdministrativeUnits/Unit 1.json")
+    expect(saved).not.toContain("AdministrativeUnits/Unit 3.json")
+    expect(outcomeOf(job, "AdministrativeUnits")).toMatchObject({ outcome: "failed", error: "Connection reset", saved: saved.length })
+    // One unanswered request ends its type, not its service.
+    expect(await files(job)).toContain("TokenLifetimePolicies/Lifetime.json")
+    await intuneSaved(await files(job))
+    expect(await manifest(job)).toMatchObject({ Status: "CompletedWithWarnings", Failures: 1, FailedTypes: ["AdministrativeUnits"] })
+  })
+
+  it("counts apart from Intune: its answers do not end a streak of unanswered Intune requests", async () => {
+    vi.useFakeTimers()
+    const circuit = new NetworkCircuit(4)
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      if (String(input).includes("/intune")) throw new TypeError("Connection reset")
+      return Response.json({ ok: true })
+    }) as typeof fetch
+    const intune = new GraphSession(fetchImpl, async () => "token", circuit, { service: "intune" })
+    const entra = new GraphSession(fetchImpl, async () => "token", circuit, { service: "entra", isolated: true })
+    const settled = (request: Promise<unknown>) => request.then(() => "answered", (error: Error) => error.message)
+    const first = settled(intune.get("https://graph.microsoft.com/beta/intune"))
+    await vi.advanceTimersByTimeAsync(3_000)
+    // Three attempts without an answer: one short of the limit.
+    await expect(first).resolves.toBe("Connection reset")
+    await expect(entra.get("https://graph.microsoft.com/beta/entra")).resolves.toEqual({ ok: true })
+    // The fourth in a row stops the backup, whatever Entra ID answered in between.
+    await expect(settled(intune.get("https://graph.microsoft.com/beta/intune"))).resolves.toContain("Microsoft Graph did not respond for 4 consecutive requests")
   })
 })
 
