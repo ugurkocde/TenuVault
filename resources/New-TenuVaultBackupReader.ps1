@@ -318,6 +318,11 @@ foreach ($assignment in $assigned) {
         elseif ($name -eq "DeviceManagementManagedDevices.Read.All") {
             Write-Warning "Removing DeviceManagementManagedDevices.Read.All because -IncludeDeviceCategories was not given. Every computer using this reader must verify it again in TenuVault. Run the script again with -IncludeDeviceCategories to keep it."
         }
+        elseif ($name -eq "Policy.Read.All" -and $PSBoundParameters.ContainsKey('Services')) {
+            # With -Services the permission comes from a service that reads Entra policies, or from the switch.
+            $readBy = ($permissionTable | Where-Object { $_.Roles -contains $name } | ForEach-Object { $_.Service } | Select-Object -Unique) -join ' or '
+            Write-Warning "Removing Policy.Read.All because no service in -Services needs it and -IncludeConditionalAccess was not given. Every computer using this reader must verify it again in TenuVault. Run the script again with $readBy in -Services, or with -IncludeConditionalAccess, to keep it."
+        }
         elseif ($name -eq "Policy.Read.All") {
             Write-Warning "Removing Policy.Read.All because -IncludeConditionalAccess was not given. Every computer using this reader must verify it again in TenuVault. Run the script again with -IncludeConditionalAccess to keep it."
         }

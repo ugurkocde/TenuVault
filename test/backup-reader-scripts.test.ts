@@ -182,6 +182,29 @@ describe("New-TenuVaultBackupReader.ps1", () => {
       expect(result.calls).toEqual([])
     }, 90_000)
 
+    it("says why it removes the Conditional Access permission: the services when -Services was passed, the switch when it was not", () => {
+      const assigned = [...FIVE, CONDITIONAL_ACCESS_ROLE]
+      const switchOnly = "Removing Policy.Read.All because -IncludeConditionalAccess was not given."
+      // The reader was set up for Intune and Entra ID, and is now set to Intune alone.
+      const named = run({ Services: ["Intune"] }, { existing: true, assigned })
+      expect(named.code, named.text).toBe(0)
+      expect(named.removed).toEqual([CONDITIONAL_ACCESS_ROLE])
+      const text = named.text.replace(/\s+/g, " ")
+      expect(text).toContain("Removing Policy.Read.All because no service in -Services needs it and -IncludeConditionalAccess was not given.")
+      expect(text).toContain("Run the script again with ConditionalAccess or Entra in -Services, or with -IncludeConditionalAccess, to keep it.")
+      expect(text).not.toContain(switchOnly)
+      // Without -Services the switch is the only way the reader gets it, as before.
+      const plain = run({}, { existing: true, assigned })
+      expect(plain.removed).toEqual([CONDITIONAL_ACCESS_ROLE])
+      expect(plain.text.replace(/\s+/g, " ")).toContain(`${switchOnly} Every computer using this reader must verify it again in TenuVault. Run the script again with -IncludeConditionalAccess to keep it.`)
+      // A service that reads Entra policies keeps it, and so does the switch.
+      for (const args of [{ Services: ["Intune", "ConditionalAccess"] }, { Services: ["Intune"], IncludeConditionalAccess: true }]) {
+        const kept = run(args, { existing: true, assigned })
+        expect(kept.removed, JSON.stringify(args)).toEqual([])
+        expect(kept.text).not.toContain("Removing")
+      }
+    }, 90_000)
+
     it("refuses an area whose service was not chosen, before it signs in", () => {
       const result = run({ Areas: ["Groups"] })
       expect(result.code).toBe(1)
