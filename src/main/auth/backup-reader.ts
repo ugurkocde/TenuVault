@@ -244,10 +244,11 @@ export class BackupReaderService {
       })
       const roles = checkReaderToken(acquired.accessToken, app, resource, selection)
       if (resource === "graph" && roles.join(" ") !== seen) {
-        seen = roles.join(" ")
         this.noteRoleChange(credential.tenantId, roles)
         usable = verified.filter((role) => roles.includes(role))
         requireSomethingToRead(usable, selection)
+        // Remembered only once the checks passed, so a refused reader is refused on every request of the run.
+        seen = roles.join(" ")
       }
       return acquired.accessToken
     }

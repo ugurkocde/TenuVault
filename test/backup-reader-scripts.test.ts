@@ -41,7 +41,7 @@ describe("New-TenuVaultBackupReader.ps1", () => {
   })
 
   describe.runIf(Boolean(powershell))("run against stand-ins for the Microsoft Graph commands", () => {
-    function run(args: Record<string, unknown> = {}, state: { existing?: boolean; assigned?: string[] } = {}) {
+    function run(args: Record<string, unknown> = {}, state: { existing?: boolean; assigned?: string[]; offered?: string[] } = {}) {
       const dir = mkdtempSync(join(tmpdir(), "reader-script-"))
       try {
         const file = (name: string) => join(dir, name)
@@ -135,6 +135,20 @@ describe("New-TenuVaultBackupReader.ps1", () => {
       expect(result.removed).toEqual(FIVE)
       expect(result.text).toContain("Removing DeviceManagementApps.Read.All because -Permissions does not name it.")
       expect(result.text).toContain("Run the script again with DeviceManagementApps.Read.All in -Permissions to keep it.")
+    }, 90_000)
+
+    it("removes a write permission without saying how to keep it, with -Permissions and in a default run", () => {
+      const write = "DeviceManagementApps.ReadWrite.All"
+      const offered = [...knownPermissions("application")[0]!.permissions, write]
+      for (const args of [{ AppId: READER_APP, Permissions: FIVE }, { AppId: READER_APP }]) {
+        const result = run(args, { existing: true, offered, assigned: [...FIVE, write] })
+        expect(result.code, result.text).toBe(0)
+        expect(result.removed).toEqual([write])
+        expect(result.text).toContain(`Removing permission ${write}`)
+        expect(result.text).toContain("the Backup Reader stays read-only")
+        // No parameter keeps a write permission, so none is suggested.
+        expect(result.text).not.toContain("to keep it")
+      }
     }, 90_000)
 
     it("accepts every permission a Backup Reader may hold for -Permissions, and still adds what a switch asks for", () => {

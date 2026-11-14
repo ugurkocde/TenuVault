@@ -161,13 +161,14 @@ if (-not $chosenServices) { $chosenServices = $defaultServices }
 foreach ($name in $Areas) {
     if (-not ($permissionTable | Where-Object { $_.OptIn -and $_.Area -eq $name -and $chosenServices -contains $_.Service })) { throw "-Areas names $name, which belongs to a service that is not in -Services. Nothing was changed." }
 }
+# Every read permission a Backup Reader may hold: the table's, and the device inventory one that has its own switch.
+$allowedPermissions = @($permissionTable | ForEach-Object { $_.Roles }) + "DeviceManagementManagedDevices.Read.All"
 $roles = @()
 if ($PSBoundParameters.ContainsKey('Permissions')) {
     # The permissions named one by one. Only a read permission of the table, or the device inventory
     # one that has its own switch, is accepted, so the reader stays read-only whatever is typed.
     if ($PSBoundParameters.ContainsKey('Services') -or $PSBoundParameters.ContainsKey('Areas')) { throw "-Permissions names the reader's permissions one by one and cannot be combined with -Services or -Areas. Nothing was changed." }
     if ($Permissions -contains 'None' -and @($Permissions).Count -gt 1) { throw "-Permissions None cannot be combined with a permission. Nothing was changed." }
-    $allowedPermissions = @($permissionTable | ForEach-Object { $_.Roles }) + "DeviceManagementManagedDevices.Read.All"
     foreach ($name in $Permissions) {
         if ($name -eq 'None') { continue }
         if ($allowedPermissions -notcontains $name) { throw "-Permissions names $name, which is not a read permission a Backup Reader may hold. Nothing was changed." }
@@ -312,7 +313,11 @@ foreach ($assignment in $assigned) {
     $keep = $assignment.ResourceId -eq $graph.Id -and ($wanted.Id -contains $assignment.AppRoleId)
     if (-not $keep -and $PSCmdlet.ShouldProcess($app.AppId, "Remove permission $($assignment.AppRoleId) on $($assignment.ResourceDisplayName)")) {
         $name = ($graph.AppRoles | Where-Object Id -eq $assignment.AppRoleId).Value
-        if ($name -and $PSBoundParameters.ContainsKey('Permissions')) {
+        # How to keep a permission is only said for one a Backup Reader may hold. A write permission, or
+        # one TenuVault does not know, is removed with the plain line below: no parameter would keep it.
+        $holdable = $name -and $allowedPermissions -contains $name
+        if (-not $holdable) { }
+        elseif ($PSBoundParameters.ContainsKey('Permissions')) {
             Write-Warning "Removing $name because -Permissions does not name it. Every computer using this reader must verify it again in TenuVault. Run the script again with $name in -Permissions to keep it."
         }
         elseif ($name -eq "DeviceManagementManagedDevices.Read.All") {
@@ -326,7 +331,7 @@ foreach ($assignment in $assigned) {
         elseif ($name -eq "Policy.Read.All") {
             Write-Warning "Removing Policy.Read.All because -IncludeConditionalAccess was not given. Every computer using this reader must verify it again in TenuVault. Run the script again with -IncludeConditionalAccess to keep it."
         }
-        elseif ($name) {
+        else {
             Write-Warning "Removing $name because the services and areas of this run do not need it. Every computer using this reader must verify it again in TenuVault. Run the script again with the -Services and -Areas the reader had to keep it."
         }
         Write-Host "Removing permission $(if ($name) { $name } else { $assignment.AppRoleId }) on $($assignment.ResourceDisplayName): the Backup Reader stays read-only."

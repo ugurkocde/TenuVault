@@ -505,6 +505,9 @@ describe("Backup Reader per service", () => {
     expect(error).toBeInstanceOf(BackupReaderError)
     expect((error as Error).message).toContain("no permission to read Entra ID or Defender")
     expect((error as Error).message).toContain("-Services Entra,Defender")
+    // Every later request of the same run is refused too, also one that was already on its way.
+    await expect(tokens!.graph()).rejects.toThrow("no permission to read Entra ID or Defender")
+    await expect(tokens!.excludedTypes!()).rejects.toThrow("no permission to read Entra ID or Defender")
   })
 
   it("still refuses a role outside the manifest at verification and at every scheduled backup", async () => {
