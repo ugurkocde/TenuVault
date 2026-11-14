@@ -130,21 +130,12 @@ export function TenantTrialOptions({ onStarted, tenantId, setupTenantId, guidanc
   </Container>
 }
 
-export function TrialContact({ tenant, initialEmail, allowUnknownRemoval = false, stacked = false }: { tenant: TenantLicenseStatus; initialEmail?: string; allowUnknownRemoval?: boolean; /** For a narrow column: the button goes under the field. */ stacked?: boolean }) {
+export function TrialContact({ tenant, allowUnknownRemoval = false, stacked = false }: { tenant: TenantLicenseStatus; allowUnknownRemoval?: boolean; /** For a narrow column: the button goes under the field. */ stacked?: boolean }) {
   const { busy, error, run } = useTrialAction()
-  const [email, setEmail] = useState(tenant.trialEmail ?? initialEmail ?? "")
+  const [email, setEmail] = useState(tenant.trialEmail ?? "")
   const [saved, setSaved] = useState(Boolean(tenant.trialEmail))
   useEffect(() => setSaved(Boolean(tenant.trialEmail)), [tenant.trialEmail])
   const [message, setMessage] = useState("")
-  useEffect(() => {
-    if (tenant.trialEmail || initialEmail) return
-    let current = true
-    void bridge.auth.accounts().then(accounts => {
-      const account = accounts.find(a => a.tenantId.toLowerCase() === tenant.tenantId)
-      if (current && account?.username) setEmail(value => value || account.username)
-    }).catch(() => {})
-    return () => { current = false }
-  }, [tenant.tenantId, tenant.trialEmail, initialEmail])
   const save = (address?: string) => run(async () => {
     setMessage("")
     await bridge.license.tenantTrialAction(tenant.tenantId, "trial_contact", address)
@@ -165,7 +156,7 @@ export function TrialContact({ tenant, initialEmail, allowUnknownRemoval = false
   </div>
 }
 
-export function TenantTrialCard({ tenant, initialEmail, welcome = false, allowUnknownContactRemoval = false, children }: { tenant: TenantLicenseStatus; initialEmail?: string; welcome?: boolean; allowUnknownContactRemoval?: boolean; children?: ReactNode }) {
+export function TenantTrialCard({ tenant, welcome = false, allowUnknownContactRemoval = false, children }: { tenant: TenantLicenseStatus; welcome?: boolean; allowUnknownContactRemoval?: boolean; children?: ReactNode }) {
   const { status } = useLicense()
   const { busy, error, run: perform } = useTrialAction()
   const name = useTenants().find(t => t.credentials?.tenantId?.toLowerCase() === tenant.tenantId)?.name
@@ -223,7 +214,7 @@ export function TenantTrialCard({ tenant, initialEmail, welcome = false, allowUn
         </div>
       </div>}
       {tenant.trial && <p className="flex gap-2 text-sm text-gray-600"><Info className="mt-0.5 size-4 shrink-0 text-gray-500" /><span>Nothing is charged and no card is on file. {trialEndText(status, tenant)}</span></p>}
-      {tenant.trial && <TrialContact tenant={tenant} initialEmail={initialEmail} allowUnknownRemoval={allowUnknownContactRemoval && !welcome} />}
+      {tenant.trial && <TrialContact tenant={tenant} allowUnknownRemoval={allowUnknownContactRemoval && !welcome} />}
       {!welcome && status?.tenantTrialsEnabled && <TrialActions tenant={tenant} source={tenant.trial ? "license-page-trial" : "trial-end"} />}
       {children}
       {notice && <p role="status" className="text-sm">{notice}</p>}
@@ -254,7 +245,7 @@ export function TenantTrialCard({ tenant, initialEmail, welcome = false, allowUn
  * optional email. It asks for no decision; the full card with its shortcuts follows the first
  * backup, and ending the trial early is offered on the License page.
  */
-export function TrialStartedRow({ tenant, initialEmail }: { tenant: TenantLicenseStatus; initialEmail?: string }) {
+export function TrialStartedRow({ tenant }: { tenant: TenantLicenseStatus }) {
   const { status } = useLicense()
   const days = Math.max(1, Math.ceil((Date.parse(tenant.trialEndsAt ?? "") - Date.now()) / 86400_000))
   return <section aria-label="Pro trial" className="space-y-3 rounded-3xl border border-gray-200 p-5">
@@ -265,7 +256,7 @@ export function TrialStartedRow({ tenant, initialEmail }: { tenant: TenantLicens
         Nothing is charged and no card is on file. {trialEndText(status, tenant)}
       </span>
     </p>
-    <TrialContact tenant={tenant} initialEmail={initialEmail} stacked />
+    <TrialContact tenant={tenant} stacked />
   </section>
 }
 
