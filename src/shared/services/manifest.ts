@@ -129,21 +129,31 @@ export function knownPermissions(mode: SignInMode): ApiPermissions[] {
  * Whether tenant-wide consent for these delegated Microsoft Graph permissions shows that an
  * administrator approved a registration for TenuVault's work.
  *
- * One permission of Intune does, as it always did: they are used for Intune alone. For any other
- * service it takes more than half of what backing the service up asks for, opt-in areas left out.
- * A single permission of those services, such as User.Read.All or Policy.Read.All, is something
- * administrators grant to many apps, so it proves nothing; neither do the permissions every
- * sign-in has. A service that asks for fewer than three permissions, which is Conditional Access,
- * therefore never counts by itself.
+ * For Intune, one of the Intune permissions a setup without choices asks for does. They are used
+ * for Intune alone, and they are exactly what counted before services could be chosen: the read
+ * permissions a default setup never asks for do not count, nor does the write permission for
+ * managed devices.
+ *
+ * For Entra ID and Defender it takes more than half of what backing the service up asks for,
+ * opt-in areas left out. A single permission of those services, such as User.Read.All or
+ * Policy.Read.All, is something administrators grant to many apps, so it proves nothing; neither
+ * do the permissions every sign-in has.
+ *
+ * A service that asks for fewer than three permissions of its own, which is Conditional Access,
+ * has no "more than half" worth counting. For it, it takes everything a setup for that service
+ * alone asks Microsoft Graph for to back it up: its own permission together with the ones every
+ * sign-in has.
  */
 export function showsApproval(consented: ReadonlySet<string>): boolean {
+  const has = (permission: string) => consented.has(permission)
   return MODULES.some((module) => {
     const areas = module.areas.filter((area) => !area.optIn)
-    if (module.id === "intune") return areas.some((area) => area.parts.some((part) => [part.backup.delegated, part.restore.delegated].some((needed) => needed !== "unsupported" && needed.some((group) => consented.has(group[0]!)))))
+    if (module.id === "intune") return areas.flatMap((area) => areaPermissions(area, DEFAULT_SETUP_CHOICE.intune!.access, "delegated")).some(has)
     const own = (permissions: string[]) => unique(permissions).filter((permission) => !BASE_PERMISSIONS.includes(permission))
     const asked = own(areas.flatMap((area) => areaPermissions(area, "backup", "delegated")))
+    if (asked.length < 3) return graphPermissions({ [module.id]: { access: "backup" } }, "delegated").every(has)
     const lacking = own(areas.flatMap((area) => areaPermissions(area, "backup", "delegated", consented)))
-    return asked.length >= 3 && (asked.length - lacking.length) * 2 > asked.length
+    return (asked.length - lacking.length) * 2 > asked.length
   })
 }
 

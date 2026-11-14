@@ -37,7 +37,12 @@ TenuVault does not create a second app registration when the tenant already has 
 * Its name starts with `TenuVault` and it carries the internal note that starts with `Used by the TenuVault desktop app`.
 * It is single tenant and has the redirect URI `http://localhost` for mobile and desktop applications.
 * It is still the plain desktop registration TenuVault makes: no client secret, no certificate, and no web or single-page application redirect URI.
-* It has an enterprise application, and that already has tenant-wide admin consent for TenuVault's work: for at least one of TenuVault's Intune permissions on Microsoft Graph, or for more than half of the Microsoft Graph permissions that backing up Entra ID or Defender asks for (the areas you turn on separately are not counted). Consent for a single permission of those two services, for Conditional Access alone, or for the two permissions every sign-in has (`User.Read` and `Organization.Read.All`) does not count, because administrators grant such permissions to many apps.
+* It has an enterprise application, and that already has tenant-wide admin consent for TenuVault's work on Microsoft Graph. One of these counts:
+  * Intune: consent for at least one of the Intune permissions in the [default set](#delegated-permissions) below. Every setup that includes Intune asks for one of them.
+  * Entra ID or Defender: consent for more than half of the permissions that backing up the service asks for. The areas you turn on separately are not counted.
+  * Conditional Access: consent for everything a setup for Conditional Access alone asks for, which is `User.Read`, `Organization.Read.All` and `Policy.Read.All` together.
+
+  Consent for a single permission of Entra ID or Defender, for `Policy.Read.All` without the other two, or for the two permissions every sign-in has (`User.Read` and `Organization.Read.All`) does not count, because administrators grant such permissions to many apps.
 
 The last point is what TenuVault relies on. A name and a note can be set by anyone who may create app registrations, which in many tenants is every member. Tenant-wide admin consent can only come from an administrator, so it shows that an administrator trusted this app registration before. An app registration that does not meet every point is left exactly as it is, and TenuVault creates its own next to it.
 
@@ -60,7 +65,7 @@ If your tenant does not list Azure Service Management or Azure Storage among its
 * If the last sign-in fails or you cancel it, the **Sign in** step opens with the tenant ID and the client ID filled in. Select **Sign in with Microsoft** to try again. Nothing is created twice.
 * If Microsoft takes longer than a minute and a half to accept sign-ins to the new app registration, the browser does not open again. The **Sign in** step says so. Wait a moment, then select **Sign in with Microsoft**.
 * If the browser says that Microsoft cannot find the application, Microsoft has not finished publishing the new app registration. Wait a minute, select **Cancel sign-in** in TenuVault and sign in again.
-* If the tenant already has a TenuVault app registration whose enterprise application has sign-in turned off, the setup stops and changes nothing. Turn sign-in on again under **Entra admin center** > **Enterprise applications** > the application the message names > **Properties**, or delete the app registration, then run the setup again.
+* If the tenant already has a TenuVault app registration whose enterprise application has sign-in turned off, the setup stops and changes nothing, whichever services you chose and whichever service that app registration was made for. Turn sign-in on again under **Entra admin center** > **Enterprise applications** > the application the message names > **Properties**, or delete the app registration, then run the setup again.
 
 For the messages TenuVault shows, see [Troubleshooting](/troubleshooting/).
 

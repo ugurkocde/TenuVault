@@ -277,9 +277,23 @@ describe("Permissions TenuVault knows", () => {
     const approved = (...permissions: string[]) => showsApproval(new Set(permissions))
     const backup = (id: ModuleId) => graphPermissions({ [id]: { access: "backup" } }, "delegated").slice(2)
 
-    it("take one Intune permission, as before, whether it reads or writes", () => {
-      for (const permission of ["DeviceManagementApps.ReadWrite.All", "DeviceManagementApps.Read.All", "DeviceManagementManagedDevices.Read.All", "DeviceManagementRBAC.ReadWrite.All"]) expect(approved(permission), permission).toBe(true)
-      expect(approved("User.Read", "Organization.Read.All", "DeviceManagementScripts.Read.All")).toBe(true)
+    // The Intune permissions of the default request: what counted before services could be chosen.
+    // Written out, so a change to the manifest that moves them fails here.
+    const INTUNE_DEFAULTS = [
+      "DeviceManagementConfiguration.ReadWrite.All", "DeviceManagementApps.ReadWrite.All", "DeviceManagementServiceConfig.ReadWrite.All",
+      "DeviceManagementScripts.ReadWrite.All", "DeviceManagementRBAC.ReadWrite.All", "DeviceManagementManagedDevices.Read.All",
+    ]
+
+    it("take one of the Intune permissions a default setup asks for, exactly as before", () => {
+      expect(graphPermissions(DEFAULT_SETUP_CHOICE, "delegated").filter((permission) => permission.startsWith("DeviceManagement"))).toEqual(INTUNE_DEFAULTS)
+      for (const permission of INTUNE_DEFAULTS) expect(approved(permission), permission).toBe(true)
+      expect(approved("User.Read", "Organization.Read.All", "DeviceManagementManagedDevices.Read.All")).toBe(true)
+      // An Intune permission a default setup never asks for did not count before, and does not now.
+      const others = [...["Configuration", "Apps", "ServiceConfig", "Scripts", "RBAC"].map((family) => `DeviceManagement${family}.Read.All`), "DeviceManagementManagedDevices.ReadWrite.All"]
+      for (const permission of others) expect(approved(permission), permission).toBe(false)
+      expect(approved("User.Read", "Organization.Read.All", ...others)).toBe(false)
+      // A setup for Intune to back up only is still recognised: it asks to read the managed devices.
+      expect(approved(...backup("intune"))).toBe(true)
     })
 
     it("take most of what backing up Entra ID or Defender asks for, and not a part of it that many apps hold", () => {
@@ -297,13 +311,23 @@ describe("Permissions TenuVault knows", () => {
       for (const few of [["Policy.Read.All"], ["Domain.Read.All"], ["SecurityEvents.Read.All", "CustomDetection.Read.All"], ["Policy.Read.All", "Domain.Read.All", "RoleManagement.Read.Directory"]]) expect(approved(...few), few.join(" ")).toBe(false)
     })
 
-    it("never take the permissions every sign-in has, the broad directory reads, an optional permission or Conditional Access alone", () => {
+    it("take everything a setup for Conditional Access alone asks for, and nothing less", () => {
+      const request = graphPermissions({ conditionalAccess: { access: "backup" } }, "delegated")
+      expect(request).toEqual(["User.Read", "Organization.Read.All", "Policy.Read.All"])
+      expect(approved(...request)).toBe(true)
+      // Its restore permission, added by hand or by the script's switch, takes nothing away.
+      expect(approved(...request, "Policy.ReadWrite.ConditionalAccess")).toBe(true)
+      // Policy.Read.All is given to many apps: without the rest of the request it proves nothing.
+      for (const left of request) expect(approved(...request.filter((permission) => permission !== left)), `without ${left}`).toBe(false)
+      expect(approved("User.Read", "Organization.Read.All", "Policy.ReadWrite.ConditionalAccess")).toBe(false)
+    })
+
+    it("never take the permissions every sign-in has, the broad directory reads or an optional permission", () => {
       expect(approved()).toBe(false)
       expect(approved("User.Read", "Organization.Read.All")).toBe(false)
       // The opt-in areas of Entra ID are made of permissions many apps are given.
       expect(approved("User.Read.All", "Group.Read.All", "GroupMember.Read.All", "Directory.Read.All", "Application.Read.All", "Device.Read.All", "Policy.Read.All")).toBe(false)
       expect(approved(...OPTIONAL_PERMISSIONS.flatMap((entry) => entry.permissions))).toBe(false)
-      expect(approved("User.Read", "Organization.Read.All", "Policy.Read.All", "Policy.ReadWrite.ConditionalAccess")).toBe(false)
       expect(approved("Mail.Read", "Sites.Read.All", "Files.Read.All")).toBe(false)
     })
   })

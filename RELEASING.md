@@ -106,10 +106,11 @@ Put these in the next stable release's notes, then remove them here.
 - **Setup script parameters.** `New-TenuVaultDesktopApp.ps1` takes `-Services`, `-RestoreAccess`
   and `-Areas`. Without them it requests exactly the permissions it requested before, and every
   existing switch works as before. Quick setup still reuses an app registration that has
-  tenant-wide admin consent for an Intune permission, and now also one whose consent covers more
-  than half of the permissions that backing up Entra ID or Defender asks for. A registration for
-  Conditional Access alone is not reused; enter its client ID under "I already have an app
-  registration".
+  tenant-wide admin consent for one of the Intune permissions of the default set, and now also one
+  whose consent covers more than half of the permissions that backing up Entra ID or Defender asks
+  for, or everything a setup for Conditional Access alone asks for (`User.Read`,
+  `Organization.Read.All` and `Policy.Read.All`). When sign-in to the enterprise application of
+  such a registration is turned off, setup stops instead of creating another one.
 
 ## Cutting a stable release
 
