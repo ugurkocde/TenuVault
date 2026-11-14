@@ -91,7 +91,8 @@ export interface IntuneType {
   /**
    * Keeps only these properties (and `id`) of every read, for objects whose other properties change on
    * their own or hold secrets. A kept value Graph leaves out or returns as null is stored as "", because
-   * some lists return "" where the detail GET returns null for the same empty value.
+   * some lists return "" where the detail GET returns null for the same empty value. What the type's
+   * `extras` read is stored next to the kept properties, and `neverStored` is removed from them too.
    */
   keep?: string[]
   /** The list GET returns every property `keep` names, so backups store the list entry and skip the detail GET. */

@@ -51,8 +51,7 @@ export function detailPath(type: IntuneType, id: string): string {
 
 export async function readObject(type: IntuneType, id: string, graph: GraphReader, options: ReadOptions = {}): Promise<Item> {
   const read = await graph.get(detailPath(type, id))
-  const detail = type.singleton ? singletonObject(type.singleton, read) : read
-  if (type.keep) return keptSnapshot(type.keep, detail)
+  let detail = type.singleton ? singletonObject(type.singleton, read) : read
   // Large expanded collections (such as Settings Catalog settings) page like lists.
   for (const [key, value] of Object.entries(detail)) {
     if (key.endsWith("@odata.nextLink") && typeof value === "string") {
@@ -62,6 +61,8 @@ export async function readObject(type: IntuneType, id: string, graph: GraphReade
       delete detail[key]
     }
   }
+  // A type that keeps only some properties keeps them of the object itself; what its extras read is stored next to them.
+  if (type.keep) detail = keptSnapshot(type.keep, detail)
   // Extra paths are built from Graph-returned IDs, so each ID is encoded as one path segment.
   // A tenant-wide object is stored under its type's ID; its sub-reads use the ID Graph gave it, when it has one.
   const encodedId = encodeURIComponent(type.singleton && typeof detail.id === "string" && detail.id ? detail.id : id)
@@ -108,11 +109,10 @@ export async function readObject(type: IntuneType, id: string, graph: GraphReade
  * return for the object (see IntuneType.keep).
  */
 export function listSnapshot(type: IntuneType, item: Item): Item {
-  if (type.keep) return keptSnapshot(type.keep, item)
   // Removing nested properties must not change the list entry itself.
   const copy = type.neverStored?.length ? structuredClone(item) : { ...item }
   delete copy["@odata.context"]
-  return withoutNeverStored(type, copy)
+  return withoutNeverStored(type, type.keep ? keptSnapshot(type.keep, copy) : copy)
 }
 
 /** The IDs of a collection's entries, each once and in a fixed order, so two reads of the same set compare equal. */

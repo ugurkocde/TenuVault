@@ -50,6 +50,15 @@ const TYPES = {
   }),
   // Only a signed-in admin can read it: the permission manifest says so for this folder.
   mdm: testType("MdmEnrollmentPolicies", "policies/mobileDeviceManagementPolicies"),
+  // Keeps only some of its own properties, never stores one of them and a part of another, and reads its members apart.
+  domains: testType("Domains", "domains", {
+    apiVersion: "v1.0",
+    keep: ["displayName", "settings", "credentials"],
+    neverStored: ["credentials", "settings.secret"],
+    extras: [{ property: "members", path: (id) => `domains/${id}/members?$select=id`, ids: true }],
+  }),
+  // The same, stored from its list entry.
+  claims: testType("ClaimsMappingPolicies", "policies/claimsMappingPolicies", { apiVersion: "v1.0", listOnly: true, keep: ["displayName", "settings", "credentials"], neverStored: ["credentials", "settings.secret"] }),
 }
 
 let unregister: () => void
@@ -69,6 +78,8 @@ function graph(routes: Record<string, unknown> = {}) {
     "/beta/policies/externalIdentitiesPolicy": { value: [{ id: "externalIdentitiesPolicy", allowExternalIdentitiesToLeave: true }] },
     "/v1.0/policies/federatedTokenValidationPolicy": refusal(404, "Request_ResourceNotFound", "Resource '' does not exist or one of its queried reference-property objects are not present."),
     "/beta/policies/mobileDeviceManagementPolicies": { value: [] },
+    "/v1.0/domains": { value: [] },
+    "/v1.0/policies/claimsMappingPolicies": { value: [] },
     ...routes,
   })
 }
@@ -338,6 +349,53 @@ describe("properties a type never stores", () => {
     }
     const key = "/v1.0/security/attackSimulation/payloads?$filter=source eq 'tenant'&$top=2"
     expect(await hash({ [key]: payload("2026-11-01", "2026-11-02", "09:00") })).toBe(await hash({ [key]: payload("2026-12-24", "2026-12-25", "17:30") }))
+  })
+})
+
+describe("a type that keeps only some of its properties", () => {
+  const object = (credentials: string, secret: string) => ({ id: "g1", displayName: "Admins", description: "not kept", credentials, settings: { mode: "strict", secret } })
+  const routes = (credentials = "hunter2", secret = "s3cret") => ({
+    "/v1.0/domains": { value: [{ id: "g1", displayName: "Admins" }] },
+    "/v1.0/domains/g1": object(credentials, secret),
+    "/v1.0/domains/g1/members?$select=id": { value: [{ id: "u2" }, { id: "u1" }] },
+  })
+
+  it("stores the kept properties of the object itself and what its sub-reads return, and never a property it declares as never stored", async () => {
+    const { run, file, requests } = fixture(graph(routes()))
+    const job = await run()
+    expect(await file(job, "Domains/Admins.json")).toEqual({ id: "g1", displayName: "Admins", settings: { mode: "strict" }, members: ["u1", "u2"] })
+    expect(requests.map((request) => request.path)).toContain("/v1.0/domains/g1/members?$select=id")
+    expect(outcome(job, "Domains")).toMatchObject({ outcome: "saved", saved: 1 })
+  })
+
+  it("leaves the never-stored values out of the fingerprint too", async () => {
+    const hash = async (credentials: string, secret: string) => {
+      const { run, manifest } = fixture(graph(routes(credentials, secret)))
+      return (await manifest(await run())).Items["Domains/g1"].hash
+    }
+    expect(await hash("hunter2", "s3cret")).toBe(await hash("rotated", "changed"))
+  })
+
+  it("stores nothing of the object when a sub-read fails, instead of an object without its members", async () => {
+    const { run, files } = fixture(graph({ ...routes(), "/v1.0/domains/g1/members?$select=id": refusal(400, "BadRequest", "Malformed") }))
+    const job = await run()
+    expect((await files(job)).some((name) => name.startsWith("Domains/"))).toBe(false)
+    expect(outcome(job, "Domains")).toMatchObject({ outcome: "failed", saved: 0 })
+  })
+
+  it("removes the never-stored properties from a list entry that is stored as it was listed", async () => {
+    const { run, file, manifest } = fixture(graph({ "/v1.0/policies/claimsMappingPolicies": { value: [object("hunter2", "s3cret")] } }))
+    const job = await run()
+    expect(await file(job, "ClaimsMappingPolicies/Admins.json")).toEqual({ id: "g1", displayName: "Admins", settings: { mode: "strict" } })
+    const other = fixture(graph({ "/v1.0/policies/claimsMappingPolicies": { value: [object("rotated", "changed")] } }))
+    expect((await manifest(job)).Items["ClaimsMappingPolicies/g1"].hash).toBe((await other.manifest(await other.run())).Items["ClaimsMappingPolicies/g1"].hash)
+  })
+
+  it("reads the object, then its sub-collections, and keeps a kept value Graph left out as an empty text", async () => {
+    const reads: string[] = []
+    const reader: GraphReader = { get: async (path) => (reads.push(path), { id: "g1", displayName: "Admins", credentials: "hunter2" }), list: async (path) => (reads.push(path), [{ id: "u1" }]) }
+    expect(await readObject(TYPES.domains, "g1", reader)).toEqual({ id: "g1", displayName: "Admins", settings: "", members: ["u1"] })
+    expect(reads).toEqual(["domains/g1", "domains/g1/members?$select=id"])
   })
 })
 
