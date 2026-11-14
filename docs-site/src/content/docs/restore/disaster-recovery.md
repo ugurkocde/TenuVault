@@ -25,7 +25,7 @@ Work through this checklist for every tenant you protect:
 3. **Keep backups off the admin device.** Use an Azure storage account (Pro and MSP), which every admin with access can read from any computer, or point the local backup folder at a network share, where the files stay encrypted. See [Backup storage and retention](/backups/storage/).
 4. **Keep an independent copy.** A storage administrator can delete or lock a storage account. Keep a second copy of important backups under your own recovery policy.
 5. **Check recovery readiness.** Open a backup in the restore wizard and expand **Recovery readiness** to see which items restore automatically and which need manual work. See [Check recovery readiness](#check-recovery-readiness).
-6. **Know who owns external artifacts.** Record where the original app installers and Apple tokens come from, and who can renew them. [Free App Backup](/apps/app-backup/) can retain original `.intunewin` files you already have; keep a separate copy of its encrypted source folder and recovery key.
+6. **Keep installer backups and external artifacts.** Capture supported Win32 installers from Intune with [free App Backup](/apps/app-backup/) before they are needed, and keep a separate copy of its encrypted folder and recovery key. For unsupported installers and Apple tokens, record their trusted source and who can obtain or renew them.
 7. **Practice a restore.** Restore a few items with **Create copies**. Copies are unassigned by default and never change existing items, so a test is safe.
 
 For a rehearsal checklist, follow the guide to [practice an Intune restore](https://www.tenuvault.com/guides/intune-restore-drill).
@@ -114,7 +114,7 @@ On **Choose what to restore**, expand **Recovery readiness for N objects**. For 
 
 Backup metadata cannot recreate private keys, installer payloads or Apple credentials that the Microsoft Graph API does not export.
 
-* **Apps with installers:** get the original installer from a trusted source, verify its publisher, and upload it through Intune's app workflow. For a copy into another tenant, then map the new app with a reviewed dependency mapping.
+* **Apps with installers:** for a supported Win32 installer captured earlier, use [App Backup → Restore to tenant](/apps/app-backup/#restore-to-the-same-or-another-tenant) to create an unassigned app in the same or another connected tenant. Review and test it before deployment. For unsupported apps or missing captures, obtain the original installer from a trusted source, verify its publisher and upload it through Intune. Review any dependency mapping separately.
 * **Apple automated device enrollment:** renew or upload the enrollment token through Apple Business Manager or Apple School Manager and Intune. Use the backed-up enrollment profiles as a reference.
 * **Masked secrets:** a profile whose backup holds a masked OMA-URI value (`****`) needs a new backup before it can be restored.
 

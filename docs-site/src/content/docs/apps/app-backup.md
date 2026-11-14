@@ -12,6 +12,10 @@ faq:
     answer: "Yes. Earlier administrator-selected files remain available as legacy local archives. You can export them offline with the matching recovery key, but they are not captured Intune backups and cannot be used for restore."
   - question: "Can App Backup restore apps?"
     answer: "Yes. Restore to tenant creates a new, unassigned Win32 app in a connected tenant using an earlier captured installer and reviewed app settings. Arbitrary local packages and metadata-only backups do not qualify. Apps with dependencies, supersedence or Intune-hosted install scripts are not supported yet."
+  - question: "Does the app have to finish installing before I can back it up?"
+    answer: "No installation-completion step is required by TenuVault. Backup requests the installer content from Intune using the enrolled PC's identity. Intune must authorize that request. A Required assignment can independently install the app on the PC, but installation itself does not create a backup."
+  - question: "Does TenuVault change app assignments for me?"
+    answer: "No. TenuVault checks device targeting and explains exclusions, filters and missing information. If a targeting change is needed, the administrator makes it in Intune, syncs the PC and selects Recheck assignments. Use a dedicated device group because Required targeting can install the app automatically."
 ---
 
 **App Backup is completely free** for every configured tenant. Open it below **Backup & Restore** in the desktop sidebar.
@@ -47,12 +51,24 @@ macOS support means retrieving the installer from Intune, not downloading a subs
 
 ## Back up a Windows installer
 
-1. Open TenuVault on a Windows PC enrolled in the same Intune tenant. Use your existing Microsoft session with an active **Intune Administrator** or **Global Administrator** role. Custom Intune roles are not supported by this preview.
-2. Find the app and choose **Backup**. The preview supports **system-context** Win32 apps with one committed installer payload, up to **2 GiB**.
-3. Review **Assignment check for this PC**, which runs automatically. It identifies device targeting, exclusions, user-only assignments and filters, with next steps. Use **Recheck assignments** after an intended change in Intune.
-4. Choose **Start backup** and approve the Windows prompt. The desktop app stays non-elevated; a temporary helper uses the enrollment key for this request. A check older than a minute refreshes first so you can review its updated guidance before starting.
-5. Wait while TenuVault downloads, verifies and encrypts the installer. Completion appears only after the encrypted backup is published.
-6. Choose **View this backup** in the completion message to open the exact captured version, with its file details and **Export installer** action. Choose **Open local folder** to open its encrypted backup folder in your file manager. Keep the [recovery key](/security/encryption/) from Settings safe.
+### Before you start
+
+- Use the current signed TenuVault build on a **Windows PC enrolled in the tenant you are backing up**. The Microsoft Intune Management Extension must be installed and able to contact Intune. A dedicated test PC is useful if you need to change app targeting.
+- Connect that tenant in TenuVault. Its existing Microsoft session is reused; a routine backup does not require a separate sign-in. The Microsoft account must have an active **Intune Administrator** or **Global Administrator** role. Custom Intune roles are not supported by this preview.
+- The **Windows account running TenuVault must also be a local administrator** so it can approve the helper. This is separate from the Microsoft account's Intune role. Approving elevation with a different Windows account is not supported.
+- Choose a **system-context Win32 app** with one committed installer payload, up to **2 GiB**. Internet access is required for a new capture. No local `.intunewin` file is needed.
+
+TenuVault uses **Documents → TenuVault App Sources** by default. To choose another location, open **App Backup → Backups → Choose installer folder** before starting. This chooses where encrypted backups are kept; it does not ask you to supply an installer.
+
+### The admin's steps
+
+1. Select the tenant and click **App Backup** in the sidebar. The **Intune apps** tab loads its Win32 apps using the existing Microsoft session. Choose **Reconnect Microsoft** only if the session is missing or expired.
+2. Find the app and click **Backup** on its row. **Details** is optional; use it to inspect the version, installation commands, rules, scripts and assignments first. Clicking Backup opens the panel for that app and starts the assignment check, not the capture itself.
+3. Review **Assignment check for this PC**. If a device assignment already includes the PC and no review is needed, leave the assignments as they are. If the check identifies missing targeting, an exclusion, a filter or conflicting intents, follow the guidance below. TenuVault does not make those changes for you.
+4. If you intentionally changed targeting in Intune, sync the PC, allow membership changes to propagate and click **Recheck assignments**. You do not have to wait for an installation-completed event in TenuVault. Intune must allow the device's content request when capture starts.
+5. Click **Start backup**, then approve the Windows permission prompt for **TenuVault.Capture.exe** on the PC running TenuVault. When working remotely, approve it on that PC's Windows desktop. A check older than a minute refreshes first: review its updated result, then click **Start backup** again. Each new capture needs its own Windows approval.
+6. Wait for download and verification to finish. Leave App Backup open; you can switch between its **Intune apps** and **Backups** tabs. Leaving App Backup or changing tenant cancels an unfinished capture. A completed backup appears only after its encrypted files and app settings have been saved successfully.
+7. Click **View this backup** in the completion message to open that exact version. **Open local folder** opens the encrypted files in Explorer; **Export installer** creates a usable source ZIP. Keep both the backup folder and its [recovery key](/security/encryption/). To recreate the app later, use **Restore to tenant…** on this backup.
 
 If the app record has no committed installer content, Backup explains this before asking for Windows approval. Choose an app whose installer has been uploaded to Intune.
 
@@ -61,7 +77,7 @@ be paused if the preview's Intune integration needs a fix, or an app update may 
 This check is free and sends no Microsoft token, tenant ID or license key. An unavailable
 control service prevents a new capture; existing backups remain available to export offline.
 
-No local installer file is required. Backup does not change assignments or start an installation. Intune must allow this device to retrieve the content. If it refuses access, review the app's Required targeting, including group membership, exclusions and filters. Required assignments can install software automatically; use a dedicated test-device group. A successful enrollment check alone does not prove content access.
+Backup does not change assignments or start an installation. **Changing an app to Required can cause Intune to install it independently of TenuVault.** There is no background watcher waiting for that installation, and TenuVault does not reconstruct an installer from Program Files or an installed app. A successful enrollment check or an already-installed app alone does not prove that Intune will grant installer access.
 
 The helper reads the Intune agent's recently discovered service address. If it cannot find that address, sync the PC with Intune and retry. This preview requires your Windows account to be a local administrator. Approval with a different Windows account is not supported. Cancelling approval or the capture leaves no completed backup. If a Windows approval prompt remains after cancellation, dismiss it; its expired request cannot continue.
 
@@ -84,6 +100,32 @@ The check reads app assignments and matches this PC's local Entra identity and I
 No assignment or group membership is changed automatically. Required assignments can cause Intune to install software; keep intended changes limited to a dedicated test-device group. After changing targeting, sync the PC and allow membership changes to propagate before rechecking. An assignment check is guidance, not proof of installer authorization, so an uncertain check still allows a deliberate Backup attempt.
 
 Device-group checks need optional delegated **`Device.Read.All`**. Reading names and visibility of referenced groups needs **`GroupMember.Read.All`** or an existing broader group-read permission. Filter details use **`DeviceManagementConfiguration.Read.All`** or its read/write equivalent, already included in the standard setup. For an existing registration, add only the needed read permissions in Entra, grant admin consent, reconnect Microsoft in TenuVault, then recheck. The default setup permissions are unchanged. All-devices and user-only targeting can be described without device-group reads.
+
+### If a Required device assignment is needed
+
+Use this route only when the intended capture PC is not already covered and it is appropriate for that PC to receive the app:
+
+1. Use **View app in Intune** to open the selected app. Review its existing assignments first.
+2. Use a dedicated device group containing the capture PC. Add that group as a **Required** assignment in Intune. Do not expand targeting to all users or all devices just to obtain a backup.
+3. Check whether an exclusion or assignment filter prevents that PC from receiving the app. Review competing Uninstall targeting as well. Adding another include assignment does not resolve a matching exclusion of the same intent.
+4. Save the intended change, sync the PC with Intune and allow group membership to propagate. Return to TenuVault and choose **Recheck assignments**, then **Start backup**.
+5. If the targeting was temporary, review and remove only that temporary change after the backup succeeds. Removing a Required assignment does not itself uninstall the Win32 app; see [Microsoft's assignment-scope guidance](https://learn.microsoft.com/en-us/intune/app-management/deployment/configure-assignment-scope). TenuVault does not undo assignment changes or uninstall the app.
+
+The check cannot promise an exact fix when membership is unreadable, targeting is user-based or a filter needs Intune's evaluation. It displays that uncertainty and still permits a deliberate capture attempt. An HTTP 403 during capture means Intune refused the device's request; Windows approval alone cannot override it.
+
+## What happens behind the Backup button
+
+The Microsoft sign-in and the PC's enrollment have different jobs:
+
+1. **Read the tenant and selected app.** TenuVault uses your delegated Microsoft session and Microsoft Graph beta to read the app, its committed content version, app settings and assignment information. This is also how the app table is populated.
+2. **Authorize one capture.** After Windows approval, the signed helper verifies the requester and supported admin role, then matches the PC's current enrollment certificate to the selected tenant and Intune account. It uses that enrollment key for this request without exporting the key.
+3. **Ask Intune for device-authorized content.** The helper uses the Intune agent's discovered service address and the PC's certificate to request the selected app version. This device-content request is separate from the Microsoft Graph calls that list apps. If Intune allows it, the response provides the content download address and encrypted decryption information, which the helper unwraps with the enrollment key.
+4. **Download and verify the installer.** The non-elevated desktop app downloads the encrypted content, decrypts it as a stream and checks its size, HMAC and plaintext SHA-256. It also checks that the selected app settings and content version did not change during authorization.
+5. **Publish the encrypted backup.** Installer bytes are encrypted into TenuVault's local store without a plaintext staging file. Only a fully verified capture is published alongside its encrypted app settings and capture receipt. The completion actions then point to that backup.
+
+The stored Windows payload is the **source ZIP contained in the Intune package**, not an exact copy of the outer `.intunewin` upload. It contains the packaged installer files and any files bundled with them. It does not contain the installed program's current state, user data or a copy of the whole PC. Capture is an explicit action for the selected app, not a scheduled sweep of every app in the tenant.
+
+This Windows preview depends on Intune's device-content integration, not a general Microsoft Graph installer-download API. It therefore requires an enrolled Windows PC and can be paused through the signed capture control if the integration needs updating. A Mac can browse Windows app details and export existing backups, but it cannot run Windows capture. macOS installer capture is not implemented yet.
 
 ## Backups and legacy archives
 
@@ -121,6 +163,12 @@ Restore creates a new app; it does not overwrite an existing destination app or 
 Assignments, group IDs, assignment filters, categories and custom scope tags are not copied. The new app uses the destination's default scope tag. Apps with dependencies, supersedence or Intune-hosted install/uninstall script references require additional mapping or script-upload support and are blocked before creation. This is a deliberate restore operation, not continuous synchronization.
 
 Capture requires an enrolled Windows PC. Restoring an existing supported Win32 backup uses Microsoft Graph and does not require enrollment in the destination or Windows elevation. The source tenant can be offline when the backup already contains its settings; destination access is always required.
+
+### Verify a restored app before deploying broadly
+
+**Restore completed** means Intune accepted the installer content and published the new app. It does not mean the app has been installed on a device. Restore leaves the app unassigned and preserves supported source settings; it does not automatically repair invalid detection rules or installer commands.
+
+Review those settings before adding a Required assignment to a small test-device group. For example, an MSI detection rule that compares versions needs a version value to compare against. A missing value in the source rule can be carried into the restored app: installation may succeed while detection reports an error. Confirm both the actual installed version on the test device and Intune's **Installed** status. Cloud reporting can lag behind the local installation result.
 
 ### Interrupted restores
 

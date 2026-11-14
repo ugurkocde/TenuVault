@@ -2,8 +2,8 @@
 title: "What cannot be restored and restore write history"
 description: Items TenuVault cannot restore automatically, and how to resolve restore writes with an unknown outcome.
 faq:
-  - question: "Why can't TenuVault restore Win32 and line-of-business apps?"
-    answer: "Intune does not let apps download installer files, so a backup holds only the app details and assignments. Get the original installer from its trusted source and upload it again through Intune's app workflow. Store, web and Microsoft 365 apps restore without an installer."
+  - question: "Can I restore a Win32 app from a configuration backup?"
+    answer: "A configuration backup contains app details and assignments, not the installer, so it cannot recreate a Win32 app by itself. If you captured the installer with the separate App Backup feature, use Restore to tenant on that captured backup to create a new, unassigned Win32 app. Unsupported apps need their original installer and Intune's upload workflow."
   - question: "Are Apple enrollment tokens included in a backup?"
     answer: "No. Intune does not export Apple enrollment and content tokens. The token details and enrollment profiles are kept for reference. Renew or upload the token through Apple Business Manager or Apple School Manager and Intune."
   - question: "Why does a profile with a masked OMA-URI value need a new backup?"
@@ -14,15 +14,15 @@ faq:
 
 Most Intune items restore directly from a backup. A few cannot, because Intune does not export everything needed to recreate them. This page lists those cases and explains **Restore write history**, which protects you from duplicate writes when a restore is interrupted.
 
-[App Backup](/apps/app-backup/) covers installer content separately. Production capture and app-content restore are not available yet. Earlier administrator-selected archives remain exportable, but they do not qualify as captured backups for restore.
+[App Backup](/apps/app-backup/) covers installer content separately. Its Windows preview retrieves supported Win32 installers on an enrolled PC and restores captured backups to the same or another connected tenant as new, unassigned apps. The configuration-backup wizard described below does not use those installer captures; start that restore from **App Backup → Backups → Restore to tenant…**. Earlier administrator-selected archives remain exportable, but do not qualify as captured backups for restore.
 
 ## Items that cannot be restored
 
-The restore wizard marks these items as **Cannot be restored** (or greys them out on **Choose what to restore**) and shows the reason under the item.
+The **Backup & Restore** configuration wizard marks these items as **Cannot be restored** (or greys them out on **Choose what to restore**) and shows the reason under the item.
 
 | Item | Reason shown | What to do |
 | --- | --- | --- |
-| Apps that use an installer file, such as Win32, line-of-business and MSI apps | "Intune does not let apps download installer files. Upload the installer again to restore this app." | Get the original installer from its trusted source and upload it through Intune's app workflow. |
+| Apps that use an installer file, such as Win32, line-of-business and MSI apps | "Intune does not let apps download installer files. Upload the installer again to restore this app." | This message applies to the metadata-only restore wizard. For a supported Win32 app captured earlier, use [App Backup's restore flow](/apps/app-backup/#restore-to-the-same-or-another-tenant). Otherwise obtain the original installer from its trusted source and upload it through Intune. |
 | Apple automated device enrollment tokens and profiles | "The Apple token must be uploaded again in Intune. Its enrollment profiles are kept for reference." | Renew or upload the token through Apple Business Manager or Apple School Manager and Intune. Use the backed-up profiles as a reference. |
 | Windows Autopilot devices that are not registered in the tenant, and every Autopilot device with **Create copies** or **Copy to other tenants instead** | "This device is not registered in Windows Autopilot in this tenant. Backups cannot include its hardware hash, so it cannot be registered again from a backup: import it again with its hardware hash, then restore it to bring back its group tag, user and device name." | Import the device again in Intune with its hardware hash, from the file you imported it with or from your OEM or reseller. Then restore it with **Replace in place**: TenuVault finds it by its serial number and puts its group tag, user and device name back. |
 | Device configuration profiles with a masked OMA-URI secret | "This backup holds a masked OMA-URI value (****). Create a new backup to restore it; restoring would send **** to devices." | Run a new backup, then restore from it. |
@@ -52,11 +52,11 @@ These app types do not need an installer file, so TenuVault can recreate them:
 
 App categories, app dependencies and supersedence links are restored with the app.
 
-### What backups cannot contain
+### What configuration backups cannot contain
 
-Intune does not export some data, so no backup can hold it:
+The Microsoft Graph configuration backup does not include:
 
-* Installer payloads of apps
+* Installer payloads of apps. Supported Win32 payloads can instead be captured separately through [App Backup](/apps/app-backup/#what-happens-behind-the-backup-button).
 * Apple enrollment and content tokens
 * Windows Autopilot hardware hashes, which Microsoft Graph returns only while a device is imported
 * Private keys and other secret material that the Microsoft Graph API does not return
