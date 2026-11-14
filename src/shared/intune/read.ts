@@ -1,16 +1,30 @@
-import type { IntuneType, Item } from "./registry"
+import type { GraphVersion, IntuneType, Item, Json } from "./registry"
 
 /**
  * Reads one Intune object the way a backup stores it: the detail GET with the type's $expand and
  * $select, paged expanded collections, extras, and masked values in plain text.
  *
  * Backup uses it to write snapshots and restore uses it to read the live object before replacing it,
- * so both compare like with like. Paths are relative to https://graph.microsoft.com/beta/.
+ * so both compare like with like. Paths are relative to the type's Microsoft Graph version (see
+ * graphVersion); the reader sends the type's headers with every request.
  */
 export interface GraphReader {
   get: (path: string) => Promise<Item>
   /** Follows @odata.nextLink; accepts a relative path or an absolute nextLink. */
   list: (path: string) => Promise<Item[]>
+}
+
+/** The Microsoft Graph version a type's paths are relative to. */
+export function graphVersion(type: Pick<IntuneType, "apiVersion">): GraphVersion {
+  return type.apiVersion ?? "beta"
+}
+
+const listQuery = (type: IntuneType) => [type.filter && `$filter=${encodeURIComponent(type.filter)}`, type.listQuery].filter(Boolean)
+
+/** The list GET of a type: its path with its mandatory filter and its extra query. */
+export function listPath(type: IntuneType): string {
+  const query = listQuery(type).join("&")
+  return `${type.path}${query ? `?${query}` : ""}`
 }
 
 export interface ReadOptions {
@@ -25,14 +39,19 @@ export interface ReadOptions {
 }
 
 export function detailPath(type: IntuneType, id: string): string {
-  if (type.singleton) return type.path
-  const query = [type.expand && `$expand=${type.expand}`, type.select && `$select=${type.select}`].filter(Boolean).join("&")
+  const shape = [type.expand && `$expand=${type.expand}`, type.select && `$select=${type.select}`].filter(Boolean)
+  // A tenant-wide object that Graph answers as a list is read like one, with the type's filter and extra query.
+  if (type.singleton) {
+    const query = [...(type.singleton.collection ? listQuery(type) : []), ...shape].join("&")
+    return `${type.path}${query ? `?${query}` : ""}`
+  }
+  const query = shape.join("&")
   return `${type.path}/${encodeURIComponent(id)}${query ? `?${query}` : ""}`
 }
 
 export async function readObject(type: IntuneType, id: string, graph: GraphReader, options: ReadOptions = {}): Promise<Item> {
-  const detail = await graph.get(detailPath(type, id))
-  if (type.singleton) return singletonSnapshot(type.singleton, detail)
+  const read = await graph.get(detailPath(type, id))
+  const detail = type.singleton ? singletonObject(type.singleton, read) : read
   if (type.keep) return keptSnapshot(type.keep, detail)
   // Large expanded collections (such as Settings Catalog settings) page like lists.
   for (const [key, value] of Object.entries(detail)) {
@@ -44,13 +63,18 @@ export async function readObject(type: IntuneType, id: string, graph: GraphReade
     }
   }
   // Extra paths are built from Graph-returned IDs, so each ID is encoded as one path segment.
-  const encodedId = encodeURIComponent(id)
+  // A tenant-wide object is stored under its type's ID; its sub-reads use the ID Graph gave it, when it has one.
+  const encodedId = encodeURIComponent(type.singleton && typeof detail.id === "string" && detail.id ? detail.id : id)
   for (const extra of type.extras ?? []) {
     if (extra.single) {
       detail[extra.property] = (await graph.get(extra.path(encodedId)))[extra.property] ?? null
       continue
     }
     const entries = await graph.list(extra.path(encodedId))
+    if (extra.ids) {
+      detail[extra.property] = sortedIds(entries, extra.property)
+      continue
+    }
     if (extra.each) {
       for (const entry of entries) {
         const path = extra.each.path(encodedId, encodeURIComponent(String(entry.id)))
@@ -76,7 +100,7 @@ export async function readObject(type: IntuneType, id: string, graph: GraphReade
     secret.apply(plain.value)
   }
   delete detail["@odata.context"]
-  return detail
+  return withoutNeverStored(type, type.singleton ? singletonSnapshot(type, detail) : detail)
 }
 
 /**
@@ -85,9 +109,36 @@ export async function readObject(type: IntuneType, id: string, graph: GraphReade
  */
 export function listSnapshot(type: IntuneType, item: Item): Item {
   if (type.keep) return keptSnapshot(type.keep, item)
-  const copy = { ...item }
+  // Removing nested properties must not change the list entry itself.
+  const copy = type.neverStored?.length ? structuredClone(item) : { ...item }
   delete copy["@odata.context"]
-  return copy
+  return withoutNeverStored(type, copy)
+}
+
+/** The IDs of a collection's entries, each once and in a fixed order, so two reads of the same set compare equal. */
+function sortedIds(entries: Item[], property: string): string[] {
+  const ids = entries.map((entry) => {
+    if (typeof entry.id !== "string" || !entry.id) throw new Error(`Microsoft Graph returned an entry without an ID in ${property}`)
+    return entry.id
+  })
+  return [...new Set(ids)].sort()
+}
+
+/** The snapshot without the properties its type never stores (see IntuneType.neverStored). */
+function withoutNeverStored(type: IntuneType, snapshot: Item): Item {
+  const remove = (value: Json | undefined, path: string[]): void => {
+    if (Array.isArray(value)) {
+      for (const entry of value) remove(entry, path)
+      return
+    }
+    if (!value || typeof value !== "object") return
+    const [key, ...rest] = path
+    if (rest.length) remove(value[key!], rest)
+    else delete value[key!]
+  }
+  // Backups, comparison and restore identify an object by its ID, so no type can leave it out.
+  for (const path of type.neverStored ?? []) if (path !== "id") remove(snapshot, path.split("."))
+  return snapshot
 }
 
 /**
@@ -131,10 +182,29 @@ export function withMaskedSecrets(type: IntuneType, snapshot: Item): Item | null
   return copy
 }
 
-/** A tenant-wide object under its stored ID, with only the properties its type keeps (see IntuneType.singleton). */
-function singletonSnapshot(singleton: NonNullable<IntuneType["singleton"]>, detail: Item): Item {
-  const snapshot: Item = { id: singleton.id }
-  for (const key of singleton.properties) if (key in detail) snapshot[key] = detail[key] ?? null
+/** The tenant-wide object of a read: the answer itself, or the one entry of the list Graph answers with (see IntuneType.singleton). */
+function singletonObject(singleton: NonNullable<IntuneType["singleton"]>, read: Item): Item {
+  if (!singleton.collection) return read
+  const entries = read.value
+  // Storing one of several, or nothing, would pass for the tenant's setting.
+  if (!Array.isArray(entries) || entries.length !== 1 || !entries[0] || typeof entries[0] !== "object" || Array.isArray(entries[0])) {
+    throw new Error(`Microsoft Graph returned ${Array.isArray(entries) ? entries.length : "no"} objects where one tenant-wide object was expected`)
+  }
+  return entries[0] as Item
+}
+
+/**
+ * A tenant-wide object under its stored ID: with the properties its type keeps and what its extras
+ * read, or with every property when the type names none (see IntuneType.singleton).
+ */
+function singletonSnapshot(type: IntuneType, detail: Item): Item {
+  const snapshot: Item = { id: type.singleton!.id }
+  const kept = type.singleton!.properties
+  if (!kept) {
+    const { id: _own, ...rest } = detail
+    return { ...snapshot, ...rest }
+  }
+  for (const key of [...kept, ...(type.extras ?? []).map((extra) => extra.property)]) if (key in detail) snapshot[key] = detail[key] ?? null
   return snapshot
 }
 

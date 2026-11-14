@@ -13,6 +13,7 @@ import { upgradeMessage, type Plan } from "../src/shared/plans"
 import { call, fakeDeps, TENANT_A, TENANT_B, TENANT_C } from "./feature-helpers"
 import { FakeTenant, referenceSetting, setting, wire } from "./feature-change-sets-fakes"
 import { withTenantWrite } from "../src/main/features/write-lock"
+import { withoutRestoreCapability } from "./helpers/restore-capability"
 
 const PATH = "/api/sync"
 const TENANT_D = "44444444-4444-4444-4444-444444444444"
@@ -101,6 +102,44 @@ function relink(context: Context, key: string, change: Partial<SyncLink>) {
 const changeSets = (context: Context, tenantId: string) => context.deps.records.list<ChangeSetRecord>(DOMAINS.changeSets, tenantId)
 const status = (context: Context, targets: string[] = [TENANT_B]) => context.post({ tenantId: TENANT_A, action: "status", targetTenants: named(targets) })
 const guardRequest = (body: Record<string, unknown>) => new Request(`http://tenuvault.internal${PATH}`, { method: "POST", body: JSON.stringify(body) })
+
+describe("/api/sync and a type without a restore capability", () => {
+  const NOT_WRITTEN = "TenuVault backs this type up and compares it, and never writes it to a tenant."
+  const targetWrites = (context: Context) => context.targets[TENANT_B]!.calls.filter((entry) => entry.method !== "GET")
+
+  it("plans nothing for the type, and writes nothing of a plan that was approved while the type could be written", async () => {
+    const context = setup()
+    // At plan time: no change set is made for the target.
+    const refused = await withoutRestoreCapability("ConfigurationPolicies", () => plan(context))
+    expect(refused.status).toBe(200)
+    expect(refused.body.targets[0]).toMatchObject({ promotion: { status: "blocked", changeSetId: null } })
+    expect(JSON.stringify(refused.body.targets[0].promotion.items[0].findings)).toContain(NOT_WRITTEN)
+    expect(changeSets(context, TENANT_B)).toEqual([])
+
+    // At apply time: a plan approved earlier is refused whole.
+    const { targets } = await planned(context)
+    const id = targets[0]!.promotion!.id
+    const contentHash = await approved(context, TENANT_B, id)
+    const apply = await withoutRestoreCapability("ConfigurationPolicies", () => context.post({ tenantId: TENANT_B, action: "apply", id, contentHash, confirm: true }))
+    expect(apply).toMatchObject({ status: 409, body: { error: NOT_WRITTEN } })
+    expect(targetWrites(context)).toEqual([])
+    expect(context.targets[TENANT_B]!.policies.size).toBe(0)
+  })
+
+  it("rolls back nothing of the type either", async () => {
+    const context = setup()
+    const id = (await synced(context))[TENANT_B]!
+    expect(context.targets[TENANT_B]!.policies.size).toBe(1)
+    expect((await context.post({ tenantId: TENANT_B, action: "rollback-create", id })).status).toBe(200)
+    const review = await context.post({ tenantId: TENANT_B, action: "rollback-review", id })
+    await context.post({ tenantId: TENANT_B, action: "rollback-approve", id, contentHash: review.body.contentHash, targetFingerprint: review.body.targetFingerprint })
+    const before = targetWrites(context).length
+    const rollback = await withoutRestoreCapability("ConfigurationPolicies", () => context.post({ tenantId: TENANT_B, action: "rollback-apply", id, contentHash: review.body.contentHash, confirm: true }))
+    expect(rollback).toMatchObject({ status: 409, body: { error: NOT_WRITTEN } })
+    expect(targetWrites(context)).toHaveLength(before)
+    expect(context.targets[TENANT_B]!.policies.size).toBe(1)
+  })
+})
 
 describe("/api/sync plans", () => {
   it("A1: refuses plan and status on Community and keeps stored runs readable", async () => {

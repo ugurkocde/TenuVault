@@ -3,11 +3,11 @@ import { restoreApprovals, saveRestoreApproval, removeRestoreApproval, type Rest
 import { parseDependencyMappings } from "../../../shared/intune/recovery"
 import { dependencyReferences, type DependencyReference } from "../../../shared/intune/dependencies"
 import { createHash, randomUUID } from "node:crypto"
-import { typeForFolder, type IntuneType, type Item, type Json, type Step } from "../../../shared/intune/registry"
+import { restoreCapability, typeForFolder, type GraphVersion, type IntuneType, type Item, type Json, type Step } from "../../../shared/intune/registry"
 
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-import { buildRestorePlan, buildUpdatePlan, NotRestorableError, resolveStep, restoreBlocker } from "../../../shared/intune/restore-plan"
-import { assignmentsUnread, locateObject, readObject, type GraphReader } from "../../../shared/intune/read"
+import { buildRestorePlan, buildUpdatePlan, NotRestorableError, resolveStep, restoreBlocker, writeBlocker, type WriteOperation } from "../../../shared/intune/restore-plan"
+import { assignmentsUnread, graphVersion, locateObject, readObject, type GraphReader } from "../../../shared/intune/read"
 import { comparableSnapshot, sameSnapshot } from "../../../shared/intune/compare"
 import { saveWrite, removeWrite, writeKey, writeRecords } from "../../../main/storage/restore-journal"
 import { describeRequirement, moduleForFolder, restorePermissionBlocker, SERVICES_PAGE, type GrantedPermissions } from "../../../shared/services/modules"
@@ -92,11 +92,16 @@ export interface GraphCallOptions {
   justification?: string
   /** Snapshot object ID a creation restores. Recorded in the write journal for later replace runs. */
   sourceId?: string
+  /** The Microsoft Graph version the path is relative to; beta when left out. */
+  version?: GraphVersion
+  /** Headers the type of the object needs on its requests. They never replace the sign-in or the approval headers. */
+  headers?: Readonly<Record<string, string>>
 }
 
 export type GraphCall = (method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE", path: string, body?: Item, options?: GraphCallOptions) => Promise<{ status: number; body: Item; approval?: ApprovalSignal }>
 
 const GRAPH = "https://graph.microsoft.com/beta/"
+const graphRoot = (version: GraphVersion) => `https://graph.microsoft.com/${version}/`
 /** Far above any real collection; stops a listing whose continuation links never end. */
 const MAX_LIST_PAGES = 5_000
 
@@ -149,9 +154,9 @@ export function graphCaller(token: string, fetchImpl: typeof fetch = fetch, opti
       if (key) saveWrite({ key, tenant: options.tenant!, method, path, at: new Date().toISOString(), state: "uncertain", label, ...(callOptions.sourceId ? { sourceId: callOptions.sourceId } : {}) })
       let response: Response
       try {
-        response = await fetchImpl(`${GRAPH}${path}`, {
+        response = await fetchImpl(`${callOptions.version && callOptions.version !== "beta" ? graphRoot(callOptions.version) : GRAPH}${path}`, {
           method,
-          headers: { Authorization: `Bearer ${token}`, ...(body ? { "Content-Type": "application/json" } : {}), ...(callOptions.approvalCode ? { "x-msft-approval-code": callOptions.approvalCode } : callOptions.justification ? { "x-msft-approval-justification": Buffer.from(callOptions.justification, "utf8").toString("base64") } : {}) },
+          headers: { ...callOptions.headers, Authorization: `Bearer ${token}`, ...(body ? { "Content-Type": "application/json" } : {}), ...(callOptions.approvalCode ? { "x-msft-approval-code": callOptions.approvalCode } : callOptions.justification ? { "x-msft-approval-justification": Buffer.from(callOptions.justification, "utf8").toString("base64") } : {}) },
           body: callOptions.exactBody ?? (body && method !== "DELETE" ? JSON.stringify(body) : undefined),
           signal: AbortSignal.timeout(60_000),
         })
@@ -276,6 +281,8 @@ export class Restorer {
     const folder = path.split("/")[1] ?? ""
     const type = typeForFolder(folder === "DeviceCompliancePolicies" ? "CompliancePolicies" : folder)
     if (!type) return { success: false, path, error: "This backup file is not an Intune type TenuVault can restore." }
+    // A type without a restore capability is refused before anything of it is read or written.
+    if (restoreCapability(type) === "none") return { success: false, path, action: "skipped", retryable: false, error: writeBlocker(type, "create") }
     const unpermitted = restorePermissionBlocker(type.folder, this.options.granted)
     if (unpermitted) return { success: false, path, action: "skipped", retryable: false, error: unpermitted }
     const source = this.remap(this.options.crossTenant ? forOtherTenant(snapshot) : snapshot)
@@ -365,7 +372,7 @@ export class Restorer {
       : `Unresolved dependencies (${unresolved.join(", ")}). Restore the dependencies first or reconcile this object in Intune.` }
     const references = await this.policyReferences(type, plan.create.body)
     if (references.blocking.length) return { success: false, path, action: "skipped", retryable: false, error: references.blocking.join(" ") }
-    const created = await this.graph("POST", plan.create.path, plan.create.body, { sourceId: typeof snapshot.id === "string" ? snapshot.id : undefined })
+    const created = await this.write(type, "create", "POST", plan.create.path, plan.create.body, { sourceId: typeof snapshot.id === "string" ? snapshot.id : undefined })
     if (created.approval) return this.pauseApproval(type, path, { ...plan.create, kind: "content" }, [...plan.steps, ...plan.assignments], source, "created", created.approval, undefined, undefined, typeof snapshot.id === "string" ? snapshot.id : undefined)
     if (created.status >= 300) return { success: false, path, retryable: created.status < 500 && created.status !== 408, error: writeError(type, created.body, created.status) }
     const id = String(created.body.id ?? "")
@@ -547,13 +554,16 @@ export class Restorer {
   private async complete(type: IntuneType, path: string, id: string, body: Item, action: "created" | "updated", steps: Step[], baseline?: Item, priorSteps = action === "created" ? 1 : 0): Promise<RestoreOutcome> {
     const name = type.singleton?.name ?? body[type.nameKey] ?? body.displayName ?? body.name
     const base = { path, policyId: id, policyName: typeof name === "string" ? name : undefined, action }
+    // Steps kept from an earlier run (a repair, or an approval that was waiting) are checked like fresh ones.
+    const blocked = steps.map((step) => writeBlocker(type, stepOperation(step))).find(Boolean)
+    if (blocked) return { ...base, success: false, retryable: false, error: blocked }
     const resolved = steps.map((step) => resolveStep(step, id))
     for (const [index, step] of resolved.entries()) {
       let message: string | undefined
       let safeToRetry = false
       let response: Awaited<ReturnType<GraphCall>> | undefined
       try {
-        response = await this.graph(step.method, step.path, step.body)
+        response = await this.write(type, stepOperation(step), step.method, step.path, step.body)
         if (!response.approval) {
           if (response.status < 300) continue
           message = `${step.kind === "assignments" ? "Assignments" : "Settings"} could not be restored: ${writeError(type, response.body, response.status)}`
@@ -627,7 +637,7 @@ export class Restorer {
     this.checkApprovalOwner(record)
     if (record.status !== "justification-required") throw new Error("This item was already submitted")
     if (!justification.trim() || justification.length > 700) throw new Error("Enter a justification of 1 to 700 characters")
-    const response = await this.graph(record.step.method, record.step.path, record.step.body ? JSON.parse(record.step.body) as Item : undefined, { exactBody: record.step.body, justification })
+    const response = await this.write(approvalType(record), approvalOperation(record), record.step.method, record.step.path, record.step.body ? JSON.parse(record.step.body) as Item : undefined, { exactBody: record.step.body, justification })
     if (response.approval?.kind === "pending") {
       const draftId = record.id
       const code = response.approval.code
@@ -650,7 +660,7 @@ export class Restorer {
     if (record.continuationPending && record.objectId) return this.resumeApproval(record, { id: record.objectId })
     record = await this.refreshApproval(record)
     if (record.status !== "approved") throw new Error("This request is not approved")
-    const type = typeForFolder(record.folder)!
+    const type = approvalType(record)
     // Without a baseline from submission time, a live read now cannot show whether someone changed the object meanwhile.
     if (record.action === "updated" && record.objectId && !record.fingerprint) throw new Error("TenuVault could not read this object when the request was sent, so it cannot check whether it changed since. Review it in Intune, then withdraw this request and restore again.")
     if (record.fingerprint && record.objectId) {
@@ -665,7 +675,7 @@ export class Restorer {
     if (unresolved.length) throw new Error(`Unresolved dependencies (${unresolved.join(", ")}). Restore them before completing this request.`)
     const references = await this.policyReferences(type, record.step.body ? JSON.parse(record.step.body) as Item : {})
     if (references.blocking.length) throw new Error(references.blocking.join(" "))
-    const response = await this.graph(record.step.method, record.step.path, record.step.body ? JSON.parse(record.step.body) as Item : undefined, { exactBody: record.step.body, approvalCode: record.id, sourceId: record.snapshotId })
+    const response = await this.write(type, approvalOperation(record), record.step.method, record.step.path, record.step.body ? JSON.parse(record.step.body) as Item : undefined, { exactBody: record.step.body, approvalCode: record.id, sourceId: record.snapshotId })
     if (response.status === 403) {
       try { await this.refreshApproval(record) } catch { /* Preserve the completion error. */ }
       throw new Error("Intune refused to complete this request. It may have expired, been changed, or been completed already. Check it in the Intune admin center.")
@@ -675,7 +685,7 @@ export class Restorer {
   }
 
   private async resumeApproval(record: RestoreApproval, response: Item, warnings: string[] = []): Promise<RestoreOutcome> {
-    const type = typeForFolder(record.folder)!
+    const type = approvalType(record)
     const id = record.objectId ?? (typeof response.id === "string" ? response.id : undefined)
     if (!id) throw new Error("Microsoft Graph did not return an object ID. Check Intune before continuing.")
     saveRestoreApproval({ ...record, objectId: id, status: "approved", continuationPending: true })
@@ -691,6 +701,17 @@ export class Restorer {
   /** The live object read like a backup, or undefined when it was deleted. */
   current(type: IntuneType, id: string): Promise<Item | undefined> {
     return readLive(this.graph, type, id)
+  }
+
+  /**
+   * Sends one write for a type. Every write of a restore passes here, so a type whose restore
+   * capability does not allow it is refused before the request, however the restore came about: a
+   * fresh plan, a repair, or an approval that was waiting.
+   */
+  private write(type: IntuneType, operation: WriteOperation, method: "POST" | "PATCH" | "PUT" | "DELETE", path: string, body?: Item, options?: GraphCallOptions): ReturnType<GraphCall> {
+    const blocked = writeBlocker(type, operation)
+    if (blocked) throw new NotRestorableError(blocked)
+    return this.graph(method, path, body, options)
   }
 
   /** Reviewed mappings only rewrite dependency references, never configuration text. */
@@ -721,29 +742,47 @@ export class Restorer {
 
 }
 
+/** What a step of a restore plan does to the tenant. */
+const stepOperation = (step: Pick<Step, "kind" | "method">): WriteOperation => (step.kind === "assignments" ? "assign" : step.method === "DELETE" ? "delete" : "update")
+
+/** The type a stored approval request is for. A request for a type this version does not know is never sent. */
+function approvalType(record: RestoreApproval): IntuneType {
+  const type = typeForFolder(record.folder)
+  if (!type) throw new Error("This request is for a type TenuVault does not know, so it was not sent. Withdraw it and restore again.")
+  return type
+}
+
+const approvalOperation = (record: RestoreApproval): WriteOperation => record.operation
+
 /**
  * The live object with the snapshot's locateBy value (see IntuneType.locateBy), read like a backup,
  * or undefined when the type has none or no single object matches.
  */
 export function locateLive(graph: GraphCall, type: IntuneType, snapshot: Item): Promise<Item | undefined> {
-  return locateObject(type, snapshot, liveReader(graph))
+  return locateObject(type, snapshot, liveReader(graph, type))
 }
 
 /** The live object read like a backup, or undefined when it was deleted. */
 export async function readLive(graph: GraphCall, type: IntuneType, id: string): Promise<Item | undefined> {
   try {
-    return await readObject(type, id, liveReader(graph))
+    return await readObject(type, id, liveReader(graph, type))
   } catch (error) {
     if (error instanceof Gone) return undefined
     throw error
   }
 }
 
-/** Reads through the restore's Graph caller; a deleted object reads as Gone. */
-function liveReader(graph: GraphCall): GraphReader {
+/**
+ * Reads through the restore's Graph caller, from the Graph version and with the headers the type
+ * names, so the live object is read the way its backup was; a deleted object reads as Gone.
+ */
+function liveReader(graph: GraphCall, type: IntuneType): GraphReader {
+  const root = graphRoot(graphVersion(type))
+  // Types on beta without headers are read exactly as before.
+  const shape = type.apiVersion || type.headers ? { version: graphVersion(type), ...(type.headers ? { headers: type.headers } : {}) } : undefined
   const reader: GraphReader = {
     get: async (path) => {
-      const response = await graph("GET", path)
+      const response = shape ? await graph("GET", path, undefined, shape) : await graph("GET", path)
       // Settings Catalog answers 400 ResourceNotFound for deleted policies instead of 404.
       if (response.status === 404 || (response.status === 400 && /ResourceNotFound/i.test(JSON.stringify(response.body)))) throw new Gone()
       if (response.status >= 300) throw new Error(errorMessage(response.body, response.status))
@@ -757,8 +796,8 @@ function liveReader(graph: GraphCall): GraphReader {
         if (seen.has(next)) throw new Error("Microsoft Graph returned a repeated continuation link")
         if (seen.size >= MAX_LIST_PAGES) throw new Error(`Microsoft Graph listing did not finish after ${MAX_LIST_PAGES} pages`)
         seen.add(next)
-        if (/^https?:/i.test(next) && !next.startsWith(GRAPH)) throw new Error("Invalid Graph continuation link")
-        const page = await reader.get(next.startsWith(GRAPH) ? next.slice(GRAPH.length) : next)
+        if (/^https?:/i.test(next) && !next.startsWith(root)) throw new Error("Invalid Graph continuation link")
+        const page = await reader.get(next.startsWith(root) ? next.slice(root.length) : next)
         if (!Array.isArray(page.value)) throw new Error("Microsoft Graph returned an invalid collection")
         items.push(...(page.value as Item[]))
         next = typeof page["@odata.nextLink"] === "string" ? page["@odata.nextLink"] : undefined

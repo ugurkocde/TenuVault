@@ -1,5 +1,6 @@
 import { decodeXml, listBlobPages } from "~/lib/storage/list"
-import { INTUNE_TYPES, typeForFolder } from "../../../../shared/intune/registry"
+import { INTUNE_TYPES, restoreCapability, typeForFolder } from "../../../../shared/intune/registry"
+import { writeBlocker } from "../../../../shared/intune/restore-plan"
 import { isBackupName } from "../../../../shared/intune/backup-names"
 import { blobPath } from "../../../../shared/security"
 import { type NextRequest, NextResponse } from "next/server"
@@ -89,7 +90,7 @@ export async function POST(request: NextRequest) {
       // Backups from older app versions stored compliance policies under this name.
       const type = typeForFolder(folder === "DeviceCompliancePolicies" ? "CompliancePolicies" : folder)
       if (!type || !fileName.endsWith(".json") || blobName.split("/").length !== 3) continue
-      const group = groups.get(type.folder) ?? { folder: type.folder, label: type.label, area: type.area, ...(type.restore === "metadata" ? { limitation: type.limitation } : {}), policies: [] }
+      const group = groups.get(type.folder) ?? { folder: type.folder, label: type.label, area: type.area, ...(type.restore === "metadata" ? { limitation: type.limitation } : restoreCapability(type) === "none" ? { limitation: writeBlocker(type, "create") } : {}), policies: [] }
       group.policies.push({ name: fileName, path: blobName, size: parseInt(match[2]!), type: type.folder, displayName: fileName.replace(/\.json$/, "") })
       groups.set(type.folder, group)
     }

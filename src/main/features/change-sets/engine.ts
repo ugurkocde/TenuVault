@@ -728,6 +728,11 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
     if (record.status === "applied") throw new FeatureError("This change set was already applied and verified.", 409)
     const review = record.review
     if (!review || review.decision !== "approved") throw new FeatureError("This change set is not approved.", 409)
+    // A change set approved before a type lost its restore capability is refused whole, before anything is claimed or written.
+    for (const operation of record.operations) {
+      const unsupported = unsupportedReason(operation.folder, operation.action)
+      if (unsupported) throw new FeatureError(unsupported, 409)
+    }
     if (input.contentHash !== record.contentHash || review.contentHash !== record.contentHash) markStale(deps, tenant, id, "The content changed after approval.", actor)
     const { entries, problem } = integrity(deps, tenant, record)
     if (problem) markStale(deps, tenant, id, problem, actor)

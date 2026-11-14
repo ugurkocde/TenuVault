@@ -3,6 +3,7 @@ import { handleOib, migrateLegacyOibRuns, OIB_BACKUP_POLLING, setOibStore } from
 import { packFolder, packItems, parsePackFile, resetOibSource } from "../src/main/oib/source"
 import type { OibBackupOptions, OibCatalog, OibComparison, OibProgress, OibRun, UndoResult, ValidationRun } from "../src/shared/oib/types"
 import { memoryStore } from "./helpers"
+import { withoutRestoreCapability } from "./helpers/restore-capability"
 
 const tenantId = "11111111-1111-1111-1111-111111111111"
 const appId = "22222222-2222-2222-2222-222222222222"
@@ -114,6 +115,43 @@ async function source() {
   return resolved
 }
 const base = { tenantId, appId, storageAccountName: `tvlocal-${tenantId}`, platform: "windows" }
+
+describe("OIB and a type without a restore capability", () => {
+  const NOT_WRITTEN = "TenuVault backs this type up and compares it, and never writes it to a tenant."
+
+  it("creates and updates nothing of the type, and reports why for each policy", async () => {
+    const writes: string[] = []
+    const state: Tenant = { policies: [{ id: EXISTING, name: "Win - OIB - SC - Test - v3.1", value: 7 }] }
+    vi.stubGlobal("fetch", world(state, writes))
+    await source()
+    const deploy = (items: Array<{ source: string; mode: string; targetId?: string }>) => handleOib({ ...base, storageAccountName: null, action: "oib-deploy", commit, backup: { mode: "none" }, items }) as Promise<OibRun>
+    const [created, updated] = await withoutRestoreCapability("ConfigurationPolicies", async () => [
+      await deploy([{ source: SC, mode: "create" }]),
+      await deploy([{ source: SC, mode: "update", targetId: EXISTING }]),
+    ])
+    expect(created).toMatchObject({ created: [], updated: [], failed: [{ name: "Win - OIB - SC - Test - v3.8", error: expect.stringContaining(NOT_WRITTEN) }] })
+    expect(updated).toMatchObject({ created: [], updated: [], failed: [{ name: "Win - OIB - SC - Test - v3.8", error: expect.stringContaining(NOT_WRITTEN) }] })
+    expect(writes.filter(write => !write.startsWith("GET "))).toEqual([])
+    expect(state.policies[0]).toMatchObject({ name: "Win - OIB - SC - Test - v3.1", value: 7 })
+  })
+
+  it("undo deletes and puts back nothing of the type, and keeps the run so it can be undone later", async () => {
+    const before = { id: EXISTING, name: "Win - OIB - SC - Test - v3.1", platforms: "windows10", technologies: "mdm", settings: [] }
+    const run: OibRun = { runId: "run-1", tenantId, createdAt: "2026-09-26T00:00:00Z", kind: "deploy", platform: "windows", reference: "r", failed: [],
+      created: [{ folder: "ConfigurationPolicies", id: "77777777-7777-7777-7777-777777777777", name: "A" }],
+      updated: [{ folder: "ConfigurationPolicies", id: EXISTING, name: "Win - OIB - SC - Test - v3.8", previousName: "Win - OIB - SC - Test - v3.1", before }] }
+    store.set(`oib:runs:${tenantId}`, JSON.stringify([run]))
+    const writes: string[] = []
+    vi.stubGlobal("fetch", world({ policies: [{ id: EXISTING, name: "Win - OIB - SC - Test - v3.8", value: 1 }] }, writes))
+    const result = await withoutRestoreCapability("ConfigurationPolicies", () => handleOib({ action: "oib-undo", tenantId, appId, runId: "run-1" })) as UndoResult
+    expect(result.results).toMatchObject([
+      { name: "A", action: "removed", done: false, error: NOT_WRITTEN },
+      { name: "Win - OIB - SC - Test - v3.1", action: "restored", done: false, error: NOT_WRITTEN },
+    ])
+    expect(writes.filter(write => !write.startsWith("GET "))).toEqual([])
+    expect(result.run).toMatchObject({ created: [{ name: "A" }], updated: [{ id: EXISTING }] })
+  })
+})
 
 describe("OIB pack files", () => {
   it("maps each OIB folder to the registry folder that creates it and ignores other files", () => {

@@ -1,6 +1,6 @@
 import { approvalMessage, type ApprovalSignal } from "../../../shared/intune/approval"
 import { readLive, type GraphCall } from "../../../portal/lib/policies/graph-restore"
-import { buildRestorePlan, buildUpdatePlan, resolveStep } from "../../../shared/intune/restore-plan"
+import { buildRestorePlan, buildUpdatePlan, resolveStep, writeBlocker } from "../../../shared/intune/restore-plan"
 import type { IntuneType, Item, Json, Step } from "../../../shared/intune/registry"
 import { isGraphId } from "../../../shared/security"
 import { matchesProposed, operationFingerprint, sameAssignments, sanitizeSnapshot, type OperationAction } from "./model"
@@ -168,6 +168,9 @@ export async function writeOperation(
   input: { action: OperationAction; targetId: string | null; proposed: Item | null; assignments: Item[] | null; current: Item | null },
   onCreated: (id: string) => void,
 ): Promise<WriteOutcome> {
+  // The last check before a request: a change set stored before the type lost its restore capability is not sent.
+  const refused = writeBlocker(type, input.action) ?? (input.assignments ? writeBlocker(type, "assign") : undefined)
+  if (refused) return { state: "rejected", objectId: input.targetId, message: `Not sent: ${refused}` }
   const blocked = (sent: Extract<Sent, { ok: false }>, objectId: string | null, partial = false): WriteOutcome => ({ state: "approval", objectId, partial, message: approvalMessage(sent.approval!, type.label, partial ? "The configuration was written, but assignments or a follow-up step need approval." : undefined) })
   const assign = async (id: string): Promise<Sent> => {
     if (!input.assignments) return { ok: true, body: {} }

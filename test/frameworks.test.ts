@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { comparePolicies, parsePolicies, remediationPayload } from "../src/shared/frameworks/policies"
 import { frameworks, searchFrameworks } from "../src/shared/frameworks/catalog"
-import { collectGraph, handleFramework } from "../src/main/frameworks/service"
+import { collectGraph, CREATED_FOLDER, handleFramework } from "../src/main/frameworks/service"
 import { setFrameworkStore } from "../src/main/frameworks/workspaces"
+import { withoutRestoreCapability } from "./helpers/restore-capability"
 
 const type = "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance"
 const policy = (value = "enabled") => ({ name: "Workstation baseline", platforms: "windows10", technologies: "mdm", description: "Approved profile",
@@ -205,6 +206,21 @@ describe("Graph reads and tenant-bound remediation", () => {
     expect(writes).toHaveLength(1)
     expect(writes[0]).not.toHaveProperty("assignments")
     await expect(handleFramework(create)).rejects.toThrow("already used")
+    expect(writes).toHaveLength(1)
+  })
+  it("creates nothing when the type it writes has no restore capability, and leaves the assessment usable", async () => {
+    const writes: Record<string, unknown>[] = []
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.includes("oauth2")) return Response.json({ access_token: "test" })
+      if (init?.method === "POST") { writes.push(JSON.parse(String(init.body))); return Response.json({ id: liveId }) }
+      return Response.json({ value: [] })
+    }))
+    const assessment = await handleFramework({ action: "assess", tenantId, appId, frameworkId: "custom", reference: "r1", policies: [policy()] }) as { runId: string }
+    const create = { action: "create", tenantId, appId, runId: assessment.runId, keys: ["0:0"], confirmUnassigned: true }
+    await withoutRestoreCapability(CREATED_FOLDER, () => expect(handleFramework(create)).rejects.toThrow("TenuVault backs this type up and compares it, and never writes it to a tenant."))
+    expect(writes).toEqual([])
+    // Refused before the assessment was used up: with the capability, the same request creates the policy.
+    expect(await handleFramework(create)).toMatchObject({ success: true })
     expect(writes).toHaveLength(1)
   })
   it("refuses remediation after the live landscape changes", async () => {
