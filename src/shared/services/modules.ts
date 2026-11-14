@@ -50,6 +50,14 @@ export interface ServiceModule {
    * block a restore that works.
    */
   precheck: boolean
+  /**
+   * A read Microsoft refuses or throttles ends the type it belongs to, and the backup goes on. The
+   * endpoints of Entra ID and Defender refuse on their own: for a product the tenant has no license
+   * for, a role the account lacks, or a setting only a signed-in admin can read. Off for Intune and
+   * Conditional Access, whose refusals keep ending a backup as they always have: there a refused
+   * read means the sign-in or its role is gone, which fails every read after it.
+   */
+  isolated: boolean
   /** The access level a tenant has for the service until the admin chooses another. */
   defaultAccess: AccessLevel
   areas: readonly PermissionArea[]
@@ -89,6 +97,7 @@ export const MODULES: readonly ServiceModule[] = [
     switchable: true,
     defaultOn: true,
     precheck: false,
+    isolated: false,
     defaultAccess: "restore",
     roles: "Intune Administrator, or an Intune role that covers the policies you back up and restore.",
     accessProbe: "deviceManagement/deviceCategories?$top=1&$select=id",
@@ -128,6 +137,7 @@ export const MODULES: readonly ServiceModule[] = [
     switchable: true,
     defaultOn: false,
     precheck: true,
+    isolated: false,
     defaultAccess: "backup",
     roles: "Security Reader or Global Reader to back up; Conditional Access Administrator or Security Administrator to restore.",
     restoreAccess: { permissions: [{ name: "Policy.ReadWrite.ConditionalAccess", id: "ad902697-1014-4ef5-81ef-2b4301988e8c" }], newSetupSwitch: "-IncludeConditionalAccessRestore" },
@@ -158,6 +168,7 @@ export const MODULES: readonly ServiceModule[] = [
     switchable: true,
     defaultOn: false,
     precheck: true,
+    isolated: true,
     defaultAccess: "backup",
     roles: "Global Reader to back up; to restore, the administrator role of the setting, such as Security Administrator or Privileged Role Administrator.",
     readerProbe: { path: "policies/authorizationPolicy?$select=id", role: "Policy.Read.All" },
@@ -170,6 +181,7 @@ export const MODULES: readonly ServiceModule[] = [
     switchable: true,
     defaultOn: false,
     precheck: true,
+    isolated: true,
     defaultAccess: "backup",
     roles: "Security Reader or Global Reader to back up; Security Administrator to restore.",
     readerProbe: { path: "security/secureScoreControlProfiles?$top=1&$select=id", role: "SecurityEvents.Read.All" },
@@ -303,6 +315,11 @@ export function backupNeed(folder: string, mode: SignInMode): Need | undefined {
 export function canBackUp(folder: string, granted: GrantedPermissions): boolean {
   const needed = backupNeed(folder, granted.kind)
   return needed === undefined || meets(needed, granted.permissions)
+}
+
+/** Whether Microsoft Graph lets only a signed-in admin read this folder, so no Backup Reader can. */
+export function signedInOnly(folder: string): boolean {
+  return backupNeed(folder, "application") === "unsupported"
 }
 
 /**

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { BackupEngine, type BackupJob, type RunTokens } from "../src/main/backup/engine"
-import { scheduledResult } from "../src/main/backup/scheduler"
+import { notifiedStatus, scheduledResult } from "../src/main/backup/scheduler"
 import { handleLocalBlobRequest, localAccountFromUrl } from "../src/main/storage/blob-emulator"
 import { LocalBlobStore } from "../src/main/storage/local-blob-store"
 import { BACKUP_OWNER_FILE, localStorageAccountName } from "../src/shared/constants"
@@ -27,7 +27,7 @@ const NOW = new Date("2026-11-10T02:00:00Z")
 /** Fields this work adds; everything else is compared as it was recorded. */
 const ADDED = {
   manifest: ["Coverage", "Outcomes"],
-  job: ["outcomes"],
+  job: ["coverage", "outcomes"],
   results: ["coverage"],
 }
 
@@ -150,8 +150,8 @@ async function run(scenario: Scenario) {
       files: Object.fromEntries(Object.entries(files).sort(([a], [b]) => a.localeCompare(b))),
       job: { ...without(job as unknown as Record<string, unknown>, ["id", ...ADDED.job]), log: job.log.map(logLine), results },
       scheduled: scheduledResult(job),
-      // What the notification of a finished backup is built from (see notifyBackupOutcome in main/index.ts).
-      notification: job.status === "Failed" ? "Failed" : job.failures || /completed with \d+ warnings?/i.test(job.progressMessage) ? "CompletedWithWarnings" : "Success",
+      // The status a finished backup is notified with. It was recorded from the expression main/index.ts held before it got a name.
+      notification: notifiedStatus(job),
       backupFolders: folders,
     },
   }

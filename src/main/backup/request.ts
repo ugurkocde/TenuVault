@@ -28,9 +28,18 @@ export function isImmutabilityRefusal(status: number, code: string): boolean {
 /** Sign-in or license problems affect every request, so they stop the backup instead of becoming per-policy warnings. */
 export class TokenError extends Error {}
 
-/** A Graph error with its status, so an expired sign-in (401) stops the backup while a missing permission for one type does not. */
+/** The error code and message of a refused Microsoft Graph request, as far as its body gives them. */
+export interface GraphAnswer {
+  code?: string
+  message?: string
+}
+
+/**
+ * A Graph error with its status, so an expired sign-in (401) stops the backup while a missing permission for one type does not.
+ * `answer` keeps what Graph said, for telling a missing permission from a missing license or a setting that was never made.
+ */
 export class GraphError extends Error {
-  constructor(message: string, readonly status: number) {
+  constructor(message: string, readonly status: number, readonly answer: GraphAnswer = {}) {
     super(message)
   }
 }
@@ -116,17 +125,43 @@ export async function withAbort<T>(request: () => Promise<T>, signal: AbortSigna
   }
 }
 
-export async function graphError(response: Response): Promise<string> {
-  const text = await response.text()
+function graphErrorMessage(text: string, status: number): string {
   try {
     const message = (JSON.parse(text) as { error?: { message?: string } }).error?.message
-    if (response.status === 403) {
+    if (status === 403) {
       return `Access denied by Microsoft Graph${message ? `: ${message}` : ""}. Check that your account has an Intune role and the app registration has the Intune permissions.`
     }
-    return message ?? `Microsoft Graph returned ${response.status}`
+    return message ?? `Microsoft Graph returned ${status}`
   } catch {
-    return `Microsoft Graph returned ${response.status}`
+    return `Microsoft Graph returned ${status}`
   }
+}
+
+/**
+ * What a refused request's body says. Most of Graph answers `{ error: { code, message } }`; the role
+ * management endpoints answer `{ errorCode, message }`; some answer an HTML page or nothing at all,
+ * which reads as no code and no message.
+ */
+export function graphAnswer(text: string): GraphAnswer {
+  let body: unknown
+  try {
+    body = JSON.parse(text)
+  } catch {
+    return {}
+  }
+  if (!body || typeof body !== "object") return {}
+  const { error, errorCode, message } = body as { error?: unknown; errorCode?: unknown; message?: unknown }
+  const source = error && typeof error === "object" ? (error as { code?: unknown; message?: unknown }) : { code: errorCode, message }
+  return {
+    ...(typeof source.code === "string" && source.code ? { code: source.code } : {}),
+    ...(typeof source.message === "string" && source.message ? { message: source.message } : {}),
+  }
+}
+
+/** The error of a failed Graph response, with its message as before and what Graph answered. */
+export async function graphFailure(response: Response): Promise<GraphError> {
+  const text = await response.text()
+  return new GraphError(graphErrorMessage(text, response.status), response.status, graphAnswer(text))
 }
 
 /** The message for a failed storage response. A network error response rejects with a StorageUnreachableError instead. */

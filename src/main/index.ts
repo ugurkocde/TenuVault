@@ -43,7 +43,7 @@ import { ApiHost } from "./api/host"
 import { routes } from "./api/routes"
 import { AuthManager, SignInRequiredError } from "./auth/msal"
 import { BackupEngine, verifyStorageAccess, type BackupJob } from "./backup/engine"
-import { BackupScheduler, reportsResult, runUnattended, scheduledResult } from "./backup/scheduler"
+import { BackupScheduler, notifiedStatus, reportsResult, runUnattended, scheduledResult } from "./backup/scheduler"
 import { runTrayBackups } from "./backup/tray-backup"
 import { announceCommunityChoice, prepareScheduledCoverage, scheduledCoverage } from "./backup/schedule-prepare"
 import { prepareScheduleInput } from "./backup/schedule-input"
@@ -749,7 +749,7 @@ async function bootstrap(): Promise<void> {
   const notifyBackupOutcome = async (job: BackupJob, trigger: string, key?: string): Promise<boolean> => {
     if (job.status === "Cancelled") return false
     const result = await emitBackupOutcome(featureDeps, job.tenantId, {
-      status: job.status === "Failed" ? "Failed" : job.failures || /completed with \d+ warnings?/i.test(job.progressMessage) ? "CompletedWithWarnings" : "Success",
+      status: notifiedStatus(job),
       backupFolder: job.backupFolder ?? null,
       naturalKey: key ?? job.backupFolder ?? `job:${job.id}`,
       finishedAt: job.endTime ?? new Date().toISOString(),

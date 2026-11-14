@@ -8,6 +8,13 @@
  */
 export const MAX_RETRY_DELAY_MS = 5 * 60_000
 
+/** The service asked for a pause longer than the bound, so the request is not retried. */
+export class RetryDelayError extends Error {
+  constructor() {
+    super("The service requested a retry delay longer than 5 minutes. Retry this backup later.")
+  }
+}
+
 export const retryableStatus = (status: number) => status === 429 || status >= 500
 
 export function retryDelay(response: Response | undefined, attempt: number): number {
@@ -16,12 +23,12 @@ export function retryDelay(response: Response | undefined, attempt: number): num
   const azureDelay = Number(response?.headers.get("x-ms-retry-after-ms"))
   // Check units before conversion, including positive values that overflow to Infinity.
   if (seconds > MAX_RETRY_DELAY_MS / 1000 || azureDelay > MAX_RETRY_DELAY_MS) {
-    throw new Error("The service requested a retry delay longer than 5 minutes. Retry this backup later.")
+    throw new RetryDelayError()
   }
   const retryAfter = Number.isFinite(seconds) ? seconds * 1000 : header ? Date.parse(header) - Date.now() : 0
   const delay = Math.max(Number.isFinite(retryAfter) ? retryAfter : 0, Number.isFinite(azureDelay) ? azureDelay : 0)
   // Never shorten a server's pause. A longer interval fails this bounded request instead.
-  if (delay > MAX_RETRY_DELAY_MS) throw new Error("The service requested a retry delay longer than 5 minutes. Retry this backup later.")
+  if (delay > MAX_RETRY_DELAY_MS) throw new RetryDelayError()
   return delay > 0 ? delay : 1000 * 2 ** attempt
 }
 

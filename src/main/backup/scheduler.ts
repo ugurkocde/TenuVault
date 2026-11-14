@@ -33,6 +33,15 @@ export function scheduledResult(job: BackupJob): ScheduledRunResult {
 }
 
 /**
+ * The status a finished backup is notified with. Like the scheduled result, it follows the job's
+ * status, its failures and its warnings, never its coverage: a type the sign-in may not read is
+ * left out of a backup that still completed.
+ */
+export function notifiedStatus(job: Pick<BackupJob, "status" | "failures" | "progressMessage">): "Success" | "CompletedWithWarnings" | "Failed" {
+  return job.status === "Failed" ? "Failed" : job.failures || /completed with \d+ warnings?/i.test(job.progressMessage) ? "CompletedWithWarnings" : "Success"
+}
+
+/**
  * Starts an unattended (scheduled or tray) backup and waits for it to end. A run that joins a
  * backup already running for the tenant adopts its outcome, but a cancellation of that backup was
  * not a cancellation of this run, so the run then starts a backup of its own. `wait` sees every

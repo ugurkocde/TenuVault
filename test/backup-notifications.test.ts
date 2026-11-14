@@ -7,7 +7,7 @@ import { NetworkUnreachableError } from "../src/main/api/network-error"
 import { BackupEngine, type BackupJob } from "../src/main/backup/engine"
 import { backupTenantLabel, notifyBackupFailure } from "../src/main/backup/notifications"
 import { RefusalLog, refuseUnlicensedBackup } from "../src/main/backup/refusals"
-import { BackupScheduler, reportsResult, runUnattended, scheduledResult, type ScheduledRunResult } from "../src/main/backup/scheduler"
+import { BackupScheduler, notifiedStatus, reportsResult, runUnattended, scheduledResult, type ScheduledRunResult } from "../src/main/backup/scheduler"
 import { isLocalAccount } from "../src/main/storage/blob-emulator"
 import { localStorageAccountName } from "../src/shared/constants"
 import type { BackupRefusal } from "../src/shared/ipc"
@@ -71,6 +71,7 @@ function unattendedFixture(getToken: () => Promise<string>) {
     },
     engine,
     scheduledResult,
+    notifiedStatus,
     runUnattended,
     reportsResult,
     scopes: { get: () => ({ scope: { excluded: [] } }) },
