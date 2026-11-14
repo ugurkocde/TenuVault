@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import type { AppRestoreReview, CapturedAppSource } from "../../src/shared/app-sources/types"
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 const tenant = "11111111-1111-1111-1111-111111111111", target = "22222222-2222-2222-2222-222222222222"
-const api = vi.hoisted(() => ({ restoreReview: vi.fn(), loadRestoreSettings: vi.fn(), restore: vi.fn(), restoreProgress: vi.fn(), cancel: vi.fn(), accounts: vi.fn(), signIn: vi.fn(), openExternal: vi.fn() }))
+const api = vi.hoisted(() => ({ restoreReview: vi.fn(), loadRestoreSettings: vi.fn(), restore: vi.fn(), restoreProgress: vi.fn(), cancel: vi.fn(), accounts: vi.fn(), signIn: vi.fn(), openExternal: vi.fn(), deviceSignIn: vi.fn(), deviceSignInStatus: vi.fn(), cancelDeviceSignIn: vi.fn() }))
 vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { appSources: api, app: api, auth: api } }))
 vi.mock("~/contexts/TenantContext", () => ({ useTenants: () => [{ id: 1, name: "Source", credentials: { tenantId: "11111111-1111-1111-1111-111111111111" } }, { id: 2, name: "Destination", credentials: { tenantId: "22222222-2222-2222-2222-222222222222" } }] }))
 import { RestoreAppDialog } from "../../src/renderer/features/app-backup/RestoreAppDialog"
@@ -12,6 +12,7 @@ const source = { id: "33333333-3333-3333-3333-333333333333", appName: "Finance" 
 const review: AppRestoreReview = { settingsHash: "a".repeat(64), observedAt: "2026-11-14T12:00:00Z", currentSettings: false, name: "Finance", version: "1", publisher: "Example", installCommand: "setup.exe", uninstallCommand: "setup.exe /uninstall", runAs: "system", detectionRules: 1, requirementRules: 0, blocker: null }
 let root: Root | undefined
 beforeEach(() => {
+  api.deviceSignIn.mockResolvedValue({ verificationUri: "https://microsoft.com/devicelogin", userCode: "ABCD12345", expiresAt: new Date(Date.now() + 900000).toISOString() }); api.deviceSignInStatus.mockResolvedValue({ status: "waiting" }); api.cancelDeviceSignIn.mockResolvedValue(undefined)
   api.restoreReview.mockResolvedValue(review); api.accounts.mockResolvedValue([{ tenantId: target }]); api.restoreProgress.mockResolvedValue(null); api.cancel.mockResolvedValue(undefined)
   api.restore.mockResolvedValue({ appId: "44444444-4444-4444-4444-444444444444", tenantId: target, name: "Finance (restored)", contentVersion: "1", sourceId: source.id })
 })
@@ -58,4 +59,22 @@ it("blocks unsupported settings without offering creation", async () => {
   api.restoreReview.mockResolvedValue({ ...review, blocker: "Destination dependency mapping is required." })
   await mount(); expect(document.body.textContent).toContain("Destination dependency mapping")
   expect(button("Restore unassigned app").disabled).toBe(true); expect(api.restore).not.toHaveBeenCalled()
+})
+it("offers a code while browser sign-in is pending and ignores the cancelled browser result", async () => {
+  api.accounts.mockResolvedValue([])
+  let reject!: (error: Error) => void; api.signIn.mockImplementation(() => new Promise((_resolve, fail) => { reject = fail }))
+  await mount(); await selectTarget(); await act(async () => button("Sign in to destination").click())
+  expect(button("Use a device code").disabled).toBe(false)
+  await act(async () => button("Use a device code").click())
+  expect(api.deviceSignIn).toHaveBeenCalledWith(target); expect(document.body.textContent).toContain("ABCD12345")
+  await act(async () => reject(new Error("Browser cancelled")))
+  expect(document.body.textContent).not.toContain("Browser cancelled")
+  expect(button("Restore unassigned app").disabled).toBe(true)
+  act(() => root!.unmount()); root = undefined
+  expect(api.cancelDeviceSignIn).toHaveBeenCalledExactlyOnceWith(target)
+})
+it("refreshes the destination session after Microsoft completes device sign-in", async () => {
+  api.accounts.mockResolvedValueOnce([]).mockResolvedValue([{ tenantId: target }]); api.deviceSignInStatus.mockResolvedValue({ status: "completed" })
+  await mount(); await selectTarget(); await confirm(); await act(async () => button("Use a device code").click())
+  expect(document.body.textContent).not.toContain("ABCD12345"); expect(button("Restore unassigned app").disabled).toBe(false)
 })

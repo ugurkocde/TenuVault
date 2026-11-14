@@ -112,6 +112,10 @@ Export remains available while signed out, provided the tenant is configured and
 5. Confirm the destination and choose **Restore unassigned app**. The installer is verified, encrypted with fresh keys and uploaded without plaintext staging files.
 6. Wait for Intune to confirm the content and publish the app. Choose **Open restored app** to inspect it in the destination tenant before assigning it.
 
+If you are operating TenuVault remotely, choose **Use a device code** in the destination sign-in section. Open the displayed Microsoft address on another device, enter the short code and sign in to the destination tenant. TenuVault keeps the resulting session on the computer running the restore. Closing the dialog or choosing **Cancel device sign-in** stops the pending request. Microsoft MFA and Conditional Access still apply; use browser sign-in on the TenuVault computer if your organization does not allow device-code authentication.
+
+Device-code authentication requires **Allow public client flows** to be enabled under the destination app registration's **Authentication** settings in Entra. TenuVault does not change that setting automatically. If Microsoft accepts the user sign-in but TenuVault reports `invalid_client`, check that setting or use browser sign-in. See [Microsoft's public-client configuration guidance](https://learn.microsoft.com/en-us/entra/identity-platform/scenario-desktop-app-configuration).
+
 Restore creates a new app; it does not overwrite an existing destination app or install anything. It copies supported app metadata, the logo, install/uninstall commands, detection and requirement rules (including inline scripts), installation settings, return codes and MSI information. Review tenant-specific URLs, commands and script contents before deployment.
 
 Assignments, group IDs, assignment filters, categories and custom scope tags are not copied. The new app uses the destination's default scope tag. Apps with dependencies, supersedence or Intune-hosted install/uninstall script references require additional mapping or script-upload support and are blocked before creation. This is a deliberate restore operation, not continuous synchronization.
@@ -121,6 +125,8 @@ Capture requires an enrolled Windows PC. Restoring an existing supported Win32 b
 ### Interrupted restores
 
 Leaving App Backup or switching the source tenant stops an unfinished restore. An unassigned draft app may remain in Intune; TenuVault does not delete it automatically. Retry with the **same backup, destination and app name** to continue that app. The encrypted backup folder keeps its restore journal, including the destination binding and upload encryption material, so keep the matching recovery key safe.
+
+If Intune reports a permanent upload-storage failure, the draft is retained for review. Intune may refuse renewal in this state; TenuVault does not delete the draft or create a replacement automatically.
 
 If a creation response was lost, TenuVault searches for its unique restore marker and refuses to create a second app when the outcome cannot be confirmed. If someone assigns or changes an unfinished destination app, restore stops for review. A successful repeat returns the existing restored app. Creating another copy from the same backup in the same destination is not currently supported.
 

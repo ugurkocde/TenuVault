@@ -1,11 +1,12 @@
 import { basename, join } from "node:path"
 import { lstat, readdir } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
-import type { AppRestoreProgress, AppRestoreReview, AppRestoreResult, AppCaptureProgress, AppSourceState, CapturedAppSource, RecoveryDeviceStatus, AppSourcesBridge, IntuneAppDetails, IntuneAppScript } from "../../shared/app-sources/types"
+import type { AppDeviceCode, AppDeviceSignInStatus, AppRestoreProgress, AppRestoreReview, AppRestoreResult, AppCaptureProgress, AppSourceState, CapturedAppSource, RecoveryDeviceStatus, AppSourcesBridge, IntuneAppDetails, IntuneAppScript } from "../../shared/app-sources/types"
 import { restoreBody, snapshotHash, type AppRestoreSnapshot } from "../app-backup/restore-snapshot"
 import { AppSourceStore, sourceTenant } from "./store"
 
 export interface AppSourceHost {
+  signInWithDeviceCode?: (tenant: string, onCode: (code: AppDeviceCode) => void, signal: AbortSignal) => Promise<void>
   restore?: (store: AppSourceStore, source: CapturedAppSource, snapshot: AppRestoreSnapshot, target: string, name: string, signal: AbortSignal, progress: (value: AppRestoreProgress) => void) => Promise<AppRestoreResult>
   loadRestoreSettings?: (tenant: string, appId: string) => Promise<AppRestoreSnapshot>
   assignments?: (tenant: string, appId: string) => ReturnType<AppSourcesBridge["assignments"]>
@@ -30,6 +31,7 @@ export interface AppSourceHost {
 
 /** Local actions are free for every configured tenant and need no live token. */
 export class AppSourceService {
+  private readonly deviceSignIns = new Map<string, { abort: AbortController; ready: Promise<AppDeviceCode>; state: AppDeviceSignInStatus }>()
   private readonly jobs = new Map<string, { tenant: string; abort: AbortController; progress?: AppCaptureProgress; restoreProgress?: AppRestoreProgress }>()
   private readonly deviceChecks = new Map<string, Promise<RecoveryDeviceStatus>>()
   private readonly appLoads = new Map<string, ReturnType<AppSourcesBridge["apps"]>>()
@@ -215,6 +217,33 @@ export class AppSourceService {
     if (!script || script.content === null) throw new Error("This script changed or is unavailable. Refresh app details and retry.")
     return this.host.downloadScript(script)
   }
+  deviceSignIn(raw: unknown): Promise<AppDeviceCode> {
+    const tenant = this.tenant(raw), pending = this.deviceSignIns.get(tenant)
+    if (pending?.state.status === "waiting") return pending.ready
+    if (!this.host.signInWithDeviceCode) return Promise.reject(new Error("Device-code sign-in is unavailable in this build."))
+    const abort = new AbortController()
+    let resolveCode!: (value: AppDeviceCode) => void, rejectCode!: (error: unknown) => void, offered = false
+    const ready = new Promise<AppDeviceCode>((resolve, reject) => { resolveCode = resolve; rejectCode = reject })
+    const entry = { abort, ready, state: { status: "waiting" } as AppDeviceSignInStatus }
+    this.deviceSignIns.set(tenant, entry)
+    abort.signal.addEventListener("abort", () => rejectCode(new Error("Microsoft device sign-in cancelled.")), { once: true })
+    void Promise.resolve().then(() => { abort.signal.throwIfAborted(); return this.host.signInWithDeviceCode!(tenant, code => { this.tenant(tenant); abort.signal.throwIfAborted(); offered = true; resolveCode(code) }, abort.signal) }).then(() => {
+      if (!offered) throw new Error("Microsoft did not provide a device sign-in code.")
+      this.tenant(tenant); abort.signal.throwIfAborted(); entry.state = { status: "completed" }
+    }).catch(error => {
+      const message = abort.signal.aborted ? "Microsoft device sign-in cancelled." : error instanceof Error ? error.message : "Microsoft device sign-in failed."
+      entry.state = { status: "failed", error: message }; rejectCode(new Error(message))
+    })
+    return ready
+  }
+  deviceSignInStatus(raw: unknown): AppDeviceSignInStatus | null {
+    const tenant = this.tenant(raw), entry = this.deviceSignIns.get(tenant)
+    return entry ? { ...entry.state } : null
+  }
+  cancelDeviceSignIn(raw: unknown): void {
+    const tenant = this.tenant(raw), entry = this.deviceSignIns.get(tenant)
+    if (entry?.state.status === "waiting") { entry.abort.abort(); entry.state = { status: "failed", error: "Microsoft device sign-in cancelled." } }
+  }
   signIn(raw: unknown): Promise<void> { return this.host.signIn(this.tenant(raw)) }
   apps(raw: unknown) {
     const tenant = this.tenant(raw), pending = this.appLoads.get(tenant)
@@ -224,7 +253,7 @@ export class AppSourceService {
     return load
   }
   /** Used on process shutdown; disk journals reconcile interrupted operations on the next list. */
-  close(): void { for (const job of this.jobs.values()) job.abort.abort() }
+  close(): void { for (const job of this.jobs.values()) job.abort.abort(); for (const entry of this.deviceSignIns.values()) entry.abort.abort() }
 }
 
 export const newSourceOperation = randomUUID

@@ -1470,6 +1470,11 @@ async function bootstrap(): Promise<void> {
   })
 
   const appSources = new AppSourceService({
+    signInWithDeviceCode: async (tenant, onCode, signal) => {
+      const client = appBackupClientId(tenant, appStore.get(`${RENDERER_STORAGE_PREFIX}tenuvault_tenants`))
+      await auth.signInWithDeviceCode(tenant, client, onCode, signal)
+      pushLicense()
+    },
     loadRestoreSettings: async (tenant, appId) => readRestoreSnapshot(tenant, appId, (await auth.getAccessToken(tenant, signedInClient(tenant), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch, "current-settings"),
     restore: (store, source, snapshot, target, name, signal, progress) => restoreCapturedApp(store, source, snapshot, target, name, {
       graph: restoreGraph(async () => (await auth.getAccessToken(target, signedInClient(target), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch, signal),
@@ -1533,6 +1538,9 @@ async function bootstrap(): Promise<void> {
     },
   })
   app.on("before-quit", () => appSources.close())
+  handleTrusted("appSources:deviceSignIn", (_event, tenant: unknown) => appSources.deviceSignIn(tenant))
+  handleTrusted("appSources:deviceSignInStatus", (_event, tenant: unknown) => appSources.deviceSignInStatus(tenant))
+  handleTrusted("appSources:cancelDeviceSignIn", (_event, tenant: unknown) => appSources.cancelDeviceSignIn(tenant))
   handleTrusted("appSources:restoreReview", (_event, tenant: unknown, source: unknown) => appSources.restoreReview(tenant, source))
   handleTrusted("appSources:loadRestoreSettings", (_event, tenant: unknown, source: unknown) => appSources.loadRestoreSettings(tenant, source))
   handleTrusted("appSources:restore", (_event, tenant: unknown, operation: unknown, source: unknown, target: unknown, name: unknown, settingsHash: unknown) => appSources.restore(tenant, operation, source, target, name, settingsHash))

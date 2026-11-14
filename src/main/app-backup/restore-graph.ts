@@ -6,15 +6,18 @@ export function restoreGraph(token: () => Promise<string>, fetchImpl: typeof fet
   return async (method, path, body) => {
     const url = new URL(path, BASE)
     if (url.origin !== "https://graph.microsoft.com" || !(url.pathname === "/beta/deviceAppManagement/mobileApps" || url.pathname.startsWith("/beta/deviceAppManagement/mobileApps/")) || url.username || url.password || url.hash) throw new Error("Invalid restore metadata request.")
+    // Intune's void actions can return 200 with an empty body as well as 204.
+    // Their result is verified by subsequent file/app reads in the restore engine.
+    const voidResponse = method === "PATCH" || (method === "POST" && /\/contentVersions\/\d+\/files\/[a-f0-9-]{36}\/(?:renewUpload|commit)$/.test(url.pathname))
     signal.throwIfAborted()
     let response: Response
     try {
       response = await fetchImpl(url.href, { method, redirect: "error", credentials: "omit", headers: { authorization: `Bearer ${await token()}`, "content-type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.any([signal, AbortSignal.timeout(60000)]) })
     } catch { signal.throwIfAborted(); throw new Error("The destination request was interrupted. Retry to reconcile the existing restore; a second app will not be created automatically.") }
     if (![200, 201, 204].includes(response.status)) { await response.body?.cancel(); throw new Error(`The destination tenant refused the restore request (HTTP ${response.status}). Check Microsoft sign-in, Intune permissions and service availability.`) }
-    if (response.status === 204) { await response.body?.cancel(); return {} }
+    if (response.status === 204) { await response.body?.cancel(); if (voidResponse) return {}; throw new Error("The destination returned no metadata.") }
     const reader = response.body?.getReader()
-    if (!reader) throw new Error("The destination returned no metadata.")
+    if (!reader) { if (voidResponse) return {}; throw new Error("The destination returned no metadata.") }
     const chunks: Uint8Array[] = []; let size = 0
     try {
       for (;;) {
@@ -24,7 +27,10 @@ export function restoreGraph(token: () => Promise<string>, fetchImpl: typeof fet
         chunks.push(part.value)
       }
     } finally { reader.releaseLock() }
-    const value: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"))
+    if (!size) { if (voidResponse) return {}; throw new Error("The destination returned no metadata.") }
+    let value: unknown
+    try { value = JSON.parse(Buffer.concat(chunks).toString("utf8")) }
+    catch { throw new Error("The destination returned invalid metadata. Retry to reconcile the existing restore.") }
     if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid destination metadata.")
     return value as Record<string, unknown>
   }

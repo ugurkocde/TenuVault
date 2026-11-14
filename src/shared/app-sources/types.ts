@@ -71,6 +71,9 @@ export type AppCapturePhase = "authorizing" | "windows-approval" | "downloading"
 export interface AppCaptureProgress { phase: AppCapturePhase; receivedBytes: number; totalBytes: number | null }
 
 export interface AppSourcesBridge {
+  deviceSignIn: (tenantId: string) => Promise<AppDeviceCode>
+  deviceSignInStatus: (tenantId: string) => Promise<AppDeviceSignInStatus | null>
+  cancelDeviceSignIn: (tenantId: string) => Promise<void>
   restoreReview: (tenantId: string, sourceId: string) => Promise<AppRestoreReview>
   loadRestoreSettings: (tenantId: string, sourceId: string) => Promise<AppRestoreReview>
   restore: (tenantId: string, operationId: string, sourceId: string, targetTenantId: string, name: string, settingsHash: string) => Promise<AppRestoreResult>
@@ -90,6 +93,9 @@ export interface AppSourcesBridge {
   deviceStatus: (tenantId: string) => Promise<RecoveryDeviceStatus>
   signIn: (tenantId: string) => Promise<void>
 }
+
+export interface AppDeviceCode { verificationUri: string; userCode: string; expiresAt: string }
+export interface AppDeviceSignInStatus { status: "waiting" | "completed" | "failed"; error?: string }
 
 export interface AppRestoreReview {
   settingsHash: string | null

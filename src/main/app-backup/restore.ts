@@ -104,17 +104,29 @@ export async function restoreCapturedApp(store: AppSourceStore, source: Captured
     throw new Error("Intune is still processing the installer. Retry this restore to check the same destination app.")
   }
   let file = await graph("GET", fileUrl)
+  if (/^azureStorageUri(?:Request|Renewal)(?:Failed|TimedOut)$/.test(String(file.uploadState))) {
+    // Intune refuses renewal after a terminal storage failure and its Win32 file
+    // DELETE route is unavailable. Keep the journal and draft; never duplicate it.
+    throw new Error("Intune cannot resume this failed upload. The unassigned draft has been retained for review in Intune. No replacement app was created.")
+  }
   if (file.uploadState === "commitFilePending") file = await poll(["commitFileSuccess"])
   if (file.uploadState !== "commitFileSuccess") {
-    if (file.uploadState !== "azureStorageUriRequestPending") await graph("POST", `${fileUrl}/renewUpload`, {})
-    file = await poll(["azureStorageUriRequestSuccess", "azureStorageUriRenewalSuccess"])
+    const ready = ["azureStorageUriRequestSuccess", "azureStorageUriRenewalSuccess"]
+    // Fresh files can briefly report "success" before allocation starts. Renewal
+    // is not valid until Intune has actually issued an upload URI.
+    if (!ready.includes(String(file.uploadState))) file = await poll(ready)
+    const expiry = Date.parse(String(file.azureStorageUriExpirationDateTime))
+    if (Number.isFinite(expiry) && expiry <= Date.now() + 60000) {
+      await graph("POST", `${fileUrl}/renewUpload`)
+      file = await poll(["azureStorageUriRenewalSuccess"])
+    }
     let sas = String(file.azureStorageUri ?? ""), renewed = Date.now()
     const ids: string[] = [], block = Buffer.alloc(4 * 1024 ** 2)
     let used = 0, uploaded = 0
     const upload = async () => {
       signal.throwIfAborted()
       if (Date.now() - renewed > 6 * 60_000) {
-        await graph("POST", `${fileUrl}/renewUpload`, {}); const renewedFile = await poll(["azureStorageUriRenewalSuccess"])
+        await graph("POST", `${fileUrl}/renewUpload`); const renewedFile = await poll(["azureStorageUriRenewalSuccess"])
         sas = String(renewedFile.azureStorageUri ?? ""); renewed = Date.now()
       }
       const id = Buffer.from(String(ids.length).padStart(6, "0")).toString("base64")

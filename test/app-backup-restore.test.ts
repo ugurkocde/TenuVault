@@ -31,9 +31,9 @@ async function fixture(configuration: AppRestoreSnapshot | null = snapshot, larg
   return { root, master, store, source, plain }
 }
 function destination() {
-  let app: Record<string, unknown> | null = null, version = false, file: Record<string, unknown> | null = null, wire: Buffer = Buffer.alloc(0)
+  let app: Record<string, unknown> | null = null, versions = 0, file: Record<string, unknown> | null = null, wire: Buffer = Buffer.alloc(0)
   let failCreateResponse = false, assigned = false
-  const blocks = new Map<string, Buffer>(), appId = randomUUID(), fileId = randomUUID()
+  const blocks = new Map<string, Buffer>(), appId = randomUUID(); let fileId = randomUUID()
   const calls: Array<[string, string, Record<string, unknown> | undefined]> = []
   const fetcher = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input)); expect(init?.headers).not.toHaveProperty("authorization")
@@ -48,9 +48,9 @@ function destination() {
       return { value: app ? [app] : [] }
     }
     if (path.endsWith("/assignments")) return { value: assigned ? [{ id: "assigned" }] : [] }
-    if (path.endsWith("/contentVersions")) { if (method === "POST") { version = true; return { id: "1" } } return { value: version ? [{ id: "1" }] : [] } }
+    if (path.endsWith("/contentVersions")) { if (method === "POST") { versions++; file = null; return { id: String(versions) } } return { value: Array.from({ length: versions }, (_, i) => ({ id: String(i + 1) })) } }
     if (path.endsWith("/files")) {
-      if (method === "POST") { file = { ...body, id: fileId, uploadState: "azureStorageUriRequestSuccess", azureStorageUri: "https://example.blob.core.windows.net/upload/file?sig=private" }; return { id: fileId } }
+      if (method === "POST") { fileId = randomUUID(); file = { ...body, id: fileId, isCommitted: false, uploadState: "azureStorageUriRequestSuccess", azureStorageUri: "https://example.blob.core.windows.net/upload/file?sig=private" }; return { id: fileId } }
       return { value: file ? [file] : [] }
     }
     if (path.endsWith("/renewUpload")) { file!.uploadState = "azureStorageUriRenewalSuccess"; return {} }
@@ -110,6 +110,42 @@ describe("app restore snapshots", () => {
 })
 
 describe("cross-tenant restore engine", () => {
+  it("waits for a new file's upload URI instead of renewing before allocation", async () => {
+    const f = await fixture(), d = destination(), opts = options(d); let initial = true
+    opts.graph = async (method, url, body) => {
+      const value = await d.graph(method, url, body)
+      if (method === "GET" && value.uploadState === "azureStorageUriRequestSuccess" && initial) { initial = false; return { ...value, uploadState: "success", azureStorageUri: null } }
+      return value
+    }
+    await restoreCapturedApp(f.store, f.source, snapshot, target, "Restored", opts)
+    expect(initial).toBe(false)
+    expect(d.calls.some(([, path]) => path.endsWith("/renewUpload"))).toBe(false)
+  })
+  it("renews an expired issued URI without sending an action body", async () => {
+    const f = await fixture(), d = destination(), opts = options(d)
+    opts.graph = async (method, url, body) => {
+      const value = await d.graph(method, url, body)
+      return value.uploadState === "azureStorageUriRequestSuccess" ? { ...value, azureStorageUriExpirationDateTime: new Date(Date.now() - 1000).toISOString() } : value
+    }
+    await restoreCapturedApp(f.store, f.source, snapshot, target, "Restored", opts)
+    const renewals = d.calls.filter(([, path]) => path.endsWith("/renewUpload"))
+    expect(renewals).toHaveLength(1); expect(renewals[0]![2]).toBeUndefined()
+  })
+  it.each(["azureStorageUriRequestFailed", "azureStorageUriRenewalFailed", "azureStorageUriRequestTimedOut"])("retains a %s draft without unsupported cleanup or duplicate creation", async state => {
+    const f = await fixture(), d = destination(), opts = options(d)
+    opts.graph = async (method, url, body) => {
+      const value = await d.graph(method, url, body)
+      if (method === "GET" && value.uploadState) value.uploadState = state
+      return value
+    }
+    await expect(restoreCapturedApp(f.store, f.source, snapshot, target, "Restored", opts)).rejects.toThrow("cannot resume this failed upload")
+    const writes = d.calls.filter(([method]) => method !== "GET").length
+    await expect(restoreCapturedApp(new AppSourceStore(f.root, () => [f.master]), f.source, snapshot, target, "Restored", opts)).rejects.toThrow("retained for review")
+    expect(d.calls.filter(([method]) => method !== "GET")).toHaveLength(writes)
+    expect(d.calls.filter(([m, p]) => m === "POST" && p.endsWith("/mobileApps"))).toHaveLength(1)
+    expect(d.calls.some(([, p]) => p.endsWith("/renewUpload"))).toBe(false)
+    expect(d.fetcher).not.toHaveBeenCalled()
+  })
   it("uploads a fresh encrypted installer, verifies commit, publishes unassigned and retries without duplicating", async () => {
     const f = await fixture(), d = destination(), opts = options(d)
     const result = await restoreCapturedApp(f.store, f.source, snapshot, target, "Restored", opts)
@@ -209,6 +245,26 @@ it.each([401, 403, 429, 503])("reports destination HTTP %s without leaking respo
   const graph = restoreGraph(async () => "private-token", async () => new Response("secret-service-error", { status }), new AbortController().signal)
   await expect(graph("GET", "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps")).rejects.toThrow(`HTTP ${status}`)
   await expect(graph("GET", "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps")).rejects.not.toThrow("secret-service-error")
+})
+
+it.each([200, 204])("accepts Intune's empty HTTP %s acknowledgments only for void actions", async status => {
+  const graph = restoreGraph(async () => "token", async () => new Response(null, { status }), new AbortController().signal)
+  const base = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/11111111-1111-1111-1111-111111111111"
+  const file = `${base}/microsoft.graph.win32LobApp/contentVersions/1/files/22222222-2222-2222-2222-222222222222`
+  await expect(graph("POST", `${file}/renewUpload`, {})).resolves.toEqual({})
+  await expect(graph("POST", `${file}/commit`, {})).resolves.toEqual({})
+  await expect(graph("PATCH", base, {})).resolves.toEqual({})
+  await expect(graph("GET", base)).rejects.toThrow("no metadata")
+  await expect(graph("POST", `${base}/microsoft.graph.win32LobApp/contentVersions`, {})).rejects.toThrow("no metadata")
+})
+it("handles a streamed empty action response and sanitizes malformed metadata", async () => {
+  const base = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps"
+  const graph = restoreGraph(async () => "token", async () => new Response("", { status: 200 }), new AbortController().signal)
+  await expect(graph("PATCH", `${base}/11111111-1111-1111-1111-111111111111`, {})).resolves.toEqual({})
+  await expect(graph("POST", base, {})).rejects.toThrow("no metadata")
+  const malformed = restoreGraph(async () => "token", async () => new Response("private truncated response", { status: 200 }), new AbortController().signal)
+  await expect(malformed("GET", base)).rejects.toThrow("invalid metadata")
+  await expect(malformed("GET", base)).rejects.not.toThrow("private truncated")
 })
 
 it("verifies that the destination retained detection scripts and installation settings", () => {
