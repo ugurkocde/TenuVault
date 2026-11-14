@@ -693,6 +693,46 @@ describe("changes since the snapshot", () => {
     expect(later.report.changes).toContainEqual({ kind: "permissionsAdded", permissions: ["DeviceManagementApps.ReadWrite.All"] })
   })
 
+  it("keeps a permission change nobody looked at listed when another admin signs in, and takes no new one from their token", () => {
+    const snapshot = evaluate([delegated({ graph: healthy(WITHOUT_APPS, ago(3 * DAY)) })], {}, new Date(NOW.getTime() - 3 * DAY)).baseline!
+    const found = evaluate([delegated({ graph: healthy(DEFAULT_SCOPES), snapshot })])
+    const unseen = [{ kind: "permissionsAdded", permissions: ["DeviceManagementApps.ReadWrite.All"] }, { kind: "becameReady", service: "intune" }]
+    expect(found.report.changes).toEqual(unseen)
+    // Another admin signs in before anyone looked. Their token differs in another permission, which is no change.
+    const OTHER_SCOPES = DEFAULT_SCOPES.filter((permission) => !permission.startsWith("DeviceManagementRBAC"))
+    const other = evaluate([delegated({ account: OTHER_ADMIN, graph: healthy(OTHER_SCOPES), snapshot: found.baseline! })])
+    expect(other.report.changes).toEqual(unseen)
+    expect(other.report.since).toBe(snapshot.at)
+    expect(other.baseline).toMatchObject({ account: OTHER_ADMIN, permissions: [...OTHER_SCOPES].sort() })
+    // It stays listed at every later evaluation, next to what changes for the new admin from here on.
+    expect(evaluate([delegated({ account: OTHER_ADMIN, graph: healthy(OTHER_SCOPES), snapshot: other.baseline! })]).report.changes).toEqual(unseen)
+    const more = evaluate([delegated({ account: OTHER_ADMIN, graph: healthy(DEFAULT_SCOPES), snapshot: other.baseline! })])
+    expect(more.report.changes).toEqual([...unseen, { kind: "permissionsAdded", permissions: ["DeviceManagementRBAC.ReadWrite.All"] }, { kind: "becameReady", service: "intune" }])
+    // And through a second change of admin, until someone looks at the changes.
+    const back = evaluate([delegated({ graph: healthy(DEFAULT_SCOPES), snapshot: more.baseline! })])
+    expect(back.report.changes).toEqual(more.report.changes)
+    expect(evaluate([delegated({ graph: healthy(DEFAULT_SCOPES), snapshot: back.current! })]).report.changes).toEqual([])
+    expect(evaluate([delegated({ account: OTHER_ADMIN, graph: healthy(OTHER_SCOPES), snapshot: other.current! })]).report.changes).toEqual([])
+  })
+
+  it("keeps a change found before the sign-in failed, for the admin who signs in next", () => {
+    const snapshot = evaluate([delegated({ graph: healthy(WITHOUT_APPS, ago(3 * DAY)) })], {}, new Date(NOW.getTime() - 3 * DAY)).baseline!
+    const found = evaluate([delegated({ graph: healthy(DEFAULT_SCOPES, ago(2 * DAY)), snapshot })], {}, new Date(NOW.getTime() - 2 * DAY))
+    // The first admin's sign-in ends: nothing can be compared, and what was found stays in the snapshot.
+    const ended = evaluate([delegated({ graph: failed({ class: "session" }), snapshot: found.baseline! })])
+    const other = evaluate([delegated({ account: OTHER_ADMIN, graph: healthy(DEFAULT_SCOPES), snapshot: ended.baseline! })])
+    expect(other.report.changes).toEqual(found.report.changes)
+  })
+
+  it("never carries lost access to another admin: what was verified, or lost, was for the earlier account", () => {
+    const runs = [run("r1", 9, { read: ["Apps"] }), run("r2", 5, { refused: [refusal("Apps", "role")] }), run("r3", 3, { refused: [refusal("Apps", "role")] })]
+    const found = evaluate([delegated({ graph: healthy(), runs, snapshot: { at: ago(20 * DAY), account: ADMIN, permissions: [...DEFAULT_SCOPES].sort(), lost: [] } })])
+    expect(found.report.changes).toMatchObject([{ kind: "lostAccess", area: "apps" }])
+    const other = evaluate([delegated({ account: OTHER_ADMIN, graph: healthy(), snapshot: found.baseline! })])
+    expect(other.report.changes).toEqual([])
+    expect(area(other.report, "intune", "apps")).toMatchObject({ lostAccess: false, verified: { state: "noBackup" } })
+  })
+
   it("invalidates what was verified for the admin who signed in before", () => {
     const runs = [run("r1", 2, { read: ["DeviceConfigurations"] })]
     expect(area(evaluate([delegated({ runs })]).report, "intune", "configuration").verified.state).toBe("verified")

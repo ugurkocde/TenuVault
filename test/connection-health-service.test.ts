@@ -434,6 +434,42 @@ describe("changes", () => {
     expect(report.granted).toEqual([...WITHOUT_APPS].sort())
   })
 
+  it("keep a change nobody looked at when another admin signs in, and take none from their token", async () => {
+    const { health, state, tokens, pass } = setup()
+    const WITHOUT_RBAC = SCOPES.filter((permission) => !permission.startsWith("DeviceManagementRBAC"))
+    tokens.mockResolvedValueOnce(fresh(WITHOUT_APPS))
+    await health.check(TENANT, "launch")
+    pass(DAY)
+    const unseen = (await health.check(TENANT, "launch")).changes
+    expect(unseen).toEqual([{ kind: "permissionsAdded", permissions: ["DeviceManagementApps.ReadWrite.All"] }, { kind: "becameReady", service: "intune" }])
+    // Nobody looked at them before another admin signed in, whose own consent differs.
+    pass(DAY)
+    state.account = OTHER_ADMIN
+    tokens.mockResolvedValue(fresh(WITHOUT_RBAC))
+    const report = await health.check(TENANT, "signIn")
+    expect(report.changes).toEqual(unseen)
+    expect(report.since).toBe(START.toISOString())
+    expect(report.granted).toEqual([...WITHOUT_RBAC].sort())
+    pass(DAY)
+    expect((await health.check(TENANT, "launch")).changes).toEqual(unseen)
+    expect(health.acknowledge(TENANT).changes).toEqual([])
+    expect((await health.check(TENANT, "again")).changes).toEqual([])
+  })
+
+  it("keep a change nobody looked at when the admin signed out before another one signed in", async () => {
+    const { health, state, tokens, pass } = setup()
+    tokens.mockResolvedValueOnce(fresh(WITHOUT_APPS))
+    await health.check(TENANT, "launch")
+    pass(DAY)
+    const unseen = (await health.check(TENANT, "launch")).changes
+    expect(unseen).toHaveLength(2)
+    health.signedOut(TENANT)
+    pass(DAY)
+    state.account = OTHER_ADMIN
+    expect((await health.check(TENANT, "signIn")).changes).toEqual(unseen)
+    expect(health.acknowledge(TENANT).changes).toEqual([])
+  })
+
   it("name a registration that replaced another, with what it lacks, until they were looked at", async () => {
     const { health, state, tokens, pass, stored } = setup()
     await health.check(TENANT, "launch")

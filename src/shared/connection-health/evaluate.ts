@@ -27,6 +27,7 @@ import {
   type HealthCause,
   type HealthChange,
   type LossCause,
+  type PermissionChange,
   type PermissionState,
   type ReaderHealth,
   type ReaderHealthState,
@@ -376,17 +377,22 @@ export function evaluateHealth(input: HealthInput, now: Date): HealthEvaluation 
     // The first snapshot of a connection, or the first one of another admin, is where comparing starts: it reports no change of its own.
     if (!previous || previous.account !== delegated.account) {
       const replaces = previous ? previous.replaces : replacedFrom(input)
-      baseline = { ...known, at: token?.at ?? known.at, ...(replaces ? { replaces } : {}) }
+      // Another admin's token is never compared with the earlier snapshot. What that snapshot had already found stays
+      // listed until someone looks at it, dated from that snapshot.
+      const carried = [...(previous?.carried ?? []), ...(previous?.found ?? [])]
+      baseline = { ...known, at: carried.length ? previous!.at : (token?.at ?? known.at), ...(replaces ? { replaces } : {}), ...(carried.length ? { carried } : {}) }
+      changes.push(...carried)
     } else {
       baseline = { ...previous, ready: { ...previous.ready } }
+      const found: PermissionChange[] = []
       if (permissions) {
         // What was not known at the snapshot is filled in now, without counting as a change.
         if (!previous.permissions) baseline.permissions = permissions
         else {
           const added = permissions.filter((permission) => !previous.permissions!.includes(permission))
           const removed = previous.permissions.filter((permission) => !held.has(permission))
-          if (added.length) changes.push({ kind: "permissionsAdded", permissions: added })
-          if (removed.length) changes.push({ kind: "permissionsRemoved", permissions: removed })
+          if (added.length) found.push({ kind: "permissionsAdded", permissions: added })
+          if (removed.length) found.push({ kind: "permissionsRemoved", permissions: removed })
         }
         for (const entry of evaluated) {
           const arrived: string[] = []
@@ -397,10 +403,14 @@ export function evaluateHealth(input: HealthInput, now: Date): HealthEvaluation 
           // One line for a service whose areas that are on all have their permissions now, otherwise one per area.
           const chosen = entry.service.areas.filter((area) => !area.optIn || input.settings[entry.service.id].areas[area.id] === true).map((area) => area.id)
           const whole = entry.service.permissions === "present" && arrived.some((area) => chosen.includes(area))
-          if (whole) changes.push({ kind: "becameReady", service: entry.service.id })
-          for (const area of arrived) if (!whole || !chosen.includes(area)) changes.push({ kind: "becameReady", service: entry.service.id, area })
+          if (whole) found.push({ kind: "becameReady", service: entry.service.id })
+          for (const area of arrived) if (!whole || !chosen.includes(area)) found.push({ kind: "becameReady", service: entry.service.id, area })
         }
+        // Without a token to compare, what the last comparison found stands in the snapshot.
+        if (found.length) baseline.found = found
+        else delete baseline.found
       }
+      changes.push(...(previous.carried ?? []), ...found)
       // Access that came back is forgotten, so losing it again is reported again.
       baseline.lost = previous.lost ? previous.lost.filter((area) => lost.has(area)) : known.lost
       for (const entry of evaluated) {
@@ -416,7 +426,7 @@ export function evaluateHealth(input: HealthInput, now: Date): HealthEvaluation 
       changes.unshift({ kind: "registrationReplaced", previousClientId: baseline.replaces.clientId, lacks: had && permissions ? had.filter((permission) => !held.has(permission)) : [] })
     }
     // What is not known now keeps its last known value, so looking at the changes never forgets a permission.
-    const { replaces: _replaces, ...kept } = baseline
+    const { replaces: _replaces, found: _found, carried: _carried, ...kept } = baseline
     current = { ...kept, ...known, ready: { ...kept.ready, ...known.ready } }
   }
 

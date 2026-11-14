@@ -1,5 +1,6 @@
-import { MAX_FOLDER_REFUSALS, RUN_MAX_AGE_MS, type ConnectionMode, type ConnectionRecord, type FolderRefusal, type ReaderObservation, type RunObservation, type SignInFailure, type Snapshot, type TokenObservation } from "../../shared/connection-health/model"
+import { MAX_FOLDER_REFUSALS, RUN_MAX_AGE_MS, type ConnectionMode, type ConnectionRecord, type FolderRefusal, type PermissionChange, type ReaderObservation, type RunObservation, type SignInFailure, type Snapshot, type TokenObservation } from "../../shared/connection-health/model"
 import { keepEvidence } from "../../shared/connection-health/observe"
+import { MODULES, type ModuleId } from "../../shared/services/modules"
 import type { KeyValueStore } from "../storage/secure-store"
 
 /**
@@ -111,11 +112,25 @@ function readerOf(value: unknown): ReaderObservation | undefined {
   }
 }
 
+const SERVICES = new Set<unknown>(MODULES.map((module) => module.id))
+
+function changesOf(value: unknown): PermissionChange[] {
+  const changes = (Array.isArray(value) ? value : []).flatMap((entry): PermissionChange[] => {
+    if (!isRecord(entry)) return []
+    if (entry.kind === "permissionsAdded" || entry.kind === "permissionsRemoved") return Array.isArray(entry.permissions) ? [{ kind: entry.kind, permissions: texts(entry.permissions) }] : []
+    const area = text(entry.area)
+    return entry.kind === "becameReady" && SERVICES.has(entry.service) ? [{ kind: "becameReady", service: entry.service as ModuleId, ...(area ? { area } : {}) }] : []
+  })
+  return changes.slice(0, MAX_ENTRIES)
+}
+
 function snapshotOf(value: unknown): Snapshot | undefined {
   if (!isRecord(value)) return undefined
   const at = time(value.at)
   if (!at) return undefined
   const account = text(value.account)
+  const found = changesOf(value.found)
+  const carried = changesOf(value.carried)
   const ready = isRecord(value.ready) ? Object.fromEntries(Object.entries(value.ready).filter(([area, present]) => text(area) && typeof present === "boolean").slice(0, MAX_ENTRIES)) : undefined
   const replaced = isRecord(value.replaces) ? text(value.replaces.clientId) : undefined
   return {
@@ -125,6 +140,8 @@ function snapshotOf(value: unknown): Snapshot | undefined {
     ...(ready ? { ready: ready as Record<string, boolean> } : {}),
     ...(Array.isArray(value.lost) ? { lost: texts(value.lost) } : {}),
     ...(replaced && isRecord(value.replaces) ? { replaces: { clientId: replaced, ...(Array.isArray(value.replaces.permissions) ? { permissions: texts(value.replaces.permissions) } : {}) } } : {}),
+    ...(found.length ? { found } : {}),
+    ...(carried.length ? { carried } : {}),
   }
 }
 
@@ -222,13 +239,15 @@ export class HealthStore {
   /**
    * The admin signed out of the tenant: everything observed for the account goes, and so does the
    * Backup Reader, which is removed with the sign-in. What stays is what the registration had, so a
-   * tenant that comes back with another registration is told what that one lacks.
+   * tenant that comes back with another registration is told what that one lacks, and the changes
+   * of its permissions that nobody looked at yet, which hold whoever signs in next.
    */
   signedOut(tenantId: string): void {
     const kept = this.connections(tenantId).flatMap((record): ConnectionRecord[] => {
       if (record.mode !== "delegated") return []
       const permissions = record.graph?.permissions ?? record.snapshot?.permissions
       const snapshot = record.snapshot
+      const carried = [...(snapshot?.carried ?? []), ...(snapshot?.found ?? [])]
       if (!permissions && !snapshot?.replaces) return []
       return [{
         clientId: record.clientId,
@@ -236,7 +255,7 @@ export class HealthStore {
         runs: [],
         verified: {},
         refused: {},
-        snapshot: { at: snapshot?.at ?? record.updatedAt, ...(permissions ? { permissions } : {}), ...(snapshot?.replaces ? { replaces: snapshot.replaces } : {}) },
+        snapshot: { at: snapshot?.at ?? record.updatedAt, ...(permissions ? { permissions } : {}), ...(snapshot?.replaces ? { replaces: snapshot.replaces } : {}), ...(carried.length ? { carried } : {}) },
         updatedAt: record.updatedAt,
       }]
     })

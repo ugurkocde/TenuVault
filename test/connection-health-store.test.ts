@@ -328,6 +328,30 @@ describe("the observation store", () => {
     }])
   })
 
+  it("keeps the permission changes nobody looked at through a sign-out, for whoever signs in next", () => {
+    const { store } = setup()
+    const added = { kind: "permissionsAdded" as const, permissions: ["Mail.Send"] }
+    const ready = { kind: "becameReady" as const, service: "intune" as const, area: "apps" }
+    store.recordToken(admin, "graph", { at: ago(DAY), permissions: ["User.Read", "Mail.Send"] }, ADMIN)
+    store.setSnapshot(admin, { at: ago(2 * DAY), account: ADMIN, permissions: ["User.Read"], lost: ["intune/apps"], carried: [ready], found: [added] })
+    store.signedOut(TENANT)
+    expect(store.connections(TENANT)[0]!.snapshot).toEqual({ at: ago(2 * DAY), permissions: ["User.Read", "Mail.Send"], carried: [ready, added] })
+  })
+
+  it("reads only the changes of a snapshot that are whole", () => {
+    const { store, backing } = setup()
+    const changes = [
+      { kind: "permissionsAdded", permissions: ["Mail.Send", 7], note: "for admin@contoso.com" },
+      { kind: "permissionsRemoved" },
+      { kind: "becameReady", service: "intune", area: "apps" },
+      { kind: "becameReady", service: "sharepoint" },
+      { kind: "lostAccess", service: "intune", area: "apps", cause: "role", mode: "delegated", folders: ["Apps"], since: ago(DAY) },
+      "change",
+    ]
+    backing.set(KEY, JSON.stringify({ version: 1, connections: [{ clientId: CLIENT, mode: "delegated", updatedAt: ago(1000), runs: [], verified: {}, snapshot: { at: ago(DAY), found: changes, carried: "all" } }] }))
+    expect(store.connections(TENANT)[0]!.snapshot).toEqual({ at: ago(DAY), found: [{ kind: "permissionsAdded", permissions: ["Mail.Send"] }, { kind: "becameReady", service: "intune", area: "apps" }] })
+  })
+
   it("keeps nothing after a sign-out for a connection that never saw a permission", () => {
     const { store, backing } = setup()
     store.recordToken(admin, "graph", { at: ago(DAY), failure: { class: "session" } }, ADMIN)

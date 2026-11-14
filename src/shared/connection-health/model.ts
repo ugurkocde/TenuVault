@@ -92,6 +92,14 @@ export interface Snapshot {
   lost?: string[]
   /** The registration this one took the tenant over from, with the permissions that one had. */
   replaces?: { clientId: string; permissions?: string[] }
+  /**
+   * The permission changes the last comparison with this snapshot found, which nobody looked at
+   * yet. They are worked out again at every evaluation. They are kept because the token of another
+   * admin cannot be compared with this snapshot: when one signs in, these are what stays listed.
+   */
+  found?: PermissionChange[]
+  /** Permission changes found for an admin who signed in before, which nobody looked at yet. */
+  carried?: PermissionChange[]
 }
 
 /** A run that refused a folder its connection had read before. */
@@ -262,6 +270,13 @@ export type HealthChange =
   | { kind: "becameReady"; service: ModuleId; area?: string }
   /** `cause` and `mode` are those of the connection that lost access: what its own refusals found, and whose sign-in it is. */
   | { kind: "lostAccess"; service: ModuleId; area: string; cause: LossCause; mode: ConnectionMode; folders: string[]; since: string }
+
+/**
+ * A change of what the app registration may do. It is found by comparing two tokens of the same
+ * admin, and it holds for the registration whoever signs in next. Lost access is not one: it is
+ * about what one account could read.
+ */
+export type PermissionChange = Extract<HealthChange, { kind: "permissionsAdded" | "permissionsRemoved" | "becameReady" }>
 
 export interface ConnectionHealthReport {
   tenantId: string
