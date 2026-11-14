@@ -2,7 +2,8 @@ import { PublicClientApplication } from "@azure/msal-node"
 import { fetchNetworkClient } from "./network-client"
 import { ERROR_PAGE, firstSignInError, page, SIGN_IN_TIMEOUT_MS, SignInCancelledError, SignInTimeoutError } from "./msal"
 import { isGuid, isMicrosoftLoginUrl } from "../../shared/security"
-import { CONSENT_ROLES_TEXT, CREATE_BY_HAND } from "../../shared/app-registration"
+import { CREATE_BY_HAND } from "../../shared/app-registration"
+import { namedSignInCode, signInErrorRow } from "../../shared/sign-in-errors"
 import { provisionRegistration } from "./registration-provisioning"
 import { checkedChoice } from "../../shared/services/manifest"
 import { loopbackSignIn } from "./loopback-sign-in"
@@ -17,27 +18,14 @@ export function setupSignInError(error: unknown): unknown {
   if (error instanceof SignInCancelledError) return error
   const message = error instanceof Error ? error.message : String(error)
   if (/Nothing was changed\.$/.test(message)) return error
-  const code = /AADSTS\d+/.exec(message)?.[0]
+  const code = namedSignInCode(message)
   const nothingChanged = (text: string) => new Error(/Nothing was changed\.$/.test(text) ? text : `${text} Nothing was changed.`)
-  if (code === "AADSTS65004") {
-    return nothingChanged(`You declined Microsoft's request to approve Microsoft Graph Command Line Tools (${code}). Select Try again and accept it, or use "Someone else is the admin?".`)
-  }
-  if (code && ["AADSTS65001", "AADSTS90094"].includes(code)) {
-    return nothingChanged(`Microsoft did not let this account approve the setup (${code}). Sign in with a ${CONSENT_ROLES_TEXT}, or use "Someone else is the admin?".`)
-  }
   // The setup signs in through Microsoft's app, not through the tenant's TenuVault app
-  // registration, so a refusal of the app itself is about Microsoft Graph Command Line Tools.
-  // The setup script signs in through the same app, so only the manual route gets around it.
-  if (code && ["AADSTS700016", "AADSTS7000112", "AADSTS50105"].includes(code)) {
-    return nothingChanged(`This tenant does not let your account sign in to Microsoft Graph Command Line Tools, the Microsoft app that the setup and the setup script sign in through (${code}). Ask your Entra administrator to allow it for your account, or ${CREATE_BY_HAND} in the Entra admin center.`)
-  }
-  if (code === "AADSTS53003") {
-    // A Conditional Access refusal may be about the device or the location, which the manual
-    // route does not get around either, so the message names both ways on.
-    return nothingChanged(`Conditional Access blocked the sign-in to Microsoft Graph Command Line Tools, the Microsoft app that the setup and the setup script sign in through (${code}). Check the sign-in logs in the Entra admin center for the policy that applied. If it asks for a compliant device or an allowed location, sign in from one and select Try again. If it blocks Microsoft Graph Command Line Tools, ${CREATE_BY_HAND} in the Entra admin center.`)
-  }
+  // registration, so the error table words a refusal of the app itself for this step.
+  const setup = signInErrorRow(code)?.setup
+  if (setup && setup !== "firstSignIn") return nothingChanged(setup)
   // Refusals about the tenant, the account and Conditional Access read the same for every sign-in.
-  if (code && SHARED_SIGN_IN_CODES.has(code) || !code) {
+  if (setup === "firstSignIn" || !code) {
     const mapped = firstSignInError(error)
     return nothingChanged(mapped instanceof Error ? mapped.message : String(mapped))
   }
@@ -53,8 +41,6 @@ export function setupLoginHint(expected: { tenantId: string; clientId: string; u
   if (!expected || typeof tenant !== "string" || typeof clientId !== "string" || typeof loginHint !== "string") return undefined
   return loginHint === expected.username && clientId.toLowerCase() === expected.clientId.toLowerCase() && tenant.toLowerCase() === expected.tenantId.toLowerCase() ? expected.username : undefined
 }
-
-const SHARED_SIGN_IN_CODES = new Set(["AADSTS90002", "AADSTS900023", "AADSTS50020", "AADSTS53000", "AADSTS53001"])
 
 /** How long the setup waits for the sign-in in the browser, as long as the first sign-in does. */
 export const SETUP_SIGN_IN_TIMEOUT_MS = SIGN_IN_TIMEOUT_MS

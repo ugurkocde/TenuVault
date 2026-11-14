@@ -6,6 +6,7 @@ import { RESOURCE_SCOPES } from "../../shared/constants"
 import { isGuid } from "../../shared/security"
 import { DEFAULT_SELECTION, MODULES, type ServiceSelection } from "../../shared/services/modules"
 import { READER_ALLOWED_ROLES, readerExcludedFolders, readerRequiredRoles, SCRIPT_SERVICE } from "../../shared/services/manifest"
+import { namedSignInCode, signInErrorRow } from "../../shared/sign-in-errors"
 import { certificateIdentity, createSelfSignedCertificate, type GeneratedCertificate } from "./certificate"
 import { fetchNetworkClient } from "./network-client"
 
@@ -387,29 +388,18 @@ export function checkReaderToken(token: string, app: { tenantId: string; clientI
 }
 
 /**
- * Refusals that retrying cannot fix, with what to do. Other codes, such as AADSTS90033 (a transient
- * service error) or AADSTS700024 (an assertion outside its time window, for example after a clock
- * correction), may succeed on a retry.
- */
-const PERMANENT_REFUSALS: Record<string, string> = {
-  AADSTS700027: "Microsoft does not know this certificate. Upload the exported certificate with the setup script, then verify again.",
-  AADSTS7000222: "The certificate has expired. Create a renewal certificate in Settings and upload it.",
-  AADSTS700016: "No app registration with this application ID exists in the tenant.",
-  AADSTS7000112: "The Backup Reader app registration is disabled.",
-  AADSTS7000229: "The Backup Reader app registration has no service principal in the tenant. Run the setup script again.",
-  AADSTS53003: "Conditional Access for workload identities blocked the Backup Reader from this location.",
-}
-
-/**
  * Microsoft's refusal of the certificate as a BackupReaderError naming the AADSTS code, without token or
  * key material; null for any other failure, such as a network error. With `permanentOnly`, a refusal
  * that may pass on a retry is also null, so a scheduled backup retries it like a network failure.
  */
 function refused(error: unknown, options: { permanentOnly?: boolean } = {}): BackupReaderError | null {
   const message = error instanceof Error ? error.message : String(error)
-  const code = /AADSTS\d+/.exec(message)?.[0]
+  const code = namedSignInCode(message)
   if (!code) return null
-  const hint = PERMANENT_REFUSALS[code]
+  // The error table says which refusals no retry can fix, with what to do. Any other code, such as
+  // AADSTS90033 (a transient service error) or AADSTS700024 (an assertion outside its time window,
+  // for example after a clock correction), may succeed on a retry.
+  const hint = signInErrorRow(code)?.reader
   if (!hint && options.permanentOnly) return null
   return new BackupReaderError(`Microsoft refused the Backup Reader (${code}). ${hint ?? "Try again in a few minutes, then check the app registration and its certificate."}`, { cause: error })
 }

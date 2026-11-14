@@ -8,7 +8,8 @@ import {
 } from "@azure/msal-node"
 import type { SignedInAccount } from "../../shared/ipc"
 import { RESOURCE_SCOPES } from "../../shared/constants"
-import { CONSENT_ROLES_TEXT, FIRST_SIGN_IN_TIMEOUT_MESSAGE } from "../../shared/app-registration"
+import { FIRST_SIGN_IN_TIMEOUT_MESSAGE } from "../../shared/app-registration"
+import { namedSignInCode, signInErrorRow } from "../../shared/sign-in-errors"
 import { isMicrosoftLoginUrl } from "../../shared/security"
 import { fetchNetworkClient } from "./network-client"
 import { loopbackSignIn } from "./loopback-sign-in"
@@ -79,7 +80,7 @@ export function signInAgainMessage(username: string, scope: string, error: { err
  */
 export function missingPermissionError(scope: string, error: unknown): Error | null {
   const message = error instanceof Error ? error.message : String(error)
-  const code = /AADSTS(650057|65001)\b/.exec(message)?.[0]
+  const code = message.match(/AADSTS\d+\b/g)?.find((named) => signInErrorRow(named)?.noConsent)
   if (!code || !isResourceScope(scope)) return null
   const resource = RESOURCE_NAMES[scope]
   // Microsoft Graph has several delegated permissions; the Azure resources have user_impersonation.
@@ -111,24 +112,6 @@ export class SignInTimeoutError extends Error {
 /** A failed first sign-in the app explains in its own words, so setup diagnostics can tell it from an unexplained one. */
 export class ExplainedSignInError extends Error {}
 
-/** Microsoft's refusals of a first sign-in that the admin can fix, with what to do. */
-const FIRST_SIGN_IN_ERRORS: Record<string, string> = {
-  AADSTS700016: "No app registration with this client ID exists in this tenant. Check the Application (client) id, and that the tenant is the one the app registration was created in. If it was created a moment ago, wait a minute and sign in again.",
-  AADSTS90002: "Microsoft does not know this tenant. Check the tenant ID or domain, for example contoso.onmicrosoft.com.",
-  AADSTS900023: "This is not a valid tenant ID or domain. Use the tenant ID of your tenant, or a domain such as contoso.onmicrosoft.com.",
-  AADSTS50011: "The app registration has no http://localhost redirect URI for mobile and desktop applications. Run the setup script again, or add the redirect URI as the setup guide describes.",
-  AADSTS7000218: "The app registration asks for a client secret, which happens when http://localhost is registered for the Web platform. In the Entra admin center, open the app registration > Authentication and add http://localhost under Mobile and desktop applications instead, or run the setup script again.",
-  AADSTS50020: "This account does not belong to the tenant. Sign in with an admin account of this tenant.",
-  AADSTS50105: "Your account is not assigned to the TenuVault app registration. Ask your Entra administrator to add you to the group that may sign in.",
-  AADSTS53000: "Conditional Access requires a compliant or registered device. Use a browser that passes the device identity, such as Microsoft Edge signed in to your work profile, as the default browser and try again.",
-  AADSTS53001: "Conditional Access requires a domain-joined device. Use a browser that passes the device identity, such as Microsoft Edge signed in to your work profile, as the default browser and try again.",
-  AADSTS53003: "Conditional Access blocked this sign-in. Check the sign-in logs in the Entra admin center for the policy, or sign in from a device and location it allows.",
-  AADSTS50076: "Microsoft asks for multifactor authentication for this sign-in, because of a Conditional Access policy, per-user MFA or a new location, and it was not completed. Sign in again and complete the MFA prompt in the browser. If no prompt appears, ask your Entra administrator to check the sign-in logs in the Entra admin center.",
-  AADSTS50079: "Microsoft requires multifactor authentication for this sign-in, because of a Conditional Access policy, per-user MFA or a new location, and your account cannot complete it yet. If your account is managed in Entra ID, register your security info at https://mysignins.microsoft.com/security-info and sign in again. If your account signs in through another identity provider (a federated account), that provider must supply the MFA claim: ask your administrator to set it up.",
-  AADSTS90094: `Administrator consent is required: this tenant does not let your account grant the permissions the TenuVault app registration asks for. Ask a ${CONSENT_ROLES_TEXT} to grant admin consent for it, or send them the setup instructions.`,
-  AADSTS65004: "The consent was declined in the browser. Sign in again and accept, or ask an administrator to run the setup script, which grants admin consent.",
-}
-
 /**
  * An actionable error for a failed first sign-in to a tenant: missing consent, a wrong client or
  * tenant ID, a misconfigured app registration or a Conditional Access block. Other errors are
@@ -138,8 +121,9 @@ export function firstSignInError(error: unknown): unknown {
   const consent = missingPermissionError(RESOURCE_SCOPES.graph, error)
   if (consent) return new ExplainedSignInError(consent.message)
   const message = error instanceof Error ? error.message : String(error)
-  const code = /AADSTS\d+/.exec(message)?.[0]
-  if (code && FIRST_SIGN_IN_ERRORS[code]) return new ExplainedSignInError(`${FIRST_SIGN_IN_ERRORS[code]} (${code})`)
+  const code = namedSignInCode(message)
+  const explained = signInErrorRow(code)?.firstSignIn
+  if (explained) return new ExplainedSignInError(`${explained} (${code})`)
   if (/access_denied|user_cancelled|user_canceled|authentication_canceled/i.test(message) && !code) return new ExplainedSignInError("The sign-in was cancelled in the browser. Sign in again to continue.")
   return error
 }
