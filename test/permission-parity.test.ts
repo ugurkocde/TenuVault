@@ -137,9 +137,18 @@ describe("The Backup Reader", () => {
       const services = value("Services") ?? ["Intune"]
       const areas = value("Areas") ?? []
       const choice: PermissionChoice = Object.fromEntries(MODULES.filter((module) => services.includes(SCRIPT_SERVICE[module.id])).map((module) => [module.id, { access: "backup", areas: module.areas.filter((area) => area.optIn && areas.includes(area.id.charAt(0).toUpperCase() + area.id.slice(1))).map((area) => area.id) }]))
-      return new Set([...readerRoles(choice), ...(commandLine.includes("-IncludeDeviceCategories") ? ["DeviceManagementManagedDevices.Read.All"] : []), ...(commandLine.includes("-IncludeConditionalAccess") ? ["Policy.Read.All"] : [])])
+      // -Permissions names the roles themselves, in place of the services and areas.
+      const base = value("Permissions")?.filter((role) => role !== "None") ?? readerRoles(choice)
+      return new Set([...base, ...(commandLine.includes("-IncludeDeviceCategories") ? ["DeviceManagementManagedDevices.Read.All"] : []), ...(commandLine.includes("-IncludeConditionalAccess") ? ["Policy.Read.All"] : [])])
+    }
+    const commandFor = (roles: string[]) => {
+      const command = readerView({ supported: true, available: true, reader: status(roles), setupArguments: "" }).command
+      expect(command.startsWith("./New-TenuVaultBackupReader.ps1 -CertificatePath <exported .cer> -AppId c")).toBe(true)
+      expect(command.slice(command.indexOf("-AppId c") + 8)).toBe(readerScriptArguments(roles))
+      return command
     }
     let checked = 0
+    let partial = 0
     const entraAreas = MODULE_BY_ID.get("entra")!.areas.filter((area) => area.optIn).map((area) => area.id)
     for (let mask = 1; mask < 1 << MODULES.length; mask++) for (let areaMask = 0; areaMask < 1 << entraAreas.length; areaMask++) for (const devices of [false, true]) {
       const on = MODULES.filter((_, position) => mask & (1 << position)).map((module) => module.id)
@@ -147,13 +156,40 @@ describe("The Backup Reader", () => {
       if (!on.includes("intune") && devices) continue
       const areasOf = (id: ModuleId) => (id === "entra" ? entraAreas.filter((_, position) => areaMask & (1 << position)) : id === "intune" && devices ? ["devices"] : [])
       const roles = [...readerRoles(Object.fromEntries(on.map((id) => [id, { access: "backup" as const, areas: areasOf(id) }])))]
-      const command = readerView({ supported: true, available: true, reader: status(roles), setupArguments: "" }).command
-      expect(command.startsWith("./New-TenuVaultBackupReader.ps1 -CertificatePath <exported .cer> -AppId c")).toBe(true)
-      expect(command.slice(command.indexOf("-AppId c") + 8)).toBe(readerScriptArguments(roles))
+      const command = commandFor(roles)
       expect(scriptRoles(command), command).toEqual(new Set(roles))
+      // Whole services and areas are named as such, as before.
+      expect(command).not.toContain("-Permissions")
       checked++
+      // Partial coverage: the same reader short of any one of its roles, and with any one role it
+      // may hold on top. Verification accepts such sets, so the command has to reproduce them too.
+      const others = [...READER_ALLOWED_ROLES].filter((role) => !roles.includes(role))
+      for (const set of [...roles.map((left) => roles.filter((role) => role !== left)), ...others.map((extra) => [...roles, extra])]) {
+        expect(scriptRoles(commandFor(set)), `${on.join("+")} as ${set.join(" ")}`).toEqual(new Set(set))
+        partial++
+      }
     }
     expect(checked).toBe(107)
+    expect(partial).toBe(107 * READER_ALLOWED_ROLES.size)
+    // The sets a renewal used to change: one role of a service, a role next to Intune, and Entra ID short of one role.
+    const five = [...readerRoles()]
+    const entra = [...readerRoles({ entra: { access: "backup" } })]
+    for (const set of [["Domain.Read.All"], [...five, "Directory.Read.All"], [...five, ...entra.slice(0, -1)], []]) {
+      const command = commandFor(set)
+      expect(command).toContain(" -Permissions ")
+      expect(scriptRoles(command), command).toEqual(new Set(set))
+    }
+  })
+
+  it("accepts for -Permissions exactly the roles a reader may hold: its table and the device inventory one", () => {
+    const table = currentBody(ARTIFACTS.find((artifact) => artifact.file.endsWith("New-TenuVaultBackupReader.ps1"))!)!
+    const tableRoles = [...table.matchAll(/Roles = @\(([^)]*)\)/g)].flatMap((match) => match[1]!.split(",").map((value) => value.trim().replace(/'/g, "")))
+    // The script takes the accepted names from its table, and adds the one its own switch grants.
+    expect(readerScript).toContain('$allowedPermissions = @($permissionTable | ForEach-Object { $_.Roles }) + "DeviceManagementManagedDevices.Read.All"')
+    expect(new Set([...tableRoles, "DeviceManagementManagedDevices.Read.All"])).toEqual(new Set(READER_ALLOWED_ROLES))
+    expect(readerScript).toContain("if ($allowedPermissions -notcontains $name) { throw")
+    // It is checked before the script connects, like the services and areas.
+    expect(readerScript.indexOf("$allowedPermissions -notcontains $name")).toBeLessThan(readerScript.indexOf("Connect-MgGraph @connectParams"))
   })
 })
 
@@ -176,7 +212,7 @@ describe("The parameters of the setup scripts", () => {
     for (const service of SCRIPT_SERVICES) expect(row(registrationPage, "Services"), service).toContain(`\`${service}\``)
     for (const area of SCRIPT_AREAS) expect(row(registrationPage, "Areas"), area).toContain(`\`${area}\``)
     expect(row(registrationPage, "RestoreAccess")).toContain("`None`")
-    for (const parameter of ["-Services", "-Areas"]) expect(readerPage).toContain(`\`${parameter}\``)
+    for (const parameter of ["-Services", "-Areas", "-Permissions"]) expect(readerPage).toContain(`\`${parameter}\``)
   })
 })
 

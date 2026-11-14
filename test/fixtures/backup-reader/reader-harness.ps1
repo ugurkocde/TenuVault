@@ -32,7 +32,7 @@ function global:New-MgApplication {
 }
 function global:Update-MgApplication {
     param($ApplicationId, $RequiredResourceAccess, $Notes, $KeyCredentials)
-    if ($RequiredResourceAccess) { Add-TvCall 'update' @($RequiredResourceAccess | ForEach-Object { $_.ResourceAccess | ForEach-Object { $_.Id } }) }
+    if ($PSBoundParameters.ContainsKey('RequiredResourceAccess')) { Add-TvCall 'update' @($RequiredResourceAccess | ForEach-Object { $_.ResourceAccess | ForEach-Object { $_.Id } }) }
     if ($KeyCredentials) { Add-TvCall 'certificate' @($KeyCredentials).Count }
 }
 function global:New-MgServicePrincipal { param($AppId, $Tags) [pscustomobject]@{ Id = 'reader-sp' } }

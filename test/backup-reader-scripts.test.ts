@@ -4,7 +4,7 @@ import { homedir, tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { describe, expect, it } from "vitest"
 import { createSelfSignedCertificate } from "../src/main/auth/certificate"
-import { knownPermissions, readerRoles, readerScriptArguments, type PermissionChoice } from "../src/shared/services/manifest"
+import { knownPermissions, READER_ALLOWED_ROLES, readerRoles, readerScriptArguments, type PermissionChoice } from "../src/shared/services/manifest"
 
 const readerScript = readFileSync(new URL("../resources/New-TenuVaultBackupReader.ps1", import.meta.url), "utf8")
 const storageScript = readFileSync(new URL("../resources/New-TenuVaultStorage.ps1", import.meta.url), "utf8")
@@ -99,6 +99,66 @@ describe("New-TenuVaultBackupReader.ps1", () => {
       expect(result.declared.some((role) => role.includes("ReadWrite"))).toBe(false)
       // Without the device inventory switch, the roles come in the manifest's own order.
       if (!choice.intune?.areas) expect(result.declared).toEqual(expected)
+    }, 90_000)
+
+    const READER_APP = "44444444-4444-4444-8444-444444444444"
+    const ENTRA = [...readerRoles({ entra: { access: "backup" } })]
+    it.each<[string, string[]]>([
+      ["one Entra ID permission alone", ["Domain.Read.All"]],
+      ["Intune and one directory permission next to it", [...FIVE, "Directory.Read.All"]],
+      ["Intune and Entra ID short of one permission", [...FIVE, ...ENTRA.filter((role) => role !== "Agreement.Read.All")]],
+      ["the device inventory permission without the rest of Intune", [DEVICE_INVENTORY_ROLE, CONDITIONAL_ACCESS_ROLE]],
+      ["no permission at all", []],
+    ])("renews a reader that holds %s without changing its permissions, from the command the app shows", (_name, held) => {
+      const command = readerScriptArguments(held)
+      expect(command).toContain(" -Permissions ")
+      // A renewal: the reader exists and holds exactly these permissions.
+      const renewal = run({ AppId: READER_APP, ...parameters(command) }, { existing: true, assigned: held })
+      expect(renewal.code, renewal.text).toBe(0)
+      expect(renewal.declared).toEqual([...held].sort())
+      expect(renewal.granted).toEqual([])
+      expect(renewal.removed).toEqual([])
+      expect(renewal.text).not.toContain("Removing")
+      expect(renewal.calls.filter((call) => call.Name === "certificate")).toHaveLength(1)
+      // The same command on a new app registration grants exactly these permissions, and no default on top.
+      const fresh = run(parameters(command))
+      expect(fresh.code, fresh.text).toBe(0)
+      expect(fresh.declared).toEqual([...held].sort())
+      expect(fresh.granted).toEqual([...held].sort())
+    }, 90_000)
+
+    it("sets a reader that drifted back to exactly the permissions it is given, and says why it removes one", () => {
+      const result = run({ AppId: READER_APP, Permissions: ["Domain.Read.All", CONDITIONAL_ACCESS_ROLE] }, { existing: true, assigned: [...FIVE, CONDITIONAL_ACCESS_ROLE] })
+      expect(result.code, result.text).toBe(0)
+      expect(result.declared).toEqual(["Domain.Read.All", CONDITIONAL_ACCESS_ROLE])
+      expect(result.granted).toEqual(["Domain.Read.All"])
+      expect(result.removed).toEqual(FIVE)
+      expect(result.text).toContain("Removing DeviceManagementApps.Read.All because -Permissions does not name it.")
+      expect(result.text).toContain("Run the script again with DeviceManagementApps.Read.All in -Permissions to keep it.")
+    }, 90_000)
+
+    it("accepts every permission a Backup Reader may hold for -Permissions, and still adds what a switch asks for", () => {
+      const all = run({ Permissions: [...READER_ALLOWED_ROLES] })
+      expect(all.code, all.text).toBe(0)
+      expect(all.declared).toEqual([...READER_ALLOWED_ROLES].sort())
+      expect(all.declared.some((role) => role.includes("ReadWrite"))).toBe(false)
+      const switched = run({ Permissions: ["Domain.Read.All"], IncludeConditionalAccess: true })
+      expect(switched.code, switched.text).toBe(0)
+      expect(switched.declared).toEqual(["Domain.Read.All", CONDITIONAL_ACCESS_ROLE])
+    }, 90_000)
+
+    it.each([
+      [{ Permissions: ["Mail.Read"] }, "-Permissions names Mail.Read, which is not a read permission a Backup Reader may hold. Nothing was changed."],
+      [{ Permissions: [CONDITIONAL_ACCESS_ROLE, "DeviceManagementApps.ReadWrite.All"] }, "-Permissions names DeviceManagementApps.ReadWrite.All, which is not a read permission a Backup Reader may hold. Nothing was changed."],
+      [{ Permissions: [CONDITIONAL_ACCESS_ROLE, "Policy.ReadWrite.ConditionalAccess"] }, "-Permissions names Policy.ReadWrite.ConditionalAccess, which is not a read permission a Backup Reader may hold. Nothing was changed."],
+      [{ Permissions: [CONDITIONAL_ACCESS_ROLE], Services: ["Entra"] }, "-Permissions names the reader's permissions one by one and cannot be combined with -Services or -Areas. Nothing was changed."],
+      [{ Permissions: ["None", CONDITIONAL_ACCESS_ROLE] }, "-Permissions None cannot be combined with a permission. Nothing was changed."],
+      [{ Permissions: [] }, "-Permissions was given without a value. Name at least one, or leave -Permissions out. Nothing was changed."],
+    ])("refuses -Permissions it cannot grant as a read-only reader, before it signs in: %j", (args, message) => {
+      const result = run(args, { existing: true, assigned: FIVE })
+      expect(result.code).toBe(1)
+      expect(result.text).toContain(message)
+      expect(result.calls).toEqual([])
     }, 90_000)
 
     it("sets an existing reader to exactly the chosen services: it grants what is missing and removes the rest", () => {

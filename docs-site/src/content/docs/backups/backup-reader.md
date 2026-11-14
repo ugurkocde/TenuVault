@@ -74,6 +74,7 @@ For a tenant that backs up Entra ID or Defender, name the services with `-Servic
 
 * Groups, users and devices, and applications are read only when you add the area with `-Areas`, for example `-Areas Groups,Applications`. Groups and users and devices hold personal data, so agree on them like on the device inventory permission.
 * The script refuses a list that is passed empty, such as `-Services @()`, before it signs in. Leave `-Services` out to get the Intune permissions, and leave `-Areas` out to read none of those areas.
+* `-Permissions` names the reader's permissions one by one, in place of `-Services` and `-Areas`, for example `-Permissions Policy.Read.All,Domain.Read.All`. It is for an existing reader whose permissions are not exactly those of whole services and areas, for example after an Entra administrator removed one. The script accepts only the read permissions listed on this page and refuses anything else before it signs in, so the reader stays read-only. `-Permissions None` is for a reader that holds no permission. You rarely type it yourself: the renewal command on the **Backup Reader** card uses it when it is needed.
 * A permission the reader lacks for Entra ID or Defender only leaves the policies out that need it. Scheduled backups list them as not readable by the Backup Reader, and manual backups include them.
 * Mobile device management and mobile application management enrollment policies, the on-premises synchronization settings and the ownerless group policy are left out of every scheduled backup: Microsoft Graph lets only a signed-in admin read them.
 * A reader with permissions for Entra ID or Defender is refused by TenuVault versions before 0.6, which know only the permissions for Intune and Conditional Access. Update TenuVault on every computer that uses the reader before you add a service to it.
@@ -197,7 +198,13 @@ Renewal needs your Entra administrator again, for each computer separately. Star
    ./New-TenuVaultBackupReader.ps1 -CertificatePath ./renewal.cer -AppId <application ID>
    ```
 
-   If the reader has the device inventory permission, add `-IncludeDeviceCategories` again, and name its services and areas again if it was set up with `-Services` or `-Areas`: the script sets exactly the permissions you ask for, and every computer using the reader would otherwise read less until it is verified again. The command on the **Backup Reader** card already includes them.
+   Use the command on the **Backup Reader** card. The script sets exactly the permissions it is given and removes every other one, so the card's command asks for exactly the permissions the reader has, and a renewal never changes them:
+
+   * A reader for Intune gets `-IncludeDeviceCategories` and `-IncludeConditionalAccess` again when it has those permissions.
+   * A reader for whole services gets them named with `-Services`, and its areas with `-Areas`.
+   * A reader that holds only part of a service, or a permission next to its services, gets every permission named with `-Permissions`.
+
+   If you type the command yourself and leave these out, the script puts the reader back to the five Intune permissions, and every computer using it reads something else until it is verified again.
 
 3. Select **Verify**. TenuVault switches to the new certificate once Microsoft accepts it; until then it keeps using the old one, and the expiry reminder stays on. **Verify again** keeps checking the certificate in use, and **Cancel renewal** discards a renewal certificate you did not upload.
 
@@ -205,7 +212,7 @@ Remove the old certificate from the app registration afterwards, in Entra ID > *
 
 ## More than one computer
 
-Each computer that runs scheduled backups has its own certificate. Set up the Backup Reader on each computer, and run the setup script with `-AppId` so all certificates go onto the same app registration, with `-IncludeDeviceCategories` if the reader uses it. The certificate name shows the computer it belongs to.
+Each computer that runs scheduled backups has its own certificate. Set up the Backup Reader on each computer, and run the setup script with `-AppId` so all certificates go onto the same app registration, with the same permission parameters as the reader has (`-IncludeDeviceCategories`, `-Services` and `-Areas`, or `-Permissions`). The command on the **Backup Reader** card of a computer where the reader is verified names them. The certificate name shows the computer it belongs to.
 
 Your Entra administrator is involved for every additional computer: each one means a saved `.cer` file from that computer and one script run with `-AppId`. Bundle several computers into one request when you can. The Azure half does not change: the storage role belongs to the app registration, not to a computer, so step 3 runs once per tenant and storage account.
 

@@ -26,6 +26,8 @@
     With -IncludeConditionalAccess also Policy.Read.All.
     With -Services, the read permissions of the services you name instead. The permission table
     in this script lists them per service and area, and the Backup Reader page of the docs too.
+    With -Permissions, exactly the read permissions you name, for a reader that holds only part
+    of a service.
 
     What it can and cannot do: it reads all Intune configuration tenant-wide, including script
     contents and encrypted OMA-URI values in plain text (Microsoft documents
@@ -64,6 +66,15 @@
     Groups and UsersAndDevices hold personal data. Needs Entra in -Services. An empty list is
     refused; leave the parameter out to read none of these areas.
 
+.PARAMETER Permissions
+    The reader's permissions named one by one, in place of -Services and -Areas, for example
+    -Permissions Policy.Read.All,Domain.Read.All. For an existing reader whose permissions are
+    not exactly those of whole services and areas: TenuVault shows this parameter in its renewal
+    command, so a renewal or another computer's certificate keeps the permissions the reader has.
+    Only the read permissions in this script's permission table and
+    DeviceManagementManagedDevices.Read.All are accepted; anything else is refused before sign-in.
+    Pass None for a reader that holds no permission.
+
 .PARAMETER IncludeDeviceCategories
     Also grants DeviceManagementManagedDevices.Read.All, which device categories and device
     cleanup rules need. It also exposes the managed device inventory (device names, serial
@@ -94,6 +105,7 @@ param(
     [string]$DisplayName = "TenuVault Backup Reader",
     [ValidateSet('Intune', 'ConditionalAccess', 'Entra', 'Defender')][string[]]$Services,
     [ValidateSet('Groups', 'UsersAndDevices', 'Applications')][string[]]$Areas,
+    [string[]]$Permissions,
     [switch]$IncludeDeviceCategories,
     [switch]$IncludeConditionalAccess
 )
@@ -141,7 +153,7 @@ $permissionTable = @(
 # END PERMISSION TABLE
 # A list that was passed empty is refused: taking it for a parameter that was left out would
 # request the default permissions without saying so.
-foreach ($name in 'Services', 'Areas') {
+foreach ($name in 'Services', 'Areas', 'Permissions') {
     if ($PSBoundParameters.ContainsKey($name) -and -not $PSBoundParameters[$name]) { throw "-$name was given without a value. Name at least one, or leave -$name out. Nothing was changed." }
 }
 $chosenServices = $Services
@@ -150,10 +162,23 @@ foreach ($name in $Areas) {
     if (-not ($permissionTable | Where-Object { $_.OptIn -and $_.Area -eq $name -and $chosenServices -contains $_.Service })) { throw "-Areas names $name, which belongs to a service that is not in -Services. Nothing was changed." }
 }
 $roles = @()
-foreach ($row in $permissionTable) {
-    if ($chosenServices -notcontains $row.Service) { continue }
-    if ($row.OptIn -and $Areas -notcontains $row.Area) { continue }
-    foreach ($name in $row.Roles) { if ($roles -notcontains $name) { $roles += $name } }
+if ($PSBoundParameters.ContainsKey('Permissions')) {
+    # The permissions named one by one. Only a read permission of the table, or the device inventory
+    # one that has its own switch, is accepted, so the reader stays read-only whatever is typed.
+    if ($PSBoundParameters.ContainsKey('Services') -or $PSBoundParameters.ContainsKey('Areas')) { throw "-Permissions names the reader's permissions one by one and cannot be combined with -Services or -Areas. Nothing was changed." }
+    if ($Permissions -contains 'None' -and @($Permissions).Count -gt 1) { throw "-Permissions None cannot be combined with a permission. Nothing was changed." }
+    $allowedPermissions = @($permissionTable | ForEach-Object { $_.Roles }) + "DeviceManagementManagedDevices.Read.All"
+    foreach ($name in $Permissions) {
+        if ($name -eq 'None') { continue }
+        if ($allowedPermissions -notcontains $name) { throw "-Permissions names $name, which is not a read permission a Backup Reader may hold. Nothing was changed." }
+        if ($roles -notcontains $name) { $roles += $name }
+    }
+} else {
+    foreach ($row in $permissionTable) {
+        if ($chosenServices -notcontains $row.Service) { continue }
+        if ($row.OptIn -and $Areas -notcontains $row.Area) { continue }
+        foreach ($name in $row.Roles) { if ($roles -notcontains $name) { $roles += $name } }
+    }
 }
 # Sorted by name, as the script has always listed them.
 [string[]]$roles = $roles
@@ -205,12 +230,14 @@ $context = Get-MgContext
 
 $graphAppId = "00000003-0000-0000-c000-000000000000"
 $graph = Get-MgServicePrincipal -Filter "appId eq '$graphAppId'"
-$wanted = foreach ($role in $roles) {
+$wanted = @(foreach ($role in $roles) {
     $appRole = $graph.AppRoles | Where-Object { $_.Value -eq $role -and $_.AllowedMemberTypes -contains "Application" }
     if (-not $appRole) { throw "Application permission $role was not found on Microsoft Graph." }
     $appRole
-}
-$requiredResourceAccess = @(@{ ResourceAppId = $graphAppId; ResourceAccess = @($wanted | ForEach-Object { @{ Id = $_.Id; Type = "Role" } }) })
+})
+# A reader that holds no permission (-Permissions None) declares none.
+$requiredResourceAccess = @()
+if ($wanted) { $requiredResourceAccess = @(@{ ResourceAppId = $graphAppId; ResourceAccess = @($wanted | ForEach-Object { @{ Id = $_.Id; Type = "Role" } }) }) }
 
 if ($AppId) {
     $app = Get-MgApplication -Filter "appId eq '$AppId'"
@@ -285,7 +312,10 @@ foreach ($assignment in $assigned) {
     $keep = $assignment.ResourceId -eq $graph.Id -and ($wanted.Id -contains $assignment.AppRoleId)
     if (-not $keep -and $PSCmdlet.ShouldProcess($app.AppId, "Remove permission $($assignment.AppRoleId) on $($assignment.ResourceDisplayName)")) {
         $name = ($graph.AppRoles | Where-Object Id -eq $assignment.AppRoleId).Value
-        if ($name -eq "DeviceManagementManagedDevices.Read.All") {
+        if ($name -and $PSBoundParameters.ContainsKey('Permissions')) {
+            Write-Warning "Removing $name because -Permissions does not name it. Every computer using this reader must verify it again in TenuVault. Run the script again with $name in -Permissions to keep it."
+        }
+        elseif ($name -eq "DeviceManagementManagedDevices.Read.All") {
             Write-Warning "Removing DeviceManagementManagedDevices.Read.All because -IncludeDeviceCategories was not given. Every computer using this reader must verify it again in TenuVault. Run the script again with -IncludeDeviceCategories to keep it."
         }
         elseif ($name -eq "Policy.Read.All") {

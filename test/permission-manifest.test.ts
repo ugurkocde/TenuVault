@@ -382,7 +382,29 @@ describe("Backup Reader roles from the manifest", () => {
     expect(readerScriptArguments([...five, "DeviceManagementManagedDevices.Read.All", "Policy.Read.All"])).toBe(" -IncludeDeviceCategories -IncludeConditionalAccess")
     expect(readerScriptArguments(readerRoles({ defender: { access: "backup" } }))).toBe(" -Services Defender")
     expect(readerScriptArguments(readerRoles({ intune: { access: "backup" }, entra: { access: "backup", areas: ["usersAndDevices"] } }))).toBe(" -Services Intune,Entra -Areas UsersAndDevices")
-    expect(readerScriptArguments([])).toBe("")
+  })
+
+  it("names the roles one by one when they are not exactly whole services and areas, so the script never sets another set", () => {
+    const five = readerRoles()
+    const entra = readerRoles({ entra: { access: "backup" } })
+    const named = (roles: readonly string[]) => ` -Permissions ${[...roles].sort().join(",")}`
+    // One Entra ID role alone: without its own parameter the script would grant the five Intune roles in its place.
+    expect(readerScriptArguments(["Domain.Read.All"])).toBe(" -Permissions Domain.Read.All")
+    // A role next to a whole service: naming the service alone would remove it.
+    expect(readerScriptArguments([...five, "Directory.Read.All"])).toBe(named([...five, "Directory.Read.All"]))
+    // Entra ID short of one role: -IncludeConditionalAccess alone would remove every other Entra ID role.
+    const short = [...five, ...entra.filter((role) => role !== "Agreement.Read.All")]
+    expect(short).toHaveLength(five.length + entra.length - 1)
+    expect(readerScriptArguments(short)).toBe(named(short))
+    // Part of Intune, which a tenant with Intune off can verify.
+    expect(readerScriptArguments(five.slice(1))).toBe(named(five.slice(1)))
+    expect(readerScriptArguments(["DeviceManagementManagedDevices.Read.All", "Policy.Read.All"])).toBe(" -Permissions DeviceManagementManagedDevices.Read.All,Policy.Read.All")
+    // The order and a repeated role do not matter.
+    expect(readerScriptArguments(["Policy.Read.All", "Domain.Read.All", "Policy.Read.All"])).toBe(" -Permissions Domain.Read.All,Policy.Read.All")
+    // A reader without any role, which a tenant that backs up nothing can verify, keeps none.
+    expect(readerScriptArguments([])).toBe(" -Permissions None")
+    // Every role a reader may hold is a name the command line takes as it is.
+    for (const role of READER_ALLOWED_ROLES) expect(role).toMatch(/^[A-Za-z0-9.]+$/)
   })
 
   it("starts a tenant's first reader with the services it backs up, and a tenant with Intune as before", () => {

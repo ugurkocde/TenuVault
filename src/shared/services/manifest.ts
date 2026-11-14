@@ -269,9 +269,14 @@ export function readerChoice(roles: readonly string[]): PermissionChoice {
 }
 
 /**
- * The parameters that make New-TenuVaultBackupReader.ps1 set the roles a reader has, with a leading
- * space, so a renewal or another computer's certificate never changes its permissions. A reader for
- * Intune, with or without Conditional Access, keeps the switches it was set up with.
+ * The parameters that make New-TenuVaultBackupReader.ps1 set exactly the roles a reader has, with a
+ * leading space, so a renewal or another computer's certificate never changes its permissions. A
+ * reader for Intune, with or without Conditional Access, keeps the switches it was set up with, and
+ * a reader for whole services and areas names them.
+ *
+ * The script grants what it is given and removes every other role. Services and areas can only
+ * name whole ones, so a reader that holds part of a service, a role next to its services, or no
+ * role at all gets its roles named one by one.
  */
 export function readerScriptArguments(roles: readonly string[]): string {
   const choice = readerChoice(roles)
@@ -279,8 +284,10 @@ export function readerScriptArguments(roles: readonly string[]): string {
   const rolesOf = (id: ModuleId) => readerRoles({ [id]: choice[id] })
   // A service whose permissions another one brings along is not named: Entra ID reads everything Conditional Access needs.
   const services = held.filter((id) => !rolesOf(id).every((role) => held.some((other) => other !== id && rolesOf(other).includes(role))))
+  const exact = unique(roles).sort()
+  const named = new Set(services.flatMap(rolesOf))
+  if (!services.length || named.size !== exact.length || !exact.every((role) => named.has(role))) return ` -Permissions ${exact.join(",") || "None"}`
   const inventory = choice.intune?.areas?.includes("devices") ? " -IncludeDeviceCategories" : ""
-  if (!services.length) return ""
   if (services[0] === "intune" && services.every((id) => id === "intune" || id === "conditionalAccess")) return `${inventory}${choice.conditionalAccess ? " -IncludeConditionalAccess" : ""}`
   return ` -Services ${services.map((id) => SCRIPT_SERVICE[id]).join(",")}${areasArgument(choice)}${inventory}`
 }
