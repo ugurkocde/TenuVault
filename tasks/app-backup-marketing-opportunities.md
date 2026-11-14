@@ -1,3 +1,5 @@
+> Superseded product positioning, 2026-11-13: App Backup must retrieve installers from Intune. The manual retention workflow below is historical and must not be used for launch copy. Do not promote Windows or macOS capture until the production adapters pass real-device validation. Existing local archives remain exportable but are not Intune backups.
+
 # App Backup: CMO visibility and launch review
 
 Reviewed 2026-11-12. Advisory only. PR #342 is unreleased; nothing below has been published or submitted. Product claims follow the local implementation and screenshot evidence, not a claim that the stable download already includes it.

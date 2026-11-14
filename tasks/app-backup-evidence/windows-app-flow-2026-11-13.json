@@ -1,0 +1,157 @@
+{
+  "schema": 1,
+  "date": "2026-11-13",
+  "baseHead": "9fb40d3d6233635f6ae57f8443e64e419c121118",
+  "scope": "Windows helper and capture evidence: baseline 3037d05, packaged follow-up ef1a704",
+  "sourceHashes": {
+    "native/app-backup/Program.cs": "18a70c23f36f9859f277a4bfe94a01cc627995527c3a44d20e62026061997e48",
+    "native/app-backup/app.manifest": "8a9d3499b0d5cb8ba373c6587564e96159248d71cec52fc1c9951098f22595a1",
+    "src/main/app-backup/windows-helper.ts": "c959c0f88952d9deb65995481c5f005a932b307a3d34debf811664dfa69b594a",
+    "src/main/app-backup/capture-download.ts": "e69ab460058aad4de4a411e469e761ac42d358554244b3c4c05e16e5045d0ee7",
+    "src/main/app-backup/capture-identity.ts": "1f14591b41fd68998f9dc6aec45f7e2c34970f7fc9751a97a99055c347717468",
+    "src/main/app-backup/device-check.ts": "035227dbd6cba89b939f6571ac8a0c2a67dcb04cf166ee18c2f193cadfc98785",
+    "src/main/app-sources/service.ts": "26dc2b8805fe1e995b8a864165d97d58c2d26dd2e6caa5e2ee245abc0eb6627d",
+    "src/main/index.ts": "2d5584b43f7344bd3d9cc7250b9cac9bbd3351e3aedc53e9efb6fe387f930f34",
+    "src/preload/index.ts": "b40909ac32431272d0f5f1b93aee3fb5f39313e3bf8d6e8972d02cd9814040ca",
+    "src/renderer/features/app-backup/IntuneAppsView.tsx": "2ac62fa93df432cc1a43f248b65aad612fc834f40629e8b5f94b2a35d75b469f",
+    "src/renderer/pages/AppBackupPage.tsx": "2de0ac2d5cacd97d127ff36924aff1734f4ef2736d441c8a7ba4b3485f488748",
+    "src/shared/app-sources/types.ts": "ac9426598a35076f2220cc434c94473174cdb871c55b0a60e42b818499cb1926"
+  },
+  "device": {
+    "platform": "Windows 11",
+    "build": "26200",
+    "node": "26.7.0",
+    "enrolled": true,
+    "desktopRunLevel": "limited",
+    "profile": "isolated test profile; installed app profile unchanged"
+  },
+  "actualAppFlow": {
+    "application": "PowerShell",
+    "authorization": "real delegated Microsoft session, active administrator role; user-approved Windows elevation for native worker",
+    "capture": "passed",
+    "bytes": 123779448,
+    "sha256": "aab979dcb289d34da2b50328b67613a896ffac542154946b158e71a6f14df3da",
+    "matchesIndependentLabCapture": true,
+    "provenance": "intune-capture",
+    "contentVersion": "1",
+    "serviceIdentifier": "SHA-256 fingerprint of opaque service identifier, not a claimed Graph file GUID",
+    "nativeExport": "passed, identical hash",
+    "restart": "packaged app reopened capture with no warnings"
+  },
+  "packaging": {
+    "x64UnpackedBuild": "passed",
+    "securityFuses": 6,
+    "helperBytes": 47616,
+    "helperSha256": "042f9df0be638d340d9dc1120eb4d1da9bb0bf94cfd65adf8159236c3c5a4f95",
+    "helperMatchesCompiledImage": true,
+    "signed": false
+  },
+  "negativeAppCases": [
+    {
+      "application": "Git fixture",
+      "outcome": "user-context app refused before launch; no Start backup action"
+    },
+    {
+      "application": "7-Zip fixture",
+      "outcome": "Windows approval cancelled; no new published source"
+    },
+    {
+      "application": "Brave fixture",
+      "testedHead": "ef1a704057cc93bd5ab77da30e087c61811dd8ef",
+      "outcome": "real packaged Backup refused by Intune with HTTP 403 after user-approved helper consent; targeting guidance shown",
+      "existingCatalogPreserved": true,
+      "sourceDirectories": 2,
+      "manifestFiles": 2,
+      "artifactFiles": 2,
+      "stagingDirectories": 0,
+      "unexpectedFiles": 0,
+      "helperProcessesAfterCompletion": 0
+    },
+    {
+      "application": "PowerShell fixture",
+      "testedHead": "ef1a704057cc93bd5ab77da30e087c61811dd8ef",
+      "outcome": "real packaged Backup cancelled through visible Cancel operation control after positive download progress",
+      "progressShownBeforeCancel": "619.2 kB of 118 MB",
+      "uiResult": "Backup cancelled. No installer backup was stored.",
+      "existingCatalogPreserved": true,
+      "catalogWarnings": [],
+      "sourceDirectories": 2,
+      "manifestFiles": 2,
+      "artifactFiles": 2,
+      "stagingDirectories": 0,
+      "unexpectedFiles": 0,
+      "helperProcessesAfterCompletion": 0,
+      "consentProcessesAfterCompletion": 0
+    }
+  ],
+  "automated": {
+    "fullSuite": {
+      "passed": 5254,
+      "skipped": 2,
+      "files": 366
+    },
+    "windowsFocused": {
+      "passed": 210,
+      "skipped": 0,
+      "files": 14
+    },
+    "windowsNativeChecks": 15,
+    "typecheck": "passed",
+    "lint": "four pre-existing warnings",
+    "docsBuild": "49 pages; internal links valid",
+    "packagedSmoke": {
+      "status": "passed",
+      "desktopRunLevel": "limited",
+      "tenantFixture": "synthetic for general desktop smoke; real capture tested separately"
+    }
+  },
+  "graphVerification": {
+    "lokka": "beta, app-only, read-only; endpoint/shape/paging/error verification",
+    "appHelper": "actual delegated beta authorization passed before enrollment-key use",
+    "writes": false
+  },
+  "notYetVerified": [
+    "Signed TenuVault app/helper release pair",
+    "Live Microsoft non-admin role refusal",
+    "Defender for Endpoint deployment",
+    "macOS retrieval, no enrolled Mac available",
+    "Restore, not implemented"
+  ],
+  "preflightFollowup": {
+    "reason": "Live duplicate 7-Zip record returned committedContentVersion null; generic helper error replaced by specific refusal before Windows consent",
+    "packagedLiveRefusal": "passed, exact no-committed-content message and unchanged catalog without consent",
+    "windowsFocused": {
+      "passed": 224,
+      "files": 15,
+      "skipped": 0
+    },
+    "windowsNativeChecks": 23,
+    "localFocused": {
+      "passed": 38,
+      "files": 4
+    },
+    "typecheck": "passed",
+    "lint": "four existing warnings",
+    "packagedSecurityFuses": 6,
+    "helperSha256": "564987896ea5d7e1720690d2a2af6f795e6db89c80168774d5293e60e2f87c13",
+    "sourceHashes": {
+      "native/app-backup/Program.cs": "e69ee0dceeff4498919f4594800643e0943aa58ce934736472c1c0cae00c2c22",
+      "src/main/index.ts": "69bd6080b80ec72cd8683d43e031543fdf5311b6a42cf7a62b3653fe8079569b",
+      "src/main/app-backup/capture-preflight.ts": "af0e6468f9366e5237b0c630bbc3b85c4f2b096782c1153397545c2ca5dd12e7"
+    }
+  },
+  "secondPackagedCapture": {
+    "testedHead": "ef1a704057cc93bd5ab77da30e087c61811dd8ef",
+    "application": "7-Zip",
+    "capture": "passed through packaged UI and real helper with user-approved consent",
+    "bytes": 11959010,
+    "sha256": "fcef456f07b73c6131c484eae363a0a8314076d55f0a6605077a5ce0037e8ff0",
+    "matchesIndependentLabCapture": true,
+    "contentVersion": "1",
+    "provenance": "intune-capture",
+    "catalogWarnings": [],
+    "nativeExport": "passed, identical hash; existing PowerShell export unchanged",
+    "restart": "packaged app reopened both captures with no warnings"
+  },
+  "latestProductHead": "ef1a704057cc93bd5ab77da30e087c61811dd8ef"
+}

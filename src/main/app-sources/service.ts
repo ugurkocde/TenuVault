@@ -1,20 +1,22 @@
 import { basename, join } from "node:path"
 import { lstat, readdir } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
-import type { AppSourceState, RecoveryDeviceStatus, AppSourcesBridge, IntuneAppDetails, IntuneAppScript } from "../../shared/app-sources/types"
+import type { AppCaptureProgress, AppSourceState, CapturedAppSource, RecoveryDeviceStatus, AppSourcesBridge, IntuneAppDetails, IntuneAppScript } from "../../shared/app-sources/types"
 import { AppSourceStore, sourceTenant } from "./store"
 
 export interface AppSourceHost {
+  assignments?: (tenant: string, appId: string) => ReturnType<AppSourcesBridge["assignments"]>
+  capture?: (tenant: string, appId: string, jobId: string, store: AppSourceStore, signal: AbortSignal, progress: (value: AppCaptureProgress) => void) => Promise<CapturedAppSource>
+  ensureKeys?: () => void
   knownTenant: (tenant: string) => boolean
   folder: (tenant: string) => string
   setFolder: (tenant: string, folder: string) => void
   keys: () => Buffer[]
   exportJournalFolder?: () => string
-  ensureKeys: () => void
   pickFolder: (current: string) => Promise<string | null>
   confirmNewStore: (tenant: string) => Promise<boolean>
-  pickPackage: () => Promise<string | null>
   pickExport: (fileName: string) => Promise<string | null>
+  openFolder: (folder: string) => Promise<void>
   checkDevice: (tenant: string) => Promise<RecoveryDeviceStatus>
   signIn: (tenant: string) => Promise<void>
   details: (tenant: string, appId: string) => Promise<IntuneAppDetails>
@@ -25,9 +27,10 @@ export interface AppSourceHost {
 
 /** Local actions are free for every configured tenant and need no live token. */
 export class AppSourceService {
-  private readonly jobs = new Map<string, { tenant: string; abort: AbortController }>()
+  private readonly jobs = new Map<string, { tenant: string; abort: AbortController; progress?: AppCaptureProgress }>()
   private readonly deviceChecks = new Map<string, Promise<RecoveryDeviceStatus>>()
   private readonly appLoads = new Map<string, ReturnType<AppSourcesBridge["apps"]>>()
+  private readonly assignmentChecks = new Map<string, ReturnType<AppSourcesBridge["assignments"]>>()
   constructor(private readonly host: AppSourceHost) {}
   private tenant(raw: unknown): string {
     const id = sourceTenant(raw)
@@ -76,7 +79,7 @@ export class AppSourceService {
     this.host.setFolder(tenant, folder)
     return true
   }
-  private async job(raw: unknown, operation: unknown, action: (tenant: string, signal: AbortSignal) => Promise<boolean>): Promise<boolean> {
+  private async job<T>(raw: unknown, operation: unknown, action: (tenant: string, signal: AbortSignal) => Promise<T>): Promise<T> {
     const tenant = this.tenant(raw), id = sourceTenant(operation)
     if (this.jobs.size) throw new Error("A source operation is already running. Finish or cancel it first.")
     const control = new AbortController()
@@ -88,19 +91,24 @@ export class AppSourceService {
       throw error
     } finally { this.jobs.delete(id) }
   }
-  attach(raw: unknown, operation: unknown, appName: unknown): Promise<boolean> {
-    if (typeof appName !== "string" || appName.length > 200) return Promise.reject(new Error("Enter an app name of at most 200 characters."))
+  capture(raw: unknown, operation: unknown, app: unknown): Promise<CapturedAppSource> {
+    const appId = sourceTenant(app)
     return this.job(raw, operation, async (tenant, signal) => {
-      const file = await this.host.pickPackage()
+      if (!this.host.capture) throw new Error("Installer capture requires the Windows capture helper.")
+      const store = this.store(tenant)
+      if ((await store.list(tenant)).unreadableSources) throw new Error("Import the matching recovery key before creating a backup in this folder.")
       signal.throwIfAborted()
-      if (!file) return false
-      this.tenant(tenant)
-      const existing = await this.store(tenant).list(tenant)
-      if (existing.unreadableSources) throw new Error("Import the matching recovery key before adding packages to this source store.")
-      this.host.ensureKeys()
-      await this.store(tenant).attach(tenant, file, appName, signal)
-      return true
+      this.host.ensureKeys?.()
+      const id = sourceTenant(operation)
+      return this.host.capture(tenant, appId, id, store, signal, value => {
+        const job = this.jobs.get(id)
+        if (job?.tenant === tenant) job.progress = value
+      })
     })
+  }
+  captureProgress(raw: unknown, operation: unknown): AppCaptureProgress | null {
+    const tenant = this.tenant(raw), job = this.jobs.get(sourceTenant(operation))
+    return job?.tenant === tenant ? job.progress ?? null : null
   }
   export(raw: unknown, operation: unknown, source: unknown): Promise<boolean> {
     if (typeof source !== "string") return Promise.reject(new Error("Select a stored source."))
@@ -116,6 +124,12 @@ export class AppSourceService {
       return true
     })
   }
+  async openFolder(raw: unknown, source: unknown): Promise<void> {
+    const tenant = this.tenant(raw), id = sourceTenant(source)
+    const folder = await this.store(tenant).sourceDirectory(tenant, id)
+    this.tenant(tenant)
+    await this.host.openFolder(folder)
+  }
   cancel(raw: unknown, operation: unknown): void {
     const tenant = this.tenant(raw), id = sourceTenant(operation)
     const job = this.jobs.get(id)
@@ -130,6 +144,16 @@ export class AppSourceService {
   }
   details(raw: unknown, app: unknown): Promise<IntuneAppDetails> {
     return this.host.details(this.tenant(raw), sourceTenant(app))
+  }
+  assignments(raw: unknown, app: unknown): ReturnType<AppSourcesBridge["assignments"]> {
+    const tenant = this.tenant(raw), appId = sourceTenant(app), key = `${tenant}/${appId}`
+    const pending = this.assignmentChecks.get(key)
+    if (pending) return pending
+    if (!this.host.assignments) return Promise.reject(new Error("Assignment checks are unavailable in this build."))
+    if (this.assignmentChecks.size >= 8) return Promise.reject(new Error("Assignment checks are busy. Wait a moment and recheck."))
+    const check = Promise.resolve().then(() => this.host.assignments!(tenant, appId)).then(value => { this.tenant(tenant); return value }).finally(() => { this.assignmentChecks.delete(key) })
+    this.assignmentChecks.set(key, check)
+    return check
   }
   async printDetails(raw: unknown, app: unknown): Promise<boolean> {
     const tenant = this.tenant(raw), id = sourceTenant(app)

@@ -1,5 +1,4 @@
-/** Local sources are administrator-selected files, never proof of Intune content equivalence. */
-export interface StoredAppSource {
+interface SourceDescriptor {
   id: string
   tenantId: string
   fileName: string
@@ -8,15 +7,37 @@ export interface StoredAppSource {
   keyId: string
   sha256: string
   createdAt: string
+}
+
+/** Local archives are not captured backups and must never become restore inputs. */
+export interface LocalAppArchive extends SourceDescriptor {
   provenance: "administrator-selected"
   format: "intunewin"
 }
+
+export interface CaptureIdentity {
+  tenantId: string
+  appId: string
+  appType: "#microsoft.graph.win32LobApp"
+  contentVersion: string
+  /** SHA-256 of the opaque device service DoFileId, prefixed sha256:. Never a Graph file-ID claim. */
+  contentFileId: string
+}
+
+export interface CapturedAppSource extends SourceDescriptor {
+  provenance: "intune-capture"
+  format: "win32-source-zip"
+  receipt: CaptureIdentity & { schema: 1; encryptedSha256: string; encryptedBytes: number }
+}
+
+export type StoredAppSource = LocalAppArchive | CapturedAppSource
 
 export interface RecoveryDeviceStatus {
   platform: "win32" | "darwin" | "linux"
   enrollment: "matched" | "different-tenant" | "not-enrolled" | "unknown"
   certificate: "matched" | "missing" | "ambiguous" | "access-denied" | "unknown"
   elevated: boolean
+  /** Metadata-only checks cannot establish content authorization; do not gate Backup on this value. */
   captureAvailable: false
   reason: string
 }
@@ -28,15 +49,38 @@ export interface AppSourceState {
   unreadableSources?: boolean
 }
 
+export interface AppAssignmentCheck {
+  appId: string
+  checkedAt: string
+  status: "device-targeted" | "review" | "unavailable" | "unsupported"
+  summary: string
+  steps: string[]
+  warnings: string[]
+  assignments: Array<{
+    id: string
+    intent: string
+    target: string
+    match: "included" | "excluded" | "not-member" | "user" | "unknown"
+    detail: string
+    filter: { name: string; mode: string; rule: string | null } | null
+  }>
+}
+
+export type AppCapturePhase = "authorizing" | "windows-approval" | "downloading" | "verifying"
+export interface AppCaptureProgress { phase: AppCapturePhase; receivedBytes: number; totalBytes: number | null }
+
 export interface AppSourcesBridge {
+  assignments: (tenantId: string, appId: string) => Promise<AppAssignmentCheck>
+  capture: (tenantId: string, operationId: string, appId: string) => Promise<CapturedAppSource>
+  captureProgress: (tenantId: string, operationId: string) => Promise<AppCaptureProgress | null>
   details: (tenantId: string, appId: string) => Promise<IntuneAppDetails>
   printDetails: (tenantId: string, appId: string) => Promise<boolean>
   downloadScript: (tenantId: string, appId: string, scriptId: string) => Promise<boolean>
   apps: (tenantId: string) => Promise<{ apps: IntuneBackupApp[]; fetchedAt: string }>
   list: (tenantId: string) => Promise<AppSourceState>
   chooseStore: (tenantId: string) => Promise<boolean>
-  attach: (tenantId: string, operationId: string, appName: string) => Promise<boolean>
   export: (tenantId: string, operationId: string, sourceId: string) => Promise<boolean>
+  openFolder: (tenantId: string, sourceId: string) => Promise<void>
   cancel: (tenantId: string, operationId: string) => Promise<void>
   deviceStatus: (tenantId: string) => Promise<RecoveryDeviceStatus>
   signIn: (tenantId: string) => Promise<void>

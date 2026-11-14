@@ -1,3 +1,7 @@
+import { requestWindowsContent } from "./app-backup/windows-helper"
+import { requireCaptureEnabled } from "./app-backup/capture-policy"
+import { checkCaptureMetadata } from "./app-backup/capture-preflight"
+import { downloadCapturedContent } from "./app-backup/capture-download"
 import { AppSourceService } from "./app-sources/service"
 import { checkRecoveryDevice } from "./app-backup/device-check"
 import { readAppBackupAccount } from "./app-backup/account"
@@ -91,6 +95,8 @@ import { allows, effectiveRetentionDays, PlanRequired } from "../shared/plans"
 import { APP_STATE_START_OVER_BUTTON, APP_STATE_START_OVER_DETAIL, SecureStore, UnreadableStoreError, type Cipher } from "./storage/secure-store"
 import { Preferences } from "./preferences"
 import { AppTray } from "./tray"
+import { checkAppAssignments } from "./app-backup/assignments"
+import { readAssignmentDevice } from "./app-backup/assignment-device"
 import { installedBySetup, isNightly, setupDiagnosticsDisabledByPolicy, Updates, updatesDisabledByPolicy } from "./updates"
 import { SetupDiagnostics } from "./setup-diagnostics/service"
 import { firstLaunchProps, isNetworkFolder, rendererEvent } from "./setup-diagnostics/events"
@@ -1461,34 +1467,51 @@ async function bootstrap(): Promise<void> {
   })
 
   const appSources = new AppSourceService({
+    ensureKeys: () => { backupKeys.keyring() },
+    capture: async (tenant, appId, jobId, store, signal, progress) => {
+      if (process.platform !== "win32") throw new Error("Back up Win32 installers on a Windows PC enrolled in this Intune tenant.")
+      progress({ phase: "authorizing", receivedBytes: 0, totalBytes: null })
+      await requireCaptureEnabled({ keys: LICENSE_PUBLIC_KEYS, appVersion: app.getVersion(), signal, fetch: bridgedFetch })
+      const token = await auth.getAccessToken(tenant, signedInClient(tenant), RESOURCE_SCOPES.graph, true)
+      signal.throwIfAborted()
+      await checkCaptureMetadata(appId, token.accessToken, bridgedFetch)
+      signal.throwIfAborted()
+      progress({ phase: "windows-approval", receivedBytes: 0, totalBytes: null })
+      const helper = app.isPackaged ? join(process.resourcesPath, "app-backup", "TenuVault.Capture.exe") : join(app.getAppPath(), "out", "helper", "TenuVault.Capture.exe")
+      const content = await requestWindowsContent(helper, { tenantId: tenant, appId, jobId, accessToken: token.accessToken }, signal)
+      signal.throwIfAborted()
+      return downloadCapturedContent(store, content.identity, content, content.appName, { signal, fetch: bridgedFetch, progress })
+    },
     details: (tenant, id) => readAppBackupDetails(tenant, id, async tid => (await auth.getAccessToken(tid, signedInClient(tid), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch),
     printDetails: details => printAppDetails(appDetailsHtml(details), options => new BrowserWindow(options)),
     downloadScript: script => downloadAppScript(script, async fileName => {
       const result = await dialog.showSaveDialog(mainWindow!, { title: "Download app script", defaultPath: fileName, filters: [{ name: "PowerShell script", extensions: ["ps1"] }] })
       return result.canceled ? null : result.filePath ?? null
     }),
+    assignments: (tenant, appId) => checkAppAssignments(tenant, appId,
+      async id => (await auth.getAccessToken(id, signedInClient(id), RESOURCE_SCOPES.graph)).accessToken,
+      { fetch: bridgedFetch, device: () => readAssignmentDevice(tenant, () => readAppBackupAccount(tenant,
+        async id => (await auth.getAccessToken(id, signedInClient(id), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch)) }),
     apps: (tenant) => readAppBackupApps(tenant, async id => (await auth.getAccessToken(id, signedInClient(id), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch),
     knownTenant: (tenant) => connectedTenantIds().some(id => id.toLowerCase() === tenant),
     folder: (tenant) => appStore.get(`app-sources.folder.${tenant}`) ?? join(app.getPath("documents"), "TenuVault App Sources"),
     setFolder: (tenant, folder) => appStore.set(`app-sources.folder.${tenant}`, folder),
     keys: () => backupKeys.existingKeyring(),
     exportJournalFolder: () => join(app.getPath("userData"), "app-source-export-jobs"),
-    ensureKeys: () => { backupKeys.keyring() },
     pickFolder: async (current) => {
       const result = await dialog.showOpenDialog(mainWindow!, { title: "Choose or reconnect source store", defaultPath: current, properties: ["openDirectory", "createDirectory"] })
       return result.canceled ? null : result.filePaths[0] ?? null
     },
     confirmNewStore: async () => {
-      const result = await dialog.showMessageBox(mainWindow!, { type: "question", title: "Use a new source folder?", message: "This folder has no source store for the selected tenant.", detail: "Use it for new attachments, or cancel and select the retained source store. Existing source folders stay where they are.", buttons: ["Cancel", "Use this folder"], defaultId: 0, cancelId: 0 })
+      const result = await dialog.showMessageBox(mainWindow!, { type: "question", title: "Use a new backup folder?", message: "This folder has no app backups for the selected tenant.", detail: "Connect it as an empty folder, or cancel and select the retained backup folder. Existing folders stay where they are.", buttons: ["Cancel", "Use this folder"], defaultId: 0, cancelId: 0 })
       return result.response === 1
     },
-    pickPackage: async () => {
-      const result = await dialog.showOpenDialog(mainWindow!, { title: "Attach an existing Win32 package", filters: [{ name: "Intune Win32 package", extensions: ["intunewin"] }], properties: ["openFile"] })
-      return result.canceled ? null : result.filePaths[0] ?? null
-    },
     pickExport: async (fileName) => {
-      const result = await dialog.showSaveDialog(mainWindow!, { title: "Export original package, choose a new file name", defaultPath: join(app.getPath("documents"), fileName), filters: [{ name: "Intune Win32 package", extensions: ["intunewin"] }] })
+      const result = await dialog.showSaveDialog(mainWindow!, { title: "Export installer, choose a new file name", defaultPath: join(app.getPath("documents"), fileName), filters: [{ name: "Installer payload", extensions: [fileName.endsWith(".zip") ? "zip" : "intunewin"] }] })
       return result.canceled ? null : result.filePath ?? null
+    },
+    openFolder: async folder => {
+      if (await shell.openPath(folder)) throw new Error("The local backup folder could not be opened. Check that it is still connected.")
     },
     checkDevice: (tenant) => checkRecoveryDevice(tenant, () => readAppBackupAccount(tenant,
       async id => (await auth.getAccessToken(id, signedInClient(id), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch)),
@@ -1499,10 +1522,13 @@ async function bootstrap(): Promise<void> {
     },
   })
   app.on("before-quit", () => appSources.close())
+  handleTrusted("appSources:capture", (_event, tenant: unknown, operation: unknown, id: unknown) => appSources.capture(tenant, operation, id))
+  handleTrusted("appSources:assignments", (_event, tenant: unknown, id: unknown) => appSources.assignments(tenant, id))
+  handleTrusted("appSources:captureProgress", (_event, tenant: unknown, operation: unknown) => appSources.captureProgress(tenant, operation))
   handleTrusted("appSources:list", (_event, tenant: unknown) => appSources.list(tenant))
   handleTrusted("appSources:chooseStore", (_event, tenant: unknown) => appSources.chooseStore(tenant))
-  handleTrusted("appSources:attach", (_event, tenant: unknown, operation: unknown, name: unknown) => appSources.attach(tenant, operation, name))
   handleTrusted("appSources:export", (_event, tenant: unknown, operation: unknown, source: unknown) => appSources.export(tenant, operation, source))
+  handleTrusted("appSources:openFolder", (_event, tenant: unknown, source: unknown) => appSources.openFolder(tenant, source))
   handleTrusted("appSources:cancel", (_event, tenant: unknown, operation: unknown) => appSources.cancel(tenant, operation))
   handleTrusted("appSources:deviceStatus", (_event, tenant: unknown) => appSources.checkDevice(tenant))
   handleTrusted("appSources:signIn", (_event, tenant: unknown) => appSources.signIn(tenant))

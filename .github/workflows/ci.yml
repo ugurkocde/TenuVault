@@ -7,6 +7,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      signed_windows:
+        description: Build a signed Windows verification package without publishing a release
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -155,12 +160,51 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Build installers
+        if: runner.os != 'Windows' || github.event_name != 'workflow_dispatch' || !inputs.signed_windows
         shell: bash
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: |
           npx electron-vite build
           npx electron-builder --config electron-builder.config.cjs ${{ matrix.target }} --publish never
+
+      # Signing credentials are never made available to a pull-request build.
+      - name: Build signed Windows verification installers
+        if: runner.os == 'Windows' && github.event_name == 'workflow_dispatch' && inputs.signed_windows
+        shell: bash
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_SIGNING_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_SIGNING_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_SIGNING_CLIENT_SECRET }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
+        run: |
+          set -euo pipefail
+          for name in AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_TRUSTED_SIGNING_ENDPOINT AZURE_TRUSTED_SIGNING_ACCOUNT_NAME AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME AZURE_TRUSTED_SIGNING_PUBLISHER_NAME; do
+            if [ -z "${!name:-}" ]; then echo "::error::Signed verification needs the $name signing secret"; exit 1; fi
+          done
+          test "$TENUVAULT_RELEASE_BUILD" = 1
+          npx electron-vite build
+          npx electron-builder --config electron-builder.config.cjs --win -c.forceCodeSigning=true --publish never
+
+      - name: Verify Windows app and capture helper signatures
+        if: runner.os == 'Windows' && github.event_name == 'workflow_dispatch' && inputs.signed_windows
+        shell: pwsh
+        env:
+          EXPECTED_PUBLISHER: ${{ secrets.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
+        run: |
+          $folders = @(Get-ChildItem dist -Directory -Filter 'win*unpacked')
+          if ($folders.Count -eq 0) { throw 'No packaged Windows app found.' }
+          foreach ($folder in $folders) {
+            ./scripts/check-capture-signatures.ps1 -AppDirectory $folder.FullName -ExpectedPublisher $env:EXPECTED_PUBLISHER
+          }
+          Compress-Archive -Path dist/win-unpacked/* -DestinationPath dist/TenuVault-signed-verification-x64.zip
+
+      - name: Test Windows capture helper
+        if: runner.os == 'Windows'
+        run: node scripts/test-app-backup-helper.mjs
 
       - name: Verify packaged security fuses
         run: node scripts/check-fuses.cjs "${{ matrix.app }}"

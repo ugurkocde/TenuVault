@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "date": "2026-11-14",
+  "desktopCommit": "21fc27d75d1420b5022bb966b43d69df886e9ccc",
+  "serviceCommit": "99bffb0d59b6e125810c23f1731ad17ae006129a",
+  "signedBuildRun": "https://github.com/ugurkocde/TenuVault/actions/runs/43503338828",
+  "device": {
+    "platform": "Windows 11",
+    "build": "26200",
+    "enrolled": true,
+    "desktopRunLevel": "limited",
+    "profile": "isolated test profile; installed profile unchanged"
+  },
+  "signatures": {
+    "application": "Valid",
+    "helper": "Valid",
+    "matchingPublishers": true,
+    "applicationSha256": "baab99b19b7d78fcd8137a532900fc09a77766bac60d17d20d4c62729e101b24",
+    "helperSha256": "06ec7d9879cd0da3e675b100f38a8a30f38a5b22467cc6c935cf0a6808fdf3d3",
+    "foreignPublisherParent": "signed helper refused Node parent before accepting a request",
+    "compiledNativeChecksWithRequireSignature": 32
+  },
+  "productionControl": {
+    "disabledResponse": "verified fresh nonce-bound Ed25519 claim against the release-pinned public key",
+    "enabledResponse": "verified fresh nonce-bound Ed25519 claim against the release-pinned public key",
+    "signedAppWhileDisabled": "refused before consent; existing two backups unchanged; no helper or staging",
+    "publicKeySha256": "71e8a17a5a7cf36a60d057b51ba6742dd33200eb1f1ce17afb7ba6b95e6f2b50"
+  },
+  "signedAppFlow": {
+    "application": "PowerShell",
+    "trigger": "user clicked Start backup in the interactive Windows app and approved native Windows consent",
+    "capture": "passed",
+    "bytes": 123779448,
+    "sha256": "aab979dcb289d34da2b50328b67613a896ffac542154946b158e71a6f14df3da",
+    "createdAt": "2026-11-14T13:27:27.086Z",
+    "provenance": "intune-capture",
+    "matchesIndependentLabCapture": true,
+    "nativeExport": "passed using the save dialog's default capture filename; byte count and SHA-256 identical",
+    "restart": "passed; all three backups retained with no catalog warnings",
+    "previousTwoBackupsPreserved": true,
+    "manifestFiles": 3,
+    "artifactFiles": 3,
+    "stagingDirectories": 0,
+    "unexpectedFiles": 0,
+    "helperProcesses": 0,
+    "consentProcesses": 0
+  },
+  "earlierAttempts": "automation-driven Windows approval attempts ended cancelled and published no backup; they are not counted as successes",
+  "scope": "Signed capture/export/restart at the commit above. Subsequent completion-navigation UI changes have separate automated evidence.",
+  "notVerified": [
+    "Live non-admin Microsoft requester refusal: no test account available; role refusals covered by compiled fixtures",
+    "Defender for Endpoint deployment",
+    "macOS installer retrieval: no enrolled Mac available",
+    "Restore: not implemented"
+  ],
+  "tenantWrites": false
+}

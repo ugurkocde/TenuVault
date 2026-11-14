@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process"
 import { resolve } from "node:path"
 import tailwindcss from "@tailwindcss/vite"
 import react from "@vitejs/plugin-react"
@@ -11,6 +12,7 @@ import {
 } from "./scripts/license-public-key"
 
 const desktopRoot = import.meta.dirname
+if (process.platform === "win32") execFileSync(process.execPath, [resolve(desktopRoot, "scripts/build-app-backup-helper.mjs")], { stdio: "inherit" })
 checkFrameworkRights(desktopRoot)
 const webSrc = resolve(desktopRoot, "src/portal")
 const renderer = resolve(desktopRoot, "src/renderer")

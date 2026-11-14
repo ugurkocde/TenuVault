@@ -1,132 +1,118 @@
 ---
-title: "App Backup: free Win32 installer storage"
-description: List your Intune Win32 apps, store encrypted copies of original .intunewin packages, and export installers offline. App Backup is free.
+title: "App Backup: Intune installers"
+description: Back up Win32 installer content from Intune on an enrolled Windows PC, keep it encrypted and export it offline. App Backup is free.
 faq:
   - question: "Is TenuVault App Backup free?"
-    answer: "Yes. App Backup is free for every configured tenant, including tenants outside paid license coverage. Saving, listing, reconnecting and exporting original installer files need no active license or Community tenant selection."
-  - question: "Can App Backup download an installer from Intune?"
-    answer: "No, the current build does not capture or download installer content from Intune. It lists your Win32 apps and guides preparation. To save an installer now, select an original .intunewin file you already have."
-  - question: "Can I export a saved installer while signed out?"
-    answer: "Yes. Saved installers work offline while the tenant remains configured and the matching encryption key is available. Live Intune app lists and device checks require Microsoft sign-in."
-  - question: "Does App Backup restore a Win32 app to Intune?"
-    answer: "No. Export returns the original .intunewin file. Uploading that file, recreating the app and reviewing its assignments remain manual Intune operations in this version."
+    answer: "Yes. App Backup is completely free for every configured tenant. It does not require a paid product license or Community tenant selection. Microsoft authentication and Intune permissions still apply to tenant reads."
+  - question: "Do I need to choose an installer from my computer?"
+    answer: "No. App Backup is intended to retrieve installer content from Intune. Selecting an existing local file is not an Intune backup. The manual attachment action has been removed."
+  - question: "Can this build retrieve Windows or macOS installers from Intune?"
+    answer: "The Windows preview retrieves system-context Win32 installer content on a PC enrolled in the selected tenant. It requires Windows approval and an active Intune Administrator or Global Administrator session. macOS installer capture is not available yet."
+  - question: "Can I still export a file saved by an earlier version?"
+    answer: "Yes. Earlier administrator-selected files remain available as legacy local archives. You can export them offline with the matching recovery key, but they are not captured Intune backups and cannot be used for restore."
+  - question: "Can App Backup restore apps?"
+    answer: "Restore is not available in this build. Its required input will be an installer captured by an earlier successful Intune backup, with its app and content identity. Arbitrary local packages and metadata-only backups do not qualify."
 ---
 
-**App Backup is completely free** for every configured tenant. No active license or Community tenant selection is required.
+**App Backup is completely free** for every configured tenant. Open it below **Backup & Restore** in the desktop sidebar.
 
-**App Backup** keeps original Win32 installer packages separately from policy backups. Open it immediately below **Backup & Restore** in the desktop sidebar.
+App Backup's purpose is to retrieve installer content from Intune and retain an encrypted backup. The **Windows capture preview** retrieves system-context Win32 installers on an enrolled Windows PC. Restore and macOS installer capture are not available yet.
 
-This first version lists your Intune Win32 apps with their details, guides backup, and supports local source folders, attaching existing `.intunewin` packages, listing stored versions and exporting the original file. It does not download installers from Intune, upload apps, restore their content or associate a selected installer with a particular Intune content version.
+The earlier manual-file workflow has been removed. Files already saved by an earlier build remain available as **Legacy local archive**, with an export action. They are not counted as Intune captures.
 
-## Before you start
+## What works now
 
-Use a desktop build with **App Backup** in the sidebar. Select a configured tenant; its Microsoft app registration is needed for live app lists and device checks. You do not need to choose policy-backup storage or activate a license to use App Backup. See [Connect your tenant](/getting-started/connect-tenant/) if it is not configured yet.
-
-To store a file, have its original `.intunewin` package, up to 2 GiB, and enough free space in the source folder. To export it later, keep the matching [recovery key](/security/encryption/). Local file operations do not require Microsoft sign-in or a matching Windows enrollment.
-
-| Action | Available in this version | Microsoft sign-in |
-| --- | --- | --- |
-| List and search the tenant's Win32 apps | Yes | Required |
-| View app details, print and download available scripts | Yes | Required |
-| Check this PC's public Windows enrollment metadata | Yes, on Windows | Required |
-| Save an original `.intunewin` file you already have | Yes | Not required |
-| Browse, reconnect and export saved originals | Yes | Not required |
-| Capture installer content from Intune | Unavailable | No capture action exists |
-| Upload or restore app content to Intune | Unavailable | Complete these steps manually in Intune |
-
-## Save your first installer
-
-1. Select the tenant, then open **App Backup** below **Backup & Restore**.
-2. Open **Saved installers → Save an installer file**.
-3. Optionally enter an app label, then select **Save installer** and choose the original `.intunewin` file.
-4. Wait for **Installer saved**. The file appears with **Administrator selected** provenance.
-5. Select **Export original**, choose a new destination filename, and confirm the exported file is available.
-6. Save the recovery key in **Settings → Storage and recovery**, and keep a separate copy of the encrypted source folder under your own backup policy.
-
-The default encrypted store is **TenuVault App Sources** in Documents. The label can help you find a file; it does not prove the file matches an Intune app or version. To start from your tenant's inventory instead, follow the preparation flow below.
-
-![Saved installers after a successful original-file export](/images/app-backup/saved-installers.png)
-
-*Example from the desktop app with a synthetic tenant and lab package. Attachment, encrypted storage and exact original export ran through the real app handlers.*
-
-## Start with an Intune app
-
-Open **Intune apps**. The table loads automatically with the Microsoft session already connected to the selected tenant. A healthy existing session needs no additional sign-in. **Reconnect Microsoft** appears only when the session is missing or a refresh needs attention. Use **Save an existing installer** to work offline.
-
-The table shows the app name, logo when Intune provides a supported image, publisher, displayed version and last-modified date. Search by name, publisher or version; lists use pages of 25 rows. A missing logo uses an initial, and a missing version says **Not specified**.
-
-Select the app name or **Details** to inspect:
-
-- **Overview:** version, publisher, description, dates, package filename/size and Intune app ID.
-- **Installation:** install/uninstall commands, execution context, restart behavior and runtime limit.
-- **Scripts:** available install, uninstall, detection and requirement script content. Scripts are displayed as text and never executed here. **Download** saves an available script through a native file dialog as a UTF-8 `.ps1` file with a BOM for Windows PowerShell compatibility. Downloads check that the returned script still matches the displayed content, preserve existing filenames and do not run it. If it changed, refresh the details first. UTF-8 and BOM-marked UTF-16 scripts are supported; invalid or unsupported encodings show unavailable content with a warning instead of a download.
-- **Detection & requirements:** the rule metadata returned by Intune.
-- **Assignments:** returned Required, Available or Uninstall targeting, including group/filter references where provided. This does not calculate effective eligibility for this PC.
-
-**Print** opens the native printer dialog. Long scripts are explicitly shortened in the printable report; the full returned script remains available in the details view. The printed metadata does not include installer bytes. Failed script or assignment reads show a notice without hiding otherwise available app details.
-
-![App details showing overview metadata and native Print](/images/app-backup/app-details.png)
-
-![Available script with a Download action and confirmation that it was saved without execution](/images/app-backup/app-scripts.png)
-
-*Details examples use synthetic metadata. The script download ran through the real trusted handler; no script was executed.*
-
-Select **Backup** on the app’s row, then **Choose installer file**. The selected app supplies a label only. Saving does not require a PC check or assignment change.
-
-The optional **What capture will need (unavailable in this build)** disclosure explains future capture requirements:
-
-1. Check that this Windows PC is enrolled in the selected tenant.
-2. Changing assignments will not enable capture in this build. Do not change assignments for this feature yet. Required assignments can install automatically; any future capture workflow must account for groups, filters and exclusions.
-3. Capture the original package, verify it and store an encrypted copy. **This capture step is unavailable in the current build.** The preparation screen does not start an installation, change assignments or extract installed program files.
-
-![Intune app table with details and a backup action for each Win32 app](/images/app-backup/intune-apps.png)
-
-*Illustration from the running desktop app using synthetic app names and a test tenant. It demonstrates the UI; it does not demonstrate sign-in or installer access.*
-
-The live list follows all Microsoft Graph beta pages and includes exact Win32 app types. A failed refresh does not show a partial inventory or infer that installers are missing. The app list is independent of saved files, so a sign-in or inventory failure does not block offline export.
-
-Already have the original `.intunewin` file? Choose **Choose installer file** after selecting an app, or open **Saved installers → Save an installer file**. Select a package up to 2 GiB. Its encrypted snapshot’s container and metadata are checked before publication. The app name is only an administrator-provided label; matching an Intune content version and installation behavior are not verified.
-
-Reconnect is available from **Saved installers**. Changing backup storage does not change this store. Sources have no automatic retention or delete action in this version.
-
-Switching between **Intune apps** and **Saved installers** keeps a running file operation and its feedback. Leaving App Backup or changing tenant cancels the operation; stay in App Backup until it finishes. Cancel is shown as a neutral notice, and incomplete files are not listed.
-
-## Export the original bytes
-
-Open **Saved installers**, find the package, then choose **Export original**. Choose a new file name. An existing destination is preserved, even if the operating system's file dialog offered to replace it.
-
-Export requires a destination filesystem supporting hard links. On macOS and Linux, exported files initially have owner-only permissions. Export checks the encrypted chunks and complete file hash before publishing the destination. It does not rebuild the package or alter its contents. Stored versions remain browseable and exportable while signed out or without an active entitlement, provided the tenant is still configured and this device has the matching encryption key.
-
-## Reconnect after moving to another computer
-
-Keep both the source folder and the [recovery key](/security/encryption/). The source folder contains the encrypted catalog as well as the encrypted artifacts; the recovery key alone does not contain the installers.
-
-On another installation, configure the same tenant, import the matching recovery key in **Settings → Storage and recovery**, then use **Choose installer folder** in App Backup to select the root of the retained source folder, which contains the tenant GUID folders. Selecting a tenant folder or an individual package folder is refused. If the selected root has no source store for this tenant, TenuVault asks before using it as a new empty store. Listing and export can read a retained store without creating folders in it. Each source is rebuilt from its encrypted manifest. Reconnecting changes the folder used for this tenant; it does not move or delete previous source folders.
-
-Unreadable or incomplete sources are not silently counted. Interrupted imports stay out of the catalog. Owned staging left by a terminated process is reconciled when the folder is next read; uncertain staging is left unlisted with a notice. Encrypted export journals in local app data track temporary plaintext so a later run on the original computer can remove interrupted exports. Keep the source folder accessible until interrupted work has been reconciled.
-
-## Coverage and device checks
-
-The Intune app list is live metadata, not evidence of installer availability. Saved packages are not automatically matched to Intune versions. A stored package does not establish restore readiness.
-
-**Check this PC** is read-only. On Windows it can compare public enrollment/certificate metadata with the selected tenant's Intune account. It requires Microsoft sign-in and the appropriate Intune permissions for the selected tenant, but no product license or Community tenant selection. Use **Reconnect Microsoft** on the app table when prompted. The optional **Check Windows enrollment** action reuses the current session or requests sign-in when it is missing, without a product-license check. Local source operations remain available while signed out. It never uses a private key, requests installer content, elevates a process or enables recovery. A matched enrollment is not a statement that recovery is ready. Non-Windows and unconfirmed checks explain why their state is unavailable or unknown.
-
-## Troubleshooting
-
-| What you see | What to do |
+| Action | Availability |
 | --- | --- |
-| App Backup is missing from the sidebar | Use a desktop release that includes App Backup. This guide does not mean it exists in older installations. |
-| The Intune list cannot load | Use **Reconnect Microsoft** if prompted, check the selected tenant and its app registration, then refresh. Review [delegated permissions](/security/permissions/) if access is refused. Saved installers remain separate. |
-| The PC check is unknown or unavailable | Read its reason. A non-Windows PC cannot perform the Windows enrollment check. A matching check does not enable capture. |
-| Capture is unavailable | This is the current product boundary. Save an original file you already have; assigning or installing the app will not enable the missing capture action. |
-| A source cannot be read | Reconnect the retained source-store root and import its matching recovery key. An unreadable store blocks adding packages until its keys/files are resolved. |
-| The destination already exists | Choose a new filename. Export preserves existing files. |
-| Export cannot publish to a filesystem | Choose a destination with hard-link support and write access. Export does not fall back to replacing an existing file. |
-| Export finished but temporary cleanup needs attention | Read the cleanup warning, resolve file access or locks at the destination, and refresh to retry. A published export remains successful. |
+| List and search the tenant's Windows Win32 apps | Available using your existing Microsoft session |
+| View version, logo, description, installation settings, rules and assignments | Available when Intune returns the information |
+| Print app details or download available script content | Available; scripts are never executed |
+| Read public Windows enrollment metadata | Available on Windows; does not establish installer access |
+| Check this PC's app assignments before capture | Automatic on Windows; group membership needs optional directory-read permissions |
+| Browse, reconnect and export legacy archives | Available offline with the matching recovery key |
+| Retrieve Windows installer content from Intune | Windows preview, system context, up to 2 GiB |
+| Retrieve macOS PKG or DMG installer content from Intune | Not available in this build |
+| Restore an app using a captured installer | Not available in this build |
+
+macOS support means retrieving the installer from Intune, not downloading a substitute from a vendor or copying an installed `.app` directory. It needs its own tested device adapter. Windows app metadata can be viewed on a Mac; a Mac cannot perform the Windows enrollment check.
+
+## Browse your tenant's apps
+
+1. Select a configured tenant and open **App Backup → Intune apps**.
+2. The app table uses the Microsoft session already connected to that tenant. Use **Reconnect Microsoft** only if it is missing or expired.
+3. Search by name, publisher or version, then open **Details**.
+4. Review the app's overview, installation settings, scripts, detection and requirement rules, and assignments. Values that Intune does not return stay unspecified.
+
+**Download** appears only when a script's actual content can be retrieved and decoded. A command line referring to a script inside the installer does not make that file available for download. Downloading a script does not execute it or back up the installer payload. Print uses the operating system's printer dialog.
+
+## Back up a Windows installer
+
+1. Open TenuVault on a Windows PC enrolled in the same Intune tenant. Use your existing Microsoft session with an active **Intune Administrator** or **Global Administrator** role. Custom Intune roles are not supported by this preview.
+2. Find the app and choose **Backup**. The preview supports **system-context** Win32 apps with one committed installer payload, up to **2 GiB**.
+3. Review **Assignment check for this PC**, which runs automatically. It identifies device targeting, exclusions, user-only assignments and filters, with next steps. Use **Recheck assignments** after an intended change in Intune.
+4. Choose **Start backup** and approve the Windows prompt. The desktop app stays non-elevated; a temporary helper uses the enrollment key for this request. A check older than a minute refreshes first so you can review its updated guidance before starting.
+5. Wait while TenuVault downloads, verifies and encrypts the installer. Completion appears only after the encrypted backup is published.
+6. Choose **View this backup** in the completion message to open the exact captured version, with its file details and **Export installer** action. Choose **Open local folder** to open its encrypted backup folder in your file manager. Keep the [recovery key](/security/encryption/) from Settings safe.
+
+If the app record has no committed installer content, Backup explains this before asking for Windows approval. Choose an app whose installer has been uploaded to Intune.
+
+New captures also require an online check of TenuVault's signed capture control. Capture can
+be paused if the preview's Intune integration needs a fix, or an app update may be required.
+This check is free and sends no Microsoft token, tenant ID or license key. An unavailable
+control service prevents a new capture; existing backups remain available to export offline.
+
+No local installer file is required. Backup does not change assignments or start an installation. Intune must allow this device to retrieve the content. If it refuses access, review the app's Required targeting, including group membership, exclusions and filters. Required assignments can install software automatically; use a dedicated test-device group. A successful enrollment check alone does not prove content access.
+
+The helper reads the Intune agent's recently discovered service address. If it cannot find that address, sync the PC with Intune and retry. This preview requires your Windows account to be a local administrator. Approval with a different Windows account is not supported. Cancelling approval or the capture leaves no completed backup. If a Windows approval prompt remains after cancellation, dismiss it; its expired request cannot continue.
+
+Microsoft permissions remain separate from product licensing. The configured registration needs delegated `DeviceManagementApps.ReadWrite.All`, `DeviceManagementServiceConfig.Read.All` (or its read/write equivalent), and `User.Read`. TenuVault's standard setup includes these capabilities. No paid TenuVault license is required.
+
+### Understand the assignment check
+
+The check reads app assignments and matches this PC's local Entra identity and Intune enrollment to the selected tenant. It uses the device's reported transitive group memberships, including nested groups. Device identifiers stay in the main process; the app does not use the administrator's user membership as a substitute for the capture PC.
+
+| Result | What to do |
+| --- | --- |
+| A device assignment includes this PC | No device-targeting change is indicated. Start backup; Intune still decides whether content access is allowed. |
+| No assignments, or no device assignment found for this PC | Review the named targets. Add the PC to the intended device group or create a Required assignment to a dedicated device group containing it. |
+| This PC matches an app exclusion | Review the named exclusion and its intent. Another include assignment of that intent does not override a matching exclusion. Change scope only if the PC should receive the app. |
+| Only user targeting found | User-based access is not evaluated. To target the capture PC explicitly, use a dedicated device-group assignment; existing user assignments can remain. |
+| Filter needs review | Check the displayed filter name, mode and rule in Intune. For an include filter the PC must match; for an exclude filter it must not match. TenuVault does not reproduce Intune's filter evaluation. |
+| Install and uninstall targeting | Review the competing intents in Intune before changing targeting. The check does not predict a final install outcome. |
+| Check unavailable or membership unknown | Resolve the displayed enrollment, connectivity or permission issue and recheck. Incomplete results are never treated as an empty assignment list. |
+
+No assignment or group membership is changed automatically. Required assignments can cause Intune to install software; keep intended changes limited to a dedicated test-device group. After changing targeting, sync the PC and allow membership changes to propagate before rechecking. An assignment check is guidance, not proof of installer authorization, so an uncertain check still allows a deliberate Backup attempt.
+
+Device-group checks need optional delegated **`Device.Read.All`**. Reading names and visibility of referenced groups needs **`GroupMember.Read.All`** or an existing broader group-read permission. Filter details use **`DeviceManagementConfiguration.Read.All`** or its read/write equivalent, already included in the standard setup. For an existing registration, add only the needed read permissions in Entra, grant admin consent, reconnect Microsoft in TenuVault, then recheck. The default setup permissions are unchanged. All-devices and user-only targeting can be described without device-group reads.
+
+## Backups and legacy archives
+
+Open **Backups** to view the encrypted folder for the selected tenant. Intune captures and earlier local archives have distinct provenance labels. A legacy archive cannot gain capture provenance by changing its name or matching an app's display name.
+
+Each stored item also offers **Open local folder**. This folder contains encrypted backup files; use **Export installer** in TenuVault to produce a usable installer payload. When viewing one completed backup, **View all backups** returns to the full catalog.
+
+An installer capture must match the requested tenant, live app and committed version, then pass HMAC, size and plaintext SHA-256 checks before publication. Its receipt retains a hash of the opaque device content service identifier; that fingerprint is not a Microsoft Graph file ID. Interrupted or failed staging is not listed as a backup. The Windows payload is a source ZIP, not a byte-identical copy of the outer `.intunewin` originally uploaded to Intune. Restore additionally needs a compatible packaging implementation and Microsoft authorization; a stored payload alone does not mean restore is ready.
+
+## Export a backup or legacy archive
+
+1. Open **Backups** and find the captured installer.
+2. Choose **Export installer**, then select a new destination filename. For an older **Legacy local archive**, use **Export archive**.
+3. Wait for **Installer exported**.
+
+Export preserves existing destination files and checks the encrypted chunks and full file hash before publishing. The destination filesystem must support hard links. On macOS and Linux, exported files initially have owner-only permissions.
+
+Export remains available while signed out, provided the tenant is configured and the matching recovery key is available. Switching between App Backup's tabs keeps the operation running. Leaving App Backup or switching tenants cancels an unfinished capture or export.
+
+## Reconnect a retained folder
+
+Keep both the encrypted folder and its [recovery key](/security/encryption/). The key alone does not contain the installers.
+
+On another installation, configure the same tenant, import the matching key in **Settings → Storage and recovery**, then use **Choose installer folder** to select the retained folder's root, which contains the tenant folders. Reconnecting does not move or delete any existing files. Earlier archive manifests remain readable.
+
+If a folder cannot be read, check its location and import the matching key. After an interrupted export, resolve any destination file locks and refresh to retry cleanup. A published export remains successful even if temporary-file cleanup needs another attempt.
 
 ## Related pages
 
+- [Connect your tenant](/getting-started/connect-tenant/)
 - [What gets backed up](/backups/coverage/): app settings and installer content are separate.
-- [Encryption and recovery key](/security/encryption/): keep the key needed to read retained source folders.
-- [Intune disaster recovery](/restore/disaster-recovery/): include original installers in your recovery preparation.
-- [Restore limitations](/restore/limitations/): exporting an original does not add content restoration to the wizard.
+- [Encryption and recovery key](/security/encryption/)
