@@ -241,7 +241,7 @@ export class BackupReaderService {
       const roles = checkReaderToken(acquired.accessToken, app, resource, selection)
       if (resource === "graph" && roles.join(" ") !== seen) {
         seen = roles.join(" ")
-        this.noteRoleChange(credential.tenantId, roles, verified)
+        this.noteRoleChange(credential.tenantId, roles)
         requireSomethingToRead(roles.filter((role) => verified.includes(role)), selection)
       }
       return acquired.accessToken
@@ -249,12 +249,17 @@ export class BackupReaderService {
     return { mode: "app-only", graph: () => token("graph"), storage: () => token("storage"), excludedTypes: readerExcludedFolders(verified, selection) }
   }
 
-  /** Keeps how a token's roles differ from the verified ones, and forgets it once they match again. */
-  private noteRoleChange(tenantId: string, roles: string[], verified: string[]): void {
+  /**
+   * Keeps how a token's roles differ from the verified ones, and forgets it once they match again.
+   * It compares with the roles verified by now, so a backup that started before the admin verified
+   * again does not bring the notice back.
+   */
+  private noteRoleChange(tenantId: string, roles: string[]): void {
+    const credential = this.read(tenantId)
+    if (!credential?.verifiedRoles) return
+    const verified = credential.verifiedRoles
     const added = roles.filter((role) => !verified.includes(role))
     const removed = verified.filter((role) => !roles.includes(role))
-    const credential = this.read(tenantId)
-    if (!credential) return
     const previous = credential.roleChange
     if (!added.length && !removed.length) {
       if (!previous) return

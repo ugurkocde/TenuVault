@@ -161,6 +161,20 @@ describe("BackupReaderService", () => {
     expect(verified.excludedTypes).toEqual([...DEVICE_INVENTORY_TYPES, ...CONDITIONAL_ACCESS_TYPES])
   })
 
+  it("does not bring the notice back from a backup that started before the admin verified again", async () => {
+    const { reader, setGraph } = service()
+    reader.prepare(TENANT, "LAPTOP-1")
+    await reader.verify(TENANT, READER)
+    // A scheduled backup starts, then the reader gets a role and the admin verifies it.
+    const running = reader.tokens(scheduled)!
+    setGraph(() => graphToken({ roles: [...READER_REQUIRED_ROLES, CONDITIONAL_ACCESS_ROLE] }))
+    await reader.verify(TENANT, READER)
+    await running.graph()
+    expect(reader.status(TENANT)!.roleChange).toBeNull()
+    // The running backup still reads only what was verified when it started.
+    expect(running.excludedTypes).toEqual([...DEVICE_INVENTORY_TYPES, ...CONDITIONAL_ACCESS_TYPES])
+  })
+
   it("forgets a noted change once the roles match the verified ones again", async () => {
     const { reader, setGraph } = service()
     reader.prepare(TENANT, "LAPTOP-1")
