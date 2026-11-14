@@ -52,8 +52,8 @@ export const ENTRA_AREAS: readonly PermissionArea[] = [
   area({ id: "externalIdentities", label: "External identities" }, [
     part(["CrossTenantAccessPolicy", "CrossTenantAccessDefault", "CrossTenantAccessPartners", "CrossTenantAccessMtoTemplates"], [["Policy.Read.All", "Policy.ReadWrite.CrossTenantAccess"]], [["Policy.Read.All"]], [["Policy.ReadWrite.CrossTenantAccess"]]),
     part(["ExternalIdentitiesPolicy"], [["Policy.Read.All", "Policy.ReadWrite.ExternalIdentities"]], [["Policy.Read.All"]], [["Policy.ReadWrite.ExternalIdentities"]]),
-    // Policy.Read.All is not on Microsoft's page, but the lab read succeeded app-only with it and without Policy.Read.B2BManagementPolicy.
-    part(["B2bManagementPolicies"], [["Policy.Read.B2BManagementPolicy", "Policy.ReadWrite.B2BManagementPolicy", "Policy.Read.All"]], [["Policy.Read.B2BManagementPolicy"]], [["Policy.ReadWrite.B2BManagementPolicy"]]),
+    // The lab read succeeded app-only with Policy.Read.All alone, but Microsoft lists only the B2B management permissions, so those are what TenuVault asks for.
+    part(["B2bManagementPolicies"], [["Policy.Read.B2BManagementPolicy", "Policy.ReadWrite.B2BManagementPolicy"]], [["Policy.Read.B2BManagementPolicy"]], [["Policy.ReadWrite.B2BManagementPolicy"]]),
     part(["IdentityProviders"], [["IdentityProvider.Read.All", "IdentityProvider.ReadWrite.All"]], [["IdentityProvider.Read.All"]], [["IdentityProvider.ReadWrite.All"]]),
     part(["UserFlows", "UserFlowAttributes"], [["IdentityUserFlow.Read.All", "IdentityUserFlow.ReadWrite.All"]], [["IdentityUserFlow.Read.All"]], [["IdentityUserFlow.ReadWrite.All"]]),
     part(["AuthenticationEventsFlows", "AuthenticationEventListeners"], [["EventListener.Read.All", "EventListener.ReadWrite.All"]], [["EventListener.Read.All"]], [["EventListener.ReadWrite.All"]]),

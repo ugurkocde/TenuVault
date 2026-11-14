@@ -1067,12 +1067,11 @@
       "read": ["GET /policies/b2bManagementPolicies"],
       "write": ["POST /policies/b2bManagementPolicies"],
       "live": "200 with Policy.Read.All",
-      "note": "Policy.Read.All is not on Microsoft's page, but the lab read succeeded app-only with it and without Policy.Read.B2BManagementPolicy.",
+      "note": "The lab read succeeded app-only with Policy.Read.All alone, but Microsoft lists only the B2B management permissions, so those are what TenuVault asks for.",
       "backup": {
         "delegated": [
           {"permission": "Policy.Read.B2BManagementPolicy", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
-          {"permission": "Policy.ReadWrite.B2BManagementPolicy", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"},
-          {"permission": "Policy.Read.All", "asked": false, "model": "not listed", "index": "not listed", "status": "confirmed live"}
+          {"permission": "Policy.ReadWrite.B2BManagementPolicy", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
         ],
         "application": [
           {"permission": "Policy.Read.B2BManagementPolicy", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
