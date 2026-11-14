@@ -56,11 +56,13 @@
 .PARAMETER Services
     The services scheduled backups read with the Backup Reader: Intune, ConditionalAccess, Entra,
     Defender. Default: Intune, which is what the script has always granted. Name the services the
-    tenant backs up in TenuVault; the reader gets the read permissions of each and no others.
+    tenant backs up in TenuVault; the reader gets the read permissions of each and no others. An
+    empty list is refused; leave the parameter out to get the default.
 
 .PARAMETER Areas
     Areas of Entra that the reader reads only on request: Groups, UsersAndDevices, Applications.
-    Groups and UsersAndDevices hold personal data. Needs Entra in -Services.
+    Groups and UsersAndDevices hold personal data. Needs Entra in -Services. An empty list is
+    refused; leave the parameter out to read none of these areas.
 
 .PARAMETER IncludeDeviceCategories
     Also grants DeviceManagementManagedDevices.Read.All, which device categories and device
@@ -137,6 +139,11 @@ $permissionTable = @(
     @{ Service = 'Defender'; Area = 'Posture'; OptIn = $false; Roles = @('SecurityEvents.Read.All', 'RoleManagement.Read.Defender') }
 )
 # END PERMISSION TABLE
+# A list that was passed empty is refused: taking it for a parameter that was left out would
+# request the default permissions without saying so.
+foreach ($name in 'Services', 'Areas') {
+    if ($PSBoundParameters.ContainsKey($name) -and -not $PSBoundParameters[$name]) { throw "-$name was given without a value. Name at least one, or leave -$name out. Nothing was changed." }
+}
 $chosenServices = $Services
 if (-not $chosenServices) { $chosenServices = $defaultServices }
 foreach ($name in $Areas) {

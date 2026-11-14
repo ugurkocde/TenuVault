@@ -73,6 +73,7 @@ For a tenant that backs up Entra ID or Defender, name the services with `-Servic
 <!-- permissions:defender:end -->
 
 * Groups, users and devices, and applications are read only when you add the area with `-Areas`, for example `-Areas Groups,Applications`. Groups and users and devices hold personal data, so agree on them like on the device inventory permission.
+* The script refuses a list that is passed empty, such as `-Services @()`, before it signs in. Leave `-Services` out to get the Intune permissions, and leave `-Areas` out to read none of those areas.
 * A permission the reader lacks for Entra ID or Defender only leaves the policies out that need it. Scheduled backups list them as not readable by the Backup Reader, and manual backups include them.
 * Mobile device management and mobile application management enrollment policies, the on-premises synchronization settings and the ownerless group policy are left out of every scheduled backup: Microsoft Graph lets only a signed-in admin read them.
 * A reader with permissions for Entra ID or Defender is refused by TenuVault versions before 0.6, which know only the permissions for Intune and Conditional Access. Update TenuVault on every computer that uses the reader before you add a service to it.

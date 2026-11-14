@@ -36,6 +36,12 @@ it("keeps the setup script ASCII and free of module dependencies", () => {
   expect(source).not.toMatch(/(?:Install-Module|Import-Module|Connect-MgGraph|\w+-Mg\w+)/i)
 })
 
+it("tells a list that was passed empty from one that was left out, before it signs in", () => {
+  const check = "if ($PSBoundParameters.ContainsKey($name) -and -not $PSBoundParameters[$name]) { throw \"-$name was given without a value."
+  expect(source).toContain(`foreach ($name in 'Services', 'Areas') {\n    ${check}`)
+  expect(source.indexOf(check)).toBeLessThan(source.indexOf("$clientId = '14d82eec-204b-4c2f-b7e8-296a70dab67e'"))
+})
+
 describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
   it.each([script, resolve("test/fixtures/app-registration/setup-harness.ps1"), resolve("test/fixtures/app-registration/parse-script.ps1")])("parses %s with no edition-specific syntax", file => {
     const result = spawnSync(powershell!, ["-NoProfile", "-File", resolve("test/fixtures/app-registration/parse-script.ps1"), "-Script", file], { encoding: "utf8" })
@@ -242,6 +248,18 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
     const result = await run("default", args)
     expect(result.code).toBe(1)
     expect(result.text).toContain(message)
+    expect(result.requests).toEqual([])
+  }, 45000)
+
+  it.each([
+    [{ Services: [] }, "Services"],
+    [{ Areas: [] }, "Areas"],
+    [{ Services: ["Entra"], Areas: [] }, "Areas"],
+    [{ Services: [], RestoreAccess: ["None"] }, "Services"],
+  ])("refuses a list that was passed empty, which is not the default, before anyone signs in: %j", async (args, parameter) => {
+    const result = await run("default", args)
+    expect(result.code).toBe(1)
+    expect(result.text).toContain(`-${parameter} was given without a value. Name at least one, or leave -${parameter} out. Nothing was changed.`)
     expect(result.requests).toEqual([])
   }, 45000)
 

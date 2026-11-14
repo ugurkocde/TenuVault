@@ -34,6 +34,12 @@ describe("New-TenuVaultBackupReader.ps1", () => {
     expect(readerScript.indexOf("which belongs to a service that is not in -Services")).toBeLessThan(readerScript.indexOf("Connect-MgGraph @connectParams"))
   })
 
+  it("tells a list that was passed empty from one that was left out, before it connects to Microsoft Graph", () => {
+    const check = "if ($PSBoundParameters.ContainsKey($name) -and -not $PSBoundParameters[$name]) { throw \"-$name was given without a value."
+    expect(readerScript).toContain(check)
+    expect(readerScript.indexOf(check)).toBeLessThan(readerScript.indexOf("Connect-MgGraph @connectParams"))
+  })
+
   describe.runIf(Boolean(powershell))("run against stand-ins for the Microsoft Graph commands", () => {
     function run(args: Record<string, unknown> = {}, state: { existing?: boolean; assigned?: string[] } = {}) {
       const dir = mkdtempSync(join(tmpdir(), "reader-script-"))
@@ -103,6 +109,17 @@ describe("New-TenuVaultBackupReader.ps1", () => {
       expect(result.removed).toEqual(FIVE)
       expect(result.granted).toEqual(entra.filter((role) => role !== "Policy.Read.All"))
       expect(result.text).toContain("Removing DeviceManagementApps.Read.All because the services and areas of this run do not need it.")
+    }, 90_000)
+
+    it.each([
+      [{ Services: [] }, "Services"],
+      [{ Areas: [] }, "Areas"],
+      [{ Services: ["Entra"], Areas: [] }, "Areas"],
+    ])("refuses a list that was passed empty, which is not the default, before it signs in: %j", (args, parameter) => {
+      const result = run(args)
+      expect(result.code).toBe(1)
+      expect(result.text).toContain(`-${parameter} was given without a value. Name at least one, or leave -${parameter} out. Nothing was changed.`)
+      expect(result.calls).toEqual([])
     }, 90_000)
 
     it("refuses an area whose service was not chosen, before it signs in", () => {

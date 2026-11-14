@@ -40,6 +40,7 @@
     The services the app registration can back up: Intune, ConditionalAccess, Entra, Defender.
     Default: Intune and ConditionalAccess, which is what the script has always requested. Each
     service brings its own read permissions; nothing is requested for a service you leave out.
+    An empty list is refused; leave the parameter out to get the default.
 
 .PARAMETER RestoreAccess
     The services TenuVault may also restore, which adds their write permissions. Default: Intune,
@@ -51,7 +52,8 @@
 
 .PARAMETER Areas
     Areas of Entra that are backed up only on request: Groups, UsersAndDevices, Applications.
-    Groups and UsersAndDevices hold personal data. Needs Entra in -Services.
+    Groups and UsersAndDevices hold personal data. Needs Entra in -Services. An empty list is
+    refused; leave the parameter out to back up none of these areas.
 
 .PARAMETER IncludeGroupRead
     When set, also requests the delegated Group.Read.All permission. The hygiene
@@ -163,6 +165,11 @@ $permissionTable = @(
     @{ Service = 'Defender'; Area = 'Posture'; OptIn = $false; Backup = @('SecurityEvents.Read.All', 'RoleManagement.Read.Defender'); Restore = @('SecurityEvents.ReadWrite.All', 'RoleManagement.ReadWrite.Defender') }
 )
 # END PERMISSION TABLE
+# A list that was passed empty is refused: taking it for a parameter that was left out would
+# request the default permissions without saying so.
+foreach ($name in 'Services', 'Areas') {
+    if ($PSBoundParameters.ContainsKey($name) -and -not $PSBoundParameters[$name]) { throw "-$name was given without a value. Name at least one, or leave -$name out. Nothing was changed." }
+}
 $chosenServices = $Services
 if (-not $chosenServices) { $chosenServices = $defaultServices }
 $chosenRestore = $RestoreAccess
