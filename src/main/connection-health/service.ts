@@ -1,6 +1,6 @@
 import type { RunOutcomes } from "../../shared/backup-outcomes"
 import { evaluateHealth, type HealthEvaluation, type ServiceChoice } from "../../shared/connection-health/evaluate"
-import type { ConnectionHealthReport, ReaderObservation } from "../../shared/connection-health/model"
+import type { ConnectionHealthReport, ReaderObservation, TokenObservation } from "../../shared/connection-health/model"
 import { runObservation } from "../../shared/connection-health/observe"
 import type { ModuleId } from "../../shared/services/modules"
 import { grantedPermissions } from "../../shared/services/token"
@@ -74,6 +74,12 @@ export class ConnectionHealth {
   /** The check that follows the running one, for triggers that must not be answered by a check that started before them. */
   private readonly following = new Map<string, Promise<ConnectionHealthReport>>()
   private readonly checkedAt = new Map<string, number>()
+  /**
+   * Per tenant: how often it was signed out of or removed. A check notes the count when it is asked
+   * for. Whatever it brings after the count moved on belongs to a sign-in that is gone, and is
+   * dropped whole: a token like a refusal, a check that waited like one that ran, and the notice.
+   */
+  private readonly generations = new Map<string, number>()
 
   constructor(private readonly host: HealthHost) {
     this.now = host.now ?? (() => new Date())
@@ -101,9 +107,11 @@ export class ConnectionHealth {
     const running = this.running.get(lane) ?? (reader ? undefined : this.running.get(`${tenant}|reader`))
     if (running && !always) return running
     if (running) {
-      const following = this.following.get(lane) ?? running.then(() => undefined, () => undefined).then(() => {
-        this.following.delete(lane)
-        return this.start(lane, tenant, reader)
+      const generation = this.generation(tenant)
+      const following: Promise<ConnectionHealthReport> = this.following.get(lane) ?? running.then(() => undefined, () => undefined).then(() => {
+        if (this.following.get(lane) === following) this.following.delete(lane)
+        // Signed out of or removed while it waited: the check was asked for under a sign-in that is gone, so it asks Microsoft nothing.
+        return this.generation(tenant) === generation ? this.start(lane, tenant, reader) : this.report(tenant)
       })
       this.following.set(lane, following)
       return following
@@ -114,7 +122,7 @@ export class ConnectionHealth {
   }
 
   private start(lane: string, tenant: string, reader: boolean): Promise<ConnectionHealthReport> {
-    const check = this.observe(tenant, reader).finally(() => {
+    const check = this.observe(tenant, reader, this.generation(tenant)).finally(() => {
       if (this.running.get(lane) === check) this.running.delete(lane)
     })
     this.running.set(lane, check)
@@ -153,20 +161,34 @@ export class ConnectionHealth {
     this.host.changed?.(tenant)
   }
 
-  /** The admin signed out of the tenant: what was observed for the account is dropped. */
+  /** The admin signed out of the tenant: what was observed for the account is dropped, and so is what a check under way still brings. */
   signedOut(tenantId: string): void {
     this.observations.signedOut(tenantId)
     this.forgetChecks(tenantId)
   }
 
-  /** The tenant was removed from the app: everything observed for it is dropped. */
+  /** The tenant was removed from the app: everything observed for it is dropped, and so is what a check under way still brings. */
   forget(tenantId: string): void {
     this.observations.forget(tenantId)
     this.forgetChecks(tenantId)
   }
 
+  private generation(tenant: string): number {
+    return this.generations.get(tenant) ?? 0
+  }
+
+  /**
+   * Moves the tenant's generation on, so nothing a check under way brings is kept, and lets go of
+   * those checks: whoever signs in next gets a check of their own, at once.
+   */
   private forgetChecks(tenantId: string): void {
-    for (const lane of ["admin", "reader"]) this.checkedAt.delete(`${tenantId.toLowerCase()}|${lane}`)
+    const tenant = tenantId.toLowerCase()
+    this.generations.set(tenant, this.generation(tenant) + 1)
+    for (const lane of [`${tenant}|admin`, `${tenant}|reader`]) {
+      this.checkedAt.delete(lane)
+      this.running.delete(lane)
+      this.following.delete(lane)
+    }
   }
 
   private adminKey(tenant: string): ConnectionKey | null {
@@ -174,15 +196,17 @@ export class ConnectionHealth {
     return connected && { tenantId: tenant, clientId: connected.clientId, mode: "delegated" }
   }
 
-  private async observe(tenant: string, reader: boolean): Promise<ConnectionHealthReport> {
+  private async observe(tenant: string, reader: boolean, generation: number): Promise<ConnectionHealthReport> {
     const connected = this.host.tenant(tenant)
     if (!connected) throw new Error("Connect this tenant first.")
     const key: ConnectionKey = { tenantId: tenant, clientId: connected.clientId, mode: "delegated" }
     await Promise.all([
-      this.observeToken(key, "graph"),
-      connected.storage === "azure" ? this.observeToken(key, "storage") : undefined,
-      reader ? this.observeReader(tenant) : undefined,
+      this.observeToken(key, "graph", generation),
+      connected.storage === "azure" ? this.observeToken(key, "storage", generation) : undefined,
+      reader ? this.observeReader(tenant, generation) : undefined,
     ])
+    // Signed out of or removed meanwhile: the answers were dropped, so nothing was checked and nothing changed.
+    if (this.generation(tenant) !== generation) return this.report(tenant)
     this.checkedAt.set(`${tenant}|${reader ? "reader" : "admin"}`, this.now().getTime())
     this.keepBaseline(tenant)
     this.host.changed?.(tenant)
@@ -194,33 +218,41 @@ export class ConnectionHealth {
    * back, never a time from inside the token. A token MSAL took from its cache was not issued for
    * this check, so nothing is kept for it and the last real answer stands.
    */
-  private async observeToken(key: ConnectionKey, resource: "graph" | "storage"): Promise<void> {
+  private async observeToken(key: ConnectionKey, resource: "graph" | "storage", generation: number): Promise<void> {
     const account = this.host.account(key.tenantId) ?? undefined
+    let observation: TokenObservation
     try {
       const token = await answered(this.host.token(key.tenantId, key.clientId, resource))
       if (token.fromCache !== false) return
-      const granted = grantedPermissions(token.accessToken)
-      this.observations.recordToken(key, resource, { at: this.now().toISOString(), ...(granted ? { permissions: [...granted.permissions].sort() } : {}) }, account)
+      observation = this.issued(token.accessToken)
     } catch (error) {
-      this.observations.recordToken(key, resource, { at: this.now().toISOString(), failure: signInFailure(error) }, account)
+      observation = { at: this.now().toISOString(), failure: signInFailure(error) }
     }
+    if (this.generation(key.tenantId) === generation) this.observations.recordToken(key, resource, observation, account)
   }
 
   /** The Backup Reader's facts on this device, and for a verified reader the answer to a new token request. */
-  private async observeReader(tenant: string): Promise<void> {
+  private async observeReader(tenant: string, generation: number): Promise<void> {
     const reader = this.host.reader(tenant)
     if (!reader?.clientId) return
     const key: ConnectionKey = { tenantId: tenant, clientId: reader.clientId, mode: "app-only" }
     this.observations.recordReader(key, { ...reader.facts, at: this.now().toISOString() })
     if (reader.facts.state !== "verified") return
+    let observation: TokenObservation
     try {
       const token = await answered(this.host.readerToken(tenant))
       if (token === null) return
-      const granted = grantedPermissions(token)
-      this.observations.recordToken(key, "graph", { at: this.now().toISOString(), ...(granted ? { permissions: [...granted.permissions].sort() } : {}) })
+      observation = this.issued(token)
     } catch (error) {
-      this.observations.recordToken(key, "graph", { at: this.now().toISOString(), failure: signInFailure(error) })
+      observation = { at: this.now().toISOString(), failure: signInFailure(error) }
     }
+    if (this.generation(tenant) === generation) this.observations.recordToken(key, "graph", observation)
+  }
+
+  /** What a token Microsoft issued for a check shows: its permissions, as of now. */
+  private issued(accessToken: string): TokenObservation {
+    const granted = grantedPermissions(accessToken)
+    return { at: this.now().toISOString(), ...(granted ? { permissions: [...granted.permissions].sort() } : {}) }
   }
 
   private evaluate(tenant: string): HealthEvaluation {

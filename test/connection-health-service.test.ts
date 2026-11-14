@@ -204,6 +204,112 @@ describe("triggers that follow each other", () => {
   })
 })
 
+describe("a tenant that is signed out of or removed while a check runs", () => {
+  const KEY = `connectionHealth.${TENANT}`
+  /** A token request that answers when the test says so. */
+  function pending() {
+    let resolve: (value: ReturnType<typeof fresh>) => void = () => undefined
+    let reject: (error: Error) => void = () => undefined
+    const request = new Promise<ReturnType<typeof fresh>>((onAnswer, onRefusal) => { resolve = onAnswer; reject = onRefusal })
+    return { request, resolve, reject }
+  }
+
+  it("is not brought back by the answer that comes late, whether Microsoft issued a token or refused", async () => {
+    for (const answer of ["token", "refusal"] as const) {
+      const { health, tokens, backing, changed } = setup()
+      await health.check(TENANT, "launch")
+      const asked = pending()
+      tokens.mockImplementationOnce(() => asked.request)
+      const late = health.check(TENANT, "again")
+      // The tenant is removed from the app while Microsoft has not answered yet.
+      health.forget(TENANT)
+      expect(backing.get(KEY)).toBeNull()
+      changed.mockClear()
+      if (answer === "token") asked.resolve(fresh())
+      else asked.reject(new SignInRequiredError(TENANT, CLIENT, "Your session has ended. Sign in again to continue."))
+      const report = await late
+      // Nothing of the answer is kept, nobody is told, and the report is what is known now: nothing.
+      expect(backing.get(KEY)).toBeNull()
+      expect(changed).not.toHaveBeenCalled()
+      expect(report).toMatchObject({ graph: { state: "notChecked", checkedAt: null }, granted: null, changes: [], since: null })
+    }
+  })
+
+  it("keeps only what a sign-out leaves, whatever the late answer says", async () => {
+    const { health, tokens, stored, changed } = setup()
+    await health.check(TENANT, "launch")
+    const asked = pending()
+    tokens.mockImplementationOnce(() => asked.request)
+    const late = health.check(TENANT, "again")
+    health.signedOut(TENANT)
+    const left = JSON.stringify(stored())
+    // What stays after a sign-out names no account and holds no answer.
+    expect(left).not.toContain(ADMIN)
+    expect(stored()!.connections[0]).not.toHaveProperty("graph")
+    changed.mockClear()
+    asked.resolve(fresh(WITHOUT_APPS))
+    expect((await late).graph.state).toBe("notChecked")
+    expect(JSON.stringify(stored())).toBe(left)
+    expect(changed).not.toHaveBeenCalled()
+  })
+
+  it("is not brought back by a late answer of the Backup Reader", async () => {
+    const { health, state, readerToken, backing } = setup()
+    state.reader = { clientId: READER, facts: READER_FACTS }
+    let answer: (token: string) => void = () => undefined
+    readerToken.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve }))
+    const late = health.check(TENANT, "again")
+    // The admin's token came back before the tenant was removed; the reader's is still on its way.
+    await Promise.resolve()
+    health.forget(TENANT)
+    state.reader = null
+    answer(`e30.${Buffer.from(JSON.stringify({ roles: ["DeviceManagementApps.Read.All"] })).toString("base64url")}.sig`)
+    expect((await late).reader.state).toBe("notSetUp")
+    expect(backing.get(KEY)).toBeNull()
+  })
+
+  it("does not run a check that was waiting behind the one that ran", async () => {
+    const { health, tokens, backing } = setup()
+    const asked = pending()
+    tokens.mockImplementationOnce(() => asked.request)
+    const running = health.check(TENANT, "launch")
+    // A check that must not be answered by the running one waits for it to end.
+    const waiting = health.check(TENANT, "signIn")
+    health.forget(TENANT)
+    asked.resolve(fresh())
+    expect((await running).graph.state).toBe("notChecked")
+    expect((await waiting).graph.state).toBe("notChecked")
+    // It asked Microsoft nothing: the admin who wanted it is gone.
+    expect(tokens).toHaveBeenCalledTimes(1)
+    expect(backing.get(KEY)).toBeNull()
+  })
+
+  it("checks at once for whoever signs in next, and still drops what the earlier check brings", async () => {
+    const { health, state, tokens, stored } = setup()
+    const asked = pending()
+    tokens.mockImplementationOnce(() => asked.request)
+    const late = health.check(TENANT, "launch")
+    const queued = health.check(TENANT, "afterBackup", { failed: true })
+    health.signedOut(TENANT)
+    // Another admin signs in while the earlier check is still out. Their check neither waits for it nor shares its answer.
+    state.account = OTHER_ADMIN
+    const report = await health.check(TENANT, "signIn")
+    expect(tokens).toHaveBeenCalledTimes(2)
+    expect(report.granted).toEqual([...SCOPES].sort())
+    expect(stored()!.connections[0]).toMatchObject({ account: OTHER_ADMIN })
+    // The earlier answer, for the admin who signed out, arrives after it.
+    asked.resolve(fresh(WITHOUT_APPS))
+    await late
+    await queued
+    expect(tokens).toHaveBeenCalledTimes(2)
+    expect(stored()!.connections[0]).toMatchObject({ account: OTHER_ADMIN, graph: { permissions: [...SCOPES].sort() } })
+    expect(health.report(TENANT).granted).toEqual([...SCOPES].sort())
+    // A page that opens within the minute is answered by the new admin's check, not asked again because of the old one.
+    await health.check(TENANT, "opened")
+    expect(tokens).toHaveBeenCalledTimes(2)
+  })
+})
+
 describe("the Backup Reader in a check", () => {
   it("is asked for a token only when the admin checks again or a scheduled backup runs with it", async () => {
     const { health, state, readerToken, pass } = setup()
