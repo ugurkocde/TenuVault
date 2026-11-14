@@ -5,6 +5,7 @@ import type { BackupScope } from "./intune/scope"
 import type { ReportPayload } from "./oib/report"
 import type { PdfBranding } from "./pdf/theme"
 import type { ModuleCheck, ModuleId } from "./services/modules"
+import type { PermissionChoice } from "./services/manifest"
 import type { FeedbackInput, FeedbackSendResult, FeedbackSnapshot } from "./feedback"
 
 /** The saved PDF branding and whether any tenant on this machine is on a plan that applies it. */
@@ -47,8 +48,13 @@ export interface BackupReaderStatus {
   lastTest: BackupReaderTestResult | null
   /** The last scheduled backup that actually ran with the reader. */
   lastRun: { at: string; status: string } | null
-  /** Types scheduled backups leave out because the reader has no permission for them. */
+  /** Types the tenant backs up that scheduled backups leave out because the reader cannot read them. */
   excludedTypes: string[]
+  /**
+   * How the reader's Microsoft Graph permissions differ from the verified ones, as the last token
+   * showed. Scheduled backups keep using only what was verified until the admin verifies again.
+   */
+  roleChange: { added: string[]; removed: string[]; at: string } | null
   /** A renewal certificate is waiting to be uploaded and verified. */
   renewalPending: boolean
 }
@@ -59,6 +65,11 @@ export interface BackupReaderState {
   /** The tenant's plan includes the Backup Reader. */
   available: boolean
   reader: BackupReaderStatus | null
+  /**
+   * The setup script parameters for the first setup of this tenant's reader, with a leading space:
+   * the services it backs up. Empty for a tenant that backs up Intune, as before.
+   */
+  setupArguments: string
   /** The tenant's Azure backup storage account; omitted when backups stay on this device. */
   storageAccountName?: string
   /** After a verification: the reader works for Microsoft Graph but cannot write backups to the tenant's Azure storage. */
@@ -479,7 +490,8 @@ export interface TenuVaultBridge {
      * registration through Microsoft Graph, or finds the one TenuVault made earlier. The token
      * stays in the main process, in memory only. `tenant` is for guest and partner admins.
      */
-    createRegistration: (options?: { tenant?: string }) => Promise<RegistrationResult>
+    /** `choice` names the services, areas and access levels to ask permissions for; without it, what a setup always asked for. */
+    createRegistration: (options?: { tenant?: string; choice?: PermissionChoice }) => Promise<RegistrationResult>
     /** Stops waiting for the setup sign-in in the browser. */
     cancelCreateRegistration: () => Promise<void>
     /** Stops only a setup sign-in that still waits for the browser. Resolves with whether one was. */

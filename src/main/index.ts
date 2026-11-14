@@ -58,7 +58,8 @@ import { readBackupSettings } from "./backup/settings"
 import { folderToOpen, localInventoryProblem } from "./backup/local-inventory"
 import { legacyAzureReader, registerStorageToken } from "./storage/azure-seal"
 import { createArmCaller } from "./azure/arm"
-import { BackupReaderService } from "./auth/backup-reader"
+import { BackupReaderService, readerConfidenceRead } from "./auth/backup-reader"
+import { readerSetupArguments } from "../shared/services/manifest"
 // The same setup script the docs site downloads and the card copies, bundled so Save writes it exactly.
 import readerSetupScript from "../../resources/New-TenuVaultBackupReader.ps1?raw"
 import desktopSetupScript from "../../resources/New-TenuVaultDesktopApp.ps1?raw"
@@ -113,7 +114,6 @@ import { TenantRecords } from "./features/records"
 import { DriftJobs, driftScanRoutes } from "./drift/jobs"
 import { afterScheduledBackup } from "./features/reports"
 import { ModuleSettings } from "./services/settings"
-import { disabledFolders } from "../shared/services/modules"
 import { servicesStatus } from "./services/status"
 import { requireServiceAccess } from "./services/access"
 
@@ -428,7 +428,7 @@ async function bootstrap(): Promise<void> {
   const failedAttempts = new FailedAttemptLog(appStore)
   // The Backup Reader's tokens reach only the backup engine: never the fetch bridge, tokenFor or a
   // portal route, so no restore, revert or other change can ever run with them.
-  const backupReader = new BackupReaderService(tokenStore, { fetch: bridgedFetch })
+  const backupReader = new BackupReaderService(tokenStore, { fetch: bridgedFetch, services: (tenantId) => moduleSettings.selection(tenantId) })
   const engine = new BackupEngine({
     fetch: bridgedFetch,
     getToken: backupAccess.getToken,
@@ -969,13 +969,11 @@ async function bootstrap(): Promise<void> {
     const plan = license.plan(tenantId)
     const profile = tenantProfile(tenantId)
     const azureStorage = profile && !isLocalAccount(profile.storageAccountName) ? profile.storageAccountName : undefined
-    const reader = backupReader.status(tenantId)
-    // Types of services turned off for the tenant are left out of every backup, so the reader does not miss them.
-    const off = new Set(disabledFolders(moduleSettings.selection(tenantId)))
     return {
       supported: readerSupported,
       available: !!plan && allows(plan, "backupReader"),
-      reader: reader && { ...reader, excludedTypes: reader.excludedTypes.filter((folder) => !off.has(folder)) },
+      reader: backupReader.status(tenantId),
+      setupArguments: readerSetupArguments(moduleSettings.selection(tenantId)),
       ...(azureStorage ? { storageAccountName: azureStorage } : {}),
     }
   }
@@ -983,8 +981,9 @@ async function bootstrap(): Promise<void> {
     if (typeof tenantId !== "string" || !tenantProfile(tenantId)) throw new Error("Connect this tenant first.")
     return tenantId
   }
-  // The confidence test behind Verify and the card's Test button: one small Intune read with the
-  // reader's token (so a green verification is not just token claims), and for Azure tenants the
+  // The confidence test behind Verify and the card's Test button: one small read of a service the
+  // tenant backs up, with the reader's token (so a green verification is not just token claims). A
+  // tenant without Intune is never asked for an Intune read. For Azure tenants it also runs the
   // container check scheduled backups need (the TenuVault Backup Writer role from
   // New-TenuVaultStorage.ps1 -BackupReaderAppId). The result is recorded for the card's checklist;
   // a storage problem stays a warning, since the Graph part can still work.
@@ -1000,14 +999,17 @@ async function bootstrap(): Promise<void> {
     }
     let graph = false
     let graphMessage: string | undefined
+    const read = readerConfidenceRead(moduleSettings.selection(tenantId), backupReader.status(tenantId)?.verifiedRoles ?? [])
     try {
-      const response = await chromiumFetch("https://graph.microsoft.com/beta/deviceManagement/deviceCompliancePolicies?$top=1&$select=id", {
-        headers: { Authorization: `Bearer ${await tokens.graph()}` },
-        signal: AbortSignal.timeout(15_000),
-      })
-      void response.body?.cancel().catch(() => undefined)
-      graph = response.ok
-      if (!graph) graphMessage = `Microsoft Graph answered ${response.status} for a Backup Reader read.`
+      // The token is asked for first, so a reader Microsoft refuses says so whatever it could read.
+      const token = await tokens.graph()
+      if (!read) graphMessage = "The Backup Reader has no permission for the test read of a service this tenant backs up, so its Microsoft Graph access was not tested."
+      else {
+        const response = await chromiumFetch(`https://graph.microsoft.com/beta/${read.path}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15_000) })
+        void response.body?.cancel().catch(() => undefined)
+        graph = response.ok
+        if (!graph) graphMessage = `Microsoft Graph answered ${response.status} for a Backup Reader read of ${read.label}.`
+      }
     } catch (error) {
       graphMessage = error instanceof Error ? error.message : String(error)
     }
@@ -1170,7 +1172,7 @@ async function bootstrap(): Promise<void> {
   // The sign-in that follows may skip the account picker once, for exactly this registration and
   // the account that just set it up; any other request for that is ignored.
   let setupSignIn: { tenantId: string; clientId: string; username: string } | null = null
-  handleTrusted("setup:createRegistration", async (_event, options?: { tenant?: string }) => {
+  handleTrusted("setup:createRegistration", async (_event, options?: { tenant?: string; choice?: unknown }) => {
     setupSignIn = null
     const result = await registrationSetup.create(options)
     setupSignIn = { tenantId: result.tenantId, clientId: result.clientId, username: result.username }

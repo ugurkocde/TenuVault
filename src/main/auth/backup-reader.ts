@@ -4,7 +4,8 @@ import type { BackupReaderStatus, BackupReaderTestResult } from "../../shared/ip
 import type { SecureStore } from "../storage/secure-store"
 import { RESOURCE_SCOPES } from "../../shared/constants"
 import { isGuid } from "../../shared/security"
-import { MODULE_BY_ID } from "../../shared/services/modules"
+import { DEFAULT_SELECTION, MODULES, type ServiceSelection } from "../../shared/services/modules"
+import { READER_ALLOWED_ROLES, readerExcludedFolders, readerRequiredRoles, SCRIPT_SERVICE } from "../../shared/services/manifest"
 import { certificateIdentity, createSelfSignedCertificate, type GeneratedCertificate } from "./certificate"
 import { fetchNetworkClient } from "./network-client"
 
@@ -16,31 +17,13 @@ import { fetchNetworkClient } from "./network-client"
  * manual backup, restore and other change uses the admin's own sign-in.
  */
 
-/** The Microsoft Graph application permissions a Backup Reader must have. */
-export const READER_REQUIRED_ROLES = [
-  "DeviceManagementApps.Read.All",
-  "DeviceManagementConfiguration.Read.All",
-  "DeviceManagementRBAC.Read.All",
-  "DeviceManagementScripts.Read.All",
-  "DeviceManagementServiceConfig.Read.All",
-] as const
-
-/** Optional: also exposes the managed device inventory, so it is opt-in for the two types that need it. */
-export const DEVICE_INVENTORY_ROLE = "DeviceManagementManagedDevices.Read.All"
-
-/** Types Microsoft Graph only returns with DEVICE_INVENTORY_ROLE. */
-export const DEVICE_INVENTORY_TYPES = ["DeviceCategories", "DeviceCleanupRules"]
-
-/**
- * Optional: reads Entra policies for the Conditional Access module (CA policies, named locations,
- * authentication strengths). Read only, but it covers every policy of the organization, so it is opt-in.
+/*
+ * The Microsoft Graph application permissions of a Backup Reader come from the permission manifest
+ * (shared/services/manifest) and follow the services the tenant backs up. It may hold the read
+ * permission of any area of any service, and nothing else. It must hold every permission of a
+ * service that is on and reads without a token pre-check, which is Intune. A permission it lacks
+ * for any other service that is on only leaves that service's types out.
  */
-export const CONDITIONAL_ACCESS_ROLE = MODULE_BY_ID.get("conditionalAccess")!.readerRole!
-
-/** Types Microsoft Graph only returns with CONDITIONAL_ACCESS_ROLE. */
-export const CONDITIONAL_ACCESS_TYPES = MODULE_BY_ID.get("conditionalAccess")!.areas.flatMap((area) => [...area.folders])
-
-const ALLOWED_ROLES = new Set<string>([...READER_REQUIRED_ROLES, DEVICE_INVENTORY_ROLE, CONDITIONAL_ACCESS_ROLE])
 
 const CERTIFICATE_DAYS = 365
 
@@ -70,9 +53,11 @@ export interface BackupReaderCredential {
   active: Certificate | null
   /** A new certificate waiting to be uploaded and verified, for setup or renewal. */
   pending: Certificate | null
-  /** The exact Graph roles seen at the last verification. Any change stops the reader until verified again. */
+  /** The exact Graph roles seen at the last verification. Scheduled backups use no role beyond them. */
   verifiedRoles: string[] | null
   verifiedAt?: string
+  /** How the roles of the last token differed from the verified ones, until they match or are verified again. */
+  roleChange?: { added: string[]; removed: string[]; at: string }
   /** The certificate file last saved from the card, tied to its certificate so a new one hides it. */
   exportedCertificate?: { fileName: string; at: string; thumbprintSha256: string }
   lastTest?: BackupReaderTestResult
@@ -95,15 +80,19 @@ const KEY = "backupReader."
 export class BackupReaderService {
   private readonly now: () => Date
   private readonly acquire: AcquireToken
+  private readonly services: (tenantId: string) => ServiceSelection
 
   constructor(
     private readonly store: SecureStore,
     // fetch: the bridged Chromium fetch MSAL token traffic must use, like AuthManager. Token
     // requests through the bridge are also license-checked there, so this must stay the bridge.
-    options: { now?: () => Date; acquire?: AcquireToken; fetch?: typeof fetch } = {},
+    // services: what the tenant backs up, which decides the roles its reader needs. When left out,
+    // the services that are on by default.
+    options: { now?: () => Date; acquire?: AcquireToken; fetch?: typeof fetch; services?: (tenantId: string) => ServiceSelection } = {},
   ) {
     this.now = options.now ?? (() => new Date())
     this.acquire = options.acquire ?? msalAcquire(options.fetch)
+    this.services = options.services ?? (() => DEFAULT_SELECTION)
   }
 
   status(tenantId: string): BackupReaderStatus | null {
@@ -126,7 +115,8 @@ export class BackupReaderService {
       exportedCertificate: exported && exported.thumbprintSha256 === shown.thumbprintSha256 ? { fileName: exported.fileName, at: exported.at } : null,
       lastTest: credential.lastTest ?? null,
       lastRun: credential.lastRun ?? null,
-      excludedTypes: excludedTypes(credential.verifiedRoles),
+      excludedTypes: readerExcludedFolders(credential.verifiedRoles, this.services(credential.tenantId)),
+      roleChange: credential.roleChange ?? null,
       renewalPending: !!credential.active && !!credential.pending,
     }
   }
@@ -149,8 +139,8 @@ export class BackupReaderService {
   }
 
   /**
-   * Checks the Backup Reader with Microsoft and records the exact roles it has, so later runs refuse it
-   * when they change. Checks the active certificate, or the waiting one at the first setup or when
+   * Checks the Backup Reader with Microsoft and records the exact roles it has, so later runs use
+   * nothing beyond them. Checks the active certificate, or the waiting one at the first setup or when
    * `renewal` asks for it; a verified renewal replaces the active certificate. Always asks Microsoft for
    * a new token. Throws BackupReaderError with the reason when Microsoft or the checks refuse it.
    */
@@ -167,7 +157,9 @@ export class BackupReaderService {
     const token = await this.acquire(app, RESOURCE_SCOPES.graph, { fresh: true }).catch((error: unknown) => {
       throw refused(error) ?? error
     })
-    const roles = checkReaderToken(token.accessToken, app, "graph")
+    const selection = this.services(credential.tenantId)
+    const roles = checkReaderToken(token.accessToken, app, "graph", selection)
+    requireSomethingToRead(roles, selection)
     credential.clientId = app.clientId
     if (certificate === credential.pending) {
       credential.active = certificate
@@ -175,6 +167,7 @@ export class BackupReaderService {
     }
     credential.verifiedRoles = roles
     credential.verifiedAt = this.now().toISOString()
+    delete credential.roleChange
     // A new certificate or new roles make an earlier confidence test meaningless.
     delete credential.lastTest
     this.write(credential)
@@ -223,7 +216,13 @@ export class BackupReaderService {
   /**
    * Tokens for a scheduled backup of the tenant, or null when it has no verified Backup Reader or its
    * certificate has expired, so the backup uses the admin's sign-in as before. Every token is checked
-   * before use: right tenant, app and audience, app-only, and exactly the verified roles.
+   * before use: right tenant, app and audience, app-only, and no role outside read-only backup.
+   *
+   * Roles that changed since the verification do not stop the backup. It reads only what the
+   * verified roles cover: a role added since then is not used, a role removed leaves its types out,
+   * and the change is kept for the Backup Reader card to ask for a new verification. A reader that
+   * can read nothing the tenant backs up is refused; the backup never moves to the admin's sign-in
+   * on its own.
    */
   tokens(request: BackupRequest): RunTokens | null {
     const credential = this.read(request.tenantId)
@@ -231,20 +230,40 @@ export class BackupReaderService {
     if (Date.parse(credential.active.notAfter) <= this.now().getTime()) return null
     const app = { tenantId: credential.tenantId, clientId: credential.clientId, certificate: credential.active }
     const verified = credential.verifiedRoles
+    const selection = this.services(credential.tenantId)
+    // A run asks for a token before every request, so the roles are compared once per set of roles.
+    let seen: string | undefined
     const token = async (resource: "graph" | "storage") => {
       const acquired = await this.acquire(app, RESOURCE_SCOPES[resource]).catch((error: unknown) => {
         // A network failure or a transient refusal stays as it is, so the backup is retried.
         throw refused(error, { permanentOnly: true }) ?? error
       })
-      const roles = checkReaderToken(acquired.accessToken, app, resource)
-      if (resource === "graph" && !sameRoles(roles, verified)) {
-        throw new BackupReaderError(
-          `The Backup Reader's Microsoft Graph permissions changed since they were verified (now: ${roles.join(", ") || "none"}). Verify the Backup Reader again in Settings.`,
-        )
+      const roles = checkReaderToken(acquired.accessToken, app, resource, selection)
+      if (resource === "graph" && roles.join(" ") !== seen) {
+        seen = roles.join(" ")
+        this.noteRoleChange(credential.tenantId, roles, verified)
+        requireSomethingToRead(roles.filter((role) => verified.includes(role)), selection)
       }
       return acquired.accessToken
     }
-    return { mode: "app-only", graph: () => token("graph"), storage: () => token("storage"), excludedTypes: excludedTypes(verified) }
+    return { mode: "app-only", graph: () => token("graph"), storage: () => token("storage"), excludedTypes: readerExcludedFolders(verified, selection) }
+  }
+
+  /** Keeps how a token's roles differ from the verified ones, and forgets it once they match again. */
+  private noteRoleChange(tenantId: string, roles: string[], verified: string[]): void {
+    const added = roles.filter((role) => !verified.includes(role))
+    const removed = verified.filter((role) => !roles.includes(role))
+    const credential = this.read(tenantId)
+    if (!credential) return
+    const previous = credential.roleChange
+    if (!added.length && !removed.length) {
+      if (!previous) return
+      delete credential.roleChange
+    } else {
+      if (previous && previous.added.join(" ") === added.join(" ") && previous.removed.join(" ") === removed.join(" ")) return
+      credential.roleChange = { added, removed, at: this.now().toISOString() }
+    }
+    this.write(credential)
   }
 
   private read(tenantId: string): BackupReaderCredential | null {
@@ -288,20 +307,38 @@ function isCredential(value: unknown, tenant: string): value is BackupReaderCred
   return true
 }
 
-function excludedTypes(roles: string[] | null): string[] {
-  return [...(roles?.includes(DEVICE_INVENTORY_ROLE) ? [] : DEVICE_INVENTORY_TYPES), ...(roles?.includes(CONDITIONAL_ACCESS_ROLE) ? [] : CONDITIONAL_ACCESS_TYPES)]
+/**
+ * Refuses a reader that can read nothing of what the tenant backs up. Its scheduled backups would
+ * save nothing and still look fine, so the admin is told which services it lacks instead.
+ */
+function requireSomethingToRead(roles: readonly string[], selection: ServiceSelection): void {
+  const backedUp = readerExcludedFolders([], selection)
+  if (!backedUp.length || readerExcludedFolders(roles, selection).length < backedUp.length) return
+  const services = MODULES.filter((module) => selection.services.includes(module.id) && module.areas.some((area) => area.folders.length))
+  throw new BackupReaderError(
+    `The Backup Reader has no permission to read ${services.map((module) => module.label).join(" or ")}, which is all this tenant backs up. Have your Entra administrator run the setup script with -Services ${services.map((module) => SCRIPT_SERVICE[module.id]).join(",")}, then verify again.`,
+  )
 }
 
-function sameRoles(a: string[], b: string[]): boolean {
-  return a.length === b.length && a.every((role) => b.includes(role))
+/**
+ * The first small read that shows a reader's token works for something the tenant backs up: the
+ * test read of a service that is on and whose permission the reader holds. Undefined when it holds
+ * the permission of none of them.
+ */
+export function readerConfidenceRead(selection: ServiceSelection, roles: readonly string[]): { label: string; path: string } | undefined {
+  const module = MODULES.find((candidate) => selection.services.includes(candidate.id) && candidate.readerProbe && roles.includes(candidate.readerProbe.role))
+  return module?.readerProbe && { label: module.label, path: module.readerProbe.path }
 }
 
 /**
  * Checks an app-only token before any request uses it, and returns its Graph roles. The signature is
  * not verified: MSAL received the token over TLS from Microsoft's token endpoint, so this guards
  * against a misconfigured app registration, not a forged token.
+ *
+ * `selection` is what the tenant backs up: it decides which roles the reader must hold. Without it,
+ * the services that are on by default.
  */
-export function checkReaderToken(token: string, app: { tenantId: string; clientId: string }, resource: "graph" | "storage"): string[] {
+export function checkReaderToken(token: string, app: { tenantId: string; clientId: string }, resource: "graph" | "storage", selection: ServiceSelection = DEFAULT_SELECTION): string[] {
   let claims: Record<string, unknown>
   try {
     claims = JSON.parse(Buffer.from(token.split(".")[1] ?? "", "base64url").toString("utf8")) as Record<string, unknown>
@@ -316,13 +353,13 @@ export function checkReaderToken(token: string, app: { tenantId: string; clientI
   if (claims.scp !== undefined || (claims.idtyp !== undefined && claims.idtyp !== "app")) throw new BackupReaderError("The Backup Reader token is not an app-only token.")
   const roles = Array.isArray(claims.roles) ? claims.roles.filter((role): role is string => typeof role === "string").sort() : []
   if (resource === "storage") return roles
-  const extra = roles.filter((role) => !ALLOWED_ROLES.has(role))
+  const extra = roles.filter((role) => !READER_ALLOWED_ROLES.has(role))
   if (extra.length) {
     throw new BackupReaderError(
       `The Backup Reader has permissions beyond read-only backup: ${extra.join(", ")}. Remove them from the app registration; TenuVault only uses a reader that cannot change Intune or Entra.`,
     )
   }
-  const missing = READER_REQUIRED_ROLES.filter((role) => !roles.includes(role))
+  const missing = readerRequiredRoles(selection).filter((role) => !roles.includes(role))
   if (missing.length) {
     throw new BackupReaderError(`The Backup Reader is missing permissions or their admin consent: ${missing.join(", ")}. Run the setup script again or grant admin consent.`)
   }
