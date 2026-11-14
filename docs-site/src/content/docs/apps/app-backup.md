@@ -52,7 +52,7 @@ macOS support means retrieving the installer from Intune, not downloading a subs
 3. Review **Assignment check for this PC**, which runs automatically. It identifies device targeting, exclusions, user-only assignments and filters, with next steps. Use **Recheck assignments** after an intended change in Intune.
 4. Choose **Start backup** and approve the Windows prompt. The desktop app stays non-elevated; a temporary helper uses the enrollment key for this request. A check older than a minute refreshes first so you can review its updated guidance before starting.
 5. Wait while TenuVault downloads, verifies and encrypts the installer. Completion appears only after the encrypted backup is published.
-6. Open **Backups** to view the result or **Export installer**. Keep the [recovery key](/security/encryption/) from Settings safe.
+6. Choose **View this backup** in the completion message to open the exact captured version, with its file details and **Export installer** action. Choose **Open local folder** to open its encrypted backup folder in your file manager. Keep the [recovery key](/security/encryption/) from Settings safe.
 
 If the app record has no committed installer content, Backup explains this before asking for Windows approval. Choose an app whose installer has been uploaded to Intune.
 
@@ -88,6 +88,8 @@ Device-group checks need optional delegated **`Device.Read.All`**. Reading names
 ## Backups and legacy archives
 
 Open **Backups** to view the encrypted folder for the selected tenant. Intune captures and earlier local archives have distinct provenance labels. A legacy archive cannot gain capture provenance by changing its name or matching an app's display name.
+
+Each stored item also offers **Open local folder**. This folder contains encrypted backup files; use **Export installer** in TenuVault to produce a usable installer payload. When viewing one completed backup, **View all backups** returns to the full catalog.
 
 An installer capture must match the requested tenant, live app and committed version, then pass HMAC, size and plaintext SHA-256 checks before publication. Its receipt retains a hash of the opaque device content service identifier; that fingerprint is not a Microsoft Graph file ID. Interrupted or failed staging is not listed as a backup. The Windows payload is a source ZIP, not a byte-identical copy of the outer `.intunewin` originally uploaded to Intune. Restore additionally needs a compatible packaging implementation and Microsoft authorization; a stored payload alone does not mean restore is ready.
 

@@ -1470,7 +1470,7 @@ async function bootstrap(): Promise<void> {
       const helper = app.isPackaged ? join(process.resourcesPath, "app-backup", "TenuVault.Capture.exe") : join(app.getAppPath(), "out", "helper", "TenuVault.Capture.exe")
       const content = await requestWindowsContent(helper, { tenantId: tenant, appId, jobId, accessToken: token.accessToken }, signal)
       signal.throwIfAborted()
-      await downloadCapturedContent(store, content.identity, content, content.appName, { signal, fetch: bridgedFetch, progress })
+      return downloadCapturedContent(store, content.identity, content, content.appName, { signal, fetch: bridgedFetch, progress })
     },
     details: (tenant, id) => readAppBackupDetails(tenant, id, async tid => (await auth.getAccessToken(tid, signedInClient(tid), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch),
     printDetails: details => printAppDetails(appDetailsHtml(details), options => new BrowserWindow(options)),
@@ -1500,6 +1500,9 @@ async function bootstrap(): Promise<void> {
       const result = await dialog.showSaveDialog(mainWindow!, { title: "Export installer, choose a new file name", defaultPath: join(app.getPath("documents"), fileName), filters: [{ name: "Installer payload", extensions: [fileName.endsWith(".zip") ? "zip" : "intunewin"] }] })
       return result.canceled ? null : result.filePath ?? null
     },
+    openFolder: async folder => {
+      if (await shell.openPath(folder)) throw new Error("The local backup folder could not be opened. Check that it is still connected.")
+    },
     checkDevice: (tenant) => checkRecoveryDevice(tenant, () => readAppBackupAccount(tenant,
       async id => (await auth.getAccessToken(id, signedInClient(id), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch)),
     signIn: async (tenant) => {
@@ -1515,6 +1518,7 @@ async function bootstrap(): Promise<void> {
   handleTrusted("appSources:list", (_event, tenant: unknown) => appSources.list(tenant))
   handleTrusted("appSources:chooseStore", (_event, tenant: unknown) => appSources.chooseStore(tenant))
   handleTrusted("appSources:export", (_event, tenant: unknown, operation: unknown, source: unknown) => appSources.export(tenant, operation, source))
+  handleTrusted("appSources:openFolder", (_event, tenant: unknown, source: unknown) => appSources.openFolder(tenant, source))
   handleTrusted("appSources:cancel", (_event, tenant: unknown, operation: unknown) => appSources.cancel(tenant, operation))
   handleTrusted("appSources:deviceStatus", (_event, tenant: unknown) => appSources.checkDevice(tenant))
   handleTrusted("appSources:signIn", (_event, tenant: unknown) => appSources.signIn(tenant))

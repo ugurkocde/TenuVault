@@ -2,6 +2,12 @@
 
 ## Release verification follow-up
 
+**Signed Windows capture, export and restart passed on 2026-11-14.** The enrolled mini PC ran the signed app/helper pair from commit `21fc27d75d1420b5022bb966b43d69df886e9ccc`, built by [signed verification run 43503338828](https://github.com/ugurkocde/TenuVault/actions/runs/43503338828). Both Authenticode signatures were valid with matching publishers. The user clicked Start backup in the ordinary desktop session and approved Windows consent. The app captured PowerShell, native export matched the independent payload hash, and restart retained all three encrypted backups without warnings. No staging directory, unexpected file, helper or consent process remained.
+
+The production control was verified in both disabled and enabled states with fresh nonce-bound Ed25519 claims and the release-pinned public key. While disabled, the actual signed app refused capture before Windows consent and retained both existing backups. With the enabled policy, the successful signed capture above completed. The signed helper also refused a foreign-publisher Node parent before accepting a request. These results supersede the signed-package and deployed-control items previously marked pending below. [Machine-readable signed evidence](app-backup-evidence/windows-signed-capture-2026-11-14.json).
+
+Earlier automation-driven attempts ended with Windows cancellation and no artifact. The successful case used a direct click on the Windows desktop; those cancelled attempts are not counted as capture successes. The new completion buttons were added afterward and are verified separately by renderer, service and built-app tests, not claimed as part of the `21fc27d` binary test.
+
 The enrolled mini PC passed 32 compiled helper checks with `REQUIRE_SIGNATURE` enabled,
 including rejection of unsigned images and absent, malformed or unsupported requester
 roles. These role cases use fixtures, not a real non-admin Microsoft session. No non-admin
@@ -9,19 +15,18 @@ test account is available, so that live case remains untested.
 
 Manual CI can now build a signed Windows verification artifact without publishing a release.
 Both manual verification and release packaging validate the app and helper's Authenticode
-signatures and expected matching publisher. Signed device capture remains pending until that
-artifact has been exercised on the mini PC.
+signatures and expected matching publisher. The signed device result is recorded above.
 
 The first signed CI run found a real packaging failure: the app was signed but the helper
 under `resources/app-backup` was not. An explicit packaging hook now signs that copy for
 each Windows architecture, with regression tests for signing failure and unsigned PR builds.
-The signed build must pass and run on the PC before this item is closed.
+The corrected signed build passed and ran on the PC as recorded above.
 
 The signed remote control now has desktop and companion-service implementations. Thirty
 desktop policy tests and 17 service cases cover signature, purpose, nonce replay, expiry,
 explicit disable, version floors, malformed replies and network refusal. The actual server
 and desktop modules also passed an enable/disable/version-floor contract check. These are
-local tests; deployed control verification and signed app capture remain pending.
+local tests; deployed control verification and signed app capture are recorded separately above.
 
 ## Automatic assignment-check follow-up
 

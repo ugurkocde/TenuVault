@@ -145,6 +145,10 @@ export class AppSourceStore {
     v.appName = v.appName.slice(0, 200)
     return { ...decoded, directory }
   }
+  /** Resolve only an authenticated source's directory; renderer paths are never accepted. */
+  async sourceDirectory(tenant: string, id: string): Promise<string> {
+    return (await this.manifest(tenant, id)).directory
+  }
   async list(tenant: string): Promise<{ sources: StoredAppSource[]; warnings: string[]; unreadableSources: boolean }> {
     const folder = await this.folder(tenant), sources: StoredAppSource[] = [], warnings: string[] = []
     let unreadableSources = false

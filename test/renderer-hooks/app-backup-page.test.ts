@@ -8,7 +8,7 @@ const state = vi.hoisted(() => ({ selected: 0, tab: "versions", empty: false, fa
 const api = vi.hoisted(() => ({ info: vi.fn(async () => ({platform:"win32"})), accounts:vi.fn(), apps: vi.fn(), list: vi.fn(), attach: vi.fn(), export: vi.fn(), cancel: vi.fn(async () => {}), chooseStore: vi.fn(async () => false), signIn: vi.fn(async () => {}), deviceStatus: vi.fn(async () => ({ enrollment: "unknown", certificate: "unknown", reason: "Recovery from Intune is not available in this version.", captureAvailable: false })) }))
 vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { app:{info:api.info}, auth:{accounts:api.accounts}, appSources: api } }))
 vi.mock("~/contexts/TenantContext", () => ({ useSelectedTenant: () => ({ selectedTenant: { id: state.selected, name: state.selected ? "Fabrikam" : "Contoso", credentials: { tenantId: ids[state.selected] } } }) }))
-vi.mock("react-router-dom", () => ({ useNavigate: () => vi.fn(), useParams: () => ({ tabId: state.tab }), Link: (props: { to: string; children: React.ReactNode }) => createElement("a", { href: props.to }, props.children) }))
+vi.mock("react-router-dom", () => ({ useNavigate: () => vi.fn(), useSearchParams: () => [new URLSearchParams(), vi.fn()], useParams: () => ({ tabId: state.tab }), Link: (props: { to: string; children: React.ReactNode }) => createElement("a", { href: props.to }, props.children) }))
 import AppBackupPage from "../../src/renderer/pages/AppBackupPage"
 HTMLElement.prototype.scrollIntoView = vi.fn()
 let root: Root | undefined

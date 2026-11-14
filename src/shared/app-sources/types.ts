@@ -71,7 +71,7 @@ export interface AppCaptureProgress { phase: AppCapturePhase; receivedBytes: num
 
 export interface AppSourcesBridge {
   assignments: (tenantId: string, appId: string) => Promise<AppAssignmentCheck>
-  capture: (tenantId: string, operationId: string, appId: string) => Promise<boolean>
+  capture: (tenantId: string, operationId: string, appId: string) => Promise<CapturedAppSource>
   captureProgress: (tenantId: string, operationId: string) => Promise<AppCaptureProgress | null>
   details: (tenantId: string, appId: string) => Promise<IntuneAppDetails>
   printDetails: (tenantId: string, appId: string) => Promise<boolean>
@@ -80,6 +80,7 @@ export interface AppSourcesBridge {
   list: (tenantId: string) => Promise<AppSourceState>
   chooseStore: (tenantId: string) => Promise<boolean>
   export: (tenantId: string, operationId: string, sourceId: string) => Promise<boolean>
+  openFolder: (tenantId: string, sourceId: string) => Promise<void>
   cancel: (tenantId: string, operationId: string) => Promise<void>
   deviceStatus: (tenantId: string) => Promise<RecoveryDeviceStatus>
   signIn: (tenantId: string) => Promise<void>

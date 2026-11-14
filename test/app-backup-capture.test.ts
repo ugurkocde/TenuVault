@@ -8,6 +8,7 @@ import { build } from "esbuild"
 import JSZip from "jszip"
 import { ingestContent, type ContentEncryption } from "../src/main/app-backup/content-stream"
 import { AppSourceStore } from "../src/main/app-sources/store"
+import { AppSourceService } from "../src/main/app-sources/service"
 import { bindCapture } from "../src/main/app-backup/capture-identity"
 import { downloadCapturedContent } from "../src/main/app-backup/capture-download"
 import type { CaptureIdentity } from "../src/shared/app-sources/types"
@@ -74,6 +75,21 @@ it("retains only a fingerprint of opaque service identifiers, with exact respons
 })
 
 describe("captured installer publication", () => {
+  it("returns the exact committed backup through the service for completion links and folder access", async () => {
+    const { base, master } = await workspace(), plain = await zipFile(), { wire, profile } = encrypt(plain)
+    const openFolder = vi.fn(async () => {})
+    const service = new AppSourceService({
+      knownTenant: value => value === tenant, folder: () => base, keys: () => [master],
+      capture: (_tenant, _app, _job, store, signal) => store.capture(identity, identity, stream(wire), profile, plain.length, "Finance", signal),
+      openFolder, setFolder: vi.fn(), pickFolder: vi.fn(), pickExport: vi.fn(), confirmNewStore: vi.fn(),
+      checkDevice: vi.fn(), signIn: vi.fn(), details: vi.fn(), apps: vi.fn(), printDetails: vi.fn(), downloadScript: vi.fn(),
+    })
+    const result = await service.capture(tenant, randomUUID(), identity.appId)
+    expect(result).toMatchObject({ provenance: "intune-capture", appName: "Finance", receipt: { appId: identity.appId } })
+    expect((await service.list(tenant)).sources).toEqual([result])
+    await service.openFolder(tenant, result.id)
+    expect(openFolder).toHaveBeenCalledExactlyOnceWith(join(base, tenant, result.id))
+  })
   it("publishes authenticated content with its identity, survives reconnect and exports the payload exactly", async () => {
     const { folder, base, master, store } = await workspace(), plain = await zipFile(), { wire, profile } = encrypt(plain)
     const item = await store.capture(identity, identity, stream(wire), profile, plain.length, "Finance")

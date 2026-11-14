@@ -18,6 +18,7 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { checkSchedulePanel } from "./schedule-panel-smoke.mjs"
 import { checkBackupCancel } from "./backup-cancel-smoke.mjs"
+import { checkAppBackupCompletion } from "./app-backup-completion-smoke.mjs"
 
 const require = createRequire(import.meta.url)
 const electronPath = require("electron")
@@ -904,7 +905,7 @@ await check("App Backup keeps stored access independent of sign-in and exposes g
   await assertPageInMain("Completely free for every configured tenant", "free App Backup")
   assert(!(await evaluate(`document.body.innerText.includes("Choose your Community tenant") || document.body.innerText.includes("Try Pro free with no card or email")`)), "App Backup displayed license-selection or upgrade prompts")
   assert(await waitForText("No Intune backups yet"), "backup catalog did not load for signed-out configured tenant")
-  assert(await evaluate(`typeof window.tenuvault.appSources.list === "function" && typeof window.tenuvault.appSources.export === "function" && typeof window.tenuvault.appSources.signIn === "function" && typeof window.tenuvault.appSources.capture === "function" && typeof window.tenuvault.appSources.captureProgress === "function" && typeof window.tenuvault.appSources.assignments === "function"`), "source IPC namespace missing")
+  assert(await evaluate(`typeof window.tenuvault.appSources.list === "function" && typeof window.tenuvault.appSources.export === "function" && typeof window.tenuvault.appSources.openFolder === "function" && typeof window.tenuvault.appSources.signIn === "function" && typeof window.tenuvault.appSources.capture === "function" && typeof window.tenuvault.appSources.captureProgress === "function" && typeof window.tenuvault.appSources.assignments === "function"`), "source IPC namespace missing")
   assert(await evaluate(`typeof window.tenuvault.appSources.attach === "undefined" && !document.querySelector('main').innerText.includes("Choose installer file")`), "manual attachment is still exposed as backup")
   assert(await evaluate(`!document.querySelector('main').innerText.includes("Ready to recover")`), "recovery availability is misleading")
   assert(!(await evaluate(`document.querySelector('main').innerText.includes("An active license is required for backup and restore operations")`)), "stored sources are behind the backup license notice")
@@ -918,6 +919,8 @@ await check("App Backup keeps stored access independent of sign-in and exposes g
   await screenshot("09b-app-backup-narrow")
   } finally { await send("Emulation.clearDeviceMetricsOverride") }
 })
+
+await checkAppBackupCompletion({ check, evaluate, waitForCondition, screenshot, assert, send })
 
 await check("Backup Reader card offers setup with a guide link, and the schedule says who runs backups", async () => {
   await go("#/portal/settings?section=background", "Backup Reader")

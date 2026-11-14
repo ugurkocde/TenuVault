@@ -333,7 +333,7 @@ describe("crash recovery", () => {
 describe("trusted local source actions", () => {
   async function setup() {
     const folder = await root(), input = await packageFile(folder)
-    const host: AppSourceHost = { details: vi.fn(), printDetails: vi.fn(), downloadScript: vi.fn(), knownTenant: id => id === tenant || id === other, folder: () => join(folder, "sources"), setFolder: vi.fn(), confirmNewStore: vi.fn(async () => false), keys: () => [master], pickFolder: async () => folder, pickExport: async () => null, checkDevice: vi.fn(), signIn: vi.fn(async () => {}), apps: vi.fn(async () => ({ apps: [], fetchedAt: new Date().toISOString() })) }
+    const host: AppSourceHost = { openFolder: vi.fn(async () => {}), details: vi.fn(), printDetails: vi.fn(), downloadScript: vi.fn(), knownTenant: id => id === tenant || id === other, folder: () => join(folder, "sources"), setFolder: vi.fn(), confirmNewStore: vi.fn(async () => false), keys: () => [master], pickFolder: async () => folder, pickExport: async () => null, checkDevice: vi.fn(), signIn: vi.fn(async () => {}), apps: vi.fn(async () => ({ apps: [], fetchedAt: new Date().toISOString() })) }
     return { folder, input, host, service: new AppSourceService(host) }
   }
   it("captures only configured app IDs, isolates progress and cancellation, and rejects concurrent jobs", async () => {
@@ -348,6 +348,7 @@ describe("trusted local source actions", () => {
       started()
       await new Promise<void>(resolve => { finish = resolve })
       abort.throwIfAborted()
+      throw new Error("Unexpected capture completion")
     })
     const pending = service.capture(tenant, job, appId)
     await ready
@@ -370,6 +371,41 @@ describe("trusted local source actions", () => {
     host.ensureKeys = vi.fn(); host.capture = vi.fn()
     await expect(service.capture(tenant, randomUUID(), randomUUID())).rejects.toThrow("matching recovery key")
     expect(host.ensureKeys).not.toHaveBeenCalled(); expect(host.capture).not.toHaveBeenCalled()
+  })
+  it("opens only the authenticated source folder for a configured tenant, without sign-in or a path from the renderer", async () => {
+    const { host, service, folder, input } = await setup()
+    const store = new AppSourceStore(join(folder, "sources"), () => [master])
+    const item = await store.attach(tenant, input.file, "Finance")
+    await service.openFolder(tenant, item.id)
+    expect(host.openFolder).toHaveBeenCalledExactlyOnceWith(join(folder, "sources", tenant, item.id))
+    expect(host.signIn).not.toHaveBeenCalled()
+    await expect(service.openFolder(other, item.id)).rejects.toThrow()
+    await expect(service.openFolder(randomUUID(), item.id)).rejects.toThrow("configured")
+    await expect(service.openFolder(tenant, "../../file")).rejects.toThrow()
+    await expect(service.openFolder(tenant, randomUUID())).rejects.toThrow()
+    host.keys = () => [randomBytes(32)]
+    await expect(service.openFolder(tenant, item.id)).rejects.toThrow("authenticated")
+    expect(host.openFolder).toHaveBeenCalledOnce()
+  })
+  it("does not open a folder when its tenant was removed while resolving the backup", async () => {
+    const { host, service, folder, input } = await setup()
+    const store = new AppSourceStore(join(folder, "sources"), () => [master])
+    const item = await store.attach(tenant, input.file, "Finance")
+    host.knownTenant = vi.fn().mockReturnValueOnce(true).mockReturnValue(false)
+    await expect(service.openFolder(tenant, item.id)).rejects.toThrow("configured")
+    expect(host.openFolder).not.toHaveBeenCalled()
+  })
+  it("does not open a source directory replaced by a symlink or junction", async () => {
+    const { host, service, folder, input } = await setup()
+    const store = new AppSourceStore(join(folder, "sources"), () => [master])
+    const item = await store.attach(tenant, input.file, "Finance")
+    const directory = join(folder, "sources", tenant, item.id), unrelated = join(folder, "unrelated")
+    await mkdir(unrelated)
+    await rm(directory, { recursive: true })
+    await symlink(unrelated, directory, process.platform === "win32" ? "junction" : "dir")
+    await expect(service.openFolder(tenant, item.id)).rejects.toThrow()
+    expect(host.openFolder).not.toHaveBeenCalled()
+    expect(await readdir(unrelated)).toEqual([])
   })
   it("guards app details and print targets without invoking paid or arbitrary-path operations", async () => {
     const {host,service}=await setup(),appId=randomUUID()
@@ -470,7 +506,7 @@ describe("trusted local source actions", () => {
   })
   it("exports legacy archives offline without entitlement and does not mint a key on an empty listing", async () => {
     const folder = await root(), input = await packageFile(folder)
-    const host: AppSourceHost = { details: vi.fn(), printDetails: vi.fn(), downloadScript: vi.fn(), knownTenant: id => id === tenant || id === other, folder: () => join(folder, "sources"), setFolder: vi.fn(), confirmNewStore: vi.fn(async () => false), keys: () => [master], pickFolder: async () => null, pickExport: async () => join(folder, "original.intunewin"), checkDevice: vi.fn(), signIn: vi.fn(async () => {}), apps: vi.fn(async () => ({ apps: [], fetchedAt: new Date().toISOString() })) }
+    const host: AppSourceHost = { openFolder: vi.fn(async () => {}), details: vi.fn(), printDetails: vi.fn(), downloadScript: vi.fn(), knownTenant: id => id === tenant || id === other, folder: () => join(folder, "sources"), setFolder: vi.fn(), confirmNewStore: vi.fn(async () => false), keys: () => [master], pickFolder: async () => null, pickExport: async () => join(folder, "original.intunewin"), checkDevice: vi.fn(), signIn: vi.fn(async () => {}), apps: vi.fn(async () => ({ apps: [], fetchedAt: new Date().toISOString() })) }
     const service = new AppSourceService(host)
     expect((await service.list(tenant)).sources).toEqual([])
     await expect(service.list("not-a-tenant")).rejects.toThrow()

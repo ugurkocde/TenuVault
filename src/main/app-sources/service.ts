@@ -1,12 +1,12 @@
 import { basename, join } from "node:path"
 import { lstat, readdir } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
-import type { AppCaptureProgress, AppSourceState, RecoveryDeviceStatus, AppSourcesBridge, IntuneAppDetails, IntuneAppScript } from "../../shared/app-sources/types"
+import type { AppCaptureProgress, AppSourceState, CapturedAppSource, RecoveryDeviceStatus, AppSourcesBridge, IntuneAppDetails, IntuneAppScript } from "../../shared/app-sources/types"
 import { AppSourceStore, sourceTenant } from "./store"
 
 export interface AppSourceHost {
   assignments?: (tenant: string, appId: string) => ReturnType<AppSourcesBridge["assignments"]>
-  capture?: (tenant: string, appId: string, jobId: string, store: AppSourceStore, signal: AbortSignal, progress: (value: AppCaptureProgress) => void) => Promise<void>
+  capture?: (tenant: string, appId: string, jobId: string, store: AppSourceStore, signal: AbortSignal, progress: (value: AppCaptureProgress) => void) => Promise<CapturedAppSource>
   ensureKeys?: () => void
   knownTenant: (tenant: string) => boolean
   folder: (tenant: string) => string
@@ -16,6 +16,7 @@ export interface AppSourceHost {
   pickFolder: (current: string) => Promise<string | null>
   confirmNewStore: (tenant: string) => Promise<boolean>
   pickExport: (fileName: string) => Promise<string | null>
+  openFolder: (folder: string) => Promise<void>
   checkDevice: (tenant: string) => Promise<RecoveryDeviceStatus>
   signIn: (tenant: string) => Promise<void>
   details: (tenant: string, appId: string) => Promise<IntuneAppDetails>
@@ -78,7 +79,7 @@ export class AppSourceService {
     this.host.setFolder(tenant, folder)
     return true
   }
-  private async job(raw: unknown, operation: unknown, action: (tenant: string, signal: AbortSignal) => Promise<boolean>): Promise<boolean> {
+  private async job<T>(raw: unknown, operation: unknown, action: (tenant: string, signal: AbortSignal) => Promise<T>): Promise<T> {
     const tenant = this.tenant(raw), id = sourceTenant(operation)
     if (this.jobs.size) throw new Error("A source operation is already running. Finish or cancel it first.")
     const control = new AbortController()
@@ -90,7 +91,7 @@ export class AppSourceService {
       throw error
     } finally { this.jobs.delete(id) }
   }
-  capture(raw: unknown, operation: unknown, app: unknown): Promise<boolean> {
+  capture(raw: unknown, operation: unknown, app: unknown): Promise<CapturedAppSource> {
     const appId = sourceTenant(app)
     return this.job(raw, operation, async (tenant, signal) => {
       if (!this.host.capture) throw new Error("Installer capture requires the Windows capture helper.")
@@ -99,11 +100,10 @@ export class AppSourceService {
       signal.throwIfAborted()
       this.host.ensureKeys?.()
       const id = sourceTenant(operation)
-      await this.host.capture(tenant, appId, id, store, signal, value => {
+      return this.host.capture(tenant, appId, id, store, signal, value => {
         const job = this.jobs.get(id)
         if (job?.tenant === tenant) job.progress = value
       })
-      return true
     })
   }
   captureProgress(raw: unknown, operation: unknown): AppCaptureProgress | null {
@@ -123,6 +123,12 @@ export class AppSourceService {
       await store.export(tenant, item.id, destination, signal)
       return true
     })
+  }
+  async openFolder(raw: unknown, source: unknown): Promise<void> {
+    const tenant = this.tenant(raw), id = sourceTenant(source)
+    const folder = await this.store(tenant).sourceDirectory(tenant, id)
+    this.tenant(tenant)
+    await this.host.openFolder(folder)
   }
   cancel(raw: unknown, operation: unknown): void {
     const tenant = this.tenant(raw), id = sourceTenant(operation)

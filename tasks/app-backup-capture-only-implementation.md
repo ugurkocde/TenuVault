@@ -73,6 +73,8 @@ The renderer exposes Start backup on Windows for system-context Win32 apps, with
 
 Release builds enforce matching valid app/helper Authenticode publishers. Development/PR packages are unsigned. A signed release-pair test, broader EDR coverage and the remaining rollout controls are separate acceptance items. Restore, custom Intune RBAC roles, user-context capture and macOS retrieval remain unavailable.
 
+The signed release-pair test and deployed positive enable/disable control passed on 2026-11-14 at desktop commit `21fc27d`, including real PowerShell capture, exact native export and restart. Broader EDR coverage and live non-admin requester refusal remain unverified. Completion now offers **View this backup**, selecting the exact newly committed artifact, and **Open local folder**, resolving its authenticated encrypted folder in the main process. Folder access also remains available on retained backup rows while offline; the renderer never supplies a filesystem path.
+
 Current evidence is in [Windows validation](app-backup-windows-validation-2026-11-13.md). Earlier lab-adapter results above remain historical component evidence and are not relabelled as app captures.
 
 ## Automatic assignment guidance
