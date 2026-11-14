@@ -451,6 +451,11 @@ async function bootstrap(): Promise<void> {
           registerStorageToken(token, request.tenantId)
           return token
         },
+        // Answered from the reader's Graph token, so it is the run's first token request and gets the same check.
+        excludedTypes: async () => {
+          await license.requireEntitlement(request.tenantId)
+          return (await reader.excludedTypes?.()) ?? []
+        },
       }
     },
     retentionDays: backupAccess.retentionDays,
