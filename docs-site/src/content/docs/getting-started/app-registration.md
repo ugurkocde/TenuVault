@@ -62,6 +62,8 @@ If your tenant does not list Azure Service Management or Azure Storage among its
 * If the browser says that Microsoft cannot find the application, Microsoft has not finished publishing the new app registration. Wait a minute, select **Cancel sign-in** in TenuVault and sign in again.
 * If the tenant already has a TenuVault app registration whose enterprise application has sign-in turned off, the setup stops and changes nothing. Turn sign-in on again under **Entra admin center** > **Enterprise applications** > the application the message names > **Properties**, or delete the app registration, then run the setup again.
 
+Under every error of the setup, **Stuck here? Book a free setup call** opens the [free setup call](/getting-started/#free-setup-call) page in your browser.
+
 For the messages TenuVault shows, see [Troubleshooting](/troubleshooting/).
 
 ### Remove it again

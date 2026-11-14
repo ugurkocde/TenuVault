@@ -3,6 +3,7 @@ import { ArrowRight, DatabaseBackup, GitCompare, RotateCcw } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import { BrandMark } from "./BrandMark"
 import { TrialOrKey } from "./PlanChoice"
+import { SetupCallLink } from "./SetupCallLink"
 import { recordSetup, SetupDiagnosticsCard } from "./SetupDiagnostics"
 
 const POINTS = [
@@ -21,9 +22,11 @@ const POINTS = [
  */
 export function ActivationScreen({ onSignIn }: { onSignIn: () => void }) {
   const { status } = useLicense()
+  // The vertical spacing is tight on purpose: without the setup diagnostics question the card fits
+  // the smallest window (1024x700), and with it the window as it opens (1440x920).
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background p-6">
-      <div className="w-full max-w-lg space-y-6 rounded-3xl bg-card p-9 shadow-[0_24px_60px_-30px_rgba(22,21,20,0.25)]">
+    <div className="flex min-h-screen items-center justify-center bg-background px-6 py-3">
+      <div className="w-full max-w-lg space-y-5 rounded-3xl bg-card px-9 py-7 shadow-[0_24px_60px_-30px_rgba(22,21,20,0.25)]">
         <div className="flex items-center gap-3">
           <BrandMark className="size-12" />
           <div>
@@ -50,6 +53,7 @@ export function ActivationScreen({ onSignIn }: { onSignIn: () => void }) {
               ? "New tenants start with a Pro trial, no card and no email needed. Setup takes a few minutes: connect your tenant with Microsoft sign-in and take a first backup. Afterwards, one tenant continues on Community Free."
               : "Setup takes a few minutes: connect your tenant with Microsoft sign-in and take a first backup. It is free on Community for one tenant, and a TenuVault license your organization shares with the tenant is picked up when you sign in."}
           </p>
+          <SetupCallLink source="welcome" variant="row" />
         </div>
 
         <SetupDiagnosticsCard />

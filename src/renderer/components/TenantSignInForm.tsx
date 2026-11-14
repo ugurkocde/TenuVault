@@ -19,6 +19,7 @@ import {
   setupHandoffText,
 } from "../../shared/app-registration"
 import { bridge } from "../lib/bridge"
+import { SetupCallLink } from "./SetupCallLink"
 import { SetupDiagnosticsReminder } from "./SetupDiagnostics"
 import { SignInErrorActions, SignInRecoveryPanel, useWaitedLong } from "./SignInRecovery"
 
@@ -495,6 +496,7 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
           <AlertDescription>{trialKeyRefusalText(errors.form)}
             <TrialKeyRefusalActions message={errors.form} source="sign-in-trial-key-refused" />
             <SignInErrorActions message={errors.form} onTryAgain={() => void submit()} />
+            <SetupCallLink source="signin-error" variant="hint" className="mt-3" />
           </AlertDescription>
         </Alert>
       )}

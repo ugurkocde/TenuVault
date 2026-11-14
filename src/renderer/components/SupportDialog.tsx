@@ -4,8 +4,9 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { DOCS_HOME_URL, GITHUB_ISSUES_URL, SUPPORT_EMAIL } from "../../shared/constants"
 import { bridge } from "../lib/bridge"
 import { hasPaidLicense, useLicense } from "../lib/license"
+import { SetupCallLink } from "./SetupCallLink"
 
-/** Docs for everyone; email support for Pro and MSP, a GitHub issue for Community. */
+/** Docs and the free setup call for everyone; email support for Pro and MSP, a GitHub issue for Community. */
 export function SupportDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const { status } = useLicense()
   const licensed = status ? hasPaidLicense(status) : false
@@ -41,6 +42,7 @@ export function SupportDialog({ open, onOpenChange }: { open: boolean; onOpenCha
               Open GitHub issue
             </Button>
           )}
+          <SetupCallLink source="support" variant="button" size="default" className="justify-start" onOpened={() => onOpenChange(false)} />
         </div>
       </DialogContent>
     </Dialog>

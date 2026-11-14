@@ -196,7 +196,53 @@ await check("first run shows the welcome screen", async () => {
     assert(await waitForText("Try Pro free for 30 days, no card"), "trial link missing")
   }
   assert(await waitForText("I have a license key"), "license key link missing")
+  assert(await waitForText("Rather do it together? Book a free setup call"), "free setup call row missing")
+  assert(await evaluate(`document.body.innerText.includes("30 minutes, free on every plan. You share your screen and we set it up in your tenant.")`), "free setup call details missing")
+  // The row sits under the helper text of Connect your tenant and above the setup diagnostics question.
+  assert(await evaluate(`(() => {
+    const link = document.querySelector('[data-setup-call="welcome"]')
+    const connect = [...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Connect your tenant")
+    const diagnostics = document.querySelector('section[aria-labelledby="setup-diagnostics-title"]')
+    const after = (a, b) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
+    return Boolean(link && connect) && link.textContent === "Book a free setup call" && after(connect, link) && (!diagnostics || after(link, diagnostics))
+  })()`), "free setup call row is not below Connect your tenant and above the setup diagnostics question")
   await screenshot("00-welcome")
+})
+
+await check("the welcome screen opens the free setup call page in the browser, named after the screen", async () => {
+  try {
+    await evaluate(`(() => {
+      window.__setupCall = { opened: [] }
+      const frame = document.createElement("iframe")
+      frame.style.cssText = "position: fixed; inset: 0; width: 100%; height: 100%; border: 0; z-index: 9999;"
+      document.body.appendChild(frame)
+      window.__setupCallFrame = frame
+      // Give the router the app's URL instead of about:blank.
+      frame.contentDocument.open()
+      frame.contentDocument.write('<html><head></head><body><div id="root"></div></body></html>')
+      frame.contentDocument.close()
+      frame.contentWindow.location.hash = "#/"
+      // Run the built renderer with a recording external bridge, without changing the frozen preload bridge.
+      frame.contentWindow.tenuvault = {
+        ...window.tenuvault,
+        app: { ...window.tenuvault.app, openExternal: url => { window.__setupCall.opened.push(url); return Promise.resolve() } },
+      }
+      document.querySelectorAll('link[rel="stylesheet"]').forEach(link => frame.contentDocument.head.appendChild(link.cloneNode()))
+      const script = frame.contentDocument.createElement("script")
+      script.type = "module"
+      script.src = document.querySelector('script[type="module"]').src
+      frame.contentDocument.head.appendChild(script)
+    })()`)
+    const body = `window.__setupCallFrame.contentDocument.body`
+    assert(await waitForCondition(`${body}.innerText.includes("Welcome to TenuVault") && Boolean(${body}.querySelector('[data-setup-call="welcome"]'))`), "welcome screen with the free setup call did not render")
+    await evaluate(`${body}.querySelector('[data-setup-call="welcome"]').click()`)
+    assert(await waitForCondition(`window.__setupCall.opened.length === 1`), "free setup call did not use the external bridge")
+    const opened = await evaluate(`window.__setupCall.opened`)
+    assert(opened.length === 1 && opened[0] === "https://www.tenuvault.com/setup-call?src=app-welcome", `free setup call opened ${JSON.stringify(opened)}`)
+    assert(await evaluate(`${body}.innerText.includes("Welcome to TenuVault")`), "free setup call left the welcome screen")
+  } finally {
+    await evaluate(`window.__setupCallFrame?.remove(); delete window.__setupCallFrame; delete window.__setupCall`)
+  }
 })
 
 await check("a pending license retry shows progress without overlapping requests", async () => {
@@ -371,6 +417,7 @@ await check("Community users can reach the tenant sign-in without a key", async 
   assert(await waitForText("Set up with Microsoft sign-in"), "setup checklist missing")
   // Until a tenant is connected the guided setup has the window to itself.
   assert(!(await evaluate(`Boolean(document.querySelector('nav[aria-label="Main navigation"]'))`)), "sidebar shown during the first setup")
+  assert(await evaluate(`[...document.querySelectorAll('nav[aria-label="Help"] > *')].map(item => item.textContent).join("|") === "Free setup call|License|Share feedback|Support"`), "first-run header does not list Free setup call, License, Share feedback and Support")
   await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false })
   await sleep(300)
   const overflow = await evaluate(`({ height: innerHeight, scroll: document.scrollingElement.scrollHeight, inner: [...document.querySelectorAll('*')].filter(e => ['auto', 'scroll'].includes(getComputedStyle(e).overflowY) && e.scrollHeight > e.clientHeight + 1).map(e => ({ tag: e.tagName, scroll: e.scrollHeight, client: e.clientHeight })) })`)

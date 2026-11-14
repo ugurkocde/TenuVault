@@ -17,6 +17,7 @@ import { FirstBackupNextSteps } from "../components/FirstBackupNextSteps"
 import { PlanContext, TrialOrKey } from "../components/PlanChoice"
 import { tenantLicense, tenantPlan, useLicense, useTenantPlan } from "../lib/license"
 import { ConnectTenantSetup } from "../components/ConnectTenantSetup"
+import { SetupCallLink } from "../components/SetupCallLink"
 import { recordSetup, SetupDiagnosticsReminder } from "../components/SetupDiagnostics"
 import { TenantSignInForm, type SignInFields } from "../components/TenantSignInForm"
 import { bridge } from "../lib/bridge"
@@ -348,6 +349,8 @@ export default function OnboardingPage() {
 
   const finished = Boolean(displayJob?.isComplete)
   const succeeded = Boolean(displayJob?.isComplete && displayJob.isSuccessful)
+  // A backup that could not start or ended with an error. Cancelling is the admin's own choice.
+  const backupFailed = Boolean(jobError) || (finished && !succeeded && displayJob?.status !== "Cancelled")
 
   return (
     <div className={cn("@container mx-auto space-y-4 p-5 lg:p-6", step === 0 ? "max-w-[96rem]" : "max-w-3xl")}>
@@ -526,6 +529,7 @@ export default function OnboardingPage() {
             )}
             {succeeded && credentials && <TrialShortcuts tenantId={credentials.tenantId} />}
             {succeeded && credentials && <FirstBackupNextSteps tenantId={credentials.tenantId} plan={plan} local={!credentials.storageAccountName || credentials.storageAccountName.startsWith(LOCAL_STORAGE_PREFIX)} />}
+            {backupFailed && <SetupCallLink source="first-backup-error" variant="hint" />}
             <div className="flex flex-wrap justify-end gap-2">
               {succeeded ? (
                 <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => void navigate("/portal/dashboard")}>

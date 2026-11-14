@@ -8,6 +8,7 @@ import { APP_REGISTRATION_GUIDE_URL, CONSENT_ROLES_TEXT, MANUAL_APP_REGISTRATION
 import type { RegistrationResult, SetupProgress } from "../../shared/ipc"
 import { bridge } from "../lib/bridge"
 import { PermissionList, SetupScriptCard } from "./TenantSignInForm"
+import { SetupCallLink } from "./SetupCallLink"
 import { recordSetup, SetupDiagnosticsReminder } from "./SetupDiagnostics"
 import { SignInRecoveryPanel, useWaitedLong } from "./SignInRecovery"
 
@@ -160,6 +161,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
                   <Button type="button" variant="ghost" size="sm" onClick={manual}>I already have an app registration</Button>
                 </div>
               )}
+              <SetupCallLink source="setup-error" variant="hint" className="mt-3" />
             </AlertDescription>
           </Alert>
         )}

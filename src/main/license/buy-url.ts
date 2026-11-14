@@ -1,11 +1,8 @@
-const SOURCE = /^[a-z0-9-]{1,40}$/
+import { appLinkSource, withAppLinkSource } from "../../shared/link-source"
 
 /** Names the screen that opened the plans, without adding a user or tenant identifier. */
 export function licenseBuyUrl(url: string, source?: unknown): string {
-  if (typeof source !== "string" || !SOURCE.test(source)) return url
-  const parsed = new URL(url)
-  parsed.searchParams.set("src", `app-${source}`)
-  return parsed.href
+  return withAppLinkSource(url, source)
 }
 
 /**
@@ -17,7 +14,8 @@ export function licenseCheckoutUrl(apiBase: string, plan: unknown, source?: unkn
   const url = new URL("/api/desktop-checkout", apiBase)
   url.searchParams.set("plan", plan === "msp" ? "msp" : "pro")
   if (interval === "yearly") url.searchParams.set("interval", "yearly")
-  if (typeof source === "string" && SOURCE.test(source)) url.searchParams.set("src", `app-${source}`)
+  const src = appLinkSource(source)
+  if (src) url.searchParams.set("src", src)
   return url.href
 }
 
@@ -32,6 +30,7 @@ export async function trialCheckoutUrl(
   options: { plan?: unknown; interval?: unknown; source?: unknown },
   fetchImpl: typeof fetch = fetch,
 ): Promise<string | null> {
+  const src = appLinkSource(options.source)
   try {
     const response = await fetchImpl(new URL("/api/desktop-checkout", apiBase).href, {
       method: "POST",
@@ -40,7 +39,7 @@ export async function trialCheckoutUrl(
         token,
         plan: options.plan === "msp" ? "msp" : "pro",
         interval: options.interval === "yearly" ? "yearly" : "monthly",
-        ...(typeof options.source === "string" && SOURCE.test(options.source) ? { src: `app-${options.source}` } : {}),
+        ...(src ? { src } : {}),
       }),
       redirect: "error",
       // The browser opens only after this answer, so a slow service falls back quickly.

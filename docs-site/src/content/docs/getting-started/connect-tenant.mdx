@@ -14,7 +14,7 @@ The guided setup, **Set up TenuVault**, is the only way to connect a tenant. Ten
 * From **Tenants** or the dashboard's **Quick Actions**: **Connect tenant**.
 * From the **All tenants** page: **Connect a tenant**.
 
-The guided setup has four steps: **Connect**, **Sign in**, **Storage** and **First backup**. Use **Previous** to go back a step. While no tenant is connected, the setup has the window to itself: there is no sidebar, only **License** and **Support** links at the top. Once a tenant is connected, the setup shows **Back to dashboard**.
+The guided setup has four steps: **Connect**, **Sign in**, **Storage** and **First backup**. Use **Previous** to go back a step. While no tenant is connected, the setup has the window to itself: there is no sidebar, only **Free setup call**, **License**, **Share feedback** and **Support** at the top. **Free setup call** opens the [free setup call](/getting-started/#free-setup-call) page in your browser. Once a tenant is connected, the sidebar is back and the setup shows **Back to dashboard**.
 
 ### Continue where you left off
 
@@ -86,6 +86,7 @@ When a sign-in has waited 3 minutes for the browser to come back, on this step o
 | **Try again** | Stops waiting for the open sign-in and starts the same sign-in again in your default browser. |
 | **Copy sign-in link** | Copies the exact Microsoft sign-in address TenuVault opened, so you can paste it into another browser or browser profile, for example Microsoft Edge signed in to your work profile. Finish the sign-in there and it comes back to TenuVault as usual. The link only works while this sign-in waits; after it ends, TenuVault says **The sign-in link is no longer available.** and you select **Try again** for a new one. |
 | **Copy instructions for your admin** | Copies the same ready-to-send setup message as **Someone else is the admin? Copy instructions**, for an Entra administrator who can create the app registration. |
+| **Book a free setup call** | Opens the [free setup call](/getting-started/#free-setup-call) page in your browser, where you pick a time for a free 30 minute call. The waiting sign-in is left as it is. |
 
 When a sign-in ends, whether it finished, failed, was cancelled, timed out or was started again, TenuVault stops listening for its answer, so a browser tab finished later signs nothing in. The panel belongs to the browser step only: once Microsoft has answered and TenuVault checks the license, it goes away, and **Try again** no longer stops anything. TenuVault stops waiting after 15 minutes. The first sign-in then shows **The sign-in in the browser was not completed within 15 minutes.** with **Try again** and **Copy instructions for your admin** next to it.
 
@@ -133,6 +134,8 @@ If Microsoft refuses the first sign-in, TenuVault shows what to do, followed by 
 For the Conditional Access codes (`AADSTS53000`, `AADSTS53001`, `AADSTS53003`), missing consent or approval (`AADSTS65001`, `AADSTS90094`) and MFA (`AADSTS50076`, `AADSTS50079`), the message also offers **Copy instructions for your admin**, the setup message for another administrator, and **Create it by hand**, which opens the guide to [create the app registration manually](/getting-started/app-registration/#create-the-app-registration-manually).
 
 For other errors, TenuVault shows the error Microsoft returned. See [Troubleshooting](/troubleshooting/#sign-in).
+
+Under every sign-in error, **Stuck here? Book a free setup call** opens the [free setup call](/getting-started/#free-setup-call) page in your browser.
 
 ### License check at sign-in
 
