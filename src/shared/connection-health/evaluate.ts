@@ -158,7 +158,10 @@ interface Entry {
   cause?: "permission" | "role" | "license" | "reader" | "signedIn"
 }
 
-/** What every run that counts says about each folder, newest first. */
+/**
+ * What is known about each folder, newest first: what every run that counts says, and what each
+ * connection keeps per folder, which is still known when the runs behind it are no longer kept.
+ */
 function evidenceOf(records: ReadonlyArray<ConnectionRecord | undefined>, now: Date): Map<string, Entry[]> {
   const byFolder = new Map<string, Entry[]>()
   const add = (folder: string, entry: Entry) => {
@@ -167,12 +170,19 @@ function evidenceOf(records: ReadonlyArray<ConnectionRecord | undefined>, now: D
     else byFolder.set(folder, [entry])
   }
   for (const record of records) {
+    if (!record) continue
     for (const run of runsOf(record, now)) {
-      const base = { time: Date.parse(run.at), at: run.at, mode: record!.mode }
+      const base = { time: Date.parse(run.at), at: run.at, mode: record.mode }
       for (const folder of run.read) add(folder, { ...base, kind: "read" })
       for (const refusal of run.refused) add(refusal.folder, { ...base, kind: "refused", cause: refusal.cause })
       for (const folder of run.unread) add(folder, { ...base, kind: "unread" })
       for (const left of run.excluded) add(left.folder, { ...base, kind: "excluded", cause: left.cause })
+    }
+    for (const [folder, at] of Object.entries(record.verified)) {
+      if (recent(at, RUN_MAX_AGE_MS, now)) add(folder, { time: Date.parse(at), at, mode: record.mode, kind: "read" })
+    }
+    for (const [folder, refusals] of Object.entries(record.refused)) {
+      for (const refusal of refusals) if (recent(refusal.at, RUN_MAX_AGE_MS, now)) add(folder, { time: Date.parse(refusal.at), at: refusal.at, mode: record.mode, kind: "refused", cause: refusal.cause })
     }
   }
   for (const entries of byFolder.values()) entries.sort((a, b) => b.time - a.time)
@@ -214,29 +224,26 @@ function verifiedOf(verdicts: readonly Verdict[]): VerifiedHealth {
 }
 
 /**
- * The folders a connection lost access to: a folder it read before that its two latest runs with
- * anything to say about it were both refused. Two runs, because one refusal can be a passing
- * answer. A run that left the folder out, or failed to read it for another reason, says nothing
- * and neither counts nor clears. `since` is the first of those refusals.
+ * The folders a connection lost access to: a folder it read before that two distinct runs refused
+ * since. Two runs, because one refusal can be a passing answer. A run that left the folder out, or
+ * failed to read it for another reason, says nothing and neither counts nor clears.
+ *
+ * It goes by what the connection keeps per folder (see keepEvidence), never by the list of its
+ * last runs, so it does not matter which types the backups since then selected: the loss stands
+ * until a run reads the folder again, or until the read or the refusals expire. `since` is the
+ * first of those refusals.
  */
 function lostFolders(record: ConnectionRecord | undefined, now: Date): Map<string, string> {
   const lost = new Map<string, string>()
   if (!record) return lost
-  const runs = runsOf(record, now)
-  for (const folder of new Set(runs.flatMap((run) => run.refused.map((refusal) => refusal.folder)))) {
-    const refusedAt: string[] = []
-    let readBefore = false
-    for (const run of runs) {
-      if (run.read.includes(folder)) {
-        readBefore = true
-        break
-      }
-      if (run.refused.some((refusal) => refusal.folder === folder)) refusedAt.push(run.at)
+  for (const [folder, refusals] of Object.entries(record.refused)) {
+    const readAt = record.verified[folder]
+    if (!recent(readAt, RUN_MAX_AGE_MS, now)) continue
+    const refusedAt = new Map<string, string>()
+    for (const refusal of refusals) {
+      if (!refusedAt.has(refusal.runId) && recent(refusal.at, RUN_MAX_AGE_MS, now) && Date.parse(refusal.at) > Date.parse(readAt!)) refusedAt.set(refusal.runId, refusal.at)
     }
-    if (refusedAt.length < 2) continue
-    const first = refusedAt.at(-1)!
-    const verifiedAt = record.verified[folder]
-    if (readBefore || (recent(verifiedAt, RUN_MAX_AGE_MS, now) && Date.parse(verifiedAt!) < Date.parse(first))) lost.set(folder, first)
+    if (refusedAt.size >= 2) lost.set(folder, [...refusedAt.values()].sort((a, b) => Date.parse(a) - Date.parse(b))[0]!)
   }
   return lost
 }

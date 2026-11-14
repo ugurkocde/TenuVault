@@ -313,6 +313,43 @@ describe("backup runs", () => {
     expect(report.services[0]!.areas.find((area) => area.id === "configuration")).toMatchObject({ lostAccess: false, verified: { state: "verified" } })
   })
 
+  it("keep a loss when the backups after it select other types, until a backup reads the type again", async () => {
+    const { health, pass, now, stored } = setup()
+    await health.check(TENANT, "launch")
+    const request = { tenantId: TENANT, clientId: CLIENT }
+    const apps = () => health.report(TENANT).services[0]!.areas.find((area) => area.id === "apps")!
+    pass(DAY)
+    health.recordRun(outcomes("desktop-1", now(), [saved("Apps"), saved("DeviceConfigurations")]), request)
+    pass(DAY)
+    const since = now()
+    health.recordRun(outcomes("desktop-2", now(), [denied("Apps"), saved("DeviceConfigurations")]), request)
+    pass(DAY)
+    health.recordRun(outcomes("desktop-3", now(), [denied("Apps"), saved("DeviceConfigurations")]), request)
+    expect(apps().lostAccess).toBe(true)
+    // Backups whose scope leaves the apps out push the runs that were refused out of the list of the last runs:
+    // after four of them one refusal is left there, after six none. The loss does not go by that list.
+    for (let index = 4; index <= 9; index++) {
+      pass(DAY)
+      health.recordRun(outcomes(`desktop-${index}`, now(), [saved("DeviceConfigurations")]), request)
+      expect(apps()).toMatchObject({ lostAccess: true, verified: { state: "notVerified", notVerified: ["Apps"] } })
+      if (index === 7) expect(stored()!.connections[0]!.runs.flatMap((run: { refused: unknown[] }) => run.refused)).toHaveLength(1)
+    }
+    expect(stored()!.connections[0]!.runs.flatMap((run: { refused: unknown[] }) => run.refused)).toEqual([])
+    expect(health.report(TENANT).changes).toMatchObject([{ kind: "lostAccess", service: "intune", area: "apps", folders: ["Apps"], since }])
+    // One more refusal is the same loss, since the same day.
+    pass(DAY)
+    health.recordRun(outcomes("desktop-10", now(), [denied("Apps")]), request)
+    expect(health.report(TENANT).changes).toMatchObject([{ kind: "lostAccess", area: "apps", since }])
+    // Looking at the changes ends the notice, not the state.
+    expect(health.acknowledge(TENANT).changes).toEqual([])
+    expect(apps().lostAccess).toBe(true)
+    // It ends with the backup that reads the apps again.
+    pass(DAY)
+    health.recordRun(outcomes("desktop-11", now(), [saved("Apps")]), request)
+    expect(apps()).toMatchObject({ lostAccess: false, verified: { state: "verified", at: now() } })
+    expect(health.report(TENANT).changes).toEqual([])
+  })
+
   it("of another admin count for nothing once someone else signed in", async () => {
     const { health, state, pass, now } = setup()
     const request = { tenantId: TENANT, clientId: CLIENT }

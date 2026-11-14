@@ -1,5 +1,5 @@
 import type { RunOutcomes } from "../backup-outcomes"
-import type { RunObservation } from "./model"
+import { MAX_FOLDER_REFUSALS, type ConnectionRecord, type RunObservation } from "./model"
 
 /**
  * What a backup run says about access, type by type, without any text of the run:
@@ -40,4 +40,32 @@ export function runObservation(outcomes: RunOutcomes, account?: string): RunObse
 /** The status and the error code Microsoft Graph answered with, never its message. */
 function answer(type: { status?: number; code?: string }): { status?: number; code?: string } {
   return { ...(type.status !== undefined ? { status: type.status } : {}), ...(type.code ? { code: type.code.slice(0, 80) } : {}) }
+}
+
+/**
+ * Adds what a run says to the evidence its connection keeps per folder: when the folder was last
+ * read, and which runs refused it since.
+ * - A read is the folder's last read when no later one is known, and ends every refusal before it.
+ * - A refusal counts only for a folder that was read before it: a folder that was never read
+ *   cannot be lost. Each run counts once. Of the refusals since the read, the first and the
+ *   latest are kept.
+ * - A run that left the folder out, or could not read it for another reason, changes nothing.
+ */
+export function keepEvidence(evidence: Pick<ConnectionRecord, "verified" | "refused">, run: RunObservation): void {
+  const ended = Date.parse(run.at)
+  for (const folder of run.read) {
+    if (!(Date.parse(evidence.verified[folder] ?? "") >= ended)) evidence.verified[folder] = run.at
+    const readAt = Date.parse(evidence.verified[folder]!)
+    const since = (evidence.refused[folder] ?? []).filter((refusal) => Date.parse(refusal.at) > readAt)
+    if (since.length) evidence.refused[folder] = since
+    else delete evidence.refused[folder]
+  }
+  for (const { folder, cause } of run.refused) {
+    const readAt = evidence.verified[folder]
+    if (!readAt || Date.parse(readAt) >= ended) continue
+    const kept = evidence.refused[folder] ?? []
+    if (kept.some((refusal) => refusal.runId === run.runId)) continue
+    const since = [...kept, { runId: run.runId, at: run.at, cause }].sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
+    evidence.refused[folder] = since.length > MAX_FOLDER_REFUSALS ? [since[0]!, ...since.slice(1 - MAX_FOLDER_REFUSALS)] : since
+  }
 }

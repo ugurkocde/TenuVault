@@ -1,4 +1,5 @@
-import { RUN_MAX_AGE_MS, type ConnectionMode, type ConnectionRecord, type ReaderObservation, type RunObservation, type SignInFailure, type Snapshot, type TokenObservation } from "../../shared/connection-health/model"
+import { MAX_FOLDER_REFUSALS, RUN_MAX_AGE_MS, type ConnectionMode, type ConnectionRecord, type FolderRefusal, type ReaderObservation, type RunObservation, type SignInFailure, type Snapshot, type TokenObservation } from "../../shared/connection-health/model"
+import { keepEvidence } from "../../shared/connection-health/observe"
 import type { KeyValueStore } from "../storage/secure-store"
 
 /**
@@ -9,15 +10,20 @@ import type { KeyValueStore } from "../storage/secure-store"
  * is replaced by the next observation. Nothing is migrated, because an observation is only worth
  * what Microsoft said recently, and the next check says it again.
  *
- * Bounded: a tenant keeps a few connections, a connection its last few runs, and every list has a
- * cap, so the app state does not grow with use. What is stored is listed in
+ * Bounded: a tenant keeps a few connections, a connection its last few runs and, per folder, its
+ * last read and two refusals since, and every list has a cap, so the app state does not grow with
+ * use. What is stored is listed in
  * shared/connection-health/model: never a token, a secret, an account name or an error message.
  */
 
 export const HEALTH_STORE_VERSION = 1
 /** Connections kept per tenant: the admin's and the Backup Reader's, and an earlier one of each. */
 export const MAX_CONNECTIONS = 4
-/** Runs kept per connection. Two decide lost access; the rest show what the backups before them read. */
+/**
+ * Runs kept per connection: they show what the last backups said about each type. Lost access does
+ * not go by them but by what the record keeps per folder, so it does not matter which types the
+ * last backups selected.
+ */
 export const MAX_RUNS = 5
 /** The most entries any list or map of a record holds. */
 export const MAX_ENTRIES = 600
@@ -54,6 +60,8 @@ function tokenOf(value: unknown): TokenObservation | undefined {
   return { at, ...(Array.isArray(value.permissions) ? { permissions: texts(value.permissions) } : {}), ...(failure ? { failure } : {}) }
 }
 
+const isCause = (value: unknown): value is FolderRefusal["cause"] => value === "permission" || value === "role" || value === "license"
+
 function runOf(value: unknown): RunObservation | undefined {
   if (!isRecord(value)) return undefined
   const runId = text(value.runId)
@@ -63,7 +71,7 @@ function runOf(value: unknown): RunObservation | undefined {
   const account = text(value.account)
   const refused = (Array.isArray(value.refused) ? value.refused : []).flatMap((entry): RunObservation["refused"] => {
     const folder = isRecord(entry) ? text(entry.folder) : undefined
-    if (!folder || !isRecord(entry) || (entry.cause !== "permission" && entry.cause !== "role" && entry.cause !== "license")) return []
+    if (!folder || !isRecord(entry) || !isCause(entry.cause)) return []
     const code = text(entry.code, 80)
     return [{ folder, cause: entry.cause, ...(typeof entry.status === "number" ? { status: entry.status } : {}), ...(code ? { code } : {}) }]
   })
@@ -72,6 +80,19 @@ function runOf(value: unknown): RunObservation | undefined {
     return folder && isRecord(entry) && (entry.cause === "reader" || entry.cause === "signedIn") ? [{ folder, cause: entry.cause }] : []
   })
   return { runId, at, trigger, status: text(value.status, 40) ?? "", ...(account ? { account } : {}), read: texts(value.read), refused: refused.slice(0, MAX_ENTRIES), unread: texts(value.unread), excluded: excluded.slice(0, MAX_ENTRIES) }
+}
+
+function refusalsOf(value: unknown): ConnectionRecord["refused"] {
+  if (!isRecord(value)) return {}
+  const folders = Object.entries(value).flatMap(([folder, entries]): Array<[string, FolderRefusal[]]> => {
+    const refusals = (Array.isArray(entries) ? entries : []).flatMap((entry): FolderRefusal[] => {
+      const runId = isRecord(entry) ? text(entry.runId) : undefined
+      const at = isRecord(entry) ? time(entry.at) : undefined
+      return runId && at && isRecord(entry) && isCause(entry.cause) ? [{ runId, at, cause: entry.cause }] : []
+    })
+    return text(folder) && refusals.length ? [[folder, refusals.slice(0, MAX_FOLDER_REFUSALS)]] : []
+  })
+  return Object.fromEntries(folders.slice(0, MAX_ENTRIES))
 }
 
 function readerOf(value: unknown): ReaderObservation | undefined {
@@ -128,6 +149,7 @@ function recordOf(value: unknown): ConnectionRecord | undefined {
     ...(reader ? { reader } : {}),
     runs: (Array.isArray(value.runs) ? value.runs : []).flatMap((run) => runOf(run) ?? []).slice(-MAX_RUNS),
     verified: Object.fromEntries(verified),
+    refused: refusalsOf(value.refused),
     ...(snapshot ? { snapshot } : {}),
     updatedAt,
   }
@@ -171,9 +193,7 @@ export class HealthStore {
       this.ownedBy(record, run.account)
       if (record.runs.some((kept) => kept.runId === run.runId)) return
       record.runs = [...record.runs, run].sort((a, b) => Date.parse(a.at) - Date.parse(b.at)).slice(-MAX_RUNS)
-      for (const folder of run.read) {
-        if (!record.verified[folder] || Date.parse(record.verified[folder]) < Date.parse(run.at)) record.verified[folder] = run.at
-      }
+      keepEvidence(record, run)
       // The folders read longest ago go first when there are more than the record may hold.
       const kept = Object.entries(record.verified).sort((a, b) => Date.parse(b[1]) - Date.parse(a[1])).slice(0, MAX_ENTRIES)
       record.verified = Object.fromEntries(kept)
@@ -215,6 +235,7 @@ export class HealthStore {
         mode: record.mode,
         runs: [],
         verified: {},
+        refused: {},
         snapshot: { at: snapshot?.at ?? record.updatedAt, ...(permissions ? { permissions } : {}), ...(snapshot?.replaces ? { replaces: snapshot.replaces } : {}) },
         updatedAt: record.updatedAt,
       }]
@@ -229,7 +250,7 @@ export class HealthStore {
 
   /**
    * Makes the record the given admin's. What was observed for another admin says nothing about
-   * this one: their token answers, their runs and what those runs read are dropped.
+   * this one: their token answers, their runs and what those runs read or were refused are dropped.
    */
   private ownedBy(record: ConnectionRecord, account: string | undefined): void {
     if (record.mode !== "delegated" || !account || record.account === account) return
@@ -238,16 +259,15 @@ export class HealthStore {
     delete record.storage
     record.runs = record.runs.filter((run) => run.account === account)
     record.verified = {}
-    for (const run of record.runs) for (const folder of run.read) {
-      if (!record.verified[folder] || Date.parse(record.verified[folder]) < Date.parse(run.at)) record.verified[folder] = run.at
-    }
+    record.refused = {}
+    for (const run of record.runs) keepEvidence(record, run)
   }
 
   private change(key: ConnectionKey, observed: boolean, apply: (record: ConnectionRecord) => void): void {
     const records = this.connections(key.tenantId)
     let record = records.find((candidate) => candidate.mode === key.mode && sameId(candidate.clientId, key.clientId))
     if (!record) {
-      record = { clientId: key.clientId.toLowerCase(), mode: key.mode, runs: [], verified: {}, updatedAt: this.now().toISOString() }
+      record = { clientId: key.clientId.toLowerCase(), mode: key.mode, runs: [], verified: {}, refused: {}, updatedAt: this.now().toISOString() }
       records.push(record)
     }
     apply(record)
@@ -261,6 +281,11 @@ export class HealthStore {
     for (const record of records) {
       record.runs = record.runs.filter((run) => Date.parse(run.at) >= oldest)
       record.verified = Object.fromEntries(Object.entries(record.verified).filter(([, at]) => Date.parse(at) >= oldest))
+      // A refusal says something only next to the read it came after, so it goes with that read.
+      record.refused = Object.fromEntries(Object.entries(record.refused).flatMap(([folder, refusals]): Array<[string, FolderRefusal[]]> => {
+        const kept = refusals.filter((refusal) => Date.parse(refusal.at) >= oldest)
+        return record.verified[folder] && kept.length ? [[folder, kept]] : []
+      }))
     }
     const kept = records
       .filter((record) => record === current || Date.parse(record.updatedAt) >= oldest)

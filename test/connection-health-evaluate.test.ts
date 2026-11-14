@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { evaluateHealth, signInState, type HealthInput, type ServiceChoice } from "../src/shared/connection-health/evaluate"
 import { RUN_MAX_AGE_MS, TOKEN_MAX_AGE_MS, type ConnectionRecord, type ReaderObservation, type RunObservation, type SignInFailure, type Snapshot, type TokenObservation } from "../src/shared/connection-health/model"
+import { keepEvidence } from "../src/shared/connection-health/observe"
 import { DEFAULT_SETUP_CHOICE, graphPermissions, missingForChoice } from "../src/shared/services/manifest"
 import { MODULES, type ModuleId } from "../src/shared/services/modules"
 import { SIGN_IN_ERRORS } from "../src/shared/sign-in-errors"
@@ -34,8 +35,20 @@ const settings = (changes: Partial<Record<ModuleId, ServiceChoice>> = {}): Recor
 const healthy = (permissions: string[] = DEFAULT_SCOPES, at = ago(MINUTE)): TokenObservation => ({ at, permissions })
 const failed = (failure: SignInFailure, at = ago(MINUTE)): TokenObservation => ({ at, failure })
 
-const delegated = (parts: Partial<ConnectionRecord> = {}): ConnectionRecord => ({ clientId: CLIENT, mode: "delegated", account: ADMIN, runs: [], verified: {}, updatedAt: ago(MINUTE), ...parts })
-const readerConnection = (parts: Partial<ConnectionRecord> = {}): ConnectionRecord => ({ clientId: READER, mode: "app-only", runs: [], verified: {}, updatedAt: ago(MINUTE), ...parts })
+/**
+ * A record as the store keeps it: what it holds per folder follows from its runs the way the store
+ * works it out, in the order the runs ended, and for an admin's record from that admin's runs only.
+ * `verified` and `refused` given by a test are what the record held before those runs.
+ */
+function stored(record: ConnectionRecord): ConnectionRecord {
+  const evidence = { verified: { ...record.verified }, refused: { ...record.refused } }
+  for (const run of [...record.runs].sort((a, b) => Date.parse(a.at) - Date.parse(b.at))) {
+    if (record.mode === "app-only" || run.account === record.account) keepEvidence(evidence, run)
+  }
+  return { ...record, ...evidence }
+}
+const delegated = (parts: Partial<ConnectionRecord> = {}): ConnectionRecord => stored({ clientId: CLIENT, mode: "delegated", account: ADMIN, runs: [], verified: {}, refused: {}, updatedAt: ago(MINUTE), ...parts })
+const readerConnection = (parts: Partial<ConnectionRecord> = {}): ConnectionRecord => stored({ clientId: READER, mode: "app-only", runs: [], verified: {}, refused: {}, updatedAt: ago(MINUTE), ...parts })
 
 /** A run that ended `daysAgo` days ago; an admin's run unless `account` is cleared. */
 const run = (runId: string, daysAgo: number, parts: Partial<RunObservation> = {}): RunObservation => ({ runId, at: ago(daysAgo * DAY), trigger: "manual", status: "Success", account: ADMIN, read: [], refused: [], unread: [], excluded: [], ...parts })
@@ -482,6 +495,45 @@ describe("lost access", () => {
     const { report } = evaluate(connections, { reader: readerFacts(), readerClientId: READER })
     expect(report.changes).toEqual([])
     expect(area(report, "intune", "configuration")).toMatchObject({ lostAccess: false, verified: { state: "verified", at: ago(DAY) } })
+  })
+
+  // What a connection keeps for a type it read 30 days ago and that two runs refused since. No run in its list says anything about the type.
+  const KEPT = { verified: { [OTHER]: ago(30 * DAY) }, refused: { [OTHER]: [{ runId: "r2", at: ago(25 * DAY), cause: "role" as const }, { runId: "r3", at: ago(24 * DAY), cause: "role" as const }] } }
+  const BEFORE: Snapshot = { at: ago(80 * DAY), account: ADMIN, lost: [] }
+
+  it("stands when the backups since then selected other types, however many there were", () => {
+    const later = [5, 4, 3, 2, 1].map((day) => read(`later-${day}`, day))
+    const { report } = evaluate([delegated({ runs: later, ...KEPT, snapshot: BEFORE })])
+    expect(area(report, "intune", "apps")).toMatchObject({ lostAccess: true, verified: { state: "notVerified", at: ago(24 * DAY), notVerified: [OTHER] } })
+    expect(report.changes).toMatchObject([{ kind: "lostAccess", service: "intune", area: "apps", folders: [OTHER], since: ago(25 * DAY) }])
+    // The type those backups read is verified by them, and nothing is lost there.
+    expect(area(report, "intune", "configuration")).toMatchObject({ lostAccess: false, verified: { state: "verified", at: ago(DAY) } })
+  })
+
+  it("counts a refusal that comes after backups that selected other types", () => {
+    const once = { verified: KEPT.verified, refused: { [OTHER]: KEPT.refused[OTHER]!.slice(0, 1) } }
+    const later = [5, 4, 3, 2].map((day) => read(`later-${day}`, day))
+    expect(lost(later, once)).toEqual([])
+    expect(lost([...later, run("again", 1, { refused: [refusal(OTHER, "role")] })], once)).toMatchObject([{ area: "apps", since: ago(25 * DAY) }])
+  })
+
+  it("ends when a backup reads the type again, and when what is kept about it expires", () => {
+    expect(lost([], KEPT)).toHaveLength(1)
+    const back = evaluate([delegated({ runs: [run("back", 1, { read: [OTHER] })], ...KEPT, snapshot: BEFORE })]).report
+    expect(back.changes).toEqual([])
+    expect(area(back, "intune", "apps")).toMatchObject({ lostAccess: false, verified: { state: "verified", at: ago(DAY) } })
+    // The read is ninety days old on day 60 from now: a day later nothing says the type was ever read.
+    const at = (days: number) => evaluate([delegated({ ...KEPT, snapshot: BEFORE })], {}, new Date(NOW.getTime() + days * DAY)).report
+    expect(area(at(60), "intune", "apps").lostAccess).toBe(true)
+    expect(area(at(61), "intune", "apps").lostAccess).toBe(false)
+    expect(at(61).changes).toEqual([])
+  })
+
+  it("needs the refusals to come after the read, from two runs, whatever a record holds", () => {
+    const refusals = KEPT.refused[OTHER]!
+    expect(lost([], { verified: { [OTHER]: ago(24 * DAY) }, refused: KEPT.refused })).toEqual([])
+    expect(lost([], { verified: KEPT.verified, refused: { [OTHER]: [refusals[0]!, { ...refusals[1]!, runId: "r2" }] } })).toEqual([])
+    expect(lost([], { verified: {}, refused: KEPT.refused })).toEqual([])
   })
 
   it("lets runs expire: an old refusal no longer counts", () => {

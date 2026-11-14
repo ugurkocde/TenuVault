@@ -94,6 +94,17 @@ export interface Snapshot {
   replaces?: { clientId: string; permissions?: string[] }
 }
 
+/** A run that refused a folder its connection had read before. */
+export interface FolderRefusal {
+  runId: string
+  /** When that run ended. */
+  at: string
+  cause: RefusalCause
+}
+
+/** The refusals kept per folder: the first since its last read, which says since when, and the latest, which says why. */
+export const MAX_FOLDER_REFUSALS = 2
+
 export interface ConnectionRecord {
   clientId: string
   mode: ConnectionMode
@@ -106,6 +117,12 @@ export interface ConnectionRecord {
   runs: RunObservation[]
   /** Per folder: when a run of this connection and account last read it. */
   verified: Record<string, string>
+  /**
+   * Per folder: the runs that refused it since that read, each once and oldest first. Kept per
+   * folder and apart from `runs`, so backups that leave a folder out never push out the evidence
+   * that access to it was lost.
+   */
+  refused: Record<string, FolderRefusal[]>
   snapshot?: Snapshot
   /** When the record last took an observation, by this device's clock. */
   updatedAt: string

@@ -116,6 +116,7 @@ describe("the observation store", () => {
           storage: { at: ago(60_000), failure: { class: "consent", code: "AADSTS65001" } },
           runs: [{ runId: "desktop-1", at: ago(DAY), trigger: "manual", status: "Success", account: ADMIN, read: ["Apps"], refused: [{ folder: "ScopeTags", cause: "role", status: 403, code: "Forbidden" }], unread: ["Branding"], excluded: [] }],
           verified: { Apps: ago(DAY) },
+          refused: {},
           snapshot: { at: ago(60_000), account: ADMIN, permissions: ["User.Read"], ready: { "intune/apps": true }, lost: [] },
           updatedAt: NOW.toISOString(),
         },
@@ -125,6 +126,7 @@ describe("the observation store", () => {
           reader: { at: ago(1000), state: "verified", notAfter: ago(-100 * DAY), verifiedAt: ago(10 * DAY), verifiedRoles: ["DeviceManagementApps.Read.All"], roleChange: { added: ["Policy.Read.All"], removed: [], at: ago(DAY) } },
           runs: [],
           verified: {},
+          refused: {},
           updatedAt: NOW.toISOString(),
         },
       ],
@@ -150,6 +152,41 @@ describe("the observation store", () => {
     expect(record!.runs.map((kept) => kept.runId)).toEqual(["desktop-5", "desktop-6", "desktop-7", "late", "desktop-8"])
     // The read of a run that is no longer kept stays known.
     expect(record!.verified).toEqual({ Apps: ago(12 * DAY), ScopeTags: ago(19 * DAY) })
+  })
+
+  it("keeps what says a type was lost per folder, whatever the backups after it select", () => {
+    const { store } = setup()
+    store.recordRun(admin, run("desktop-1", 20, { read: ["Apps", "DeviceConfigurations"] }))
+    store.recordRun(admin, run("desktop-2", 19, { read: ["DeviceConfigurations"], refused: [{ folder: "Apps", cause: "role", status: 403, code: "Forbidden" }] }))
+    store.recordRun(admin, run("desktop-3", 18, { read: ["DeviceConfigurations"], refused: [{ folder: "Apps", cause: "permission" }] }))
+    for (let index = 4; index < 4 + MAX_RUNS; index++) store.recordRun(admin, run(`desktop-${index}`, 21 - index, { read: ["DeviceConfigurations"] }))
+    const [record] = store.connections(TENANT)
+    // No run that is still kept says anything about the apps.
+    expect(record!.runs.flatMap((kept) => [...kept.read, ...kept.refused.map((refusal) => refusal.folder)])).not.toContain("Apps")
+    expect(record!.verified).toEqual({ Apps: ago(20 * DAY), DeviceConfigurations: ago((21 - 3 - MAX_RUNS) * DAY) })
+    // The run, its time and the cause it found: no status, code or text of the answer.
+    expect(record!.refused).toEqual({ Apps: [{ runId: "desktop-2", at: ago(19 * DAY), cause: "role" }, { runId: "desktop-3", at: ago(18 * DAY), cause: "permission" }] })
+  })
+
+  it("keeps the first and the latest refusal of a folder, each run once, and none from before its last read", () => {
+    const { store } = setup()
+    const refusedBy = () => (store.connections(TENANT)[0]!.refused.Apps ?? []).map((refusal) => refusal.runId)
+    const refuse = (runId: string, daysAgo: number) => store.recordRun(admin, run(runId, daysAgo, { refused: [{ folder: "Apps", cause: "role" }] }))
+    // A folder that was never read cannot be lost.
+    refuse("early", 30)
+    expect(store.connections(TENANT)[0]!.refused).toEqual({})
+    store.recordRun(admin, run("read", 20, { read: ["Apps"] }))
+    for (const [runId, daysAgo] of [["r1", 19], ["r2", 18], ["r3", 17], ["r4", 16]] as const) refuse(runId, daysAgo)
+    expect(refusedBy()).toEqual(["r1", "r4"])
+    // A refusal from before the read says nothing about now, and a read ends the refusals before it.
+    refuse("old", 25)
+    expect(refusedBy()).toEqual(["r1", "r4"])
+    store.recordRun(admin, run("read-again", 10, { read: ["Apps"] }))
+    expect(store.connections(TENANT)[0]).toMatchObject({ verified: { Apps: ago(10 * DAY) }, refused: {} })
+    // A run that could not read the folder for another reason, or left it out, changes nothing.
+    refuse("r5", 9)
+    store.recordRun(admin, run("unread", 8, { unread: ["Apps"], excluded: [{ folder: "Apps", cause: "reader" }] }))
+    expect(refusedBy()).toEqual(["r5"])
   })
 
   it("keeps a bounded number of connections per tenant: the ones used last", () => {
@@ -190,15 +227,30 @@ describe("the observation store", () => {
     expect(RUN_MAX_AGE_MS).toBe(90 * DAY)
   })
 
+  it("drops the refusals of a folder with the read they came after", () => {
+    const { store, at } = setup(new Date(NOW.getTime() - 80 * DAY))
+    store.recordRun(admin, run("read", 80, { read: ["Apps", "ScopeTags"] }))
+    at(new Date(NOW.getTime() - 5 * DAY))
+    store.recordRun(admin, run("r1", 6, { read: ["ScopeTags"], refused: [{ folder: "Apps", cause: "role" }] }))
+    store.recordRun(admin, run("r2", 5, { read: ["ScopeTags"], refused: [{ folder: "Apps", cause: "role" }] }))
+    expect(store.connections(TENANT)[0]!.refused.Apps).toHaveLength(2)
+    // Fifteen days on, the read of the apps is more than ninety days old: nothing says they were ever read.
+    at(new Date(NOW.getTime() + 15 * DAY))
+    store.recordToken(admin, "graph", { at: new Date(NOW.getTime() + 15 * DAY).toISOString() })
+    expect(store.connections(TENANT)[0]).toMatchObject({ verified: { ScopeTags: ago(5 * DAY) }, refused: {} })
+  })
+
   it("starts a record over for another admin: their answers, runs and reads are their own", () => {
     const { store } = setup()
     store.recordToken(admin, "graph", { at: ago(5 * DAY), permissions: ["User.Read"] }, ADMIN)
     store.recordToken(admin, "storage", { at: ago(5 * DAY) }, ADMIN)
     store.recordRun(admin, run("desktop-1", 4, { read: ["Apps"] }))
+    store.recordRun(admin, run("desktop-2", 3, { refused: [{ folder: "Apps", cause: "role" }] }))
+    expect(store.connections(TENANT)[0]!.refused.Apps).toHaveLength(1)
     store.setSnapshot(admin, { at: ago(5 * DAY), account: ADMIN, permissions: ["User.Read"], lost: [] })
     store.recordToken(admin, "graph", { at: ago(DAY), permissions: ["User.Read", "Mail.Send"] }, OTHER_ADMIN)
     const [record] = store.connections(TENANT)
-    expect(record).toMatchObject({ account: OTHER_ADMIN, graph: { permissions: ["User.Read", "Mail.Send"] }, runs: [], verified: {} })
+    expect(record).toMatchObject({ account: OTHER_ADMIN, graph: { permissions: ["User.Read", "Mail.Send"] }, runs: [], verified: {}, refused: {} })
     expect(record).not.toHaveProperty("storage")
     // The snapshot still names the earlier admin, which is how the evaluator knows not to compare.
     expect(record!.snapshot!.account).toBe(ADMIN)
@@ -227,7 +279,7 @@ describe("the observation store", () => {
     backing.set(KEY, JSON.stringify({
       version: 1,
       connections: [
-        { clientId: CLIENT, mode: "delegated", updatedAt: ago(1000), account: 7, graph: { at: "yesterday", permissions: ["User.Read"] }, storage: { at: ago(1000), permissions: "all", failure: { class: 5 } }, runs: [{ runId: "r1" }, "run", { runId: "r2", at: ago(DAY), read: ["Apps", 3], refused: [{ folder: "ScopeTags", cause: "curse" }, { folder: "Branding", cause: "license", status: "403" }], excluded: [{ folder: "X", cause: "reader" }, { folder: "Y" }] }], verified: { Apps: "never", ScopeTags: ago(DAY) }, snapshot: { at: ago(DAY), ready: { "intune/apps": "yes", "intune/roles": false }, replaces: { clientId: 12 } }, reader: { state: "verified" } },
+        { clientId: CLIENT, mode: "delegated", updatedAt: ago(1000), account: 7, graph: { at: "yesterday", permissions: ["User.Read"] }, storage: { at: ago(1000), permissions: "all", failure: { class: 5 } }, runs: [{ runId: "r1" }, "run", { runId: "r2", at: ago(DAY), read: ["Apps", 3], refused: [{ folder: "ScopeTags", cause: "curse" }, { folder: "Branding", cause: "license", status: "403" }], excluded: [{ folder: "X", cause: "reader" }, { folder: "Y" }] }], verified: { Apps: "never", ScopeTags: ago(DAY) }, refused: { Apps: "twice", Branding: [{ runId: "r3", at: ago(DAY), cause: "curse" }, { runId: "r4", at: "today", cause: "role" }], ScopeTags: [{ runId: "r5", at: ago(1000), cause: "role", status: 403, message: "Access denied for admin@contoso.com" }, "refusal", { runId: "r6", at: ago(500), cause: "license" }, { runId: "r7", at: ago(100), cause: "role" }] }, snapshot: { at: ago(DAY), ready: { "intune/apps": "yes", "intune/roles": false }, replaces: { clientId: 12 } }, reader: { state: "verified" } },
         { clientId: READER, mode: "certificate", updatedAt: ago(1000) },
         { mode: "delegated", updatedAt: ago(1000) },
         "connection",
@@ -239,6 +291,7 @@ describe("the observation store", () => {
       storage: { at: ago(1000) },
       runs: [{ runId: "r2", at: ago(DAY), trigger: "manual", status: "", read: ["Apps"], refused: [{ folder: "Branding", cause: "license" }], unread: [], excluded: [{ folder: "X", cause: "reader" }] }],
       verified: { ScopeTags: ago(DAY) },
+      refused: { ScopeTags: [{ runId: "r5", at: ago(1000), cause: "role" }, { runId: "r6", at: ago(500), cause: "license" }] },
       snapshot: { at: ago(DAY), ready: { "intune/roles": false } },
       updatedAt: ago(1000),
     }])
@@ -259,7 +312,8 @@ describe("the observation store", () => {
   it("drops what was observed for the account when the admin signs out, and keeps what the registration had", () => {
     const { store } = setup()
     store.recordToken(admin, "graph", { at: ago(DAY), permissions: ["User.Read", "Mail.Send"] }, ADMIN)
-    store.recordRun(admin, run("desktop-1", 1, { read: ["Apps"] }))
+    store.recordRun(admin, run("desktop-2", 2, { read: ["Apps"] }))
+    store.recordRun(admin, run("desktop-1", 1, { refused: [{ folder: "Apps", cause: "role" }] }))
     store.setSnapshot(admin, { at: ago(2 * DAY), account: ADMIN, permissions: ["User.Read"], lost: [], replaces: { clientId: "55555555-5555-5555-5555-555555555555" } })
     store.recordToken(reader, "graph", { at: ago(DAY) })
     store.signedOut(TENANT)
@@ -268,6 +322,7 @@ describe("the observation store", () => {
       mode: "delegated",
       runs: [],
       verified: {},
+      refused: {},
       snapshot: { at: ago(2 * DAY), permissions: ["User.Read", "Mail.Send"], replaces: { clientId: "55555555-5555-5555-5555-555555555555" } },
       updatedAt: NOW.toISOString(),
     }])
