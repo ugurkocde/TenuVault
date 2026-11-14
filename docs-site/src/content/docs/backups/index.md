@@ -116,8 +116,11 @@ The log lists what TenuVault did, with a time stamp per line. Typical lines:
 | "Removed N backups older than N days." | Retention removed old backups |
 | "Older backups were kept because this backup is incomplete." | Retention was skipped because of warnings |
 | "Backup completed: N policies in ..." | The final count and duration |
+| "Backup failed: nothing could be read. ..." | Every selected type was left out, so the backup holds nothing. The line names the cause most types share. See [Coverage](#coverage). |
 
-If Microsoft Graph throttles requests, TenuVault pauses and retries automatically. If your sign-in expires during a backup, the backup stops instead of reporting every remaining item as a warning. Sign in again and run a new backup.
+If Microsoft Graph throttles requests, TenuVault pauses and retries automatically. If your sign-in expires during a backup, the backup stops instead of reporting every remaining item as a warning, whichever service was being read. Sign in again and run a new backup.
+
+Some Entra ID and Defender endpoints refuse a read with the same answer Microsoft gives for a sign-in that ended. TenuVault asks such a request once more with a new sign-in token. Only when the new token gets the same answer is the type left out; when no new token can be had, the backup stops and you are asked to sign in again.
 
 ## Read the result
 
@@ -127,7 +130,7 @@ A backup ends with one of these results:
 | --- | --- |
 | **Complete** | Every item of every included type was saved |
 | **Completed with warnings** | Some items or types could not be read. The rest was saved. The log and **Backup Details** list what is missing. |
-| **Failed** | No item could be saved, or the backup stopped after it started saving, for example because the sign-in expired, Microsoft Graph stopped responding or the 30 minute deadline passed. It holds only the policies it saved and is never used as a complete backup. The timeline shows how it started, and retention removes it like any other backup once it is older than the retention period. |
+| **Failed** | No item could be saved, every selected type was left out so nothing could be read, or the backup stopped after it started saving, for example because the sign-in expired, Microsoft Graph stopped responding or the 30 minute deadline passed. It holds only the policies it saved and is never used as a complete backup. The timeline shows how it started, and retention removes it like any other backup once it is older than the retention period. |
 | **Cancelled** | You cancelled the backup after it started saving. It is shown in a neutral tone, because you stopped it on purpose. Like a failed backup, it holds only the policies it saved, is never used as a complete backup, and retention removes it once it is older than the retention period. On the Dashboard it counts in the backups in storage, but not as successful or failed and not in **Success Rate**, and it does not change **Tenant Health**. Backups cancelled with an earlier version, which recorded them as failed, are shown as cancelled too. |
 | **Incomplete** | The backup stopped and could not record its result, for example because TenuVault was closed or the storage could not be reached. It holds only part of the tenant. |
 | **Status unknown** | The backup's summary could not be read, so whether it finished is not known. **Backup Details** shows why, for example "This backup was encrypted by an earlier TenuVault version. Import the recovery key of the device that made it to open it." for an older encrypted Azure backup, or a damaged file on this device. Import that recovery key, or select **Refresh** when the storage did not answer. Drift detection does not offer it until its summary can be read. |
@@ -152,9 +155,13 @@ The result says whether the backup finished and can be used. Coverage says wheth
 | Saved | Every object of the type was saved. A type the tenant has none of is saved with a count of 0. | Complete |
 | Not set up in this tenant | Microsoft answered that the setting was never made. There is nothing to save. | Complete |
 | Left out | The sign-in could not read the type. The reason names the cause: a permission or its admin consent is missing, your account has no role that can read it, the tenant has no license for the product or never set it up, or only a signed-in admin can read it and the backup ran as the Backup Reader. | Incomplete |
-| Not read | The type, or some of its objects, could not be read, for example because Microsoft Graph returned an error or asked for a longer pause than a backup waits. | Incomplete |
+| Not read | The type, or some of its objects, could not be read, for example because Microsoft Graph returned an error, did not answer, or asked for a longer pause than a backup waits. | Incomplete |
 
 A backup with a type that was left out or not read shows **Coverage incomplete** in the **Backup Progress** dialog and in **Backup Details**, with the types concerned. A type that was left out does not change the result: the backup is still **Complete**, scheduled backups do not retry it, and no failure is notified. A type that was not read makes the result **Completed with warnings**, as before.
+
+One case is different: when every selected type was left out, the backup read nothing and holds nothing. It ends as **Failed** with "Backup failed: nothing could be read" and the cause most of the types share, for example a missing permission or a product the tenant has no license for. Scheduled backups retry it, a failure is notified, and older backups are kept. A backup whose types are all empty or not set up in the tenant did read the tenant and stays **Complete**.
+
+An Entra ID or Defender endpoint that fails ends its own type, and the backup goes on with the other types and services. When Microsoft Graph stops answering the requests of one of these services, the rest of that service is not read and the other services are.
 
 Types the backup choice leaves out, and the types of a service that is turned off for the tenant, are not selected. They never make coverage incomplete.
 

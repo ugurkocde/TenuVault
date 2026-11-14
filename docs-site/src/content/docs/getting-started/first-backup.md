@@ -53,6 +53,7 @@ For more on manual backups, see [Run a backup](/backups/).
 | **Backup completed successfully** | Every object in scope was saved. |
 | **Backup completed with &lt;n&gt; warnings** | Most objects were saved, but some could not be read. **Needs attention** lists each one with the reason. Older backups are kept because this backup is incomplete. |
 | **Backup failed: no policies could be saved** | Nothing was saved. Check **Needs attention** or the raw log for the first error. |
+| **Backup failed: nothing could be read** | Every selected type was left out, for example for a missing permission or a product the tenant has no license for. The error names the main cause, and **Needs attention** lists the reason per type. |
 
 Below the result, TenuVault shows:
 

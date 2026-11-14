@@ -123,6 +123,21 @@ Put these in the next stable release's notes, then remove them here.
   and in Backup Details. Versions before 0.6 ignore both fields and import such a backup as
   before. A backup that holds a type those versions do not know is refused there as a whole
   ("Unsupported backup item"). Backups made before 0.6 import into 0.6 and show no coverage.
+- **A backup that read nothing fails.** A backup in which every selected type was left out (for a
+  missing permission, role or license, or because only a signed-in admin can read it) used to end
+  as successful although it held nothing. It now ends as failed with "Backup failed: nothing
+  could be read" and the cause most of its types share. The scheduler retries it, the
+  notification is a failure and every older backup is kept. This shows for a tenant that backs
+  up only Conditional Access, Entra ID or Defender. For Intune it shows only when the backup
+  choice leaves out device configuration profiles, compliance policies, settings catalog and
+  endpoint security policies and administrative templates, and every remaining type is denied;
+  a refused read of those four always failed the backup. A backup that read some types and left
+  others out ends as before, and so does one whose types are all empty or not set up.
+- **Refusals and pauses are counted per service.** For a tenant that backs up Intune and
+  Conditional Access, refused reads and throttling are now counted for each service on its own.
+  Five consecutive refused Intune reads end the backup even when Conditional Access reads succeed
+  in between, and a pause of more than five minutes that Microsoft Graph asks of Intune no longer
+  stops the Conditional Access reads. Requests that get no answer still count for both together.
 - **Restore capability.** Every type has a restore capability, and a type without one is never
   written to a tenant by restore, revert, change sets, Sync, baselines or the copy to another
   tenant. Every type of earlier versions keeps what it could do.
