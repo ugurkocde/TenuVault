@@ -1,3 +1,6 @@
+// The pricing and checkout links build the same value in src/main/license/buy-url.ts. That file
+// keeps its own copy of the pattern, because licensing files change only with a soak on the
+// nightly channel (RELEASING.md). test/setup-call-url.test.ts fails when the two rules differ.
 const SOURCE = /^[a-z0-9-]{1,40}$/
 
 /**

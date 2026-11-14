@@ -25,10 +25,10 @@ describe("link source rule", () => {
     expect(withAppLinkSource("https://www.tenuvault.com/setup-call#times", source)).toBe("https://www.tenuvault.com/setup-call#times")
   })
 
-  it("is the rule the pricing and checkout links use", () => {
-    expect(licenseBuyUrl("https://tenuvault.com/desktop#pricing", "welcome")).toBe(withAppLinkSource("https://tenuvault.com/desktop#pricing", "welcome"))
-    expect(new URL(licenseCheckoutUrl("https://www.tenuvault.com", "pro", "welcome")).searchParams.get("src")).toBe(appLinkSource("welcome"))
-    expect(new URL(licenseCheckoutUrl("https://www.tenuvault.com", "pro", "Not valid")).searchParams.has("src")).toBe(false)
+  // The licensing module keeps its own copy of the pattern, so the two are compared here.
+  it.each(["welcome", "license-page-trial", "a", "7", "a".repeat(40), ...INVALID])("agrees with the pricing and checkout links for %j", (source) => {
+    expect(licenseBuyUrl("https://tenuvault.com/desktop#pricing", source)).toBe(withAppLinkSource("https://tenuvault.com/desktop#pricing", source))
+    expect(new URL(licenseCheckoutUrl("https://www.tenuvault.com", "pro", source)).searchParams.get("src")).toBe(appLinkSource(source))
   })
 })
 
