@@ -248,7 +248,7 @@ export class HealthStore {
       const permissions = record.graph?.permissions ?? record.snapshot?.permissions
       const snapshot = record.snapshot
       const carried = [...(snapshot?.carried ?? []), ...(snapshot?.found ?? [])]
-      if (!permissions && !snapshot?.replaces) return []
+      if (!permissions && !snapshot?.replaces && !carried.length) return []
       return [{
         clientId: record.clientId,
         mode: record.mode,
