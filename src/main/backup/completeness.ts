@@ -1,6 +1,6 @@
 import { normalizeBackupStatus } from "../../portal/lib/backup-health"
 import { typeForFolder } from "../../shared/intune/registry"
-import { maskedFolders } from "../../shared/intune/scope"
+import { coveredFolders, maskedFolders, type ScopeMetadata } from "../../shared/intune/scope"
 
 /**
  * Whether a backup holds a complete copy of the types a change is about to write, from its
@@ -17,7 +17,7 @@ export interface BackupGaps {
   missing: Array<{ reason: GapReason; folders: string[] }>
 }
 
-export type GapReason = "excluded" | "skipped" | "failed" | "reader" | "masked"
+export type GapReason = "excluded" | "skipped" | "failed" | "reader" | "masked" | "uncovered"
 
 const REASON_TEXT: Record<GapReason, string> = {
   excluded: "left out of the backup scope",
@@ -25,6 +25,7 @@ const REASON_TEXT: Record<GapReason, string> = {
   failed: "failed",
   reader: "not readable by the Backup Reader (covered by manual backups)",
   masked: "saved with encrypted values masked (a manual backup captures them)",
+  uncovered: "not part of the backup (the service is turned off for this tenant under Services and permissions in Settings, or the backup is older than the type)",
 }
 
 const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [])
@@ -46,6 +47,11 @@ export function backupGaps(metadataValue: unknown, folders: string[]): BackupGap
     ["reader", strings(metadata.AppOnlyExcludedTypes)],
     ["masked", [...maskedFolders(metadata)]],
   ]
+  // A folder the backup never attempted is in none of the lists above: its service was off for the
+  // tenant, so the run left it out without recording a reason. It is missing all the same.
+  const covered = coveredFolders(metadata as ScopeMetadata)
+  const explained = new Set(lists.flatMap(([, list]) => list))
+  lists.push(["uncovered", folders.filter((folder) => !covered.has(folder) && !explained.has(folder))])
   return {
     status, ...(failures !== undefined ? { failures } : {}),
     succeeded: normalizeBackupStatus({ status }) === "success" && failures === 0,

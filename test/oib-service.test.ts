@@ -390,6 +390,16 @@ describe("backup choice", () => {
     expect(state.started).toEqual([])
   })
 
+  it("does not call a recent backup complete when it was taken with the written type's service off", async () => {
+    const state: Tenant = { policies: [], backups: [
+      { id: "backup-2026-10-01-095000", timestamp: minutesAgo(20), metadata: { ...COMPLETE, Scope: { Excluded: [], Included: ["NamedLocations", "AuthenticationStrengths", "ConditionalAccessPolicies"] } } },
+    ] }
+    vi.stubGlobal("fetch", world(state, []))
+    const { recent } = await handleOib({ ...base, action: "oib-backup-options", folders: ["ConfigurationPolicies"] }) as OibBackupOptions
+    expect(recent).toMatchObject({ folder: "backup-2026-10-01-095000", complete: false, missing: ["settings catalog and endpoint security policies"] })
+    expect(recent?.reason).toContain("not part of the backup (the service is turned off for this tenant")
+  })
+
   it("never offers a backup the user cancelled, so it does not hide an older finished one", async () => {
     const state: Tenant = { policies: [], backups: [
       { id: "backup-2026-10-01-095000", timestamp: minutesAgo(20), status: "Cancelled", metadata: { ...COMPLETE, Status: "Cancelled" } },
