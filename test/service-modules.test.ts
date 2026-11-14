@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
-import { checkModules, disabledFolders, missingPermissions, MODULES, moduleForFolder, restorePermissionBlocker, type GrantedPermissions } from "../src/shared/services/modules"
+import { LEGACY_FOLDERS } from "../src/shared/intune/scope"
+import { checkModules, DEFAULT_SELECTION, disabledFolders, missingPermissions, MODULES, moduleForFolder, restorePermissionBlocker, type GrantedPermissions, type ServiceModule } from "../src/shared/services/modules"
 import { grantedPermissions } from "../src/shared/services/token"
 import { ModuleSettings } from "../src/main/services/settings"
 import { servicesStatus } from "../src/main/services/status"
@@ -46,30 +47,87 @@ describe("Service modules", () => {
     expect(apps.missingBackup).toEqual([["DeviceManagementApps.Read.All", "DeviceManagementApps.ReadWrite.All"]])
   })
 
-  it("never blocks an Intune restore on the mapping: Graph stays the judge for always-on modules", () => {
+  it("never blocks an Intune restore on the mapping: Graph stays the judge for a service without a token pre-check", () => {
     expect(moduleForFolder("deviceconfigurations")?.module.id).toBe("intune")
     expect(restorePermissionBlocker("DeviceConfigurations", delegated())).toBeUndefined()
     expect(restorePermissionBlocker("DeviceConfigurations", undefined)).toBeUndefined()
   })
 
-  it("leaves no Intune type out of backups", () => {
-    expect(disabledFolders([])).toEqual(MODULES.filter((module) => module.optIn).flatMap((module) => module.areas.flatMap((area) => area.folders)))
-    for (const type of INTUNE_TYPES) if (moduleForFolder(type.folder)?.module.id === "intune") expect(disabledFolders([])).not.toContain(type.folder)
+  it("leaves no Intune type out of backups for a tenant that has made no choice", () => {
+    expect(DEFAULT_SELECTION.services).toEqual(["intune"])
+    expect(disabledFolders(DEFAULT_SELECTION)).toEqual(["NamedLocations", "AuthenticationStrengths", "ConditionalAccessPolicies"])
+    for (const type of INTUNE_TYPES) if (moduleForFolder(type.folder)?.module.id === "intune") expect(disabledFolders(DEFAULT_SELECTION)).not.toContain(type.folder)
+  })
+
+  it("leaves out the folders of a service that is off, and of an opt-in area that is off", () => {
+    const intune = MODULES.find((module) => module.id === "intune")!.areas.flatMap((area) => area.folders)
+    expect(disabledFolders({ services: ["conditionalAccess"] })).toEqual(intune)
+    expect(disabledFolders({ services: ["intune", "conditionalAccess", "entra", "defender"] })).toEqual([])
+    // An opt-in area follows its own switch, not only its service.
+    const entra = MODULES.find((module) => module.id === "entra")!
+    const groups = entra.areas.find((area) => area.id === "groups")!
+    const folders = groups.folders
+    try {
+      Object.assign(groups, { folders: ["Groups"] })
+      expect(disabledFolders({ services: ["entra"] })).toContain("Groups")
+      expect(disabledFolders({ services: ["entra"], areas: { entra: ["groups"] } })).not.toContain("Groups")
+      expect(disabledFolders({ services: [], areas: { entra: ["groups"] } })).toContain("Groups")
+    } finally {
+      Object.assign(groups, { folders })
+    }
+  })
+
+  it("gives every area a key that is unique within its service", () => {
+    for (const module of MODULES) expect(new Set(module.areas.map((area) => area.id)).size, module.id).toBe(module.areas.length)
+  })
+})
+
+/** Folder names that are taken: a second owner would mix two services' files in one backup folder. */
+function folderCollisions(modules: readonly ServiceModule[]): string[] {
+  // Backups made before 0.6 hold these folders; DeviceCompliancePolicies is the name older backups used for compliance policies.
+  const taken = new Set([...INTUNE_TYPES.map((type) => type.folder), ...LEGACY_FOLDERS, "DeviceCompliancePolicies"].map((folder) => folder.toLowerCase()))
+  const seen = new Set<string>()
+  const collisions: string[] = []
+  for (const module of modules) {
+    for (const folder of module.areas.flatMap((area) => area.folders)) {
+      const key = folder.toLowerCase()
+      const reusesOlder = (module.id === "entra" || module.id === "defender") && taken.has(key)
+      if (seen.has(key) || reusesOlder) collisions.push(`${module.id}/${folder}`)
+      seen.add(key)
+    }
+  }
+  return collisions
+}
+
+describe("Folder names across services", () => {
+  it("are unique without case, and the new services take no folder an existing type or an older backup uses", () => {
+    expect(folderCollisions(MODULES)).toEqual([])
+  })
+
+  it("would catch a new service reusing RoleDefinitions or Branding in another case", () => {
+    const withFolders = (id: string, folders: string[]) => MODULES.map((module) => (module.id === id ? { ...module, areas: [{ ...module.areas[0]!, folders }] } : module))
+    expect(folderCollisions(withFolders("entra", ["roleDefinitions"]))).toEqual(["entra/roleDefinitions"])
+    expect(folderCollisions(withFolders("defender", ["BRANDING", "DetectionRules"]))).toEqual(["defender/BRANDING"])
+    expect(folderCollisions(withFolders("entra", ["devicecompliancepolicies"]))).toEqual(["entra/devicecompliancepolicies"])
+    // Two new services may not share a folder either.
+    const both = MODULES.map((module) => (module.id === "entra" || module.id === "defender" ? { ...module, areas: [{ ...module.areas[0]!, folders: ["Shared"] }] } : module))
+    expect(folderCollisions(both)).toEqual(["defender/Shared"])
   })
 })
 
 describe("Module settings", () => {
-  it("keeps always-on modules on and refuses to turn them off", () => {
+  it("keeps Intune on until the admin turns it off, and refuses a service it does not know", () => {
     const settings = new ModuleSettings(memoryStore())
-    expect(settings.get("Tenant").intune).toEqual({ enabled: true, connection: "default" })
-    expect(() => settings.set("tenant", "intune", false)).toThrow(/turned on or off/)
+    expect(settings.get("Tenant").intune).toEqual({ enabled: true, connection: "default", access: "restore", areas: {} })
+    expect(settings.set("tenant", "intune", false).intune.enabled).toBe(false)
     expect(() => settings.set("tenant", "unknown", true)).toThrow(/turned on or off/)
+    expect(() => settings.set("tenant", "intune", "no")).toThrow(/turned on or off/)
   })
 
   it("survives an unreadable saved value", () => {
     const store = memoryStore()
     store.set("services.modules", "{not json")
-    expect(new ModuleSettings(store).enabled("tenant")).toEqual([])
+    expect(new ModuleSettings(store).selection("tenant").services).toEqual(["intune"])
   })
 })
 

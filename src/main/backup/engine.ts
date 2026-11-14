@@ -13,7 +13,7 @@ import { listSnapshot, readObject, withMaskedSecrets } from "../../shared/intune
 import { comparableSnapshot } from "../../shared/intune/compare"
 import type { BackupItems } from "../../shared/intune/backup-changes"
 import { EVERYTHING, includedTypes, normalizeScope, restorableFolders, type BackupScope } from "../../shared/intune/scope"
-import { canBackUp, describeRequirement, disabledFolders, moduleForFolder, SERVICES_PAGE, type ModuleId } from "../../shared/services/modules"
+import { canBackUp, DEFAULT_SELECTION, describeRequirement, disabledFolders, moduleForFolder, SERVICES_PAGE, type ServiceSelection } from "../../shared/services/modules"
 import { grantedPermissions } from "../../shared/services/token"
 import { MAX_ITEM_ERRORS, type BackupNotice, type BackupResults, type BackupTypeResult } from "../../shared/backup-results"
 
@@ -96,10 +96,11 @@ export interface BackupEngineDeps {
    */
   unattendedTokens?: (request: BackupRequest) => RunTokens | null
   /**
-   * The opt-in service modules turned on for the tenant (see shared/services/modules). Types of opt-in
-   * modules that are off are never backed up, whatever the scope says. None when left out.
+   * The services and opt-in areas turned on for the tenant (see shared/services/modules). Types of a
+   * service or area that is off are never backed up, whatever the scope says. When left out, the
+   * services that are on by default.
    */
-  enabledModules?: (tenantId: string) => ModuleId[]
+  services?: (tenantId: string) => ServiceSelection
   /** Backups older than this many days are deleted after each backup; 0 keeps everything. */
   retentionDays?: (tenantId: string) => number
   now?: () => Date
@@ -445,12 +446,13 @@ export class BackupEngine {
 
     const scope = normalizeScope(request.scope ?? EVERYTHING)
     const readerExcluded = new Set(tokens.excludedTypes ?? [])
-    const moduleOff = new Set(disabledFolders(this.deps.enabledModules?.(request.tenantId) ?? []))
+    const selection = this.deps.services?.(request.tenantId) ?? DEFAULT_SELECTION
+    const moduleOff = new Set(disabledFolders(selection))
     const notReadable = includedTypes(scope).filter((type) => readerExcluded.has(type.folder) && !moduleOff.has(type.folder)).map((type) => type.folder)
-    // An opt-in module that is on but whose read permission the token lacks is left out up front with the
-    // missing permission named, instead of failing on a refused read. Intune keeps its long-standing per-type handling.
-    const granted = await moduleGrants(tokens, includedTypes(scope).some((type) => !moduleOff.has(type.folder) && moduleForFolder(type.folder)?.module.optIn))
-    const unpermitted = includedTypes(scope).filter((type) => !moduleOff.has(type.folder) && !readerExcluded.has(type.folder) && moduleForFolder(type.folder)?.module.optIn && granted && !canBackUp(type.folder, granted))
+    // A service with a token pre-check that is on but whose read permission the token lacks is left out up front with
+    // the missing permission named, instead of failing on a refused read. Intune keeps its long-standing per-type handling.
+    const granted = await moduleGrants(tokens, includedTypes(scope).some((type) => !moduleOff.has(type.folder) && moduleForFolder(type.folder)?.module.precheck))
+    const unpermitted = includedTypes(scope).filter((type) => !moduleOff.has(type.folder) && !readerExcluded.has(type.folder) && moduleForFolder(type.folder)?.module.precheck && granted && !canBackUp(type.folder, granted))
     const types = includedTypes(scope).filter((type) => !readerExcluded.has(type.folder) && !moduleOff.has(type.folder) && !unpermitted.includes(type))
     // Results list every type this run covers or leaves out for a permission, in registry order.
     const results: BackupResults = {
@@ -529,9 +531,9 @@ export class BackupEngine {
         if (denied) {
           skippedTypes.push(type.folder)
           const module = moduleForFolder(type.folder)?.module
-          const reason = module?.optIn
-            ? `Access was denied. The app registration may lack the permission or admin consent, or your account may not have a role that can read ${module.label} (${module.roles.split(";")[0]}).`
-            : "Access was denied. The app registration may lack the permission or admin consent, or your Intune role may not allow it."
+          const reason = module?.precheck
+            ? `Access was denied. The app registration may lack the permission or admin consent, or your account may not have a role that can read ${module.label}${module.roles ? ` (${module.roles.split(";")[0]})` : ""}.`
+            : `Access was denied. The app registration may lack the permission or admin consent, or your ${module?.label ?? "Intune"} role may not allow it.`
           Object.assign(result(type.folder), { state: "skipped", reason })
           this.write(job, `Skipped ${type.label}: ${reason.charAt(0).toLowerCase()}${reason.slice(1)}`)
           return
@@ -1005,7 +1007,7 @@ function uniqueName(name: string, id: string, used: Set<string>): string {
 }
 
 
-/** The permissions in the run's Graph token, read only when an opt-in module needs checking. */
+/** The permissions in the run's Graph token, read only when a service with a token pre-check needs checking. */
 async function moduleGrants(tokens: RunTokens, needed: boolean) {
   if (!needed) return undefined
   try {

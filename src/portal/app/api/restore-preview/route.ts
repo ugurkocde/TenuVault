@@ -63,11 +63,11 @@ export async function POST(request: NextRequest) {
   try {
     const [storageToken, graphToken] = await Promise.all([
       token(tenantId, appId, clientSecret, "https://storage.azure.com/.default"),
-      // An opt-in service's items are checked against the app registration's permissions, so a restore
+      // Items of a service with a token pre-check are checked against the app registration's permissions, so a restore
       // that would be refused shows as not restorable here instead of failing when it starts.
       live === true
         ? token(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default")
-        : paths.some((path) => moduleForFolder(String(path).split("/")[1] ?? "")?.module.optIn)
+        : paths.some((path) => moduleForFolder(String(path).split("/")[1] ?? "")?.module.precheck)
           // Without the token the restore still checks the permission before its first write.
           ? token(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default").catch(() => "")
           : Promise.resolve(""),
@@ -135,7 +135,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-/** Marks an item not restorable when the app registration lacks its opt-in service's write permission. */
+/** Marks an item not restorable when the app registration lacks the write permission of its pre-checked service. */
 function withPermission(item: PreviewItem, granted: ReturnType<typeof grantedPermissions>): PreviewItem {
   const blocker = restorePermissionBlocker(item.folder, granted)
   return blocker ? { ...item, blocker: item.blocker ?? blocker, replaceBlocker: item.replaceBlocker ?? blocker } : item

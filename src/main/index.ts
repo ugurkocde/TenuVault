@@ -431,7 +431,7 @@ async function bootstrap(): Promise<void> {
   const engine = new BackupEngine({
     fetch: bridgedFetch,
     getToken: backupAccess.getToken,
-    enabledModules: (tenantId) => moduleSettings.enabled(tenantId),
+    services: (tenantId) => moduleSettings.selection(tenantId),
     unattendedTokens: (request) => {
       const plan = license.plan(request.tenantId)
       if (!plan || !allows(plan, "backupReader")) return null
@@ -970,7 +970,7 @@ async function bootstrap(): Promise<void> {
     const azureStorage = profile && !isLocalAccount(profile.storageAccountName) ? profile.storageAccountName : undefined
     const reader = backupReader.status(tenantId)
     // Types of services turned off for the tenant are left out of every backup, so the reader does not miss them.
-    const off = new Set(disabledFolders(moduleSettings.enabled(tenantId)))
+    const off = new Set(disabledFolders(moduleSettings.selection(tenantId)))
     return {
       supported: readerSupported,
       available: !!plan && allows(plan, "backupReader"),

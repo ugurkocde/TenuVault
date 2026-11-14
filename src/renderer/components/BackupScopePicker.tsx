@@ -104,7 +104,8 @@ export function BackupScopePicker({ value, onChange, counts, uncounted = [], dis
                 </div>
                 {(() => {
                   const module = moduleForFolder(types[0]!.folder)?.module
-                  return module?.optIn ? (
+                  // A service that starts off is not backed up until the admin turns it on, whatever the scope says.
+                  return module && !module.defaultOn ? (
                     <p className="pb-2 pl-7 text-xs text-gray-500">
                       Backed up only when {module.label} is turned on for the tenant in Settings, under Services and permissions.
                     </p>

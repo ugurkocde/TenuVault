@@ -72,7 +72,7 @@ function Permissions({ requirement }: { requirement: Requirement }) {
   )
 }
 
-/** On and off for an opt-in service, in the app's coral. */
+/** On and off for a service the admin can switch, in the app's coral. */
 function Switch({ checked, disabled, label, onChange }: { checked: boolean; disabled: boolean; label: string; onChange: (checked: boolean) => void }) {
   const id = useId()
   return (
@@ -170,7 +170,7 @@ function ModuleDetail({ module, tenantId, clientId, busy, onToggle }: { module: 
         ) : (
           <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">Off</span>
         )}
-        {module.optIn ? <Switch checked={module.enabled} disabled={busy} label="Include in backups" onChange={onToggle} /> : null}
+        {module.switchable ? <Switch checked={module.enabled} disabled={busy} label="Include in backups" onChange={onToggle} /> : null}
       </div>
       <p className="text-sm text-gray-500">{module.description}</p>
       {check ? (
@@ -244,7 +244,7 @@ function Overview({ tenants, statuses, selected, onSelect }: { tenants: Array<{ 
 
 /**
  * The services each tenant backs up and what its app registration may do with each: read for backups
- * and drift, write for restores. Opt-in services are turned on here per tenant. With several tenants,
+ * and drift, write for restores. Services are turned on and off here per tenant. With several tenants,
  * an overview lists them all. Backup and restore messages link to this section when a permission is missing.
  */
 export function ServicesSettings() {

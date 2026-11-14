@@ -407,8 +407,8 @@ export interface ServiceModuleStatus {
   id: ModuleId
   label: string
   description: string
-  /** Opt-in modules start off for every tenant; the others are always on. */
-  optIn: boolean
+  /** The admin can turn the service on or off for the tenant. */
+  switchable: boolean
   enabled: boolean
   roles: string
   /** Restore permissions this module adds on top of the default setup, and the setup switch for new app registrations. */
@@ -523,9 +523,9 @@ export interface TenuVaultBridge {
     liveRuns: (tenantId: string) => Promise<string[]>
   }
   services: {
-    /** The tenant's service modules and what its app registration may do with each. `refresh` gets a new token, so recent consent changes show. */
+    /** The tenant's service modules that have types to back up, and what its app registration may do with each. `refresh` gets a new token, so recent consent changes show. */
     status: (tenantId: string, clientId: string, refresh?: boolean) => Promise<ServicesStatus>
-    /** Turns an opt-in service module on or off for the tenant's backups. */
+    /** Turns a service module on or off for the tenant's backups. */
     setEnabled: (tenantId: string, clientId: string, id: ModuleId, enabled: boolean) => Promise<ServicesStatus>
   }
   license: {

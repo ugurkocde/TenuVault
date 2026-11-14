@@ -200,13 +200,13 @@ const errorMessage = (body: Item, status: number) => {
 
 /**
  * The error of a refused write. Entra puts the useful part in innerError.message (for example "1007:
- * Incoming ConditionalAccessPolicy object ... does not match the schema"), and a 403 on an opt-in
- * service usually means the app registration or the admin's role does not cover it.
+ * Incoming ConditionalAccessPolicy object ... does not match the schema"), and a 403 on a service with
+ * a token pre-check usually means the app registration or the admin's role does not cover it.
  */
 const writeError = (type: IntuneType, body: Item, status: number) => {
   const entry = moduleForFolder(type.folder)
   let message = errorMessage(body, status)
-  if (!entry?.module.optIn) return message
+  if (!entry?.module.precheck) return message
   const inner = ((body.error as Item | undefined)?.innerError as Item | undefined)?.message
   if (typeof inner === "string" && inner && !message.includes(inner)) message = `${message} ${inner}`
   if (status !== 403) return message
