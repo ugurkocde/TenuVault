@@ -78,6 +78,11 @@ export interface ServiceModule {
   restoreAccess?: { permissions: ReadonlyArray<{ name: string; id: string }>; newSetupSwitch: string }
   /** Backup Reader (app-only) application permission that lets scheduled backups read the module. */
   readerRole?: string
+  /**
+   * A Microsoft Graph beta path of one small read that only an account with access to the service can
+   * make. Restore history opens after it succeeds, so a stored sign-in alone does not show it.
+   */
+  accessProbe?: string
 }
 
 const rw = (name: string): Requirement => [[`${name}.ReadWrite.All`]]
@@ -100,6 +105,7 @@ export const MODULES: readonly ServiceModule[] = [
     precheck: false,
     defaultAccess: "restore",
     roles: "Intune Administrator, or an Intune role that covers the policies you back up and restore.",
+    accessProbe: "deviceManagement/deviceCategories?$top=1&$select=id",
     areas: [
       {
         id: "configuration",
@@ -161,6 +167,7 @@ export const MODULES: readonly ServiceModule[] = [
     roles: "Security Reader or Global Reader to back up; Conditional Access Administrator or Security Administrator to restore.",
     restoreAccess: { permissions: [{ name: "Policy.ReadWrite.ConditionalAccess", id: "ad902697-1014-4ef5-81ef-2b4301988e8c" }], newSetupSwitch: "-IncludeConditionalAccessRestore" },
     readerRole: "Policy.Read.All",
+    accessProbe: "identity/conditionalAccess/policies?$top=1&$select=id",
     // Writes also need Policy.Read.All (a documented Microsoft Graph requirement for POST and PATCH of policies).
     areas: [
       {

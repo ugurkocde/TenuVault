@@ -115,6 +115,7 @@ import { afterScheduledBackup } from "./features/reports"
 import { ModuleSettings } from "./services/settings"
 import { disabledFolders } from "../shared/services/modules"
 import { servicesStatus } from "./services/status"
+import { requireServiceAccess } from "./services/access"
 
 const RENDERER_STORAGE_PREFIX = "renderer."
 const LOCAL_FOLDER_KEY = "backup.localFolder"
@@ -374,15 +375,16 @@ async function bootstrap(): Promise<void> {
     if (!accounts.get(tenantId)) throw new Error("Sign in to this tenant before opening framework history.")
     return license.requireEntitlement(tenantId)
   })
+  const moduleSettings = new ModuleSettings(appStore)
   setRestoreJournalAuthorization(async (tenantId) => {
     const account = accounts.get(tenantId)
     if (!account) throw new Error("Sign in to this tenant before opening restore history.")
     await license.requireEntitlement(tenantId)
     const token = await tokenFor(tenantId, account.clientId, "https://graph.microsoft.com/.default", true)
-    const response = await bridgedFetch("https://graph.microsoft.com/beta/deviceManagement/deviceCategories?$top=1&$select=id", {
+    // One small read of a service the tenant backs up: Intune when it is on, as before.
+    await requireServiceAccess(moduleSettings.selection(tenantId), (path) => bridgedFetch(`https://graph.microsoft.com/beta/${path}`, {
       headers: { Authorization: `Bearer ${token.accessToken}` }, signal: AbortSignal.timeout(15_000),
-    })
-    if (!response.ok || !Array.isArray((await response.json()).value)) throw new Error("Intune management access is required for this tenant's restore history.")
+    }), "this tenant's restore history")
   })
 
   // Every PDF export resolves branding per tenant here: saved branding applies only on a plan with pdfBranding.
@@ -427,7 +429,6 @@ async function bootstrap(): Promise<void> {
   // The Backup Reader's tokens reach only the backup engine: never the fetch bridge, tokenFor or a
   // portal route, so no restore, revert or other change can ever run with them.
   const backupReader = new BackupReaderService(tokenStore, { fetch: bridgedFetch })
-  const moduleSettings = new ModuleSettings(appStore)
   const engine = new BackupEngine({
     fetch: bridgedFetch,
     getToken: backupAccess.getToken,

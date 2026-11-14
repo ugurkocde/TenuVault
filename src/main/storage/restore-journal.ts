@@ -36,6 +36,6 @@ export function removeWrite(key: string): void { store.set(JOURNAL_KEY, JSON.str
 let authorize: ((tenantId: string) => Promise<void>) | undefined
 export function setRestoreJournalAuthorization(value: (tenantId: string) => Promise<void>): void { authorize = value }
 export async function authorizeRestoreJournal(tenantId: string): Promise<void> {
-  if (!authorize) throw new Error('Sign in with Intune access before opening restore history.')
+  if (!authorize) throw new Error('Sign in to this tenant before opening restore history.')
   await authorize(tenantId)
 }

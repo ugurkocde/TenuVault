@@ -4,7 +4,7 @@ export async function POST(request: Request): Promise<Response> {
   if (!body || typeof body.tenantId !== 'string' || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(body.tenantId)) return Response.json({ error: 'Select a tenant for restore history.' }, { status: 400 })
   const tenantId = body.tenantId.toLowerCase()
   try { await authorizeRestoreJournal(tenantId) }
-  catch { return Response.json({ error: 'Sign in with licensed Intune access to this tenant before viewing or changing restore history.' }, { status: 403 }) }
+  catch { return Response.json({ error: 'Sign in with a license and management access to this tenant before viewing or changing restore history.' }, { status: 403 }) }
   const scopedRecords = () => writeRecords().filter(record => record.tenant.toLowerCase() === tenantId)
   if (body.action === 'list') return Response.json({ records: scopedRecords() })
   if (body.confirmed !== true || typeof body.key !== 'string') return Response.json({ error: 'Review the write in Intune and confirm reconciliation.' }, { status: 400 })
