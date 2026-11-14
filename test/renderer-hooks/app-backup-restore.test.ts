@@ -4,8 +4,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import type { AppRestoreReview, CapturedAppSource } from "../../src/shared/app-sources/types"
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 const tenant = "11111111-1111-1111-1111-111111111111", target = "22222222-2222-2222-2222-222222222222"
-const api = vi.hoisted(() => ({ restoreReview: vi.fn(), loadRestoreSettings: vi.fn(), restore: vi.fn(), restoreProgress: vi.fn(), cancel: vi.fn(), accounts: vi.fn(), signIn: vi.fn(), openExternal: vi.fn(), deviceSignIn: vi.fn(), deviceSignInStatus: vi.fn(), cancelDeviceSignIn: vi.fn() }))
+const api = vi.hoisted(() => ({ restoreReview: vi.fn(), loadRestoreSettings: vi.fn(), restore: vi.fn(), restoreProgress: vi.fn(), cancel: vi.fn(), accounts: vi.fn(), signIn: vi.fn(), openExternal: vi.fn(), deviceSignIn: vi.fn(), deviceSignInStatus: vi.fn(), cancelDeviceSignIn: vi.fn(), acknowledge: vi.fn() }))
 vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { appSources: api, app: api, auth: api } }))
+vi.mock("../../src/renderer/lib/disclaimer", () => ({ requestAcknowledgement: api.acknowledge }))
 vi.mock("~/contexts/TenantContext", () => ({ useTenants: () => [{ id: 1, name: "Source", credentials: { tenantId: "11111111-1111-1111-1111-111111111111" } }, { id: 2, name: "Destination", credentials: { tenantId: "22222222-2222-2222-2222-222222222222" } }] }))
 import { RestoreAppDialog } from "../../src/renderer/features/app-backup/RestoreAppDialog"
 const source = { id: "33333333-3333-3333-3333-333333333333", appName: "Finance" } as CapturedAppSource
@@ -77,4 +78,37 @@ it("refreshes the destination session after Microsoft completes device sign-in",
   api.accounts.mockResolvedValueOnce([]).mockResolvedValue([{ tenantId: target }]); api.deviceSignInStatus.mockResolvedValue({ status: "completed" })
   await mount(); await selectTarget(); await confirm(); await act(async () => button("Use a device code").click())
   expect(document.body.textContent).not.toContain("ABCD12345"); expect(button("Restore unassigned app").disabled).toBe(false)
+})
+
+
+it("reconnects only the source and retries earlier settings loading after authentication", async () => {
+  api.restoreReview.mockResolvedValue({ ...review, settingsHash: null })
+  api.loadRestoreSettings.mockRejectedValueOnce(new Error("Sign in to the source first")).mockResolvedValue({ ...review, currentSettings: true })
+  api.signIn.mockResolvedValue(undefined)
+  await mount(); await act(async () => button("Load current app settings").click())
+  expect(document.body.textContent).toContain("Sign in to the source first")
+  await act(async () => button("Reconnect source and load settings").click())
+  expect(api.signIn).toHaveBeenCalledExactlyOnceWith(tenant)
+  expect(api.loadRestoreSettings).toHaveBeenCalledTimes(2)
+  expect(api.loadRestoreSettings).toHaveBeenLastCalledWith(tenant, source.id)
+  expect(document.body.textContent).toContain("Current source settings loaded")
+  expect((document.querySelector("select") as HTMLSelectElement).value).toBe("")
+})
+it.each([true, false])("retries only after the destination disclaimer is accepted: %s", async accepted => {
+  const result = { appId: target, tenantId: target, name: "Restored", contentVersion: "1", sourceId: source.id }
+  api.restore.mockResolvedValueOnce({ error: "Accept disclaimer", acknowledgement: { version: 1, tenantIds: [target] } }).mockResolvedValue(result)
+  api.acknowledge.mockResolvedValue(accepted)
+  await mount(); await selectTarget(); await confirm(); await act(async () => button("Restore unassigned app").click())
+  expect(api.acknowledge).toHaveBeenCalledExactlyOnceWith([target])
+  expect(api.restore).toHaveBeenCalledTimes(accepted ? 2 : 1)
+  expect(document.body.textContent).toContain(accepted ? "No assignments were added" : "No changes were made")
+})
+it("does not retry after leaving while the disclaimer is pending", async () => {
+  let finish!: (value: boolean) => void
+  api.acknowledge.mockImplementation(() => new Promise(resolve => { finish = resolve }))
+  api.restore.mockResolvedValue({ error: "Accept disclaimer", acknowledgement: { version: 1, tenantIds: [target] } })
+  await mount(); await selectTarget(); await confirm(); await act(async () => button("Restore unassigned app").click())
+  act(() => root!.unmount()); root = undefined
+  await act(async () => finish(true))
+  expect(api.restore).toHaveBeenCalledOnce()
 })

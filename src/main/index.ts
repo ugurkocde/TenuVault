@@ -25,6 +25,7 @@ import { licenseBuyUrl, licenseCheckoutUrl, trialCheckoutUrl } from "./license/b
 import { requestTrialKey } from "./license/trial"
 import { assertArchiveFileSize, importConfirmedArchive, reviewArchive } from "./backup/archive"
 import { readFile, stat } from "node:fs/promises"
+import { randomUUID } from "node:crypto"
 import { pathToFileURL } from "node:url"
 import { isGuid, isMicrosoftLoginUrl, sameRendererDocument } from "../shared/security"
 import { rendererStorageKey, rendererStorageValue } from "./renderer-storage"
@@ -1470,16 +1471,21 @@ async function bootstrap(): Promise<void> {
   })
 
   const appSources = new AppSourceService({
+    restoreOwner: () => {
+      let id = appStore.get("appSources.restoreOwner")
+      if (!id || !isGuid(id)) { id = randomUUID(); appStore.set("appSources.restoreOwner", id) }
+      return id
+    },
     signInWithDeviceCode: async (tenant, onCode, signal) => {
       const client = appBackupClientId(tenant, appStore.get(`${RENDERER_STORAGE_PREFIX}tenuvault_tenants`))
       await auth.signInWithDeviceCode(tenant, client, onCode, signal)
       pushLicense()
     },
     loadRestoreSettings: async (tenant, appId) => readRestoreSnapshot(tenant, appId, (await auth.getAccessToken(tenant, signedInClient(tenant), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch, "current-settings"),
-    restore: (store, source, snapshot, target, name, signal, progress) => restoreCapturedApp(store, source, snapshot, target, name, {
+    restore: (store, source, snapshot, target, name, signal, progress) => disclaimer.run([target], () => restoreCapturedApp(store, source, snapshot, target, name, {
       graph: restoreGraph(async () => (await auth.getAccessToken(target, signedInClient(target), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch, signal),
       fetch: bridgedFetch, signal, progress,
-    }),
+    })),
     ensureKeys: () => { backupKeys.keyring() },
     capture: async (tenant, appId, jobId, store, signal, progress) => {
       if (process.platform !== "win32") throw new Error("Back up Win32 installers on a Windows PC enrolled in this Intune tenant.")

@@ -4,7 +4,7 @@ Scope: restore a previously captured Win32 source ZIP into a new, unassigned app
 
 ## Live Windows result
 
-The packaged Windows preview restored a PowerShell backup to the authorized destination tenant through the actual desktop review dialog and main-process upload handlers. Destination authentication used the new Microsoft device-code option, with sign-in completed on another device. The app ran unelevated in an isolated test profile; the installed app profile was unchanged.
+The packaged Windows preview at `18f8b06` restored a PowerShell backup to the authorized destination tenant through the actual desktop review dialog and main-process upload handlers. Destination authentication used the new Microsoft device-code option, with sign-in completed on another device. The app ran unelevated in an isolated test profile; the installed app profile was unchanged.
 
 Independent Microsoft Graph beta reads through Lokka Microsoft MCP verified:
 
@@ -26,10 +26,16 @@ The earlier premature renewal left an unassigned, unpublished test draft in a te
 
 The product retains terminally failed drafts and explains the failure. It neither deletes destination apps nor silently creates replacements. Regression tests prove that retrying such a failure performs no additional writes. Interrupted uploads with usable storage and lost creation responses remain resumable against their original destination app.
 
+## Review regression checks
+
+The review follow-up adds exclusive per-backup/destination ownership before any journal read or Graph operation. A competing process is refused; a real child-process test verifies active-owner refusal and recovery only after the same installation’s owner exits. Unknown and foreign locks are retained. Lock records are encrypted and removed without recursive deletion.
+
+Additional regressions cover cancellation while journaling a creation that has not been dispatched, completed retries with changed install settings, the destination’s existing disclaimer guard and cancellation, and reconnecting the source before enriching an older backup. The main process checks destination acceptance before entering the restore engine. The updated packaged Windows app displayed that destination disclaimer; choosing Cancel change returned “Restore cancelled. No changes were made.” Authentication, tenant selection and plan licensing remain separate.
+
 ## Automated checks
 
-- Full local suite: 5,651 passed, two existing skips.
-- Focused restore, authentication and renderer suite: 52 passed on Linux and the Windows mini PC.
+- Full local suite: 5,662 passed, two existing skips.
+- Focused restore, authentication and renderer suite: 70 passed on the Windows mini PC; these suites also pass in the full Linux run.
 - Typecheck and lint passed; four existing lint warnings remain outside this change.
 - Desktop build and App Backup smoke checks passed, including destination review and completion. The earlier full desktop smoke run also passed.
 - Documentation build passed for all 49 pages.

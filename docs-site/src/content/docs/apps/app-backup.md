@@ -107,9 +107,9 @@ Export remains available while signed out, provided the tenant is configured and
 
 1. Connect the destination tenant in TenuVault. App Backup and this restore flow remain free for every configured tenant.
 2. In the source tenant, open **App Backup → Backups**, then **Restore to tenant…** on a captured installer.
-3. Review the app settings. For a backup created before settings snapshots were available, choose **Load current app settings**. This reads the source tenant and accepts settings only when the committed content version still matches the captured installer. These are labeled as current settings, not settings from the original backup date. If the source app changed version or is unavailable, make a new backup instead.
+3. Review the app settings. For a backup created before settings snapshots were available, choose **Load current app settings**. This reads the source tenant and accepts settings only when the committed content version still matches the captured installer. These are labeled as current settings, not settings from the original backup date. If the source session has expired, use **Reconnect source and load settings**; destination sign-in stays separate. If the source app changed version or is unavailable, make a new backup instead.
 4. Choose the destination tenant and enter the new app name. TenuVault reuses its existing Microsoft session. Sign in only if that destination has no active session. The account needs Intune permission to create apps, and the configured registration needs delegated `DeviceManagementApps.ReadWrite.All`.
-5. Confirm the destination and choose **Restore unassigned app**. The installer is verified, encrypted with fresh keys and uploaded without plaintext staging files.
+5. Confirm the destination and choose **Restore unassigned app**. Before the first change to that tenant, review and accept the tenant disclaimer. Cancelling it makes no changes. The installer is verified, encrypted with fresh keys and uploaded without plaintext staging files.
 6. Wait for Intune to confirm the content and publish the app. Choose **Open restored app** to inspect it in the destination tenant before assigning it.
 
 If you are operating TenuVault remotely, choose **Use a device code** in the destination sign-in section. Open the displayed Microsoft address on another device, enter the short code and sign in to the destination tenant. TenuVault keeps the resulting session on the computer running the restore. Closing the dialog or choosing **Cancel device sign-in** stops the pending request. Microsoft MFA and Conditional Access still apply; use browser sign-in on the TenuVault computer if your organization does not allow device-code authentication.
@@ -125,6 +125,8 @@ Capture requires an enrolled Windows PC. Restoring an existing supported Win32 b
 ### Interrupted restores
 
 Leaving App Backup or switching the source tenant stops an unfinished restore. An unassigned draft app may remain in Intune; TenuVault does not delete it automatically. Retry with the **same backup, destination and app name** to continue that app. The encrypted backup folder keeps its restore journal, including the destination binding and upload encryption material, so keep the matching recovery key safe.
+
+Only one process or computer can restore a particular backup to a particular destination at a time. The backup folder keeps an encrypted ownership record throughout the operation. After a crash, the same TenuVault installation can recover its stopped process’s lock. A lock from another computer or an unknown owner remains blocked; return to the owning installation to recover it, or review the interrupted operation before manually removing its lock. Do not remove a lock while another restore could still be running.
 
 If Intune reports a permanent upload-storage failure, the draft is retained for review. Intune may refuse renewal in this state; TenuVault does not delete the draft or create a replacement automatically.
 

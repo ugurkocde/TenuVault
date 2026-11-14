@@ -38,6 +38,10 @@ async function all(graph: RestoreGraph, initial: string): Promise<Record<string,
 
 /** One durable restore per captured version and destination. Retries never silently create another app. */
 export async function restoreCapturedApp(store: AppSourceStore, source: CapturedAppSource, snapshot: AppRestoreSnapshot, target: string, name: string, options: RestoreOptions): Promise<AppRestoreResult> {
+  return store.withRestoreLock(source.tenantId, source.id, target, options.signal, () => restoreOwnedApp(store, source, snapshot, target, name, options))
+}
+
+async function restoreOwnedApp(store: AppSourceStore, source: CapturedAppSource, snapshot: AppRestoreSnapshot, target: string, name: string, options: RestoreOptions): Promise<AppRestoreResult> {
   const { graph, fetch: fetchImpl, signal, progress } = options, wait = options.wait ?? pause
   const body = restoreBody(snapshot, name), settingsHash = snapshotHash(snapshot)
   const totalBytes = 48 + (Math.floor(source.bytes / 16) + 1) * 16
@@ -69,18 +73,23 @@ export async function restoreCapturedApp(store: AppSourceStore, source: Captured
     record.appId = identifier(found[0]!.id); await save()
   }
   if (!record.appId) {
-    report("creating"); record.creationStarted = true; await save(); signal.throwIfAborted()
+    report("creating"); record.creationStarted = true; await save()
+    if (signal.aborted) {
+      // No request has been dispatched. Persist that fact so a deliberate retry
+      // can create the app; unknown POST outcomes still require reconciliation.
+      record.creationStarted = false; await save(); signal.throwIfAborted()
+    }
     record.appId = identifier((await graph("POST", BASE, body)).id); await save()
   }
   const appUrl = `${BASE}/${record.appId}`, contentUrl = `${appUrl}/microsoft.graph.win32LobApp/contentVersions`
   const existing = await graph("GET", appUrl)
   if (existing["@odata.type"] !== "#microsoft.graph.win32LobApp" || typeof existing.notes !== "string" || !existing.notes.split("\n").includes(marker)) throw new Error("The destination app no longer belongs to this restore. No changes were made to it.")
+  assertRestoredSettings(body, existing)
   if (record.completed) {
     if (existing.committedContentVersion !== record.version || existing.publishingState !== "published") throw new Error("The previously restored destination app has changed. Review it in Intune.")
     report("completed", totalBytes); return result()
   }
   if ((await all(graph, `${appUrl}/assignments`)).length) throw new Error("This destination app was assigned while the restore was incomplete. Remove its assignments in Intune before continuing.")
-  assertRestoredSettings(body, existing)
   if (!record.version) {
     const versions = await all(graph, contentUrl)
     if (versions.length > 1) throw new Error("The destination has unexpected content versions. Review it in Intune.")

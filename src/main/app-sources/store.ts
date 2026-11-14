@@ -2,7 +2,7 @@ import { createCipheriv, createDecipheriv, createHash, createHmac, hkdfSync, ran
 import { constants } from "node:fs"
 import { hostname } from "node:os"
 import { basename, join, dirname } from "node:path"
-import { mkdir, open, readdir, rename, rm, link, lstat, realpath, type FileHandle } from "node:fs/promises"
+import { mkdir, open, readdir, rename, rm, link, lstat, realpath, unlink, rmdir, type FileHandle } from "node:fs/promises"
 import type { StoredAppSource, LocalAppArchive, CapturedAppSource, CaptureIdentity } from "../../shared/app-sources/types"
 import { inspectIntunewin, inspectSourceZip, type PackageReader } from "./package"
 import { SNAPSHOT_LIMIT, snapshotHash, validateSnapshot, type AppRestoreSnapshot } from "../app-backup/restore-snapshot"
@@ -94,6 +94,9 @@ async function readMetadata(path: string, limit = METADATA_LIMIT): Promise<Buffe
   } finally { await file.close() }
 }
 const activeExports = new Set<string>()
+// Production supplies its persisted, machine-local installation ID. Unconfigured
+// callers cannot reclaim another process's lock just because host names match.
+const processRestoreOwner = randomUUID()
 const owner = () => ({ host: hostname(), pid: process.pid })
 function abandoned(value: { host?: unknown; pid?: unknown }): boolean {
   if (value.host !== hostname() || !Number.isInteger(value.pid) || Number(value.pid) <= 0) return false
@@ -102,7 +105,7 @@ function abandoned(value: { host?: unknown; pid?: unknown }): boolean {
 
 /** Streaming, tenant-bound source storage. A final directory rename is the catalog commit point. */
 export class AppSourceStore {
-  constructor(readonly root: string, private readonly keys: () => Buffer[], private readonly exportRoot = root) {}
+  constructor(readonly root: string, private readonly keys: () => Buffer[], private readonly exportRoot = root, private readonly restoreOwner: string = processRestoreOwner) {}
   private async folder(tenant: string, create = false, root = this.root): Promise<string | null> {
     sourceTenant(tenant)
     try {
@@ -303,6 +306,42 @@ export class AppSourceStore {
       await this.privateWrite(temporary, this.encode(snapshot, tenant, id, "configuration", manifest.master))
       await link(temporary, target)
     } finally { await rm(temporary, { force: true }) }
+  }
+  /** Atomic directory ownership spans journal reads, reconciliation and every remote write. */
+  async withRestoreLock<T>(tenant: string, id: string, target: string, signal: AbortSignal, action: () => Promise<T>): Promise<T> {
+    abort(signal)
+    const manifest = await this.manifest(tenant, id), destination = sourceTenant(target)
+    const directory = join(manifest.directory, `.restore-${destination}.lock`), token = randomUUID()
+    const ownedFile = join(directory, `${token}.tvm`), purpose = `restore-lock/${destination}`
+    const conflict = () => new Error("Another process or computer owns this restore. Close its restore first. An unknown or interrupted lock must be reviewed before retrying.")
+    try { await mkdir(directory, { mode: 0o700 }) }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
+      try {
+        await noLink(directory)
+        const files = await readdir(directory)
+        if (files.length !== 1 || !/^[a-f0-9-]{36}\.tvm$/.test(files[0]!)) throw conflict()
+        const previousFile = join(directory, files[0]!)
+        const previous = this.decode<{ installation: string; pid: number; token: string }>(await readMetadata(previousFile), tenant, id, purpose).value
+        if (previous.installation !== this.restoreOwner || `${previous.token}.tvm` !== files[0] || !Number.isInteger(previous.pid) || previous.pid <= 0) throw conflict()
+        try { process.kill(previous.pid, 0); throw conflict() }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw conflict() }
+        // Only the contender that removes this exact owner's file may remove the
+        // empty directory. A concurrent reclaimer cannot delete the next owner.
+        await unlink(previousFile)
+        await rmdir(directory)
+        await mkdir(directory, { mode: 0o700 })
+      } catch { throw conflict() }
+    }
+    try {
+      await this.privateWrite(ownedFile, this.encode({ installation: this.restoreOwner, pid: process.pid, token }, tenant, id, purpose, manifest.master))
+      abort(signal)
+      return await action()
+    } finally {
+      // Never recursively delete this shared directory or another owner's file.
+      await rm(ownedFile, { force: true })
+      await rmdir(directory)
+    }
   }
   async readRestoreRecord<T>(tenant: string, id: string, target: string): Promise<T | null> {
     const manifest = await this.manifest(tenant, id)

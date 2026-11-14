@@ -1,3 +1,5 @@
+import type { AcknowledgementRequired } from "../disclaimer"
+
 interface SourceDescriptor {
   id: string
   tenantId: string
@@ -76,7 +78,7 @@ export interface AppSourcesBridge {
   cancelDeviceSignIn: (tenantId: string) => Promise<void>
   restoreReview: (tenantId: string, sourceId: string) => Promise<AppRestoreReview>
   loadRestoreSettings: (tenantId: string, sourceId: string) => Promise<AppRestoreReview>
-  restore: (tenantId: string, operationId: string, sourceId: string, targetTenantId: string, name: string, settingsHash: string) => Promise<AppRestoreResult>
+  restore: (tenantId: string, operationId: string, sourceId: string, targetTenantId: string, name: string, settingsHash: string) => Promise<AppRestoreResult | AcknowledgementRequired>
   restoreProgress: (tenantId: string, operationId: string) => Promise<AppRestoreProgress | null>
   assignments: (tenantId: string, appId: string) => Promise<AppAssignmentCheck>
   capture: (tenantId: string, operationId: string, appId: string) => Promise<CapturedAppSource>

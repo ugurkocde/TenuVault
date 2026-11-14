@@ -1,9 +1,12 @@
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeAll, afterAll, describe, expect, it, vi } from "vitest"
 import { createCipheriv, createHash, createHmac, randomBytes, randomUUID } from "node:crypto"
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, readFile, rm, writeFile, readdir, mkdir } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import JSZip from "jszip"
+import { build } from "esbuild"
+import { spawn } from "node:child_process"
+import { once } from "node:events"
 import { AppSourceStore } from "../src/main/app-sources/store"
 import { AppSourceService } from "../src/main/app-sources/service"
 import { ingestContent, type ContentEncryption } from "../src/main/app-backup/content-stream"
@@ -110,6 +113,46 @@ describe("app restore snapshots", () => {
 })
 
 describe("cross-tenant restore engine", () => {
+  it("keeps cancellation during creation journaling retryable before a POST", async () => {
+    const f = await fixture(), d = destination(), controller = new AbortController()
+    const save = f.store.writeRestoreRecord.bind(f.store)
+    vi.spyOn(f.store, "writeRestoreRecord").mockImplementation(async (tenant, source, destination, record) => {
+      await save(tenant, source, destination, record)
+      if ((record as { creationStarted: boolean; appId?: string }).creationStarted && !(record as { appId?: string }).appId) controller.abort()
+    })
+    await expect(restoreCapturedApp(f.store, f.source, snapshot, target, "Restored", options(d, controller.signal))).rejects.toThrow()
+    expect(d.calls.every(([method]) => method === "GET")).toBe(true)
+    expect(await f.store.readRestoreRecord(tenant, f.source.id, target)).toMatchObject({ creationStarted: false })
+    await restoreCapturedApp(new AppSourceStore(f.root, () => [f.master]), f.source, snapshot, target, "Restored", options(d))
+    expect(d.calls.filter(([m, p]) => m === "POST" && p.endsWith("/mobileApps"))).toHaveLength(1)
+  })
+  it("refuses changed settings on a completed retry without rewriting the app", async () => {
+    const f = await fixture(), d = destination()
+    await restoreCapturedApp(f.store, f.source, snapshot, target, "Restored", options(d))
+    const writes = d.calls.filter(([m]) => m !== "GET").length
+    d.app!.installCommandLine = "different.exe"
+    const opts = options(d)
+    await expect(restoreCapturedApp(f.store, f.source, snapshot, target, "Restored", opts)).rejects.toThrow("installCommandLine")
+    expect(d.calls.filter(([m]) => m !== "GET")).toHaveLength(writes)
+    expect(opts.progress).not.toHaveBeenCalledWith(expect.objectContaining({ phase: "completed" }))
+  })
+  it("holds exclusive ownership before the journal is read and through destination writes", async () => {
+    const f = await fixture(), d = destination(), second = destination()
+    let release!: () => void, entered!: () => void
+    const ready = new Promise<void>(resolve => { entered = resolve }), gate = new Promise<void>(resolve => { release = resolve })
+    const opts = options(d), original = opts.graph
+    opts.graph = async (method, url, body) => { if (!d.calls.length) { entered(); await gate }; return original(method, url, body) }
+    const first = restoreCapturedApp(f.store, f.source, snapshot, target, "Restored", opts)
+    await ready
+    try {
+      const contender = new AppSourceStore(f.root, () => [f.master])
+      const read = vi.spyOn(contender, "readRestoreRecord")
+      await expect(restoreCapturedApp(contender, f.source, snapshot, target, "Restored", options(second))).rejects.toThrow("owns this restore")
+      expect(read).not.toHaveBeenCalled(); expect(second.calls).toEqual([])
+    } finally { release(); await first }
+    expect((await readdir(join(f.root, tenant, f.source.id))).some(n => n.endsWith(".lock"))).toBe(false)
+  })
+
   it("waits for a new file's upload URI instead of renewing before allocation", async () => {
     const f = await fixture(), d = destination(), opts = options(d); let initial = true
     opts.graph = async (method, url, body) => {
@@ -272,4 +315,41 @@ it("verifies that the destination retained detection scripts and installation se
   expect(() => assertRestoredSettings(body, actual)).not.toThrow()
   actual.rules = [{ ruleType: "detection", scriptContent: "changed" }]
   expect(() => assertRestoredSettings(body, actual)).toThrow("rules")
+})
+
+
+describe("restore ownership across processes", () => {
+  let bundle: string
+  beforeAll(async () => {
+    bundle = join(tmpdir(), `restore-lock-${randomUUID()}.cjs`)
+    await build({ entryPoints: ["src/main/app-sources/store.ts"], bundle: true, platform: "node", format: "cjs", outfile: bundle, logLevel: "silent" })
+  })
+  afterAll(async () => { await rm(bundle, { force: true }) })
+  it("refuses a live owner, retains a foreign owner's lock, and recovers a crashed local owner", async () => {
+    const f = await fixture(), installation = randomUUID()
+    const script = `const {AppSourceStore}=require(${JSON.stringify(bundle)});new AppSourceStore(${JSON.stringify(f.root)},()=>[Buffer.from(${JSON.stringify(f.master.toString("hex"))},'hex')],undefined,${JSON.stringify(installation)}).withRestoreLock(${JSON.stringify(tenant)},${JSON.stringify(f.source.id)},${JSON.stringify(target)},new AbortController().signal,async()=>{process.send('locked');await new Promise(()=>{setInterval(()=>{},1000)})}).catch(()=>process.exit(9));`
+    const child = spawn(process.execPath, ["-e", script], { stdio: ["ignore", "ignore", "pipe", "ipc"] })
+    const exited = once(child, "exit")
+    try {
+      await Promise.race([once(child, "message"), exited.then(() => { throw new Error("Lock owner exited early") })])
+      const local = new AppSourceStore(f.root, () => [f.master], undefined, installation), action = vi.fn(async () => "ok")
+      await expect(local.withRestoreLock(tenant, f.source.id, target, new AbortController().signal, action)).rejects.toThrow("owns this restore")
+      // A different destination uses an independent lock.
+      await expect(local.withRestoreLock(tenant, f.source.id, randomUUID(), new AbortController().signal, async () => "different")).resolves.toBe("different")
+      child.kill("SIGKILL"); await exited
+      const foreign = new AppSourceStore(f.root, () => [f.master], undefined, randomUUID())
+      await expect(foreign.withRestoreLock(tenant, f.source.id, target, new AbortController().signal, action)).rejects.toThrow("owns this restore")
+      expect(action).not.toHaveBeenCalled()
+      await expect(local.withRestoreLock(tenant, f.source.id, target, new AbortController().signal, action)).resolves.toBe("ok")
+      expect(action).toHaveBeenCalledOnce()
+    } finally { child.kill("SIGKILL"); await exited }
+  }, 15000)
+  it.each(["empty", "malformed"])("does not reclaim an unknown %s lock", async kind => {
+    const f = await fixture(), directory = join(f.root, tenant, f.source.id, `.restore-${target}.lock`)
+    await mkdir(directory)
+    if (kind === "malformed") await writeFile(join(directory, `${randomUUID()}.tvm`), "invalid owner")
+    const action = vi.fn(async () => {})
+    await expect(f.store.withRestoreLock(tenant, f.source.id, target, new AbortController().signal, action)).rejects.toThrow("owns this restore")
+    expect(action).not.toHaveBeenCalled(); expect(await readdir(directory)).toHaveLength(kind === "empty" ? 0 : 1)
+  })
 })

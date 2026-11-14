@@ -4,10 +4,12 @@ import { randomUUID } from "node:crypto"
 import type { AppDeviceCode, AppDeviceSignInStatus, AppRestoreProgress, AppRestoreReview, AppRestoreResult, AppCaptureProgress, AppSourceState, CapturedAppSource, RecoveryDeviceStatus, AppSourcesBridge, IntuneAppDetails, IntuneAppScript } from "../../shared/app-sources/types"
 import { restoreBody, snapshotHash, type AppRestoreSnapshot } from "../app-backup/restore-snapshot"
 import { AppSourceStore, sourceTenant } from "./store"
+import type { AcknowledgementRequired } from "../../shared/disclaimer"
 
 export interface AppSourceHost {
+  restoreOwner?: () => string
   signInWithDeviceCode?: (tenant: string, onCode: (code: AppDeviceCode) => void, signal: AbortSignal) => Promise<void>
-  restore?: (store: AppSourceStore, source: CapturedAppSource, snapshot: AppRestoreSnapshot, target: string, name: string, signal: AbortSignal, progress: (value: AppRestoreProgress) => void) => Promise<AppRestoreResult>
+  restore?: (store: AppSourceStore, source: CapturedAppSource, snapshot: AppRestoreSnapshot, target: string, name: string, signal: AbortSignal, progress: (value: AppRestoreProgress) => void) => Promise<AppRestoreResult | AcknowledgementRequired>
   loadRestoreSettings?: (tenant: string, appId: string) => Promise<AppRestoreSnapshot>
   assignments?: (tenant: string, appId: string) => ReturnType<AppSourcesBridge["assignments"]>
   capture?: (tenant: string, appId: string, jobId: string, store: AppSourceStore, signal: AbortSignal, progress: (value: AppCaptureProgress) => void) => Promise<CapturedAppSource>
@@ -47,7 +49,7 @@ export class AppSourceService {
       const keys = this.host.keys()
       if (!keys.length) throw new Error("Import the matching recovery key to read this source store.")
       return keys
-    }, this.host.exportJournalFolder?.())
+    }, this.host.exportJournalFolder?.(), this.host.restoreOwner?.())
   }
   async list(raw: unknown): Promise<AppSourceState> {
     const tenant = this.tenant(raw)
@@ -139,7 +141,7 @@ export class AppSourceService {
     }
     return this.restoreReview(tenant, id)
   }
-  restore(raw: unknown, operation: unknown, source: unknown, target: unknown, name: unknown, settingsHash: unknown): Promise<AppRestoreResult> {
+  restore(raw: unknown, operation: unknown, source: unknown, target: unknown, name: unknown, settingsHash: unknown): Promise<AppRestoreResult | AcknowledgementRequired> {
     const destination = this.tenant(target), sourceId = sourceTenant(source), operationId = sourceTenant(operation)
     if (typeof name !== "string" || typeof settingsHash !== "string" || !/^[a-f0-9]{64}$/.test(settingsHash)) return Promise.reject(new Error("Review the app settings and destination before restoring."))
     return this.job(raw, operation, async (tenant, signal) => {

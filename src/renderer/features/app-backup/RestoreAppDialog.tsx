@@ -5,6 +5,8 @@ import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "~/components/ui/dialog"
 import { bridge } from "../../lib/bridge"
+import { requestAcknowledgement } from "../../lib/disclaimer"
+import { isAcknowledgementRequired } from "../../../shared/disclaimer"
 import type { AppDeviceCode, AppRestoreProgress, AppRestoreResult, AppRestoreReview, CapturedAppSource } from "../../../shared/app-sources/types"
 
 export function RestoreAppDialog({ tenant, source, onClose, onBusy }: { tenant: string; source: CapturedAppSource; onClose: () => void; onBusy: (busy: boolean) => void }) {
@@ -24,6 +26,7 @@ export function RestoreAppDialog({ tenant, source, onClose, onBusy }: { tenant: 
   const [progress, setProgress] = useState<AppRestoreProgress | null>(null)
   const [result, setResult] = useState<AppRestoreResult | null>(null)
   const alive = useRef(true), operation = useRef<string | null>(null)
+  const stopped = useRef(false)
   const destination = tenants.find(t => t.credentials?.tenantId.toLowerCase() === target)
   const authenticated = signedIn.includes(target)
   const refreshAccounts = async () => {
@@ -75,9 +78,13 @@ export function RestoreAppDialog({ tenant, source, onClose, onBusy }: { tenant: 
     if (active) await bridge.appSources.cancelDeviceSignIn(active)
     if (alive.current) { setDeviceCode(null); deviceTenant.current = null }
   }
-  async function loadSettings() {
+  async function loadSettings(reconnect = false) {
     setLoading(true); setError("")
-    try { const value = await bridge.appSources.loadRestoreSettings(tenant, source.id); if (alive.current) setReview(value) }
+    try {
+      if (reconnect) { await bridge.appSources.signIn(tenant); await refreshAccounts() }
+      if (!alive.current) return
+      const value = await bridge.appSources.loadRestoreSettings(tenant, source.id); if (alive.current) setReview(value)
+    }
     catch (e) { if (alive.current) setError(e instanceof Error ? e.message : "Source settings could not be loaded.") }
     finally { if (alive.current) setLoading(false) }
   }
@@ -91,9 +98,16 @@ export function RestoreAppDialog({ tenant, source, onClose, onBusy }: { tenant: 
   async function restore() {
     if (operation.current || !review?.settingsHash || !confirmed || !target) return
     const id = crypto.randomUUID(); operation.current = id
+    stopped.current = false
     setRunning(true); onBusy(true); setError(""); setProgress(null)
     try {
-      const value = await bridge.appSources.restore(tenant, id, source.id, target, name, review.settingsHash)
+      let value = await bridge.appSources.restore(tenant, id, source.id, target, name, review.settingsHash)
+      if (isAcknowledgementRequired(value)) {
+        if (!await requestAcknowledgement(value.acknowledgement.tenantIds)) throw new Error("Restore cancelled. No changes were made.")
+        if (!alive.current || stopped.current) return
+        value = await bridge.appSources.restore(tenant, id, source.id, target, name, review.settingsHash)
+      }
+      if (isAcknowledgementRequired(value)) throw new Error(value.error)
       if (alive.current) setResult(value)
     } catch (e) {
       if (alive.current) {
@@ -110,7 +124,7 @@ export function RestoreAppDialog({ tenant, source, onClose, onBusy }: { tenant: 
         <div role="status" className="flex items-start gap-3 rounded-2xl border p-4"><CheckCircle2 aria-hidden="true" className="size-6 shrink-0" /><div><p className="font-medium">{result.name} restored to {destination?.name || "the destination tenant"}.</p><p className="mt-2 text-sm text-muted-foreground">Intune confirmed the installer and published the app. No assignments were added. Review it before deploying.</p></div></div>
         <Button onClick={() => void bridge.app.openExternal(`https://intune.microsoft.com/#@${result.tenantId}/view/Microsoft_Intune_Apps/SettingsMenu/~/0/appId/${result.appId}`)}><ExternalLink className="mr-2 size-4" aria-hidden="true" />Open restored app</Button>
       </div> : <div className="space-y-5 py-3">
-        {loading ? <p role="status">Reading backup settings…</p> : review && !review.settingsHash ? <div className="space-y-3 rounded-2xl border p-4"><p className="font-medium">This earlier backup contains the installer only.</p><p className="text-sm text-muted-foreground">Load the app’s current settings from the source tenant. They are accepted only if its content version still matches this installer. You can review them before restoring.</p><Button onClick={() => void loadSettings()}>Load current app settings</Button></div> : review && <>
+        {loading ? <p role="status">Reading backup settings…</p> : review && !review.settingsHash ? <div className="space-y-3 rounded-2xl border p-4"><p className="font-medium">This earlier backup contains the installer only.</p><p className="text-sm text-muted-foreground">Load the app’s current settings from the source tenant. They are accepted only if its content version still matches this installer. You can review them before restoring.</p><Button onClick={() => void loadSettings()}>Load current app settings</Button>{(!!error || !signedIn.includes(tenant)) && <Button variant="outline" onClick={() => void loadSettings(true)}>Reconnect source and load settings</Button>}</div> : review && <>
           <section aria-label="App settings" className="space-y-3 rounded-2xl border p-4">
             <p className="font-medium">{review.name} · {review.version || "Version not specified"}</p>
             <p className="text-sm text-muted-foreground">{review.publisher} · Install as {review.runAs || "unspecified"} · {review.detectionRules} detection and {review.requirementRules} requirement rules</p>
@@ -126,7 +140,7 @@ export function RestoreAppDialog({ tenant, source, onClose, onBusy }: { tenant: 
             <label className="flex items-start gap-3 text-sm"><input type="checkbox" className="mt-1" checked={confirmed} disabled={running || !target} onChange={e => setConfirmed(e.target.checked)} /><span>Create this app in <strong>{destination?.name || "the selected tenant"}</strong>, with no assignments.</span></label>
           </>}
         </>}
-        {running && <div role="status" className="space-y-3 rounded-xl bg-secondary p-4 text-sm"><p>{phase}</p><p>Leaving this page stops the upload. Retry with the same app name and destination to continue; an unassigned draft may remain.</p><Button variant="outline" onClick={() => { if (operation.current) void bridge.appSources.cancel(tenant, operation.current).catch(() => {}) }}>Stop restore</Button></div>}
+        {running && <div role="status" className="space-y-3 rounded-xl bg-secondary p-4 text-sm"><p>{phase}</p><p>Leaving this page stops the upload. Retry with the same app name and destination to continue; an unassigned draft may remain.</p><Button variant="outline" onClick={() => { stopped.current = true; if (operation.current) void bridge.appSources.cancel(tenant, operation.current).catch(() => {}) }}>Stop restore</Button></div>}
         {error && <p role="alert" className="rounded-xl border p-4 text-sm">{error}</p>}
       </div>}
       <div className="flex flex-wrap justify-end gap-2 border-t pt-4"><Button variant="outline" disabled={running || loading || signingIn} onClick={onClose}>{result ? "Done" : "Close"}</Button>{!result && <Button disabled={running || loading || signingIn || deviceStarting || !!deviceCode || !authenticated || !confirmed || !review?.settingsHash || !!review.blocker || !name.trim()} onClick={() => void restore()}>{running ? "Restoring…" : "Restore unassigned app"}</Button>}</div>
