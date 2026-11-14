@@ -71,6 +71,16 @@ export function coverageOf(types: readonly TypeOutcome[]): Coverage {
   return types.every((type) => type.outcome === "saved" || type.outcome === "notConfigured") ? "complete" : "incomplete"
 }
 
+/**
+ * Whether a run read nothing: it selected at least one type, none of them ended as saved or as not
+ * configured, and the backup holds no object of any. Such a run failed, whatever the reason of each
+ * type: a backup that holds nothing must not pass for one that worked. A run whose types are all
+ * empty or not configured did read the tenant, and a run without a selected type had nothing to read.
+ */
+export function nothingRead(types: readonly TypeOutcome[]): boolean {
+  return types.length > 0 && types.every((type) => (type.outcome === "skipped" || type.outcome === "failed") && !type.saved)
+}
+
 /** The outcomes as a backup's manifest records them, in the manifest's own naming. */
 export function manifestOutcomes(types: readonly TypeOutcome[]): Array<Record<string, unknown>> {
   return types.map((type) => ({
@@ -174,6 +184,27 @@ export interface ReasonContext {
   mode: "delegated" | "app-only"
   /** The name of the Settings card that shows permissions. */
   settingsPage: string
+}
+
+/** In the order a tie is settled: the cause an admin can fix first. */
+const CAUSES: readonly SkipCause[] = ["permission", "role", "license", "signedIn"]
+
+/**
+ * What a run says when every selected type was left out, so it read nothing: that, and the cause
+ * most of the types share. The reason of each type stays with the type.
+ */
+export function nothingReadReason(types: readonly TypeOutcome[], context: Pick<ReasonContext, "mode" | "settingsPage">): string {
+  const causes = types.flatMap((type) => (type.outcome === "skipped" ? [type.cause] : []))
+  const count = (cause: SkipCause) => causes.filter((entry) => entry === cause).length
+  const main = CAUSES.reduce((most, cause) => (count(cause) > count(most) ? cause : most))
+  const because = {
+    permission: `the ${context.mode === "app-only" ? "Backup Reader" : "TenuVault app registration"} may lack the permission or its admin consent`,
+    role: "your account may have no role that can read it",
+    license: "the tenant has no license for the product or never set it up",
+    signedIn: "only a signed-in admin can read it",
+  }[main]
+  const leftOut = types.length === 1 ? "The selected type was left out" : `Every selected type was left out${count(main) === types.length ? "" : ", most of them"}`
+  return `Nothing could be read. ${leftOut} because ${because}.${main === "permission" ? ` ${context.settingsPage} in Settings shows what is missing.` : ""}`
 }
 
 /** Why a type was left out, for the backup result. `message` is what Microsoft Graph answered. */

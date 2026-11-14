@@ -18,7 +18,8 @@ import { reviewAsRelease05, RELEASE_FOLDERS } from "./fixtures/release-0.5-impor
 /**
  * Every way the types of a backup can end, against what reads a backup's result: the manifest
  * status, retention, the scheduler, notifications and import (into this version and into release
- * 0.5.x). Coverage is recorded next to the status and changes none of the others.
+ * 0.5.x). Coverage is recorded next to the status and changes none of the others, with one
+ * exception: a backup in which every selected type was left out read nothing, and that is a failure.
  */
 
 const NOW = new Date("2026-11-10T02:00:00Z")
@@ -83,6 +84,8 @@ interface Row {
   /** Whether this version imports the backup, and whether release 0.5.x does; a refusal names the release's message. */
   importHere: true | string
   importRelease: true | string
+  /** What the schedule, the notification and the result say of the job, where the row is about that. */
+  message?: string
 }
 
 const INCOMPLETE = "Only complete backups with item metadata can be imported"
@@ -91,6 +94,9 @@ const UNKNOWN_TYPE = "Unsupported backup item"
 
 const denied = refusal(403, "Forbidden", "Forbidden")
 const broken = refusal(400, "BadRequest", "Something went wrong")
+const notOnboarded = refusal(403, "Forbidden", "Tenant is not onboarded to Microsoft Defender for Identity.")
+/** A backup scope that selects the PowerShell scripts and nothing else. */
+const ONLY_SCRIPTS = INTUNE_TYPES.map((type) => type.folder).filter((folder) => folder !== "PowerShellScripts")
 
 const ROWS: Row[] = [
   // A tenant that backs up what it did before the update.
@@ -130,8 +136,37 @@ const ROWS: Row[] = [
   // The old backup was made while the service was on: it stays, as the last backup that holds the service's types.
   { name: "new service: turned off for the tenant, although its endpoint would fail", services: INTUNE, routes: { "/beta/policies/tokenLifetimePolicies": broken }, oldHolds: ALL,
     manifest: { Status: "Success", Failures: 0, SkippedTypes: [], FailedTypes: [], Coverage: "Complete" }, oldBackup: "kept", scheduler: "Completed", notification: "Success", importHere: true, importRelease: true },
-  { name: "new service only: every type left out, nothing saved", services: ["defender"], routes: { "/beta/security/identities/sensors": refusal(403, "Forbidden", "Tenant is not onboarded to Microsoft Defender for Identity.") },
-    manifest: { Status: "Success", Failures: 0, SkippedTypes: ["DefenderIdentitySensors"], FailedTypes: [], Coverage: "Incomplete" }, outcome: ["DefenderIdentitySensors", "skipped", "license"], oldBackup: "kept", scheduler: "Completed", notification: "Success", importHere: true, importRelease: true },
+
+  // A tenant that backs up a new service only. A backup that read nothing is a failure; one that read the tenant is not, whatever it found.
+  { name: "new service only: every type left out, nothing read", services: ["defender"], routes: { "/beta/security/identities/sensors": notOnboarded },
+    manifest: { Status: "Failed", Failures: 0, SkippedTypes: ["DefenderIdentitySensors"], FailedTypes: [], Coverage: "Incomplete" }, outcome: ["DefenderIdentitySensors", "skipped", "license"], oldBackup: "kept", scheduler: "Failed", notification: "Failed", importHere: INCOMPLETE, importRelease: INCOMPLETE,
+    message: "Nothing could be read. The selected type was left out because the tenant has no license for the product or never set it up." },
+  { name: "new service only: every type left out for different causes, nothing read", services: ["entra"], deps: { concurrency: 1 },
+    routes: { "/beta/policies/tokenLifetimePolicies": () => new Response("<html>401</html>", { status: 401 }), "/beta/policies/federatedTokenValidationPolicy": notOnboarded, "/beta/policies/mobileDeviceManagementPolicies": notOnboarded },
+    manifest: { Status: "Failed", Failures: 0, SkippedTypes: ["TokenLifetimePolicies", "FederatedTokenValidationPolicy", "MdmEnrollmentPolicies"], FailedTypes: [], Coverage: "Incomplete" }, outcome: ["TokenLifetimePolicies", "skipped", "permission"], oldBackup: "kept", scheduler: "Failed", notification: "Failed", importHere: INCOMPLETE, importRelease: INCOMPLETE,
+    message: "Nothing could be read. Every selected type was left out, most of them because the tenant has no license for the product or never set it up." },
+  { name: "new service only: every type left out because the token lacks its permission, before any request", services: ["defender"], deps: { getToken: async () => jwt({ scp: "DeviceManagementConfiguration.Read.All" }) },
+    manifest: { Status: "Failed", Failures: 0, SkippedTypes: ["DefenderIdentitySensors"], FailedTypes: [], Coverage: "Incomplete" }, outcome: ["DefenderIdentitySensors", "skipped", "permission"], oldBackup: "kept", scheduler: "Failed", notification: "Failed", importHere: INCOMPLETE, importRelease: INCOMPLETE,
+    message: "Nothing could be read. The selected type was left out because the TenuVault app registration may lack the permission or its admin consent. Services and permissions in Settings shows what is missing." },
+  { name: "new service only: every type empty or not configured", services: ["entra"],
+    manifest: { Status: "Success", Failures: 0, SkippedTypes: [], FailedTypes: [], Coverage: "Complete" }, outcome: ["FederatedTokenValidationPolicy", "notConfigured"], oldBackup: "removed", scheduler: "Completed", notification: "Success", importHere: true, importRelease: true,
+    message: "Backup completed successfully" },
+  { name: "new service only: a type read and another left out", services: ["entra"], routes: { "/beta/policies/tokenLifetimePolicies": { value: [{ id: "tl1", displayName: "Lifetime" }] }, "/beta/policies/mobileDeviceManagementPolicies": notOnboarded },
+    manifest: { Status: "Success", Failures: 0, SkippedTypes: ["MdmEnrollmentPolicies"], FailedTypes: [], Coverage: "Incomplete" }, outcome: ["MdmEnrollmentPolicies", "skipped", "license"], oldBackup: "kept", scheduler: "Completed", notification: "Success", importHere: true, importRelease: UNKNOWN_TYPE,
+    message: "Backup completed successfully" },
+  { name: "new service only: a type empty and the others left out", services: ["entra"], routes: { "/beta/policies/federatedTokenValidationPolicy": notOnboarded, "/beta/policies/mobileDeviceManagementPolicies": notOnboarded }, deps: { concurrency: 1 },
+    manifest: { Status: "Success", Failures: 0, SkippedTypes: ["FederatedTokenValidationPolicy", "MdmEnrollmentPolicies"], FailedTypes: [], Coverage: "Incomplete" }, outcome: ["TokenLifetimePolicies", "saved"], oldBackup: "kept", scheduler: "Completed", notification: "Success", importHere: true, importRelease: true,
+    message: "Backup completed successfully" },
+  { name: "new service only: the one type could not be read", services: ["defender"], routes: { "/beta/security/identities/sensors": broken },
+    manifest: { Status: "Failed", Failures: 1, SkippedTypes: [], FailedTypes: ["DefenderIdentitySensors"], Coverage: "Incomplete" }, outcome: ["DefenderIdentitySensors", "failed"], oldBackup: "kept", scheduler: "Failed", notification: "Failed", importHere: INCOMPLETE, importRelease: INCOMPLETE,
+    message: "Backup failed: no policies could be saved" },
+  // The same rule for Intune, where it only shows when the backup scope leaves out the four types whose refusal always was a failure.
+  { name: "Intune: the only selected type denied, nothing read", services: INTUNE, routes: { "/beta/deviceManagement/deviceManagementScripts": denied }, request: { scope: { excluded: ONLY_SCRIPTS } },
+    manifest: { Status: "Failed", Failures: 0, SkippedTypes: ["PowerShellScripts"], FailedTypes: [], Coverage: "Incomplete" }, outcome: ["PowerShellScripts", "skipped", "permission"], oldBackup: "kept", scheduler: "Failed", notification: "Failed", importHere: INCOMPLETE, importRelease: INCOMPLETE,
+    message: "Nothing could be read. The selected type was left out because the TenuVault app registration may lack the permission or its admin consent. Services and permissions in Settings shows what is missing." },
+  { name: "Intune: the only selected type empty", services: INTUNE, routes: { "/beta/deviceManagement/deviceManagementScripts": { value: [] } }, request: { scope: { excluded: ONLY_SCRIPTS } },
+    manifest: { Status: "Success", Failures: 0, SkippedTypes: [], FailedTypes: [], Coverage: "Complete" }, outcome: ["PowerShellScripts", "saved"], oldBackup: "kept", scheduler: "Completed", notification: "Success", importHere: true, importRelease: true,
+    message: "Backup completed successfully" },
 ]
 
 async function seedOld(store: LocalBlobStore, account: string, services: ModuleId[]): Promise<void> {
@@ -207,6 +242,9 @@ describe("every outcome combination against what reads a backup's result", () =>
     expect(folders.has(OLD) ? "kept" : "removed").toBe(row.oldBackup)
     expect(scheduledResult(job).status).toBe(row.scheduler)
     expect(notifiedStatus(job)).toBe(row.notification)
+    if (row.message) expect(scheduledResult(job).message).toBe(row.message)
+    // A failure that Microsoft answered, or that came before any request, is never taken for an unreachable network.
+    expect(job.unreachable).toBeUndefined()
 
     // Import: into this version, and by the rules of release 0.5.x.
     const files = await exported(setup, job)
@@ -219,6 +257,41 @@ describe("every outcome combination against what reads a backup's result", () =>
     const seen = new Set(ROWS.flatMap((row) => (row.outcome ? [row.outcome[1], ...(row.outcome[2] ? [row.outcome[2]] : [])] : [])))
     expect([...seen].sort()).toEqual(["failed", "license", "notConfigured", "permission", "role", "saved", "signedIn", "skipped"])
     expect(new Set(ROWS.map((row) => row.manifest.Status))).toEqual(new Set(["Success", "CompletedWithWarnings", "Failed"]))
+  })
+})
+
+describe("a backup that read nothing", () => {
+  it("is recorded as failed with the reason, keeps every older backup and says so where the result is read", async () => {
+    const setup = fixture(tenant({ "/beta/security/identities/sensors": notOnboarded }), { services: () => ({ services: ["defender"] }), retentionDays: () => 30, now: () => NOW })
+    // An old backup that holds nothing the tenant still backs up would be removed by a backup that worked.
+    await seedOld(setup.store, setup.account, [])
+    const job = await setup.run({ trigger: "scheduled" })
+    const reason = "Nothing could be read. The selected type was left out because the tenant has no license for the product or never set it up."
+    expect(job).toMatchObject({ status: "Failed", failures: 0, totalPolicies: 0, coverage: "incomplete", progressMessage: "Backup failed: nothing could be read", exception: reason })
+    expect(await setup.manifest(job)).toMatchObject({ Status: "Failed", Failures: 0, Error: reason, Coverage: "Incomplete", ItemCounts: { TotalPolicies: 0 } })
+    expect(job.outcomes).toMatchObject({ status: "Failed", coverage: "incomplete" })
+    expect(job.log.map((line) => line.slice(11))).toEqual(expect.arrayContaining(["Older backups were kept because this backup is incomplete.", `Backup failed: n${reason.slice(1)}`]))
+    expect(job.log.some((line) => line.includes("Backup completed"))).toBe(false)
+    expect((await setup.store.list(setup.account, "intune-backups")).some((blob) => blob.name.startsWith(OLD))).toBe(true)
+    // The scheduler tries the slot again, as for any failed backup that Microsoft answered.
+    expect(scheduledResult(job)).toEqual({ status: "Failed", message: reason })
+    expect(notifiedStatus(job)).toBe("Failed")
+  })
+
+  it("names the Backup Reader when its run was left out of everything it selected", async () => {
+    const setup = fixture(tenant({ "/beta/security/identities/sensors": refusal(403, "Forbidden", "Missing application roles. API required roles: SecurityIdentitiesSensors.Read.All.") }), { services: () => ({ services: ["defender"] }), ...reader(["SecurityIdentitiesSensors.Read.All"]) })
+    const job = await setup.run({ trigger: "scheduled" })
+    expect(job.status).toBe("Failed")
+    expect(job.exception).toBe("Nothing could be read. The selected type was left out because the Backup Reader may lack the permission or its admin consent. Services and permissions in Settings shows what is missing.")
+    // Not a problem with the reader's certificate, which a retry could not fix.
+    expect(job.credentialError).toBeUndefined()
+  })
+
+  it("is not what a backup without a selected type is: a tenant with every service off still completes", async () => {
+    const setup = fixture(tenant(), { services: () => ({ services: [] }) })
+    const job = await setup.run()
+    expect(job).toMatchObject({ status: "Completed", progressMessage: "Backup completed successfully", coverage: "complete" })
+    expect(await setup.manifest(job)).toMatchObject({ Status: "Success", Outcomes: [] })
   })
 })
 

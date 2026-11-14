@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { graphAnswer, graphFailure } from "../src/main/backup/request"
-import { classifyAnswer, coverageOf, manifestCoverage, manifestOutcomes, skipReason, type TypeOutcome } from "../src/shared/backup-outcomes"
+import { classifyAnswer, coverageOf, manifestCoverage, manifestOutcomes, nothingRead, nothingReadReason, signInRefused, skipReason, type SkipCause, type TypeOutcome } from "../src/shared/backup-outcomes"
 import { GRAPH_ANSWERS, NOT_CONFIGURED_ANSWERS } from "./fixtures/graph-answers"
 
 const verdict = (expected: string) => (expected === "failed" ? { outcome: "failed" } : { outcome: "skipped", cause: expected })
@@ -32,6 +32,18 @@ describe("what a refused Microsoft Graph read means for its type", () => {
 
   it("never calls a server error or a throttle a missing permission", () => {
     for (const status of [400, 404, 409, 429, 500, 502, 503]) expect(classifyAnswer({ status, message: "Something went wrong" }, { held: true, mode: "delegated" })).toEqual({ outcome: "failed" })
+  })
+})
+
+describe("a sign-in Microsoft no longer accepts", () => {
+  it("is a 401 that names a token error, and nothing else", () => {
+    expect(signInRefused({ status: 401, code: "InvalidAuthenticationToken", message: "Access token has expired or is not yet valid." })).toBe(true)
+    expect(signInRefused({ status: 401, message: "Lifetime validation failed, the token is expired." })).toBe(true)
+    expect(signInRefused({ status: 401, code: "Unauthorized", message: "Access token validation failure." })).toBe(true)
+    // An HTML page, an endpoint that takes no app-only call, and the same words under another status.
+    expect(signInRefused({ status: 401 })).toBe(false)
+    expect(signInRefused({ status: 401, code: "AccessDenied", message: "Unsupported app-only call." })).toBe(false)
+    expect(signInRefused({ status: 403, code: "InvalidAuthenticationToken", message: "Access token has expired." })).toBe(false)
   })
 })
 
@@ -84,6 +96,41 @@ describe("coverage", () => {
     expect(manifestCoverage({ Status: "Success" } as never)).toEqual({ coverage: null, notRead: [] })
     expect(manifestCoverage(null)).toEqual({ coverage: null, notRead: [] })
     expect(manifestCoverage({ Coverage: "yes", Outcomes: [null, "x", { Folder: 5, Outcome: "failed" }, { Folder: "F", Outcome: "failed" }] })).toEqual({ coverage: null, notRead: ["F"] })
+  })
+})
+
+describe("a backup that read nothing", () => {
+  const base = { folder: "A", service: "entra" as const }
+  const leftOut = (cause: SkipCause, saved?: number): TypeOutcome => ({ ...base, outcome: "skipped", cause, reason: "Left out.", ...(saved ? { saved } : {}) })
+  const context = { mode: "delegated" as const, settingsPage: "Services and permissions" }
+
+  it("selected at least one type, read none of them and holds no object", () => {
+    expect(nothingRead([leftOut("license")])).toBe(true)
+    expect(nothingRead([leftOut("license"), leftOut("permission"), { ...base, outcome: "failed", error: "Broken", saved: 0 }])).toBe(true)
+    // No type was selected, so there was nothing to read.
+    expect(nothingRead([])).toBe(false)
+    // A type that is empty or was never set up is an answer from the tenant.
+    expect(nothingRead([leftOut("license"), { ...base, outcome: "saved", saved: 0 }])).toBe(false)
+    expect(nothingRead([leftOut("license"), { ...base, outcome: "notConfigured" }])).toBe(false)
+    // Objects saved before a type ended are in the backup.
+    expect(nothingRead([leftOut("license"), leftOut("permission", 2)])).toBe(false)
+    expect(nothingRead([{ ...base, outcome: "failed", error: "1 of 3 could not be saved.", saved: 2 }])).toBe(false)
+  })
+
+  it.each<[SkipCause, string]>([
+    ["permission", "Nothing could be read. Every selected type was left out because the TenuVault app registration may lack the permission or its admin consent. Services and permissions in Settings shows what is missing."],
+    ["role", "Nothing could be read. Every selected type was left out because your account may have no role that can read it."],
+    ["license", "Nothing could be read. Every selected type was left out because the tenant has no license for the product or never set it up."],
+    ["signedIn", "Nothing could be read. Every selected type was left out because only a signed-in admin can read it."],
+  ])("says so and names the cause %s when every type shares it", (cause, expected) => {
+    expect(nothingReadReason([leftOut(cause), leftOut(cause)], context)).toBe(expected)
+  })
+
+  it("names the cause most types share, the one an admin can fix first on a tie, and the Backup Reader in its run", () => {
+    expect(nothingReadReason([leftOut("permission"), leftOut("license"), leftOut("license")], context)).toBe("Nothing could be read. Every selected type was left out, most of them because the tenant has no license for the product or never set it up.")
+    expect(nothingReadReason([leftOut("license"), leftOut("role")], context)).toContain("most of them because your account may have no role")
+    expect(nothingReadReason([leftOut("signedIn")], { ...context, mode: "app-only" })).toBe("Nothing could be read. The selected type was left out because only a signed-in admin can read it.")
+    expect(nothingReadReason([leftOut("permission"), leftOut("permission")], { ...context, mode: "app-only" })).toContain("because the Backup Reader may lack the permission")
   })
 })
 

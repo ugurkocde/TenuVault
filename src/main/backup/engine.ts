@@ -17,7 +17,7 @@ import { EVERYTHING, includedTypes, normalizeScope, restorableFolders, type Back
 import { canBackUp, DEFAULT_SELECTION, describeRequirement, disabledFolders, MODULES, moduleForFolder, SERVICES_PAGE, signedInOnly, type ServiceSelection, type SignInMode } from "../../shared/services/modules"
 import { grantedPermissions } from "../../shared/services/token"
 import { MAX_ITEM_ERRORS, type BackupNotice, type BackupResults, type BackupTypeResult } from "../../shared/backup-results"
-import { classifyAnswer, coverageOf, manifestOutcomes, signInRefused, skipReason, type Coverage, type RunOutcomes, type SkipCause, type TypeOutcome } from "../../shared/backup-outcomes"
+import { classifyAnswer, coverageOf, manifestOutcomes, nothingRead, nothingReadReason, signInRefused, skipReason, type Coverage, type RunOutcomes, type SkipCause, type TypeOutcome } from "../../shared/backup-outcomes"
 
 /**
  * Runs Intune backups from the desktop app as the signed-in admin.
@@ -511,8 +511,8 @@ export class BackupEngine {
       if (!settled.has(folder)) settled.set(folder, { folder, service: moduleForFolder(folder)?.module.id ?? null, ...ending, ...(ending.outcome === "failed" ? { saved: 0 } : {}) } as TypeOutcome)
     }
     // Every selected type has an outcome at any moment: the settled one, or what its result says so far.
-    const outcomesNow = (status: string, ended: Date, stopped: boolean): RunOutcomes => {
-      const typeOutcomes = results.types.map((entry): TypeOutcome => {
+    const typesNow = (stopped: boolean) =>
+      results.types.map((entry): TypeOutcome => {
         const known = settled.get(entry.folder)
         // Objects saved before the type ended stay in the backup, so the outcome names how many.
         if (known?.outcome === "failed") return { ...known, saved: entry.saved }
@@ -523,6 +523,8 @@ export class BackupEngine {
         if (entry.failed > 0) return { ...base, outcome: "failed", error: `${entry.failed} of ${entry.found ?? entry.saved + entry.failed} could not be saved. ${entry.errors?.[0] ?? ""}`.trim(), saved: entry.saved }
         return { ...base, outcome: "saved", saved: entry.saved }
       })
+    const outcomesNow = (status: string, ended: Date, stopped: boolean): RunOutcomes => {
+      const typeOutcomes = typesNow(stopped)
       return {
         runId: job.id,
         tenantId: request.tenantId.toLowerCase(),
@@ -840,9 +842,13 @@ export class BackupEngine {
     const totalPolicies = policyCount(counts)
     const saved = Object.values(counts).reduce((sum, count) => sum + count, 0)
     const inventory = Object.entries(counts).filter(([folder, count]) => count > 0 && typeForFolder(folder)?.inventory)
-    const status = failures > 0 ? (saved === 0 ? "Failed" : "CompletedWithWarnings") : "Success"
+    // Every selected type was left out, so the backup holds nothing: that is a failure, although no single read failed.
+    // A run with failures keeps its status and its message as they were.
+    const ending = typesNow(false)
+    const unread = failures === 0 && nothingRead(ending) ? nothingReadReason(ending, { mode: tokens.mode, settingsPage: SERVICES_PAGE }) : null
+    const status = failures > 0 ? (saved === 0 ? "Failed" : "CompletedWithWarnings") : unread ? "Failed" : "Success"
     const outcomes = outcomesNow(status, ended, false)
-    const metadata = manifest(status, ended, outcomes)
+    const metadata = manifest(status, ended, outcomes, unread ? { Error: unread } : {})
 
     // Detach cancellation at the first manifest PUT, after cancellable token acquisition.
     // Retention reads cannot delay the manifest, and a saved backup must not burn a retry slot.
@@ -867,9 +873,10 @@ export class BackupEngine {
     // The Backup Reader cannot delete from Azure Storage. The next backup with an admin's sign-in applies
     // retention to every backup of the tenant, Backup Reader backups included, with the same protections.
     const deletesAllowed = local || tokens.mode === "delegated"
-    if (!deletesAllowed && failures === 0 && (this.deps.retentionDays?.(job.tenantId) ?? 0) > 0) {
+    const complete = failures === 0 && !unread
+    if (!deletesAllowed && complete && (this.deps.retentionDays?.(job.tenantId) ?? 0) > 0) {
       this.write(job, "Older backups were kept: the Backup Reader cannot delete from Azure Storage. The next backup made with an admin's sign-in removes expired ones.", "info")
-    } else if (deletesAllowed && failures === 0 && (this.deps.retentionDays?.(job.tenantId) ?? 0) > 0) {
+    } else if (deletesAllowed && complete && (this.deps.retentionDays?.(job.tenantId) ?? 0) > 0) {
       const retentionNetwork = new NetworkCircuit(3 * concurrency, signal, deadline)
       const retentionStorage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, retentionNetwork)
       try {
@@ -888,7 +895,7 @@ export class BackupEngine {
           this.write(job, `Could not remove old backups: ${(error instanceof Error ? error.message : String(error)).replace(/\.$/, "")}. They will be reconsidered on the next run.`, "warning")
         }
       }
-    } else if (failures > 0) {
+    } else if (!complete) {
       this.write(job, "Older backups were kept because this backup is incomplete.", "info")
     }
 
@@ -896,13 +903,21 @@ export class BackupEngine {
     job.totalPolicies = totalPolicies
     results.totalPolicies = totalPolicies
     job.failedTypes = [...failedTypes]
-    job.status = failures > 0 && saved === 0 ? "Failed" : "Completed"
-    if (job.status === "Failed" && !outcome.answered && !outcome.otherFailures) job.unreachable = true
+    job.status = status === "Failed" ? "Failed" : "Completed"
+    // Types that were left out are an answer, or were left out before any request: only failed reads can mean that Microsoft was out of reach.
+    if (job.status === "Failed" && failures > 0 && !outcome.answered && !outcome.otherFailures) job.unreachable = true
     if (maskedItems.length) {
       this.write(job, `Saved ${maskedItems.length} object${maskedItems.length === 1 ? "" : "s"} with encrypted OMA-URI values masked (****): Microsoft refused the plain-text read, so these copies cannot be restored. A manual backup with your sign-in captures them when Microsoft returns the values.`, "warning")
     }
     const warnings = failures + retentionWarnings + (maskedItems.length ? 1 : 0)
     results.warnings = warnings
+    if (unread) {
+      // The reason is the job's error, so the result, the schedule and the notification show it like any other failure's.
+      job.progressMessage = "Backup failed: nothing could be read"
+      job.exception = unread
+      this.write(job, `Backup failed: ${unread.charAt(0).toLowerCase()}${unread.slice(1)}`)
+      return
+    }
     job.progressMessage =
       job.status === "Failed" ? "Backup failed: no policies could be saved" : warnings > 0 ? `Backup completed with ${warnings} warning${warnings === 1 ? "" : "s"}` : "Backup completed successfully"
     const extra = inventory.map(([folder, count]) => ` and ${count} ${typeForFolder(folder)!.label}`).join("")
