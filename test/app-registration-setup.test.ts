@@ -49,6 +49,30 @@ it("uses an isolated memory client, setup scopes and the chosen tenant", async (
   expect(result).not.toHaveProperty("token")
   expect(state.clear).toHaveBeenCalled()
 })
+it("hands a choice of services to the provisioning as it is, and none when the admin made none", async () => {
+  const signIn = async () => ({ account: { tenantId: "tenant", username: "admin" }, accessToken: "ephemeral" })
+  state.interactive.mockImplementation(signIn)
+  state.provision.mockResolvedValue({ tenantId: "tenant", clientId: "client", username: "admin", reused: false, ready: true, missingConsent: [] })
+  const choice = { entra: { access: "backup", areas: ["groups"] }, defender: { access: "restore" } }
+  await new AppRegistrationSetup(host()).create({ choice })
+  expect(state.provision.mock.calls.at(-1)![0].choice).toEqual(choice)
+  await new AppRegistrationSetup(host()).create({ tenant: "example.test" })
+  expect(state.provision.mock.calls.at(-1)![0]).not.toHaveProperty("choice")
+  await new AppRegistrationSetup(host()).create()
+  expect(state.provision.mock.calls.at(-1)![0]).not.toHaveProperty("choice")
+})
+it.each([{}, { sharepoint: { access: "backup" } }, { intune: { access: "everything" } }, { intune: { access: "backup", areas: ["groups"] } }, "intune", null])("refuses a choice the manifest does not know before anyone signs in: %j", async choice => {
+  const h = host()
+  const setup = new AppRegistrationSetup(h)
+  await expect(setup.create({ choice })).rejects.toThrow("Choose the services to set up, each with backup or restore as its access.")
+  expect(state.interactive).not.toHaveBeenCalled()
+  expect(state.provision).not.toHaveBeenCalled()
+  expect(h.progress).not.toHaveBeenCalled()
+  // The refusal leaves the setup free for the next try.
+  state.interactive.mockImplementationOnce(async () => ({ account: { tenantId: "tenant", username: "admin" }, accessToken: "ephemeral" }))
+  state.provision.mockResolvedValueOnce({ tenantId: "tenant", clientId: "client", username: "admin", reused: false, ready: true, missingConsent: [] })
+  await expect(setup.create()).resolves.toMatchObject({ clientId: "client" })
+})
 it("cancels the browser wait and ignores a late answer", async () => {
   let finish!: (value: unknown) => void
   let signal: AbortSignal | undefined

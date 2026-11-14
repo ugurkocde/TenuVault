@@ -4,6 +4,7 @@ import { ERROR_PAGE, firstSignInError, page, SIGN_IN_TIMEOUT_MS, SignInCancelled
 import { isGuid, isMicrosoftLoginUrl } from "../../shared/security"
 import { CONSENT_ROLES_TEXT, CREATE_BY_HAND } from "../../shared/app-registration"
 import { provisionRegistration } from "./registration-provisioning"
+import { checkedChoice } from "../../shared/services/manifest"
 import { loopbackSignIn } from "./loopback-sign-in"
 import type { RegistrationResult, SetupProgress } from "../../shared/ipc"
 import { diagnosticCode, signInResult, type SetupEventInput } from "../setup-diagnostics/events"
@@ -98,9 +99,15 @@ export class AppRegistrationSetup {
   /** The Microsoft sign-in address of the setup sign-in waiting for the browser, or null. */
   signInLink(): string | null { return this.link }
 
-  async create(options?: { tenant?: string }): Promise<RegistrationResult> {
+  /**
+   * Creates or finds the app registration. `choice` names the services, areas and access levels to
+   * ask permissions for; without it the setup asks for what it always has.
+   */
+  async create(options?: { tenant?: string; choice?: unknown }): Promise<RegistrationResult> {
     if (this.running) throw new Error("Setup is already running.")
     if (options?.tenant !== undefined && (typeof options.tenant !== "string" || options.tenant.length > 253 || options.tenant !== "" && !isGuid(options.tenant) && !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(options.tenant))) throw new Error("Enter a valid tenant ID or domain.")
+    // Checked before anyone signs in, so a choice the manifest does not know never reaches Microsoft.
+    const choice = options?.choice === undefined ? undefined : checkedChoice(options.choice)
     this.running = true
     const controller = new AbortController()
     this.controller = controller
@@ -159,6 +166,7 @@ export class AppRegistrationSetup {
           fetch: this.host.fetch, token: result.accessToken,
           tenantId: result.account.tenantId.toLowerCase(), username: result.account.username,
           progress: (progress) => { phase = progress.phase; this.host.progress(progress) }, signal: controller.signal,
+          ...(choice ? { choice } : {}),
         })
         this.host.report?.(registrationEvent({ result: registration }))
         return registration
