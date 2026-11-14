@@ -12,7 +12,7 @@ TenuVault has three plans: Community, which is free, and the paid Pro and MSP pl
 | | Community | Pro | MSP |
 | --- | --- | --- | --- |
 | Price | Free, no license key needed | Paid subscription | Paid subscription |
-| Tenants | 1 | 2 (for example production and test) | The number of tenants in your subscription. New subscriptions include 5; existing subscriptions keep their quantity (minimum 3) |
+| Tenants | 1 | 2 (for example production and test). A third tenant needs MSP | The number of tenants in your subscription. New subscriptions include 5; existing subscriptions keep their quantity (minimum 3) |
 | Installations per tenant | | 5 | 5 |
 | Free trial | | 14 days per tenant, no card and no email | Through the Pro trial |
 
@@ -101,6 +101,7 @@ Pro covers two tenants and includes daily scheduled backups, the optional [Backu
 * **Community** covers the first tenant you use on a machine without a license. If you remove that tenant from TenuVault, the free plan is available for another tenant.
 * **Pro and MSP** count tenants across every machine that uses the same license key. A tenant counts from the first time it is activated, and removing it from TenuVault frees its place on the license.
 * **Installations:** each tenant can be active on up to 5 installations of TenuVault at the same time. Deactivate an installation you no longer use to free its place.
+* **More than two tenants:** Pro covers exactly two tenants, and you cannot add tenants to it. From the third tenant you need MSP. A new MSP subscription includes 5 tenants, and further tenants are added to the subscription one at a time. See [More than two tenants](/licensing/manage/#more-than-two-tenants).
 
 If you lower the number of tenants on an MSP subscription, the tenants that were activated first stay licensed.
 

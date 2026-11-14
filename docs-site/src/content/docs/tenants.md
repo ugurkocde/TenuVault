@@ -173,7 +173,7 @@ If a tenant is licensed with your license key, the **Tenants** card on the **Lic
 
 | Action | Community | Pro | MSP |
 | --- | --- | --- | --- |
-| Connect tenants | 1 tenant | 2 tenants | Subscribed quantity |
+| Connect tenants | 1 tenant | 2 tenants (a third needs MSP) | Subscribed quantity |
 | Dashboard, All tenants overview, rename, tags | Yes | Yes | Yes |
 | **Backup Selected** across several tenants | No | No | Yes |
 | **Check all** drift across tenants | No | No | Yes |

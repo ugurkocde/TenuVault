@@ -74,7 +74,7 @@ The **Tenants** card lists every tenant on this machine with its license state:
 
 ## Add and remove tenants
 
-* **Adding a tenant:** TenuVault checks the license when you sign in to a new tenant. If your license does not cover it, the tenant is not added and the reason is shown, for example that your license already covers its maximum number of tenants.
+* **Adding a tenant:** TenuVault checks the license when you sign in to a new tenant. If your license does not cover it, the tenant is not added and the reason is shown, for example that your license already covers its maximum number of tenants. Pro covers two tenants. A third tenant needs MSP, which includes 5.
 * **Removing a tenant:** removing a tenant on the **Tenants** page releases its activation and frees its place on your license. Existing backups are kept and nothing in the tenant changes.
 
 ## Share the license with your tenant's admins
@@ -153,6 +153,16 @@ When tenant trials are off, the email trial form and existing email trial keys c
 
 Click **Manage subscription** on the **License** page to open the customer portal at [polar.sh/ugurlabs/portal](https://polar.sh/ugurlabs/portal) in your browser. There you can manage your subscription and release installations you no longer use.
 
+### More than two tenants
+
+Pro covers exactly two tenants, and you cannot add tenants to it. For a third tenant, move from Pro to MSP, which includes 5 tenants:
+
+1. Change the plan to MSP in the customer portal, or email [support@tenuvault.com](mailto:support@tenuvault.com) and we help you switch.
+2. MSP has its own license key. Copy the MSP key from the customer portal.
+3. On the **License** page, replace the saved key with the MSP key. See [Change your license key](#change-your-license-key).
+
+On MSP, when you need more tenants than your subscription covers, email [support@tenuvault.com](mailto:support@tenuvault.com) with the number of tenants you need. Your license key stays the same.
+
 To upgrade from Community, start the free trial or click **Buy now** on the **License** page, or go to [tenuvault.com/pricing](https://tenuvault.com/pricing).
 
 ## License messages
@@ -161,7 +171,7 @@ To upgrade from Community, start the free trial or click **Buy now** on the **Li
 | --- | --- |
 | This license key is not valid for TenuVault. | Check that you copied the whole key from your purchase email. |
 | This license key is not valid, or it has been revoked or has expired. | Check your subscription in the customer portal. |
-| This license already covers its maximum number of tenants. | Upgrade, or remove a tenant from TenuVault on the machine that uses it. |
+| This license already covers its maximum number of tenants. | Remove a tenant from TenuVault on the machine that uses it. Or get more tenants: on Pro, move to MSP for a third tenant; on MSP, ask for more tenants in your subscription. See [More than two tenants](#more-than-two-tenants). |
 | This tenant already has 5 active installations. | Deactivate an installation in the app or in the customer portal. |
 | This license has no activations left. | Deactivate an installation in the customer portal. |
 | This installation is no longer activated. | No action needed. It activates again the next time the tenant is used. |
