@@ -1,0 +1,637 @@
+import { describe, expect, it } from "vitest"
+import { evaluateHealth, signInState, type HealthInput, type ServiceChoice } from "../src/shared/connection-health/evaluate"
+import { RUN_MAX_AGE_MS, TOKEN_MAX_AGE_MS, type ConnectionRecord, type ReaderObservation, type RunObservation, type SignInFailure, type Snapshot, type TokenObservation } from "../src/shared/connection-health/model"
+import { DEFAULT_SETUP_CHOICE, graphPermissions, missingForChoice } from "../src/shared/services/manifest"
+import { MODULES, type ModuleId } from "../src/shared/services/modules"
+import { SIGN_IN_ERRORS } from "../src/shared/sign-in-errors"
+
+// The evaluator is a pure function of observations, the snapshot and the time, so every case here
+// names its time. NOW is the clock; everything else is dated relative to it.
+const NOW = new Date("2026-11-14T12:00:00.000Z")
+const MINUTE = 60_000
+const DAY = 86_400_000
+const ago = (ms: number) => new Date(NOW.getTime() - ms).toISOString()
+
+const TENANT = "11111111-1111-1111-1111-111111111111"
+const CLIENT = "33333333-3333-3333-3333-333333333333"
+const OLD_CLIENT = "55555555-5555-5555-5555-555555555555"
+const READER = "44444444-4444-4444-4444-444444444444"
+const ADMIN = "aaaaaaaa-0000-0000-0000-000000000001.11111111-1111-1111-1111-111111111111"
+const OTHER_ADMIN = "bbbbbbbb-0000-0000-0000-000000000002.11111111-1111-1111-1111-111111111111"
+
+/** What a setup without choices asks for: Intune with restore, and reading Conditional Access. */
+const DEFAULT_SCOPES = [...graphPermissions(DEFAULT_SETUP_CHOICE, "delegated")]
+
+const choice = (enabled: boolean, access: "backup" | "restore" = "backup", areas: Record<string, boolean> = {}): ServiceChoice => ({ enabled, access, areas })
+const settings = (changes: Partial<Record<ModuleId, ServiceChoice>> = {}): Record<ModuleId, ServiceChoice> => ({
+  intune: choice(true, "restore"),
+  conditionalAccess: choice(false),
+  entra: choice(false),
+  defender: choice(false),
+  ...changes,
+})
+
+const healthy = (permissions: string[] = DEFAULT_SCOPES, at = ago(MINUTE)): TokenObservation => ({ at, permissions })
+const failed = (failure: SignInFailure, at = ago(MINUTE)): TokenObservation => ({ at, failure })
+
+const delegated = (parts: Partial<ConnectionRecord> = {}): ConnectionRecord => ({ clientId: CLIENT, mode: "delegated", account: ADMIN, runs: [], verified: {}, updatedAt: ago(MINUTE), ...parts })
+const readerConnection = (parts: Partial<ConnectionRecord> = {}): ConnectionRecord => ({ clientId: READER, mode: "app-only", runs: [], verified: {}, updatedAt: ago(MINUTE), ...parts })
+
+/** A run that ended `daysAgo` days ago; an admin's run unless `account` is cleared. */
+const run = (runId: string, daysAgo: number, parts: Partial<RunObservation> = {}): RunObservation => ({ runId, at: ago(daysAgo * DAY), trigger: "manual", status: "Success", account: ADMIN, read: [], refused: [], unread: [], excluded: [], ...parts })
+const readerRun = (runId: string, daysAgo: number, parts: Partial<RunObservation> = {}): RunObservation => {
+  const { account: _account, ...rest } = run(runId, daysAgo, { trigger: "scheduled", ...parts })
+  return rest
+}
+const refusal = (folder: string, cause: "permission" | "role" | "license" = "permission") => ({ folder, cause, status: 403 })
+
+const readerFacts = (parts: Partial<ReaderObservation> = {}): ReaderObservation => ({ at: NOW.toISOString(), state: "verified", notAfter: ago(-200 * DAY), verifiedAt: ago(30 * DAY), verifiedRoles: ["DeviceManagementConfiguration.Read.All"], roleChange: null, ...parts })
+
+const evaluate = (connections: ConnectionRecord[], input: Partial<HealthInput> = {}, now = NOW) =>
+  evaluateHealth({ tenantId: TENANT, clientId: CLIENT, reader: null, storage: "local", settings: settings(), connections, ...input }, now)
+
+const service = (report: ReturnType<typeof evaluate>["report"], id: ModuleId) => report.services.find((entry) => entry.id === id)!
+const area = (report: ReturnType<typeof evaluate>["report"], id: ModuleId, areaId: string) => service(report, id).areas.find((entry) => entry.id === areaId)!
+
+describe("the state of the admin's sign-in", () => {
+  it("is not checked before any token request was answered", () => {
+    expect(evaluate([]).report.graph).toEqual({ state: "notChecked", checkedAt: null })
+    expect(evaluate([delegated()]).report.graph).toEqual({ state: "notChecked", checkedAt: null })
+  })
+
+  it("is healthy when Microsoft issued a token for the check, as of the time of the check", () => {
+    expect(evaluate([delegated({ graph: healthy(DEFAULT_SCOPES, ago(3 * MINUTE)) })]).report.graph).toEqual({ state: "healthy", checkedAt: ago(3 * MINUTE) })
+  })
+
+  // Every code of the error table that can answer an admin's sign-in, each to the state of its row.
+  it.each(SIGN_IN_ERRORS.map((row) => [row.code, row.class, row.class === "credential" ? "unknown" : row.state] as const))("%s (%s) leads to %s", (code, errorClass, state) => {
+    const { graph } = evaluate([delegated({ graph: failed({ class: errorClass, code }) })]).report
+    expect(graph).toEqual({ state, checkedAt: ago(MINUTE), class: errorClass, code, link: `https://login.microsoftonline.com/error?code=${code.slice(6)}` })
+  })
+
+  it("covers every state an admin's sign-in can be in", () => {
+    const fromCodes = new Set(SIGN_IN_ERRORS.filter((row) => row.class !== "credential").map((row) => row.state))
+    expect([...fromCodes].sort()).toEqual([
+      "accountDisabled", "applicationDisabled", "blockedByConditionalAccess", "consentMissing", "mfaRequired", "notAssigned", "registrationMisconfigured",
+      "registrationNotFound", "servicePrincipalMissing", "signInNeeded", "throttled", "unreachable", "wrongTenantOrAccount",
+    ])
+  })
+
+  // A failure without a code Microsoft gave: the class alone decides.
+  it.each([
+    ["session", "signInNeeded"],
+    ["mfa", "mfaRequired"],
+    ["conditionalAccess", "blockedByConditionalAccess"],
+    ["consent", "consentMissing"],
+    ["assignment", "notAssigned"],
+    ["account", "accountDisabled"],
+    ["tenant", "wrongTenantOrAccount"],
+    ["throttled", "throttled"],
+    ["unavailable", "unreachable"],
+    ["unreachable", "unreachable"],
+    ["registration", "unknown"],
+    ["application", "unknown"],
+    ["credential", "unknown"],
+    ["readerCheck", "unknown"],
+    ["unknown", "unknown"],
+  ] as const)("a %s failure without a code leads to %s", (failureClass, state) => {
+    expect(signInState({ class: failureClass })).toBe(state)
+    expect(evaluate([delegated({ graph: failed({ class: failureClass }) })]).report.graph).toEqual({ state, checkedAt: ago(MINUTE), class: failureClass })
+  })
+
+  it("names a code it has no row for, with Microsoft's description of it, and guesses nothing", () => {
+    expect(evaluate([delegated({ graph: failed({ class: "unknown", code: "AADSTS999999" }) })]).report.graph).toEqual({
+      state: "unknown", checkedAt: ago(MINUTE), class: "unknown", code: "AADSTS999999", link: "https://login.microsoftonline.com/error?code=999999",
+    })
+  })
+
+  it("follows the code when the class stored with it says something else", () => {
+    expect(evaluate([delegated({ graph: failed({ class: "session", code: "AADSTS53003" }) })]).report.graph.state).toBe("blockedByConditionalAccess")
+    expect(evaluate([delegated({ graph: failed({ class: "unreachable", code: "AADSTS700016" }) })]).report.graph.state).toBe("registrationNotFound")
+  })
+
+  it("lets an answer expire", () => {
+    const at = (age: number) => evaluate([delegated({ graph: healthy(DEFAULT_SCOPES, ago(age)) })]).report.graph
+    expect(at(TOKEN_MAX_AGE_MS).state).toBe("healthy")
+    expect(at(TOKEN_MAX_AGE_MS + 1)).toEqual({ state: "notChecked", checkedAt: null })
+    // A refusal expires like a success: after a week it no longer says how the sign-in is.
+    expect(evaluate([delegated({ graph: failed({ class: "session", code: "AADSTS50173" }, ago(8 * DAY)) })]).report.graph).toEqual({ state: "notChecked", checkedAt: null })
+  })
+
+  it("does not trust an answer dated ahead of the clock", () => {
+    expect(evaluate([delegated({ graph: healthy(DEFAULT_SCOPES, ago(-MINUTE)) })]).report.graph.state).toBe("healthy")
+    expect(evaluate([delegated({ graph: healthy(DEFAULT_SCOPES, ago(-DAY)) })]).report.graph.state).toBe("notChecked")
+    expect(evaluate([delegated({ graph: healthy(DEFAULT_SCOPES, "not a date") })]).report.graph.state).toBe("notChecked")
+  })
+
+  it("reads the same observations differently as time passes", () => {
+    const connections = [delegated({ graph: healthy(DEFAULT_SCOPES, ago(0)) })]
+    expect(evaluate(connections, {}, NOW).report.graph.state).toBe("healthy")
+    expect(evaluate(connections, {}, new Date(NOW.getTime() + 6 * DAY)).report.graph.state).toBe("healthy")
+    expect(evaluate(connections, {}, new Date(NOW.getTime() + 8 * DAY)).report.graph.state).toBe("notChecked")
+  })
+
+  it("only looks at the connection the tenant is connected with", () => {
+    const report = evaluate([delegated({ clientId: OLD_CLIENT, graph: healthy() }), readerConnection({ graph: healthy() })]).report
+    expect(report.graph).toEqual({ state: "notChecked", checkedAt: null })
+    expect(report.granted).toBeNull()
+  })
+})
+
+describe("the state of the storage sign-in", () => {
+  it("is local for backups on this device, whatever was observed", () => {
+    expect(evaluate([delegated({ storage: failed({ class: "consent", code: "AADSTS65001" }) })]).report.storage).toEqual({ state: "local", checkedAt: null })
+  })
+
+  it.each([
+    [undefined, "notChecked"],
+    [healthy(["user_impersonation"]), "healthy"],
+    [failed({ class: "consent", code: "AADSTS65001" }), "consentMissing"],
+    [failed({ class: "consent", code: "AADSTS650057" }), "consentMissing"],
+    [failed({ class: "session", code: "AADSTS70043" }), "signInNeeded"],
+    [failed({ class: "mfa", code: "AADSTS50076" }), "mfaRequired"],
+    [failed({ class: "conditionalAccess", code: "AADSTS53003" }), "blockedByConditionalAccess"],
+    [failed({ class: "unreachable" }), "unreachable"],
+    [failed({ class: "throttled" }), "throttled"],
+    [failed({ class: "unknown", code: "AADSTS500011" }), "unknown"],
+  ] as const)("an Azure tenant with %j is %s", (storage, state) => {
+    const report = evaluate([delegated({ graph: healthy(), ...(storage ? { storage } : {}) })], { storage: "azure" }).report
+    expect(report.storage.state).toBe(state)
+    // Graph and storage are told apart: a storage refusal says nothing about Microsoft Graph.
+    expect(report.graph.state).toBe("healthy")
+  })
+
+  it("expires like the Graph answer", () => {
+    expect(evaluate([delegated({ storage: healthy(["user_impersonation"], ago(8 * DAY)) })], { storage: "azure" }).report.storage).toEqual({ state: "notChecked", checkedAt: null })
+  })
+})
+
+describe("the state of the Backup Reader", () => {
+  const reader = (facts: ReaderObservation | null, token?: TokenObservation, now = NOW) =>
+    evaluate(token ? [readerConnection({ graph: token })] : [], { reader: facts, ...(facts ? { readerClientId: READER } : {}) }, now).report.reader
+
+  it("is not set up for a tenant without one", () => {
+    expect(reader(null)).toEqual({ state: "notSetUp", checkedAt: null })
+  })
+
+  it("is pending while its certificate waits for the first verification", () => {
+    expect(reader(readerFacts({ state: "pending", verifiedAt: null, verifiedRoles: null })).state).toBe("pending")
+  })
+
+  it("is healthy when verified, with a certificate that is far from its end", () => {
+    expect(reader(readerFacts(), healthy(["DeviceManagementConfiguration.Read.All"]))).toEqual({ state: "healthy", checkedAt: ago(MINUTE), notAfter: ago(-200 * DAY), daysLeft: 200 })
+    // Without an answer to a token request the facts on this device stand, and say when nothing was asked.
+    expect(reader(readerFacts())).toEqual({ state: "healthy", checkedAt: null, notAfter: ago(-200 * DAY), daysLeft: 200 })
+  })
+
+  it.each([[31, "healthy"], [30, "certificateExpiring"], [1, "certificateExpiring"]] as const)("with %i days left the certificate is %s", (days, state) => {
+    expect(reader(readerFacts({ notAfter: ago(-days * DAY) }))).toMatchObject({ state, daysLeft: days })
+  })
+
+  it("has an expired certificate from the certificate's own date on", () => {
+    expect(reader(readerFacts({ notAfter: ago(0) }))).toMatchObject({ state: "certificateExpired", daysLeft: 0 })
+    expect(reader(readerFacts({ notAfter: ago(3 * DAY) }))).toMatchObject({ state: "certificateExpired", daysLeft: -3 })
+    // The same facts a day earlier: the clock decides, not when they were read.
+    expect(reader(readerFacts({ notAfter: ago(0) }), undefined, new Date(NOW.getTime() - DAY)).state).toBe("certificateExpiring")
+  })
+
+  it("waits for a new verification when its permissions changed", () => {
+    const roleChange = { added: ["Policy.Read.All"], removed: [], at: ago(DAY) }
+    expect(reader(readerFacts({ roleChange }), healthy([]))).toMatchObject({ state: "rolesChanged", roleChange })
+  })
+
+  it.each([
+    [{ class: "credential", code: "AADSTS700027" }, "refused"],
+    [{ class: "credential", code: "AADSTS700024" }, "refused"],
+    [{ class: "credential", code: "AADSTS7000222" }, "certificateExpired"],
+    [{ class: "registration", code: "AADSTS700016" }, "refused"],
+    [{ class: "application", code: "AADSTS7000112" }, "refused"],
+    [{ class: "application", code: "AADSTS7000229" }, "refused"],
+    [{ class: "conditionalAccess", code: "AADSTS53003" }, "refused"],
+    [{ class: "readerCheck" }, "refused"],
+    [{ class: "unknown", code: "AADSTS999999" }, "refused"],
+    [{ class: "throttled", code: "AADSTS90055" }, "throttled"],
+    [{ class: "throttled" }, "throttled"],
+    [{ class: "unavailable", code: "AADSTS90033" }, "unreachable"],
+    [{ class: "unreachable" }, "unreachable"],
+  ] as const)("a token request answered with %j makes it %s", (failure, state) => {
+    const found = reader(readerFacts(), failed(failure))
+    expect(found).toMatchObject({ state, checkedAt: ago(MINUTE), class: failure.class })
+    if ("code" in failure) expect(found).toMatchObject({ code: failure.code, link: `https://login.microsoftonline.com/error?code=${failure.code.slice(6)}` })
+  })
+
+  it("settles observations that disagree by what stops scheduled backups first", () => {
+    const roleChange = { added: [], removed: ["DeviceManagementApps.Read.All"], at: ago(DAY) }
+    const refused = failed({ class: "application", code: "AADSTS7000112" })
+    // An expired certificate is never used, whatever Microsoft said last.
+    expect(reader(readerFacts({ notAfter: ago(DAY), roleChange }), refused).state).toBe("certificateExpired")
+    expect(reader(readerFacts({ notAfter: ago(-10 * DAY), roleChange }), refused).state).toBe("refused")
+    expect(reader(readerFacts({ notAfter: ago(-10 * DAY), roleChange }), healthy([])).state).toBe("rolesChanged")
+    expect(reader(readerFacts({ notAfter: ago(-10 * DAY) }), healthy([])).state).toBe("certificateExpiring")
+    // A pending reader was never verified, so nothing else is said about it.
+    expect(reader(readerFacts({ state: "pending", notAfter: ago(DAY) }), refused).state).toBe("pending")
+  })
+
+  it("forgets a refusal that expired, and falls back to what this device knows", () => {
+    expect(reader(readerFacts(), failed({ class: "application", code: "AADSTS7000112" }, ago(8 * DAY)))).toEqual({ state: "healthy", checkedAt: null, notAfter: ago(-200 * DAY), daysLeft: 200 })
+  })
+
+  it("never takes the admin's token for the reader's, or the other way round", () => {
+    const report = evaluate([delegated({ graph: failed({ class: "session", code: "AADSTS50173" }) }), readerConnection({ graph: healthy([]) })], { reader: readerFacts(), readerClientId: READER }).report
+    expect(report.graph.state).toBe("signInNeeded")
+    expect(report.reader.state).toBe("healthy")
+  })
+})
+
+// Every service, with its own permissions and its own folders: permissions present from the token,
+// verified from the last backup, and the cause when it was not.
+describe.each(MODULES.map((module) => [module.label, module] as const))("%s", (_label, module) => {
+  const scopes = [...graphPermissions({ [module.id]: { access: "backup" } }, "delegated")]
+  const on = settings({ intune: choice(false), [module.id]: choice(true) })
+  const first = module.areas.find((entry) => !entry.optIn)!
+  const [folder, second] = [first.folders[0]!, first.folders[1]]
+  const always = module.areas.filter((entry) => !entry.optIn)
+
+  it("has its permissions present when the token carries what backing it up asks for", () => {
+    const found = service(evaluate([delegated({ graph: healthy(scopes) })], { settings: on }).report, module.id)
+    expect(found).toMatchObject({ enabled: true, access: "backup", permissions: "present", missing: [] })
+    for (const entry of found.areas.filter((entry) => !entry.optIn)) expect(entry).toMatchObject({ enabled: true, permissions: "present", missing: [] })
+  })
+
+  it("names exactly the permissions that are missing, from the manifest", () => {
+    const base = ["User.Read", "Organization.Read.All"]
+    const found = service(evaluate([delegated({ graph: healthy(base) })], { settings: on }).report, module.id)
+    const expected = missingForChoice({ [module.id]: { access: "backup" } }, { kind: "delegated", permissions: new Set(base) })
+    expect(expected.length).toBeGreaterThan(0)
+    expect(found.missing).toEqual(expected)
+    expect(found.permissions).toBe("missing")
+    // Every permission named for an area is one the service names.
+    for (const entry of found.areas.filter((entry) => !entry.optIn)) for (const permission of entry.missing) expect(expected).toContain(permission)
+  })
+
+  it("says unknown, never missing, without a recent token", () => {
+    for (const graph of [undefined, failed({ class: "session" }), healthy(scopes, ago(8 * DAY))]) {
+      const found = service(evaluate([delegated(graph ? { graph } : {})], { settings: on }).report, module.id)
+      expect(found).toMatchObject({ permissions: "unknown", missing: [] })
+      expect(found.areas.every((entry) => entry.permissions === "unknown" && entry.restore === "unknown")).toBe(true)
+    }
+  })
+
+  it("is verified by the last backup that read its types, with that backup's date", () => {
+    const folders = always.flatMap((entry) => entry.folders)
+    const report = evaluate([delegated({ graph: healthy(scopes), runs: [run("r1", 2, { read: folders })] })], { settings: on }).report
+    expect(service(report, module.id).verified).toEqual({ state: "verified", at: ago(2 * DAY), notVerified: [] })
+    expect(area(report, module.id, first.id).verified).toEqual({ state: "verified", at: ago(2 * DAY), notVerified: [] })
+  })
+
+  it("has no backup to go by before one selected its types", () => {
+    const report = evaluate([delegated({ graph: healthy(scopes) })], { settings: on }).report
+    expect(service(report, module.id).verified).toEqual({ state: "noBackup", notVerified: [] })
+  })
+
+  const refusedReads: Array<[cause: string, outcome: Partial<RunObservation>, granted: string[]]> = [
+    ["permission", { refused: [refusal(folder, "permission")] }, []],
+    // The token carries the permission and the read was refused all the same: the account's role.
+    ["role", { refused: [refusal(folder, "permission")] }, scopes],
+    ["role", { refused: [refusal(folder, "role")] }, []],
+    ["license", { refused: [refusal(folder, "license")] }, scopes],
+    ["notRead", { unread: [folder] }, scopes],
+  ]
+  it.each(refusedReads)("is not verified, because of %s, when the last backup ended with %j", (cause, outcome, granted) => {
+    const report = evaluate([delegated({ graph: healthy(granted), runs: [run("r1", 1, outcome)] })], { settings: on }).report
+    expect(area(report, module.id, first.id).verified).toEqual({ state: "notVerified", at: ago(DAY), cause, mode: "delegated", notVerified: [folder] })
+    expect(area(report, module.id, first.id).lostAccess).toBe(false)
+  })
+
+  it("says a signed-in admin is required when only the Backup Reader ran and left the type out for that", () => {
+    const report = evaluate([readerConnection({ runs: [readerRun("r1", 1, { excluded: [{ folder, cause: "signedIn" }] })] })], { settings: on, reader: readerFacts(), readerClientId: READER }).report
+    expect(area(report, module.id, first.id).verified).toEqual({ state: "notVerified", at: ago(DAY), cause: "signedIn", mode: "app-only", notVerified: [folder] })
+  })
+
+  it("keeps an admin's read when a later Backup Reader run left the type out by design", () => {
+    const report = evaluate(
+      [delegated({ runs: [run("manual", 9, { read: [folder] })] }), readerConnection({ runs: [readerRun("nightly", 1, { excluded: [{ folder, cause: "reader" }] })] })],
+      { settings: on, reader: readerFacts(), readerClientId: READER },
+    ).report
+    expect(area(report, module.id, first.id).verified).toEqual({ state: "verified", at: ago(9 * DAY), notVerified: [] })
+  })
+
+  it.runIf(second)("is partly verified when the last backup read one type and not another", () => {
+    const report = evaluate([delegated({ runs: [run("r1", 1, { read: [folder], refused: [refusal(second!, "license")] })] })], { settings: on }).report
+    expect(area(report, module.id, first.id).verified).toEqual({ state: "partly", at: ago(DAY), cause: "license", mode: "delegated", notVerified: [second] })
+  })
+
+  it("loses access when a type it read before is refused by two backups", () => {
+    const runs = [run("r1", 5, { read: [folder] }), run("r2", 3, { refused: [refusal(folder)] }), run("r3", 1, { refused: [refusal(folder)] })]
+    const baseline = evaluate([delegated({ runs: runs.slice(0, 1) })], { settings: on }).baseline!
+    const { report } = evaluate([delegated({ runs, snapshot: baseline })], { settings: on })
+    expect(area(report, module.id, first.id)).toMatchObject({ lostAccess: true, verified: { state: "notVerified", cause: "permission" } })
+    expect(report.changes).toEqual([{ kind: "lostAccess", service: module.id, area: first.id, cause: "permission", folders: [folder], since: ago(3 * DAY) }])
+  })
+
+  it("is outside what backups cover when it is turned off: nothing verified, nothing lost", () => {
+    const runs = [run("r1", 5, { read: [folder] }), run("r2", 3, { refused: [refusal(folder)] }), run("r3", 1, { refused: [refusal(folder)] })]
+    const off = settings({ intune: choice(false), [module.id]: choice(false) })
+    const { report } = evaluate([delegated({ graph: healthy(scopes), runs, snapshot: { at: ago(9 * DAY), account: ADMIN, lost: [] } })], { settings: off })
+    expect(service(report, module.id)).toMatchObject({ enabled: false, verified: { state: "noBackup" } })
+    expect(service(report, module.id).areas.every((entry) => !entry.enabled && !entry.lostAccess)).toBe(true)
+    expect(report.changes).toEqual([])
+    // What its token may do is still known, so the card can say what turning it on would need.
+    expect(service(report, module.id).permissions).toBe("present")
+  })
+})
+
+describe("opt-in areas", () => {
+  it("count only when the tenant turned them on", () => {
+    const scopes = [...graphPermissions({ entra: { access: "backup" } }, "delegated")]
+    const off = evaluate([delegated({ graph: healthy(scopes), runs: [run("r1", 1, { read: ["Groups"] })] })], { settings: settings({ entra: choice(true) }) }).report
+    expect(area(off, "entra", "groups")).toMatchObject({ optIn: true, personalData: true, enabled: false, permissions: "missing", verified: { state: "noBackup" } })
+    // An area that is off does not make its service miss permissions.
+    expect(service(off, "entra")).toMatchObject({ permissions: "present", missing: [] })
+
+    const on = evaluate([delegated({ graph: healthy(scopes), runs: [run("r1", 1, { read: ["Groups"] })] })], { settings: settings({ entra: choice(true, "backup", { groups: true }) }) }).report
+    expect(area(on, "entra", "groups")).toMatchObject({ enabled: true, permissions: "missing", verified: { state: "verified" } })
+    expect(service(on, "entra").permissions).toBe("missing")
+    expect(service(on, "entra").missing).toEqual(missingForChoice({ entra: { access: "backup", areas: ["groups"] } }, { kind: "delegated", permissions: new Set(scopes) }))
+  })
+})
+
+describe("services and what this version backs up", () => {
+  it("lists every service, and says which have types to back up", () => {
+    const { services } = evaluate([]).report
+    expect(services.map((entry) => entry.id)).toEqual(MODULES.map((module) => module.id))
+    expect(services.find((entry) => entry.id === "intune")!.hasTypes).toBe(true)
+  })
+
+  it("follows the access level the tenant chose when it names what to add", () => {
+    const backup = [...graphPermissions({ conditionalAccess: { access: "backup" } }, "delegated")]
+    const report = evaluate([delegated({ graph: healthy(backup) })], { settings: settings({ conditionalAccess: choice(true, "restore") }) }).report
+    expect(service(report, "conditionalAccess")).toMatchObject({ access: "restore", permissions: "present", missing: ["Policy.ReadWrite.ConditionalAccess"] })
+    expect(area(report, "conditionalAccess", "policies")).toMatchObject({ permissions: "present", restore: "missing", missing: ["Policy.ReadWrite.ConditionalAccess"] })
+  })
+})
+
+describe("lost access", () => {
+  const FOLDER = "DeviceConfigurations"
+  const OTHER = "Apps"
+  /** The areas that lost access for these runs, evaluated against a snapshot taken before any of it. */
+  const lost = (runs: RunObservation[], parts: Partial<ConnectionRecord> = {}, input: Partial<HealthInput> = {}) => {
+    const { report } = evaluate([delegated({ runs, snapshot: { at: ago(80 * DAY), account: ADMIN, lost: [] }, ...parts })], input)
+    return report.changes.filter((change) => change.kind === "lostAccess")
+  }
+  const read = (id: string, daysAgo: number, parts: Partial<RunObservation> = {}) => run(id, daysAgo, { read: [FOLDER], ...parts })
+  const refused = (id: string, daysAgo: number, parts: Partial<RunObservation> = {}) => run(id, daysAgo, { refused: [refusal(FOLDER)], ...parts })
+
+  it("needs two refusals", () => {
+    expect(lost([read("r1", 5), refused("r2", 1)])).toEqual([])
+    expect(lost([read("r1", 5), refused("r2", 3), refused("r3", 1)])).toEqual([
+      { kind: "lostAccess", service: "intune", area: "configuration", cause: "permission", folders: [FOLDER], since: ago(3 * DAY) },
+    ])
+  })
+
+  it("needs two distinct runs: the same run recorded twice is one", () => {
+    expect(lost([read("r1", 5), refused("r2", 3), refused("r2", 3)])).toEqual([])
+    expect(lost([read("r1", 5), refused("r2", 3), refused("r2", 1)])).toEqual([])
+  })
+
+  it("needs a type that was read before", () => {
+    expect(lost([refused("r2", 3), refused("r3", 1)])).toEqual([])
+    // A read of another type is not a read of this one.
+    expect(lost([run("r1", 5, { read: [OTHER] }), refused("r2", 3), refused("r3", 1)])).toEqual([])
+  })
+
+  it("takes the read from the connection's record when the run that made it is no longer kept", () => {
+    expect(lost([refused("r2", 3), refused("r3", 1)], { verified: { [FOLDER]: ago(20 * DAY) } })).toHaveLength(1)
+    // A read after the first refusal is not a read before it, and an expired one no longer counts.
+    expect(lost([refused("r2", 3), refused("r3", 1)], { verified: { [FOLDER]: ago(2 * DAY) } })).toEqual([])
+    expect(lost([refused("r2", 3), refused("r3", 1)], { verified: { [FOLDER]: ago(RUN_MAX_AGE_MS + DAY) } })).toEqual([])
+  })
+
+  it("is cleared by a read, and a type that is not configured is a read", () => {
+    expect(lost([read("r1", 9), refused("r2", 5), read("r3", 3), refused("r4", 1)])).toEqual([])
+    expect(lost([read("r1", 9), refused("r2", 5), refused("r3", 3), read("r4", 1)])).toEqual([])
+  })
+
+  it("never counts a type the backup scope left out: the run says nothing about it", () => {
+    const without = (id: string, daysAgo: number) => run(id, daysAgo, { read: [OTHER] })
+    expect(lost([read("r1", 9), refused("r2", 5), without("r3", 3), without("r4", 1)])).toEqual([])
+    // Nor does it clear a refusal: two refusals around a run that left the type out still count.
+    expect(lost([read("r1", 9), refused("r2", 5), without("r3", 3), refused("r4", 1)])).toHaveLength(1)
+  })
+
+  it("never counts a type the Backup Reader leaves out, or that only a signed-in admin can read", () => {
+    const left = (id: string, daysAgo: number, cause: "reader" | "signedIn") => run(id, daysAgo, { excluded: [{ folder: FOLDER, cause }] })
+    expect(lost([read("r1", 9), left("r2", 5, "reader"), left("r3", 3, "reader")])).toEqual([])
+    expect(lost([read("r1", 9), left("r2", 5, "signedIn"), left("r3", 3, "signedIn")])).toEqual([])
+    expect(lost([read("r1", 9), refused("r2", 5), left("r3", 3, "reader")])).toEqual([])
+  })
+
+  it("never counts a read that failed for another reason, which neither clears a refusal", () => {
+    const unread = (id: string, daysAgo: number) => run(id, daysAgo, { unread: [FOLDER] })
+    expect(lost([read("r1", 9), unread("r2", 5), unread("r3", 3)])).toEqual([])
+    expect(lost([read("r1", 9), refused("r2", 5), unread("r3", 3)])).toEqual([])
+    expect(lost([read("r1", 9), refused("r2", 5), unread("r3", 3), refused("r4", 1)])).toHaveLength(1)
+  })
+
+  it("never counts the runs of another admin, as refusals or as the read before", () => {
+    const other = { account: OTHER_ADMIN }
+    expect(lost([read("r1", 9), refused("r2", 5, other), refused("r3", 3, other)])).toEqual([])
+    expect(lost([read("r1", 9), refused("r2", 5), refused("r3", 3, other)])).toEqual([])
+    expect(lost([read("r1", 9, other), refused("r2", 5), refused("r3", 3)])).toEqual([])
+  })
+
+  it("never adds a refusal of the Backup Reader to one of the admin", () => {
+    const connections = [
+      delegated({ runs: [read("r1", 9), refused("r2", 5)], snapshot: { at: ago(80 * DAY), account: ADMIN, lost: [] } }),
+      readerConnection({ runs: [readerRun("r3", 3, { refused: [refusal(FOLDER)] })] }),
+    ]
+    const { report } = evaluate(connections, { reader: readerFacts(), readerClientId: READER })
+    expect(report.changes).toEqual([])
+    expect(area(report, "intune", "configuration").lostAccess).toBe(false)
+  })
+
+  it("counts for the Backup Reader what its own runs say", () => {
+    const connections = [
+      delegated({ snapshot: { at: ago(80 * DAY), account: ADMIN, lost: [] } }),
+      readerConnection({ runs: [readerRun("r1", 9, { read: [FOLDER] }), readerRun("r2", 5, { refused: [refusal(FOLDER, "license")] }), readerRun("r3", 3, { refused: [refusal(FOLDER, "license")] })] }),
+    ]
+    const { report } = evaluate(connections, { reader: readerFacts(), readerClientId: READER })
+    expect(report.changes).toEqual([{ kind: "lostAccess", service: "intune", area: "configuration", cause: "license", folders: [FOLDER], since: ago(5 * DAY) }])
+  })
+
+  it("is not lost when the admin read the type after the Backup Reader was refused", () => {
+    const connections = [
+      delegated({ runs: [read("manual", 1)], snapshot: { at: ago(80 * DAY), account: ADMIN, lost: [] } }),
+      readerConnection({ runs: [readerRun("r1", 9, { read: [FOLDER] }), readerRun("r2", 5, { refused: [refusal(FOLDER)] }), readerRun("r3", 3, { refused: [refusal(FOLDER)] })] }),
+    ]
+    const { report } = evaluate(connections, { reader: readerFacts(), readerClientId: READER })
+    expect(report.changes).toEqual([])
+    expect(area(report, "intune", "configuration")).toMatchObject({ lostAccess: false, verified: { state: "verified", at: ago(DAY) } })
+  })
+
+  it("lets runs expire: an old refusal no longer counts", () => {
+    const old = RUN_MAX_AGE_MS / DAY + 1
+    expect(lost([read("r1", old + 5), refused("r2", old), refused("r3", 1)], { verified: { [FOLDER]: ago((old + 5) * DAY) } })).toEqual([])
+    const { report } = evaluate([delegated({ runs: [read("r1", old)] })])
+    expect(area(report, "intune", "configuration").verified).toEqual({ state: "noBackup", notVerified: [] })
+  })
+
+  it("names the role as the cause when the token still carries the permission", () => {
+    const [change] = lost([read("r1", 9), refused("r2", 5), refused("r3", 3)], { graph: healthy() })
+    expect(change).toMatchObject({ cause: "role" })
+  })
+
+  it("is reported once: looking at the changes makes it the state, and losing it again is news", () => {
+    const runs = [read("r1", 9), refused("r2", 5), refused("r3", 3)]
+    const first = evaluate([delegated({ runs, snapshot: { at: ago(80 * DAY), account: ADMIN, lost: [] } })])
+    expect(first.report.changes).toHaveLength(1)
+    // The changes were looked at: the state as it is becomes the snapshot.
+    const seen = evaluate([delegated({ runs, snapshot: first.current! })])
+    expect(seen.report.changes).toEqual([])
+    expect(area(seen.report, "intune", "configuration").lostAccess).toBe(true)
+    // Access comes back, then goes again.
+    const back = evaluate([delegated({ runs: [...runs, read("r4", 2)], snapshot: seen.baseline! })])
+    expect(back.report.changes).toEqual([])
+    expect(back.baseline!.lost).toEqual([])
+    const again = evaluate([delegated({ runs: [read("r4", 2), refused("r5", 1), refused("r6", 0.5)], snapshot: back.baseline! })])
+    expect(again.report.changes).toMatchObject([{ kind: "lostAccess", area: "configuration", since: ago(DAY) }])
+  })
+})
+
+describe("changes since the snapshot", () => {
+  const WITHOUT_APPS = DEFAULT_SCOPES.filter((permission) => !permission.startsWith("DeviceManagementApps"))
+
+  it("reports nothing for the first snapshot, whatever it finds", () => {
+    const runs = [run("r1", 9, { read: ["Apps"] }), run("r2", 5, { refused: [refusal("Apps")] }), run("r3", 3, { refused: [refusal("Apps")] })]
+    const { report, baseline } = evaluate([delegated({ graph: healthy(WITHOUT_APPS, ago(2 * MINUTE)), runs })])
+    expect(report.changes).toEqual([])
+    expect(report.since).toBe(ago(2 * MINUTE))
+    expect(baseline).toMatchObject({ at: ago(2 * MINUTE), account: ADMIN, permissions: [...WITHOUT_APPS].sort(), lost: ["intune/apps"] })
+    expect(baseline!.ready).toMatchObject({ "intune/apps": false, "intune/configuration": true })
+  })
+
+  it("has no snapshot and no changes before anything was observed for the connection", () => {
+    const evaluation = evaluate([])
+    expect(evaluation.report).toMatchObject({ changes: [], since: null, granted: null })
+    expect(evaluation.baseline).toBeUndefined()
+    expect(evaluation.current).toBeUndefined()
+  })
+
+  it("names permissions that were added and removed, for the same connection and admin", () => {
+    const snapshot = evaluate([delegated({ graph: healthy(WITHOUT_APPS, ago(3 * DAY)) })], {}, new Date(NOW.getTime() - 3 * DAY)).baseline!
+    const scopes = [...DEFAULT_SCOPES.filter((permission) => permission !== "DeviceManagementRBAC.ReadWrite.All"), "Mail.Send"]
+    const { report, baseline } = evaluate([delegated({ graph: healthy(scopes), snapshot })])
+    expect(report.changes).toEqual([
+      { kind: "permissionsAdded", permissions: ["DeviceManagementApps.ReadWrite.All", "Mail.Send"] },
+      { kind: "permissionsRemoved", permissions: ["DeviceManagementRBAC.ReadWrite.All"] },
+      { kind: "becameReady", service: "intune", area: "apps" },
+    ])
+    // The snapshot stays what it was, with its date, until the changes were looked at.
+    expect(report.since).toBe(snapshot.at)
+    expect(baseline).toMatchObject({ at: snapshot.at, permissions: snapshot.permissions })
+    expect(report.granted).toEqual([...scopes].sort())
+  })
+
+  it("moves the date of the snapshot to the last check that found nothing changed", () => {
+    const snapshot = evaluate([delegated({ graph: healthy(DEFAULT_SCOPES, ago(3 * DAY)) })], {}, new Date(NOW.getTime() - 3 * DAY)).baseline!
+    expect(snapshot.at).toBe(ago(3 * DAY))
+    const { report, baseline } = evaluate([delegated({ graph: healthy(DEFAULT_SCOPES, ago(MINUTE)), snapshot })])
+    expect(report.changes).toEqual([])
+    expect(baseline!.at).toBe(ago(MINUTE))
+    // A check that could not compare anything leaves the date alone.
+    expect(evaluate([delegated({ graph: failed({ class: "unreachable" }), snapshot })]).baseline!.at).toBe(ago(3 * DAY))
+  })
+
+  it("reports no change when the sign-in fails: a token that was not issued shows no permissions", () => {
+    const snapshot: Snapshot = { at: ago(3 * DAY), account: ADMIN, permissions: [...DEFAULT_SCOPES].sort(), lost: [] }
+    for (const graph of [failed({ class: "consent", code: "AADSTS65001" }), failed({ class: "session" }), healthy(DEFAULT_SCOPES, ago(8 * DAY))]) {
+      const { report } = evaluate([delegated({ graph, snapshot })])
+      expect(report.changes).toEqual([])
+      expect(report.granted).toBeNull()
+    }
+  })
+
+  it("fills in what the snapshot did not know, without calling it a change", () => {
+    const snapshot: Snapshot = { at: ago(3 * DAY), account: ADMIN, lost: [] }
+    const { report, baseline } = evaluate([delegated({ graph: healthy(), snapshot })])
+    expect(report.changes).toEqual([])
+    expect(baseline!.permissions).toEqual([...DEFAULT_SCOPES].sort())
+    expect(baseline!.ready).toMatchObject({ "intune/apps": true })
+  })
+
+  it("reports no permission change when another admin signs in, and starts comparing from them", () => {
+    const snapshot: Snapshot = { at: ago(3 * DAY), account: ADMIN, permissions: [...DEFAULT_SCOPES].sort(), ready: { "intune/apps": true }, lost: [] }
+    const other = evaluate([delegated({ account: OTHER_ADMIN, graph: healthy(WITHOUT_APPS), snapshot })])
+    expect(other.report.changes).toEqual([])
+    expect(other.baseline).toMatchObject({ account: OTHER_ADMIN, permissions: [...WITHOUT_APPS].sort(), at: ago(MINUTE) })
+    // From here on a change for that admin is one.
+    const later = evaluate([delegated({ account: OTHER_ADMIN, graph: healthy(DEFAULT_SCOPES), snapshot: other.baseline! })])
+    expect(later.report.changes).toContainEqual({ kind: "permissionsAdded", permissions: ["DeviceManagementApps.ReadWrite.All"] })
+  })
+
+  it("invalidates what was verified for the admin who signed in before", () => {
+    const runs = [run("r1", 2, { read: ["DeviceConfigurations"] })]
+    expect(area(evaluate([delegated({ runs })]).report, "intune", "configuration").verified.state).toBe("verified")
+    expect(area(evaluate([delegated({ account: OTHER_ADMIN, runs })]).report, "intune", "configuration").verified).toEqual({ state: "noBackup", notVerified: [] })
+  })
+
+  it("starts over, without a permission change, for a snapshot whose admin is no longer known", () => {
+    const snapshot: Snapshot = { at: ago(3 * DAY), permissions: [...DEFAULT_SCOPES].sort(), lost: [] }
+    const { report, baseline } = evaluate([delegated({ graph: healthy(WITHOUT_APPS), snapshot })])
+    expect(report.changes).toEqual([])
+    expect(baseline).toMatchObject({ account: ADMIN, permissions: [...WITHOUT_APPS].sort() })
+  })
+
+  it("names a replaced registration, with what it lacks, until the changes were looked at", () => {
+    const old = delegated({ clientId: OLD_CLIENT, graph: healthy(DEFAULT_SCOPES, ago(10 * DAY)), updatedAt: ago(10 * DAY), snapshot: { at: ago(20 * DAY), account: ADMIN, permissions: [...DEFAULT_SCOPES].sort(), lost: [] } })
+    const first = evaluate([old, delegated({ graph: healthy(WITHOUT_APPS) })])
+    expect(first.report.changes).toEqual([{ kind: "registrationReplaced", previousClientId: OLD_CLIENT, lacks: ["DeviceManagementApps.ReadWrite.All"] }])
+    expect(first.baseline!.replaces).toEqual({ clientId: OLD_CLIENT, permissions: [...DEFAULT_SCOPES].sort() })
+    // The earlier record is no longer needed: the snapshot carries what the old registration had.
+    const next = evaluate([delegated({ graph: healthy(DEFAULT_SCOPES), snapshot: first.baseline! })])
+    expect(next.report.changes).toEqual([
+      { kind: "registrationReplaced", previousClientId: OLD_CLIENT, lacks: [] },
+      { kind: "permissionsAdded", permissions: ["DeviceManagementApps.ReadWrite.All"] },
+      { kind: "becameReady", service: "intune" },
+    ])
+    expect(next.current!.replaces).toBeUndefined()
+    expect(evaluate([delegated({ graph: healthy(DEFAULT_SCOPES), snapshot: next.current! })]).report.changes).toEqual([])
+  })
+
+  it("names a replaced registration even when its permissions could not be read yet", () => {
+    const old = delegated({ clientId: OLD_CLIENT, updatedAt: ago(10 * DAY), snapshot: { at: ago(20 * DAY), account: ADMIN, permissions: [...DEFAULT_SCOPES].sort(), lost: [] } })
+    const { report } = evaluate([old, delegated({ graph: failed({ class: "consent", code: "AADSTS65001" }) })])
+    expect(report.changes).toEqual([{ kind: "registrationReplaced", previousClientId: OLD_CLIENT, lacks: [] }])
+    expect(report.graph.state).toBe("consentMissing")
+  })
+
+  it("does not take the Backup Reader's registration for an earlier one of the admin", () => {
+    expect(evaluate([readerConnection({ graph: healthy([]) }), delegated({ graph: healthy() })]).report.changes).toEqual([])
+  })
+
+  it("says a service became ready when every area that is on has its permissions, otherwise the area", () => {
+    const entra = [...graphPermissions({ entra: { access: "backup" } }, "delegated")]
+    const on = settings({ entra: choice(true) })
+    const before = evaluate([delegated({ graph: healthy(DEFAULT_SCOPES, ago(DAY)) })], { settings: on }, new Date(NOW.getTime() - DAY)).baseline!
+    const whole = evaluate([delegated({ graph: healthy([...DEFAULT_SCOPES, ...entra]), snapshot: before })], { settings: on }).report.changes
+    expect(whole.filter((change) => change.kind === "becameReady")).toEqual([{ kind: "becameReady", service: "entra" }])
+    // Only one of its areas: the area is named.
+    const part = evaluate([delegated({ graph: healthy([...DEFAULT_SCOPES, "IdentityProvider.Read.All", "IdentityUserFlow.Read.All", "EventListener.Read.All", "CustomAuthenticationExtension.Read.All", "APIConnectors.Read.All", "MultiTenantOrganization.Read.All", "Policy.Read.B2BManagementPolicy"]), snapshot: before })], { settings: on }).report.changes
+    expect(part).toContainEqual({ kind: "becameReady", service: "entra", area: "externalIdentities" })
+    expect(part).not.toContainEqual({ kind: "becameReady", service: "entra" })
+  })
+
+  it("makes the state as it is the snapshot once the changes were looked at", () => {
+    const snapshot: Snapshot = { at: ago(3 * DAY), account: ADMIN, permissions: [...WITHOUT_APPS].sort(), ready: { "intune/apps": false }, lost: [] }
+    const first = evaluate([delegated({ graph: healthy(), snapshot })])
+    expect(first.report.changes.length).toBeGreaterThan(0)
+    expect(first.current).toMatchObject({ at: NOW.toISOString(), permissions: [...DEFAULT_SCOPES].sort() })
+    expect(evaluate([delegated({ graph: healthy(), snapshot: first.current! })]).report.changes).toEqual([])
+  })
+
+  it("keeps the last known permissions in the snapshot when the changes are looked at while the sign-in fails", () => {
+    const snapshot: Snapshot = { at: ago(3 * DAY), account: ADMIN, permissions: [...DEFAULT_SCOPES].sort(), ready: { "intune/apps": true }, lost: [] }
+    const { current } = evaluate([delegated({ graph: failed({ class: "session" }), snapshot })])
+    expect(current).toMatchObject({ permissions: snapshot.permissions, ready: { "intune/apps": true } })
+  })
+})
