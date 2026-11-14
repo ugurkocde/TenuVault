@@ -111,6 +111,9 @@ describe("a type read from Microsoft Graph v1.0", () => {
     ["names another host on the Graph path", "https://attacker.example/v1.0/roleManagement/directory/roleAssignments?page=2"],
     ["switches to another Graph version", next("/beta/roleManagement/directory/roleAssignments?page=2")],
     ["uses plain HTTP", "http://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments?page=2"],
+    ["moves to another collection", next("/v1.0/users?page=2")],
+    ["moves below the collection", next("/v1.0/roleManagement/directory/roleAssignments/ra1/principal?page=2")],
+    ["moves above the collection", next("/v1.0/roleManagement/directory?page=2")],
   ])("refuses a continuation link that %s, and sends the sign-in nowhere else", async (_what, link) => {
     const { run, requests, files } = fixture(graph({
       "/v1.0/roleManagement/directory/roleAssignments": { value: [{ id: "ra1", name: "First" }], "@odata.nextLink": link },
@@ -121,6 +124,30 @@ describe("a type read from Microsoft Graph v1.0", () => {
     // A list that could not be read in full stores nothing of the type.
     expect((await files(job)).some((name) => name.startsWith("EntraRoleAssignments/"))).toBe(false)
     expect(outcome(job, "EntraRoleAssignments")).toMatchObject({ outcome: "failed", error: "Invalid Graph continuation link" })
+  })
+
+  it("follows a link that spells the same collection in another case, as Microsoft Graph reads paths", async () => {
+    const { run, files } = fixture(graph({
+      "/v1.0/roleManagement/directory/roleAssignments": { value: [{ id: "ra1", name: "First" }], "@odata.nextLink": next("/v1.0/RoleManagement/Directory/RoleAssignments?$skiptoken=2") },
+      "/v1.0/RoleManagement/Directory/RoleAssignments?$skiptoken=2": { value: [{ id: "ra2", name: "Second" }] },
+    }))
+    expect((await files(await run())).filter((name) => name.startsWith("EntraRoleAssignments/"))).toHaveLength(2)
+  })
+
+  it("refuses a link to another collection for an Intune list and for a sub-collection too", async () => {
+    const { run, requests, files } = fixture(graph({
+      "/beta/deviceManagement/deviceCategories": { value: [{ id: "c1", displayName: "Kiosk" }], "@odata.nextLink": next("/beta/deviceManagement/managedDevices?page=2") },
+      "/v1.0/directory/administrativeUnits": { value: [{ id: "au1", displayName: "Berlin" }] },
+      "/v1.0/directory/administrativeUnits/au1": { id: "au1", displayName: "Berlin" },
+      "/v1.0/directory/administrativeUnits/au1/members?$select=id": { value: [{ id: "a" }], "@odata.nextLink": next("/v1.0/directory/administrativeUnits/other/members?$select=id&$skiptoken=2") },
+      "/v1.0/directory/administrativeUnits/other/members?$select=id&$skiptoken=2": { value: [{ id: "b" }] },
+    }))
+    const job = await run()
+    expect(requests.some((request) => request.path.includes("managedDevices") || request.path.includes("/other/"))).toBe(false)
+    expect(job.failedTypes).toEqual(["DeviceCategories"])
+    // No unit with the members of another one, and none with a shorter list.
+    expect((await files(job)).some((name) => name.startsWith("AdministrativeUnits/"))).toBe(false)
+    expect(outcome(job, "AdministrativeUnits")).toMatchObject({ outcome: "failed", saved: 0 })
   })
 
   it("still refuses a v1.0 continuation link for a beta list", async () => {
@@ -179,6 +206,23 @@ describe("a type whose list needs a filter", () => {
     ])
     expect((await files(job)).filter((name) => name.startsWith("DefenderAttackSimulationPayloads/"))).toHaveLength(3)
     expect(outcome(job, "DefenderAttackSimulationPayloads")).toMatchObject({ outcome: "saved", saved: 3, service: "defender" })
+  })
+
+  it.each([
+    ["moves to another collection with another filter", "/v1.0/users?$filter=source eq 'global'"],
+    ["stays on the collection with another filter", "/v1.0/security/attackSimulation/payloads?$filter=source+eq+%27global%27&$top=2&$skiptoken=A"],
+    ["carries the filter and a second one", "/v1.0/security/attackSimulation/payloads?$filter=source+eq+%27tenant%27&$filter=source+eq+%27global%27&$skiptoken=A"],
+    ["names another filter without the $", "/v1.0/security/attackSimulation/payloads?filter=source+eq+%27global%27&$skiptoken=A"],
+    ["names another filter in another case", "/v1.0/security/attackSimulation/payloads?$Filter=source+eq+%27global%27&$skiptoken=A"],
+  ])("refuses a continuation link that %s, and stores nothing of the type", async (_what, link) => {
+    const first = "/v1.0/security/attackSimulation/payloads?$filter=source eq 'tenant'&$top=2"
+    const { run, requests, files, manifest } = fixture(graph({ [first]: { value: [{ id: "p1", displayName: "One", source: "tenant" }], "@odata.nextLink": next(link) } }))
+    const job = await run()
+    // Only the first page was requested: the link was not followed, with or without the type's filter added.
+    expect(requests.filter((request) => request.path.includes("attackSimulation") || request.path.includes("/users")).map((request) => request.path)).toEqual([first])
+    expect((await files(job)).some((name) => name.startsWith("DefenderAttackSimulationPayloads/"))).toBe(false)
+    expect(outcome(job, "DefenderAttackSimulationPayloads")).toMatchObject({ outcome: "failed", error: "Invalid Graph continuation link", saved: 0 })
+    expect(await manifest(job)).toMatchObject({ Status: "CompletedWithWarnings", Failures: 1, FailedTypes: ["DefenderAttackSimulationPayloads"], Coverage: "Incomplete" })
   })
 
   it("builds the list path from the filter and the extra query", () => {
