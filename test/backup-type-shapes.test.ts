@@ -234,6 +234,19 @@ describe("a tenant-wide object", () => {
     expect(job.coverage).toBe("incomplete")
   })
 
+  it("is not stored when the list continues on another page, and the page is never asked for", async () => {
+    const { run, files, requests, manifest } = fixture(graph({
+      "/beta/policies/externalIdentitiesPolicy": { value: [{ id: "externalIdentitiesPolicy", allowExternalIdentitiesToLeave: true }], "@odata.nextLink": next("/beta/policies/externalIdentitiesPolicy?$skiptoken=2") },
+      "/beta/policies/externalIdentitiesPolicy?$skiptoken=2": { value: [{ id: "second", allowExternalIdentitiesToLeave: false }] },
+    }))
+    const job = await run()
+    expect((await files(job)).some((name) => name.startsWith("ExternalIdentitiesPolicy/"))).toBe(false)
+    expect(requests.some((request) => request.path.includes("$skiptoken=2"))).toBe(false)
+    expect(outcome(job, "ExternalIdentitiesPolicy")).toMatchObject({ outcome: "failed", saved: 0, error: expect.stringContaining("continues on another page") })
+    expect(await manifest(job)).toMatchObject({ Status: "CompletedWithWarnings", Failures: 1, Coverage: "Incomplete" })
+    expect((await manifest(job)).ItemCounts.ExternalIdentitiesPolicy).toBe(0)
+  })
+
   it("keeps the properties a type names, and reads the object with the type's query", async () => {
     const reads: string[] = []
     const reader: GraphReader = { get: async (path) => (reads.push(path), { value: [{ id: "x", a: 1, b: 2, c: 3 }] }), list: async (path) => (reads.push(path), [{ id: "m2" }, { id: "m1" }]) }

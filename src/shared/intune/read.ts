@@ -185,6 +185,8 @@ export function withMaskedSecrets(type: IntuneType, snapshot: Item): Item | null
 /** The tenant-wide object of a read: the answer itself, or the one entry of the list Graph answers with (see IntuneType.singleton). */
 function singletonObject(singleton: NonNullable<IntuneType["singleton"]>, read: Item): Item {
   if (!singleton.collection) return read
+  // A list that goes on may hold a second object, or a page that cannot be read: its first entry is not the tenant's setting.
+  if ("@odata.nextLink" in read) throw new Error("Microsoft Graph returned a list that continues on another page where one tenant-wide object was expected")
   const entries = read.value
   // Storing one of several, or nothing, would pass for the tenant's setting.
   if (!Array.isArray(entries) || entries.length !== 1 || !entries[0] || typeof entries[0] !== "object" || Array.isArray(entries[0])) {
