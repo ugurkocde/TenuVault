@@ -151,11 +151,27 @@ describe("triggers that follow each other", () => {
     const { health, tokens } = setup()
     let answer: (value: ReturnType<typeof fresh>) => void = () => undefined
     tokens.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve }))
-    const checks = [health.check(TENANT, "launch"), health.check(TENANT, "opened"), health.check(TENANT, "beforeBackup"), health.check(TENANT, "signIn")]
+    const checks = [health.check(TENANT, "launch"), health.check(TENANT, "opened"), health.check(TENANT, "beforeBackup"), health.check(TENANT, "afterBackup")]
     answer(fresh())
     const reports = await Promise.all(checks)
     expect(tokens).toHaveBeenCalledTimes(1)
     expect(new Set(reports.map((report) => report.graph.checkedAt)).size).toBe(1)
+  })
+
+  it("are not answered by a check that started before a sign-in or before the admin asked again", async () => {
+    const { health, tokens, pass } = setup()
+    let refuse: (error: Error) => void = () => undefined
+    // The check under way started while the sign-in had ended: Microsoft refuses it.
+    tokens.mockImplementationOnce(() => new Promise((_resolve, reject) => { refuse = reject }))
+    const before = health.check(TENANT, "launch")
+    // The admin signs in and asks again while it runs: one more check follows it, shared by both.
+    const after = [health.check(TENANT, "signIn"), health.check(TENANT, "signIn"), health.check(TENANT, "afterBackup", { failed: true })]
+    pass(1000)
+    refuse(new SignInRequiredError(TENANT, CLIENT, "Your session for admin@contoso.com has ended. Sign in again to continue."))
+    expect((await before).graph.state).toBe("signInNeeded")
+    const reports = await Promise.all(after)
+    expect(tokens).toHaveBeenCalledTimes(2)
+    expect(reports.map((report) => report.graph.state)).toEqual(["healthy", "healthy", "healthy"])
   })
 
   it("answer from the last check when they come within a minute of it", async () => {

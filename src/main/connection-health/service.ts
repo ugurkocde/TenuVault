@@ -71,6 +71,8 @@ export class ConnectionHealth {
   private readonly observations: HealthStore
   private readonly now: () => Date
   private readonly running = new Map<string, Promise<ConnectionHealthReport>>()
+  /** The check that follows the running one, for triggers that must not be answered by a check that started before them. */
+  private readonly following = new Map<string, Promise<ConnectionHealthReport>>()
   private readonly checkedAt = new Map<string, number>()
 
   constructor(private readonly host: HealthHost) {
@@ -81,9 +83,11 @@ export class ConnectionHealth {
   /**
    * Checks the tenant's connection and returns the report. Triggers that follow each other are
    * settled here: one check runs per tenant at a time and everyone who asks meanwhile gets its
-   * result, and a trigger within a minute of the last check gets what that check found. Only the
-   * admin asking to check again, a new sign-in and a backup that did not end well always ask
-   * Microsoft, because each of them means the answer may have changed.
+   * result, and a trigger within a minute of the last check gets what that check found.
+   *
+   * The admin asking to check again, a new sign-in and a backup that failed always ask Microsoft,
+   * because each of them means the answer may have changed. A check that was already running when
+   * one of them came started before it, so it cannot answer for it: one more check follows.
    *
    * `reader` also asks for a new token of the Backup Reader. That happens only where the reader is
    * used anyway, before a scheduled backup that runs with it, and when the admin asks to check again.
@@ -92,12 +96,24 @@ export class ConnectionHealth {
     const tenant = tenantId.toLowerCase()
     const reader = options.reader === true || trigger === "again"
     const lane = `${tenant}|${reader ? "reader" : "admin"}`
-    const running = this.running.get(lane) ?? (reader ? undefined : this.running.get(`${tenant}|reader`))
-    if (running) return running
     const always = trigger === "again" || trigger === "signIn" || (trigger === "afterBackup" && options.failed === true)
-    // A check that also asked the Backup Reader answers for one that would not have.
+    // A check that also asks the Backup Reader answers for one that would not have.
+    const running = this.running.get(lane) ?? (reader ? undefined : this.running.get(`${tenant}|reader`))
+    if (running && !always) return running
+    if (running) {
+      const following = this.following.get(lane) ?? running.then(() => undefined, () => undefined).then(() => {
+        this.following.delete(lane)
+        return this.start(lane, tenant, reader)
+      })
+      this.following.set(lane, following)
+      return following
+    }
     const last = Math.max(this.checkedAt.get(`${tenant}|reader`) ?? -Infinity, reader ? -Infinity : (this.checkedAt.get(lane) ?? -Infinity))
     if (!always && this.now().getTime() - last < CHECK_INTERVAL_MS) return Promise.resolve(this.report(tenant))
+    return this.start(lane, tenant, reader)
+  }
+
+  private start(lane: string, tenant: string, reader: boolean): Promise<ConnectionHealthReport> {
     const check = this.observe(tenant, reader).finally(() => {
       if (this.running.get(lane) === check) this.running.delete(lane)
     })
