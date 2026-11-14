@@ -170,7 +170,7 @@ More on licenses: [Activate and manage your license](/licensing/manage/).
 | --- | --- | --- |
 | No backups to restore from | The tenant has no backup with items, or its only backup is still running. | Run a backup first. |
 | This backup did not complete fully, so some items may be missing from it. | The chosen backup stopped early or had failures. | Items that were saved restore normally. Pick another backup if the item you need is missing. |
-| Intune does not let apps download installer files. Upload the installer again to restore this app. | The app type needs an installer, which Intune does not export. | Upload the installer through Intune. See [What cannot be restored](/restore/limitations/). |
+| Intune does not let apps download installer files. Upload the installer again to restore this app. | The configuration-backup wizard has app metadata but no installer payload. | If you captured this supported Win32 installer earlier, use [App Backup's restore flow](/apps/app-backup/#restore-to-the-same-or-another-tenant). Otherwise obtain and upload the original installer through Intune. See [What cannot be restored](/restore/limitations/). |
 | This backup holds a masked OMA-URI value (****). Create a new backup to restore it; restoring would send **** to devices. | The backup captured a secret as `****`. | Run a new backup, then restore from it. |
 | This is the tenant default. Restore updates it in place. / This is the default branding. Restore updates it in place. | Defaults cannot be copied. | Use **Replace in place**. |
 | Replace only: this object cannot be copied. | Shown in **Replace in place** mode for items that cannot be restored as copies. | Keep **Replace in place** for this item. |

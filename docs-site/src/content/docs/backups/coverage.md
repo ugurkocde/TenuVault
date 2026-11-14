@@ -5,7 +5,7 @@ faq:
   - question: "Which Intune objects does TenuVault back up?"
     answer: "41 Intune object types in nine areas: device configuration, compliance, endpoint security, scripts and remediations, Windows updates, apps, app protection and configuration, enrollment, and tenant administration. Each object is saved as it is in Microsoft Graph (beta), with its settings and, where Intune has them, its assignments."
   - question: "Does TenuVault back up app installer files?"
-    answer: "Policy backups save app details, assignments, categories, and dependency and supersedence links, not installers. App Backup is a separate, free feature for installer content. Production capture and app-content restore are not available yet; earlier local archives remain exportable."
+    answer: "Configuration backups save app details, assignments, categories, and dependency and supersedence links, not installers. The separate, free App Backup Windows preview retrieves supported Win32 installer content on an enrolled Windows PC. A captured installer can be restored as a new, unassigned app in the same or another connected tenant."
   - question: "Are the groups that assignments target backed up?"
     answer: "No. Assignments are saved as references to groups; the groups themselves are not part of the backup."
   - question: "Are Windows update rings included?"
@@ -20,7 +20,7 @@ The area and type names below are the ones the **Back up** dialog shows under **
 
 For the product overview of how to [back up Intune policies](https://www.tenuvault.com/intune-backup), see the backup page on the product site.
 
-Installer content stays separate from this metadata. [App Backup](/apps/app-backup/) is free for every configured tenant, but production installer capture and app-content restore are not available yet. Earlier local archives remain exportable and are not treated as captured backups.
+Installer content stays separate from this metadata. The free [App Backup Windows preview](/apps/app-backup/#back-up-a-windows-installer) retrieves supported Win32 installers on a PC enrolled in the source tenant. Its captured backups can be restored as new, unassigned apps in the same or another connected tenant. Earlier local archives remain exportable but do not qualify for that restore flow. macOS installer capture is not available yet.
 
 ## How to read the tables
 
@@ -83,7 +83,7 @@ Update rings are device configuration profiles and are backed up with **Device c
 | Apps | Yes | App details, assignments, categories, and dependency and supersedence links. Installer files are never downloaded. Left out of **Everything except apps**. |
 | Policy sets | Yes | With the items each set contains |
 
-Apps are the slowest type to back up. Because installer files are never downloaded, Win32 and line-of-business apps cannot be recreated from a backup; store, web and Microsoft 365 apps can. See [What cannot be restored](/restore/limitations/).
+Apps are the slowest type to include in a configuration backup. This backup does not download installer files, so its metadata alone cannot recreate Win32 and line-of-business apps; store, web and Microsoft 365 apps can be recreated. Use [App Backup](/apps/app-backup/) separately to capture and restore supported Win32 installers. See [What cannot be restored](/restore/limitations/).
 
 ## App protection and configuration
 
@@ -146,7 +146,7 @@ Off until you turn the service on for the tenant in **Settings** > **Services an
 
 ## What is not backed up
 
-* **App installer files.** Apps are saved as their Intune details only.
+* **App installer files in configuration backups.** These backups save app details only. Capture supported Win32 installers separately with [App Backup](/apps/app-backup/).
 * **Built-in objects Intune recreates itself:** remediations provided by Microsoft, built-in app categories, built-in scope tags and built-in Intune roles.
 * **The Apple automated device enrollment token.** Its details and profiles are kept for reference, but the token has to be uploaded again in Intune.
 * **Android Enterprise enrollment tokens.** A restored profile gets a new token.

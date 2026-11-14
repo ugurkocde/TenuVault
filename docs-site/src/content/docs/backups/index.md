@@ -5,7 +5,7 @@ faq:
   - question: "How do I back up Microsoft Intune policies?"
     answer: "In TenuVault, select the tenant, open Backup & Restore and click Run Backup. Keep the saved backup choice or change it, then click Start backup. TenuVault reads the Intune configuration through Microsoft Graph with your own delegated sign-in and saves the objects in your backup choice, with their assignments where Intune has them."
   - question: "What does an Intune backup include?"
-    answer: "A full backup covers 41 Intune object types in nine areas, including Settings Catalog and device configuration policies, compliance policies, scripts, Administrative Templates, enrollment and tenant settings, plus app details and assignments. App installer files, Apple tokens and private keys cannot be exported by Microsoft Graph and are never included."
+    answer: "A full configuration backup covers 41 Intune object types in nine areas, including Settings Catalog and device configuration policies, compliance policies, scripts, Administrative Templates, enrollment and tenant settings, plus app details and assignments. It excludes installer files, Apple tokens and private keys. Use the separate App Backup Windows preview to capture supported Win32 installer content."
   - question: "Does Microsoft Intune have a built-in backup?"
     answer: "No. Intune has no native backup, point-in-time restore or recycle bin for policies, so a deleted or changed policy cannot be recovered from the Intune portal. A backup tool such as TenuVault saves the configuration through Microsoft Graph before something goes wrong."
   - question: "Where are Intune backups stored?"
@@ -24,7 +24,7 @@ Backups go to the storage you chose for the tenant: encrypted on this device, or
 
 For the full list of object types, see [What gets backed up](/backups/coverage/).
 
-For original Win32 installer files you already have, use [free App Backup](/apps/app-backup/). Its encrypted installer store is separate from policy backup storage and remains accessible while signed out.
+To retrieve supported Win32 installer content from Intune, use [free App Backup](/apps/app-backup/) on an enrolled Windows PC. Its encrypted installer store is separate from configuration backup storage and remains accessible while signed out. Capture requires no local installer file.
 
 ## Before you start
 
@@ -69,7 +69,7 @@ With **Custom**, TenuVault lists the areas (for example **Device configuration**
 
 The line under the choices shows how many of the 41 types the backup covers. **Start backup** is unavailable until at least one type is ticked ("Choose at least one type.").
 
-When apps are included, a note explains that apps are saved as their Intune details and assignments, which makes them the slowest type to back up, and that installer files are never downloaded.
+When apps are included, a note explains that apps are saved as their Intune details and assignments, which makes them the slowest type to back up. Installer files are not downloaded by this configuration-backup workflow; [App Backup](/apps/app-backup/) handles supported installer captures separately.
 
 ### The saved backup choice
 
