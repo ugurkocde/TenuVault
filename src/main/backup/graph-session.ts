@@ -58,14 +58,24 @@ export class GraphSession {
     const seen = new Set<string>()
     // Microsoft Graph repeats the path of the request in its continuation links, so a link stays on the collection
     // (and with it the version) the list started on. Anything else would merge another collection's objects into this one.
-    const collection = new URL(url).pathname.toLowerCase()
+    const started = new URL(url)
+    const collection = started.pathname.toLowerCase()
+    // The filters a page of this list may carry: the type's own, or the ones the request itself named. A list
+    // without a filter has none, so a link that brings one would end the list early and leave objects out.
+    const allowed = options.filter !== undefined ? [options.filter] : filtersOf(started)
     while (next) {
       if (seen.size >= MAX_LIST_PAGES) throw new Error(`Graph listing did not finish after ${MAX_LIST_PAGES} pages`)
       const parsed = new URL(next)
-      if (parsed.origin !== GRAPH || !VERSION.test(collection) || parsed.pathname.toLowerCase() !== collection || seen.has(next)) throw new Error("Invalid Graph continuation link")
+      // The refusal names what was wrong and the link's path, never its query: that holds the paging token.
+      const refuse = (reason: string) => new Error(`Invalid Graph continuation link (${reason}): ${parsed.origin === GRAPH ? parsed.pathname : "an address outside Microsoft Graph"}`)
+      if (parsed.origin !== GRAPH || parsed.username || parsed.password) throw refuse("it leaves Microsoft Graph")
+      // What follows a # is never sent, so a filter added to such a link would not reach Graph.
+      if (parsed.hash) throw refuse("it carries a fragment")
+      if (!VERSION.test(collection) || parsed.pathname.toLowerCase() !== collection) throw refuse("it moves to another collection")
+      if (seen.has(next)) throw refuse("it repeats a page")
       const filters = filtersOf(parsed)
       // A link with another filter would list what the type's filter leaves out, such as objects that are not the tenant's own.
-      if (options.filter !== undefined && filters.some((filter) => filter !== options.filter)) throw new Error("Invalid Graph continuation link")
+      if (filters.some((filter) => !allowed.includes(filter))) throw refuse("it names another filter")
       seen.add(next)
       // Appended as text: rewriting the query would re-encode the paging token Graph issued.
       const request: string = options.filter !== undefined && !filters.length ? `${next}${parsed.search ? "&" : "?"}$filter=${encodeURIComponent(options.filter)}` : next
@@ -110,6 +120,9 @@ export class GraphSession {
         this.network.signal.throwIfAborted()
         const unanswered = (attempted || error instanceof RequestTimeoutError) && requestFailure(error) === "network"
         if (unanswered) this.notAnswered(error)
+        // A refusal is an answer too: the endpoint was reached, so the service's streak of unanswered requests is over.
+        // Intune and Conditional Access keep counting as they always did, where only a successful read ends the streak.
+        else if (this.options.isolated && response) this.unanswered = 0
         if (error instanceof GraphPauseError) {
           attempt--
           continue

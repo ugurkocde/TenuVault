@@ -127,7 +127,27 @@ describe("a type read from Microsoft Graph v1.0", () => {
     expect(requests.filter((request) => request.path.includes("roleAssignments")).map((request) => request.path)).toEqual(["/v1.0/roleManagement/directory/roleAssignments"])
     // A list that could not be read in full stores nothing of the type.
     expect((await files(job)).some((name) => name.startsWith("EntraRoleAssignments/"))).toBe(false)
-    expect(outcome(job, "EntraRoleAssignments")).toMatchObject({ outcome: "failed", error: "Invalid Graph continuation link" })
+    expect(outcome(job, "EntraRoleAssignments")).toMatchObject({ outcome: "failed", error: expect.stringMatching(/^Invalid Graph continuation link \(it (leaves Microsoft Graph|moves to another collection)\): /) })
+    // The refusal names the link's path, or that it left Microsoft Graph, and never its query.
+    expect(JSON.stringify(outcome(job, "EntraRoleAssignments"))).not.toContain("page=2")
+  })
+
+  it.each([
+    ["brings a filter the list did not have", next("/v1.0/roleManagement/directory/roleAssignments?$filter=id+eq+%27ra1%27&$skiptoken=A"), "it names another filter"],
+    ["brings a filter without the $", next("/v1.0/roleManagement/directory/roleAssignments?filter=id+eq+%27ra1%27&$skiptoken=A"), "it names another filter"],
+    ["brings a filter in another case", next("/v1.0/roleManagement/directory/roleAssignments?$FILTER=id+eq+%27ra1%27&$skiptoken=A"), "it names another filter"],
+    ["carries a fragment", next("/v1.0/roleManagement/directory/roleAssignments?$skiptoken=A#section"), "it carries a fragment"],
+    ["carries a sign-in of its own", "https://user:secret@graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments?$skiptoken=A", "it leaves Microsoft Graph"],
+  ])("refuses a continuation link of an unfiltered list that %s, so the list cannot end early", async (_what, link, reason) => {
+    const { run, requests, files } = fixture(graph({
+      "/v1.0/roleManagement/directory/roleAssignments": { value: [{ id: "ra1", name: "First" }], "@odata.nextLink": link },
+    }))
+    const job = await run()
+    expect(requests.filter((request) => request.path.includes("roleAssignments")).map((request) => request.path)).toEqual(["/v1.0/roleManagement/directory/roleAssignments"])
+    expect((await files(job)).some((name) => name.startsWith("EntraRoleAssignments/"))).toBe(false)
+    expect(outcome(job, "EntraRoleAssignments")).toMatchObject({ outcome: "failed", error: expect.stringContaining(`Invalid Graph continuation link (${reason})`) })
+    expect(JSON.stringify(outcome(job, "EntraRoleAssignments"))).not.toContain("skiptoken")
+    expect(JSON.stringify(outcome(job, "EntraRoleAssignments"))).not.toContain("secret")
   })
 
   it("follows a link that spells the same collection in another case, as Microsoft Graph reads paths", async () => {
@@ -218,6 +238,8 @@ describe("a type whose list needs a filter", () => {
     ["carries the filter and a second one", "/v1.0/security/attackSimulation/payloads?$filter=source+eq+%27tenant%27&$filter=source+eq+%27global%27&$skiptoken=A"],
     ["names another filter without the $", "/v1.0/security/attackSimulation/payloads?filter=source+eq+%27global%27&$skiptoken=A"],
     ["names another filter in another case", "/v1.0/security/attackSimulation/payloads?$Filter=source+eq+%27global%27&$skiptoken=A"],
+    // The type's filter would be added after the #, where Graph never sees it.
+    ["drops the filter and carries a fragment", "/v1.0/security/attackSimulation/payloads?$skiptoken=A#section"],
   ])("refuses a continuation link that %s, and stores nothing of the type", async (_what, link) => {
     const first = "/v1.0/security/attackSimulation/payloads?$filter=source eq 'tenant'&$top=2"
     const { run, requests, files, manifest } = fixture(graph({ [first]: { value: [{ id: "p1", displayName: "One", source: "tenant" }], "@odata.nextLink": next(link) } }))
@@ -225,7 +247,7 @@ describe("a type whose list needs a filter", () => {
     // Only the first page was requested: the link was not followed, with or without the type's filter added.
     expect(requests.filter((request) => request.path.includes("attackSimulation") || request.path.includes("/users")).map((request) => request.path)).toEqual([first])
     expect((await files(job)).some((name) => name.startsWith("DefenderAttackSimulationPayloads/"))).toBe(false)
-    expect(outcome(job, "DefenderAttackSimulationPayloads")).toMatchObject({ outcome: "failed", error: "Invalid Graph continuation link", saved: 0 })
+    expect(outcome(job, "DefenderAttackSimulationPayloads")).toMatchObject({ outcome: "failed", error: expect.stringMatching(/^Invalid Graph continuation link \(it (moves to another collection|names another filter|carries a fragment)\): /), saved: 0 })
     expect(await manifest(job)).toMatchObject({ Status: "CompletedWithWarnings", Failures: 1, FailedTypes: ["DefenderAttackSimulationPayloads"], Coverage: "Incomplete" })
   })
 

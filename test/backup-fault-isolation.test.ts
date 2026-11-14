@@ -301,6 +301,33 @@ describe("an Entra ID or Defender endpoint that does not answer", () => {
     // The fourth in a row stops the backup, whatever Entra ID answered in between.
     await expect(settled(intune.get("https://graph.microsoft.com/beta/intune"))).resolves.toContain("Microsoft Graph did not respond for 4 consecutive requests")
   })
+
+  it("takes a refusal as an answer: unanswered requests on either side of it are not a streak", async () => {
+    vi.useFakeTimers()
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      if (String(input).endsWith("/silent")) throw new TypeError("Connection reset")
+      if (String(input).endsWith("/refused")) return Response.json({ error: { code: "Forbidden", message: "Insufficient privileges" } }, { status: 403 })
+      return Response.json({ ok: true })
+    }) as typeof fetch
+    // Six unanswered requests in a row would stop the service.
+    const entra = new GraphSession(fetchImpl, async () => "token", new NetworkCircuit(6), { service: "entra", isolated: true })
+    const settled = (request: Promise<unknown>) => request.then(() => "answered", (error: Error) => error.message)
+    const silent = async () => {
+      const request = settled(entra.get("https://graph.microsoft.com/beta/silent"))
+      await vi.advanceTimersByTimeAsync(3_000)
+      return request
+    }
+    // Three attempts without an answer, a refusal, three more without an answer: never six in a row.
+    await expect(silent()).resolves.toBe("Connection reset")
+    await expect(settled(entra.get("https://graph.microsoft.com/beta/refused"))).resolves.toContain("Insufficient privileges")
+    await expect(silent()).resolves.toBe("Connection reset")
+    // The service was not stopped, so an endpoint that answers is still read.
+    await expect(entra.get("https://graph.microsoft.com/beta/healthy")).resolves.toEqual({ ok: true })
+    // Without an answer in between, the sixth unanswered request in a row does stop it.
+    await expect(silent()).resolves.toBe("Connection reset")
+    await expect(silent()).resolves.toContain("did not respond for 6 consecutive requests of this service")
+    await expect(settled(entra.get("https://graph.microsoft.com/beta/healthy"))).resolves.toContain("did not respond for 6 consecutive requests of this service")
+  })
 })
 
 describe("a sign-in that ended during a backup", () => {
