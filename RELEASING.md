@@ -87,6 +87,13 @@ Put these in the next stable release's notes, then remove them here.
   it. Existing installs are never asked. Admins can turn it off with the `DisableSetupDiagnostics`
   policy (Windows DWORD under `SOFTWARE\Policies\TenuVault`, macOS managed preference for
   `com.tenuvault.desktop`).
+- **Services per tenant.** Intune can be turned off for a tenant under Settings > Services and
+  permissions; it stays on for every existing tenant until an admin turns it off. The setting is
+  stored in the same place and shape as before (`services.modules` in the app state), with more
+  fields per service. Versions before 0.6 ignore those fields and always back up Intune, so a
+  downgrade backs up Intune again for a tenant that had it off. Restore history now needs access
+  to a service the tenant backs up (Intune while it is on), and its refusal message no longer
+  names Intune.
 
 ## Cutting a stable release
 

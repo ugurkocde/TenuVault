@@ -105,6 +105,7 @@ The log lists what TenuVault did, with a time stamp per line. Typical lines:
 | Log line | Meaning |
 | --- | --- |
 | "Leaving out N of 41 types: ..." | The backup choice excludes these types |
+| "Intune is turned off for this tenant, so its types are not backed up. ..." | Intune is off for the tenant under **Settings** > **Services and permissions**, so this backup holds no Intune policies. Turn it on there to back them up again. |
 | "Found N ... (N built-in skipped)." | Items found for a type. Built-in objects Intune recreates itself are skipped. |
 | "Backed up N ..." | All items of a type are saved |
 | "Skipped ...: access was denied. The app registration may lack the permission or admin consent, or your Intune role may not allow it." | Microsoft Graph refused access to this type: a permission or its admin consent is missing, or your Intune role does not cover it. The backup continues without it. |

@@ -47,7 +47,7 @@ Shows, for each connected tenant, which services TenuVault backs up and what the
 | Control | What it does |
 | --- | --- |
 | **Check again** | Gets a new sign-in token and checks again, for example after you granted admin consent to a permission. |
-| **Include in backups** | Turns an opt-in service, such as Entra Conditional Access, on or off for the tenant. While it is off, backups leave its items out. |
+| **Include in backups** | Turns a service on or off for the tenant. Intune is on until you turn it off; Entra Conditional Access is off until you turn it on. While a service is off, backups leave its policies out, whatever the backup choice says. When Intune is off, the backup results say so. |
 | **Open API permissions in Entra** | Shown when a permission is missing. Opens the tenant's existing app registration in Entra, where you add the permission and grant admin consent. That needs a Global Administrator, Privileged Role Administrator, Cloud Application Administrator or Application Administrator. |
 | **Copy Azure CLI commands** | Shown when only a service's restore permission is missing. Copies the commands that add it to the existing app registration and grant admin consent. |
 
@@ -94,7 +94,7 @@ When a restore write to Intune ends without a clear answer (for example a timeou
 
 | Control | What it does |
 | --- | --- |
-| **Restore history tenant** | Chooses the tenant whose history is shown. Viewing it needs a current sign-in to that tenant, a license that covers it and Intune management access. |
+| **Restore history tenant** | Chooses the tenant whose history is shown. Viewing it needs a current sign-in to that tenant, a license that covers it and management access to a service the tenant backs up: Intune, or Entra Conditional Access when Intune is off for the tenant. |
 | **Refresh history** | Reloads the list. If it fails, the previous records stay visible with an error. |
 
 Each entry shows the object name, time, state, tenant and the request (method and path). Request payloads and tokens are not stored. Interrupted writes stay blocked across restarts.

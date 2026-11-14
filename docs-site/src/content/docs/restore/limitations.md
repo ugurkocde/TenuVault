@@ -101,7 +101,7 @@ The journal stores the method, target path, tenant, time, a short policy name an
 2. Under **Restore history tenant**, select the tenant.
 3. The **Restore write history** card lists every recorded write for that tenant, newest first. Click **Refresh history** to reload it. If the refresh fails, the previous records stay visible with an error.
 
-Opening or changing the history requires the tenant's stored sign-in, an active license, and live Intune management access for that tenant. Records of other tenants are never shown.
+Opening or changing the history requires the tenant's stored sign-in, an active license, and live management access to a service the tenant backs up: Intune, or Entra Conditional Access when Intune is turned off for the tenant under **Settings** > **Services and permissions**. Records of other tenants are never shown.
 
 Each record shows the policy name (or "Object name unavailable"), the time, its state, the tenant, the request method and path, and the object ID if known. States are:
 

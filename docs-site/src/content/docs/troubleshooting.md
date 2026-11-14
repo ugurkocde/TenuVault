@@ -197,7 +197,7 @@ More on licenses: [Activate and manage your license](/licensing/manage/).
 | Unresolved target dependencies (*paths*). Copy the dependencies first or reconcile this object in the target tenant. | A cross-tenant copy refers to objects that do not exist in the target tenant. | Include the dependencies in the same restore, or map apps and app categories. See [Restore to another tenant](/restore/cross-tenant/). |
 | A mapped dependency is missing or unreadable in the target tenant | A mapped target ID does not exist or cannot be read. | Check the target IDs in the target tenant. Nothing was written. |
 | The original target tenant is no longer connected. | A retry targets a tenant that was removed from TenuVault. | Connect the tenant again, or start a new restore. |
-| Sign in with licensed Intune access to this tenant before viewing or changing restore history. | Restore write history requires sign-in, a license and live Intune access for the tenant. | Sign in to the tenant again and check its license and your Intune role. |
+| Sign in with a license and management access to this tenant before viewing or changing restore history. | Restore write history requires sign-in, a license and live access to a service the tenant backs up: Intune, or Entra Conditional Access when Intune is turned off for the tenant. | Sign in to the tenant again and check its license and your Intune role, or your Entra role when Intune is off. If every service is off for the tenant, turn one on under **Settings** > **Services and permissions**. |
 
 ## Updates
 
