@@ -1,6 +1,9 @@
 import { requestWindowsContent } from "./app-backup/windows-helper"
 import { requireCaptureEnabled } from "./app-backup/capture-policy"
 import { checkCaptureMetadata } from "./app-backup/capture-preflight"
+import { restoreCapturedApp } from "./app-backup/restore"
+import { restoreGraph } from "./app-backup/restore-graph"
+import { readRestoreSnapshot, sameRestoreSettings } from "./app-backup/restore-snapshot"
 import { downloadCapturedContent } from "./app-backup/capture-download"
 import { AppSourceService } from "./app-sources/service"
 import { checkRecoveryDevice } from "./app-backup/device-check"
@@ -1467,6 +1470,11 @@ async function bootstrap(): Promise<void> {
   })
 
   const appSources = new AppSourceService({
+    loadRestoreSettings: async (tenant, appId) => readRestoreSnapshot(tenant, appId, (await auth.getAccessToken(tenant, signedInClient(tenant), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch, "current-settings"),
+    restore: (store, source, snapshot, target, name, signal, progress) => restoreCapturedApp(store, source, snapshot, target, name, {
+      graph: restoreGraph(async () => (await auth.getAccessToken(target, signedInClient(target), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch, signal),
+      fetch: bridgedFetch, signal, progress,
+    }),
     ensureKeys: () => { backupKeys.keyring() },
     capture: async (tenant, appId, jobId, store, signal, progress) => {
       if (process.platform !== "win32") throw new Error("Back up Win32 installers on a Windows PC enrolled in this Intune tenant.")
@@ -1475,12 +1483,15 @@ async function bootstrap(): Promise<void> {
       const token = await auth.getAccessToken(tenant, signedInClient(tenant), RESOURCE_SCOPES.graph, true)
       signal.throwIfAborted()
       await checkCaptureMetadata(appId, token.accessToken, bridgedFetch)
+      const snapshot = await readRestoreSnapshot(tenant, appId, token.accessToken, bridgedFetch, "capture")
       signal.throwIfAborted()
       progress({ phase: "windows-approval", receivedBytes: 0, totalBytes: null })
       const helper = app.isPackaged ? join(process.resourcesPath, "app-backup", "TenuVault.Capture.exe") : join(app.getAppPath(), "out", "helper", "TenuVault.Capture.exe")
       const content = await requestWindowsContent(helper, { tenantId: tenant, appId, jobId, accessToken: token.accessToken }, signal)
       signal.throwIfAborted()
-      return downloadCapturedContent(store, content.identity, content, content.appName, { signal, fetch: bridgedFetch, progress })
+      const after = await readRestoreSnapshot(tenant, appId, token.accessToken, bridgedFetch, "capture")
+      if (!sameRestoreSettings(snapshot, after) || snapshot.contentVersion !== content.identity.contentVersion) throw new Error("The app settings changed during capture. Start a new backup.")
+      return downloadCapturedContent(store, content.identity, content, content.appName, { signal, fetch: bridgedFetch, progress, snapshot })
     },
     details: (tenant, id) => readAppBackupDetails(tenant, id, async tid => (await auth.getAccessToken(tid, signedInClient(tid), RESOURCE_SCOPES.graph)).accessToken, bridgedFetch),
     printDetails: details => printAppDetails(appDetailsHtml(details), options => new BrowserWindow(options)),
@@ -1522,6 +1533,10 @@ async function bootstrap(): Promise<void> {
     },
   })
   app.on("before-quit", () => appSources.close())
+  handleTrusted("appSources:restoreReview", (_event, tenant: unknown, source: unknown) => appSources.restoreReview(tenant, source))
+  handleTrusted("appSources:loadRestoreSettings", (_event, tenant: unknown, source: unknown) => appSources.loadRestoreSettings(tenant, source))
+  handleTrusted("appSources:restore", (_event, tenant: unknown, operation: unknown, source: unknown, target: unknown, name: unknown, settingsHash: unknown) => appSources.restore(tenant, operation, source, target, name, settingsHash))
+  handleTrusted("appSources:restoreProgress", (_event, tenant: unknown, operation: unknown) => appSources.restoreProgress(tenant, operation))
   handleTrusted("appSources:capture", (_event, tenant: unknown, operation: unknown, id: unknown) => appSources.capture(tenant, operation, id))
   handleTrusted("appSources:assignments", (_event, tenant: unknown, id: unknown) => appSources.assignments(tenant, id))
   handleTrusted("appSources:captureProgress", (_event, tenant: unknown, operation: unknown) => appSources.captureProgress(tenant, operation))

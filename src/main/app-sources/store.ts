@@ -5,6 +5,7 @@ import { basename, join, dirname } from "node:path"
 import { mkdir, open, readdir, rename, rm, link, lstat, realpath, type FileHandle } from "node:fs/promises"
 import type { StoredAppSource, LocalAppArchive, CapturedAppSource, CaptureIdentity } from "../../shared/app-sources/types"
 import { inspectIntunewin, inspectSourceZip, type PackageReader } from "./package"
+import { SNAPSHOT_LIMIT, snapshotHash, validateSnapshot, type AppRestoreSnapshot } from "../app-backup/restore-snapshot"
 import { bindCapture } from "../app-backup/capture-identity"
 import { ingestContent, type ContentEncryption } from "../app-backup/content-stream"
 
@@ -73,23 +74,23 @@ async function write(file: FileHandle, data: Buffer): Promise<void> {
   while (at < data.length) { const n = await file.write(data, at, data.length - at); if (!n.bytesWritten) throw new Error("Could not write source data."); at += n.bytesWritten }
 }
 async function noLink(path: string): Promise<void> { if ((await lstat(path)).isSymbolicLink()) throw new Error("Source-store links are not supported.") }
-async function readMetadata(path: string): Promise<Buffer> {
+async function readMetadata(path: string, limit = METADATA_LIMIT): Promise<Buffer> {
   const before = await lstat(path)
-  if (!before.isFile() || before.size > METADATA_LIMIT) throw new Error("Source metadata must be a regular file of at most 64 KiB.")
+  if (!before.isFile() || before.size > limit) throw new Error(`Source metadata must be a regular file of at most ${limit / 1024} KiB.`)
   const file = await open(path, flags)
   try {
     const stat = await file.stat()
-    if (!stat.isFile() || stat.size > METADATA_LIMIT) throw new Error("Source metadata must be a regular file of at most 64 KiB.")
+    if (!stat.isFile() || stat.size > limit) throw new Error(`Source metadata must be a regular file of at most ${limit / 1024} KiB.`)
     // The file can grow after stat. Bound the read itself, including an overflow byte.
-    const bytes = Buffer.alloc(METADATA_LIMIT + 1)
+    const bytes = Buffer.alloc(limit + 1)
     let size = 0
     while (size < bytes.length) {
       const { bytesRead } = await file.read(bytes, size, bytes.length - size, null)
       if (!bytesRead) return bytes.subarray(0, size)
       size += bytesRead
-      if (size > METADATA_LIMIT) throw new Error("Source metadata exceeds 64 KiB.")
+      if (size > limit) throw new Error(`Source metadata exceeds ${limit / 1024} KiB.`)
     }
-    throw new Error("Source metadata exceeds 64 KiB.")
+    throw new Error(`Source metadata exceeds ${limit / 1024} KiB.`)
   } finally { await file.close() }
 }
 const activeExports = new Set<string>()
@@ -119,8 +120,8 @@ export class AppSourceStore {
   private encode(value: unknown, tenant: string, id: string, purpose: string, master = this.keys()[0]!): Buffer {
     return Buffer.concat([MANIFEST, seal(Buffer.from(JSON.stringify(value)), key(master, tenant, `${purpose}/${id}`), aad(tenant, id, 0, 0))])
   }
-  private decode<T>(data: Buffer, tenant: string, id: string, purpose: string): { value: T; master: Buffer } {
-    if (!data.subarray(0, 4).equals(MANIFEST) || data.length > METADATA_LIMIT) throw new Error("The source manifest is invalid.")
+  private decode<T>(data: Buffer, tenant: string, id: string, purpose: string, limit = METADATA_LIMIT): { value: T; master: Buffer } {
+    if (!data.subarray(0, 4).equals(MANIFEST) || data.length > limit) throw new Error("The source manifest is invalid.")
     for (const master of this.keys()) {
       try { return { value: JSON.parse(unseal(data.subarray(4), key(master, tenant, `${purpose}/${id}`), aad(tenant, id, 0, 0)).toString("utf8")) as T, master } } catch { /* Try rotated/imported keys. */ }
     }
@@ -226,8 +227,9 @@ export class AppSourceStore {
    * The adapter must authorize the requester and establish the returned identity;
    * this store verifies binding and content integrity, not Microsoft permissions.
    */
-  async capture(expected: CaptureIdentity, returned: CaptureIdentity, content: AsyncIterable<Uint8Array>, encryption: ContentEncryption, bytes: number, appName: string, signal?: AbortSignal): Promise<CapturedAppSource> {
+  async capture(expected: CaptureIdentity, returned: CaptureIdentity, content: AsyncIterable<Uint8Array>, encryption: ContentEncryption, bytes: number, appName: string, signal?: AbortSignal, snapshot?: AppRestoreSnapshot): Promise<CapturedAppSource> {
     const identity = bindCapture(expected, returned), tenant = identity.tenantId
+    const configuration = snapshot ? structuredClone(validateSnapshot(snapshot, identity)) : undefined
     if (typeof appName !== "string" || !appName.trim() || appName.trim().length > 200) throw new Error("Invalid captured app name.")
     // Snapshot the helper metadata before any asynchronous work.
     const profile = { ...encryption }
@@ -262,8 +264,10 @@ export class AppSourceStore {
         createdAt: new Date().toISOString(), keyId: createHmac("sha256", master).update("TenuVault/app-sources/key-id/v1").digest("hex").slice(0, 24),
         provenance: "intune-capture", format: "win32-source-zip",
         receipt: { schema: 1, ...identity, encryptedSha256: integrity.encryptedSha256, encryptedBytes: integrity.encryptedBytes },
+        ...(configuration ? { configurationSha256: snapshotHash(configuration) } : {}),
       }
       abort(signal)
+      if (configuration) await this.privateWrite(join(stage, "configuration.tvm"), this.encode(configuration, tenant, id, "configuration", master))
       await this.privateWrite(join(stage, "manifest.tvm"), this.encode(manifest, tenant, id, "manifest", master))
       await artifact.close(); artifact = undefined; abort(signal)
       await rename(stage, join(folder, id))
@@ -278,6 +282,67 @@ export class AppSourceStore {
     const { value } = await this.manifest(tenant, id)
     if (value.provenance !== "intune-capture") throw new Error("Restore requires an earlier Intune capture. Local archives cannot be restored.")
     return value
+  }
+  async configuration(tenant: string, id: string): Promise<AppRestoreSnapshot | null> {
+    const manifest = await this.manifest(tenant, id)
+    if (manifest.value.provenance !== "intune-capture") throw new Error("Restore requires an earlier Intune capture.")
+    let data: Buffer
+    try { data = await readMetadata(join(manifest.directory, "configuration.tvm"), SNAPSHOT_LIMIT) }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT" && !manifest.value.configurationSha256) return null; throw error }
+    const value = validateSnapshot(this.decode<AppRestoreSnapshot>(data, tenant, id, "configuration", SNAPSHOT_LIMIT).value, manifest.value.receipt)
+    if (manifest.value.configurationSha256 && snapshotHash(value) !== manifest.value.configurationSha256) throw new Error("The captured app settings failed their integrity check.")
+    return value
+  }
+  /** Explicit legacy enrichment uses current settings only for the same content version. */
+  async saveConfiguration(tenant: string, id: string, snapshot: AppRestoreSnapshot): Promise<void> {
+    const manifest = await this.manifest(tenant, id)
+    if (manifest.value.provenance !== "intune-capture") throw new Error("Restore requires an earlier Intune capture.")
+    validateSnapshot(snapshot, manifest.value.receipt)
+    const target = join(manifest.directory, "configuration.tvm"), temporary = `${target}.${randomUUID()}.tmp`
+    try {
+      await this.privateWrite(temporary, this.encode(snapshot, tenant, id, "configuration", manifest.master))
+      await link(temporary, target)
+    } finally { await rm(temporary, { force: true }) }
+  }
+  async readRestoreRecord<T>(tenant: string, id: string, target: string): Promise<T | null> {
+    const manifest = await this.manifest(tenant, id)
+    try { return this.decode<T>(await readMetadata(join(manifest.directory, `restore-${sourceTenant(target)}.tvm`)), tenant, id, `restore/${target}`).value }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error }
+  }
+  async writeRestoreRecord(tenant: string, id: string, target: string, record: unknown): Promise<void> {
+    const manifest = await this.manifest(tenant, id), file = join(manifest.directory, `restore-${sourceTenant(target)}.tvm`)
+    const encoded = this.encode(record, tenant, id, `restore/${target}`, manifest.master)
+    if (encoded.length > METADATA_LIMIT) throw new Error("The restore journal exceeds its size limit.")
+    const temporary = `${file}.${randomUUID()}.tmp`
+    try { await this.privateWrite(temporary, encoded); await rename(temporary, file) }
+    finally { await rm(temporary, { force: true }) }
+  }
+  /** Every chunk is authenticated before yielding; callers must consume through the footer. */
+  async *content(tenant: string, id: string, signal?: AbortSignal): AsyncGenerator<Buffer> {
+    const manifest = await this.manifest(tenant, id)
+    const input = await open(join(manifest.directory, "artifact.tvs"), flags)
+    const secret = key(manifest.master, tenant, `artifact/${id}`), hash = createHash("sha256")
+    try {
+      if (!(await exact(input, 4)).equals(MAGIC)) throw new Error("The stored source format is invalid.")
+      let size = 0, index = 0
+      for (;;) {
+        abort(signal)
+        const header = await exact(input, 5), type = header[0]!, length = header.readUInt32BE(1)
+        if (![1, 2].includes(type) || length < 28 || length > CHUNK + 28) throw new Error("The source contains an invalid chunk.")
+        const plain = unseal(await exact(input, length), secret, aad(tenant, id, type, index))
+        try {
+          if (type === 2) {
+            const footer = JSON.parse(plain.toString("utf8")) as { size: number; chunks: number; sha256: string }
+            const sha256 = hash.digest("hex"), extra = Buffer.alloc(1)
+            if (footer.size !== size || footer.chunks !== index || footer.sha256 !== sha256 || size !== manifest.value.bytes || sha256 !== manifest.value.sha256 || (await input.read(extra, 0, 1, null)).bytesRead) throw new Error("The source integrity check failed.")
+            return
+          }
+          size += plain.length; index++
+          if (!plain.length || size > manifest.value.bytes) throw new Error("The source length is invalid.")
+          hash.update(plain); yield plain
+        } finally { plain.fill(0) }
+      }
+    } finally { secret.fill(0); await input.close() }
   }
   private async privateWrite(path: string, bytes: Buffer): Promise<void> {
     const file = await open(path, "wx", 0o600)

@@ -5,6 +5,7 @@ import { useSelectedTenant } from "~/contexts/TenantContext"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
 import { cn } from "~/lib/utils"
+import { RestoreAppDialog } from "../features/app-backup/RestoreAppDialog"
 import { IntuneAppsView } from "../features/app-backup/IntuneAppsView"
 import { bridge } from "../lib/bridge"
 import type { AppCaptureProgress, AppSourceState, CapturedAppSource, RecoveryDeviceStatus } from "../../shared/app-sources/types"
@@ -34,6 +35,7 @@ export function SourceWorkspace({ tenant }: { tenant: string }) {
   const [catalogError, setCatalogError] = useState("")
   const [notice, setNotice] = useState("")
   const [completedBackup, setCompletedBackup] = useState<Pick<CapturedAppSource, "id" | "appName"> | null>(null)
+  const [restoringSource, setRestoringSource] = useState<CapturedAppSource | null>(null)
   const [openingFolder, setOpeningFolder] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [capturing, setCapturing] = useState(false)
@@ -155,7 +157,7 @@ export function SourceWorkspace({ tenant }: { tenant: string }) {
       {deviceError && <p role="alert" className="mt-4 text-sm text-red-800">{deviceError}</p>}
     </section>
   )
-  const feedback = <>
+  const feedback = restoringSource ? null : <>
     {busy && <div role="status" className="mt-4 space-y-2 rounded-2xl bg-secondary p-4 text-sm">
       <div className="flex flex-wrap items-center justify-between gap-3"><span>{capturing ? cancelling ? "Cancellation requested. Dismiss any Windows approval prompt." : progress?.phase === "downloading" ? `Downloading installer… ${size(progress.receivedBytes)}${progress.totalBytes ? ` of ${size(progress.totalBytes)}` : ""}` : progress?.phase === "verifying" ? "Verifying and saving encrypted backup…" : progress?.phase === "windows-approval" ? "Approve Windows access, then checking installer availability…" : "Checking Microsoft authorization…" : "Exporting installer…"}</span><Button variant="outline" disabled={cancelling} onClick={() => void cancel()}>{cancelling ? "Cancelling…" : "Cancel operation"}</Button></div>
       <p>Leaving App Backup or changing tenant cancels this operation. You can switch between its two tabs.</p>
@@ -185,7 +187,7 @@ export function SourceWorkspace({ tenant }: { tenant: string }) {
         <div><h2 id="stored-sources-heading" className="text-lg font-semibold text-gray-900">Installer backups</h2><p className="mt-1 text-sm text-gray-600">{state ? `${selectedSource ? `${sources.length} selected backup` : `${state.sources.filter(source => source.provenance === "intune-capture").length} Intune captures`} · Folder: ${state.storeName}` : "Connect the source folder that holds this tenant's installers."}</p></div>
         <div className="flex flex-wrap gap-2"><Button variant="outline" disabled={busy || loading} onClick={() => { setNotice(""); setCompletedBackup(null); void reload() }}><RefreshCw className="mr-2 size-4" aria-hidden="true" />Refresh</Button><Button variant="outline" disabled={busy} onClick={() => void reconnect()}><FolderOpen className="mr-2 size-4" aria-hidden="true" />Choose installer folder</Button></div>
       </div>
-      <p className="mt-5 max-w-prose text-sm text-gray-600">Backups contain installer content retrieved from Intune. Capture runs on an enrolled Windows PC. Restore is not available in this build. Existing local archives can still be exported, but they are not Intune backups and cannot be used for restore.</p>
+      <p className="mt-5 max-w-prose text-sm text-gray-600">Backups contain installer content retrieved from Intune. Capture runs on an enrolled Windows PC. Restore a captured Win32 installer to a connected tenant as a new, unassigned app. Existing local archives can still be exported, but they are not Intune backups and cannot be used for restore.</p>
       {(loading || !feedbackSource || !sources.some(source => source.id === feedbackSource)) && feedback}
       {state?.warnings.map(warning => <p role="status" key={warning} className="mt-4 rounded-2xl bg-amber-50 p-4 text-sm text-amber-900">{warning}</p>)}
       <p className="mt-4 text-xs text-gray-600">Export needs a destination with hard-link support and preserves existing files.</p>
@@ -198,17 +200,18 @@ export function SourceWorkspace({ tenant }: { tenant: string }) {
           <p className="mt-2 text-xs text-gray-600">{source.provenance === "intune-capture" ? "Captured from Intune" : "Legacy local archive"} · {size(source.bytes)} · {new Date(source.createdAt).toLocaleString()}</p>
         </div>
         <div className="flex flex-wrap gap-2">
+          {source.provenance === "intune-capture" && <Button disabled={busy} onClick={() => setRestoringSource(source)}>Restore to tenant…</Button>}
           <Button variant="outline" disabled={busy} onClick={() => void run(id => bridge.appSources.export(tenant, id, source.id), "Installer exported.", source.id)}><ArrowDownToLine className="mr-2 size-4" aria-hidden="true" />{source.provenance === "intune-capture" ? "Export installer" : "Export archive"}</Button>
           <Button variant="outline" disabled={busy || openingFolder !== null} onClick={() => void openFolder(source.id)}><FolderOpen className="mr-2 size-4" aria-hidden="true" />{openingFolder === source.id ? "Opening folder…" : "Open local folder"}</Button>
         </div>
         <details open={selectedSource === source.id || undefined} className="min-w-0 basis-full text-xs text-gray-600">
           <summary className="cursor-pointer rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">File details</summary>
           <p className="mt-2 break-all font-mono">SHA-256: {source.sha256}</p>
-          <p className="mt-1">{source.provenance === "intune-capture" ? `Content version ${source.receipt.contentVersion}. Captured installer payload; restore is not available in this build.` : "Previously selected local file. Not an Intune backup; unavailable for restore."}</p>
+          <p className="mt-1">{source.provenance === "intune-capture" ? `Content version ${source.receipt.contentVersion}. Captured installer payload available for restore after reviewing its app settings.` : "Previously selected local file. Not an Intune backup; unavailable for restore."}</p>
         </details>
         {feedbackSource === source.id && <div className="min-w-0 basis-full">{feedback}</div>}
       </li>)}</ul> : <p className="py-8 text-sm text-gray-600">{!state ? "The source store is unavailable. Reconnect it and check the matching recovery key." : selectedSource ? "This backup is unavailable in this tenant’s connected folder. View all backups or reconnect its original folder." : search ? "No stored packages match your search." : "No Intune backups yet. Choose a Win32 app in the Intune apps tab to start."}</p>}
     </section>}
-
+    {restoringSource && <RestoreAppDialog tenant={tenant} source={restoringSource} onClose={() => setRestoringSource(null)} onBusy={setBusy} />}
   </>
 }

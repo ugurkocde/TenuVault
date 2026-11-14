@@ -1,10 +1,13 @@
 import { basename, join } from "node:path"
 import { lstat, readdir } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
-import type { AppCaptureProgress, AppSourceState, CapturedAppSource, RecoveryDeviceStatus, AppSourcesBridge, IntuneAppDetails, IntuneAppScript } from "../../shared/app-sources/types"
+import type { AppRestoreProgress, AppRestoreReview, AppRestoreResult, AppCaptureProgress, AppSourceState, CapturedAppSource, RecoveryDeviceStatus, AppSourcesBridge, IntuneAppDetails, IntuneAppScript } from "../../shared/app-sources/types"
+import { restoreBody, snapshotHash, type AppRestoreSnapshot } from "../app-backup/restore-snapshot"
 import { AppSourceStore, sourceTenant } from "./store"
 
 export interface AppSourceHost {
+  restore?: (store: AppSourceStore, source: CapturedAppSource, snapshot: AppRestoreSnapshot, target: string, name: string, signal: AbortSignal, progress: (value: AppRestoreProgress) => void) => Promise<AppRestoreResult>
+  loadRestoreSettings?: (tenant: string, appId: string) => Promise<AppRestoreSnapshot>
   assignments?: (tenant: string, appId: string) => ReturnType<AppSourcesBridge["assignments"]>
   capture?: (tenant: string, appId: string, jobId: string, store: AppSourceStore, signal: AbortSignal, progress: (value: AppCaptureProgress) => void) => Promise<CapturedAppSource>
   ensureKeys?: () => void
@@ -27,7 +30,7 @@ export interface AppSourceHost {
 
 /** Local actions are free for every configured tenant and need no live token. */
 export class AppSourceService {
-  private readonly jobs = new Map<string, { tenant: string; abort: AbortController; progress?: AppCaptureProgress }>()
+  private readonly jobs = new Map<string, { tenant: string; abort: AbortController; progress?: AppCaptureProgress; restoreProgress?: AppRestoreProgress }>()
   private readonly deviceChecks = new Map<string, Promise<RecoveryDeviceStatus>>()
   private readonly appLoads = new Map<string, ReturnType<AppSourcesBridge["apps"]>>()
   private readonly assignmentChecks = new Map<string, ReturnType<AppSourcesBridge["assignments"]>>()
@@ -109,6 +112,48 @@ export class AppSourceService {
   captureProgress(raw: unknown, operation: unknown): AppCaptureProgress | null {
     const tenant = this.tenant(raw), job = this.jobs.get(sourceTenant(operation))
     return job?.tenant === tenant ? job.progress ?? null : null
+  }
+  async restoreReview(raw: unknown, source: unknown): Promise<AppRestoreReview> {
+    const tenant = this.tenant(raw), id = sourceTenant(source), store = this.store(tenant)
+    const captured = await store.capturedSource(tenant, id), snapshot = await store.configuration(tenant, id)
+    if (!snapshot) return { settingsHash: null, observedAt: null, currentSettings: false, name: captured.appName, version: null, publisher: null, installCommand: null, uninstallCommand: null, runAs: null, detectionRules: 0, requirementRules: 0, blocker: null }
+    let blocker: string | null = null
+    try { restoreBody(snapshot, captured.appName) } catch (error) { blocker = error instanceof Error ? error.message : "These app settings cannot be restored." }
+    const app = snapshot.app, text = (key: string) => typeof app[key] === "string" ? app[key] as string : null
+    const rules = Array.isArray(app.rules) ? app.rules as Record<string, unknown>[] : []
+    const experience = app.installExperience as Record<string, unknown> | null
+    return { settingsHash: snapshotHash(snapshot), observedAt: snapshot.observedAt, currentSettings: snapshot.origin === "current-settings", name: text("displayName") || captured.appName, version: text("displayVersion"), publisher: text("publisher"), installCommand: text("installCommandLine"), uninstallCommand: text("uninstallCommandLine"), runAs: typeof experience?.runAsAccount === "string" ? experience.runAsAccount : null, detectionRules: rules.filter(r => r.ruleType === "detection").length, requirementRules: rules.filter(r => r.ruleType === "requirement").length, blocker }
+  }
+  async loadRestoreSettings(raw: unknown, source: unknown): Promise<AppRestoreReview> {
+    const tenant = this.tenant(raw), id = sourceTenant(source), store = this.store(tenant)
+    if (this.jobs.size) throw new Error("Finish the current installer operation before loading restore settings.")
+    const captured = await store.capturedSource(tenant, id)
+    if (!await store.configuration(tenant, id)) {
+      if (!this.host.loadRestoreSettings) throw new Error("Source settings cannot be loaded in this build.")
+      const settings = await this.host.loadRestoreSettings(tenant, captured.receipt.appId)
+      this.tenant(tenant)
+      if (this.jobs.size) throw new Error("An installer operation started. Retry after it finishes.")
+      await store.saveConfiguration(tenant, id, settings)
+    }
+    return this.restoreReview(tenant, id)
+  }
+  restore(raw: unknown, operation: unknown, source: unknown, target: unknown, name: unknown, settingsHash: unknown): Promise<AppRestoreResult> {
+    const destination = this.tenant(target), sourceId = sourceTenant(source), operationId = sourceTenant(operation)
+    if (typeof name !== "string" || typeof settingsHash !== "string" || !/^[a-f0-9]{64}$/.test(settingsHash)) return Promise.reject(new Error("Review the app settings and destination before restoring."))
+    return this.job(raw, operation, async (tenant, signal) => {
+      const store = this.store(tenant), captured = await store.capturedSource(tenant, sourceId), snapshot = await store.configuration(tenant, sourceId)
+      if (!snapshot || snapshotHash(snapshot) !== settingsHash) throw new Error("The app settings changed. Review them before restoring.")
+      if (!this.host.restore) throw new Error("App restore is unavailable in this build.")
+      restoreBody(snapshot, name); this.tenant(destination)
+      return this.host.restore(store, captured, snapshot, destination, name, signal, value => {
+        const job = this.jobs.get(operationId)
+        if (job?.tenant === tenant) job.restoreProgress = value
+      })
+    })
+  }
+  restoreProgress(raw: unknown, operation: unknown): AppRestoreProgress | null {
+    const tenant = this.tenant(raw), job = this.jobs.get(sourceTenant(operation))
+    return job?.tenant === tenant ? job.restoreProgress ?? null : null
   }
   export(raw: unknown, operation: unknown, source: unknown): Promise<boolean> {
     if (typeof source !== "string") return Promise.reject(new Error("Select a stored source."))

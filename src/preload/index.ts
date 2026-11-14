@@ -21,6 +21,10 @@ function subscribe<T>(channel: string, listener: (payload: T) => void): () => vo
 
 const bridge: TenuVaultPreloadBridge = {
   appSources: {
+    restoreReview: (tenant, source) => invoke("appSources:restoreReview", tenant, source),
+    loadRestoreSettings: (tenant, source) => invoke("appSources:loadRestoreSettings", tenant, source),
+    restore: (tenant, operation, source, target, name, settingsHash) => invoke("appSources:restore", tenant, operation, source, target, name, settingsHash),
+    restoreProgress: (tenant, operation) => invoke("appSources:restoreProgress", tenant, operation),
     assignments: (tenant, appId) => invoke("appSources:assignments", tenant, appId),
     capture: (tenant, operation, appId) => invoke("appSources:capture", tenant, operation, appId),
     captureProgress: (tenant, operation) => invoke("appSources:captureProgress", tenant, operation),

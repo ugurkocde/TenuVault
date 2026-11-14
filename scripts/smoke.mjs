@@ -921,6 +921,8 @@ await check("App Backup keeps stored access independent of sign-in and exposes g
 })
 
 await checkAppBackupCompletion({ check, evaluate, waitForCondition, screenshot, assert, send })
+// Focused local App Backup validation; CI leaves this unset and runs the complete suite.
+if (process.env.TENUVAULT_SMOKE_SECTION === "app-backup") await finish()
 
 await check("Backup Reader card offers setup with a guide link, and the schedule says who runs backups", async () => {
   await go("#/portal/settings?section=background", "Backup Reader")
