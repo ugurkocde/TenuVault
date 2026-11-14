@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { DisclaimerAcknowledgements, disclaimerGuard } from "../src/main/disclaimer"
 import { ACKNOWLEDGEMENT_REQUIRED, DISCLAIMER_VERSION } from "../src/shared/disclaimer"
 import { tenantWriteTargets } from "../src/shared/tenant-writes"
@@ -106,4 +106,15 @@ describe("disclaimerGuard", () => {
     const refused = await disclaimerGuard(acks)(post("/api/restore-backup", { tenantId: A, mode: "copy", targetTenants: [{ tenantId: B }, { tenantId: C }] }))
     expect(await refused?.json()).toMatchObject({ acknowledgement: { tenantIds: [C] } })
   })
+})
+
+
+it("guards native restores against the destination's acceptance without invoking the write", async () => {
+  const acks = new DisclaimerAcknowledgements(memoryStore()), write = vi.fn(async () => ({ restored: true }))
+  acks.accept([A], () => null)
+  expect(await acks.run([B], write)).toMatchObject({ acknowledgement: { tenantIds: [B] } })
+  expect(write).not.toHaveBeenCalled()
+  acks.accept([B], () => null)
+  expect(await acks.run([B], write)).toEqual({ restored: true })
+  expect(write).toHaveBeenCalledOnce()
 })

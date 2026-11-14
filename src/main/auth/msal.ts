@@ -12,6 +12,8 @@ import { CONSENT_ROLES_TEXT, FIRST_SIGN_IN_TIMEOUT_MESSAGE } from "../../shared/
 import { isMicrosoftLoginUrl } from "../../shared/security"
 import { fetchNetworkClient } from "./network-client"
 import { loopbackSignIn } from "./loopback-sign-in"
+import { deviceCodeSignIn } from "./device-code-sign-in"
+import type { AppDeviceCode } from "../../shared/app-sources/types"
 
 export interface AuthHost {
   /**
@@ -207,6 +209,7 @@ export class AuthManager {
   /** Rejects the first sign-ins (signIn) waiting for the browser, for cancelInteractive. */
   private readonly cancels = new Map<(error: Error) => void, string>()
   private readonly interactive = new Map<string, Promise<AuthenticationResult>>()
+  private readonly interactiveControls = new Map<object, { tenant: string; controller: AbortController }>()
 
   constructor(private readonly host: AuthHost) {}
 
@@ -345,6 +348,15 @@ export class AuthManager {
     return accounts.find((account) => account.homeAccountId === homeAccountId) ?? null
   }
 
+  async signInWithDeviceCode(tenant: string, clientId: string, onCode: (code: AppDeviceCode) => void, signal: AbortSignal): Promise<void> {
+    // Switching methods ends only this tenant's waiting browser attempts.
+    for (const entry of this.interactiveControls.values()) if (entry.tenant.toLowerCase() === tenant.toLowerCase()) entry.controller.abort(new SignInCancelledError())
+    const result = await deviceCodeSignIn(tenant, request => this.app(clientId).acquireTokenByDeviceCode(request), onCode, signal)
+    signal.throwIfAborted()
+    const account = result.account!
+    this.host.accountStore.set({ tenantId: tenant.toLowerCase(), clientId, username: account.username, name: account.name, homeAccountId: account.homeAccountId })
+  }
+
   /** One interactive prompt per tenant, scope, prompt and account hint at a time; parallel callers share it. */
   private acquireInteractive(
     clientId: string,
@@ -364,8 +376,10 @@ export class AuthManager {
     // first sign-in can be cancelled, so a reauthentication started elsewhere keeps waiting.
     const owner = {}
     const controller = new AbortController()
+    this.interactiveControls.set(owner, { tenant, controller })
     const cancel = (error: Error) => controller.abort(error)
     const ended = () => {
+      this.interactiveControls.delete(owner)
       clearTimeout(deadline)
       if (this.link?.owner === owner) this.link = null
       this.cancels.delete(cancel)

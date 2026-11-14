@@ -1,3 +1,5 @@
+import type { AcknowledgementRequired } from "../disclaimer"
+
 interface SourceDescriptor {
   id: string
   tenantId: string
@@ -27,6 +29,7 @@ export interface CaptureIdentity {
 export interface CapturedAppSource extends SourceDescriptor {
   provenance: "intune-capture"
   format: "win32-source-zip"
+  configurationSha256?: string
   receipt: CaptureIdentity & { schema: 1; encryptedSha256: string; encryptedBytes: number }
 }
 
@@ -70,6 +73,13 @@ export type AppCapturePhase = "authorizing" | "windows-approval" | "downloading"
 export interface AppCaptureProgress { phase: AppCapturePhase; receivedBytes: number; totalBytes: number | null }
 
 export interface AppSourcesBridge {
+  deviceSignIn: (tenantId: string) => Promise<AppDeviceCode>
+  deviceSignInStatus: (tenantId: string) => Promise<AppDeviceSignInStatus | null>
+  cancelDeviceSignIn: (tenantId: string) => Promise<void>
+  restoreReview: (tenantId: string, sourceId: string) => Promise<AppRestoreReview>
+  loadRestoreSettings: (tenantId: string, sourceId: string) => Promise<AppRestoreReview>
+  restore: (tenantId: string, operationId: string, sourceId: string, targetTenantId: string, name: string, settingsHash: string) => Promise<AppRestoreResult | AcknowledgementRequired>
+  restoreProgress: (tenantId: string, operationId: string) => Promise<AppRestoreProgress | null>
   assignments: (tenantId: string, appId: string) => Promise<AppAssignmentCheck>
   capture: (tenantId: string, operationId: string, appId: string) => Promise<CapturedAppSource>
   captureProgress: (tenantId: string, operationId: string) => Promise<AppCaptureProgress | null>
@@ -84,6 +94,30 @@ export interface AppSourcesBridge {
   cancel: (tenantId: string, operationId: string) => Promise<void>
   deviceStatus: (tenantId: string) => Promise<RecoveryDeviceStatus>
   signIn: (tenantId: string) => Promise<void>
+}
+
+export interface AppDeviceCode { verificationUri: string; userCode: string; expiresAt: string }
+export interface AppDeviceSignInStatus { status: "waiting" | "completed" | "failed"; error?: string }
+
+export interface AppRestoreReview {
+  settingsHash: string | null
+  observedAt: string | null
+  currentSettings: boolean
+  name: string
+  version: string | null
+  publisher: string | null
+  installCommand: string | null
+  uninstallCommand: string | null
+  runAs: string | null
+  detectionRules: number
+  requirementRules: number
+  blocker: string | null
+}
+export interface AppRestoreResult { appId: string; tenantId: string; name: string; contentVersion: string; sourceId: string }
+export interface AppRestoreProgress {
+  phase: "verifying" | "creating" | "uploading" | "committing" | "publishing" | "completed"
+  uploadedBytes: number
+  totalBytes: number
 }
 
 export interface IntuneBackupApp {

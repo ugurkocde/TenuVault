@@ -1,0 +1,53 @@
+{
+  "verifiedAt": "2026-11-14T17:00:54.095Z",
+  "layer": "Lokka Microsoft MCP",
+  "graphApiVersion": "beta",
+  "sameDestinationAppId": true,
+  "matchingApps": 1,
+  "publishingState": "published",
+  "isAssigned": false,
+  "assignmentCount": 0,
+  "contentVersion": "1",
+  "files": [
+    {
+      "size": 123779448,
+      "sizeEncrypted": 123779504,
+      "isCommitted": true,
+      "uploadState": "commitFileSuccess"
+    }
+  ],
+  "sourceVersion": "1",
+  "comparedFields": [
+    "description",
+    "publisher",
+    "isFeatured",
+    "fileName",
+    "installCommandLine",
+    "uninstallCommandLine",
+    "allowedArchitectures",
+    "setupFilePath",
+    "minimumSupportedWindowsRelease",
+    "displayVersion",
+    "allowAvailableUninstall",
+    "rules",
+    "installExperience",
+    "returnCodes"
+  ],
+  "settingsMismatches": [],
+  "rulesSha256": "edfa95b22c988f4ac2870ea145e185482d841bfa55e9257ecfcd5cc69eda54a1",
+  "installationSettingsSha256": "48f5c6c2b49517faa49201317a8a2a0a3816ff71846ee01ef3ea6b31c3558900",
+  "defaultScopeTag": true,
+  "pagingObserved": true,
+  "continuationRead": true,
+  "invalidSelectRejected": true,
+  "windows": {
+    "packagedPreview": true,
+    "elevated": false,
+    "uiCompleted": true,
+    "restartRetryCompleted": true,
+    "bothTenantSessionsPersisted": true,
+    "retainedSourceCount": 3,
+    "focusedTestsPassed": 52,
+    "deploymentAttempted": false
+  }
+}

@@ -1,6 +1,6 @@
 ---
 title: "App Backup: Intune installers"
-description: Back up Win32 installer content from Intune on an enrolled Windows PC, keep it encrypted and export it offline. App Backup is free.
+description: Back up Win32 installer content from Intune on an enrolled Windows PC, keep it encrypted, export it offline and restore it to another tenant. App Backup is free.
 faq:
   - question: "Is TenuVault App Backup free?"
     answer: "Yes. App Backup is completely free for every configured tenant. It does not require a paid product license or Community tenant selection. Microsoft authentication and Intune permissions still apply to tenant reads."
@@ -11,12 +11,12 @@ faq:
   - question: "Can I still export a file saved by an earlier version?"
     answer: "Yes. Earlier administrator-selected files remain available as legacy local archives. You can export them offline with the matching recovery key, but they are not captured Intune backups and cannot be used for restore."
   - question: "Can App Backup restore apps?"
-    answer: "Restore is not available in this build. Its required input will be an installer captured by an earlier successful Intune backup, with its app and content identity. Arbitrary local packages and metadata-only backups do not qualify."
+    answer: "Yes. Restore to tenant creates a new, unassigned Win32 app in a connected tenant using an earlier captured installer and reviewed app settings. Arbitrary local packages and metadata-only backups do not qualify. Apps with dependencies, supersedence or Intune-hosted install scripts are not supported yet."
 ---
 
 **App Backup is completely free** for every configured tenant. Open it below **Backup & Restore** in the desktop sidebar.
 
-App Backup's purpose is to retrieve installer content from Intune and retain an encrypted backup. The **Windows capture preview** retrieves system-context Win32 installers on an enrolled Windows PC. Restore and macOS installer capture are not available yet.
+App Backup's purpose is to retrieve installer content from Intune and retain an encrypted backup. The **Windows capture preview** retrieves system-context Win32 installers on an enrolled Windows PC. Restore can upload a captured Win32 installer to the same or another connected tenant. macOS installer capture is not available yet.
 
 The earlier manual-file workflow has been removed. Files already saved by an earlier build remain available as **Legacy local archive**, with an export action. They are not counted as Intune captures.
 
@@ -32,7 +32,7 @@ The earlier manual-file workflow has been removed. Files already saved by an ear
 | Browse, reconnect and export legacy archives | Available offline with the matching recovery key |
 | Retrieve Windows installer content from Intune | Windows preview, system context, up to 2 GiB |
 | Retrieve macOS PKG or DMG installer content from Intune | Not available in this build |
-| Restore an app using a captured installer | Not available in this build |
+| Restore an app using a captured installer | Create a new, unassigned Win32 app in a connected tenant; restrictions below |
 
 macOS support means retrieving the installer from Intune, not downloading a substitute from a vendor or copying an installed `.app` directory. It needs its own tested device adapter. Windows app metadata can be viewed on a Mac; a Mac cannot perform the Windows enrollment check.
 
@@ -91,7 +91,7 @@ Open **Backups** to view the encrypted folder for the selected tenant. Intune ca
 
 Each stored item also offers **Open local folder**. This folder contains encrypted backup files; use **Export installer** in TenuVault to produce a usable installer payload. When viewing one completed backup, **View all backups** returns to the full catalog.
 
-An installer capture must match the requested tenant, live app and committed version, then pass HMAC, size and plaintext SHA-256 checks before publication. Its receipt retains a hash of the opaque device content service identifier; that fingerprint is not a Microsoft Graph file ID. Interrupted or failed staging is not listed as a backup. The Windows payload is a source ZIP, not a byte-identical copy of the outer `.intunewin` originally uploaded to Intune. Restore additionally needs a compatible packaging implementation and Microsoft authorization; a stored payload alone does not mean restore is ready.
+An installer capture must match the requested tenant, live app and committed version, then pass HMAC, size and plaintext SHA-256 checks before publication. Its receipt retains a hash of the opaque device content service identifier; that fingerprint is not a Microsoft Graph file ID. Interrupted or failed staging is not listed as a backup. The Windows payload is a source ZIP, not a byte-identical copy of the outer `.intunewin` originally uploaded to Intune. New captures also retain encrypted app settings. Restore verifies the captured ZIP, encrypts it with fresh upload keys, uploads it through Microsoft Graph beta and checks Intune’s content commit and app publication before reporting success.
 
 ## Export a backup or legacy archive
 
@@ -102,6 +102,37 @@ An installer capture must match the requested tenant, live app and committed ver
 Export preserves existing destination files and checks the encrypted chunks and full file hash before publishing. The destination filesystem must support hard links. On macOS and Linux, exported files initially have owner-only permissions.
 
 Export remains available while signed out, provided the tenant is configured and the matching recovery key is available. Switching between App Backup's tabs keeps the operation running. Leaving App Backup or switching tenants cancels an unfinished capture or export.
+
+## Restore to the same or another tenant
+
+1. Connect the destination tenant in TenuVault. App Backup and this restore flow remain free for every configured tenant.
+2. In the source tenant, open **App Backup → Backups**, then **Restore to tenant…** on a captured installer.
+3. Review the app settings. For a backup created before settings snapshots were available, choose **Load current app settings**. This reads the source tenant and accepts settings only when the committed content version still matches the captured installer. These are labeled as current settings, not settings from the original backup date. If the source session has expired, use **Reconnect source and load settings**; destination sign-in stays separate. If the source app changed version or is unavailable, make a new backup instead.
+4. Choose the destination tenant and enter the new app name. TenuVault reuses its existing Microsoft session. Sign in only if that destination has no active session. The account needs Intune permission to create apps, and the configured registration needs delegated `DeviceManagementApps.ReadWrite.All`.
+5. Confirm the destination and choose **Restore unassigned app**. Before the first change to that tenant, review and accept the tenant disclaimer. Cancelling it makes no changes. The installer is verified, encrypted with fresh keys and uploaded without plaintext staging files.
+6. Wait for Intune to confirm the content and publish the app. Choose **Open restored app** to inspect it in the destination tenant before assigning it.
+
+If you are operating TenuVault remotely, choose **Use a device code** in the destination sign-in section. Open the displayed Microsoft address on another device, enter the short code and sign in to the destination tenant. TenuVault keeps the resulting session on the computer running the restore. Closing the dialog or choosing **Cancel device sign-in** stops the pending request. Microsoft MFA and Conditional Access still apply; use browser sign-in on the TenuVault computer if your organization does not allow device-code authentication.
+
+Device-code authentication requires **Allow public client flows** to be enabled under the destination app registration's **Authentication** settings in Entra. TenuVault does not change that setting automatically. If Microsoft accepts the user sign-in but TenuVault reports `invalid_client`, check that setting or use browser sign-in. See [Microsoft's public-client configuration guidance](https://learn.microsoft.com/en-us/entra/identity-platform/scenario-desktop-app-configuration).
+
+Restore creates a new app; it does not overwrite an existing destination app or install anything. It copies supported app metadata, the logo, install/uninstall commands, detection and requirement rules (including inline scripts), installation settings, return codes and MSI information. Review tenant-specific URLs, commands and script contents before deployment.
+
+Assignments, group IDs, assignment filters, categories and custom scope tags are not copied. The new app uses the destination's default scope tag. Apps with dependencies, supersedence or Intune-hosted install/uninstall script references require additional mapping or script-upload support and are blocked before creation. This is a deliberate restore operation, not continuous synchronization.
+
+Capture requires an enrolled Windows PC. Restoring an existing supported Win32 backup uses Microsoft Graph and does not require enrollment in the destination or Windows elevation. The source tenant can be offline when the backup already contains its settings; destination access is always required.
+
+### Interrupted restores
+
+Leaving App Backup or switching the source tenant stops an unfinished restore. An unassigned draft app may remain in Intune; TenuVault does not delete it automatically. Retry with the **same backup, destination and app name** to continue that app. The encrypted backup folder keeps its restore journal, including the destination binding and upload encryption material, so keep the matching recovery key safe.
+
+Only one process or computer can restore a particular backup to a particular destination at a time. The backup folder keeps an encrypted ownership record throughout the operation. After a crash, the same TenuVault installation can recover its stopped process’s lock. A lock from another computer or an unknown owner remains blocked; return to the owning installation to recover it, or review the interrupted operation before manually removing its lock. Do not remove a lock while another restore could still be running.
+
+If Intune reports a permanent upload-storage failure, the draft is retained for review. Intune may refuse renewal in this state; TenuVault does not delete the draft or create a replacement automatically.
+
+If a creation response was lost, TenuVault searches for its unique restore marker and refuses to create a second app when the outcome cannot be confirmed. If someone assigns or changes an unfinished destination app, restore stops for review. A successful repeat returns the existing restored app. Creating another copy from the same backup in the same destination is not currently supported.
+
+Legacy local archives are export-only and cannot be selected for restore.
 
 ## Reconnect a retained folder
 
