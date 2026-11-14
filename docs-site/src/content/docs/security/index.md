@@ -43,6 +43,7 @@ TenuVault keeps its working data in an encrypted store in your user profile, pro
 * Your license key and license activations.
 * The encryption keys for your backups.
 * The Backup Reader's private key, when you set one up. It is never shown or exported.
+* What TenuVault observed about each tenant's connection, so it can tell you when something changed: the permission names in your last token, Microsoft's error code when a sign-in was refused, and which policy types each of your last backups could read. It holds no tokens, names or error messages; the account that signed in is kept as its ID.
 
 If the operating system cannot provide this protection, the packaged app refuses to start rather than store this data in plain text.
 

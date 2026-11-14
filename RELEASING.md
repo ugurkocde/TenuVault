@@ -77,6 +77,13 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 Put these in the next stable release's notes, then remove them here.
 
+- **Connection checks.** TenuVault asks Microsoft for a new token of the signed-in admin when it
+  starts (for the tenant that is open only), after a sign-in, and when a backup of a tenant starts
+  and ends, and for a new Backup Reader token before a scheduled backup that runs with the reader.
+  Admins who watch the Entra sign-in logs see more non-interactive sign-ins of the TenuVault app
+  registration than before. No new destination and no new permission: the firewall allow list
+  does not change.
+
 - **Setup diagnostics.** New installs ask once on the welcome screen whether to share setup
   diagnostics with `POST https://www.tenuvault.com/api/desktop-events` (schema 1); turning it off
   or the policy sends `POST /api/desktop-events/erase`. The website's ingest and erase endpoints
