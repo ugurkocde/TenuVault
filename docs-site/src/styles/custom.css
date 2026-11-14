@@ -855,3 +855,32 @@ button.sl-menu-button:has(~ :popover-open),
 		transform: none;
 	}
 }
+
+/* App captures retain their aspect ratio and open at native resolution for detail. */
+.sl-markdown-content .docs-screenshot {
+	margin: 1.75rem 0;
+}
+.sl-markdown-content .docs-screenshot > a {
+	display: block;
+	border: 1px solid var(--tv-line);
+	border-radius: var(--tv-radius-md);
+	overflow: hidden;
+	background: #f5f4f1;
+	cursor: zoom-in;
+}
+.sl-markdown-content .docs-screenshot > a:focus-visible {
+	outline: 2px solid var(--tv-focus);
+	outline-offset: 4px;
+}
+.sl-markdown-content .docs-screenshot img {
+	display: block;
+	width: 100%;
+	height: auto;
+	margin: 0;
+}
+.sl-markdown-content .docs-screenshot figcaption {
+	margin-top: 0.625rem;
+	font-size: 0.875rem;
+	line-height: 1.6;
+	color: var(--sl-color-gray-2);
+}

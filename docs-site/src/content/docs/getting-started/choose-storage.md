@@ -28,6 +28,13 @@ You can change the plan later on the **License** page.
 | Other computers can read the backups | With the recovery key and a copy of the folder | Every admin with access to the storage account, no key needed |
 | Before the first backup | Saving the recovery key is strongly recommended | Nothing else |
 
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/setup-storage.webp" aria-label="Open full-size screenshot: setup storage">
+    <img src="/images/screenshots/setup-storage.webp" alt="The Storage step lets you choose this device or your Azure storage account" width="2880" height="2000" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>The Storage step lets you choose this device or your Azure storage account. This example uses local storage. Select the image to view it full size.</figcaption>
+</figure>
+
 ## Option 1: This device, encrypted
 
 1. Select **This device, encrypted**. It is selected by default.

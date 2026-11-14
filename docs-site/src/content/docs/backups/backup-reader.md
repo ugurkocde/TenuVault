@@ -98,6 +98,13 @@ Having these values ready saves a round of messages with each administrator:
 1. Open **Settings** > **Background runner**, find the **Backup Reader** card, choose the tenant and select **Set up the Backup Reader**.
 2. Select **Save certificate**. This saves the public certificate as a `.cer` file. The private key stays encrypted on this computer and TenuVault cannot show or export it, so nobody needs to ask you for it.
 
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/settings-background.webp" aria-label="Open full-size screenshot: settings background">
+    <img src="/images/screenshots/settings-background.webp" alt="Backup Reader setup starts in Settings, under Background runner" width="2880" height="2000" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Backup Reader setup starts in Settings, under Background runner. This example has no reader configured. Select the image to view it full size.</figcaption>
+</figure>
+
 ### Step 2, your Entra administrator: create the app registration
 
 Send them the saved `.cer` file, the script (**Copy setup script** on the card, or the [download](/downloads/New-TenuVaultBackupReader.ps1)), and whether you agreed on `-IncludeDeviceCategories`. You can copy and adjust this request:

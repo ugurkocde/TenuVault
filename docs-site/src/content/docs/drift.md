@@ -89,6 +89,13 @@ The original property path is shown in small print under each name. Values show 
 
 A change marked **Reverted** was already reverted with TenuVault. A change marked **Result of Revert** appeared because you reverted the item between the two backups; no action is needed.
 
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/drift-results.webp" aria-label="Open full-size screenshot: drift results">
+    <img src="/images/screenshots/drift-results.webp" alt="Drift results group added, modified and deleted items, with filters for reviewing changes" width="2880" height="2000" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Drift results group added, modified and deleted items, with filters for reviewing changes. Example comparison data. Select the image to view it full size.</figcaption>
+</figure>
+
 ## What drift detection compares
 
 * All types both backups include. If one backup left out apps, apps are not compared. See [What gets backed up](/backups/coverage/).

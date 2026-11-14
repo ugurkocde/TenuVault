@@ -53,6 +53,13 @@ To copy policies to several tenants, or to keep updating the same policies in a 
 
 You can plan at most 25 policies at once.
 
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/changes.webp" aria-label="Open full-size screenshot: changes">
+    <img src="/images/screenshots/changes.webp" alt="Dev to Prod names the source and destination before you select policies and plan" width="2880" height="2000" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Dev to Prod names the source and destination before you select policies and plan. Initial workspace; no promotion was planned or applied. Select the image to view it full size.</figcaption>
+</figure>
+
 ### Review and apply
 
 1. In **Promotions**, click the planned promotion. Each policy shows **ready** or **blocked**, whether it creates a new policy or updates an existing one, and its findings. Blocking findings must be resolved before the change set can be applied.
@@ -82,6 +89,13 @@ Upgrades need a recorded install to compare against.
 2. In **Record an installed baseline**, find the OpenIntuneBaseline deployment and click **Record**. The list shows deployments made on this device, including earlier Quick Start runs, with the policies they created or updated.
 
 Recording stores the exact OpenIntuneBaseline content as the base of later comparisons. When the deployed commit is not recorded, the baseline is recorded with unknown provenance and upgrades are compared manually. To deploy a baseline first, see [OpenIntuneBaseline](/baselines/quick-start/).
+
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/baseline-upgrades.webp" aria-label="Open full-size screenshot: baseline upgrades">
+    <img src="/images/screenshots/baseline-upgrades.webp" alt="Baseline upgrades lists installed baselines before comparisons can begin" width="2880" height="2000" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Baseline upgrades lists installed baselines before comparisons can begin. Initial workspace with no recorded installs. Select the image to view it full size.</figcaption>
+</figure>
 
 ### Compare with a newer version
 

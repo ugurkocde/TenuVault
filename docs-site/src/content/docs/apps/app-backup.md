@@ -49,6 +49,13 @@ macOS support means retrieving the installer from Intune, not downloading a subs
 
 **Download** appears only when a script's actual content can be retrieved and decoded. A command line referring to a script inside the installer does not make that file available for download. Downloading a script does not execute it or back up the installer payload. Print uses the operating system's printer dialog.
 
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/app-backup-apps.webp" aria-label="Open full-size screenshot: app backup apps">
+    <img src="/images/screenshots/app-backup-apps.webp" alt="App Backup lists the selected tenant&#x27;s Win32 apps separately from its stored installers" width="2880" height="2000" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>App Backup lists the selected tenant&#x27;s Win32 apps separately from its stored installers. Fictional inventory; capture requires an enrolled Windows PC. Select the image to view it full size.</figcaption>
+</figure>
+
 ## Back up a Windows installer
 
 ### Before you start
@@ -135,6 +142,13 @@ Each stored item also offers **Open local folder**. This folder contains encrypt
 
 An installer capture must match the requested tenant, live app and committed version, then pass HMAC, size and plaintext SHA-256 checks before publication. Its receipt retains a hash of the opaque device content service identifier; that fingerprint is not a Microsoft Graph file ID. Interrupted or failed staging is not listed as a backup. The Windows payload is a source ZIP, not a byte-identical copy of the outer `.intunewin` originally uploaded to Intune. New captures also retain encrypted app settings. Restore verifies the captured ZIP, encrypts it with fresh upload keys, uploads it through Microsoft Graph beta and checks Intune’s content commit and app publication before reporting success.
 
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/app-backup-installers.webp" aria-label="Open full-size screenshot: app backup installers">
+    <img src="/images/screenshots/app-backup-installers.webp" alt="Backups identifies a captured installer and offers export and restore actions" width="2880" height="2000" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Backups identifies a captured installer and offers export and restore actions. Fictional encrypted-backup catalog. Select the image to view it full size.</figcaption>
+</figure>
+
 ## Export a backup or legacy archive
 
 1. Open **Backups** and find the captured installer.
@@ -181,6 +195,13 @@ If Intune reports a permanent upload-storage failure, the draft is retained for 
 If a creation response was lost, TenuVault searches for its unique restore marker and refuses to create a second app when the outcome cannot be confirmed. If someone assigns or changes an unfinished destination app, restore stops for review. A successful repeat returns the existing restored app. Creating another copy from the same backup in the same destination is not currently supported.
 
 Legacy local archives are export-only and cannot be selected for restore.
+
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/app-backup-restore.webp" aria-label="Open full-size screenshot: app backup restore">
+    <img src="/images/screenshots/app-backup-restore.webp" alt="Review saved app settings and choose the destination before restoring an unassigned app" width="1440" height="1522" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Review saved app settings and choose the destination before restoring an unassigned app. Example settings; no upload or restore was performed. Select the image to view it full size.</figcaption>
+</figure>
 
 ## Reconnect a retained folder
 

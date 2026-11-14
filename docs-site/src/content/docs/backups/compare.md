@@ -31,6 +31,13 @@ Open **Backup & Restore** and stay on the **Backup History** tab. In the **Backu
 
 The same numbers appear in **Backup Details** as **Changes since the previous backup**.
 
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/backup-history.webp" aria-label="Open full-size screenshot: backup history">
+    <img src="/images/screenshots/backup-history.webp" alt="The Changes column gives a quick comparison with the previous backup" width="2880" height="2000" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>The Changes column gives a quick comparison with the previous backup. Example tenant data. Select the image to view it full size.</figcaption>
+</figure>
+
 ## See what changed
 
 1. In the **Backup Timeline**, click the backup you want to look at.

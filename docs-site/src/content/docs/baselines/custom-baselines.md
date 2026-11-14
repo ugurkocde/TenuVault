@@ -9,6 +9,13 @@ description: Keep your own Settings Catalog baseline, customized from OpenIntune
 
 Open **Frameworks** in the sidebar and select **My baselines** at the top of the framework list. To start from OpenIntuneBaseline, select **OpenIntuneBaseline** in the sidebar, choose a platform under **Your own baseline** and select **Customize**. See [OpenIntuneBaseline](/baselines/quick-start/#your-own-baseline).
 
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/custom-baselines.webp" aria-label="Open full-size screenshot: custom baselines">
+    <img src="/images/screenshots/custom-baselines.webp" alt="My baselines starts with creating a baseline from OpenIntuneBaseline or a backup" width="2880" height="2000" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>My baselines starts with creating a baseline from OpenIntuneBaseline or a backup. Initial workspace with no saved baselines. Select the image to view it full size.</figcaption>
+</figure>
+
 ## What your plan includes
 
 | | Community | Pro | MSP |

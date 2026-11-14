@@ -11,6 +11,13 @@ Open **Governance** in the sidebar, then choose a screen at the top of the page.
 
 The **Overview** is the landing screen. It reads only what the other Governance screens already show (saved comparisons, the latest hygiene scan, stored standards records), so every figure names its source and age: the latest baseline score with coverage, open definite and possible hygiene findings, accepted deviations with expired ones marked, and standard deviations and pending upgrades. **Needs attention** lists what waits first, each with a link to its owning screen. **Export evidence pack** saves one dated JSON with the scores, hygiene findings, adoption states, customizations and the accepted deviations register, headed by a notice that states what the evidence is and is not, and how fresh each section is. Each screen also names its own source and age in a "Source:" line, because scores, hygiene and standards are snapshots of different ages, not one live truth.
 
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/governance.webp" aria-label="Open full-size screenshot: governance">
+    <img src="/images/screenshots/governance.webp" alt="Governance brings scores, findings, deviations and standards together" width="2880" height="2000" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Governance brings scores, findings, deviations and standards together. Initial workspace with no assessments; Not scored is not a passing score. Select the image to view it full size.</figcaption>
+</figure>
+
 ## What your plan includes
 
 | Screen | Community | Pro | MSP |
@@ -104,6 +111,13 @@ A scan reads the latest complete backup. It does not change the tenant. Apart fr
 
 The findings stay those of the last scan until you scan again: a newer backup does not update them on its own. The screen names the source backup and its collection date, and warns when that backup was collected more than 7 days ago.
 
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/hygiene.webp" aria-label="Open full-size screenshot: hygiene">
+    <img src="/images/screenshots/hygiene.webp" alt="Conflicts and hygiene starts with Scan latest backup" width="2880" height="2000" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Conflicts and hygiene starts with Scan latest backup. Initial workspace with no scan results. Select the image to view it full size.</figcaption>
+</figure>
+
 ### Read a scan
 
 The latest scan shows when it was collected, the source backup, how many objects were inspected, how many findings are definite and possible, and when the Settings Catalog was checked. Types that were not collected are shown as not collected, not as clean. Group membership, filters and device state are not collected, so overlaps that depend on them stay possible, never proven. When the Settings Catalog cannot be read during a scan, deprecated settings are shown as a check that could not be made, never as clean.
@@ -156,6 +170,13 @@ These are two screens. **Customizations** (Pro and MSP) records where this tenan
 3. Click **Document customization**.
 
 Records are versioned and nothing here changes the tenant. For an active record, click **Change owner** to save a new owner as a new version, or **Retire** and enter why it is retired, then click **Save**. Click **Cancel** to leave a record unchanged.
+
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/customizations.webp" aria-label="Open full-size screenshot: customizations">
+    <img src="/images/screenshots/customizations.webp" alt="Record a deliberate customization with its setting, reason, owner and review date" width="2880" height="2000" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Record a deliberate customization with its setting, reason, owner and review date. Initial workspace; no record was saved. Select the image to view it full size.</figcaption>
+</figure>
 
 ### Create a golden standard (MSP)
 

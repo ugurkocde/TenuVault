@@ -74,6 +74,13 @@ Use the **Reporting period** list to choose **Last 24 hours**, **Last 7 days** (
 The Drift tile and the audit part of Recent Activity come from the audit log. The audit log is part of Pro and MSP, so on Community these show only backup activity.
 :::
 
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/dashboard.webp" aria-label="Open full-size screenshot: dashboard">
+    <img src="/images/screenshots/dashboard.webp" alt="The selected tenant dashboard shows backup freshness, success rate and policy totals" width="2880" height="2000" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>The selected tenant dashboard shows backup freshness, success rate and policy totals. Example tenant data. Select the image to view it full size.</figcaption>
+</figure>
+
 ## The All tenants overview
 
 When two or more tenants are connected, the sidebar shows **All tenants** at the top, and TenuVault opens on this page when it starts.
@@ -100,6 +107,13 @@ The buttons on each card:
 | **Drift** | Selects the tenant and opens Drift Detection |
 
 Click a tenant's name, or its arrow button, to select it and open its dashboard. **Connect a tenant** opens the guided setup, **Set up TenuVault**.
+
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/tenants-overview.webp" aria-label="Open full-size screenshot: tenants overview">
+    <img src="/images/screenshots/tenants-overview.webp" alt="All tenants puts backup status and schedules side by side" width="2880" height="2000" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>All tenants puts backup status and schedules side by side. Example MSP workspace with fictional tenants. Select the image to view it full size.</figcaption>
+</figure>
 
 ## The Tenant Management page
 
@@ -139,6 +153,13 @@ Select tenants with **Select tenant** on each card, or with the check boxes in t
 * **Backup Selected** backs up every selected tenant after you confirm. The backups run one at a time in the order shown: a tenant waiting its turn shows as queued, and its card shows the live progress once its backup runs. Each tenant uses its saved backup choice (see [Choose what to back up](/backups/#choose-what-to-back-up)). This needs the MSP plan on every selected tenant. If any selected tenant is not on MSP, the whole backup is refused and no backup starts. Without MSP, while nothing is selected, the selection bar's help text names this with an **MSP** badge. With a selection, the **Backup Selected** button carries its own **MSP** badge. Selecting and tagging tenants stays available on every plan.
 
 In the list view, **Check all** in the **Drift** column compares each tenant's two newest backups and shows **No drift**, the number of changes and critical changes, **Not available** (hover for the reason) or **Not checked**. This needs the MSP plan on every tenant it checks. If any checked tenant is not on MSP, the whole check is refused. See [Drift detection](/drift/).
+
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/tenant-management.webp" aria-label="Open full-size screenshot: tenant management">
+    <img src="/images/screenshots/tenant-management.webp" alt="Tenant Management offers search, tags and actions for connected tenants" width="2880" height="2000" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Tenant Management offers search, tags and actions for connected tenants. Example MSP workspace. Select the image to view it full size.</figcaption>
+</figure>
 
 ## Sign in again or change storage
 
