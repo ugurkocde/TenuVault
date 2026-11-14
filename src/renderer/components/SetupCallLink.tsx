@@ -1,3 +1,4 @@
+import { createContext, useContext } from "react"
 import { CalendarClock } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import { cn } from "~/lib/utils"
@@ -6,6 +7,12 @@ import { bridge } from "../lib/bridge"
 
 const LABEL = "Book a free setup call"
 const inline = "rounded-sm font-medium underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+
+/**
+ * True below a screen that already shows the hint next to an error of its own. A hint further
+ * down then renders nothing, so one step never shows the line twice.
+ */
+export const SetupCallHintShown = createContext(false)
 
 /**
  * The free setup call: 30 minutes in which the admin shares their screen and we guide them through
@@ -27,6 +34,7 @@ export function SetupCallLink({ source, variant, size = "sm", className, onOpene
   /** Called after the click, for a dialog that closes with it. */
   onOpened?: () => void
 }) {
+  const hintShown = useContext(SetupCallHintShown)
   const open = () => {
     // A browser that cannot be opened leaves the screen as it is.
     void bridge.app.openExternal(setupCallUrl(source)).catch(() => undefined)
@@ -46,6 +54,7 @@ export function SetupCallLink({ source, variant, size = "sm", className, onOpene
     )
   }
   if (variant === "hint") {
+    if (hintShown) return null
     return (
       <p className={cn("text-xs text-gray-600", className)}>
         Stuck here?{" "}

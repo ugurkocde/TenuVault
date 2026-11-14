@@ -26,7 +26,7 @@ export function ActivationScreen({ onSignIn }: { onSignIn: () => void }) {
   // the smallest window (1024x700), and with it the window as it opens (1440x920).
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-6 py-3">
-      <div className="w-full max-w-lg space-y-5 rounded-3xl bg-card px-9 py-7 shadow-[0_24px_60px_-30px_rgba(22,21,20,0.25)]">
+      <div className="w-full max-w-lg space-y-4 rounded-3xl bg-card px-9 py-7 shadow-[0_24px_60px_-30px_rgba(22,21,20,0.25)]">
         <div className="flex items-center gap-3">
           <BrandMark className="size-12" />
           <div>

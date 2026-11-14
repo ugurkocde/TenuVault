@@ -17,6 +17,8 @@ const state = vi.hoisted(() => ({
   createRegistration: vi.fn<() => Promise<unknown>>(),
   accounts: vi.fn(async (): Promise<unknown[]> => []),
   checkNewTenant: vi.fn(async (): Promise<unknown> => undefined),
+  cancelBackup: vi.fn(async (_jobId: string): Promise<void> => undefined),
+  storageChoice: { kind: "local" } as unknown,
   activeJobs: [] as unknown[],
   diagnostics: "unasked",
 }))
@@ -35,7 +37,7 @@ vi.mock("../../src/renderer/lib/bridge", () => ({
     diagnostics: { record: async () => undefined, status: async () => ({ state: state.diagnostics, policy: false, reminder: { setup: false, signin: false } }), reminderShown: async () => undefined, consent: async () => undefined, decline: async () => undefined },
     preferences: { get: async () => ({ firstBackupNoteSeen: true }), set: async () => ({}) },
     schedules: { list: async () => [] },
-    backups: { settings: async () => ({ recoveryExported: true }), cancel: async () => undefined },
+    backups: { settings: async () => ({ recoveryExported: true }), cancel: state.cancelBackup },
     feedback: { capture: async () => null },
   },
 }))
@@ -58,7 +60,7 @@ vi.mock("~/contexts/BackupProgressContext", () => ({
 }))
 vi.mock("../../src/renderer/components/StorageChooser", () => ({
   StorageChooser: ({ onChange }: { onChange: (choice: unknown) => void }) => {
-    useEffect(() => { onChange({ kind: "local" }) }, [])
+    useEffect(() => { onChange(state.storageChoice) }, [])
     return createElement("p", null, "Storage chooser")
   },
 }))
@@ -105,8 +107,10 @@ beforeEach(() => {
   state.tenants = []
   state.activeJobs = []
   state.diagnostics = "unasked"
+  state.storageChoice = { kind: "local" }
   state.store.clear()
-  for (const mock of [state.signIn, state.createRegistration, state.accounts, state.checkNewTenant]) mock.mockReset()
+  for (const mock of [state.signIn, state.createRegistration, state.accounts, state.checkNewTenant, state.cancelBackup]) mock.mockReset()
+  state.cancelBackup.mockResolvedValue(undefined)
   state.accounts.mockResolvedValue([])
   state.checkNewTenant.mockResolvedValue({ tenants: [] })
 })
@@ -136,6 +140,12 @@ async function render(element: ReactElement, route = "/portal/onboarding") {
   act(() => root.render(createElement(MemoryRouter, { initialEntries: [route] }, element)))
   await advance()
   return container
+}
+
+/** Renders the page again in the root of the last render, as the job store does when a job changes. */
+async function rerender(element: ReactElement, route = "/portal/onboarding") {
+  act(() => roots.at(-1)!.render(createElement(MemoryRouter, { initialEntries: [route] }, element)))
+  await advance()
 }
 
 const button = (container: ParentNode, label: string) =>
@@ -206,6 +216,18 @@ async function firstBackupStep() {
   await act(async () => { button(container, "Continue")!.click() })
   await advance()
   expect(container.textContent).toContain("Take a first backup")
+  return container
+}
+
+/** The guided setup back on its Sign in step, after the license check refused the tenant on Continue. */
+async function refusedAfterContinue() {
+  state.store.set("tenuvault.onboarding.draft", JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "Contoso", account: ACCOUNT, signedInAt: Date.now() }))
+  state.accounts.mockResolvedValue([ACCOUNT])
+  state.checkNewTenant.mockRejectedValueOnce(new Error("This license does not cover another tenant."))
+  const container = await render(createElement(OnboardingPage))
+  await act(async () => { button(container, "Continue")!.click() })
+  await advance()
+  expect(container.textContent).toContain("Sign in to your tenant")
   return container
 }
 
@@ -407,6 +429,107 @@ describe("first backup", () => {
   })
 })
 
+describe("a cancel of the first backup that failed", () => {
+  const running = { isComplete: false, isSuccessful: false, status: "Running", progressMessage: "Reading policies..." }
+
+  async function failedCancel() {
+    state.cancelBackup.mockRejectedValueOnce(new Error("Could not cancel the backup. Try again."))
+    const container = await runFirstBackup(started, running)
+    await act(async () => { button(container, "Cancel backup")!.click() })
+    await advance()
+    expect(container.querySelector('[role="alert"]')!.textContent).toContain("Could not cancel the backup. Try again.")
+    return container
+  }
+
+  it("is not a failed backup: nothing is offered while the backup still runs", async () => {
+    await failedCancel()
+    expect(links()).toEqual([])
+  })
+
+  it("leaves no error and no offer behind when the backup then succeeds", async () => {
+    const container = await failedCancel()
+    state.activeJobs = [{ jobId: "first", progress: 100, isComplete: true, isSuccessful: true, status: "Completed", progressMessage: "Backup completed" }]
+    await rerender(createElement(OnboardingPage))
+    expect(container.textContent).toContain("Your first backup is done")
+    expect(container.textContent).not.toContain("Could not cancel the backup")
+    expect(container.querySelector('[role="alert"]')).toBeNull()
+    expect(links()).toEqual([])
+  })
+
+  it("leaves no error and no offer behind when a second cancel then ends the backup", async () => {
+    const container = await failedCancel()
+    await act(async () => { button(container, "Cancel backup")!.click() })
+    await advance()
+    expect(state.cancelBackup).toHaveBeenCalledTimes(2)
+    state.activeJobs = [{ jobId: "first", progress: 100, isComplete: true, isSuccessful: false, status: "Cancelled", progressMessage: "Backup cancelled", exception: "Backup cancelled by you." }]
+    await rerender(createElement(OnboardingPage))
+    expect(container.textContent).toContain("Backup cancelled by you.")
+    expect(container.textContent).not.toContain("Could not cancel the backup")
+    expect(container.querySelector('[role="alert"]')).toBeNull()
+    expect(links()).toEqual([])
+  })
+
+  it("still offers the call when the backup then ends with an error", async () => {
+    const container = await failedCancel()
+    state.activeJobs = [{ jobId: "first", progress: 100, isComplete: true, isSuccessful: false, status: "Failed", progressMessage: "Backup failed", exception: "Microsoft Graph refused the request." }]
+    await rerender(createElement(OnboardingPage))
+    expect(container.textContent).not.toContain("Could not cancel the backup")
+    expect(links()).toEqual(["first-backup-error"])
+  })
+})
+
+describe("errors the Sign in step shows after a later step sent the admin back", () => {
+  it("offers the call once under a license refusal, also when the sign-in form then shows an error of its own", async () => {
+    const container = await refusedAfterContinue()
+    const refusal = container.querySelector<HTMLElement>('[role="alert"]')!
+    expect(refusal.textContent).toContain("This license does not cover another tenant. TenuVault signed you out of this tenant.")
+    expect(refusal.textContent).toContain(HINT)
+    expect(links()).toEqual(["signin-error"])
+    await expectOpens("signin-error", refusal)
+
+    state.signIn.mockRejectedValueOnce(new Error("Conditional Access blocked this sign-in. (AADSTS53003)"))
+    await act(async () => { button(container, "Sign in with Microsoft")!.click() })
+    await advance()
+    const alerts = [...container.querySelectorAll<HTMLElement>('[role="alert"]')]
+    expect(alerts.some((alert) => alert !== refusal && alert.textContent?.includes("AADSTS53003"))).toBe(true)
+    expect(links()).toEqual(["signin-error"])
+    expect(link("signin-error", refusal)).not.toBeNull()
+  })
+
+  it("offers nothing for a tenant that is already connected, and the sign-in form keeps its own offer", async () => {
+    state.tenants = [{ id: 1, name: "Contoso", credentials: { tenantId: TENANT } }]
+    state.store.set("tenuvault.onboarding.draft", JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "Contoso", account: ACCOUNT, signedInAt: Date.now() }))
+    state.accounts.mockResolvedValue([ACCOUNT])
+    const container = await render(createElement(OnboardingPage))
+    await act(async () => { button(container, "Continue")!.click() })
+    await advance()
+    const connected = container.querySelector<HTMLElement>('[role="alert"]')!
+    expect(connected.textContent).toContain("This tenant is already connected to TenuVault.")
+    expect(connected.textContent).toContain("Go to dashboard")
+    expect(links()).toEqual([])
+
+    state.signIn.mockRejectedValueOnce(new Error("Microsoft could not find this application in the tenant. (AADSTS700016)"))
+    await act(async () => { button(container, "Sign in with Microsoft")!.click() })
+    await advance()
+    expect(links()).toEqual(["signin-error"])
+    expect(link("signin-error", connected)).toBeNull()
+  })
+
+  it("leaves the plain error line of the Storage step as it is", async () => {
+    state.store.set("tenuvault.onboarding.draft", JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "Contoso", account: ACCOUNT, signedInAt: Date.now() }))
+    state.accounts.mockResolvedValue([ACCOUNT])
+    // The plan changed between the storage choice and the check: the page stays on Storage.
+    state.storageChoice = { kind: "azure", storageAccountName: "contosobackups", subscriptionId: "sub", resourceGroupName: "rg", location: "westeurope" }
+    state.checkNewTenant.mockResolvedValueOnce(COMMUNITY)
+    const container = await render(createElement(OnboardingPage))
+    await act(async () => { button(container, "Continue")!.click() })
+    await advance()
+    expect(container.textContent).toContain("Choose where backups are stored")
+    expect(container.querySelector('[role="alert"]')!.textContent).toBe("This tenant is on Community now, which keeps backups on this device. Choose This device to continue.")
+    expect(links()).toEqual([])
+  })
+})
+
 describe("Support dialog", () => {
   it.each([
     ["Community", COMMUNITY, "Open GitHub issue"],
@@ -433,6 +556,7 @@ describe("every placement on every plan", () => {
     ["waiting panel of the setup sign-in", "signin-waiting", async () => { await waitingSetup(); await advance(RECOVERY_DELAY_MS) }],
     ["setup error", "setup-error", () => failedSetup("Microsoft Graph refused to create the app registration.")],
     ["first sign-in error", "signin-error", () => failedSignIn("Microsoft could not find this application in the tenant. (AADSTS700016)")],
+    ["license refusal on the Sign in step", "signin-error", refusedAfterContinue],
     ["first backup failure", "first-backup-error", () => runFirstBackup(startFails)],
     ["Support dialog", "support", () => render(createElement(SupportDialog, { open: true, onOpenChange: vi.fn() }))],
   ]

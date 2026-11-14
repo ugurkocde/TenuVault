@@ -46,7 +46,7 @@ The same page opens from the app, in your default browser:
 
 * **Book a free setup call** on the welcome screen.
 * **Free setup call** at the top of the guided setup, while no tenant is connected.
-* **Book a free setup call** in **Still waiting for Microsoft?**, under a failed sign-in and under a failed first backup.
+* **Book a free setup call** in **Still waiting for Microsoft?**, next to the error of a setup or sign-in attempt, and under a first backup that failed.
 * **Support** > **Book a free setup call**, at any time.
 
 The app only opens the link. See [Links that open in your browser](/security/data-flows/#links-that-open-in-your-browser).

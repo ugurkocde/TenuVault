@@ -6,9 +6,10 @@
  *   node scripts/setup-call-shots.mjs [screenshot-dir]
  *
  * It also prints what the welcome screen and the Connect step measure at each size. It fails when
- * the primary button of the welcome screen is not fully visible, when the welcome screen scrolls
- * (at the size the window opens with while it asks about setup diagnostics, at any size once that
- * is answered), or when the Connect step scrolls at the size the window opens with.
+ * the welcome screen cuts off its primary button, the setup call or the answers to the setup
+ * diagnostics question, when the welcome screen scrolls (at the size the window opens with while
+ * it asks about setup diagnostics, at any size once that is answered), or when the Connect step
+ * scrolls at the size the window opens with.
  */
 import { spawn } from "node:child_process"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
@@ -29,6 +30,7 @@ const ACCOUNT = { tenantId: TENANT_ID, clientId: CLIENT_ID, username: "admin@con
 const SETUP_ERROR = "Microsoft Graph refused to create the app registration: Insufficient privileges to complete the operation. Sign in as a Global Administrator, Cloud Application Administrator or Application Administrator."
 const BLOCKED = "Conditional Access blocked this sign-in. Check the sign-in logs in the Entra admin center for the policy, or sign in from a device and location it allows. (AADSTS53003)"
 const NOT_FOUND = "Microsoft could not find this application in the tenant. Check the client ID, or wait a minute if the app registration was created just now. (AADSTS700016)"
+const REFUSED = "This license covers 2 tenants and both are in use. Remove a tenant or upgrade the license to add another."
 const BACKUP_ERROR = "The backup could not start: Microsoft Graph did not answer. Check your network connection and try again."
 
 const port = 9300 + Math.floor(Math.random() * 400)
@@ -178,10 +180,21 @@ try {
   const licenseStatus = await evaluate(`window.tenuvault.license.status()`)
 
   // Fresh installs are asked about setup diagnostics on the welcome screen, which makes it its tallest.
-  const handlers = ({ signIn = "waiting", createRegistration = "waiting", diagnostics = "granted" } = {}) => main.evaluate(`(() => {
+  // Its helper text is longer while tenant trials are off, which is also how every start begins,
+  // until the licensing service has answered.
+  const handlers = ({ signIn = "waiting", createRegistration = "waiting", checkNewTenant = `() => (${JSON.stringify(licenseStatus)})`, diagnostics = "granted", trials = Boolean(licenseStatus.tenantTrialsEnabled) } = {}) => main.evaluate(`(() => {
     const req = process.getBuiltinModule("module").createRequire(process.cwd() + "/x.cjs")
-    const { ipcMain } = req("electron")
+    const { ipcMain, BrowserWindow } = req("electron")
     const handle = (channel, fn) => { ipcMain.removeHandler(channel); ipcMain.handle(channel, (_event, ...args) => fn(...args)) }
+    // The license status of each screenshot is the one set here, so a later push of the real one is dropped.
+    if (!globalThis.__setupCallShotsQuiet) {
+      globalThis.__setupCallShotsQuiet = true
+      for (const win of BrowserWindow.getAllWindows()) {
+        const send = win.webContents.send.bind(win.webContents)
+        win.webContents.send = (channel, ...args) => channel === "license:changed" ? undefined : send(channel, ...args)
+      }
+    }
+    handle("license:status", () => ({ ...${JSON.stringify(licenseStatus)}, tenantTrialsEnabled: ${JSON.stringify(trials)} }))
     // A sign-in that waits for the browser. Its answer is kept, because Electron ends a call
     // whose unanswered promise was collected with "reply was never sent".
     const kept = globalThis.__setupCallShots ??= []
@@ -194,7 +207,7 @@ try {
     handle("setup:cancelCreateRegistration", () => undefined)
     handle("setup:clipboardIds", () => null)
     handle("diagnostics:status", () => ({ state: ${JSON.stringify(diagnostics)}, policy: false, reminder: { setup: false, signin: false } }))
-    handle("license:checkNewTenant", () => (${JSON.stringify(licenseStatus)}))
+    handle("license:checkNewTenant", ${checkNewTenant})
     handle("api", request => ({ status: 500, statusText: "Internal Server Error", headers: { "content-type": "application/json" }, body: new TextEncoder().encode(JSON.stringify(request.path === "/api/backup/start" ? { error: ${JSON.stringify(BACKUP_ERROR)} } : {})) }))
   })()`)
   /** Opens the guided setup on a step, with no tenant connected. Step 2 resumes a fictional sign-in. */
@@ -214,9 +227,14 @@ try {
     for (const theme of ["light", "dark"]) {
       const name = (screen) => `${screen}-${theme}-${size.name}`
 
-      // 1. The welcome screen: as a fresh install sees it, with the setup diagnostics question, and without it.
-      for (const [screen, diagnostics] of [["welcome", "unasked"], ["welcome-answered", "declined"]]) {
-        await handlers({ diagnostics })
+      // 1. The welcome screen with both helper texts, with the setup diagnostics question of a fresh install and without it.
+      for (const [screen, trials, diagnostics] of [
+        ["welcome", true, "unasked"],
+        ["welcome-answered", true, "declined"],
+        ["welcome-long-text", false, "unasked"],
+        ["welcome-long-text-answered", false, "declined"],
+      ]) {
+        await handlers({ diagnostics, trials })
         await evaluate(`Promise.all([window.tenuvault.storage.setItem("tenuvault_tenants", "[]"), window.tenuvault.storage.removeItem("tenuvault.onboarding.draft")])`)
         await setTheme(theme)
         await evaluate(`location.hash = "#/"; location.reload()`)
@@ -224,20 +242,27 @@ try {
         await assertText("Welcome to TenuVault", 30000)
         await disableAnimations()
         await assertLink("welcome")
+        await assertText(trials ? "New tenants start with a Pro trial, no card and no email needed." : "It is free on Community for one tenant")
         if (diagnostics === "unasked") await assertText("Help us make setup work in your environment")
         await evaluate(`window.scrollTo(0, 0)`)
         const welcome = await evaluate(`(() => {
           const rect = (element) => { const r = element.getBoundingClientRect(); return { top: Math.round(r.top), bottom: Math.round(r.bottom) } }
-          const primary = [...document.querySelectorAll("button")].find(b => b.textContent.trim().startsWith("Connect your tenant"))
+          const button = (label) => [...document.querySelectorAll("button")].find(b => b.textContent.trim().startsWith(label))
+          const primary = button("Connect your tenant")
           // The card without the centering of the screen around it, plus the margin the screen keeps.
           const card = primary.closest(".bg-card")
           const frame = getComputedStyle(card.parentElement)
           const content = Math.round(card.getBoundingClientRect().height + parseFloat(frame.paddingTop) + parseFloat(frame.paddingBottom))
-          return { viewport: innerHeight, content, page: document.scrollingElement.scrollHeight, primary: rect(primary), setupCall: rect(document.querySelector('[data-setup-call="welcome"]')) }
+          const visible = { primary: rect(primary), setupCall: rect(document.querySelector('[data-setup-call="welcome"]')) }
+          if (button("Share setup diagnostics")) Object.assign(visible, { share: rect(button("Share setup diagnostics")), decline: rect(button("Don't share")) })
+          return { viewport: innerHeight, content, page: document.scrollingElement.scrollHeight, visible }
         })()`)
         console.log(`${screen} ${size.width}x${size.height} ${theme}: ${JSON.stringify(welcome)}`)
-        if (welcome.primary.top < 0 || welcome.primary.bottom > welcome.viewport) throw new Error(`The primary button of the welcome screen is not fully visible at ${size.width}x${size.height}`)
-        // With the diagnostics question the screen fits the window as it opens; without it, the smallest window.
+        // Without scrolling, every window shows the primary button, the setup call and the answers to the diagnostics question.
+        for (const [part, { top, bottom }] of Object.entries(welcome.visible)) {
+          if (top < 0 || bottom > welcome.viewport) throw new Error(`The welcome screen cuts off ${part} at ${size.width}x${size.height}: ${JSON.stringify(welcome)}`)
+        }
+        // With the diagnostics question the screen fits the window as it opens; without it, the smallest window too.
         const fits = diagnostics === "unasked" ? size.name === "default" : true
         if (fits && welcome.content > welcome.viewport) throw new Error(`The welcome screen scrolls at ${size.width}x${size.height}: ${JSON.stringify(welcome)}`)
         await screenshot(name(screen))
@@ -293,6 +318,17 @@ try {
         await center('[role="alert"]')
         await screenshot(name(screen))
       }
+
+      // 5. The Sign in step again, after the license check refused the tenant on Continue.
+      await handlers({ checkNewTenant: `() => { throw new Error(${JSON.stringify(REFUSED)}) }` })
+      await openStep(2, theme)
+      await assertText("Choose where backups are stored", 30000)
+      await waitFor(`[...document.querySelectorAll("button")].some(b => b.textContent.trim() === "Continue" && !b.disabled)`)
+      await click("Continue")
+      await assertText("Sign in to your tenant")
+      await assertLink("signin-error")
+      await center('[role="alert"]')
+      await screenshot(name("signin-refused"))
 
       // 6. A first backup that could not start.
       await handlers()

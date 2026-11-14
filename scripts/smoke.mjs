@@ -206,7 +206,37 @@ await check("first run shows the welcome screen", async () => {
     const after = (a, b) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
     return Boolean(link && connect) && link.textContent === "Book a free setup call" && after(connect, link) && (!diagnostics || after(link, diagnostics))
   })()`), "free setup call row is not below Connect your tenant and above the setup diagnostics question")
+  // At the size this window has, which is the smallest one on a small display, what a new admin
+  // has to reach shows without scrolling: Connect your tenant, the setup call and the answers
+  // to the setup diagnostics question.
+  await evaluate(`window.scrollTo(0, 0)`)
+  const cutOff = await evaluate(`(() => {
+    const button = label => [...document.querySelectorAll("button")].find(b => b.innerText.trim() === label)
+    const parts = { "Connect your tenant": button("Connect your tenant"), "Book a free setup call": document.querySelector('[data-setup-call="welcome"]'), "Share setup diagnostics": button("Share setup diagnostics"), "Don't share": button("Don't share") }
+    return { page: innerWidth + "x" + innerHeight, parts: Object.entries(parts).filter(([, part]) => part && (part.getBoundingClientRect().top < 0 || part.getBoundingClientRect().bottom > innerHeight)).map(([label]) => label) }
+  })()`)
+  assert(cutOff.parts.length === 0, `welcome screen cuts off ${cutOff.parts.join(", ")} in a ${cutOff.page} page`)
   await screenshot("00-welcome")
+  // The whole screen fits the window as it opens: 1440x920, less the title bar and menu of this
+  // platform. With tenant trials off the helper text is longer and a second link joins the license
+  // key link, which the fonts of a Linux runner may wrap, so that state is not measured.
+  if (settled.tenantTrialsEnabled) {
+    const frame = await evaluate(`Math.min(Math.max(outerHeight - innerHeight, 0), 80)`)
+    await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 920 - frame, deviceScaleFactor: 1, mobile: false })
+    try {
+      await sleep(300)
+      const overflow = await evaluate(`(() => {
+        // The card with the margin the screen keeps around it, which is what has to fit.
+        const card = document.querySelector('[data-setup-call="welcome"]').closest(".bg-card")
+        const margin = getComputedStyle(card.parentElement)
+        return { height: innerHeight, content: Math.round(card.getBoundingClientRect().height + parseFloat(margin.paddingTop) + parseFloat(margin.paddingBottom)), scroll: document.scrollingElement.scrollHeight, inner: [...document.querySelectorAll('*')].filter(e => ['auto', 'scroll'].includes(getComputedStyle(e).overflowY) && e.scrollHeight > e.clientHeight + 1).map(e => ({ tag: e.tagName, scroll: e.scrollHeight, client: e.clientHeight })) }
+      })()`)
+      console.log(`     welcome screen: ${overflow.content}px in a ${overflow.height}px page`)
+      assert(overflow.scroll <= overflow.height && overflow.inner.length === 0, `welcome screen scrolls: ${JSON.stringify(overflow)}`)
+    } finally {
+      await send("Emulation.clearDeviceMetricsOverride")
+    }
+  }
 })
 
 await check("the welcome screen opens the free setup call page in the browser, named after the screen", async () => {

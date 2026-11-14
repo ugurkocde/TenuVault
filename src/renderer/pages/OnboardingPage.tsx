@@ -17,7 +17,7 @@ import { FirstBackupNextSteps } from "../components/FirstBackupNextSteps"
 import { PlanContext, TrialOrKey } from "../components/PlanChoice"
 import { tenantLicense, tenantPlan, useLicense, useTenantPlan } from "../lib/license"
 import { ConnectTenantSetup } from "../components/ConnectTenantSetup"
-import { SetupCallLink } from "../components/SetupCallLink"
+import { SetupCallHintShown, SetupCallLink } from "../components/SetupCallLink"
 import { recordSetup, SetupDiagnosticsReminder } from "../components/SetupDiagnostics"
 import { TenantSignInForm, type SignInFields } from "../components/TenantSignInForm"
 import { bridge } from "../lib/bridge"
@@ -143,6 +143,8 @@ export default function OnboardingPage() {
     completedBackup.current = runningJobId
     setSnapshot(trackedStatus)
     setCancelling(false)
+    // A cancel that failed while the backup ran says nothing about how it ended.
+    setJobError("")
     if (tracked.isSuccessful && tenantProfileId) updateTenant(tenantProfileId, { lastBackup: new Date().toISOString(), syncStatus: "success" })
   }, [tracked?.isComplete, tracked?.isSuccessful, trackedStatus, runningJobId, tenantProfileId, updateTenant])
 
@@ -349,8 +351,12 @@ export default function OnboardingPage() {
 
   const finished = Boolean(displayJob?.isComplete)
   const succeeded = Boolean(displayJob?.isComplete && displayJob.isSuccessful)
-  // A backup that could not start or ended with an error. Cancelling is the admin's own choice.
-  const backupFailed = Boolean(jobError) || (finished && !succeeded && displayJob?.status !== "Cancelled")
+  // A backup that could not start or ended with an error. Cancelling is the admin's own choice, and
+  // an error next to a backup that is on screen is a failed cancel, not a failed backup.
+  const backupFailed = (Boolean(jobError) && !displayJob) || (finished && !succeeded && displayJob?.status !== "Cancelled")
+  // An error on the Sign in step that leaves the admin stuck. A tenant that is already connected
+  // does not: that error has its own way on.
+  const signInStuck = Boolean(addError && !addError.alreadyConnected)
 
   return (
     <div className={cn("@container mx-auto space-y-4 p-5 lg:p-6", step === 0 ? "max-w-[96rem]" : "max-w-3xl")}>
@@ -425,6 +431,7 @@ export default function OnboardingPage() {
                   <TrialKeyRefusalActions message={addError.message} source="setup-trial-key-refused" />
                   {addError.message.includes(TRIAL_USED_MESSAGE) ? <Link className="text-blue-600 underline" to="/license">Enter a Pro license key</Link> : <TrialOrKey source="setup-license-error" />}
                 </div>}
+                {signInStuck && <SetupCallLink source="signin-error" variant="hint" />}
               </div>
             )}
             {account ? (
@@ -443,27 +450,30 @@ export default function OnboardingPage() {
                 </div>
               </div>
             ) : (
-              <TenantSignInForm
-                initial={fields}
-                autoSignIn={autoSignIn}
-                hidePaste={Boolean(setupNotice)}
-                onFieldsChange={setFields}
-                onSignedIn={(signedIn, displayName) => {
-                  resumeCheck.current = false
-                  if (connected(signedIn.tenantId)) {
+              // The error above already offers the setup call, so an error of the form does not repeat it.
+              <SetupCallHintShown.Provider value={signInStuck}>
+                <TenantSignInForm
+                  initial={fields}
+                  autoSignIn={autoSignIn}
+                  hidePaste={Boolean(setupNotice)}
+                  onFieldsChange={setFields}
+                  onSignedIn={(signedIn, displayName) => {
+                    resumeCheck.current = false
+                    if (connected(signedIn.tenantId)) {
+                      setAutoSignIn(null)
+                      setAddError({ message: "This tenant is already connected to TenuVault.", license: false, alreadyConnected: true })
+                      return
+                    }
+                    setAddError(null)
+                    // The automatic sign-in is for this one registration; a later sign-in asks again.
                     setAutoSignIn(null)
-                    setAddError({ message: "This tenant is already connected to TenuVault.", license: false, alreadyConnected: true })
-                    return
-                  }
-                  setAddError(null)
-                  // The automatic sign-in is for this one registration; a later sign-in asks again.
-                  setAutoSignIn(null)
-                  setSetupNotice("")
-                  setAccount(signedIn)
-                  setFields((current) => ({ ...current, displayName }))
-                  setStep(2)
-                }}
-              />
+                    setSetupNotice("")
+                    setAccount(signedIn)
+                    setFields((current) => ({ ...current, displayName }))
+                    setStep(2)
+                  }}
+                />
+              </SetupCallHintShown.Provider>
             )}
           </div>
         )}
