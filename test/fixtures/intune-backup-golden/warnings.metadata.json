@@ -1,0 +1,142 @@
+{
+  "BackupDate": "2026-11-10-020000",
+  "BackupFolder": "backup-2026-11-10-020000",
+  "StartTime": "2026-11-10 02:00:00",
+  "EndTime": "2026-11-10 02:00:00",
+  "Duration": "0s",
+  "DurationSeconds": 0,
+  "ItemCounts": {
+    "DeviceConfigurations": 1,
+    "ConfigurationPolicies": 1,
+    "GroupPolicyConfigurations": 0,
+    "ReusablePolicySettings": 0,
+    "HardwareConfigurations": 0,
+    "CompliancePolicies": 1,
+    "ComplianceSettingsPolicies": 0,
+    "ComplianceScripts": 0,
+    "CompliancePolicySettings": 1,
+    "EndpointSecurityIntents": 0,
+    "PowerShellScripts": 1,
+    "ShellScripts": 0,
+    "CustomAttributeScripts": 0,
+    "Remediations": 0,
+    "FeatureUpdateProfiles": 0,
+    "QualityUpdateProfiles": 0,
+    "QualityUpdatePolicies": 0,
+    "DriverUpdateProfiles": 0,
+    "AppCategories": 0,
+    "Apps": 0,
+    "AppConfigurationPolicies": 0,
+    "ManagedAppConfigurations": 0,
+    "AppProtectionIOS": 0,
+    "AppProtectionAndroid": 0,
+    "AppProtectionWindows": 0,
+    "PolicySets": 0,
+    "EnrollmentConfigurations": 0,
+    "AutopilotProfiles": 0,
+    "AutopilotDevices": 1,
+    "AppleEnrollmentProfiles": 0,
+    "AppleAutomatedEnrollment": 0,
+    "AndroidEnrollmentProfiles": 0,
+    "DeviceCategories": 0,
+    "TermsAndConditions": 0,
+    "AssignmentFilters": 0,
+    "ScopeTags": 1,
+    "RoleDefinitions": 0,
+    "NotificationTemplates": 0,
+    "Branding": 0,
+    "DeviceCleanupRules": 0,
+    "MultiAdminApprovalPolicies": 0,
+    "TotalPolicies": 6
+  },
+  "Status": "CompletedWithWarnings",
+  "RunbookVersion": "desktop",
+  "BackupFormat": "Individual policy files with Intune-compatible JSON",
+  "Source": "TenuVault Desktop",
+  "TenantId": "11111111-1111-1111-1111-111111111111",
+  "Trigger": "scheduled",
+  "RunId": "<run>",
+  "Scope": {
+    "Excluded": [],
+    "Included": [
+      "DeviceConfigurations",
+      "ConfigurationPolicies",
+      "GroupPolicyConfigurations",
+      "ReusablePolicySettings",
+      "HardwareConfigurations",
+      "CompliancePolicies",
+      "ComplianceSettingsPolicies",
+      "ComplianceScripts",
+      "CompliancePolicySettings",
+      "EndpointSecurityIntents",
+      "PowerShellScripts",
+      "ShellScripts",
+      "CustomAttributeScripts",
+      "Remediations",
+      "FeatureUpdateProfiles",
+      "QualityUpdateProfiles",
+      "QualityUpdatePolicies",
+      "DriverUpdateProfiles",
+      "AppCategories",
+      "Apps",
+      "AppConfigurationPolicies",
+      "ManagedAppConfigurations",
+      "AppProtectionIOS",
+      "AppProtectionAndroid",
+      "AppProtectionWindows",
+      "PolicySets",
+      "EnrollmentConfigurations",
+      "AutopilotProfiles",
+      "AutopilotDevices",
+      "AppleEnrollmentProfiles",
+      "AppleAutomatedEnrollment",
+      "AndroidEnrollmentProfiles",
+      "DeviceCategories",
+      "TermsAndConditions",
+      "AssignmentFilters",
+      "ScopeTags",
+      "RoleDefinitions",
+      "NotificationTemplates",
+      "Branding",
+      "DeviceCleanupRules",
+      "MultiAdminApprovalPolicies"
+    ]
+  },
+  "Failures": 2,
+  "SkippedTypes": [],
+  "FailedTypes": [
+    "DeviceCategories"
+  ],
+  "AuthMode": "delegated",
+  "Items": {
+    "AutopilotDevices/ap-1": {
+      "file": "SN-0001.json",
+      "hash": "JfCguf2NfPEsxW/f/3WvzV"
+    },
+    "CompliancePolicies/cp1": {
+      "file": "Compliance.json",
+      "hash": "sGt3IguvNsfuWMrh7/+VeZ"
+    },
+    "CompliancePolicySettings/CompliancePolicySettings": {
+      "file": "Compliance policy settings.json",
+      "hash": "0w3bumGvD8A9ufjS2kKqcH"
+    },
+    "ConfigurationPolicies/sc1": {
+      "file": "Settings catalog.json",
+      "hash": "6GXdT/ctNiZ5rz6Nudm2SX",
+      "hashWithEmptyAssignments": "A38kbNt47552CkHvC3bP86"
+    },
+    "DeviceConfigurations/dc1": {
+      "file": "Win_ BitLocker_Encryption.json",
+      "hash": "SXGWlT9iZ8vRlom8dsvFPo"
+    },
+    "PowerShellScripts/ps1": {
+      "file": "Script.json",
+      "hash": "HiVxwVUcLIVXxqclPuuWWC"
+    },
+    "ScopeTags/7": {
+      "file": "Berlin.json",
+      "hash": "lvJFj99DvPg4Hz2yuM3mIt"
+    }
+  }
+}

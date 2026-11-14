@@ -1,0 +1,474 @@
+{
+  "files": {
+    ".tenuvault-owner.json": "{\"Source\":\"TenuVault Desktop\",\"TenantId\":\"11111111-1111-1111-1111-111111111111\",\"RunId\":\"<run>\"}",
+    "AutopilotDevices/SN-0001.json": "ea45d0c6800811d948a20b885bed0cbfb483c9aa01dba6b6562b52ec7ad8fe02",
+    "CompliancePolicies/Compliance.json": "d51a051aa7f2eae1e1088dbf91bfa396503750f5b21783ba13cf1b2f6305b792",
+    "CompliancePolicySettings/Compliance policy settings.json": "7be2bd790b02bc9559dadd8f5786e2588f077c696187101bb2c9abd9c6875166",
+    "ConfigurationPolicies/Settings catalog.json": "8ccbe336c64f2ff32956d7c119ad04445b02f7878e1caf1bd58bf97837408398",
+    "DeviceCategories/Kiosk.json": "c895928b54d39fd26f08d048589c0f0b13ad66b37deba3a4dbaccde5e5a6189b",
+    "DeviceConfigurations/Win_ BitLocker_Encryption (dc2).json": "4720a09bc800e6fd359c910369e639b4252b8d7177a6f296e57b708cefcaeab8",
+    "DeviceConfigurations/Win_ BitLocker_Encryption.json": "192e7b8ca4b0672edc0262f6abc70c8ff9ff8e36a9a41e89e3d326585de1fa79",
+    "ScopeTags/Berlin.json": "53d895ea31c7a8727963acbd366699ac0c9eda939c97193363ee1a6cb01c41a6"
+  },
+  "job": {
+    "tenantId": "11111111-1111-1111-1111-111111111111",
+    "storageAccountName": "tvlocal-11111111-1111-1111-1111-111111111111",
+    "status": "Completed",
+    "progress": 100,
+    "progressMessage": "Backup completed successfully",
+    "startTime": "2026-11-10T02:00:00.000Z",
+    "authMode": "delegated",
+    "log": [
+      "Backing up tenant 11111111-1111-1111-1111-111111111111 to this device (encrypted).",
+      "Backup folder: backup-2026-11-10-020000",
+      "Found 2 device configuration profiles.",
+      "Found 1 settings catalog and endpoint security policies.",
+      "Found 0 administrative templates.",
+      "Found 0 reusable settings.",
+      "Found 0 BIOS configurations.",
+      "Found 1 compliance policies.",
+      "Found 0 settings catalog compliance policies.",
+      "Found 0 compliance scripts.",
+      "Found 1 compliance policy settings.",
+      "Found 0 security baselines and template profiles.",
+      "Skipped Windows PowerShell scripts: access was denied. The app registration may lack the permission or admin consent, or your Intune role may not allow it.",
+      "Found 0 macOS shell scripts.",
+      "Found 0 macOS custom attributes.",
+      "Found 0 remediations.",
+      "Found 0 feature update profiles.",
+      "Found 0 expedited quality update profiles.",
+      "Found 0 hotpatch quality update policies.",
+      "Found 0 driver update profiles.",
+      "Found 0 app categories.",
+      "Found 0 apps.",
+      "Found 0 app configuration policies for managed devices.",
+      "Found 0 app configuration policies for managed apps.",
+      "Found 0 iOS app protection policies.",
+      "Found 0 Android app protection policies.",
+      "Found 0 Windows app protection policies.",
+      "Found 0 policy sets.",
+      "Found 0 enrollment configurations.",
+      "Found 0 Windows Autopilot deployment profiles.",
+      "Found 1 Windows Autopilot devices.",
+      "Found 0 Apple user enrollment profiles.",
+      "Found 0 Apple automated device enrollment tokens and profiles.",
+      "Found 0 Android Enterprise enrollment profiles.",
+      "Found 1 device categories.",
+      "Found 0 terms and conditions.",
+      "Found 0 assignment filters.",
+      "Found 1 scope tags (1 built-in skipped).",
+      "Found 0 Intune roles.",
+      "Found 0 compliance notification templates.",
+      "Found 0 Company Portal branding.",
+      "Found 0 device clean-up rules.",
+      "Found 0 multi admin approval policies.",
+      "Backed up 2 device configuration profiles.",
+      "Backed up 1 settings catalog and endpoint security policies.",
+      "Backed up 1 compliance policies.",
+      "Backed up 1 compliance policy settings.",
+      "Backed up 1 Windows Autopilot devices.",
+      "Backed up 1 device categories.",
+      "Backed up 1 scope tags.",
+      "Kept 1 older backup because it holds the newest copy of types this backup leaves out.",
+      "Backup completed: 7 policies and 1 Windows Autopilot devices in 0s."
+    ],
+    "backupFolder": "backup-2026-11-10-020000",
+    "results": {
+      "types": [
+        {
+          "folder": "DeviceConfigurations",
+          "label": "device configuration profiles",
+          "area": "Device configuration",
+          "state": "saved",
+          "saved": 2,
+          "failed": 0,
+          "found": 2
+        },
+        {
+          "folder": "ConfigurationPolicies",
+          "label": "settings catalog and endpoint security policies",
+          "area": "Device configuration",
+          "state": "saved",
+          "saved": 1,
+          "failed": 0,
+          "found": 1
+        },
+        {
+          "folder": "GroupPolicyConfigurations",
+          "label": "administrative templates",
+          "area": "Device configuration",
+          "state": "empty",
+          "saved": 0,
+          "failed": 0,
+          "found": 0
+        },
+        {
+          "folder": "ReusablePolicySettings",
+          "label": "reusable settings",
+          "area": "Device configuration",
+          "state": "empty",
+          "saved": 0,
+          "failed": 0,
+          "found": 0
+        },
+        {
+          "folder": "HardwareConfigurations",
+          "label": "BIOS configurations",
+          "area": "Device configuration",
+          "state": "empty",
+          "saved": 0,
+          "failed": 0,
+          "found": 0
+        },
+        {
+          "folder": "CompliancePolicies",
+          "label": "compliance policies",
+          "area": "Compliance",
+          "state": "saved",
+          "saved": 1,
+          "failed": 0,
+          "found": 1
+        },
+        {
+          "folder": "ComplianceSettingsPolicies",
+          "label": "settings catalog compliance policies",
+          "area": "Compliance",
+          "state": "empty",
+          "saved": 0,
+          "failed": 0,
+          "found": 0
+        },
+        {
+          "folder": "ComplianceScripts",
+          "label": "compliance scripts",
+          "area": "Compliance",
+          "state": "empty",
+          "saved": 0,
+          "failed": 0,
+          "found": 0
+        },
+        {
+          "folder": "CompliancePolicySettings",
+          "label": "compliance policy settings",
+          "area": "Compliance",
+          "state": "saved",
+          "saved": 1,
+          "failed": 0,
+          "found": 1
+        },
+        {
+          "folder": "EndpointSecurityIntents",
+          "label": "security baselines and template profiles",
+          "area": "Endpoint security",
+          "state": "empty",
+          "saved": 0,
+          "failed": 0,
+          "found": 0
+        },
+        {
+          "folder": "PowerShellScripts",
+          "label": "Windows PowerShell scripts",
+          "area": "Scripts and remediations",
+          "state": "skipped",
+          "saved": 0,
+          "failed": 0,
+          "reason": "Access was denied. The app registration may lack the permission or admin consent, or your Intune role may not allow it."
+        },
+        {
+          "folder": "ShellScripts",
+          "label": "macOS shell scripts",
+          "area": "Scripts and remediations",
+          "state": "empty",
+          "saved": 0,
+          "failed": 0,
+          "found": 0
+        },
+        {
+          "folder": "CustomAttributeScripts",
+          "label": "macOS custom attributes",
+          "area": "Scripts and remediations",
+          "state": "empty",
+          "saved": 0,
+          "failed": 0,
+          "found": 0
+        },
+        {
+          "folder": "Remediations",
+          "label": "remediations",
+          "area": "Scripts and remediations",
+          "state": "empty",
+          "saved": 0,
+          "failed": 0,
+          "found": 0
+        },
+        {
+          "folder": "FeatureUpdateProfiles",
+          "label": "feature update profiles",
+          "area": "Windows updates",
+          "state": "empty",
+          "saved": 0,
+          "failed": 0,
+          "found": 0
+        },
+        {
+          "folder": "QualityUpdateProfiles",
+          "label": "expedited quality update profiles",
+          "area": "Windows updates",
+          "state": "empty",
+          "saved": 0,
+          "failed": 0,
+          "found": 0
+        },
+        {
+          "folder": "QualityUpdatePolicies",
+          "label": "hotpatch quality update policies",
+          "area": "Windows updates",
+          "state": "empty",
+          "saved": 0,
+          "failed": 0,
+          "found": 0
+        },
+        {
+          "folder": "DriverUpdateProfiles",
+          "label": "driver update profiles",
+          "area": "Windows updates",
+          "state": "empty",
+          "saved": 0,
+          "failed": 0,
+          "found": 0
+        },
+        {
+          "folder": "AppCategories",
+          "label": "app categories",
+          "area": "Apps",
+          "state": "empty",
+          "saved": 0,
+          "failed": 0,
+          "found": 0
+        },
+        {
+          "folder": "Apps",
+          "label": "apps",
+          "area": "Apps",
+          "state": "empty",
+          "saved": 0,
+          "failed": 0,
+          "found": 0
+        },
+        {
+          "folder": "AppConfigurationPolicies",
+          "label": "app configuration policies for managed devices",
+          "area": "App protection and configuration",
+          "state": "empty",
+          "saved": 0,
+          "failed": 0,
+          "found": 0
+        },
+        {
+          "folder": "ManagedAppConfigurations",
+          "label": "app configuration policies for managed apps",
+          "area": "App protection and configuration",
+          "state": "empty",
+          "saved": 0,
+          "failed": 0,
+          "found": 0
+        },
+        {
+          "folder": "AppProtectionIOS",
+          "label": "iOS app protection policies",
+          "area": "App protection and configuration",
+          "state": "empty",
+          "saved": 0,
+          "failed": 0,
+          "found": 0
+        },
+        {
+          "folder": "AppProtectionAndroid",
+          "label": "Android app protection policies",
+          "area": "App protection and configuration",
+          "state": "empty",
+          "saved": 0,
+          "failed": 0,
+          "found": 0
+        },
+        {
+          "folder": "AppProtectionWindows",
+          "label": "Windows app protection policies",
+          "area": "App protection and configuration",
+          "state": "empty",
+          "saved": 0,
+          "failed": 0,
+          "found": 0
+        },
+        {
+          "folder": "PolicySets",
+          "label": "policy sets",
+          "area": "Apps",
+          "state": "empty",
+          "saved": 0,
+          "failed": 0,
+          "found": 0
+        },
+        {
+          "folder": "EnrollmentConfigurations",
+          "label": "enrollment configurations",
+          "area": "Enrollment",
+          "state": "empty",
+          "saved": 0,
+          "failed": 0,
+          "found": 0
+        },
+        {
+          "folder": "AutopilotProfiles",
+          "label": "Windows Autopilot deployment profiles",
+          "area": "Enrollment",
+          "state": "empty",
+          "saved": 0,
+          "failed": 0,
+          "found": 0
+        },
+        {
+          "folder": "AutopilotDevices",
+          "label": "Windows Autopilot devices",
+          "area": "Enrollment",
+          "inventory": true,
+          "state": "saved",
+          "saved": 1,
+          "failed": 0,
+          "found": 1
+        },
+        {
+          "folder": "AppleEnrollmentProfiles",
+          "label": "Apple user enrollment profiles",
+          "area": "Enrollment",
+          "state": "empty",
+          "saved": 0,
+          "failed": 0,
+          "found": 0
+        },
+        {
+          "folder": "AppleAutomatedEnrollment",
+          "label": "Apple automated device enrollment tokens and profiles",
+          "area": "Enrollment",
+          "state": "empty",
+          "saved": 0,
+          "failed": 0,
+          "found": 0
+        },
+        {
+          "folder": "AndroidEnrollmentProfiles",
+          "label": "Android Enterprise enrollment profiles",
+          "area": "Enrollment",
+          "state": "empty",
+          "saved": 0,
+          "failed": 0,
+          "found": 0
+        },
+        {
+          "folder": "DeviceCategories",
+          "label": "device categories",
+          "area": "Enrollment",
+          "state": "saved",
+          "saved": 1,
+          "failed": 0,
+          "found": 1
+        },
+        {
+          "folder": "TermsAndConditions",
+          "label": "terms and conditions",
+          "area": "Enrollment",
+          "state": "empty",
+          "saved": 0,
+          "failed": 0,
+          "found": 0
+        },
+        {
+          "folder": "AssignmentFilters",
+          "label": "assignment filters",
+          "area": "Tenant administration",
+          "state": "empty",
+          "saved": 0,
+          "failed": 0,
+          "found": 0
+        },
+        {
+          "folder": "ScopeTags",
+          "label": "scope tags",
+          "area": "Tenant administration",
+          "state": "saved",
+          "saved": 1,
+          "failed": 0,
+          "found": 1,
+          "builtInSkipped": 1
+        },
+        {
+          "folder": "RoleDefinitions",
+          "label": "Intune roles",
+          "area": "Tenant administration",
+          "state": "empty",
+          "saved": 0,
+          "failed": 0,
+          "found": 0
+        },
+        {
+          "folder": "NotificationTemplates",
+          "label": "compliance notification templates",
+          "area": "Tenant administration",
+          "state": "empty",
+          "saved": 0,
+          "failed": 0,
+          "found": 0
+        },
+        {
+          "folder": "Branding",
+          "label": "Company Portal branding",
+          "area": "Tenant administration",
+          "state": "empty",
+          "saved": 0,
+          "failed": 0,
+          "found": 0
+        },
+        {
+          "folder": "DeviceCleanupRules",
+          "label": "device clean-up rules",
+          "area": "Tenant administration",
+          "state": "empty",
+          "saved": 0,
+          "failed": 0,
+          "found": 0
+        },
+        {
+          "folder": "MultiAdminApprovalPolicies",
+          "label": "multi admin approval policies",
+          "area": "Tenant administration",
+          "state": "empty",
+          "saved": 0,
+          "failed": 0,
+          "found": 0
+        }
+      ],
+      "notices": [
+        {
+          "level": "info",
+          "message": "Kept 1 older backup because it holds the newest copy of types this backup leaves out."
+        }
+      ],
+      "totalPolicies": 7,
+      "warnings": 0
+    },
+    "failures": 0,
+    "totalPolicies": 7,
+    "failedTypes": [],
+    "endTime": "2026-11-10T02:00:00.000Z"
+  },
+  "scheduled": {
+    "status": "Completed",
+    "message": "Backup completed successfully"
+  },
+  "notification": "Success",
+  "backupFolders": [
+    "backup-2026-09-01-020000",
+    "backup-2026-11-05-020000",
+    "backup-2026-11-10-020000"
+  ]
+}
