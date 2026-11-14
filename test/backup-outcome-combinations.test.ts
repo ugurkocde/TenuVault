@@ -222,6 +222,45 @@ describe("every outcome combination against what reads a backup's result", () =>
   })
 })
 
+describe("a run that stops before it finished", () => {
+  it("records the outcomes in the manifest it leaves behind, with every unfinished type as not read, and hands them over once", async () => {
+    const handed: RunOutcomes[] = []
+    const finished: string[] = []
+    // The sign-in is refused on an object read, after the run claimed its folder.
+    const setup = fixture(tenant({ "/beta/deviceManagement/deviceManagementScripts/ps1?$expand=assignments": refusal(401, "InvalidAuthenticationToken", "Access token has expired or is not yet valid.") }), {
+      services: () => ({ services: ALL }), concurrency: 1, onOutcomes: (outcomes) => handed.push(outcomes), onFinished: (job) => finished.push(job.id),
+    })
+    const job = await setup.run()
+    expect(job.status).toBe("Failed")
+    const metadata = await setup.manifest(job)
+    expect(metadata).toMatchObject({ Status: "Failed", Coverage: "Incomplete", RunId: job.id, Error: "Access token has expired or is not yet valid." })
+    const recorded = Object.fromEntries(metadata.Outcomes.map((entry: { Folder: string; Outcome: string }) => [entry.Folder, entry]))
+    // Read before the stop: saved. Being read, or not reached: not read, with what the backup holds of it.
+    expect(recorded.CompliancePolicies).toEqual({ Folder: "CompliancePolicies", Outcome: "saved", Saved: 1 })
+    expect(recorded.PowerShellScripts).toEqual({ Folder: "PowerShellScripts", Outcome: "failed", Saved: 0, Error: "The backup stopped before this type was read in full." })
+    expect(recorded.FederatedTokenValidationPolicy).toEqual({ Folder: "FederatedTokenValidationPolicy", Outcome: "notConfigured" })
+    expect(job.outcomes).toMatchObject({ runId: job.id, status: "Failed", coverage: "incomplete" })
+    expect(handed).toEqual([job.outcomes])
+    expect(finished).toEqual([job.id])
+    // A stopped backup is never imported, here or by release 0.5.x.
+    const files = await exported(setup, job)
+    expect(await answer(async () => reviewArchive(await zipped(files)))).toBe(INCOMPLETE)
+    expect(await answer(() => reviewAsRelease05(files))).toBe(INCOMPLETE)
+  })
+
+  it("hands over no outcomes for a run that never got to choose what to read, and a failing listener changes nothing", async () => {
+    const handed: RunOutcomes[] = []
+    const refused = fixture(tenant(), { services: () => ({ services: INTUNE }), onOutcomes: (outcomes) => handed.push(outcomes), unattendedTokens: () => ({ mode: "app-only", graph: async () => "t", storage: async () => "t", excludedTypes: async () => { throw new Error("AADSTS700016: the Backup Reader was deleted") } }) })
+    const stopped = await refused.run({ trigger: "scheduled" })
+    expect(stopped.status).toBe("Failed")
+    expect(stopped.outcomes).toBeUndefined()
+    expect(handed).toEqual([])
+    const throwing = fixture(tenant(), { services: () => ({ services: INTUNE }), onOutcomes: () => { throw new Error("store is full") } })
+    const job = await throwing.run()
+    expect(job).toMatchObject({ status: "Completed", coverage: "complete" })
+  })
+})
+
 describe("a backup that crosses versions", () => {
   it("written by this version imports into release 0.5.x with its added fields, and those fields are all it added", async () => {
     const setup = fixture(tenant({ "/beta/deviceManagement/deviceManagementScripts": denied }), { services: () => ({ services: INTUNE }) })
