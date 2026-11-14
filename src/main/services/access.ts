@@ -1,6 +1,12 @@
 import { MODULES, type ServiceSelection } from "../../shared/services/modules"
 
 /**
+ * No service that can prove management access is on for the tenant. The message names a setting to
+ * change and nothing about the account, so it is shown as it is; signing in again would not help.
+ */
+export class ServiceOffError extends Error {}
+
+/**
  * Proves that an account can read a service the tenant backs up, with that service's one small
  * read. The check follows the tenant's services, so a tenant without Intune is not asked for Intune
  * access: the first service that is on and has such a read decides. A tenant with no such service
@@ -10,7 +16,7 @@ import { MODULES, type ServiceSelection } from "../../shared/services/modules"
  */
 export async function requireServiceAccess(selection: ServiceSelection, read: (path: string) => Promise<Response>, what: string): Promise<void> {
   const module = MODULES.find((candidate) => candidate.accessProbe && selection.services.includes(candidate.id))
-  if (!module?.accessProbe) throw new Error(`Turn on ${MODULES.filter((candidate) => candidate.accessProbe).map((candidate) => candidate.label).join(" or ")} for this tenant in Settings before opening ${what}.`)
+  if (!module?.accessProbe) throw new ServiceOffError(`Turn on ${MODULES.filter((candidate) => candidate.accessProbe).map((candidate) => candidate.label).join(" or ")} for this tenant in Settings before opening ${what}.`)
   const response = await read(module.accessProbe)
   if (!response.ok || !Array.isArray((await response.json()).value)) throw new Error(`${module.label} management access is required for ${what}.`)
 }

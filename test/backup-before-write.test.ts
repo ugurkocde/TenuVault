@@ -52,7 +52,18 @@ describe.each(["oib", "change-set"] as const)("%s backup checks", (workflow) => 
     // Intune off: the run succeeds and records only the Conditional Access folders it attempted.
     const metadata = { ...COMPLETE_BACKUP_METADATA, Scope: { Excluded: [], Included: ["NamedLocations", "AuthenticationStrengths", "ConditionalAccessPolicies"] } }
     context.post.mockImplementation((path, body) => path === "/api/list-backup-contents" ? Promise.resolve({ ok: true, status: 200, json: { content: { metadata } } }) : post(path, body))
-    await expect(backupBeforeWrite(context.options)).rejects.toMatchObject({ status: 502, message: expect.stringContaining("settings catalog and endpoint security policies not part of the backup (the service is turned off for this tenant") })
+    const refusal = await backupBeforeWrite(context.options).catch((error: Error & { status?: number }) => error)
+    expect(refusal).toMatchObject({ status: 502, message: expect.stringContaining("settings catalog and endpoint security policies not part of the backup (the service is turned off for this tenant") })
+    // The advice starts with the step that fixes it.
+    expect((refusal as Error).message).toMatch(workflow === "oib" ? /Turn the service on, grant the missing permissions and try again\.$/ : /Turn the service on, include those types in the backup scope, grant the missing permissions and apply again\.$/)
+  })
+
+  it("keeps the advice as it was for a type the backup scope left out", async () => {
+    const context = setup(workflow)
+    const post = context.post.getMockImplementation()!
+    const metadata = { ...COMPLETE_BACKUP_METADATA, Scope: { Excluded: ["ConfigurationPolicies"], Included: ["ConfigurationPolicies"] } }
+    context.post.mockImplementation((path, body) => path === "/api/list-backup-contents" ? Promise.resolve({ ok: true, status: 200, json: { content: { metadata } } }) : post(path, body))
+    await expect(backupBeforeWrite(context.options)).rejects.toMatchObject({ message: expect.stringMatching(workflow === "oib" ? / Grant the missing permissions and try again\.$/ : / Include those types in the backup scope, grant the missing permissions and apply again\.$/) })
   })
 
   it("accepts a backup that records the written type among the types it attempted", async () => {
