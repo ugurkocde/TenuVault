@@ -1,22 +1,116 @@
-import { readFileSync } from "node:fs"
+import { spawnSync } from "node:child_process"
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { homedir, tmpdir } from "node:os"
+import { join, resolve } from "node:path"
 import { describe, expect, it } from "vitest"
-import { CONDITIONAL_ACCESS_ROLE, DEVICE_INVENTORY_ROLE, READER_REQUIRED_ROLES } from "../src/main/auth/backup-reader"
+import { createSelfSignedCertificate } from "../src/main/auth/certificate"
+import { knownPermissions, readerRoles, readerScriptArguments, type PermissionChoice } from "../src/shared/services/manifest"
 
 const readerScript = readFileSync(new URL("../resources/New-TenuVaultBackupReader.ps1", import.meta.url), "utf8")
 const storageScript = readFileSync(new URL("../resources/New-TenuVaultStorage.ps1", import.meta.url), "utf8")
 
-/** The quoted names in the script's $roles array. */
-function scriptRoles(): string[] {
-  const block = /\$roles = @\(([\s\S]*?)\)/.exec(readerScript)![1]!
-  return [...block.matchAll(/"([^"]+)"/g)].map((match) => match[1]!)
-}
+const override = process.env.TENUVAULT_TEST_POWERSHELL
+const powershell = override || ["/usr/bin/pwsh", "/usr/local/bin/pwsh", "/opt/homebrew/bin/pwsh", join(homedir(), ".local/bin/pwsh")].find(existsSync)
+
+// What the script granted before services could be chosen, written out so a change to the
+// permission manifest that moves the default fails here.
+const FIVE = ["DeviceManagementApps.Read.All", "DeviceManagementConfiguration.Read.All", "DeviceManagementRBAC.Read.All", "DeviceManagementScripts.Read.All", "DeviceManagementServiceConfig.Read.All"]
+const DEVICE_INVENTORY_ROLE = "DeviceManagementManagedDevices.Read.All"
+const CONDITIONAL_ACCESS_ROLE = "Policy.Read.All"
+
+/** Script parameters as the harness takes them, from a command line such as " -Services Intune,Entra -IncludeDeviceCategories". */
+const parameters = (commandLine: string): Record<string, unknown> =>
+  Object.fromEntries([...commandLine.matchAll(/-(\w+)(?: ([^-\s]\S*))?/g)].map((match) => [match[1]!, match[2] ? match[2].split(",") : true]))
 
 describe("New-TenuVaultBackupReader.ps1", () => {
-  it("grants exactly the read permissions the app requires, and the device inventory one only on request", () => {
-    expect(scriptRoles().sort()).toEqual([...READER_REQUIRED_ROLES].sort())
-    expect(readerScript).toContain(`if ($IncludeDeviceCategories) { $roles += "${DEVICE_INVENTORY_ROLE}" }`)
-    expect(readerScript).toContain(`if ($IncludeConditionalAccess) { $roles += "${CONDITIONAL_ACCESS_ROLE}" }`)
-    expect(scriptRoles().some((role) => role.includes("ReadWrite"))).toBe(false)
+  it("has no write permission anywhere, and adds the device inventory and Conditional Access ones only on request", () => {
+    expect(readerScript).not.toMatch(/'[A-Za-z.-]+\.ReadWrite[A-Za-z.]*'/)
+    expect(readerScript).toContain(`if ($IncludeDeviceCategories -and $roles -notcontains "${DEVICE_INVENTORY_ROLE}") { $roles += "${DEVICE_INVENTORY_ROLE}" }`)
+    expect(readerScript).toContain(`if ($IncludeConditionalAccess -and $roles -notcontains "${CONDITIONAL_ACCESS_ROLE}") { $roles += "${CONDITIONAL_ACCESS_ROLE}" }`)
+  })
+
+  it("checks the services and areas before it connects to Microsoft Graph", () => {
+    expect(readerScript.indexOf("# END PERMISSION TABLE")).toBeLessThan(readerScript.indexOf("Connect-MgGraph @connectParams"))
+    expect(readerScript.indexOf("which belongs to a service that is not in -Services")).toBeLessThan(readerScript.indexOf("Connect-MgGraph @connectParams"))
+  })
+
+  describe.runIf(Boolean(powershell))("run against stand-ins for the Microsoft Graph commands", () => {
+    function run(args: Record<string, unknown> = {}, state: { existing?: boolean; assigned?: string[] } = {}) {
+      const dir = mkdtempSync(join(tmpdir(), "reader-script-"))
+      try {
+        const file = (name: string) => join(dir, name)
+        writeFileSync(file("reader.cer"), createSelfSignedCertificate("TenuVault Backup Reader (TEST)", 365, new Date()).certificatePem)
+        writeFileSync(file("arguments.json"), JSON.stringify({ CertificatePath: file("reader.cer"), ...args }))
+        writeFileSync(file("state.json"), JSON.stringify({ offered: knownPermissions("application")[0]!.permissions, existing: false, assigned: [], ...state }))
+        const result = spawnSync(powershell!, ["-NoProfile", "-NonInteractive", "-File", resolve("test/fixtures/backup-reader/reader-harness.ps1"), "-Script", resolve("resources/New-TenuVaultBackupReader.ps1"), "-ArgumentsFile", file("arguments.json"), "-StateFile", file("state.json"), "-OutputFile", file("calls.json")], { encoding: "utf8", timeout: 60_000 })
+        const calls = existsSync(file("calls.json")) ? (JSON.parse(readFileSync(file("calls.json"), "utf8").replace(/^\uFEFF/, "")) as { Name: string; Value: unknown }[]) : []
+        const named = (name: string) => calls.filter((call) => call.Name === name).map((call) => call.Value)
+        const roles = (values: unknown) => (values as string[]).map((id) => id.replace("role/", ""))
+        return { code: result.status, text: result.stdout + result.stderr, calls, declared: roles(named("create")[0] ?? named("update")[0] ?? []), granted: roles(named("grant")), removed: (named("remove") as string[]).map((id) => id.replace("assignment/", "")) }
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    }
+
+    it.each([resolve("resources/New-TenuVaultBackupReader.ps1"), resolve("test/fixtures/backup-reader/reader-harness.ps1")])("parses %s with no edition-specific syntax", (file) => {
+      const result = spawnSync(powershell!, ["-NoProfile", "-File", resolve("test/fixtures/app-registration/parse-script.ps1"), "-Script", file], { encoding: "utf8" })
+      expect(result.error).toBeUndefined()
+      expect(result.status, result.stdout + result.stderr).toBe(0)
+    })
+
+    it("grants exactly the five Intune read permissions without parameters, in the order it always has", () => {
+      const result = run()
+      expect(result.code, result.text).toBe(0)
+      expect(result.declared).toEqual(FIVE)
+      expect(result.granted).toEqual(FIVE)
+      expect(readerRoles()).toEqual(FIVE)
+    }, 90_000)
+
+    it.each([
+      [{ IncludeDeviceCategories: true }, [...FIVE, DEVICE_INVENTORY_ROLE]],
+      [{ IncludeConditionalAccess: true }, [...FIVE, CONDITIONAL_ACCESS_ROLE]],
+      [{ IncludeDeviceCategories: true, IncludeConditionalAccess: true }, [...FIVE, DEVICE_INVENTORY_ROLE, CONDITIONAL_ACCESS_ROLE]],
+    ])("keeps the existing switches working: %j", (switches, expected) => {
+      const result = run(switches)
+      expect(result.code, result.text).toBe(0)
+      expect(result.declared).toEqual(expected)
+      expect(result.granted).toEqual(expected)
+    }, 90_000)
+
+    it.each<[string, PermissionChoice]>([
+      ["Entra ID alone", { entra: { access: "backup" } }],
+      ["Defender alone", { defender: { access: "backup" } }],
+      ["Conditional Access alone", { conditionalAccess: { access: "backup" } }],
+      ["Intune and Entra ID with two opt-in areas", { intune: { access: "backup" }, entra: { access: "backup", areas: ["groups", "applications"] } }],
+      ["every service with every area", { intune: { access: "backup", areas: ["devices"] }, conditionalAccess: { access: "backup" }, entra: { access: "backup", areas: ["groups", "usersAndDevices", "applications"] }, defender: { access: "backup" } }],
+    ])("grants what the permission manifest names for %s, from the command the app shows", (_name, choice) => {
+      const expected = [...readerRoles(choice)]
+      // The command the Backup Reader card builds for a reader with these roles asks for the same roles again.
+      const result = run(parameters(readerScriptArguments(expected)))
+      expect(result.code, result.text).toBe(0)
+      expect([...result.declared].sort()).toEqual([...expected].sort())
+      expect([...result.granted].sort()).toEqual([...expected].sort())
+      expect(result.declared.some((role) => role.includes("ReadWrite"))).toBe(false)
+      // Without the device inventory switch, the roles come in the manifest's own order.
+      if (!choice.intune?.areas) expect(result.declared).toEqual(expected)
+    }, 90_000)
+
+    it("sets an existing reader to exactly the chosen services: it grants what is missing and removes the rest", () => {
+      const entra = [...readerRoles({ entra: { access: "backup" } })]
+      const result = run({ Services: ["Entra"] }, { existing: true, assigned: [...FIVE, "Policy.Read.All"] })
+      expect(result.code, result.text).toBe(0)
+      expect(result.declared).toEqual(entra)
+      expect(result.removed).toEqual(FIVE)
+      expect(result.granted).toEqual(entra.filter((role) => role !== "Policy.Read.All"))
+      expect(result.text).toContain("Removing DeviceManagementApps.Read.All because the services and areas of this run do not need it.")
+    }, 90_000)
+
+    it("refuses an area whose service was not chosen, before it signs in", () => {
+      const result = run({ Areas: ["Groups"] })
+      expect(result.code).toBe(1)
+      expect(result.text).toContain("-Areas names Groups, which belongs to a service that is not in -Services. Nothing was changed.")
+      expect(result.calls).toEqual([])
+    }, 90_000)
   })
 
   it("removes any other permission granted to the reader", () => {

@@ -1,6 +1,8 @@
 // The app registration TenuVault Desktop signs in with, as the setup script creates it
 // (resources/New-TenuVaultDesktopApp.ps1). Shown in the guided setup before anyone consents.
 
+import { DEFAULT_SETUP_CHOICE, requestedPermissions, setupScriptArguments, type PermissionChoice } from "./services/manifest"
+
 export const SETUP_SCRIPT_FILE_NAME = "New-TenuVaultDesktopApp.ps1"
 export const SETUP_SCRIPT_DOWNLOAD_URL = "https://docs.tenuvault.com/downloads/New-TenuVaultDesktopApp.ps1"
 export const APP_REGISTRATION_GUIDE_URL = "https://docs.tenuvault.com/getting-started/app-registration/"
@@ -44,37 +46,16 @@ export function offersSignInHandoff(message: string): boolean {
   return (message.match(/AADSTS\d+/g) ?? []).some((code) => HANDOFF_SIGN_IN_CODES.includes(code))
 }
 
-/** The delegated permissions the setup script grants admin consent for by default, per API. */
-export const DESKTOP_APP_PERMISSIONS: readonly { api: string; appId: string; permissions: readonly string[]; purpose: string }[] = [
-  {
-    api: "Microsoft Graph",
-    appId: "00000003-0000-0000-c000-000000000000",
-    permissions: [
-      "User.Read",
-      "Organization.Read.All",
-      "Policy.Read.All",
-      "DeviceManagementConfiguration.ReadWrite.All",
-      "DeviceManagementApps.ReadWrite.All",
-      "DeviceManagementServiceConfig.ReadWrite.All",
-      "DeviceManagementScripts.ReadWrite.All",
-      "DeviceManagementRBAC.ReadWrite.All",
-      "DeviceManagementManagedDevices.Read.All",
-    ],
-    purpose: "Reads Intune configuration for backups, and writes it only when you restore or deploy.",
-  },
-  {
-    api: "Azure Service Management",
-    appId: "797f4846-ba00-4fd7-ba43-dac1f8f63013",
-    permissions: ["user_impersonation"],
-    purpose: "Lists your storage accounts, only if you keep backups in Azure.",
-  },
-  {
-    api: "Azure Storage",
-    appId: "e406a681-f3d4-42a8-90b6-c2b029497af1",
-    permissions: ["user_impersonation"],
-    purpose: "Reads and writes backup files, only if you keep backups in Azure.",
-  },
-]
+const PURPOSE: Record<string, string> = {
+  "Microsoft Graph": "Reads Intune configuration for backups, and writes it only when you restore or deploy.",
+  "Azure Service Management": "Lists your storage accounts, only if you keep backups in Azure.",
+  "Azure Storage": "Reads and writes backup files, only if you keep backups in Azure.",
+}
+
+/** The delegated permissions a setup without choices grants admin consent for, per API, from the permission manifest. */
+export const DESKTOP_APP_PERMISSIONS: readonly { api: string; appId: string; permissions: readonly string[]; purpose: string }[] = requestedPermissions(DEFAULT_SETUP_CHOICE, "delegated").map(
+  (entry) => ({ ...entry, purpose: PURPOSE[entry.api]! }),
+)
 
 const GUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 
@@ -92,9 +73,12 @@ export function parseSetupOutput(text: string): { tenantId?: string; clientId?: 
   }
 }
 
-/** Plain text instructions for the Entra administrator who creates the app registration. */
-export function setupHandoffText(): string {
-  const permissions = DESKTOP_APP_PERMISSIONS.map((entry) => `  ${entry.api}: ${entry.permissions.join(", ")}`).join("\n")
+/**
+ * Plain text instructions for the Entra administrator who creates the app registration. With a
+ * choice, the command and the permission list are the ones for that choice.
+ */
+export function setupHandoffText(choice: PermissionChoice = DEFAULT_SETUP_CHOICE): string {
+  const permissions = requestedPermissions(choice, "delegated").map((entry) => `  ${entry.api}: ${entry.permissions.join(", ")}`).join("\n")
   return [
     "Could you create the app registration TenuVault Desktop signs in with? It takes a few minutes.",
     "",
@@ -106,7 +90,7 @@ export function setupHandoffText(): string {
     "",
     `1. Download the setup script: ${SETUP_SCRIPT_DOWNLOAD_URL}`,
     "2. Run it in PowerShell (PowerShell 7 on macOS). It installs nothing:",
-    `   ./${SETUP_SCRIPT_FILE_NAME}`,
+    `   ./${SETUP_SCRIPT_FILE_NAME}${setupScriptArguments(choice)}`,
     "   To limit sign-in to a group of admins, add: -AllowedGroupId <group object id>",
     "3. Sign in with your admin account in the browser window it opens. Microsoft may first ask you to consent to",
     "   Microsoft Graph Command Line Tools, which the script signs in through to create the app registration.",

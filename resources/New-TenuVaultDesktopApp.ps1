@@ -36,6 +36,23 @@
     Assigning a group needs Entra ID P1 or P2, and only direct members get access (nested
     groups do not). Off by default so an admin who is not in the group is not locked out.
 
+.PARAMETER Services
+    The services the app registration can back up: Intune, ConditionalAccess, Entra, Defender.
+    Default: Intune and ConditionalAccess, which is what the script has always requested. Each
+    service brings its own read permissions; nothing is requested for a service you leave out.
+
+.PARAMETER RestoreAccess
+    The services TenuVault may also restore, which adds their write permissions. Default: Intune,
+    when Intune is one of the services, as before. When you pass it, name every service that gets
+    write permissions; pass None to request read permissions only. Restoring Intune device
+    categories and clean-up rules needs DeviceManagementManagedDevices.ReadWrite.All, and restoring
+    Entra group expiration policies needs Directory.ReadWrite.All; the script never requests these
+    two, because they reach far beyond those settings.
+
+.PARAMETER Areas
+    Areas of Entra that are backed up only on request: Groups, UsersAndDevices, Applications.
+    Groups and UsersAndDevices hold personal data. Needs Entra in -Services.
+
 .PARAMETER IncludeGroupRead
     When set, also requests the delegated Group.Read.All permission. The hygiene
     unresolved groups check needs it to tell whether a referenced group exists. Without
@@ -56,7 +73,8 @@
 .PARAMETER IncludeConditionalAccessRestore
     When set, also requests the delegated Policy.ReadWrite.ConditionalAccess permission, so
     TenuVault can restore Entra Conditional Access policies, named locations and authentication
-    strengths. Backing them up only needs Policy.Read.All, which is always requested. A restore
+    strengths. Backing them up only needs Policy.Read.All, which is requested by default and
+    added with this switch when your choice of services left it out. A restore
     still needs an admin with the Conditional Access Administrator or Security Administrator
     role, and restored policies start in report-only mode. Off by default, so the default
     permission set cannot change Conditional Access.
@@ -78,12 +96,21 @@
 
 .EXAMPLE
     ./New-TenuVaultDesktopApp.ps1 -TenantId contoso.onmicrosoft.com -IncludeGroupRead
+
+.EXAMPLE
+    ./New-TenuVaultDesktopApp.ps1 -Services Intune,Entra -RestoreAccess Intune
+
+.EXAMPLE
+    ./New-TenuVaultDesktopApp.ps1 -Services Entra,Defender -RestoreAccess None -Areas Groups
 #>
 [CmdletBinding()]
 param(
     [string]$TenantId,
     [string]$DisplayName = "TenuVault Desktop",
     [string]$AllowedGroupId,
+    [ValidateSet('Intune', 'ConditionalAccess', 'Entra', 'Defender')][string[]]$Services,
+    [ValidateSet('Intune', 'ConditionalAccess', 'Entra', 'Defender', 'None')][string[]]$RestoreAccess,
+    [ValidateSet('Groups', 'UsersAndDevices', 'Applications')][string[]]$Areas,
     [switch]$IncludeGroupRead,
     [switch]$IncludeNotifications,
     [switch]$IncludeAuditLog,
@@ -105,6 +132,60 @@ if ($AllowedGroupId) {
     $groupGuid = [Guid]::Empty
     if (-not [Guid]::TryParse($AllowedGroupId, [ref]$groupGuid)) { throw "-AllowedGroupId must be the object ID of a group, a GUID. Nothing was changed." }
 }
+
+# What each service and area needs from Microsoft Graph, as delegated permissions: Backup to read
+# it, Restore to read and write it. TenuVault's own tests keep this table equal to the one the app uses.
+# BEGIN PERMISSION TABLE
+$basePermissions = @('User.Read', 'Organization.Read.All')
+$defaultServices = @('ConditionalAccess', 'Intune')
+$defaultRestoreAccess = @('Intune')
+$permissionTable = @(
+    @{ Service = 'ConditionalAccess'; Area = 'NamedLocations'; OptIn = $false; Backup = @('Policy.Read.All'); Restore = @('Policy.Read.All', 'Policy.ReadWrite.ConditionalAccess') }
+    @{ Service = 'ConditionalAccess'; Area = 'AuthenticationStrengths'; OptIn = $false; Backup = @('Policy.Read.All'); Restore = @('Policy.ReadWrite.ConditionalAccess') }
+    @{ Service = 'ConditionalAccess'; Area = 'Policies'; OptIn = $false; Backup = @('Policy.Read.All'); Restore = @('Policy.Read.All', 'Policy.ReadWrite.ConditionalAccess') }
+    @{ Service = 'Intune'; Area = 'Configuration'; OptIn = $false; Backup = @('DeviceManagementConfiguration.Read.All'); Restore = @('DeviceManagementConfiguration.ReadWrite.All') }
+    @{ Service = 'Intune'; Area = 'Apps'; OptIn = $false; Backup = @('DeviceManagementApps.Read.All'); Restore = @('DeviceManagementApps.ReadWrite.All') }
+    @{ Service = 'Intune'; Area = 'Enrollment'; OptIn = $false; Backup = @('DeviceManagementServiceConfig.Read.All'); Restore = @('DeviceManagementServiceConfig.ReadWrite.All') }
+    @{ Service = 'Intune'; Area = 'Scripts'; OptIn = $false; Backup = @('DeviceManagementScripts.Read.All'); Restore = @('DeviceManagementScripts.ReadWrite.All') }
+    @{ Service = 'Intune'; Area = 'Roles'; OptIn = $false; Backup = @('DeviceManagementRBAC.Read.All'); Restore = @('DeviceManagementRBAC.ReadWrite.All') }
+    @{ Service = 'Intune'; Area = 'Devices'; OptIn = $false; Backup = @('DeviceManagementManagedDevices.Read.All'); Restore = @('DeviceManagementManagedDevices.Read.All') }
+    @{ Service = 'Entra'; Area = 'TenantSettings'; OptIn = $false; Backup = @('Policy.Read.All', 'Policy.Read.PermissionGrant', 'GroupSettings.Read.All', 'Organization.Read.All', 'Domain.Read.All', 'OnPremDirectorySynchronization.Read.All'); Restore = @('Policy.ReadWrite.Authorization', 'Policy.Read.All', 'Policy.ReadWrite.SecurityDefaults', 'Policy.ReadWrite.ConsentRequest', 'Policy.ReadWrite.PermissionGrant', 'Policy.ReadWrite.ApplicationConfiguration', 'Policy.ReadWrite.DeviceConfiguration', 'Policy.ReadWrite.MobilityManagement', 'GroupSettings.ReadWrite.All', 'Organization.ReadWrite.All', 'Domain-InternalFederation.ReadWrite.All', 'Domain.Read.All', 'OnPremDirectorySynchronization.Read.All') }
+    @{ Service = 'Entra'; Area = 'Authentication'; OptIn = $false; Backup = @('Policy.Read.All', 'AuthenticationContext.Read.All', 'Organization.Read.All', 'PublicKeyInfrastructure.Read.All'); Restore = @('Policy.ReadWrite.AuthenticationMethod', 'Policy.ReadWrite.AuthenticationFlows', 'AuthenticationContext.ReadWrite.All', 'Organization.ReadWrite.All', 'PublicKeyInfrastructure.ReadWrite.All', 'Policy.ReadWrite.FedTokenValidation', 'Policy.Read.All') }
+    @{ Service = 'Entra'; Area = 'ExternalIdentities'; OptIn = $false; Backup = @('Policy.Read.All', 'IdentityProvider.Read.All', 'IdentityUserFlow.Read.All', 'EventListener.Read.All', 'CustomAuthenticationExtension.Read.All', 'APIConnectors.Read.All', 'MultiTenantOrganization.Read.All'); Restore = @('Policy.ReadWrite.CrossTenantAccess', 'Policy.ReadWrite.ExternalIdentities', 'Policy.ReadWrite.B2BManagementPolicy', 'IdentityProvider.ReadWrite.All', 'IdentityUserFlow.ReadWrite.All', 'EventListener.ReadWrite.All', 'CustomAuthenticationExtension.ReadWrite.All', 'APIConnectors.ReadWrite.All', 'MultiTenantOrganization.Read.All') }
+    @{ Service = 'Entra'; Area = 'Roles'; OptIn = $false; Backup = @('RoleManagement.Read.Directory', 'PrivilegedEligibilitySchedule.Read.AzureADGroup', 'PrivilegedAssignmentSchedule.Read.AzureADGroup', 'RoleManagementAlert.Read.Directory', 'AdministrativeUnit.Read.All', 'CustomSecAttributeDefinition.Read.All'); Restore = @('RoleManagement.ReadWrite.Directory', 'PrivilegedEligibilitySchedule.ReadWrite.AzureADGroup', 'PrivilegedAssignmentSchedule.ReadWrite.AzureADGroup', 'RoleManagementAlert.ReadWrite.Directory', 'AdministrativeUnit.ReadWrite.All', 'CustomSecAttributeDefinition.ReadWrite.All') }
+    @{ Service = 'Entra'; Area = 'Governance'; OptIn = $false; Backup = @('EntitlementManagement.Read.All', 'AccessReview.Read.All', 'Policy.Read.All', 'LifecycleWorkflows.Read.All', 'Agreement.Read.All'); Restore = @('EntitlementManagement.ReadWrite.All', 'AccessReview.ReadWrite.All', 'Policy.ReadWrite.AccessReview', 'LifecycleWorkflows.ReadWrite.All', 'Agreement.ReadWrite.All') }
+    @{ Service = 'Entra'; Area = 'Groups'; OptIn = $true; Backup = @('Group.Read.All', 'Directory.Read.All'); Restore = @('Group.ReadWrite.All', 'Directory.Read.All') }
+    @{ Service = 'Entra'; Area = 'UsersAndDevices'; OptIn = $true; Backup = @('User.Read.All', 'Device.Read.All', 'OrgContact.Read.All'); Restore = @('User.ReadWrite.All', 'Device.Read.All', 'OrgContact.Read.All') }
+    @{ Service = 'Entra'; Area = 'Applications'; OptIn = $true; Backup = @('Application.Read.All', 'Synchronization.Read.All', 'Directory.Read.All'); Restore = @('Application.ReadWrite.All', 'AppRoleAssignment.ReadWrite.All', 'DelegatedPermissionGrant.ReadWrite.All', 'Synchronization.Read.All') }
+    @{ Service = 'Defender'; Area = 'Detection'; OptIn = $false; Backup = @('CustomDetection.Read.All', 'CaseManagement.Read.All'); Restore = @('CustomDetection.ReadWrite.All', 'CaseManagement.Read.All') }
+    @{ Service = 'Defender'; Area = 'Email'; OptIn = $false; Backup = @('AttackSimulation.Read.All', 'ThreatSubmission.Read.All'); Restore = @('ThreatSubmissionPolicy.ReadWrite.All', 'AttackSimulation.Read.All') }
+    @{ Service = 'Defender'; Area = 'Identity'; OptIn = $false; Backup = @('SecurityIdentitiesSensors.Read.All', 'SecurityIdentitiesAutoConfig.Read.All'); Restore = @('SecurityIdentitiesSensors.ReadWrite.All', 'SecurityIdentitiesAutoConfig.ReadWrite.All') }
+    @{ Service = 'Defender'; Area = 'Posture'; OptIn = $false; Backup = @('SecurityEvents.Read.All', 'RoleManagement.Read.Defender'); Restore = @('SecurityEvents.ReadWrite.All', 'RoleManagement.ReadWrite.Defender') }
+)
+# END PERMISSION TABLE
+$chosenServices = $Services
+if (-not $chosenServices) { $chosenServices = $defaultServices }
+$chosenRestore = $RestoreAccess
+if (-not $PSBoundParameters.ContainsKey('RestoreAccess')) { $chosenRestore = @($defaultRestoreAccess | Where-Object { $chosenServices -contains $_ }) }
+if ($chosenRestore -contains 'None') {
+    if (@($chosenRestore).Count -gt 1) { throw "-RestoreAccess None cannot be combined with a service. Nothing was changed." }
+    $chosenRestore = @()
+}
+foreach ($name in $chosenRestore) {
+    if ($chosenServices -notcontains $name) { throw "-RestoreAccess names $name, which is not one of the services in -Services. Nothing was changed." }
+}
+foreach ($name in $Areas) {
+    if (-not ($permissionTable | Where-Object { $_.OptIn -and $_.Area -eq $name -and $chosenServices -contains $_.Service })) { throw "-Areas names $name, which belongs to a service that is not in -Services. Nothing was changed." }
+}
+$graphScopes = @($basePermissions)
+foreach ($row in $permissionTable) {
+    if ($chosenServices -notcontains $row.Service) { continue }
+    if ($row.OptIn -and $Areas -notcontains $row.Area) { continue }
+    $wanted = $row.Backup
+    if ($chosenRestore -contains $row.Service) { $wanted = $row.Restore }
+    foreach ($name in $wanted) { if ($graphScopes -notcontains $name) { $graphScopes += $name } }
+}
+
 # Windows PowerShell 5.1 does not offer TLS 1.2 by default on older systems.
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 # Behind a proxy that asks for the Windows sign-in, answer with the current user (5.1, then 7).
@@ -335,17 +416,7 @@ $resources = @(
     @{
         Name   = "Microsoft Graph"
         AppId  = "00000003-0000-0000-c000-000000000000"
-        Scopes = @(
-            "User.Read",
-            "Organization.Read.All",
-            "Policy.Read.All",
-            "DeviceManagementConfiguration.ReadWrite.All",
-            "DeviceManagementApps.ReadWrite.All",
-            "DeviceManagementServiceConfig.ReadWrite.All",
-            "DeviceManagementScripts.ReadWrite.All",
-            "DeviceManagementRBAC.ReadWrite.All",
-            "DeviceManagementManagedDevices.Read.All"
-        )
+        Scopes = $graphScopes
     },
     @{
         # Lists subscriptions and storage accounts in the backup storage picker.
@@ -361,28 +432,32 @@ $resources = @(
     }
 )
 
+# Permissions that single features need, added only on request and only once.
+$optional = @()
 if ($IncludeGroupRead) {
     # Opt-in only: lets the hygiene unresolved groups check read group existence.
-    $resources[0].Scopes += "Group.Read.All"
+    $optional += "Group.Read.All"
 }
 
 if ($IncludeConditionalAccessRestore) {
     # Opt-in only: restores Conditional Access. Microsoft Graph also needs Policy.Read.All for these writes.
-    $resources[0].Scopes += "Policy.ReadWrite.ConditionalAccess"
+    $optional += "Policy.ReadWrite.ConditionalAccess"
+    $optional += "Policy.Read.All"
 }
 
 if ($IncludeAuditLog) {
     # Opt-in only: Conditional Access change watching reads the Entra audit log.
-    $resources[0].Scopes += "AuditLog.Read.All"
+    $optional += "AuditLog.Read.All"
 }
 
 if ($IncludeNotifications) {
     # Opt-in only: notification email as the signed-in admin, plus group recipient resolution.
-    $resources[0].Scopes += "Mail.Send"
-    $resources[0].Scopes += "GroupMember.Read.All"
+    $optional += "Mail.Send"
+    $optional += "GroupMember.Read.All"
     # Reading other members' mail and userType needs their basic profile properties.
-    $resources[0].Scopes += "User.Read.All"
+    $optional += "User.Read.All"
 }
+foreach ($name in $optional) { if ($resources[0].Scopes -notcontains $name) { $resources[0].Scopes += $name } }
 
 $requiredResourceAccess = @()
 foreach ($resource in $resources) {
@@ -446,7 +521,11 @@ try {
     }
 } catch { }
 Write-Host ""
-Write-Host "The admins who use TenuVault also need an Intune role (for example Intune Administrator)."
+if ($chosenServices -contains 'Intune') {
+    Write-Host "The admins who use TenuVault also need an Intune role (for example Intune Administrator)."
+} else {
+    Write-Host "The admins who use TenuVault also need a role that can read the services you chose (for example Global Reader)."
+}
 Write-Host "For backups, schedules and the audit log in an Azure storage account they also need 'Storage"
 Write-Host "Blob Data Contributor' and read access on that account (see New-TenuVaultStorage.ps1)."
 if (-not $AllowedGroupId) {

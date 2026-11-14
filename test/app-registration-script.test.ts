@@ -6,6 +6,7 @@ import { tmpdir, homedir } from "node:os"
 import { join, resolve } from "node:path"
 import { describe, expect, it } from "vitest"
 import { DESKTOP_APP_PERMISSIONS, parseSetupOutput } from "../src/shared/app-registration"
+import { graphPermissions, knownPermissions, setupScriptArguments, type PermissionChoice } from "../src/shared/services/manifest"
 
 const override = process.env.TENUVAULT_TEST_POWERSHELL
 const powershell = override || ["/usr/bin/pwsh", "/usr/local/bin/pwsh", "/opt/homebrew/bin/pwsh", join(homedir(), ".local/bin/pwsh")].find(existsSync)
@@ -25,7 +26,8 @@ const API_IDS: Record<string, string> = {
 const GRAPH_DEFAULTS = DESKTOP_APP_PERMISSIONS[0]!.permissions
 // The opt-in permissions, in the order the script appends them.
 const OPT_IN = { IncludeGroupRead: ["Group.Read.All"], IncludeConditionalAccessRestore: ["Policy.ReadWrite.ConditionalAccess"], IncludeAuditLog: ["AuditLog.Read.All"], IncludeNotifications: ["Mail.Send", "GroupMember.Read.All", "User.Read.All"] }
-const offered = (appId: string) => (appId === API_IDS["Microsoft Graph"] ? [...GRAPH_DEFAULTS, ...Object.values(OPT_IN).flat()] : ["user_impersonation"])
+// Microsoft Graph offers every permission the manifest can name, so a choice of services finds its permissions.
+const offered = (appId: string) => (appId === API_IDS["Microsoft Graph"] ? [...new Set([...GRAPH_DEFAULTS, ...Object.values(OPT_IN).flat(), ...knownPermissions("delegated")[0]!.permissions])] : ["user_impersonation"])
 const scopeId = (appId: string, value: string) => `${appId}/${value}`
 const spId = (appId: string) => `sp-${appId}`
 
@@ -187,6 +189,60 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
       expect(result.requests.filter(r => r.status === 503 && r.method === "GET")).toHaveLength(1)
       expect(result.requests.filter(r => r.status === 429 && r.path.endsWith("/oauth2PermissionGrants"))).toHaveLength(1)
     }
+  }, 45000)
+
+  /** Script parameters from a command line such as " -Services Intune,Entra -RestoreAccess None". */
+  const parameters = (commandLine: string): Record<string, unknown> =>
+    Object.fromEntries([...commandLine.matchAll(/-(\w+)(?: ([^-\s]\S*))?/g)].map((match) => [match[1]!, match[2] ? match[2].split(",") : true]))
+  /** The Microsoft Graph permissions the script declared on the app registration and gave consent for. */
+  const requested = (result: Awaited<ReturnType<typeof run>>) => {
+    const app = result.requests.find(r => r.method === "POST" && r.path.endsWith("/applications"))!
+    const access = (app.body.requiredResourceAccess as { resourceAppId: string; resourceAccess: { id: string }[] }[]).find(entry => entry.resourceAppId === API_IDS["Microsoft Graph"])!
+    const grant = result.requests.find(r => r.path.endsWith("/oauth2PermissionGrants") && r.body.resourceId === spId(API_IDS["Microsoft Graph"]!))!
+    return { declared: access.resourceAccess.map(entry => entry.id.replace(`${API_IDS["Microsoft Graph"]}/`, "")), consented: String(grant.body.scope).split(" ") }
+  }
+
+  it.each<[string, PermissionChoice]>([
+    ["Entra ID to back up", { entra: { access: "backup" } }],
+    ["Intune to back up only", { intune: { access: "backup" } }],
+    ["Defender and Conditional Access to back up", { defender: { access: "backup" }, conditionalAccess: { access: "backup" } }],
+    ["Intune to restore and Entra ID with groups to back up", { intune: { access: "restore" }, entra: { access: "backup", areas: ["groups"] } }],
+    ["every service and area to restore", { intune: { access: "restore" }, conditionalAccess: { access: "restore" }, entra: { access: "restore", areas: ["groups", "usersAndDevices", "applications"] }, defender: { access: "restore" } }],
+  ])("requests exactly the permissions of the manifest for %s, from the parameters the app generates", async (_name, choice) => {
+    const result = await run("default", parameters(setupScriptArguments(choice)))
+    expect(result.code, result.text).toBe(0)
+    const expected = [...graphPermissions(choice, "delegated")]
+    expect(requested(result)).toEqual({ declared: expected, consented: expected })
+    // The Azure APIs are requested as always.
+    expect(result.requests.filter(r => r.path.endsWith("/oauth2PermissionGrants") && r.status === 200)).toHaveLength(3)
+    // A service that was not chosen brings nothing, and a backup-only choice no write permission.
+    if (!choice.intune) expect(expected.some(permission => permission.startsWith("DeviceManagement"))).toBe(false)
+    if (Object.values(choice).every(picked => picked.access === "backup")) expect(expected.some(permission => permission.includes("ReadWrite"))).toBe(false)
+  }, 45000)
+
+  it("gives Intune its restore permissions by default when only the services are named", async () => {
+    const result = await run("default", { Services: ["Intune", "Entra"] })
+    expect(result.code, result.text).toBe(0)
+    expect(requested(result).declared).toEqual(graphPermissions({ intune: { access: "restore" }, entra: { access: "backup" } }, "delegated"))
+  }, 45000)
+
+  it("asks once for a permission that a service and a switch both need", async () => {
+    const result = await run("default", { Services: ["Entra"], Areas: ["UsersAndDevices"], IncludeNotifications: true, IncludeConditionalAccessRestore: true })
+    expect(result.code, result.text).toBe(0)
+    const fromServices = graphPermissions({ entra: { access: "backup", areas: ["usersAndDevices"] } }, "delegated")
+    expect(fromServices).toContain("User.Read.All")
+    expect(requested(result).declared).toEqual([...fromServices, "Policy.ReadWrite.ConditionalAccess", "Mail.Send", "GroupMember.Read.All"])
+  }, 45000)
+
+  it.each([
+    [{ Services: ["Intune"], RestoreAccess: ["Entra"] }, "-RestoreAccess names Entra, which is not one of the services in -Services. Nothing was changed."],
+    [{ RestoreAccess: ["None", "Intune"] }, "-RestoreAccess None cannot be combined with a service. Nothing was changed."],
+    [{ Services: ["Intune"], Areas: ["Groups"] }, "-Areas names Groups, which belongs to a service that is not in -Services. Nothing was changed."],
+  ])("refuses a choice that does not fit together before anyone signs in: %j", async (args, message) => {
+    const result = await run("default", args)
+    expect(result.code).toBe(1)
+    expect(result.text).toContain(message)
+    expect(result.requests).toEqual([])
   }, 45000)
 
   it.each([["device-declined", "Device code sign-in was declined"], ["device-expired", "Device code expired"]])("stops a %s sign-in without Graph requests", async (scenario, message) => {
