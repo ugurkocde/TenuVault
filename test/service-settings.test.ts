@@ -102,7 +102,8 @@ const FIXTURES: Array<{ name: string; stored: string | null; conditionalAccess: 
   { name: "unknown service IDs", stored: JSON.stringify({ [TENANT]: { exchange: { enabled: true, connection: "default" }, conditionalAccess: { enabled: true, connection: "default" }, teams: 7 } }), conditionalAccess: true },
   { name: "another tenant's settings only", stored: JSON.stringify({ "99999999-9999-9999-9999-999999999999": { conditionalAccess: { enabled: true, connection: "default" } } }), conditionalAccess: false },
   { name: "a tenant ID asked for in upper case", stored: JSON.stringify({ [TENANT]: { conditionalAccess: { enabled: true, connection: "default" } } }), conditionalAccess: true, readAs: TENANT.toUpperCase() },
-  { name: "a tenant ID stored in mixed case", stored: JSON.stringify({ "0A1B2C3D-4e5f-6A7B-8c9d-0E1F2A3B4C5D": { conditionalAccess: { enabled: true, connection: "default" } } }), conditionalAccess: true },
+  // No version has read a key in another case than lower case, so the choice stored under it was never in effect.
+  { name: "a tenant ID stored in mixed case, which no version reads", stored: JSON.stringify({ "0A1B2C3D-4e5f-6A7B-8c9d-0E1F2A3B4C5D": { conditionalAccess: { enabled: true, connection: "default" } } }), conditionalAccess: false },
 ]
 
 const SCOPES: Array<{ name: string; scope: BackupScope }> = [
@@ -178,13 +179,16 @@ describe("Saving a setting on top of stored settings", () => {
     expect(read(store)).toEqual({ [TENANT]: { conditionalAccess: { connection: "default", enabled: true } } })
   })
 
-  it("saves under the key that already holds the tenant, whatever its case, without a second entry", () => {
+  it("leaves a key stored in another case unread and untouched, and saves under the lower-case key", () => {
     const mixed = "0A1B2C3D-4e5f-6A7B-8c9d-0E1F2A3B4C5D"
-    const store = storeWith(JSON.stringify({ [mixed]: { conditionalAccess: { enabled: true, connection: "default" } } }))
+    const entry = { conditionalAccess: { enabled: true, connection: "default" } }
+    const store = storeWith(JSON.stringify({ [mixed]: entry }))
     const settings = new ModuleSettings(store)
-    settings.set(TENANT, "intune", false)
-    expect(Object.keys(read(store))).toEqual([mixed])
-    expect(settings.selection(TENANT.toUpperCase()).services).toEqual(["conditionalAccess"])
+    // As in the release before: only the lower-case key counts, so Conditional Access stays off.
+    expect(settings.selection(TENANT).services).toEqual(["intune"])
+    settings.set(TENANT, "conditionalAccess", true)
+    expect(read(store)).toEqual({ [mixed]: entry, [TENANT]: { conditionalAccess: { connection: "default", enabled: true } } })
+    expect(settings.selection(TENANT.toUpperCase()).services).toEqual(["intune", "conditionalAccess"])
   })
 
   it("starts over from a corrupt value instead of failing, and replaces a tenant entry that is not an object", () => {
@@ -302,8 +306,9 @@ describe("Any combination of services for a tenant", () => {
       expect(new Set(graphPaths)).toEqual(new Set(included.map((folder) => `/beta/${INTUNE_TYPES.find((type) => type.folder === folder)!.path}`)))
       // The results list holds the selected types only, and a turned-off Intune is named.
       expect(job.results?.types.map((type) => type.folder)).toEqual(included)
-      const notices = job.results?.notices.map((notice) => notice.message) ?? []
-      expect(notices.includes("Intune is turned off for this tenant, so its types are not backed up. Services and permissions in Settings turns it on again.")).toBe(!combination.includes("intune"))
+      // A warning, so a backup without Intune stands out in the result instead of reading like any other success.
+      const warnings = job.results?.notices.filter((notice) => notice.level === "warning").map((notice) => notice.message) ?? []
+      expect(warnings.includes("Intune is turned off for this tenant, so its types are not backed up. Services and permissions in Settings turns it on again.")).toBe(!combination.includes("intune"))
       expect(job.progressMessage).toBe("Backup completed successfully")
     })
 
@@ -373,7 +378,7 @@ describe("The access check behind restore history", () => {
   it("refuses a tenant whose services have no such read yet, without asking Microsoft or naming Intune", async () => {
     reads.length = 0
     for (const services of [[], ["entra"], ["defender"], ["entra", "defender"]] as ModuleId[][]) {
-      await expect(check(services, answer({ value: [] }))).rejects.toThrow("Turn on a service for this tenant in Settings before opening this tenant's restore history.")
+      await expect(check(services, answer({ value: [] }))).rejects.toThrow("Turn on Intune or Entra Conditional Access for this tenant in Settings before opening this tenant's restore history.")
     }
     expect(reads).toEqual([])
   })

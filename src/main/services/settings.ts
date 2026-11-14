@@ -103,12 +103,11 @@ export class ModuleSettings {
 }
 
 /**
- * The tenant's stored settings and the key they are stored under. Tenant IDs are matched without
- * case; this app writes them in lower case, and a setting is saved under the key that already holds
- * the tenant's settings.
+ * The tenant's stored settings and the key they are stored under: the tenant ID in lower case, as
+ * every version has written and read it. A key in another case was never read, so it is not read
+ * now either; reading it would turn on a service the tenant did not back up before the update.
  */
 function tenantEntry(all: Stored, tenantId: string): { key: string; value: Stored } {
-  const lower = tenantId.toLowerCase()
-  const key = Object.hasOwn(all, lower) ? lower : (Object.keys(all).find((candidate) => candidate.toLowerCase() === lower) ?? lower)
-  return { key, value: record(all[key]) ?? {} }
+  const key = tenantId.toLowerCase()
+  return { key, value: Object.hasOwn(all, key) ? (record(all[key]) ?? {}) : {} }
 }

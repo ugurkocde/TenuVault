@@ -472,7 +472,7 @@ export class BackupEngine {
     // A service that is normally on but was turned off for the tenant is named, so a smaller or empty backup explains itself.
     for (const module of MODULES) {
       if (!module.defaultOn || selection.services.includes(module.id) || !includedTypes(scope).some((type) => moduleForFolder(type.folder)?.module === module)) continue
-      this.write(job, `${module.label} is turned off for this tenant, so its types are not backed up. ${SERVICES_PAGE} in Settings turns it on again.`, "info")
+      this.write(job, `${module.label} is turned off for this tenant, so its types are not backed up. ${SERVICES_PAGE} in Settings turns it on again.`, "warning")
     }
     if (scope.excluded.length) {
       this.write(job, `Leaving out ${scope.excluded.length} of ${INTUNE_TYPES.length} types: ${scope.excluded.join(", ")}.`)

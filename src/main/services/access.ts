@@ -10,7 +10,7 @@ import { MODULES, type ServiceSelection } from "../../shared/services/modules"
  */
 export async function requireServiceAccess(selection: ServiceSelection, read: (path: string) => Promise<Response>, what: string): Promise<void> {
   const module = MODULES.find((candidate) => candidate.accessProbe && selection.services.includes(candidate.id))
-  if (!module?.accessProbe) throw new Error(`Turn on a service for this tenant in Settings before opening ${what}.`)
+  if (!module?.accessProbe) throw new Error(`Turn on ${MODULES.filter((candidate) => candidate.accessProbe).map((candidate) => candidate.label).join(" or ")} for this tenant in Settings before opening ${what}.`)
   const response = await read(module.accessProbe)
   if (!response.ok || !Array.isArray((await response.json()).value)) throw new Error(`${module.label} management access is required for ${what}.`)
 }
