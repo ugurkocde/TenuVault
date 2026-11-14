@@ -192,13 +192,13 @@ The certificate is valid for one year. From 30 days before it expires, TenuVault
 Renewal needs your Entra administrator again, for each computer separately. Start as soon as the reminder appears, so their availability (and a PIM activation) does not become the reason a certificate lapses. The request is the same as in step 2 of the setup, with the renewal file and the reader's application ID.
 
 1. Select **Renew certificate** and save the new certificate.
-2. Run the setup script with the new file and the reader's application ID:
+2. Run the setup script with the new file and the reader's application ID. Copy the command from the **Backup Reader** card. For a reader with the five Intune permissions it is:
 
    ```powershell
    ./New-TenuVaultBackupReader.ps1 -CertificatePath ./renewal.cer -AppId <application ID>
    ```
 
-   Use the command on the **Backup Reader** card. The script sets exactly the permissions it is given and removes every other one, so the card's command asks for exactly the permissions the reader has, and a renewal never changes them:
+   The script sets exactly the permissions it is given and removes every other one, so the card's command asks for exactly the permissions the reader has, and a renewal never changes them:
 
    * A reader for Intune gets `-IncludeDeviceCategories` and `-IncludeConditionalAccess` again when it has those permissions.
    * A reader for whole services gets them named with `-Services`, and its areas with `-Areas`.
