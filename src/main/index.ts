@@ -490,7 +490,11 @@ async function bootstrap(): Promise<void> {
     retentionDays: backupAccess.retentionDays,
     // The connection is checked as a backup starts and after it ended. Neither waits for the other:
     // the backup runs whatever the check finds, and a check that fails is only an observation.
-    onStarted: (job, request) => void health.check(request.tenantId, "beforeBackup", { reader: job.authMode === "app-only" }).catch(() => undefined),
+    // Whose sign-in the run reads with is noted as it starts, so its outcomes are credited to that sign-in.
+    onStarted: (job, request) => {
+      health.runStarted(job, request)
+      void health.check(request.tenantId, "beforeBackup", { reader: job.authMode === "app-only" }).catch(() => undefined)
+    },
     onOutcomes: (outcomes, request) => health.recordRun(outcomes, request),
     onFinished: (job, request) => {
       failedAttempts.finished(job, request)
@@ -500,6 +504,7 @@ async function bootstrap(): Promise<void> {
       // Every trigger counts, until the first backup that works.
       diagnostics.record(firstBackupEvent(job))
       tallyBackup(job, request)
+      health.runEnded(job.id)
       void health.check(request.tenantId, "afterBackup", { reader: job.authMode === "app-only", failed: job.status === "Failed" }).catch(() => undefined)
     },
   })

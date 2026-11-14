@@ -1,6 +1,6 @@
 import type { RunOutcomes } from "../../shared/backup-outcomes"
 import { evaluateHealth, type HealthEvaluation, type ServiceChoice } from "../../shared/connection-health/evaluate"
-import type { ConnectionHealthReport, ReaderObservation, TokenObservation } from "../../shared/connection-health/model"
+import type { ConnectionHealthReport, ConnectionMode, ReaderObservation, TokenObservation } from "../../shared/connection-health/model"
 import { runObservation } from "../../shared/connection-health/observe"
 import type { ModuleId } from "../../shared/services/modules"
 import { grantedPermissions } from "../../shared/services/token"
@@ -36,6 +36,17 @@ function answered<T>(request: Promise<T>): Promise<T> {
   })
   request.catch(() => undefined)
   return Promise.race([request, timeout]).finally(() => clearTimeout(timer))
+}
+
+/** Whose sign-in a backup run reads with, as it was when the run got its job. */
+interface RunStart {
+  tenant: string
+  generation: number
+  mode: ConnectionMode
+  /** The app registration the run signs in to: the tenant's for an admin, the Backup Reader's own for the reader. */
+  clientId: string
+  /** The admin who was signed in; left out for the Backup Reader, and when nobody was. */
+  account?: string
 }
 
 export interface HealthHost {
@@ -80,6 +91,8 @@ export class ConnectionHealth {
    * dropped whole: a token like a refusal, a check that waited like one that ran, and the notice.
    */
   private readonly generations = new Map<string, number>()
+  /** The backup runs under way, by run ID, from runStarted to runEnded. */
+  private readonly runs = new Map<string, RunStart>()
 
   constructor(private readonly host: HealthHost) {
     this.now = host.now ?? (() => new Date())
@@ -100,6 +113,9 @@ export class ConnectionHealth {
    */
   check(tenantId: string, trigger: CheckTrigger, options: { reader?: boolean; failed?: boolean } = {}): Promise<ConnectionHealthReport> {
     const tenant = tenantId.toLowerCase()
+    // Every sign-in is followed by a check, so this is where a run under way is seen to have lost its sign-in:
+    // it is credited to nobody, also when that sign-in comes back before the run ends.
+    for (const [runId, started] of this.runs) if (started.tenant === tenant && !this.unchanged(started)) this.runs.delete(runId)
     const reader = options.reader === true || trigger === "again"
     const lane = `${tenant}|${reader ? "reader" : "admin"}`
     const always = trigger === "again" || trigger === "signIn" || (trigger === "afterBackup" && options.failed === true)
@@ -150,15 +166,33 @@ export class ConnectionHealth {
     return this.report(tenant)
   }
 
-  /** Keeps how a backup run ended for each type, under the connection that ran it. */
+  /**
+   * A backup run got its job. Whose sign-in it reads with is noted now, because that is whose run
+   * it is: by the time it ends, another admin may be signed in, or the Backup Reader replaced.
+   */
+  runStarted(run: { id: string; authMode?: ConnectionMode }, request: { tenantId: string; clientId: string }): void {
+    const tenant = request.tenantId.toLowerCase()
+    const identity = this.identity(tenant, run.authMode ?? "delegated", request.clientId)
+    if (identity) this.runs.set(run.id, { tenant, generation: this.generation(tenant), ...identity })
+  }
+
+  /**
+   * Keeps how a backup run ended for each type, under the connection and the account it started
+   * with. Nothing is kept of a run whose sign-in changed while it ran, or whose tenant was signed
+   * out of or removed: what it read, or was refused, cannot be credited to anyone.
+   */
   recordRun(outcomes: RunOutcomes, request: { tenantId: string; clientId: string }): void {
     const tenant = request.tenantId.toLowerCase()
-    const reader = outcomes.authMode === "app-only" ? this.host.reader(tenant) : null
-    if (outcomes.authMode === "app-only" && !reader?.clientId) return
-    const key: ConnectionKey = reader ? { tenantId: tenant, clientId: reader.clientId, mode: "app-only" } : { tenantId: tenant, clientId: request.clientId, mode: "delegated" }
-    this.observations.recordRun(key, runObservation(outcomes, this.host.account(tenant) ?? undefined))
+    const started = this.runs.get(outcomes.runId)
+    if (!started || started.mode !== outcomes.authMode || started.generation !== this.generation(tenant) || !this.unchanged(started)) return
+    this.observations.recordRun({ tenantId: tenant, clientId: started.clientId, mode: started.mode }, runObservation(outcomes, started.account))
     this.keepBaseline(tenant)
     this.host.changed?.(tenant)
+  }
+
+  /** The job of a backup run ended, with outcomes or without: its start is no longer needed. */
+  runEnded(runId: string): void {
+    this.runs.delete(runId)
   }
 
   /** The admin signed out of the tenant: what was observed for the account is dropped, and so is what a check under way still brings. */
@@ -189,6 +223,23 @@ export class ConnectionHealth {
       this.running.delete(lane)
       this.following.delete(lane)
     }
+    for (const [runId, started] of this.runs) if (started.tenant === tenant) this.runs.delete(runId)
+  }
+
+  /** The sign-in a run of this mode reads with now; null for the Backup Reader of a tenant that has none. */
+  private identity(tenant: string, mode: ConnectionMode, clientId: string): Pick<RunStart, "mode" | "clientId" | "account"> | null {
+    if (mode === "app-only") {
+      const reader = this.host.reader(tenant)
+      return reader?.clientId ? { mode, clientId: reader.clientId.toLowerCase() } : null
+    }
+    const account = this.host.account(tenant)
+    return { mode, clientId: clientId.toLowerCase(), ...(account ? { account } : {}) }
+  }
+
+  /** Whether the sign-in a run started with is still the tenant's. */
+  private unchanged(started: RunStart): boolean {
+    const now = this.identity(started.tenant, started.mode, started.clientId)
+    return !!now && now.clientId === started.clientId && now.account === started.account
   }
 
   private adminKey(tenant: string): ConnectionKey | null {

@@ -395,13 +395,20 @@ describe("backup runs", () => {
   const outcomes = (runId: string, endedAt: string, types: Array<Record<string, unknown>>, authMode: "delegated" | "app-only" = "delegated") =>
     ({ runId, tenantId: TENANT, authMode, trigger: "manual" as const, startedAt: endedAt, endedAt, status: "Success", coverage: "complete" as const, types: types as never })
   const saved = (folder: string) => ({ folder, service: "intune", outcome: "saved", saved: 1 })
+  const REQUEST = { tenantId: TENANT, clientId: CLIENT }
+  /** A run from its start to its end, as the engine hands it over: it got its job, how it ended, and its job ended. */
+  const ran = (health: ConnectionHealth, run: ReturnType<typeof outcomes>) => {
+    health.runStarted({ id: run.runId, authMode: run.authMode }, REQUEST)
+    health.recordRun(run, REQUEST)
+    health.runEnded(run.runId)
+  }
   const denied = (folder: string, cause: "permission" | "role" = "permission") => ({ folder, service: "intune", outcome: "skipped", cause, reason: "Access was denied.", status: 403 })
 
   it("are kept under the connection and the account that ran them", () => {
     const { health, state, stored, now, changed } = setup()
     state.reader = { clientId: READER, facts: READER_FACTS }
-    health.recordRun(outcomes("desktop-1", now(), [saved("Apps")]), { tenantId: TENANT, clientId: CLIENT })
-    health.recordRun(outcomes("desktop-2", now(), [saved("Apps")], "app-only"), { tenantId: TENANT, clientId: CLIENT })
+    ran(health, outcomes("desktop-1", now(), [saved("Apps")]))
+    ran(health, outcomes("desktop-2", now(), [saved("Apps")], "app-only"))
     const records = stored()!.connections
     expect(records.find((record) => record.mode === "delegated")).toMatchObject({ clientId: CLIENT, account: ADMIN, runs: [{ runId: "desktop-1", account: ADMIN, read: ["Apps"] }] })
     const reader = records.find((record) => record.mode === "app-only")!
@@ -412,26 +419,112 @@ describe("backup runs", () => {
 
   it("of a Backup Reader that is no longer set up are not kept", () => {
     const { health, stored, now } = setup()
-    health.recordRun(outcomes("desktop-1", now(), [saved("Apps")], "app-only"), { tenantId: TENANT, clientId: CLIENT })
+    ran(health, outcomes("desktop-1", now(), [saved("Apps")], "app-only"))
+    expect(stored()).toBeNull()
+  })
+
+  it("are credited to the admin who was signed in when they started, never to whoever is signed in when they end", async () => {
+    const { health, state, stored, now, pass, changed } = setup()
+    const apps = () => health.report(TENANT).services[0]!.areas.find((area) => area.id === "apps")!
+    await health.check(TENANT, "launch")
+    pass(DAY)
+    health.runStarted({ id: "desktop-1", authMode: "delegated" }, REQUEST)
+    // The run read the apps as the first admin. Another admin signs in while it still writes the backup.
+    state.account = OTHER_ADMIN
+    changed.mockClear()
+    health.recordRun(outcomes("desktop-1", now(), [saved("Apps")]), REQUEST)
+    health.runEnded("desktop-1")
+    // Nothing of it is kept: it is not the new admin's run, and the admin whose run it was is no longer signed in.
+    expect(JSON.stringify(stored())).not.toContain("desktop-1")
+    expect(stored()!.connections[0]).toMatchObject({ account: ADMIN, runs: [], verified: {} })
+    expect(changed).not.toHaveBeenCalled()
+    await health.check(TENANT, "signIn")
+    expect(stored()!.connections[0]).toMatchObject({ account: OTHER_ADMIN, runs: [], verified: {} })
+    expect(apps().verified).toEqual({ state: "noBackup", notVerified: [] })
+    // A run the new admin starts and ends is theirs.
+    pass(DAY)
+    ran(health, outcomes("desktop-2", now(), [saved("Apps")]))
+    expect(stored()!.connections[0]).toMatchObject({ account: OTHER_ADMIN, runs: [{ runId: "desktop-2", account: OTHER_ADMIN }] })
+    expect(apps().verified.state).toBe("verified")
+  })
+
+  it("count for nobody once their sign-in changed while they ran, also when it is back before they end", async () => {
+    const { health, state, stored, now } = setup()
+    await health.check(TENANT, "launch")
+    health.runStarted({ id: "desktop-1", authMode: "delegated" }, REQUEST)
+    // Another admin signs in, then the first one again: some of the run may have read as either.
+    state.account = OTHER_ADMIN
+    await health.check(TENANT, "signIn")
+    state.account = ADMIN
+    await health.check(TENANT, "signIn")
+    health.recordRun(outcomes("desktop-1", now(), [saved("Apps"), denied("ScopeTags")]), REQUEST)
+    expect(JSON.stringify(stored())).not.toContain("desktop-1")
+    expect(stored()!.connections[0]).toMatchObject({ account: ADMIN, runs: [], verified: {}, refused: {} })
+  })
+
+  it("of the Backup Reader are credited to the reader they started with", () => {
+    const OTHER_READER = "77777777-7777-7777-7777-777777777777"
+    const { health, state, stored, now } = setup()
+    state.reader = { clientId: READER, facts: READER_FACTS }
+    // The reader is looked up as the run starts, not when it ends.
+    health.runStarted({ id: "desktop-1", authMode: "app-only" }, REQUEST)
+    state.account = OTHER_ADMIN
+    health.recordRun(outcomes("desktop-1", now(), [saved("Apps")], "app-only"), REQUEST)
+    expect(stored()!.connections).toMatchObject([{ clientId: READER, mode: "app-only", runs: [{ runId: "desktop-1" }] }])
+    // A reader that was replaced, or removed, while the run went on: the run is neither one's.
+    for (const [index, replaced] of [{ clientId: OTHER_READER, facts: READER_FACTS }, null].entries()) {
+      state.reader = { clientId: READER, facts: READER_FACTS }
+      health.runStarted({ id: `desktop-${index + 2}`, authMode: "app-only" }, REQUEST)
+      state.reader = replaced
+      health.recordRun(outcomes(`desktop-${index + 2}`, now(), [saved("Apps")], "app-only"), REQUEST)
+    }
+    expect(stored()!.connections).toHaveLength(1)
+    expect(stored()!.connections[0]!.runs.map((run: { runId: string }) => run.runId)).toEqual(["desktop-1"])
+  })
+
+  it("that end after their tenant was signed out of or removed are not kept", async () => {
+    const { health, backing, stored, now } = setup()
+    await health.check(TENANT, "launch")
+    health.runStarted({ id: "desktop-1", authMode: "delegated" }, REQUEST)
+    health.forget(TENANT)
+    health.recordRun(outcomes("desktop-1", now(), [saved("Apps")]), REQUEST)
+    expect(backing.get(`connectionHealth.${TENANT}`)).toBeNull()
+    // The same admin signs in again before a run that started before the sign-out ends: that sign-in is another one.
+    await health.check(TENANT, "signIn")
+    health.runStarted({ id: "desktop-2", authMode: "delegated" }, REQUEST)
+    health.signedOut(TENANT)
+    await health.check(TENANT, "signIn")
+    health.recordRun(outcomes("desktop-2", now(), [saved("Apps")]), REQUEST)
+    expect(JSON.stringify(stored())).not.toContain("desktop-2")
+  })
+
+  it("whose start was never noted, or whose job has ended, are not kept", () => {
+    const { health, stored, now } = setup()
+    health.recordRun(outcomes("desktop-1", now(), [saved("Apps")]), REQUEST)
+    health.runStarted({ id: "desktop-2", authMode: "delegated" }, REQUEST)
+    health.runEnded("desktop-2")
+    health.recordRun(outcomes("desktop-2", now(), [saved("Apps")]), REQUEST)
+    // A run that says it read as the Backup Reader although it started with the admin's sign-in is not kept either.
+    health.runStarted({ id: "desktop-3", authMode: "delegated" }, REQUEST)
+    health.recordRun(outcomes("desktop-3", now(), [saved("Apps")], "app-only"), REQUEST)
     expect(stored()).toBeNull()
   })
 
   it("show what the last backup verified, and lost access after two runs that were refused", async () => {
     const { health, pass, now } = setup()
     await health.check(TENANT, "launch")
-    const request = { tenantId: TENANT, clientId: CLIENT }
     pass(DAY)
-    health.recordRun(outcomes("desktop-1", now(), [saved("Apps"), saved("DeviceConfigurations")]), request)
+    ran(health, outcomes("desktop-1", now(), [saved("Apps"), saved("DeviceConfigurations")]))
     expect(health.report(TENANT).services[0]!.areas.find((area) => area.id === "apps")!.verified).toEqual({ state: "verified", at: now(), notVerified: [] })
     pass(DAY)
     const firstRefusal = now()
-    health.recordRun(outcomes("desktop-2", now(), [denied("Apps", "role"), saved("DeviceConfigurations")]), request)
+    ran(health, outcomes("desktop-2", now(), [denied("Apps", "role"), saved("DeviceConfigurations")]))
     expect(health.report(TENANT).changes).toEqual([])
     // The same run handed over again is still one run.
-    health.recordRun(outcomes("desktop-2", now(), [denied("Apps", "role"), saved("DeviceConfigurations")]), request)
+    ran(health, outcomes("desktop-2", now(), [denied("Apps", "role"), saved("DeviceConfigurations")]))
     expect(health.report(TENANT).changes).toEqual([])
     pass(DAY)
-    health.recordRun(outcomes("desktop-3", now(), [denied("Apps", "role"), saved("DeviceConfigurations")]), request)
+    ran(health, outcomes("desktop-3", now(), [denied("Apps", "role"), saved("DeviceConfigurations")]))
     const report = health.report(TENANT)
     // The cause is the one the runs found with the token they had: it carried the permission, so they named the account's role.
     expect(report.changes).toEqual([{ kind: "lostAccess", service: "intune", area: "apps", cause: "role", mode: "delegated", folders: ["Apps"], since: firstRefusal }])
@@ -441,21 +534,20 @@ describe("backup runs", () => {
   it("keep a loss when the backups after it select other types, until a backup reads the type again", async () => {
     const { health, pass, now, stored } = setup()
     await health.check(TENANT, "launch")
-    const request = { tenantId: TENANT, clientId: CLIENT }
     const apps = () => health.report(TENANT).services[0]!.areas.find((area) => area.id === "apps")!
     pass(DAY)
-    health.recordRun(outcomes("desktop-1", now(), [saved("Apps"), saved("DeviceConfigurations")]), request)
+    ran(health, outcomes("desktop-1", now(), [saved("Apps"), saved("DeviceConfigurations")]))
     pass(DAY)
     const since = now()
-    health.recordRun(outcomes("desktop-2", now(), [denied("Apps"), saved("DeviceConfigurations")]), request)
+    ran(health, outcomes("desktop-2", now(), [denied("Apps"), saved("DeviceConfigurations")]))
     pass(DAY)
-    health.recordRun(outcomes("desktop-3", now(), [denied("Apps"), saved("DeviceConfigurations")]), request)
+    ran(health, outcomes("desktop-3", now(), [denied("Apps"), saved("DeviceConfigurations")]))
     expect(apps().lostAccess).toBe(true)
     // Backups whose scope leaves the apps out push the runs that were refused out of the list of the last runs:
     // after four of them one refusal is left there, after six none. The loss does not go by that list.
     for (let index = 4; index <= 9; index++) {
       pass(DAY)
-      health.recordRun(outcomes(`desktop-${index}`, now(), [saved("DeviceConfigurations")]), request)
+      ran(health, outcomes(`desktop-${index}`, now(), [saved("DeviceConfigurations")]))
       expect(apps()).toMatchObject({ lostAccess: true, verified: { state: "notVerified", notVerified: ["Apps"] } })
       if (index === 7) expect(stored()!.connections[0]!.runs.flatMap((run: { refused: unknown[] }) => run.refused)).toHaveLength(1)
     }
@@ -463,27 +555,26 @@ describe("backup runs", () => {
     expect(health.report(TENANT).changes).toMatchObject([{ kind: "lostAccess", service: "intune", area: "apps", folders: ["Apps"], since }])
     // One more refusal is the same loss, since the same day.
     pass(DAY)
-    health.recordRun(outcomes("desktop-10", now(), [denied("Apps")]), request)
+    ran(health, outcomes("desktop-10", now(), [denied("Apps")]))
     expect(health.report(TENANT).changes).toMatchObject([{ kind: "lostAccess", area: "apps", since }])
     // Looking at the changes ends the notice, not the state.
     expect(health.acknowledge(TENANT).changes).toEqual([])
     expect(apps().lostAccess).toBe(true)
     // It ends with the backup that reads the apps again.
     pass(DAY)
-    health.recordRun(outcomes("desktop-11", now(), [saved("Apps")]), request)
+    ran(health, outcomes("desktop-11", now(), [saved("Apps")]))
     expect(apps()).toMatchObject({ lostAccess: false, verified: { state: "verified", at: now() } })
     expect(health.report(TENANT).changes).toEqual([])
   })
 
   it("keep the cause they found, and say not verified yet once the permission a run lacked is there", async () => {
     const { health, tokens, pass, now } = setup()
-    const request = { tenantId: TENANT, clientId: CLIENT }
     const apps = () => health.report(TENANT).services[0]!.areas.find((area) => area.id === "apps")!
     tokens.mockResolvedValueOnce(fresh(WITHOUT_APPS))
     await health.check(TENANT, "launch")
     pass(DAY)
     const refusedAt = now()
-    health.recordRun(outcomes("desktop-1", now(), [denied("Apps"), saved("DeviceConfigurations")]), request)
+    ran(health, outcomes("desktop-1", now(), [denied("Apps"), saved("DeviceConfigurations")]))
     expect(apps()).toMatchObject({ permissions: "missing", verified: { state: "notVerified", cause: "permission" } })
     // The permission is added to the app registration, and a check sees it. No backup ran since.
     pass(DAY)
@@ -491,20 +582,19 @@ describe("backup runs", () => {
     expect(apps()).toMatchObject({ permissions: "present", verified: { state: "notVerified", at: refusedAt, cause: "notVerifiedYet", mode: "delegated", notVerified: ["Apps"] } })
     // The next backup reads the type.
     pass(DAY)
-    health.recordRun(outcomes("desktop-2", now(), [saved("Apps"), saved("DeviceConfigurations")]), request)
+    ran(health, outcomes("desktop-2", now(), [saved("Apps"), saved("DeviceConfigurations")]))
     expect(apps().verified).toEqual({ state: "verified", at: now(), notVerified: [] })
   })
 
   it("of another admin count for nothing once someone else signed in", async () => {
     const { health, state, pass, now } = setup()
-    const request = { tenantId: TENANT, clientId: CLIENT }
     await health.check(TENANT, "launch")
-    health.recordRun(outcomes("desktop-1", now(), [saved("Apps")]), request)
+    ran(health, outcomes("desktop-1", now(), [saved("Apps")]))
     pass(DAY)
     state.account = OTHER_ADMIN
-    health.recordRun(outcomes("desktop-2", now(), [denied("Apps")]), request)
+    ran(health, outcomes("desktop-2", now(), [denied("Apps")]))
     pass(DAY)
-    health.recordRun(outcomes("desktop-3", now(), [denied("Apps")]), request)
+    ran(health, outcomes("desktop-3", now(), [denied("Apps")]))
     const report = health.report(TENANT)
     expect(report.changes).toEqual([])
     expect(report.services[0]!.areas.find((area) => area.id === "apps")).toMatchObject({ lostAccess: false, verified: { state: "notVerified", cause: "permission" } })
@@ -629,8 +719,8 @@ describe("the tenant that is checked at launch", () => {
   })
 })
 
-// The engine with the same three hooks the main process wires: a check as a backup starts, the
-// outcomes when it ended, and a check after it.
+// The engine with the same three hooks the main process wires: the run's sign-in and a check as a
+// backup starts, the outcomes when it ended, and a check after it.
 describe("with the backup engine", () => {
   function wired(routes: () => Record<string, unknown>) {
     const base = setup()
@@ -640,9 +730,15 @@ describe("with the backup engine", () => {
       now: () => new Date(base.now()),
       getToken: async () => jwt({ scp: SCOPES.join(" ") }),
       services: () => ({ services: ["intune"] }),
-      onStarted: (job, request) => void checks.push(health.check(request.tenantId, "beforeBackup", { reader: job.authMode === "app-only" }).catch(() => undefined)),
+      onStarted: (job, request) => {
+        health.runStarted(job, request)
+        checks.push(health.check(request.tenantId, "beforeBackup", { reader: job.authMode === "app-only" }).catch(() => undefined))
+      },
       onOutcomes: (outcomes, request) => health.recordRun(outcomes, request),
-      onFinished: (job, request) => void checks.push(health.check(request.tenantId, "afterBackup", { reader: job.authMode === "app-only", failed: job.status === "Failed" }).catch(() => undefined)),
+      onFinished: (job, request) => {
+        health.runEnded(job.id)
+        checks.push(health.check(request.tenantId, "afterBackup", { reader: job.authMode === "app-only", failed: job.status === "Failed" }).catch(() => undefined))
+      },
     })
     return { ...base, backups, settled: () => Promise.all(checks) }
   }
@@ -660,6 +756,26 @@ describe("with the backup engine", () => {
     const report = health.report(TENANT)
     expect(report.graph.state).toBe("healthy")
     expect(report.services[0]).toMatchObject({ id: "intune", verified: { state: "verified" } })
+  })
+
+  it("credits a real run to the admin it started with: one who signs in while it runs gets no verification from it", async () => {
+    let signIn = () => undefined as void
+    // Another admin signs in while the run reads the tenant.
+    const base = wired(() => ({ "/beta/deviceAppManagement/mobileAppCategories": () => { signIn(); return Response.json({ value: [] }) } }))
+    signIn = () => { base.state.account = OTHER_ADMIN }
+    await base.health.check(TENANT, "launch")
+    base.pass(DAY)
+    const job = await base.backups.run()
+    await base.settled()
+    expect(job.status).toBe("Completed")
+    expect(base.state.account).toBe(OTHER_ADMIN)
+    expect(JSON.stringify(base.stored())).not.toContain(job.id)
+    expect(base.health.report(TENANT).services[0]).toMatchObject({ id: "intune", verified: { state: "noBackup" } })
+    // The next run is the new admin's from start to end.
+    signIn = () => undefined
+    const next = await base.backups.run()
+    await base.settled()
+    expect(base.stored()!.connections[0]).toMatchObject({ account: OTHER_ADMIN, runs: [{ runId: next.id, account: OTHER_ADMIN }] })
   })
 
   it("never keeps a backup from running, whatever the check finds", async () => {
