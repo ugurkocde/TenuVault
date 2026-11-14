@@ -22,7 +22,10 @@ describe("Service modules", () => {
     const owners = new Map<string, number>()
     for (const module of MODULES) for (const area of module.areas) for (const folder of area.folders) owners.set(folder, (owners.get(folder) ?? 0) + 1)
     for (const type of INTUNE_TYPES) expect(owners.get(type.folder), type.folder).toBe(1)
-    expect([...owners.keys()].sort()).toEqual(INTUNE_TYPES.map((type) => type.folder).sort())
+    // A folder without a registry type is one of Entra ID or Defender, whose types are added to the registry later.
+    const backedUp = new Set(INTUNE_TYPES.map((type) => type.folder))
+    for (const folder of owners.keys()) if (!backedUp.has(folder)) expect(["entra", "defender"], folder).toContain(moduleForFolder(folder)!.module.id)
+    for (const id of ["intune", "conditionalAccess"]) for (const folder of MODULES.find((module) => module.id === id)!.areas.flatMap((area) => area.folders)) expect(backedUp.has(folder), folder).toBe(true)
   })
 
   it("reads delegated scopes and application roles from a token without verifying it", () => {
@@ -55,26 +58,25 @@ describe("Service modules", () => {
 
   it("leaves no Intune type out of backups for a tenant that has made no choice", () => {
     expect(DEFAULT_SELECTION.services).toEqual(["intune"])
-    expect(disabledFolders(DEFAULT_SELECTION)).toEqual(["NamedLocations", "AuthenticationStrengths", "ConditionalAccessPolicies"])
+    expect(disabledFolders(DEFAULT_SELECTION).slice(0, 3)).toEqual(["NamedLocations", "AuthenticationStrengths", "ConditionalAccessPolicies"])
+    expect(disabledFolders(DEFAULT_SELECTION)).toEqual(MODULES.filter((module) => module.id !== "intune").flatMap((module) => module.areas.flatMap((area) => area.folders)))
     for (const type of INTUNE_TYPES) if (moduleForFolder(type.folder)?.module.id === "intune") expect(disabledFolders(DEFAULT_SELECTION)).not.toContain(type.folder)
   })
 
   it("leaves out the folders of a service that is off, and of an opt-in area that is off", () => {
-    const intune = MODULES.find((module) => module.id === "intune")!.areas.flatMap((area) => area.folders)
-    expect(disabledFolders({ services: ["conditionalAccess"] })).toEqual(intune)
-    expect(disabledFolders({ services: ["intune", "conditionalAccess", "entra", "defender"] })).toEqual([])
-    // An opt-in area follows its own switch, not only its service.
+    const foldersOf = (...ids: string[]) => MODULES.filter((module) => ids.includes(module.id)).flatMap((module) => module.areas.flatMap((area) => area.folders))
+    expect(disabledFolders({ services: ["conditionalAccess"] })).toEqual(foldersOf("intune", "entra", "defender"))
+    expect(disabledFolders({ services: ["conditionalAccess"] }).slice(0, foldersOf("intune").length)).toEqual(foldersOf("intune"))
+    // With every service on, only the opt-in areas nobody turned on are left out.
     const entra = MODULES.find((module) => module.id === "entra")!
-    const groups = entra.areas.find((area) => area.id === "groups")!
-    const folders = groups.folders
-    try {
-      Object.assign(groups, { folders: ["Groups"] })
-      expect(disabledFolders({ services: ["entra"] })).toContain("Groups")
-      expect(disabledFolders({ services: ["entra"], areas: { entra: ["groups"] } })).not.toContain("Groups")
-      expect(disabledFolders({ services: [], areas: { entra: ["groups"] } })).toContain("Groups")
-    } finally {
-      Object.assign(groups, { folders })
-    }
+    const optIn = entra.areas.filter((area) => area.optIn)
+    expect(optIn.map((area) => area.id)).toEqual(["groups", "usersAndDevices", "applications"])
+    expect(disabledFolders({ services: ["intune", "conditionalAccess", "entra", "defender"] })).toEqual(optIn.flatMap((area) => area.folders))
+    expect(disabledFolders({ services: ["intune", "conditionalAccess", "entra", "defender"], areas: { entra: optIn.map((area) => area.id) } })).toEqual([])
+    // An opt-in area follows its own switch, not only its service.
+    expect(disabledFolders({ services: ["entra"] })).toContain("Groups")
+    expect(disabledFolders({ services: ["entra"], areas: { entra: ["groups"] } })).not.toContain("Groups")
+    expect(disabledFolders({ services: [], areas: { entra: ["groups"] } })).toContain("Groups")
   })
 
   it("gives every area a key that is unique within its service", () => {

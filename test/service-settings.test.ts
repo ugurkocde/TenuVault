@@ -319,7 +319,11 @@ describe("Any combination of services for a tenant", () => {
       expect(status.error).toBeUndefined()
       expect(status.modules.map((module) => [module.id, module.enabled])).toEqual([["intune", combination.includes("intune")], ["conditionalAccess", combination.includes("conditionalAccess")]])
       const off = disabledFolders(settings.selection(TENANT))
-      expect(off).toEqual([...(combination.includes("intune") ? [] : MODULES[0]!.areas.flatMap((area) => area.folders)), ...(combination.includes("conditionalAccess") ? [] : CONDITIONAL_ACCESS_FOLDERS)])
+      // Every folder of a service that is off, and of an opt-in area nobody turned on.
+      expect(off).toEqual(MODULES.flatMap((module) => module.areas.filter((area) => !combination.includes(module.id) || area.optIn).flatMap((area) => area.folders)))
+      // Of the types this version backs up, that leaves out what it left out before Entra ID and Defender had folders.
+      const backedUp = new Set(INTUNE_TYPES.map((type) => type.folder))
+      expect(off.filter((folder) => backedUp.has(folder))).toEqual([...(combination.includes("intune") ? [] : MODULES[0]!.areas.flatMap((area) => area.folders)), ...(combination.includes("conditionalAccess") ? [] : CONDITIONAL_ACCESS_FOLDERS)])
     })
   }
 

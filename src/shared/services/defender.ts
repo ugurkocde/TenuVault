@@ -1,0 +1,29 @@
+import { area, part, type PermissionArea } from "./areas"
+
+/**
+ * The areas of Defender with the Microsoft Graph permissions each folder needs, checked and recorded
+ * like the Entra ID ones (see ./entra).
+ *
+ * Left out, because their read permissions are not in Microsoft's permissions reference: cloud
+ * scopes, workbooks and content repositories.
+ */
+export const DEFENDER_AREAS: readonly PermissionArea[] = [
+  area({ id: "detection", label: "Detection and response" }, [
+    part(["DefenderCustomDetectionRules"], [["CustomDetection.Read.All", "CustomDetection.ReadWrite.All"]], [["CustomDetection.Read.All"]], [["CustomDetection.ReadWrite.All"]]),
+    // Not restored: Microsoft documents no write for case type configurations.
+    part(["DefenderCaseTypeConfigurations"], [["CaseManagement.Read.All", "CaseManagement.ReadWrite.All"]], [["CaseManagement.Read.All"]], "unsupported"),
+  ]),
+  area({ id: "email", label: "Email and collaboration" }, [
+    // Never restored: a restored simulation would start a new campaign.
+    part(["DefenderAttackSimulations", "DefenderAttackSimulationAutomations", "DefenderAttackSimulationTrainingCampaigns", "DefenderAttackSimulationPayloads", "DefenderAttackSimulationLandingPages", "DefenderAttackSimulationLoginPages", "DefenderAttackSimulationNotifications"], [["AttackSimulation.Read.All"]], [["AttackSimulation.Read.All"]], "unsupported"),
+    part(["DefenderEmailSubmissionPolicies"], [["ThreatSubmission.Read.All", "ThreatSubmission.ReadWrite.All", "ThreatSubmissionPolicy.ReadWrite.All"]], [["ThreatSubmission.Read.All"]], [["ThreatSubmissionPolicy.ReadWrite.All"]]),
+  ]),
+  area({ id: "identity", label: "Identity" }, [
+    part(["DefenderIdentitySensors", "DefenderIdentitySensorActivation"], [["SecurityIdentitiesSensors.Read.All", "SecurityIdentitiesSensors.ReadWrite.All"]], [["SecurityIdentitiesSensors.Read.All"]], [["SecurityIdentitiesSensors.ReadWrite.All"]]),
+    part(["DefenderIdentityAutoAuditing"], [["SecurityIdentitiesAutoConfig.Read.All", "SecurityIdentitiesAutoConfig.ReadWrite.All"]], [["SecurityIdentitiesAutoConfig.Read.All"]], [["SecurityIdentitiesAutoConfig.ReadWrite.All"]]),
+  ]),
+  area({ id: "posture", label: "Posture and access" }, [
+    part(["DefenderSecureScoreControlStates"], [["SecurityEvents.Read.All", "SecurityEvents.ReadWrite.All"]], [["SecurityEvents.Read.All"]], [["SecurityEvents.ReadWrite.All"]]),
+    part(["DefenderRoleDefinitions", "DefenderRoleAssignments"], [["RoleManagement.Read.Defender", "RoleManagement.ReadWrite.Defender"]], [["RoleManagement.Read.Defender"]], [["RoleManagement.ReadWrite.Defender"]]),
+  ]),
+]

@@ -465,7 +465,11 @@ export class BackupEngine {
     const result = (folder: string) => results.types.find((entry) => entry.folder === folder)!
     for (const type of unpermitted) {
       const entry = moduleForFolder(type.folder)!
-      const reason = `The ${tokens.mode === "app-only" ? "Backup Reader" : "TenuVault app registration"} has no ${describeRequirement(entry.area.backup, granted?.permissions)} permission for ${entry.module.label}. ${SERVICES_PAGE} in Settings shows how to add it.`
+      const needed = entry.part.backup[granted!.kind]
+      const reason = needed === "unsupported"
+        // No permission lets this sign-in read the type, so there is nothing to add.
+        ? "Microsoft Graph lets only a signed-in admin read this type, so the Backup Reader leaves it out. Manual backups include it."
+        : `The ${tokens.mode === "app-only" ? "Backup Reader" : "TenuVault app registration"} has no ${describeRequirement(needed, granted?.permissions)} permission for ${entry.module.label}. ${SERVICES_PAGE} in Settings shows how to add it.`
       Object.assign(result(type.folder), { state: "skipped", reason })
       this.write(job, `Leaving out ${type.label}: ${reason.charAt(0).toLowerCase()}${reason.slice(1)}`)
     }

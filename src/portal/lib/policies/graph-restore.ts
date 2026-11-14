@@ -10,7 +10,7 @@ import { buildRestorePlan, buildUpdatePlan, NotRestorableError, resolveStep, res
 import { assignmentsUnread, locateObject, readObject, type GraphReader } from "../../../shared/intune/read"
 import { comparableSnapshot, sameSnapshot } from "../../../shared/intune/compare"
 import { saveWrite, removeWrite, writeKey, writeRecords } from "../../../main/storage/restore-journal"
-import { moduleForFolder, restorePermissionBlocker, SERVICES_PAGE, type GrantedPermissions } from "../../../shared/services/modules"
+import { describeRequirement, moduleForFolder, restorePermissionBlocker, SERVICES_PAGE, type GrantedPermissions } from "../../../shared/services/modules"
 import { TENANT_ADMIN, adminCenterLink, type AdminLink } from "../../../shared/intune/admin-links"
 import { policyReferences, referenceLabel, referencePath, TENANT_KINDS, uncheckedReferencesWarning, type PolicyReference } from "../../../shared/intune/conditional-access"
 
@@ -209,8 +209,10 @@ const writeError = (type: IntuneType, body: Item, status: number) => {
   if (!entry?.module.precheck) return message
   const inner = ((body.error as Item | undefined)?.innerError as Item | undefined)?.message
   if (typeof inner === "string" && inner && !message.includes(inner)) message = `${message} ${inner}`
-  if (status !== 403) return message
-  return `Microsoft refused to change ${entry.module.label} (${message}). The TenuVault app registration needs the ${entry.area.restore.map((group) => group.join(" or ")).join(" and ")} permission with admin consent, and your account an admin role that may change it: ${entry.module.roles} ${SERVICES_PAGE} in Settings shows what is missing.`
+  // Restores run as the signed-in admin, so the delegated permissions are the ones to name.
+  const needed = entry.part.restore.delegated
+  if (status !== 403 || needed === "unsupported") return message
+  return `Microsoft refused to change ${entry.module.label} (${message}). The TenuVault app registration needs the ${describeRequirement(needed)} permission with admin consent, and your account an admin role that may change it: ${entry.module.roles} ${SERVICES_PAGE} in Settings shows what is missing.`
 }
 
 function forOtherTenant(snapshot: Item): Item {
