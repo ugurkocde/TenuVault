@@ -1,6 +1,10 @@
 import type { RunOutcomes } from "../backup-outcomes"
 import { MAX_FOLDER_REFUSALS, type ConnectionRecord, type PermissionChange, type RunObservation, type Snapshot } from "./model"
 
+/** Folder keys must be plain names, never properties inherited from an object prototype. */
+export const validFolder = (folder: unknown): folder is string => typeof folder === "string" && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,199}$/.test(folder) && !Object.hasOwn(Object.prototype, folder)
+export const folderValue = <T>(values: Record<string, T>, folder: string): T | undefined => Object.hasOwn(values, folder) ? values[folder] : undefined
+
 /**
  * What a backup run says about access, type by type, without any text of the run:
  * - saved and not configured are reads: Microsoft answered for the type.
@@ -26,6 +30,7 @@ export function runObservation(outcomes: RunOutcomes, account?: string, permissi
     excluded: [],
   }
   for (const type of outcomes.types) {
+    if (!validFolder(type.folder)) continue
     if (type.outcome === "saved" || type.outcome === "notConfigured") observation.read.push(type.folder)
     else if (type.outcome === "skipped") {
       if (type.reader) observation.excluded.push({ folder: type.folder, cause: "reader" })
@@ -35,7 +40,7 @@ export function runObservation(outcomes: RunOutcomes, account?: string, permissi
     else observation.unread.push(type.folder)
   }
   for (const refusal of observation.refused) {
-    const held = permissionHeld[refusal.folder]
+    const held = folderValue(permissionHeld, refusal.folder)
     if (held !== undefined) refusal.permissionHeld = held
   }
   return observation
@@ -58,16 +63,18 @@ function answer(type: { status?: number; code?: string }): { status?: number; co
 export function keepEvidence(evidence: Pick<ConnectionRecord, "verified" | "refused">, run: RunObservation): void {
   const ended = Date.parse(run.at)
   for (const folder of run.read) {
-    if (!(Date.parse(evidence.verified[folder] ?? "") >= ended)) evidence.verified[folder] = run.at
-    const readAt = Date.parse(evidence.verified[folder]!)
-    const since = (evidence.refused[folder] ?? []).filter((refusal) => Date.parse(refusal.at) > readAt)
+    if (!validFolder(folder)) continue
+    if (!(Date.parse(folderValue(evidence.verified, folder) ?? "") >= ended)) evidence.verified[folder] = run.at
+    const readAt = Date.parse(folderValue(evidence.verified, folder)!)
+    const since = (folderValue(evidence.refused, folder) ?? []).filter((refusal) => Date.parse(refusal.at) > readAt)
     if (since.length) evidence.refused[folder] = since
     else delete evidence.refused[folder]
   }
   for (const { folder, cause, permissionHeld } of run.refused) {
-    const readAt = evidence.verified[folder]
+    if (!validFolder(folder)) continue
+    const readAt = folderValue(evidence.verified, folder)
     if (!readAt || Date.parse(readAt) >= ended) continue
-    const kept = evidence.refused[folder] ?? []
+    const kept = folderValue(evidence.refused, folder) ?? []
     if (kept.some((refusal) => refusal.runId === run.runId)) continue
     const since = [...kept, { runId: run.runId, at: run.at, cause, ...(permissionHeld !== undefined ? { permissionHeld } : {}) }].sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
     evidence.refused[folder] = since.length > MAX_FOLDER_REFUSALS ? [since[0]!, ...since.slice(1 - MAX_FOLDER_REFUSALS)] : since

@@ -24,6 +24,8 @@ const reader: ConnectionKey = { tenantId: TENANT, clientId: READER, mode: "app-o
 
 const run = (runId: string, daysAgo: number, parts: Partial<RunObservation> = {}): RunObservation => ({ runId, at: ago(daysAgo * DAY), trigger: "manual", status: "Success", account: ADMIN, read: [], refused: [], unread: [], excluded: [], ...parts })
 
+const outcomesForFolder = (folder: string): RunOutcomes => ({ runId: "bad", tenantId: TENANT, authMode: "delegated", trigger: "manual", startedAt: ago(DAY), endedAt: ago(0), status: "Success", coverage: "complete", types: [{ folder, service: "intune", outcome: "saved", saved: 1 }] })
+
 function setup(now = NOW) {
   const backing = memoryStore()
   let clock = now
@@ -342,14 +344,32 @@ describe("the observation store", () => {
     }])
   })
 
+  it.each(["__proto__", "constructor", "toString", ""])("drops a malformed folder record for %j and loads and writes the rest", (folder) => {
+    const { store, backing } = setup()
+    const bad = { clientId: READER, mode: "app-only", updatedAt: ago(0), verified: {}, runs: [run("bad", 1, { read: [folder] })] }
+    const good = { clientId: CLIENT, mode: "delegated", updatedAt: ago(0), runs: [], verified: {} }
+    for (const record of [bad, { ...bad, runs: [], verified: { [folder]: ago(DAY) } }, { ...bad, runs: [], refused: { [folder]: [] } }]) {
+      backing.set(KEY, JSON.stringify({ version: 1, connections: [record, good] }))
+      expect(store.connections(TENANT).map((kept) => kept.clientId)).toEqual([CLIENT])
+      store.recordToken(admin, "graph", { at: ago(1000), permissions: ["User.Read"] }, ADMIN)
+      expect(store.connections(TENANT)[0]!.graph!.permissions).toEqual(["User.Read"])
+    }
+    store.recordRun(admin, run("bad-live", 1, { read: [folder] }))
+    expect(backing.get(KEY)).not.toContain("bad-live")
+    expect(runObservation(outcomesForFolder(folder)).read).toEqual([])
+  })
+
   it("never stores a token, however an observation is recorded", () => {
     const { store, backing } = setup()
     const secret = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.secret-token-body.signature"
     // What a careless caller might hand over next to the fields an observation has.
     store.recordToken(admin, "graph", { at: ago(1000), permissions: ["User.Read"], accessToken: secret, account: { username: "admin@contoso.com" } } as never, ADMIN)
     store.recordReader(reader, { at: ago(1000), state: "verified", notAfter: ago(-DAY), verifiedAt: null, verifiedRoles: null, roleChange: null, privateKeyPem: secret } as never)
-    // What is stored is read back through the same checks, so only what a record may hold survives a restart.
-    const reread = JSON.stringify(new HealthStore(backing).connections(TENANT))
+    store.recordToken(admin, "storage", { at: ago(1000), failure: { class: "consent", code: "AADSTS65001", message: secret }, token: secret } as never, ADMIN)
+    store.recordRun(admin, { ...run("private", 1, { read: ["Apps"] }), accessToken: secret, refused: [{ folder: "ScopeTags", cause: "role", message: secret }], excluded: [{ folder: "Branding", cause: "reader", message: secret }] } as never)
+    store.setSnapshot(admin, { at: ago(1000), secret, replaces: { clientId: CLIENT, secret }, found: [{ kind: "permissionsAdded", permissions: ["User.Read"], message: secret }] } as never)
+    // Privacy is enforced at the write boundary, including nested fields of every observation kind.
+    const reread = backing.get(KEY)!
     expect(reread).not.toContain("secret-token-body")
     expect(reread).not.toContain("contoso")
   })

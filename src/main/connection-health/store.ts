@@ -1,5 +1,5 @@
 import { MAX_FOLDER_REFUSALS, RUN_MAX_AGE_MS, type ConnectionMode, type ConnectionRecord, type FolderRefusal, type PermissionChange, type ReaderObservation, type RunObservation, type SignInFailure, type Snapshot, type TokenObservation } from "../../shared/connection-health/model"
-import { carryChanges, keepEvidence } from "../../shared/connection-health/observe"
+import { carryChanges, folderValue, keepEvidence, validFolder } from "../../shared/connection-health/observe"
 import { MODULES, type ModuleId } from "../../shared/services/modules"
 import type { KeyValueStore } from "../storage/secure-store"
 
@@ -70,6 +70,8 @@ function runOf(value: unknown): RunObservation | undefined {
   const trigger = value.trigger === "scheduled" || value.trigger === "tray" ? value.trigger : "manual"
   if (!runId || !at) return undefined
   const account = text(value.account)
+  if ([value.read, value.unread].some((list) => Array.isArray(list) && list.some((folder) => typeof folder === "string" && !validFolder(folder))) ||
+    [value.refused, value.excluded].some((list) => Array.isArray(list) && list.some((entry) => isRecord(entry) && typeof entry.folder === "string" && !validFolder(entry.folder)))) return undefined
   const refused = (Array.isArray(value.refused) ? value.refused : []).flatMap((entry): RunObservation["refused"] => {
     const folder = isRecord(entry) ? text(entry.folder) : undefined
     if (!folder || !isRecord(entry) || !isCause(entry.cause)) return []
@@ -153,6 +155,8 @@ function recordOf(value: unknown): ConnectionRecord | undefined {
   const clientId = text(value.clientId)
   const updatedAt = time(value.updatedAt)
   if (!clientId || !updatedAt || (value.mode !== "delegated" && value.mode !== "app-only")) return undefined
+  if ([value.verified, value.refused].some((map) => isRecord(map) && Object.keys(map).some((folder) => !validFolder(folder))) ||
+    (Array.isArray(value.runs) && value.runs.some((run) => isRecord(run) && time(run.at) && text(run.runId) && !runOf(run)))) return undefined
   const account = text(value.account)
   const graph = tokenOf(value.graph)
   const storage = tokenOf(value.storage)
@@ -209,7 +213,7 @@ export class HealthStore {
   recordToken(key: ConnectionKey, resource: "graph" | "storage", observation: TokenObservation, account?: string): void {
     this.change(key, true, (record) => {
       this.ownedBy(record, account)
-      record[resource] = { ...observation, ...(observation.permissions ? { permissions: observation.permissions.slice(0, MAX_ENTRIES) } : {}) }
+      record[resource] = tokenOf(observation)
     })
   }
 
@@ -217,7 +221,9 @@ export class HealthStore {
    * Keeps how a run ended. A run that is already kept is not kept twice, whatever it says the
    * second time: two refusals have to come from two runs.
    */
-  recordRun(key: ConnectionKey, run: RunObservation): void {
+  recordRun(key: ConnectionKey, observation: RunObservation): void {
+    const run = runOf(observation)
+    if (!run) return
     this.change(key, true, (record) => {
       this.ownedBy(record, run.account)
       if (record.runs.some((kept) => kept.runId === run.runId)) return
@@ -231,13 +237,13 @@ export class HealthStore {
 
   recordReader(key: ConnectionKey, observation: ReaderObservation): void {
     this.change(key, true, (record) => {
-      record.reader = observation
+      record.reader = readerOf(observation)
     })
   }
 
   setSnapshot(key: ConnectionKey, snapshot: Snapshot): void {
     this.change(key, false, (record) => {
-      record.snapshot = snapshot
+      record.snapshot = snapshotOf(snapshot)
     })
   }
 
@@ -315,7 +321,7 @@ export class HealthStore {
       // A refusal says something only next to the read it came after, so it goes with that read.
       record.refused = Object.fromEntries(Object.entries(record.refused).flatMap(([folder, refusals]): Array<[string, FolderRefusal[]]> => {
         const kept = refusals.filter((refusal) => Date.parse(refusal.at) >= oldest)
-        return record.verified[folder] && kept.length ? [[folder, kept]] : []
+        return folderValue(record.verified, folder) && kept.length ? [[folder, kept]] : []
       }))
     }
     const kept = records
@@ -323,6 +329,6 @@ export class HealthStore {
       .sort((a, b) => (a === current ? -1 : b === current ? 1 : Date.parse(b.updatedAt) - Date.parse(a.updatedAt)))
       .slice(0, MAX_CONNECTIONS)
     if (!kept.length) return this.store.delete(KEY + tenantId.toLowerCase())
-    this.store.set(KEY + tenantId.toLowerCase(), JSON.stringify({ version: HEALTH_STORE_VERSION, connections: kept }))
+    this.store.set(KEY + tenantId.toLowerCase(), JSON.stringify({ version: HEALTH_STORE_VERSION, connections: kept.flatMap((record) => recordOf(record) ?? []) }))
   }
 }

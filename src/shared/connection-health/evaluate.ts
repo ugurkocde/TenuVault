@@ -11,7 +11,7 @@
  * or whether a product was set up: those show when a backup reads a type, or is refused.
  */
 
-import { carryChanges } from "./observe"
+import { carryChanges, folderValue } from "./observe"
 import { INTUNE_TYPES } from "../intune/registry"
 import { areaPermissions, missingForChoice } from "../services/manifest"
 import { canBackUp, checkModules, MODULES, moduleForFolder, type AccessLevel, type AreaCheck, type GrantedPermissions, type ModuleId, type PermissionArea, type ServiceModule } from "../services/modules"
@@ -252,7 +252,7 @@ function lostFolders(record: ConnectionRecord | undefined, now: Date): Map<strin
   const lost = new Map<string, Loss>()
   if (!record) return lost
   for (const [folder, refusals] of Object.entries(record.refused)) {
-    const readAt = record.verified[folder]
+    const readAt = folderValue(record.verified, folder)
     if (!recent(readAt, RUN_MAX_AGE_MS, now)) continue
     const byRun = new Map<string, FolderRefusal>()
     for (const refusal of refusals) {
