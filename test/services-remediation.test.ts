@@ -175,6 +175,11 @@ it.each(["bash", "zsh"])("%s skips a scope already declared on the registration 
   expect(calls.filter(args => args[0] === "rest").map(args => args[2])).toEqual(["POST", "PATCH"])
   expect(state.grants).toEqual([unrelated, { ...grant, id: "new-grant", scope: "Group.Read.All Policy.Read.All" }])
 })
+it.each(["bash", "zsh"])("%s treats a declared scope ID in other letter case as already declared", shellName => {
+  const { results, calls } = shell(shellName, "", false, true, { declaredScopes: [permissionIds[0]!.toUpperCase()], runs: 2 })
+  for (const result of results) expect(result.status, result.stderr).toBe(0)
+  expect(calls.filter(args => args.includes("add")).map(args => args.at(-1))).toEqual([`${permissionIds[1]}=Scope`])
+})
 it.each(["bash", "zsh"])("%s warns to check Entra when a consent write is applied and then times out", shellName => {
   for (const existing of [true, false]) {
     const { result, calls, initial, state } = shell(shellName, "timeout", false, existing)
