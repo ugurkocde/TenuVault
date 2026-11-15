@@ -50,7 +50,7 @@ Backups on your device are encrypted with AES-256-GCM before they are written to
 
 ## What TenuVault the company can see
 
-TenuVault talks to its own server, tenuvault.com, to check your license and, only when you send it, to receive your feedback. The table below lists everything a license check and a feedback message can include. [Network connections and data flows](/security/data-flows/) lists every request in detail.
+TenuVault talks to its own server, tenuvault.com, to check your license, to ask whether an App Backup installer capture may start and, only when you send it, to receive your feedback. The table below lists everything these requests can include. [Network connections and data flows](/security/data-flows/) lists every request in detail.
 
 | TenuVault can see | When |
 | --- | --- |
@@ -61,6 +61,7 @@ TenuVault talks to its own server, tenuvault.com, to check your license and, onl
 | Your operating system (Windows or macOS) and the TenuVault version | When a tenant is activated, and with organization license checks. |
 | A Microsoft ID token for your sign-in | When a license is shared with your tenant, or when you use a license your organization shared. The token contains identity claims such as your name and user principal name. The licensing service verifies it with Microsoft's public signing keys to confirm which tenant and app registration you signed in to, and does not store it. |
 | Your public IP address | As with any web request. The licensing service uses it only to rate limit requests. |
+| That an App Backup installer capture is starting | Each time you select **Start backup** in App Backup on Windows. The request carries one random value made for it, and no Microsoft token, tenant ID, license key or installation ID. See [Capture check](/security/data-flows/#capture-check). |
 | Setup diagnostics, if a new install chooses to share them | For 30 days after you agree: which setup steps worked, Microsoft error codes such as `AADSTS53003`, app version, operating system and a random ID that links the steps. Never tenant names or IDs, account names, client IDs, error messages, policies or backups. Kept 180 days. Turning it off deletes the events already sent; only the random ID is kept for 180 days, as a marker so late uploads are discarded. See [Setup diagnostics](/security/data-flows/#setup-diagnostics). |
 | Feedback you send | Only when you click **Send feedback** in **Share feedback**: your answers, the reply-to email if you enter one, app version, operating system, plan, page name and a random message ID. A screenshot of the window only if you tick it; it may show tenant, policy or user names. Stored up to 12 months; the email copy to support is kept as support correspondence. A keyed hash of your IP address is kept 24 hours for rate limiting. See [Feedback](/security/data-flows/#feedback). |
 
@@ -76,7 +77,7 @@ Apart from what you write in feedback and a feedback screenshot you choose to at
 | Your backup recovery key | It is created on your machine and only leaves it when you save it to a file yourself. |
 | Your storage account contents | TenuVault has no access to your Azure subscription. |
 
-TenuVault contains no analytics or crash reporting. Apart from license checks, it sends TenuVault only feedback you choose to send and, on a new install that chooses to share them, [setup diagnostics](/security/data-flows/#setup-diagnostics) for 30 days after it agrees: which setup steps worked and which Microsoft error codes stopped them, never tenant names or IDs, account names, policies or backups.
+TenuVault contains no analytics or crash reporting. Apart from license checks and the App Backup [capture check](/security/data-flows/#capture-check), which carries one random value, it sends TenuVault only feedback you choose to send and, on a new install that chooses to share them, [setup diagnostics](/security/data-flows/#setup-diagnostics) for 30 days after it agrees: which setup steps worked and which Microsoft error codes stopped them, never tenant names or IDs, account names, policies or backups.
 
 ## Control and revoke access
 

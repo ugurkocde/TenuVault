@@ -3,7 +3,7 @@ title: "Network connections and data flows"
 description: Every outbound connection TenuVault makes, what it sends, and what happens if you block it.
 ---
 
-TenuVault connects to three groups of services: Microsoft (for your tenant and storage), tenuvault.com (for license checks, feedback you choose to send, setup diagnostics a new install chooses to share and, on Pro and MSP, CIS Benchmarks content) and GitHub (for updates and baseline content), plus any notification webhook you configure yourself. This page lists every destination and exactly what is sent to it, so you can review the data flows and configure your firewall or proxy.
+TenuVault connects to three groups of services: Microsoft (for your tenant and storage), tenuvault.com (for license checks, the capture check of App Backup, feedback you choose to send, setup diagnostics a new install chooses to share and, on Pro and MSP, CIS Benchmarks content) and GitHub (for updates and baseline content), plus any notification webhook you configure yourself. This page lists every destination and exactly what is sent to it, so you can review the data flows and configure your firewall or proxy.
 
 All connections use HTTPS on TCP port 443. TenuVault opens no inbound ports. During browser sign-in, Microsoft redirects your browser to `http://localhost` on your own machine, where TenuVault receives the sign-in result.
 
@@ -15,9 +15,12 @@ All connections use HTTPS on TCP port 443. TenuVault opens no inbound ports. Dur
 | `graph.microsoft.com` | Read and write your Intune configuration | Yes, between your machine and Microsoft |
 | `management.azure.com` | List subscriptions and storage accounts for the storage picker | No |
 | `<your account>.blob.core.windows.net` | Your own Azure storage account, when you store backups there | Yes, backups in your account, over HTTPS |
+| Hosts under `manage.microsoft.com`: one that the Intune agent on the PC discovered, one that Intune returns | [App Backup](#app-backup), only when you capture an installer on an enrolled Windows PC: Intune's device content service and the installer download | Yes, between your PC and Microsoft. The selected app's ID, version and name and this PC's Intune device identity go out, the encrypted installer comes back |
+| A storage account under `blob.core.windows.net` that Intune returns, not your own storage account | [App Backup](#app-backup), only for **Restore to tenant**: upload of the installer to the address Intune created for it | Yes, the installer, encrypted on your machine before the upload |
 | `www.tenuvault.com` | License checks and, on Pro and MSP, CIS Benchmarks content | No configuration or backups. Tenant ID, installation ID and license details only |
 | `www.tenuvault.com/api/desktop-feedback` | Feedback, only when you click **Send feedback** | Your answers, an optional reply-to email, app version, operating system, plan and page name. A screenshot of the window only if you tick it, which may show tenant, policy or user names |
 | `www.tenuvault.com/api/desktop-events` | [Setup diagnostics](#setup-diagnostics), only on a new install that chose to share them, for 30 days after you agree | No. Setup steps, Microsoft error codes, app version, operating system and a random ID that links the steps. The ID is deleted from your computer after 30 days, and the events are deleted from tenuvault.com after 180 days |
+| `www.tenuvault.com/api/app-backup/capture-policy` | [Capture check](#capture-check) of App Backup, on Windows, each time you start an installer capture | No. One random value made for that request. No Microsoft token, tenant ID, license key or installation ID |
 | `github.com`, `release-assets.githubusercontent.com`, `objects.githubusercontent.com` | App updates | No |
 | `api.github.com`, `raw.githubusercontent.com` | OpenIntuneBaseline content for the OpenIntuneBaseline section and My baselines | No |
 | A webhook URL you configure (optional) | Health review notifications | Counts, severities, finding keys and timestamps only |
@@ -43,8 +46,9 @@ All Intune work goes directly from your machine to Microsoft Graph with your del
 * Backups read your Intune configuration, including assignments.
 * Restores, drift reverts, the OpenIntuneBaseline section and Framework coverage write the objects you choose to your tenant.
 * The tenant overview reads your organization's name and verified domains, policy counts, and your managed device count and compliance rate.
+* [App Backup](#app-backup) reads the tenant's Win32 apps with their settings, scripts and assignments, and **Restore to tenant** creates a new Win32 app in the tenant you choose.
 
-Nothing from these calls is sent anywhere else. Results are written only to the backup storage you chose.
+Nothing from these calls is sent anywhere else. Results are written only to the backup storage you chose. App Backup differs in two points, both described under [App Backup](#app-backup): an installer capture names the selected app to Intune's device content service, which is also a Microsoft service, and it keeps the installer and the app's settings in its own encrypted folder on your device.
 
 ### Azure Resource Manager: `management.azure.com`
 
@@ -123,6 +127,8 @@ Tenant configuration, backups, policy names, device or user records from your te
 
 Tenants that are already active keep working offline for up to 14 days after their last successful check. A new tenant cannot be activated on a paid plan until the service is reachable. On a machine without a license key, the Community tenant works without any connection to tenuvault.com.
 
+On every plan, a new installer capture in [App Backup](#app-backup) needs its [capture check](#capture-check) each time. Listing apps, exporting installers you already captured and **Restore to tenant** do not use it.
+
 ### CIS Benchmarks content
 
 On Pro and MSP, the [CIS Benchmarks](/baselines/cis-benchmarks/) page downloads its content from `https://www.tenuvault.com/cis/v1/`: the list of available benchmarks (`/cis/v1/catalog`), and for each benchmark Level you load, its pack (`/cis/v1/packs/...`) and its recommendation list (`/cis/v1/lists/...`). The app only connects when you open the CIS Benchmarks page or load a benchmark.
@@ -185,6 +191,64 @@ A `code` is only ever one of these: a Microsoft error code such as `AADSTS53003`
 
 **Firewall.** Setup diagnostics use `www.tenuvault.com`, which the allow list below already contains. If your proxy filters by path, `https://www.tenuvault.com/api/desktop-events` and `https://www.tenuvault.com/api/desktop-events/erase` may stay blocked: nothing else depends on them, and the queued events are dropped after 7 days.
 
+## App Backup
+
+[App Backup](/apps/app-backup/) lists the Win32 apps of a tenant, captures an app's installer from Intune on an enrolled Windows PC, keeps it encrypted on your device and can restore it as a new app in a connected tenant. Listing apps uses Microsoft Graph like the rest of TenuVault. Capturing and restoring an installer add the three connections described in this section.
+
+| Action | Where it runs | Destinations |
+| --- | --- | --- |
+| List apps, open **Details**, print details, download a script | Windows and macOS | `graph.microsoft.com` |
+| Enrollment check and **Assignment check for this PC** | Windows | `graph.microsoft.com` |
+| **Start backup**: capture an installer | Windows, on a PC enrolled in the selected tenant | `www.tenuvault.com/api/app-backup/capture-policy`, `login.microsoftonline.com`, `graph.microsoft.com` and two addresses under `manage.microsoft.com` |
+| **Export installer**, **Open local folder** | Windows and macOS | None |
+| **Restore to tenant** | Windows and macOS | `login.microsoftonline.com`, `graph.microsoft.com` and an Azure Storage address under `blob.core.windows.net` that Intune returns |
+
+**View app in Intune** and **Open restored app** open the Intune admin center (`intune.microsoft.com`) in your default browser. The app does not request those pages itself.
+
+### Capture check
+
+Installer capture depends on Intune's device content service, not on a documented Microsoft Graph download API. So that capture can be paused, or tied to a newer TenuVault version, if that integration needs a fix, TenuVault asks tenuvault.com before every capture whether capture is allowed. The request goes out when you select **Start backup** and is the first request of the capture: the token refresh, the Microsoft Graph reads, the Windows approval prompt and the request to Intune follow only after a valid answer. It is made only on Windows, because capture runs only there.
+
+* **Sent:** a `GET` request to `https://www.tenuvault.com/api/app-backup/capture-policy?nonce=<value>`. `nonce` is the only parameter: 32 random bytes, written as 64 hexadecimal characters and created for this one request. The request has no body and no cookies, and TenuVault adds no header to it. Like every request the app makes, it carries the standard headers of the app's network stack, such as `User-Agent`.
+* **Not sent:** Microsoft tokens, the tenant ID, the license key or the signed entitlement, the installation ID, the selected app or anything else from your tenant.
+* **Received:** a short signed answer. It repeats the `nonce` and states whether capture is enabled, the oldest TenuVault version that may capture, the platform (`win32`) and an issue time and an expiry time at most 5 minutes apart. TenuVault checks the signature with public keys built into the app and accepts the answer only if it repeats the `nonce` of this request, so an earlier answer cannot be reused. It compares the minimum version with its own version on your computer. The answer is not saved: the next capture asks again.
+* **If the answer says no:** when capture is paused, TenuVault shows **Installer capture has been paused.** When your version is older than the minimum, it shows **Update TenuVault before starting a new app backup.** No capture starts.
+* **If blocked:** when the address does not answer within 10 seconds, redirects, or returns anything that is not a valid signed answer, no capture starts and TenuVault shows **Installer capture is temporarily unavailable.** Listing apps, exporting installers you already captured and **Restore to tenant** do not use this check and keep working.
+
+As with any web request, the service also sees your public IP address.
+
+### Installer capture
+
+Capture runs only on a Windows PC that is enrolled in the selected tenant. It starts when you select **Start backup**. The capture helper that is installed with TenuVault, **TenuVault.Capture.exe**, makes its requests only after you approve the Windows prompt for it. After the capture check, one capture makes these requests, in this order:
+
+1. **`login.microsoftonline.com` and `graph.microsoft.com`.** TenuVault refreshes your delegated token and reads the selected app with its settings and relationships. The helper then uses the same token to confirm your account (`/me`) and to read the tenant's Intune account ID, the app's committed content version and the list of its content files. After step 2, TenuVault reads the app's settings once more to make sure they did not change during the capture. All of these are read requests.
+2. **Intune's device content service, `agents.<name>.manage.microsoft.com`.** The helper sends one request to the service address that the Intune Management Extension on this PC discovered. TenuVault contains no fixed host name for it: the helper reads the address from the agent's own log files on the PC, uses only files changed in the last 7 days, and accepts only an `https` address of the form `agents.<name>.manage.microsoft.com`. The request is authenticated with this PC's Intune enrollment certificate as a TLS client certificate and carries no Microsoft Graph token.
+3. **The installer download, a host under `manage.microsoft.com`.** Intune's answer contains the download address of the installer content. TenuVault contains no fixed host name for this one either. It downloads from the returned address only if that is an `https` address on the default port whose host is `manage.microsoft.com` or a host under it, and it refuses redirects. The download request carries no Microsoft token, no certificate and no cookies.
+
+What the request in step 2 carries:
+
+* **Sent:** the tenant's Intune account ID, the device ID from this PC's enrollment certificate, a random session ID, the selected app's ID, content version and display name, the enrollment certificate without its private key, the computer name, the Windows version and the version of the Intune Management Extension.
+* **Received:** the download address, the size of the installer and the decryption information for it, encrypted for the enrollment certificate. The helper decrypts that information with the certificate's private key. The private key is used on the PC and is not exported or sent.
+
+The helper sends its requests in steps 1 and 2 itself. They do not pass through the network stack that the rest of TenuVault uses. TenuVault passes the helper only the tenant ID, the app ID, a job ID and the access token, so a proxy user name and password saved in TenuVault do not reach it.
+
+TenuVault decrypts the installer while it downloads, checks it against the size, HMAC and SHA-256 digest from Intune's answer, and writes it to the App Backup folder on your device, by default **Documents** > **TenuVault App Sources**, encrypted with AES-256-GCM with a key derived from your TenuVault backup key (see [Encryption and recovery key](/security/encryption/)). No unencrypted copy of the installer is written during capture. The app's settings are stored next to it, encrypted in the same way. Captured installers and their settings are not sent to tenuvault.com, and App Backup does not copy them to your Azure storage account. An unencrypted copy exists only where you save one with **Export installer**.
+
+### Restore to tenant
+
+**Restore to tenant** needs no enrolled PC and runs on Windows and macOS. It uses two destinations:
+
+1. **`graph.microsoft.com`**, with your delegated token for the destination tenant. TenuVault creates a new Win32 app from the settings you reviewed, adds a content version and a content file entry to it and waits for the upload address that Intune creates. After the upload it commits the file and waits until Intune reports the app as published. It also reads the new app and its assignments to confirm that nothing else changed the app during the restore. To continue an interrupted restore without creating a second app, it can read the IDs and notes of the destination's apps.
+2. **The upload address, a storage account under `blob.core.windows.net`.** Intune returns the address in the `azureStorageUri` property of the content file, and TenuVault uploads the installer to exactly that address, in blocks of 4 MiB. TenuVault contains no fixed host name for it. It uploads only if the address is an `https` address on the default port, its host is one storage account name directly under `blob.core.windows.net` and it contains a signature (a shared access signature). The upload requests carry no Microsoft token: the signature in the address is their only authorization. During a long upload, TenuVault asks Intune through Microsoft Graph to renew the address.
+
+Microsoft documents `azureStorageUri` as [created by the Intune service](https://learn.microsoft.com/graph/api/resources/intune-apps-mobileappcontentfile?view=graph-rest-beta) when it receives the content file entry. It is not the storage account you may have chosen for your backups, and the upload uses no Azure role assignment and no sign-in to Azure.
+
+* **Uploaded to the storage address:** the installer, encrypted on your machine with new random keys (AES-256-CBC with HMAC-SHA256) before it leaves it. Apart from the list of uploaded blocks that completes the upload, nothing else is sent there.
+* **Sent to Intune through Microsoft Graph:** the app settings you reviewed, with the app name you entered and a restore marker in the app's notes, the file's size before and after encryption and, in the `commit` request, the keys and the digest of the uploaded file, so that Intune can decrypt and verify it.
+* **Not sent:** nothing from a restore goes to tenuvault.com, and a restore does not use the capture check.
+
+If the destination tenant has no active session, you sign in to it at `login.microsoftonline.com`, in your browser or with **Use a device code**. With a device code, TenuVault shows a code and a Microsoft address that you can open on another device, and waits for the result at `login.microsoftonline.com`.
+
 ## GitHub
 
 ### App updates
@@ -234,6 +298,8 @@ login.microsoftonline.com
 graph.microsoft.com
 management.azure.com
 <your storage account>.blob.core.windows.net
+*.manage.microsoft.com
+*.blob.core.windows.net
 www.tenuvault.com
 github.com
 release-assets.githubusercontent.com
@@ -244,10 +310,20 @@ raw.githubusercontent.com
 
 `management.azure.com` and your storage account are needed only for backups in Azure. The GitHub hosts are needed only for updates and baseline packs. If you configure a health review webhook, also allow its host.
 
+`*.manage.microsoft.com` and `*.blob.core.windows.net` are needed only for [App Backup](#app-backup), and each for one action only:
+
+| Allow | Needed only for | Why it is not a single host |
+| --- | --- | --- |
+| `*.manage.microsoft.com` | Capturing an installer, on the enrolled Windows PC that runs the capture | The address of Intune's device content service comes from the Intune agent on the PC, and the download address comes from Intune's answer. Microsoft lists `*.manage.microsoft.com` and `manage.microsoft.com` as required for Intune-managed devices and states that SSL traffic inspection is not supported for `*.manage.microsoft.com`. See [Network endpoints for Microsoft Intune](https://learn.microsoft.com/intune/fundamentals/endpoints). |
+| `*.blob.core.windows.net` | **Restore to tenant** | Intune chooses the storage account and returns its address for each upload, so the account name is not known in advance. |
+
+Capturing an installer also needs the [capture check](#capture-check) at `https://www.tenuvault.com/api/app-backup/capture-policy`. It is covered by `www.tenuvault.com`. Allow the path if your proxy filters by path. Capture and restore also use `login.microsoftonline.com` and `graph.microsoft.com`, like every other feature. Listing apps and their details needs nothing else, and exporting an installer needs no connection.
+
 ## Related pages
 
 * [Security and privacy](/security/)
 * [App registration and delegated permissions](/security/permissions/)
 * [Backup Reader for scheduled backups](/backups/backup-reader/): the optional app-only identity and its certificate
 * [Encryption and recovery key](/security/encryption/)
+* [App Backup: Intune installers](/apps/app-backup/)
 * [Requirements](/getting-started/requirements/)

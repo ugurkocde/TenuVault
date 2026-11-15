@@ -57,9 +57,11 @@ TenuVault connects to the global Microsoft cloud endpoints below over HTTPS (TCP
 | --- | --- | --- |
 | `login.microsoftonline.com` | Microsoft sign-in and tokens | Yes |
 | `graph.microsoft.com` | Reading and writing Intune configuration | Yes |
-| `www.tenuvault.com` | License checks | Yes |
+| `www.tenuvault.com` | License checks, and the capture check before an [App Backup](/apps/app-backup/) installer capture | Yes |
 | `management.azure.com` | Listing your subscriptions and storage accounts in the storage picker | Only for Azure storage |
 | `<account>.blob.core.windows.net` | Reading and writing backups in your storage account | Only for Azure storage |
+| `*.manage.microsoft.com` | [App Backup](/apps/app-backup/): Intune's device content service and the installer download, at addresses the Intune agent on the PC and Intune supply | Only to capture an installer, on the enrolled Windows PC |
+| `*.blob.core.windows.net` | [App Backup](/apps/app-backup/): upload of the installer to the storage address Intune returns. This is not your own storage account | Only for **Restore to tenant** |
 | `github.com`, `release-assets.githubusercontent.com`, `objects.githubusercontent.com` | Automatic updates | For updates |
 | `api.github.com`, `raw.githubusercontent.com` | OpenIntuneBaseline content for the OpenIntuneBaseline section and My baselines | For OpenIntuneBaseline |
 
@@ -71,7 +73,7 @@ When the proxy asks for a sign-in (HTTP 407), TenuVault asks once per proxy for 
 
 A proxy that signs in with your Windows account (NTLM or Kerberos) usually needs no prompt. If the sign-in is cancelled or refused, errors name proxy authentication, for example `HTTP 407` or `ERR_PROXY_AUTH_REQUESTED`. Allowing the destinations above without proxy authentication avoids the prompt, which also keeps scheduled backups from waiting for an answer while nobody is at the computer.
 
-If GitHub is blocked, updates and baseline packs fail, but backup and restore keep working. For what is sent to each destination, see [Network connections and data flows](/security/data-flows/).
+If GitHub is blocked, updates and baseline packs fail, but backup and restore keep working. For what is sent to each destination, see [Network connections and data flows](/security/data-flows/). The App Backup connections are described under [App Backup](/security/data-flows/#app-backup).
 
 If your storage account uses firewall rules, the computer running TenuVault must be allowed through them. Otherwise TenuVault reports that the storage account rejected the request from this network.
 
