@@ -3,7 +3,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 // @ts-expect-error The CI harness is plain JavaScript without type declarations.
-import { CA_NAME, cleanup, install, leftovers } from "../scripts/sign-in-e2e/runner.mjs"
+import { CA_NAME, cleanup, forgetAppSecret, install, leftovers } from "../scripts/sign-in-e2e/runner.mjs"
 
 type Call = { command: string; args: string[] }
 
@@ -26,7 +26,6 @@ function machine(platform: "linux" | "darwin" | "win32", failing: (call: Call) =
     const call = command === "sudo" ? { command: args[1]!, args: args.slice(2) } : { command, args }
     calls.push(call)
     if (failing(call)) throw Object.assign(new Error(`${call.command} failed`), { stderr: `${call.command}: refused` })
-    const joined = call.args.join(" ")
     if (call.command === "rm") {
       rmSync(call.args.at(-1)!, { force: true })
       return ""
@@ -35,8 +34,8 @@ function machine(platform: "linux" | "darwin" | "win32", failing: (call: Call) =
       writeFileSync(call.args[1]!, readFileSync(call.args[0]!))
       return ""
     }
-    if (call.command === "certutil" && joined.includes("-A")) stores.add("nss")
-    if (call.command === "certutil" && joined.includes("-D")) stores.delete("nss")
+    if (call.command === "certutil" && call.args.includes("-A")) stores.add("nss")
+    if (call.command === "certutil" && call.args.includes("-D")) stores.delete("nss")
     if (call.command === "certutil" && call.args.at(-1) === "-L") return stores.has("nss") ? `${CA_NAME}  C,,` : ""
     if (call.command === "certutil" && call.args[0] === "-addstore") stores.add("windows")
     if (call.command === "certutil" && call.args[0] === "-delstore") stores.delete("windows")
@@ -116,6 +115,8 @@ describe("sign-in test runner changes", () => {
     install(join(m.dir, "ca.pem"), m.system)
     const disposable = join(m.system.stateDir, "sign-in-e2e.keychain-db")
     expect(m.calls).toContainEqual({ command: "security", args: ["default-keychain", "-d", "user", "-s", disposable] })
+    forgetAppSecret(m.system)
+    expect(m.calls).toContainEqual({ command: "security", args: ["delete-generic-password", "-s", "TenuVault Safe Storage", disposable] })
     writeFileSync(disposable, "keychain")
     cleanup(m.system)
     expect(m.calls).toContainEqual({ command: "security", args: ["default-keychain", "-d", "user", "-s", "/Users/runner/Library/Keychains/login.keychain-db"] })

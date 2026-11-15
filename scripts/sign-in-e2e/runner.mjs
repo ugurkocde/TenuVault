@@ -176,6 +176,19 @@ export function install(ca, system = realSystem()) {
   }
 }
 
+/**
+ * Before each start of the app on macOS: removes the app's safe storage key from the disposable
+ * keychain, so every fresh profile gets a new key the app writes and reads itself. An unsigned
+ * build cannot read back a key an earlier start of it wrote (errSecAuthFailed).
+ */
+export function forgetAppSecret(system = realSystem()) {
+  const path = readState(system).keychain?.path
+  if (system.platform !== "darwin" || !path) return
+  for (let i = 0; i < 5; i++) {
+    try { system.exec("security", ["delete-generic-password", "-s", "TenuVault Safe Storage", path]) } catch { return }
+  }
+}
+
 /** What is still on the machine: hosts entries and the root certificate in each store. */
 export function leftovers(system = realSystem()) {
   const found = []

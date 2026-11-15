@@ -34,7 +34,7 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { chromium, firefox, webkit } from "playwright"
 import { LOGIN_HOST, startStandIn } from "./stand-in.mjs"
-import { cleanup, install, makeCertificates } from "./runner.mjs"
+import { cleanup, forgetAppSecret, install, makeCertificates } from "./runner.mjs"
 
 // The app checkout is the current directory: the release workflow runs a harness from another
 // checkout against the release target's build.
@@ -106,6 +106,7 @@ async function launchApp(label) {
   if (process.platform === "linux") args.push("--no-sandbox", "--password-store=gnome-libsecret")
   if (process.platform === "linux" && process.env.DISPLAY) args.push("--ozone-platform=x11")
   // On macOS the app's secrets go to the disposable keychain runner.mjs makes the default.
+  forgetAppSecret()
   const env = { ...process.env, ELECTRON_ENABLE_LOGGING: "1" }
   delete env.ELECTRON_RUN_AS_NODE
   const child = spawn(packagedApp ?? require("electron"), args, { stdio: ["ignore", "pipe", "pipe"], env })
