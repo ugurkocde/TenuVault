@@ -222,7 +222,7 @@ export interface VerifiedHealth {
   /** When the latest backup behind the state ended. */
   at?: string
   cause?: HealthCause
-  /** Whose backup the cause comes from. */
+  /** Whose backup verified the area, or whose backup the cause comes from. */
   mode?: ConnectionMode
   /** The folders the last backup did not read. */
   notVerified: string[]
@@ -244,6 +244,8 @@ export interface AreaHealth {
   verified: VerifiedHealth
   /** A type that was read before was refused by two backups since. */
   lostAccess: boolean
+  /** Each connection's loss, independent of what another connection verified. */
+  losses: Array<{ folder: string; since: string; cause: LossCause; mode: ConnectionMode }>
 }
 
 export interface ServiceHealth {

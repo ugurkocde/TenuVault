@@ -198,7 +198,7 @@ function evidenceOf(records: ReadonlyArray<ConnectionRecord | undefined>, now: D
   return byFolder
 }
 
-type Verdict = { folder: string; at: string; time: number } & ({ read: true } | { read: false; cause: HealthCause; mode: ConnectionMode })
+type Verdict = { folder: string; at: string; time: number; mode: ConnectionMode } & ({ read: true } | { read: false; cause: HealthCause; mode: ConnectionMode })
 
 /**
  * The cause of a refusal as it stands now: the cause the run found with the token it had. The
@@ -223,7 +223,7 @@ function verdictOf(folder: string, entries: readonly Entry[] | undefined, grante
     const left = entries[0]!
     return { folder, at: left.at, time: left.time, read: false, cause: left.cause === "signedIn" ? "signedIn" : "reader", mode: left.mode }
   }
-  const base = { folder, at: said.at, time: said.time }
+  const base = { folder, at: said.at, time: said.time, mode: said.mode }
   if (said.kind === "read") return { ...base, read: true }
   if (said.kind === "unread") return { ...base, read: false, cause: "notRead", mode: said.mode }
   return { ...base, read: false, cause: causeNow(folder, said.cause as RefusalCause, said.mode, granted), mode: said.mode }
@@ -236,7 +236,7 @@ function verifiedOf(verdicts: readonly Verdict[]): VerifiedHealth {
   if (!verdicts.length) return { state: "noBackup", notVerified: [] }
   const latest = verdicts.reduce((newest, verdict) => (verdict.time > newest.time ? verdict : newest))
   const notRead = verdicts.flatMap((verdict) => (verdict.read ? [] : [verdict]))
-  if (!notRead.length) return { state: "verified", at: latest.at, notVerified: [] }
+  if (!notRead.length) return { state: "verified", at: latest.at, mode: latest.mode, notVerified: [] }
   const main = CAUSES.flatMap((cause) => notRead.filter((verdict) => verdict.cause === cause))[0]!
   return { state: notRead.length === verdicts.length ? "notVerified" : "partly", at: latest.at, cause: main.cause, mode: main.mode, notVerified: notRead.map((verdict) => verdict.folder) }
 }
@@ -296,15 +296,14 @@ function evaluateService(module: ServiceModule, choice: ServiceChoice, granted: 
     // A service or an area that is off is outside what backups cover: nothing is verified for it, and nothing is lost.
     const found = enabled ? area.folders.flatMap((folder) => verdictOf(folder, evidence.get(folder), granted) ?? []) : []
     verdicts.push(...found)
-    // A loss is one connection's: its own refusals say since when and why, whatever the last backup of the other connection ran into.
-    // When both lost the folder, the one that lost it first is named. A read by either one since then ends it.
-    const gone = found.flatMap((verdict) => {
-      const loss = verdict.read ? undefined : lostBy.flatMap((folders) => folders.get(verdict.folder) ?? []).sort((a, b) => Date.parse(a.since) - Date.parse(b.since))[0]
-      return loss ? [{ folder: verdict.folder, since: loss.since, cause: causeNow(verdict.folder, loss.cause, loss.mode, granted), mode: loss.mode }] : []
-    })
+    // A read by another connection never clears this connection's own loss.
+    const gone = enabled ? area.folders.flatMap((folder) => lostBy.flatMap((folders) => {
+      const loss = folders.get(folder)
+      return loss ? [{ folder, since: loss.since, cause: causeNow(folder, loss.cause, loss.mode, granted), mode: loss.mode }] : []
+    })).sort((a, b) => Date.parse(a.since) - Date.parse(b.since)) : []
     if (gone.length) {
       const main = CAUSES.flatMap((cause) => gone.filter((entry) => entry.cause === cause))[0]!
-      lost.set(key(module, area), { folders: gone.map((entry) => entry.folder), since: gone.map((entry) => entry.since).sort()[0]!, cause: main.cause, mode: main.mode })
+      lost.set(key(module, area), { folders: [...new Set(gone.map((entry) => entry.folder))], since: gone.map((entry) => entry.since).sort()[0]!, cause: main.cause, mode: main.mode })
     }
     if (checks) ready[key(module, area)] = checks[index]!.backup
     return {
@@ -318,6 +317,7 @@ function evaluateService(module: ServiceModule, choice: ServiceChoice, granted: 
       missing: granted ? areaPermissions(area, choice.access, "delegated", granted.permissions) : [],
       verified: verifiedOf(found),
       lostAccess: gone.length > 0,
+      losses: gone,
     }
   })
   const considered = module.areas.flatMap((area, index) => (chosen(area) ? [index] : []))

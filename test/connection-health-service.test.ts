@@ -582,7 +582,7 @@ describe("backup runs", () => {
     await health.check(TENANT, "launch")
     pass(DAY)
     ran(health, outcomes("desktop-1", now(), [saved("Apps"), saved("DeviceConfigurations")]))
-    expect(health.report(TENANT).services[0]!.areas.find((area) => area.id === "apps")!.verified).toEqual({ state: "verified", at: now(), notVerified: [] })
+    expect(health.report(TENANT).services[0]!.areas.find((area) => area.id === "apps")!.verified).toEqual({ state: "verified", at: now(), mode: "delegated", notVerified: [] })
     pass(DAY)
     const firstRefusal = now()
     ran(health, outcomes("desktop-2", now(), [denied("Apps", "role"), saved("DeviceConfigurations")]))
@@ -650,7 +650,7 @@ describe("backup runs", () => {
     // The next backup reads the type.
     pass(DAY)
     ran(health, outcomes("desktop-2", now(), [saved("Apps"), saved("DeviceConfigurations")]))
-    expect(apps().verified).toEqual({ state: "verified", at: now(), notVerified: [] })
+    expect(apps().verified).toEqual({ state: "verified", at: now(), mode: "delegated", notVerified: [] })
   })
 
   it("of another admin count for nothing once someone else signed in", async () => {

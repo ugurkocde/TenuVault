@@ -321,8 +321,8 @@ describe.each(MODULES.map((module) => [module.label, module] as const))("%s", (_
   it("is verified by the last backup that read its types, with that backup's date", () => {
     const folders = always.flatMap((entry) => entry.folders)
     const report = evaluate([delegated({ graph: healthy(scopes), runs: [run("r1", 2, { read: folders })] })], { settings: on }).report
-    expect(service(report, module.id).verified).toEqual({ state: "verified", at: ago(2 * DAY), notVerified: [] })
-    expect(area(report, module.id, first.id).verified).toEqual({ state: "verified", at: ago(2 * DAY), notVerified: [] })
+    expect(service(report, module.id).verified).toEqual({ state: "verified", at: ago(2 * DAY), mode: "delegated", notVerified: [] })
+    expect(area(report, module.id, first.id).verified).toEqual({ state: "verified", at: ago(2 * DAY), mode: "delegated", notVerified: [] })
   })
 
   it("has no backup to go by before one selected its types", () => {
@@ -363,7 +363,7 @@ describe.each(MODULES.map((module) => [module.label, module] as const))("%s", (_
       [delegated({ runs: [run("manual", 9, { read: [folder] })] }), readerConnection({ runs: [readerRun("nightly", 1, { excluded: [{ folder, cause: "reader" }] })] })],
       { settings: on, reader: readerFacts(), readerClientId: READER },
     ).report
-    expect(area(report, module.id, first.id).verified).toEqual({ state: "verified", at: ago(9 * DAY), notVerified: [] })
+    expect(area(report, module.id, first.id).verified).toEqual({ state: "verified", at: ago(9 * DAY), mode: "delegated", notVerified: [] })
   })
 
   it.runIf(second)("is partly verified when the last backup read one type and not another", () => {
@@ -528,14 +528,24 @@ describe("lost access", () => {
     expect(report.changes).toEqual([{ kind: "lostAccess", service: "intune", area: "configuration", cause: "permission", mode: "delegated", folders: [FOLDER], since: ago(8 * DAY) }])
   })
 
-  it("is not lost when the admin read the type after the Backup Reader was refused", () => {
+  it("keeps the Backup Reader loss while an admin read verifies the type, and after an admin timeout", () => {
+    const FOLDER = "Apps"
     const connections = [
-      delegated({ runs: [read("manual", 1)], snapshot: { at: ago(80 * DAY), account: ADMIN, lost: [] } }),
+      delegated({ runs: [run("manual", 1, { read: [FOLDER] })], snapshot: { at: ago(80 * DAY), account: ADMIN, lost: [] } }),
       readerConnection({ runs: [readerRun("r1", 9, { read: [FOLDER] }), readerRun("r2", 5, { refused: [refusal(FOLDER)] }), readerRun("r3", 3, { refused: [refusal(FOLDER)] })] }),
     ]
     const { report } = evaluate(connections, { reader: readerFacts(), readerClientId: READER })
-    expect(report.changes).toEqual([])
-    expect(area(report, "intune", "configuration")).toMatchObject({ lostAccess: false, verified: { state: "verified", at: ago(DAY) } })
+    const loss = { folder: FOLDER, since: ago(5 * DAY), cause: "permission", mode: "app-only" }
+    expect(report.changes).toMatchObject([{ kind: "lostAccess", mode: "app-only" }])
+    expect(area(report, "intune", "apps")).toMatchObject({ lostAccess: true, losses: [loss], verified: { state: "verified", at: ago(DAY), mode: "delegated" } })
+    // A later timeout of the admin changes verification, never the reader's still-standing loss.
+    connections[0]!.runs.push(run("timeout", 0.5, { unread: [FOLDER] }))
+    const later = evaluate(connections, { reader: readerFacts(), readerClientId: READER }).report
+    expect(area(later, "intune", "apps")).toMatchObject({ lostAccess: true, losses: [loss], verified: { state: "notVerified", cause: "notRead", mode: "delegated" } })
+    expect(later.changes).toEqual(report.changes)
+    // Only a read by the reader ends its own loss.
+    connections[1] = readerConnection({ runs: [...connections[1]!.runs, readerRun("reader-back", 0.25, { read: [FOLDER] })] })
+    expect(area(evaluate(connections, { reader: readerFacts(), readerClientId: READER }).report, "intune", "apps")).toMatchObject({ lostAccess: false, losses: [] })
   })
 
   // What a connection keeps for a type it read 30 days ago and that two runs refused since. No run in its list says anything about the type.
