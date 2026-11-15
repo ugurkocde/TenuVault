@@ -2,10 +2,13 @@
 #
 #   ./install-windows.ps1 -Downloads <folder with the release's x64 EXE and MSI> -ExpectedPublisher <name>
 #
-# The MSI is installed silently for all users, its app and capture helper signatures are checked,
-# and it is removed again. Then the x64 NSIS installer runs silently for the current user, the
-# same checks run on that installation, and its TenuVault.exe path is written to GITHUB_OUTPUT as
-# `app` (or printed without GitHub Actions).
+# Every installer in the folder must carry a valid Authenticode signature of the expected
+# publisher, all with the same certificate subject, before anything runs: the x64 EXE and MSI,
+# and the arm64 and combined EXE when they are there (those are checked, not installed). The MSI
+# is installed silently for all users, its app and capture helper signatures are checked, and it
+# is removed again. Then the x64 NSIS installer runs silently for the current user, the same
+# checks run on that installation, and the installed app's subject must match the installers'.
+# Its TenuVault.exe path is written to GITHUB_OUTPUT as `app` (or printed without GitHub Actions).
 param(
     [Parameter(Mandatory = $true)][string]$Downloads,
     [Parameter(Mandatory = $true)][string]$ExpectedPublisher
@@ -13,6 +16,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $checkSignatures = Join-Path $PSScriptRoot '..\check-capture-signatures.ps1'
 
+# Returns the signer certificate subject.
 function Assert-Signed([string]$File) {
     $signature = Get-AuthenticodeSignature -LiteralPath $File
     if ($signature.Status -ne 'Valid' -or $null -eq $signature.SignerCertificate) {
@@ -22,7 +26,17 @@ function Assert-Signed([string]$File) {
     if (-not [string]::Equals($publisher, $ExpectedPublisher, [StringComparison]::Ordinal)) {
         throw "Unexpected Authenticode publisher for $([IO.Path]::GetFileName($File))."
     }
-    Write-Output "Signature verified: $([IO.Path]::GetFileName($File))"
+    Write-Host "Signature verified: $([IO.Path]::GetFileName($File))"
+    return $signature.SignerCertificate.Subject
+}
+
+$subject = $null
+function Assert-Publisher([string]$File) {
+    $found = Assert-Signed $File
+    if ($null -eq $script:subject) { $script:subject = $found }
+    elseif (-not [string]::Equals($found, $script:subject, [StringComparison]::Ordinal)) {
+        throw "$([IO.Path]::GetFileName($File)) is signed with another certificate subject than the other installers."
+    }
 }
 
 # The install folder an installer registered for TenuVault, from the uninstall entries.
@@ -42,8 +56,12 @@ function Find-Install([string[]]$Roots, [string]$Fallback) {
 $exe = @(Get-ChildItem $Downloads -Filter '*-win-x64.exe')
 $msi = @(Get-ChildItem $Downloads -Filter '*-win-x64.msi')
 if ($exe.Count -ne 1 -or $msi.Count -ne 1) { throw "Expected one x64 EXE and one x64 MSI in $Downloads." }
-Assert-Signed $exe[0].FullName
-Assert-Signed $msi[0].FullName
+Assert-Publisher $exe[0].FullName
+Assert-Publisher $msi[0].FullName
+# The other published installers: signature checks only.
+foreach ($other in @(Get-ChildItem $Downloads -Filter '*.exe' | Where-Object { $_.Name -like '*-win-arm64.exe' -or $_.Name -like '*-win.exe' })) {
+    Assert-Publisher $other.FullName
+}
 
 # MSI: per machine, as Intune or Configuration Manager deploy it.
 $log = Join-Path $env:RUNNER_TEMP 'tenuvault-msi.log'
@@ -62,6 +80,8 @@ if ($process.ExitCode -ne 0) { throw "The installer did not install (exit code $
 $appDir = Find-Install @('HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall') (Join-Path $env:LOCALAPPDATA 'Programs\TenuVault')
 Write-Output "Installed to $appDir"
 & $checkSignatures -AppDirectory $appDir -ExpectedPublisher $ExpectedPublisher
+$installed = (Get-AuthenticodeSignature -LiteralPath (Join-Path $appDir 'TenuVault.exe')).SignerCertificate.Subject
+if (-not [string]::Equals($installed, $subject, [StringComparison]::Ordinal)) { throw 'The installed app is signed with another certificate subject than its installer.' }
 # Nothing the installer started may hold the single instance lock.
 Get-Process TenuVault -ErrorAction SilentlyContinue | Stop-Process -Force
 

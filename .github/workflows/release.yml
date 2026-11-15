@@ -46,8 +46,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      # The nightly verification result is a commit status.
+      # The nightly verification result is a commit status, bound to its run and the run's result
+      # artifact (.github/scripts/nightly-verified.mjs).
       statuses: read
+      actions: read
     outputs:
       channel: ${{ steps.resolve.outputs.channel }}
       version: ${{ steps.resolve.outputs.version }}
@@ -377,9 +379,22 @@ jobs:
             stamp="${VERSION##*.}"
             title="Nightly ${stamp:0:4}-${stamp:4:2}-${stamp:6:2} ${stamp:8:2}:${stamp:10:2} UTC"
             gh release create "$TAG" artifacts/* --target "$SHA" --title "$title" --notes-file notes.md --prerelease --latest=false
+            # What was published, for the nightly verification of this run (published-nightly below).
+            jq -n --arg tag "$TAG" --arg sha "$SHA" '{tag: $tag, sha: $sha}' > published-nightly.json
           else
             gh release create "$TAG" artifacts/* --target "$SHA" --title "$VERSION" --notes-file notes.md --latest
           fi
+
+      # The nightly verification verifies exactly this tag and commit, whatever later steps do, also
+      # when the run is cancelled after the release was created. No file: nothing was published.
+      - name: Record the published nightly
+        if: always() && needs.meta.outputs.channel == 'nightly'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: published-nightly
+          path: published-nightly.json
+          if-no-files-found: ignore
+          retention-days: 30
 
       # Keep the release page readable: the newest 20 nightlies stay, older ones and their tags go.
       - name: Remove old nightlies

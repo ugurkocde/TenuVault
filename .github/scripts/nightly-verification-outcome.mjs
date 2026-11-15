@@ -3,6 +3,7 @@
  * (.github/workflows/nightly-verification.yml, job "Record the result").
  *
  *   node .github/scripts/nightly-verification-outcome.mjs <jobs.json>
+ *   node .github/scripts/nightly-verification-outcome.mjs superseded <statuses.json>
  *
  * Reads EVENT, REF, ALERT_REQUESTED, RESOLVE and TAG from the environment and the run's jobs
  * ({ name, conclusion } as the GitHub API lists them) from jobs.json, and writes state,
@@ -16,7 +17,9 @@
  *   that was cancelled, skipped or never ran leaves the nightly unverified: the status is
  *   "error", which the stable gate does not accept, and nothing is alerted.
  * - Only failures alert: always for the release-triggered run, for a workflow_dispatch only
- *   when it asked for alerts.
+ *   when it asked for alerts. A run with a cancelled check never alerts, even when another
+ *   check failed; it still records the failure.
+ * - A run never overwrites the result of a newer run of the same commit (supersededBy).
  */
 import { appendFileSync, readFileSync } from "node:fs"
 
@@ -49,13 +52,14 @@ export function verificationOutcome({ event, ref, alertRequested, resolve, tag, 
   const unfinished = results.filter((result) => result.conclusion !== "success" && !FAILED.has(result.conclusion))
   const describe = (list) => list.map((result) => `${result.name} ${result.conclusion === "timed_out" ? "timed out" : result.conclusion}`).join(", ")
 
+  const cancelled = results.some((result) => result.conclusion === "cancelled")
   if (failed.length > 0) {
     const detail = describe([...failed, ...unfinished])
     return {
       state: "failure",
       description: `${tag}: ${detail}`.slice(0, 140),
       record: defaultFlow,
-      alert: mayAlert,
+      alert: mayAlert && !cancelled,
       message: `Nightly verification of ${tag} failed: ${detail}.`,
     }
   }
@@ -78,11 +82,33 @@ export function verificationOutcome({ event, ref, alertRequested, resolve, tag, 
   }
 }
 
+/**
+ * The id of a newer run of this workflow that already recorded a status for the commit, or
+ * null. statuses: the commit's statuses; ownRunId: this run. A run started after this one
+ * (a higher id) owns the result, so this run must not write over it.
+ */
+export function supersededBy(statuses, ownRunId, repository) {
+  const prefix = `https://github.com/${repository}/actions/runs/`
+  const newer = statuses
+    .filter((status) => status.context === "Nightly verification" && status.creator?.login === "github-actions[bot]" && String(status.target_url ?? "").startsWith(prefix))
+    .map((status) => Number(/^(\d+)/.exec(status.target_url.slice(prefix.length))?.[1]))
+    .filter((id) => Number.isFinite(id) && id > ownRunId)
+  return newer.length > 0 ? Math.max(...newer) : null
+}
+
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const jobs = JSON.parse(readFileSync(process.argv[2], "utf8"))
-  const { EVENT, REF, ALERT_REQUESTED, RESOLVE, TAG, GITHUB_OUTPUT } = process.env
-  const outcome = verificationOutcome({ event: EVENT, ref: REF, alertRequested: ALERT_REQUESTED === "true", resolve: RESOLVE, tag: TAG, jobs })
-  const lines = Object.entries(outcome).map(([key, value]) => `${key}=${value ?? ""}`)
-  if (GITHUB_OUTPUT) appendFileSync(GITHUB_OUTPUT, `${lines.join("\n")}\n`)
-  console.log(lines.join("\n"))
+  const { EVENT, REF, ALERT_REQUESTED, RESOLVE, TAG, GITHUB_OUTPUT, GITHUB_RUN_ID, GITHUB_REPOSITORY } = process.env
+  const write = (values) => {
+    const lines = Object.entries(values).map(([key, value]) => `${key}=${value ?? ""}`)
+    if (GITHUB_OUTPUT) appendFileSync(GITHUB_OUTPUT, `${lines.join("\n")}\n`)
+    console.log(lines.join("\n"))
+  }
+  if (process.argv[2] === "superseded") {
+    // node nightly-verification-outcome.mjs superseded <statuses.json>
+    write({ superseded: supersededBy(JSON.parse(readFileSync(process.argv[3], "utf8")), Number(GITHUB_RUN_ID), GITHUB_REPOSITORY) })
+  } else {
+    // node nightly-verification-outcome.mjs <jobs.json>
+    const jobs = JSON.parse(readFileSync(process.argv[2], "utf8"))
+    write(verificationOutcome({ event: EVENT, ref: REF, alertRequested: ALERT_REQUESTED === "true", resolve: RESOLVE, tag: TAG, jobs }))
+  }
 }

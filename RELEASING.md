@@ -66,57 +66,91 @@ with `allow_unsoaked_license_change`; a pushed tag has no override.
 ## Nightly verification
 
 Every published nightly is installed and used as users get it, by
-`.github/workflows/nightly-verification.yml`. It starts when a Release run that published a
-nightly completes, and checks:
+`.github/workflows/nightly-verification.yml`. It starts when a Release run completes and
+verifies exactly the tag and commit that run published (the `published-nightly` artifact the
+publish job uploads right after creating the release, also when a later step fails or the run is
+cancelled). Runs that published nothing (stable releases, skipped nightlies) verify nothing. It
+checks:
 
-- **Installers and signatures.** On `windows-latest` the x64 MSI installs silently for all users,
-  is checked and removed, then the x64 NSIS installer installs silently for the current user. The
-  Authenticode signatures of both installers, `TenuVault.exe` and
-  `resources/app-backup/TenuVault.Capture.exe` must be valid and carry the publisher in
-  `AZURE_TRUSTED_SIGNING_PUBLISHER_NAME`. On `macos-latest` the disk image for the runner's
-  architecture is mounted (license accepted) and the app copied to `/Applications`; it and the
-  app in the update zip must pass `codesign --verify --deep --strict` with a Developer ID
-  Application authority, carry a stapled notarization ticket, and be accepted by Gatekeeper as
-  notarized.
+- **Installers and signatures.** Every installer is checked before anything runs it. On
+  `windows-latest` every published Windows installer (x64 EXE and MSI, arm64 EXE, combined EXE)
+  must carry a valid Authenticode signature with the publisher in
+  `AZURE_TRUSTED_SIGNING_PUBLISHER_NAME`, all with the same certificate subject. The x64 MSI
+  installs silently for all users, is checked and removed, then the x64 NSIS installer installs
+  silently for the current user; on both installations `TenuVault.exe` and
+  `resources/app-backup/TenuVault.Capture.exe` must be signed by that publisher, and the
+  installed app by the installers' subject. On `macos-latest` the app in every published disk
+  image and update zip (both architectures) must pass `codesign --verify --deep --strict` with
+  a Developer ID Application authority of Team ID `D259ULY2B4`, carry a stapled notarization
+  ticket, and be accepted by Gatekeeper as notarized. The runner's own architecture's disk image
+  is mounted (license accepted) and its app copied to `/Applications`, and checked again there.
 - **Paid key** (`scripts/nightly-verification/license.mjs`). The installed app starts with a
-  throwaway profile and is driven over the DevTools protocol like the smoke test. It saves the
+  fresh profile and is driven over the DevTools protocol like the smoke test. It saves the
   licensing canary's Pro key (`LICENSING_CANARY_KEY`) on the welcome screen, activates it against
-  production for the canary tenant the [licensing canary](.github/workflows/license-canary.yml)
-  uses (the check a first sign-in runs), and checks the License page shows the tenant as Active,
-  Pro. The key must not be readable in plain text in the profile, a refresh must reach the
-  service and keep Pro, the key must come back after a restart (the operating system credential
-  store round trip; on macOS the login keychain, which must be unlocked), and the activation is
-  released at the end, also after a failure. On start the app itself releases activations of
-  tenants that are not connected, so the canary tenant's activation may already be gone after the
+  production for the verification tenant (the check a first sign-in runs), and checks the
+  License page shows the tenant as Active, Pro. The key must not be readable in plain text in
+  the profile, a refresh must reach the service and keep Pro, and the key must come back after a
+  restart (the operating system credential store round trip; on macOS the login keychain, which
+  must be unlocked). The activation is released at the end. On start the app itself releases
+  activations of tenants that are not connected, so the activation may already be gone after the
   restart; that is expected.
 - **Microsoft sign-in** (`scripts/nightly-verification/sign-in.mjs`). With a fresh profile per
   browser, the installed app goes through Connect your tenant, I already have an app
   registration, the test tenant and client IDs, and Sign in with Microsoft. The harness copies
   the sign-in link the app offers for another browser, completes Microsoft's login page in
   Playwright Chromium, Firefox and WebKit (and Microsoft Edge on Windows), answers "Stay signed
-  in?" with No, and checks the app shows "Signed in as" the test user. No license key is used.
+  in?" with No, and checks the app shows "Signed in as" the test user and holds an account whose
+  tenant, user and app registration all match. No license key is used.
 
 Both harnesses run with the `DisableAutoUpdate` policy set (as managed deployments use it) and
 check after every start that the running app is the nightly under test, so a newer release the
 app would otherwise update to is never what gets verified.
 
-The result is the commit status `Nightly verification` on the nightly's commit, the newest one
-counts (`.github/scripts/nightly-verification-outcome.mjs` has the rules):
+### The canary key and its activations
 
-- Only runs from `main` record it: the run a Release run starts, or a manual run from `main`.
+The paid key check uses the canary's key but its own tenant
+(`c0a1b2c3-d4e5-4f60-8a71-9b0c1d2e3f50`), never the canary tenant of
+`scripts/license-canary.ts`. The Pro key covers two tenants: the canary's and this one. Each
+tenant allows five installations, and each verification is a new installation (the app picks a
+random installation ID per profile and keeps it in its encrypted store).
+
+- Runs never overlap: the whole workflow is one concurrency group, and the two platforms' paid
+  key jobs run one after the other.
+- An activation is released by the check itself; if that step fails, times out or is
+  cancelled, by the step "Release a leftover activation", which runs regardless and starts the
+  app again with the kept profile (the app also releases the never connected tenant by itself
+  on that start).
+- What none of these can release (a runner lost mid run, a profile the app can no longer read)
+  stays on the verification tenant, never on the canary tenant. At most five such activations
+  can exist; with five recent ones the next verification is refused with `install_limit`, fails
+  and alerts, and the licensing service frees the oldest once it has not been used for 30 days.
+  The canary is not affected either way.
+
+### Result and gate
+
+The result is the commit status `Nightly verification` on the nightly's commit, linking to its
+run, and the run's `nightly-verification-result` artifact (`{ sha, tag, state, runId }`)
+(`.github/scripts/nightly-verification-outcome.mjs` has the rules):
+
+- Only runs from `main` record them: the run a Release run starts, or a manual run from `main`.
   Runs from other branches, pushes and pull requests record nothing and never alert.
 - `success` needs all four checks (paid key and sign-in, Windows and macOS) to pass.
 - A failed or timed out check records `failure`, fails the run (GitHub emails the maintainer) and
   is emailed with the subject "TenuVault release: nightly verification failed", naming each check
   and how it ended. The release-triggered run always emails; a manual run only with `alert`.
-- A cancelled, skipped or missing check records `error`: the nightly counts as unverified, the
-  stable gate refuses it, and nothing is emailed. Rerun it.
+- A cancelled, skipped or missing check records `error` (or `failure` when another check
+  failed): the nightly counts as unverified, the stable gate refuses it, and a run with a
+  cancelled check never emails.
+- A run never writes over the result of a newer run of the same commit (one started later).
 
-The email goes to `https://www.tenuvault.com/api/desktop-license/nightly-verification-alert`,
-authorized with `LICENSING_CANARY_ALERT_SECRET`, with the body `{ failures: string[], runUrl }`.
-The website must serve that route with its own subject; until it does, the request answers 404,
-no email is sent, and GitHub's failed run email is the only alert. Screenshots are uploaded as
-run artifacts.
+The email goes to `https://www.tenuvault.com/api/desktop-license/nightly-verification-alert`
+(TenuVault-Website), authorized with `LICENSING_CANARY_ALERT_SECRET`, with the body
+`{ failures: string[], runUrl }`; the route refuses any other field and control, format or line
+separator characters, which the alert removes. Where the route is not deployed the request
+answers 404, no email is sent, and GitHub's failed run email is the only alert.
+
+The repository is public, so screenshots are kept only for failed checks, for 3 days, with the
+license key, the test account and the tenant and app IDs replaced before the capture.
 
 Rerun it for a nightly, for example after fixing a secret or a flaky Microsoft page:
 
@@ -139,10 +173,15 @@ Secrets (Settings > Secrets and variables > Actions):
 
 Without the sign-in secrets the sign-in jobs fail and say which are missing; they never pass.
 
-A stable release, by promotion or by tag, fails unless the newest `Nightly verification` status
-of its commit is a success set by the workflow (`.github/scripts/nightly-verified.mjs`). Rerun
-the verification for the commit's nightly, or in an emergency run the stable promotion by hand
-with `allow_unverified_nightly`; a pushed tag has no override.
+A stable release, by promotion or by tag, fails unless its commit passed
+(`.github/scripts/nightly-verified.mjs`). The gate trusts no status by itself: it fetches the
+run each `Nightly verification` status links to and counts only runs of
+`.github/workflows/nightly-verification.yml` in this repository, on `main`, started by a Release
+run or by hand. The newest such run decides: it must have finished with success, and its result
+artifact must name exactly this commit with `success`. Anything else, including any error
+reading GitHub, refuses the release. Rerun the verification for the commit's nightly, or in an
+emergency run the stable promotion by hand with `allow_unverified_nightly`; a pushed tag has no
+override.
 
 ## Plan boundary changes
 
@@ -263,6 +302,10 @@ macOS, Developer ID and notarization:
 | `APPLE_API_KEY` | Contents of the App Store Connect API key (`AuthKey_XXXX.p8`) |
 | `APPLE_API_KEY_ID` | The key ID |
 | `APPLE_API_ISSUER` | The issuer ID |
+
+The Developer ID Application certificate belongs to Apple Team ID `D259ULY2B4`. The nightly
+verification refuses an app signed by any other team (`EXPECTED_TEAM_ID` in
+`scripts/nightly-verification/install-macos.sh`); change both together if the team ever changes.
 
 Licensing (already set): secret `TENUVAULT_LICENSE_PUBLIC_KEY`, variable `TENUVAULT_LICENSE_PORTAL_URL`.
 

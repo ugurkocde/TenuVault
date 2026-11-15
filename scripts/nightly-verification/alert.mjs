@@ -5,9 +5,10 @@
  *   LICENSING_CANARY_ALERT_SECRET=<secret> node scripts/nightly-verification/alert.mjs <line> [<line>...]
  *
  * Posts { failures, runUrl } to /api/desktop-license/nightly-verification-alert, authorized with
- * the canary's alert secret. The website has to provide that route; until it does, the request
- * answers 404, nothing is emailed and this warns. Best effort either way: the failed run's own
- * GitHub email still arrives. Without the secret nothing is sent.
+ * the canary's alert secret (TenuVault-Website). The route is strict: no other field, and no
+ * control, format or line separator characters. Where the route is not deployed it answers 404,
+ * nothing is emailed and this warns. Best effort either way: the failed run's own GitHub email
+ * still arrives. Without the secret nothing is sent.
  */
 export const ALERT_URL = "https://www.tenuvault.com/api/desktop-license/nightly-verification-alert"
 
@@ -15,7 +16,9 @@ export const ALERT_URL = "https://www.tenuvault.com/api/desktop-license/nightly-
 export function alertBody(lines, env = process.env) {
   const { GITHUB_SERVER_URL, GITHUB_REPOSITORY, GITHUB_RUN_ID } = env
   const runUrl = GITHUB_SERVER_URL && GITHUB_REPOSITORY && GITHUB_RUN_ID ? `${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}` : undefined
-  return { failures: lines.filter(Boolean).slice(0, 10).map((line) => line.slice(0, 500)), ...(runUrl ? { runUrl } : {}) }
+  // The route refuses control, format and line separator characters, and any other field.
+  const clean = (line) => line.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ").trim()
+  return { failures: lines.map(clean).filter(Boolean).slice(0, 10).map((line) => line.slice(0, 500)), ...(runUrl ? { runUrl } : {}) }
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

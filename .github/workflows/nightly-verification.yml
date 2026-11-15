@@ -4,10 +4,10 @@ name: Nightly verification
 # Windows and macOS and their signatures checked; the installed app activates the licensing
 # canary's Pro key against production and releases it again (paid key), and signs in to the test
 # tenant through Microsoft's real login page in every browser engine (sign-in). The result is the
-# commit status "Nightly verification" on the nightly's commit, which stable releases require
-# (.github/scripts/nightly-verified.mjs). Only runs from main record it, and only a failed check
-# of the release-triggered run (or a dispatch with alert) is emailed. Rerun for a tag with:
-# gh workflow run nightly-verification.yml -f tag=<tag>
+# commit status "Nightly verification" on the nightly's commit plus the result artifact the stable
+# gate reads (.github/scripts/nightly-verified.mjs). Only runs from main record them, and only a
+# failed check of the release-triggered run (or a dispatch with alert) is emailed. Rerun for a tag
+# with: gh workflow run nightly-verification.yml -f tag=<tag>
 on:
   workflow_run:
     workflows: [Release]
@@ -25,45 +25,61 @@ on:
 permissions:
   contents: read
 
+# One run at a time, automatic and dispatched alike: two runs never use the canary key together,
+# and results are written in the order the runs started. GitHub keeps at most one run waiting;
+# a newer one replaces it, and the replaced run records nothing.
 concurrency:
-  group: nightly-verification-${{ inputs.tag || github.event.workflow_run.id }}
+  group: nightly-verification
   cancel-in-progress: false
 
 jobs:
   resolve:
     name: Find the nightly
-    # A Release run that failed published nothing.
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
       statuses: write
     outputs:
       tag: ${{ steps.find.outputs.tag }}
       sha: ${{ steps.find.outputs.sha }}
       version: ${{ steps.find.outputs.version }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+
       - name: Resolve the tag and commit
         id: find
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
           INPUT_TAG: ${{ inputs.tag }}
-          RELEASE_STARTED: ${{ github.event.workflow_run.run_started_at }}
+          RELEASE_RUN_ID: ${{ github.event.workflow_run.id }}
+          RELEASE_PATH: ${{ github.event.workflow_run.path }}
+          RELEASE_REPOSITORY: ${{ github.event.workflow_run.repository.full_name }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
           if [ "$EVENT" = "workflow_run" ]; then
-            # The nightly this Release run published, if it published one: stable releases and
-            # nightlies skipped for lack of app changes publish none.
-            tag=$(gh release list -R "$GITHUB_REPOSITORY" --limit 50 --json tagName,isPrerelease,createdAt |
-              jq -r --arg started "$RELEASE_STARTED" '[.[] | select(.isPrerelease and (.tagName | test("-nightly\\.")) and .createdAt >= $started)] | sort_by(.createdAt) | .[0].tagName // ""')
-            if [ -z "$tag" ]; then
-              echo "::notice::This Release run published no nightly, so there is nothing to verify."
+            if [ "$RELEASE_REPOSITORY" != "$GITHUB_REPOSITORY" ] || [ "$RELEASE_PATH" != .github/workflows/release.yml ]; then
+              echo "::error::Started by $RELEASE_PATH of $RELEASE_REPOSITORY, not by this repository's Release workflow."
+              exit 1
+            fi
+            # Exactly what the Release run published (its published-nightly artifact), whatever its
+            # later steps did. Stable releases and skipped nightlies publish none.
+            found=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RELEASE_RUN_ID/artifacts?name=published-nightly" --jq '[.artifacts[] | select(.expired | not)] | length')
+            if [ "$found" = 0 ]; then
+              echo "::notice::Release run $RELEASE_RUN_ID published no nightly, so there is nothing to verify."
               exit 0
             fi
+            gh run download "$RELEASE_RUN_ID" -R "$GITHUB_REPOSITORY" -n published-nightly -D "$RUNNER_TEMP/published"
+            tag=$(jq -r .tag "$RUNNER_TEMP/published/published-nightly.json")
+            published_sha=$(jq -r .sha "$RUNNER_TEMP/published/published-nightly.json")
           else
             tag="$INPUT_TAG"
+            published_sha=""
           fi
           if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]{14}$ ]]; then
             echo "::error::$tag is not a nightly tag such as v0.5.3-nightly.20261114180404."
@@ -71,10 +87,18 @@ jobs:
           fi
           gh release view "$tag" -R "$GITHUB_REPOSITORY" --json isPrerelease --jq 'if .isPrerelease then empty else error("not a prerelease") end'
           sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha)
-          # Only runs from main record a status (nightly-verification-outcome.mjs).
+          if [ -n "$published_sha" ] && [ "$sha" != "$published_sha" ]; then
+            echo "::error::$tag points to $sha, but the Release run published it from $published_sha."
+            exit 1
+          fi
+          # Only runs from main record a status, and never over a newer run's result.
           if [ "$GITHUB_REF" = refs/heads/main ] && { [ "$EVENT" = workflow_run ] || [ "$EVENT" = workflow_dispatch ]; }; then
-            gh api "repos/$GITHUB_REPOSITORY/statuses/$sha" -f state=pending -f context="Nightly verification" \
-              -f description="$tag is being verified" -f target_url="$RUN_URL" > /dev/null
+            gh api "repos/$GITHUB_REPOSITORY/commits/$sha/statuses?per_page=100" > "$RUNNER_TEMP/statuses.json"
+            node .github/scripts/nightly-verification-outcome.mjs superseded "$RUNNER_TEMP/statuses.json" > "$RUNNER_TEMP/superseded.txt"
+            if grep -qx 'superseded=' "$RUNNER_TEMP/superseded.txt"; then
+              gh api "repos/$GITHUB_REPOSITORY/statuses/$sha" -f state=pending -f context="Nightly verification" \
+                -f description="$tag is being verified" -f target_url="$RUN_URL" > /dev/null
+            fi
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
@@ -87,8 +111,8 @@ jobs:
     if: needs.resolve.outputs.tag != ''
     strategy:
       fail-fast: false
-      # One installation of the canary key for the canary tenant at a time, so the platforms never
-      # act on the same tenant's activations together.
+      # One installation of the canary key at a time, so the platforms never act on the
+      # verification tenant's activations together.
       max-parallel: 1
       matrix:
         include:
@@ -114,8 +138,9 @@ jobs:
           TAG: ${{ needs.resolve.outputs.tag }}
         run: |
           set -euo pipefail
-          if [ "$RUNNER_OS" = "Windows" ]; then patterns=(-p '*-win-x64.exe' -p '*-win-x64.msi')
-          else arch=$([ "$(uname -m)" = arm64 ] && echo arm64 || echo x64); patterns=(-p "*-mac-$arch.dmg" -p "*-mac-$arch.zip"); fi
+          # Every published installer: this runner's own are installed, the others signature checked.
+          if [ "$RUNNER_OS" = "Windows" ]; then patterns=(-p '*-win-x64.exe' -p '*-win-x64.msi' -p '*-win-arm64.exe' -p '*-win.exe')
+          else patterns=(-p '*-mac-arm64.dmg' -p '*-mac-arm64.zip' -p '*-mac-x64.dmg' -p '*-mac-x64.zip'); fi
           gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D "$RUNNER_TEMP/installers" "${patterns[@]}"
           ls -l "$RUNNER_TEMP/installers"
 
@@ -152,16 +177,37 @@ jobs:
         env:
           NIGHTLY_VERIFY_APP: ${{ steps.install-windows.outputs.app || steps.install-macos.outputs.app }}
           NIGHTLY_VERIFY_VERSION: ${{ needs.resolve.outputs.version }}
+          NIGHTLY_VERIFY_PROFILE: ${{ runner.temp }}/license-profile
           LICENSING_CANARY_KEY: ${{ secrets.LICENSING_CANARY_KEY }}
         run: node scripts/nightly-verification/license.mjs "$RUNNER_TEMP/shots"
 
-      - name: Upload screenshots
-        if: always()
+      # Runs also when the step above failed, timed out or was cancelled: an activation it left in
+      # the kept profile is released through the app (which also releases it by itself on start,
+      # as the verification tenant is never connected). The step above deletes the profile once it
+      # released the activation, so normally there is nothing to do.
+      - name: Release a leftover activation
+        if: always() && (steps.install-windows.outputs.app != '' || steps.install-macos.outputs.app != '')
+        timeout-minutes: 10
+        shell: bash
+        env:
+          NIGHTLY_VERIFY_APP: ${{ steps.install-windows.outputs.app || steps.install-macos.outputs.app }}
+          NIGHTLY_VERIFY_PROFILE: ${{ runner.temp }}/license-profile
+          LICENSING_CANARY_KEY: ${{ secrets.LICENSING_CANARY_KEY }}
+        run: |
+          # An app the cancelled step left running holds the profile.
+          if [ "$RUNNER_OS" = "Windows" ]; then MSYS_NO_PATHCONV=1 taskkill /IM TenuVault.exe /T /F > /dev/null 2>&1 || true
+          else pkill -x TenuVault || true; fi
+          node scripts/nightly-verification/license.mjs --release "$RUNNER_TEMP/shots"
+
+      # The repository is public: only failures keep screenshots, with the key hidden, for 3 days.
+      - name: Upload failure screenshots
+        if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: nightly-license-${{ matrix.name }}
+          name: nightly-license-${{ matrix.name }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/shots
           if-no-files-found: ignore
+          retention-days: 3
 
   sign-in:
     name: Microsoft sign-in (${{ matrix.name }})
@@ -239,13 +285,16 @@ jobs:
           TENUVAULT_E2E_PASSWORD: ${{ secrets.TENUVAULT_E2E_PASSWORD }}
         run: node scripts/nightly-verification/sign-in.mjs "${{ matrix.browsers }}" "$RUNNER_TEMP/shots"
 
-      - name: Upload screenshots
-        if: always()
+      # The repository is public: only failures keep screenshots, with the test account, tenant
+      # and app ids hidden before the capture, for 3 days.
+      - name: Upload failure screenshots
+        if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: nightly-sign-in-${{ matrix.name }}
+          name: nightly-sign-in-${{ matrix.name }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/shots
           if-no-files-found: ignore
+          retention-days: 3
 
   record:
     name: Record the result
@@ -275,13 +324,44 @@ jobs:
           ALERT_REQUESTED: ${{ inputs.alert }}
           RESOLVE: ${{ needs.resolve.result }}
           TAG: ${{ needs.resolve.outputs.tag }}
+          SHA: ${{ needs.resolve.outputs.sha }}
         run: |
           set -euo pipefail
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?filter=latest&per_page=100" --jq '[.jobs[] | {name, conclusion}]' > "$RUNNER_TEMP/jobs.json"
           node .github/scripts/nightly-verification-outcome.mjs "$RUNNER_TEMP/jobs.json"
+          # A newer run of the same commit owns the result; this run then writes and alerts nothing.
+          if [ -n "$SHA" ]; then
+            gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/statuses?per_page=100" > "$RUNNER_TEMP/statuses.json"
+            node .github/scripts/nightly-verification-outcome.mjs superseded "$RUNNER_TEMP/statuses.json"
+          else
+            echo "superseded=" >> "$GITHUB_OUTPUT"
+          fi
+
+      # What this run verified, bound to the run: the stable gate reads it from the run the status
+      # links to, so a status alone proves nothing.
+      - name: Write the result
+        if: steps.outcome.outputs.record == 'true' && steps.outcome.outputs.state != '' && steps.outcome.outputs.superseded == ''
+        env:
+          TAG: ${{ needs.resolve.outputs.tag }}
+          SHA: ${{ needs.resolve.outputs.sha }}
+          STATE: ${{ steps.outcome.outputs.state }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/result"
+          jq -n --arg sha "$SHA" --arg tag "$TAG" --arg state "$STATE" --argjson runId "$GITHUB_RUN_ID" \
+            '{sha: $sha, tag: $tag, state: $state, runId: $runId}' > "$RUNNER_TEMP/result/result.json"
+
+      - name: Upload the result
+        if: steps.outcome.outputs.record == 'true' && steps.outcome.outputs.state != '' && steps.outcome.outputs.superseded == ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nightly-verification-result
+          path: ${{ runner.temp }}/result/result.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 90
 
       - name: Set the commit status
-        if: steps.outcome.outputs.record == 'true' && steps.outcome.outputs.state != ''
+        if: steps.outcome.outputs.record == 'true' && steps.outcome.outputs.state != '' && steps.outcome.outputs.superseded == ''
         env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ needs.resolve.outputs.sha }}
@@ -295,7 +375,7 @@ jobs:
           echo "::notice::$STATE: $DESCRIPTION"
 
       - name: Email the failure
-        if: steps.outcome.outputs.alert == 'true'
+        if: steps.outcome.outputs.alert == 'true' && steps.outcome.outputs.superseded == ''
         env:
           LICENSING_CANARY_ALERT_SECRET: ${{ secrets.LICENSING_CANARY_ALERT_SECRET }}
           MESSAGE: ${{ steps.outcome.outputs.message }}
@@ -306,7 +386,9 @@ jobs:
           STATE: ${{ steps.outcome.outputs.state }}
           RESOLVE: ${{ needs.resolve.result }}
           MESSAGE: ${{ steps.outcome.outputs.message }}
+          SUPERSEDED: ${{ steps.outcome.outputs.superseded }}
         run: |
+          if [ -n "$SUPERSEDED" ]; then echo "::notice::Run $SUPERSEDED verifies this commit too and is newer, so this run recorded nothing."; fi
           # A failed check fails the run, so GitHub emails the maintainer as well. A cancelled one
           # leaves the nightly unverified without calling it broken.
           if [ "$STATE" = failure ] || [ "$RESOLVE" = failure ]; then echo "::error::$MESSAGE"; exit 1; fi

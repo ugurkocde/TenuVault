@@ -20,6 +20,7 @@ import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { assert, checker, launch, sleep } from "./app.mjs"
+import { hidden, hide, maskPage, matchesTestAccount } from "./secrets.mjs"
 
 const SECRETS = ["TENUVAULT_E2E_TENANT_ID", "TENUVAULT_E2E_CLIENT_ID", "TENUVAULT_E2E_USERNAME", "TENUVAULT_E2E_PASSWORD"]
 const BROWSERS = ["chromium", "firefox", "webkit", "msedge"]
@@ -107,6 +108,8 @@ async function signInWith(browserName, playwright, secrets) {
     try {
       await completeLogin(page, secrets.TENUVAULT_E2E_USERNAME, secrets.TENUVAULT_E2E_PASSWORD)
     } catch (error) {
+      // The repository is public: the test account is hidden before the capture.
+      await page.evaluate(maskPage, hidden(secrets)).catch(() => {})
       await page.screenshot({ path: join(shotsDir, `fail-${browserName}-login.png`) }).catch(() => {})
       throw error
     }
@@ -114,15 +117,18 @@ async function signInWith(browserName, playwright, secrets) {
     const signedIn = `document.body.innerText.toLowerCase().includes(${JSON.stringify(`Signed in as ${secrets.TENUVAULT_E2E_USERNAME}`.toLowerCase())})`
     if (!(await app.waitFor(signedIn, 90_000))) {
       const error = await app.evaluate(`[...document.querySelectorAll('[role="alert"]')].map((e) => e.innerText).join(" ").slice(0, 400)`).catch(() => "")
-      await app.screenshot(`fail-${browserName}-app`).catch(() => {})
-      throw new Error(`The app does not show the signed-in account${error ? `: ${error}` : "."}`)
+      await app.screenshot(`fail-${browserName}-app`, hidden(secrets)).catch(() => {})
+      throw new Error(`The app does not show the signed-in account${error ? `: ${hide(error, secrets)}` : "."}`)
     }
     const accounts = await app.evaluate("window.tenuvault.auth.accounts()")
     assert(
-      accounts.some((account) => account.tenantId?.toLowerCase() === secrets.TENUVAULT_E2E_TENANT_ID.toLowerCase() || account.username?.toLowerCase() === secrets.TENUVAULT_E2E_USERNAME.toLowerCase()),
-      "The app has no account for the test tenant.",
+      accounts.some((account) => matchesTestAccount(account, secrets)),
+      `The app has no account for the test user in the test tenant through the test app registration (${accounts.length} account(s)).`,
     )
-    await app.screenshot(`signed-in-${browserName}`)
+  } catch (error) {
+    await app?.screenshot(`fail-${browserName}-app`, hidden(secrets)).catch(() => {})
+    // The logs are public; GitHub masks secrets in them, and so does this.
+    throw new Error(hide(error instanceof Error ? error.message : String(error), secrets))
   } finally {
     await browser?.close().catch(() => {})
     await app?.close().catch(() => {})
