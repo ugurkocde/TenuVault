@@ -409,6 +409,25 @@ describe("setup sign-in and provisioning errors", () => {
     expect(container.querySelector('[role="alert"]')!.textContent).toContain("Could not copy: The clipboard is blocked.")
     expect(links()).toEqual([])
   })
+
+  it("offers nothing next to a copy that fails only after a setup attempt started meanwhile has failed", async () => {
+    let fail!: (error: Error) => void
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: () => new Promise<void>((_resolve, reject) => { fail = reject }) } })
+    try {
+      const container = await render(createElement(ConnectTenantSetup, { trials: false, onManual: vi.fn(), onRegistered: vi.fn() }))
+      await act(async () => { button(container, "Someone else is the admin? Copy instructions")!.click() })
+      state.createRegistration.mockRejectedValueOnce(new Error("Microsoft Graph refused to create the app registration."))
+      await act(async () => { button(container, "Set up with Microsoft sign-in")!.click() })
+      await advance()
+      expect(links()).toEqual(["setup-error"])
+      await act(async () => { fail(new Error("The clipboard is blocked.")) })
+      await advance()
+      expect(container.querySelector('[role="alert"]')!.textContent).toContain("Could not copy: The clipboard is blocked.")
+      expect(links()).toEqual([])
+    } finally {
+      Reflect.deleteProperty(navigator, "clipboard")
+    }
+  })
 })
 
 describe("first sign-in errors", () => {
@@ -532,6 +551,45 @@ describe("a cancel of the first backup that failed", () => {
     expect(container.textContent).not.toContain("Could not cancel the backup")
     expect(container.querySelector('[role="alert"]')).toBeNull()
     expect(links()).toEqual([])
+  })
+
+  /** A cancel whose answer is still out, and the way to let it fail. */
+  async function pendingCancel() {
+    let fail!: (error: Error) => void
+    state.cancelBackup.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { fail = reject }))
+    const container = await runFirstBackup(started, running)
+    await act(async () => { button(container, "Cancel backup")!.click() })
+    return { container, fail: () => act(async () => { fail(new Error("Could not cancel the backup. Try again.")) }) }
+  }
+
+  it("ignores the answer to a cancel that arrives after another backup started", async () => {
+    const { container, fail } = await pendingCancel()
+    state.activeJobs = [{ jobId: "first", progress: 100, isComplete: true, isSuccessful: false, status: "Failed", progressMessage: "Backup failed", exception: "Microsoft Graph refused the request." }]
+    await rerender(createElement(OnboardingPage))
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => (url === "/api/backup/start" ? Response.json({ jobId: "second" }) : Response.json({}))))
+    state.activeJobs = [{ jobId: "second", progress: 10, ...running }]
+    await act(async () => { button(container, "Try again")!.click() })
+    await advance()
+    await fail()
+    await advance()
+    expect(container.textContent).toContain("Reading policies...")
+    expect(container.textContent).not.toContain("Could not cancel the backup")
+    expect(container.querySelector('[role="alert"]')).toBeNull()
+    expect(links()).toEqual([])
+    expect(button(container, "Cancel backup")!.disabled).toBe(false)
+  })
+
+  it("keeps the error of a backup whose status could not be read when the answer to a cancel arrives after it", async () => {
+    const { container, fail } = await pendingCancel()
+    state.activeJobs = [{ jobId: "first", progress: 40, ...running, pollError: "The backup status could not be read." }]
+    await rerender(createElement(OnboardingPage))
+    expect(container.querySelector('[role="alert"]')!.textContent).toContain("The backup status could not be read.")
+    expect(links()).toEqual(["first-backup-error"])
+    await fail()
+    await advance()
+    expect(container.querySelector('[role="alert"]')!.textContent).toContain("The backup status could not be read.")
+    expect(container.textContent).not.toContain("Could not cancel the backup")
+    expect(links()).toEqual(["first-backup-error"])
   })
 
   it("still offers the call when the backup then ends with an error", async () => {

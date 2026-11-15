@@ -132,7 +132,9 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
       await navigator.clipboard.writeText(setupHandoffText())
       setCopied(true)
     } catch (caught) {
+      // The copy can fail after a setup attempt that started meanwhile has failed.
       setError(`Could not copy: ${caught instanceof Error ? caught.message : String(caught)}`)
+      setAttemptFailed(false)
     }
   }
 
