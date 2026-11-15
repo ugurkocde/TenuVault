@@ -25,6 +25,8 @@ The Dashboard, Backup & Restore, Drift Detection and Audit Log pages work on one
 
 The switcher marks tenants your license does not cover right now with a warning icon, and shows **Not licensed** under the selected tenant's name when it applies. The menu also has **All tenants** (when two or more tenants are connected) and **Connect a tenant**.
 
+Notification links select the tenant the work belongs to before opening its workflow. If that tenant is no longer connected or is unknown on this computer, TenuVault shows **The linked tenant is not connected** with **Open Tenants**. Connect or choose a tenant there to continue.
+
 The **Backup & Restore** page has its own **Select tenant** list. Choosing a tenant there changes the same selection.
 
 ## Add a tenant

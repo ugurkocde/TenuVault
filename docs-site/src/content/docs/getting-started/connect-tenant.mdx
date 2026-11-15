@@ -149,6 +149,8 @@ Before Connect, **What do you want to back up?** offers Intune, Entra ID and Def
 * **Someone else is the admin? Copy instructions** includes the same chosen command and permission list in the message for your administrator.
 * **I already have an app registration** opens the ID form. After sign-in TenuVault checks the chosen permissions in the Microsoft Graph token, without reading or changing the registration.
 
+After sign-in, **Checking permissions** appears before storage is available. TenuVault waits up to 20 seconds for the result. If the check fails or takes longer, **Permissions could not be checked** explains what happened. You can retry with **Check again**, or choose storage and continue, then check permissions later in **Settings > Services and permissions**.
+
 When chosen permissions are missing, **Review your chosen permissions** shows exactly what is missing, with the Azure CLI commands, registration link and text for your administrator from **Services and permissions**. Select **Check again** after consent changes, or **Continue to storage** to fix permissions later. A check that cannot run is advisory and allows setup to continue. A successful check adds no confirmation step.
 
 ![Permission result after sign-in](/images/onboarding/10-permissions-missing-light.png)

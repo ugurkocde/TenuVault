@@ -989,6 +989,98 @@ describe("onboarding service choices", () => {
     expect(state.createRegistration).toHaveBeenCalledWith({ choice: { entra: { access: "backup", areas: ["groups"] } } })
   })
 
+  it("waits for a deferred missing-permission answer before Continue can save the signed-in tenant", async () => {
+    const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: TENANT, clientId: CLIENT, account: null }))
+    state.signIn.mockResolvedValueOnce(account)
+    let answer!: (result: { missing: string[] }) => void
+    state.checkPermissions.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    state.storageChoice = { kind: "local" }
+    const container = await render(createElement(OnboardingPage))
+    await act(async () => button(container, "Sign in with Microsoft")!.click())
+    await act(async () => button(container, "Continue")?.click())
+    expect(state.checkNewTenant).not.toHaveBeenCalled()
+    expect(state.saveServices).not.toHaveBeenCalled()
+    expect(state.addTenant).not.toHaveBeenCalled()
+    expect(container.textContent).toContain("Checking permissions")
+    expect(container.textContent).not.toContain("Storage chooser")
+    await act(async () => answer({ missing: ["Policy.Read.All"] }))
+    expect(container.textContent).toContain("Some chosen permissions are missing")
+    expect(container.textContent).toContain("Policy.Read.All")
+    expect(container.textContent).not.toContain("Storage chooser")
+    await act(async () => button(container, "Continue to storage")!.click())
+    expect(container.textContent).toContain("Storage chooser")
+    await act(async () => button(container, "Continue")!.click())
+    expect(state.addTenant).toHaveBeenCalledOnce()
+  })
+
+  it("releases a stalled permission check after 20 seconds and ignores its late answer", async () => {
+    const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: TENANT, clientId: CLIENT, account: null }))
+    state.signIn.mockResolvedValueOnce(account)
+    let answer!: (result: { missing: string[] }) => void
+    state.checkPermissions.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    state.storageChoice = { kind: "local" }
+    const container = await render(createElement(OnboardingPage))
+    vi.useFakeTimers()
+    try {
+      await act(async () => button(container, "Sign in with Microsoft")!.click())
+      expect(container.textContent).not.toContain("Storage chooser")
+      await act(async () => vi.advanceTimersByTime(19_999))
+      expect(container.textContent).toContain("Checking permissions")
+      expect(button(container, "Continue")).toBeUndefined()
+      await act(async () => vi.advanceTimersByTime(1))
+      expect(container.textContent).toContain("Permissions could not be checked")
+      expect(container.textContent).toContain("You can continue")
+      expect(container.textContent).toContain("Storage chooser")
+      expect(button(container, "Continue")!.disabled).toBe(false)
+      await act(async () => answer({ missing: ["Policy.Read.All"] }))
+      expect(container.textContent).not.toContain("Some chosen permissions are missing")
+      await act(async () => button(container, "Continue")!.click())
+      expect(state.addTenant).toHaveBeenCalledOnce()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("holds an existing storage choice while checking permissions again", async () => {
+    const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, account, signedInAt: Date.now() }))
+    state.accounts.mockResolvedValueOnce([account])
+    state.checkPermissions.mockResolvedValue({ missing: ["Policy.Read.All"] })
+    state.storageChoice = { kind: "local" }
+    const container = await render(createElement(OnboardingPage))
+    await act(async () => button(container, "Continue to storage")!.click())
+    expect(container.textContent).toContain("Storage chooser")
+    let answer!: (result: { missing: string[] }) => void
+    state.checkPermissions.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    await act(async () => button(container, "Check again")!.click())
+    await act(async () => button(container, "Continue")?.click())
+    expect(container.textContent).toContain("Checking permissions")
+    expect(container.textContent).not.toContain("Storage chooser")
+    expect(state.addTenant).not.toHaveBeenCalled()
+    await act(async () => answer({ missing: ["Policy.Read.All"] }))
+    expect(container.textContent).toContain("Some chosen permissions are missing")
+    expect(container.textContent).not.toContain("Storage chooser")
+    await act(async () => button(container, "Continue to storage")!.click())
+    await act(async () => button(container, "Continue")!.click())
+    expect(state.addTenant).toHaveBeenCalledOnce()
+  })
+
+  it("lets the admin continue after the permission check fails", async () => {
+    const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, account, signedInAt: Date.now() }))
+    state.accounts.mockResolvedValueOnce([account])
+    state.checkPermissions.mockRejectedValue(new Error("Microsoft could not be reached."))
+    state.storageChoice = { kind: "local" }
+    const container = await render(createElement(OnboardingPage))
+    expect(container.textContent).toContain("Permissions could not be checked")
+    expect(container.textContent).toContain("Microsoft could not be reached.")
+    expect(container.textContent).toContain("You can continue")
+    await act(async () => button(container, "Continue")!.click())
+    expect(state.addTenant).toHaveBeenCalledOnce()
+  })
+
   it("saves an Entra-only choice before adding the tenant and explains missing permissions without blocking", async () => {
     const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
     state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "", account, services: { entra: { access: "backup" } }, signedInAt: Date.now() }))

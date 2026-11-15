@@ -3,11 +3,11 @@ import { createRoot } from "react-dom/client"
 import { MemoryRouter, Route, Routes, useSearchParams } from "react-router-dom"
 import { afterEach, expect, it, vi } from "vitest"
 
-const state = vi.hoisted(() => ({ tenant: { id: 1, name: "Contoso", credentials: { tenantId: "one", appId: "client" } }, tenants: [] as { id: number; name: string; credentials: { tenantId: string; appId: string } }[], select: (_id: number | null) => {}, status: vi.fn(), changed: null as null | ((id: string) => void) }))
+const state = vi.hoisted(() => ({ tenant: { id: 1, name: "Contoso", credentials: { tenantId: "one", appId: "client" } }, tenants: [] as { id: number; name: string; credentials: { tenantId: string; appId: string } }[], select: (_id: number | null) => {}, status: vi.fn(), workflowMounted: vi.fn(), changed: null as null | ((id: string) => void) }))
 vi.mock("~/contexts/TenantContext", () => ({ useSelectedTenant: () => { const id = useContext(SelectionContext); return { selectedTenant: state.tenants.find(tenant => tenant.id === id) ?? state.tenant, setSelectedTenantId: state.select } }, useTenants: () => state.tenants }))
 vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { services: { status: state.status }, health: { onChanged: (listener: typeof state.changed) => { state.changed = listener; return () => {} } } } }))
 vi.mock("../../src/renderer/lib/license", () => ({ useTenantPlan: () => "pro", useLicense: () => ({ status: {} }) }))
-vi.mock("../../src/renderer/features/scores/ScoresTab", () => ({ default: ({ tenant }: { tenant: { name: string } }) => createElement("p", null, `Scores for ${tenant.name}`) }))
+vi.mock("../../src/renderer/features/scores/ScoresTab", () => ({ default: ({ tenant }: { tenant: { name: string } }) => { state.workflowMounted(); return createElement("p", null, `Scores for ${tenant.name}`) } }))
 vi.mock("../../src/renderer/features/governance/DeviationsTab", () => ({ default: () => createElement("p", null, "Deviation register") }))
 vi.mock("../../src/renderer/features/standards/CustomizationsTab", () => ({ default: () => createElement("p", null, "Customization register") }))
 import HubPage from "../../src/renderer/pages/HubPage"
@@ -51,16 +51,18 @@ function TenantHost({ children }: { children: React.ReactNode }) {
 }
 
 function FrameworkJob() {
+  state.workflowMounted()
   const [params] = useSearchParams()
   return createElement("p", null, `Framework job ${params.get("job")} for ${state.tenant.name}`)
 }
 
-async function openLink(route: string) {
+async function openLink(route: string, removedTenantId?: string) {
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
   state.tenants = [
     { id: 1, name: "Contoso", credentials: { tenantId: "one", appId: "client" } },
     { id: 2, name: "Fabrikam", credentials: { tenantId: "two", appId: "client" } },
   ]
+  state.tenants = state.tenants.filter(tenant => tenant.credentials.tenantId !== removedTenantId)
   const container = document.createElement("div")
   const root = createRoot(container)
   roots.push(root)
@@ -103,4 +105,18 @@ it("opens the requested hub tenant when Intune is enabled there", async () => {
   const container = await openLink("/portal/governance/scores?tenant=TWO")
   expect(container.textContent).toContain("Scores for Fabrikam")
   expect(container.textContent).not.toContain("This page needs Intune")
+})
+
+it.each([
+  ["unknown", "unknown-tenant", undefined],
+  ["removed", "two", "two"],
+])("does not mount any workflow for a tenant link that is %s", async (_label, tenantId, removedTenantId) => {
+  state.status.mockImplementation(async (id: string) => ({ tenantId: id, modules: [{ id: "intune", enabled: true }] }))
+  for (const route of ["/portal/frameworks/cis-intune", "/portal/governance/scores"]) {
+    const container = await openLink(`${route}?tenant=${tenantId}&job=saved-job`, removedTenantId)
+    expect(state.workflowMounted).not.toHaveBeenCalled()
+    expect(state.status).not.toHaveBeenCalled()
+    expect(container.textContent).toContain("The linked tenant is not connected")
+    expect(container.querySelector("a")?.getAttribute("href")).toBe("/portal/tenants")
+  }
 })

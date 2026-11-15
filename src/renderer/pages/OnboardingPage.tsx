@@ -68,11 +68,12 @@ export default function OnboardingPage() {
   const [step, setStep] = useState<Step>(initial?.step ?? -1)
   const [services, setServices] = useState<PermissionChoice>(initial?.services ?? DEFAULT_ONBOARDING_CHOICE)
   const [permissionAccepted, setPermissionAccepted] = useState(false)
-  const [permissionResult, setPermissionResult] = useState<{ missing: string[]; error?: string } | null>(null)
-  const [checkingPermissions, setCheckingPermissions] = useState(false)
+  const [permissionCheck, setPermissionCheck] = useState<{ account: SignedInAccount; services: PermissionChoice; step: Step; result: { missing: string[]; error?: string } } | null>(null)
   const permissionGeneration = useRef(0)
   const [fields, setFields] = useState<SignInFields>({ tenant: initial?.tenant ?? "", clientId: initial?.clientId ?? "", displayName: initial?.displayName ?? "" })
   const [account, setAccount] = useState<SignedInAccount | null>(initial?.account ?? null)
+  const permissionResult = permissionCheck?.account === account && permissionCheck?.services === services && permissionCheck?.step === step ? permissionCheck.result : null
+  const checkingPermissions = Boolean(account && (step === 1 || step === 2) && !permissionResult)
   const [resumed, setResumed] = useState(Boolean(initial && (initial.step > 0 || initial.account)))
   const [checkingResume, setCheckingResume] = useState(Boolean(initial?.account))
   const [choice, setChoice] = useState<StorageChoice | null>(null)
@@ -143,16 +144,21 @@ export default function OnboardingPage() {
 
   useEffect(() => {
     const sent = ++permissionGeneration.current
-    setPermissionResult(null)
+    setPermissionCheck(null)
     setPermissionAccepted(false)
     if (!account || (step !== 1 && step !== 2)) return
-    setCheckingPermissions(true)
-    void bridge.setup.checkPermissions(account.tenantId, account.clientId, services).then(result => {
-      if (mounted.current && sent === permissionGeneration.current) setPermissionResult(result)
-    }).catch(error => {
-      if (mounted.current && sent === permissionGeneration.current) setPermissionResult({ missing: [], error: error instanceof Error ? error.message : String(error) })
-    }).finally(() => { if (mounted.current && sent === permissionGeneration.current) setCheckingPermissions(false) })
-    return () => { permissionGeneration.current++ }
+    // Bound the wait so an unavailable check stays advisory. Drop answers after timeout or retry.
+    const finish = (result: { missing: string[]; error?: string }) => {
+      if (!mounted.current || sent !== permissionGeneration.current) return
+      permissionGeneration.current++
+      clearTimeout(timer)
+      setPermissionCheck({ account, services, step, result })
+    }
+    const timer = setTimeout(() => finish({ missing: [], error: "The permission check did not finish within 20 seconds." }), 20_000)
+    void bridge.setup.checkPermissions(account.tenantId, account.clientId, services).then(finish).catch(error => {
+      finish({ missing: [], error: error instanceof Error ? error.message : String(error) })
+    })
+    return () => { permissionGeneration.current++; clearTimeout(timer) }
   }, [account, services, step])
 
   // Each step starts at its heading, for keyboard and screen reader users too.
@@ -249,7 +255,7 @@ export default function OnboardingPage() {
   // tenant the license does not cover is not added and its sign-in is removed in the main
   // process, so the admin signs in again with the same IDs once the license is sorted.
   const createTenant = async () => {
-    if (!account || !choice) return
+    if (!account || !choice || !permissionResult || checkingPermissions || (permissionResult.missing.length > 0 && !permissionAccepted)) return
     if (connected(account.tenantId)) {
       setAddError({ message: "This tenant is already connected to TenuVault.", license: false, alreadyConnected: true })
       setAccount(null)
@@ -497,19 +503,20 @@ export default function OnboardingPage() {
 
         {step === 2 && account && (
           <div className="space-y-5">
-            <StepHeading id="setup-step-2">{permissionResult?.missing.length && !permissionAccepted ? "Review your chosen permissions" : "Choose where backups are stored"}</StepHeading>
+            <StepHeading id="setup-step-2">{checkingPermissions ? "Checking permissions" : permissionResult?.missing.length && !permissionAccepted ? "Review your chosen permissions" : "Choose where backups are stored"}</StepHeading>
             <p className="flex items-center gap-2 text-sm text-gray-600">
               <CheckCircle2 className="h-4 w-4 text-green-700" aria-hidden="true" /> Signed in as {account.username}
             </p>
-            {checkingPermissions && <p role="status" className="text-sm text-gray-600">Checking the chosen permissions...</p>}
+            {checkingPermissions && <p role="status" className="text-sm text-gray-600">Checking permissions for your chosen services...</p>}
             {permissionResult && (permissionResult.missing.length > 0 || permissionResult.error) && <section aria-label="Permission result" className="space-y-3 rounded-2xl bg-blue-50 p-4 text-sm text-gray-700">
               <h3 className="font-medium text-gray-900">{permissionResult.missing.length ? "Some chosen permissions are missing" : "Permissions could not be checked"}</h3>
               <p>{permissionResult.error ?? "Your sign-in works. The registration does not allow everything you chose yet. You can fix it now or continue and add permissions later in Settings > Services and permissions."}</p>
+              {permissionResult.error && <p>You can continue and check permissions later in Settings &gt; Services and permissions.</p>}
               <PermissionRoutes report={account} missing={permissionResult.missing} />
               <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => { setAccount({ ...account }) }}>Check again</Button>
               {permissionResult.missing.length > 0 && !permissionAccepted && <Button onClick={() => setPermissionAccepted(true)}>Continue to storage</Button>}</div>
             </section>}
-            {(!permissionResult?.missing.length || permissionAccepted) && <>
+            {permissionResult && !checkingPermissions && (!permissionResult.missing.length || permissionAccepted) && <>
             <PlanContext tenantId={account.tenantId} username={account.username} />
             {addError && <p role="alert" className="text-sm text-red-700">{addError.message}</p>}
             <StorageChooser tenantId={account.tenantId} clientId={account.clientId} onChange={setChoice} onBlockerChange={setStorageBlocker} />

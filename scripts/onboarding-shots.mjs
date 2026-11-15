@@ -135,12 +135,15 @@ const scenes = [
   ["09-connect-manual", "Entra-only manual setup and its chosen permission list."],
   ["09-connect-handoff", "Entra-only instructions for an administrator, including command and permissions."],
   ["09-connect-existing", "Existing registration, ready for tenant and client IDs."],
+  ["10-permissions-checking", "Permission check in progress, with storage and Continue held until the result or timeout."],
+  ["10-permissions-unavailable", "Permission check timed out after 20 seconds, with an advisory notice and storage available."],
   ["10-permissions-missing", "After sign-in, chosen permissions missing, with the existing remediation routes and a way to continue."],
   ["10-storage-local", "Storage choice after sign-in."],
   ["11-backup-intune", "First backup for the default Intune choice, with Run first backup available."],
   ["11-backup-first", "First backup for Entra-only, explaining that these backups arrive later."],
   ["12-hub-intune-required", "Governance with Intune off, keeping all tabs and Accepted deviations and Customizations reachable."],
   ["12-intune-required", "OpenIntuneBaseline on a tenant without Intune, linked to service settings."],
+  ["13-tenant-unavailable", "A notification link for an unavailable tenant, with a link to Tenants and no workflow mounted."],
 ]
 let exitCode = 0
 let main = null
@@ -153,7 +156,7 @@ try {
     const { ipcMain } = process.getBuiltinModule("module").createRequire(process.cwd() + "/x.cjs")("electron")
     const handle = (channel, fn) => { ipcMain.removeHandler(channel); ipcMain.handle(channel, (_event, ...args) => fn(...args)) }
     const M = globalThis.__marketingMock
-    handle("setup:checkPermissions", () => ({ missing: M.missing ? ["Policy.Read.All", "Domain.Read.All"] : [] }))
+    handle("setup:checkPermissions", () => M.stall ? new Promise(resolve => { (M.pendingChecks ??= []).push(resolve) }) : ({ missing: M.missing ? ["Policy.Read.All", "Domain.Read.All"] : [] }))
     handle("setup:saveServices", () => undefined)
     handle("setup:saveScript", () => ({ saved: true, folder: "/Users/admin/Downloads", fileName: "New-TenuVaultDesktopApp.ps1" }))
     handle("setup:clipboardIds", () => null)
@@ -170,8 +173,8 @@ try {
   page = await connect(await target(`http://127.0.0.1:${port}/json/list`, t => t.type === "page"))
   const { send, evaluate } = page
   await send("Page.enable")
-  const waitFor = async expression => {
-    for (let i = 0; i < 100; i++) { if (await evaluate(expression).catch(() => false)) return; await sleep(100) }
+  const waitFor = async (expression, attempts = 100) => {
+    for (let i = 0; i < attempts; i++) { if (await evaluate(expression).catch(() => false)) return; await sleep(100) }
     throw new Error(`Screen did not become ready: ${expression}`)
   }
   const click = async text => {
@@ -188,15 +191,16 @@ try {
     const connectScene = state.startsWith("09")
     const afterSignIn = state.startsWith("10") || state.startsWith("11")
     const intuneRequired = state.startsWith("12")
+    const tenantUnavailable = state === "13-tenant-unavailable"
     const services = state !== "11-backup-intune" && (connectScene || afterSignIn) ? { entra: { access: "backup" } } : { intune: { access: "restore" } }
-    const draft = welcome || intuneRequired ? null : { step: connectScene ? 0 : afterSignIn ? 2 : -1, tenant: afterSignIn ? TENANTS[0].guid : "", clientId: afterSignIn ? CLIENT_ID : "", displayName: "Contoso Ltd", account: afterSignIn ? MOCK.accounts[0] : null, signedInAt: Date.now(), services }
+    const draft = welcome || intuneRequired || tenantUnavailable ? null : { step: connectScene ? 0 : afterSignIn ? 2 : -1, tenant: afterSignIn ? TENANTS[0].guid : "", clientId: afterSignIn ? CLIENT_ID : "", displayName: "Contoso Ltd", account: afterSignIn ? MOCK.accounts[0] : null, signedInAt: Date.now(), services }
     const license = welcome ? { ...MOCK.license, hasKey: false, plan: null, tenants: [], tenantTrialsEnabled: true } : { ...MOCK.license, tenantTrialsEnabled: true }
-    await main.evaluate(`Object.assign(globalThis.__marketingMock, { license: ${JSON.stringify(license)}, missing: ${state === "10-permissions-missing"}, health: ${JSON.stringify(healthScene("intune-off"))} })`)
-    await evaluate(`Promise.all([window.tenuvault.storage.setItem("tenuvault_tenants", ${JSON.stringify(JSON.stringify(intuneRequired ? MOCK.tenants : []))}), window.tenuvault.storage.setItem("tenuvault_selected_tenant", "1"), ${draft ? `window.tenuvault.storage.setItem("tenuvault.onboarding.draft", ${JSON.stringify(JSON.stringify(draft))})` : 'window.tenuvault.storage.removeItem("tenuvault.onboarding.draft")'}])`)
+    await main.evaluate(`Object.assign(globalThis.__marketingMock, { license: ${JSON.stringify(license)}, missing: ${state === "10-permissions-missing"}, stall: ${["10-permissions-checking", "10-permissions-unavailable"].includes(state)}, health: ${JSON.stringify(healthScene("intune-off"))} })`)
+    await evaluate(`Promise.all([window.tenuvault.storage.setItem("tenuvault_tenants", ${JSON.stringify(JSON.stringify(intuneRequired || tenantUnavailable ? MOCK.tenants : []))}), window.tenuvault.storage.setItem("tenuvault_selected_tenant", "1"), ${draft ? `window.tenuvault.storage.setItem("tenuvault.onboarding.draft", ${JSON.stringify(JSON.stringify(draft))})` : 'window.tenuvault.storage.removeItem("tenuvault.onboarding.draft")'}])`)
     await send("Emulation.setDeviceMetricsOverride", { width: 1024, height: 768, deviceScaleFactor: 1, mobile: false })
-    const route = state === "12-hub-intune-required" ? "#/portal/governance/scores" : intuneRequired ? "#/portal/oib" : "#/portal/onboarding"
+    const route = tenantUnavailable ? "#/portal/governance/scores?tenant=removed-tenant" : state === "12-hub-intune-required" ? "#/portal/governance/scores" : intuneRequired ? "#/portal/oib" : "#/portal/onboarding"
     await evaluate(`localStorage.setItem("tenuvault-appearance", "${theme}"); location.hash = ${JSON.stringify(route)}; location.reload()`)
-    await waitFor(`document.body?.innerText.includes(${JSON.stringify(welcome ? "Welcome to TenuVault" : intuneRequired ? "This page needs Intune" : connectScene ? "Connect your tenant" : afterSignIn ? "Signed in as" : "What do you want to back up?")})`)
+    await waitFor(`document.body?.innerText.includes(${JSON.stringify(welcome ? "Welcome to TenuVault" : tenantUnavailable ? "The linked tenant is not connected" : intuneRequired ? "This page needs Intune" : connectScene ? "Connect your tenant" : afterSignIn ? "Signed in as" : "What do you want to back up?")})`)
     await evaluate(`document.documentElement.classList.toggle("dark", ${theme === "dark"}); (() => { const style = document.createElement("style"); style.textContent = "*, *::before, *::after { animation: none !important; transition: none !important; caret-color: transparent !important; }"; document.head.appendChild(style) })()`)
     if (["03-choice-entra-details", "03-choice-exact-permissions", "04-choice-both-details", "05-choice-personal-data", "06-choice-customize", "07-choice-intune-entra", "08-choice-entra-only"].includes(state)) await evaluate(`document.querySelector('[aria-label="Back up Entra ID"]').click()`)
     if (["03-choice-entra-details", "04-choice-both-details", "05-choice-personal-data"].includes(state)) await expand('[data-onboarding-service="entra"] details')
@@ -213,6 +217,9 @@ try {
       await waitFor(`document.body.innerText.includes("Instructions for your administrator")`)
     }
     if (state === "09-connect-existing") await click("I already have an app registration")
+    if (state === "10-permissions-checking") await waitFor(`document.body.innerText.includes("Checking permissions") && ![...document.querySelectorAll('button')].some(b => b.textContent.trim() === "Continue")`)
+    if (state === "10-permissions-unavailable") await waitFor(`document.body.innerText.includes("The permission check did not finish within 20 seconds.")`, 300)
+    if (state === "10-storage-local") await waitFor(`document.body.innerText.includes("Choose where backups are stored")`)
     if (state === "10-permissions-missing") { await waitFor(`document.body.innerText.includes("Some chosen permissions are missing")`); await expand('[data-permission-routes]'); await expand('[data-permission-routes] details') }
     if (state.startsWith("11-backup")) await click("Continue")
     await sleep(250)

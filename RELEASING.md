@@ -75,7 +75,7 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 ## Compatibility notes for the next release
 
-* Setup now keeps a service choice per tenant. Intune keeps its previous default permissions, including read access to Conditional Access while its backups stay off. Entra ID and Defender can be chosen to prepare backup permissions; their backup types arrive in later updates. Intune-only workflows direct tenants without Intune to Services and permissions.
+* Setup now keeps a service choice per tenant. Intune keeps its previous default permissions, including read access to Conditional Access while its backups stay off. Entra ID and Defender can be chosen to prepare backup permissions; their backup types arrive in later updates. Intune-only workflows direct tenants without Intune to Services and permissions. Links for tenants that are not connected show a notice and a link to Tenants before opening any workflow. After sign-in, setup waits up to 20 seconds for the permission result before offering storage; a failed or stalled check shows an advisory notice and allows setup to continue.
 
 Put these in the next stable release's notes, then remove them here.
 
