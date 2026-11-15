@@ -80,8 +80,11 @@ async function launchApp(label) {
   const args = [...(packagedApp ? [] : [desktopDir]), `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`]
   if (process.platform === "linux") args.push("--no-sandbox")
   if (process.platform === "linux" && process.env.DISPLAY) args.push("--ozone-platform=x11")
-  // As in the smoke test: development builds on macOS use a mock keychain, packaged ones the real one.
-  if (process.platform === "darwin" && !packagedApp) args.push("--use-mock-keychain")
+  // The login keychain of a CI runner can be locked by now, and the packaged app then refuses to
+  // start without OS encryption. Secret storage is the smoke test's subject; here a mock keychain
+  // (as in the smoke test's development runs) keeps it out of the way. It changes nothing about
+  // the sign-in.
+  if (process.platform === "darwin") args.push("--use-mock-keychain")
   const env = { ...process.env, ELECTRON_ENABLE_LOGGING: "1" }
   delete env.ELECTRON_RUN_AS_NODE
   const child = spawn(packagedApp ?? require("electron"), args, { stdio: ["ignore", "pipe", "pipe"], env })
