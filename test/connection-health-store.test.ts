@@ -1,6 +1,9 @@
+import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 import { HEALTH_STORE_VERSION, HealthStore, MAX_CONNECTIONS, MAX_ENTRIES, MAX_RUNS, type ConnectionKey } from "../src/main/connection-health/store"
 import { RUN_MAX_AGE_MS, type RunObservation } from "../src/shared/connection-health/model"
+import { evaluateHealth } from "../src/shared/connection-health/evaluate"
+import { MODULES } from "../src/shared/services/modules"
 import { runObservation } from "../src/shared/connection-health/observe"
 import type { RunOutcomes, TypeOutcome } from "../src/shared/backup-outcomes"
 import { memoryStore } from "./helpers"
@@ -166,6 +169,25 @@ describe("the observation store", () => {
     expect(record!.verified).toEqual({ Apps: ago(20 * DAY), DeviceConfigurations: ago((21 - 3 - MAX_RUNS) * DAY) })
     // The run, its time and the cause it found: no status, code or text of the answer.
     expect(record!.refused).toEqual({ Apps: [{ runId: "desktop-2", at: ago(19 * DAY), cause: "role" }, { runId: "desktop-3", at: ago(18 * DAY), cause: "permission" }] })
+  })
+
+  it("rebuilds a known loss from validated kept runs when the stored refusal map is absent", () => {
+    const { backing, store } = setup()
+    backing.set(KEY, readFileSync(new URL("./fixtures/connection-health-before-folder-refusals.json", import.meta.url), "utf8"))
+    const records = store.connections(TENANT)
+    expect(records[0]!.refused.Apps).toEqual([
+      { runId: "old-1", at: "2026-11-11T12:00:00.000Z", cause: "role" },
+      { runId: "old-2", at: "2026-11-12T12:00:00.000Z", cause: "role" },
+    ])
+    const settings = Object.fromEntries(MODULES.map((module) => [module.id, { enabled: true, access: "backup", areas: {} }])) as Parameters<typeof evaluateHealth>[0]["settings"]
+    const { report } = evaluateHealth({ tenantId: TENANT, clientId: CLIENT, reader: null, storage: "local", settings, connections: records }, NOW)
+    expect(report.services[0]!.areas.find((area) => area.id === "apps")!.lostAccess).toBe(true)
+    // Runs of another account and malformed refusals never rebuild evidence.
+    const earlier = JSON.parse(backing.get(KEY)!)
+    earlier.connections[0].runs[1].account = "another-admin"
+    earlier.connections[0].runs[2].refused[0].cause = "unknown-cause"
+    backing.set(KEY, JSON.stringify(earlier))
+    expect(store.connections(TENANT)[0]!.refused).toEqual({})
   })
 
   it("keeps the first and the latest refusal of a folder, each run once, and none from before its last read", () => {

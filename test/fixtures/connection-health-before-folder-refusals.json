@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "connections": [
+    {
+      "clientId": "33333333-3333-3333-3333-333333333333",
+      "mode": "delegated",
+      "account": "admin-id",
+      "updatedAt": "2026-11-14T12:00:00.000Z",
+      "verified": {
+        "Apps": "2026-11-10T12:00:00.000Z"
+      },
+      "runs": [
+        {
+          "runId": "old-0",
+          "at": "2026-11-10T12:00:00.000Z",
+          "trigger": "manual",
+          "status": "Success",
+          "account": "admin-id",
+          "read": [
+            "Apps"
+          ],
+          "refused": [],
+          "unread": [],
+          "excluded": []
+        },
+        {
+          "runId": "old-1",
+          "at": "2026-11-11T12:00:00.000Z",
+          "trigger": "manual",
+          "status": "Success",
+          "account": "admin-id",
+          "read": [],
+          "refused": [
+            {
+              "folder": "Apps",
+              "cause": "role"
+            }
+          ],
+          "unread": [],
+          "excluded": []
+        },
+        {
+          "runId": "old-2",
+          "at": "2026-11-12T12:00:00.000Z",
+          "trigger": "manual",
+          "status": "Success",
+          "account": "admin-id",
+          "read": [],
+          "refused": [
+            {
+              "folder": "Apps",
+              "cause": "role"
+            }
+          ],
+          "unread": [],
+          "excluded": []
+        }
+      ]
+    }
+  ]
+}

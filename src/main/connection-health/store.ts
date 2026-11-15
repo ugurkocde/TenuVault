@@ -157,7 +157,7 @@ function recordOf(value: unknown): ConnectionRecord | undefined {
   const reader = readerOf(value.reader)
   const snapshot = snapshotOf(value.snapshot)
   const verified = isRecord(value.verified) ? Object.entries(value.verified).flatMap(([folder, at]): Array<[string, string]> => (text(folder) && time(at) ? [[folder, at as string]] : [])).slice(0, MAX_ENTRIES) : []
-  return {
+  const record: ConnectionRecord = {
     clientId,
     mode: value.mode,
     ...(account ? { account } : {}),
@@ -170,6 +170,14 @@ function recordOf(value: unknown): ConnectionRecord | undefined {
     ...(snapshot ? { snapshot } : {}),
     updatedAt,
   }
+  // Earlier values kept only runs and last reads. Recover their bounded evidence without trusting
+  // unvalidated data or crediting another admin's runs to the current account.
+  if (value.refused === undefined) {
+    for (const run of [...record.runs].sort((a, b) => Date.parse(a.at) - Date.parse(b.at))) {
+      if (record.mode === "app-only" || run.account === record.account) keepEvidence(record, run)
+    }
+  }
+  return record
 }
 
 export class HealthStore {
