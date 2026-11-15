@@ -65,20 +65,44 @@ with `allow_unsoaked_license_change`; a pushed tag has no override.
 
 ## Sign-in test
 
-Every pull request, every push to `main` and every release build runs a complete first browser
-sign-in in the built app (Linux) and the packaged app (Windows and macOS), so no manual sign-in
-check is needed per release. `scripts/sign-in-e2e/` starts the app with a fresh profile, enters a
-tenant and client ID, starts the sign-in, takes the Microsoft sign-in address through Copy sign-in
-link and follows it in Playwright Chromium, Firefox and WebKit, and in Microsoft Edge on Windows,
-one sign-in per engine. A local stand-in for `login.microsoftonline.com` answers the authorize and
-token requests with a signed ID token; the app redeems the code through MSAL and must show the
-storage step with the signed-in account. It also checks that the listener closes after the
-answer, that an answer with another state is refused, and that a refusal shows the app's error.
+A complete first browser sign-in runs in the packaged app before anything ships, so no manual
+sign-in check is needed per release. `scripts/sign-in-e2e/` starts the app with a fresh profile,
+enters a tenant and client ID, starts the sign-in, takes the Microsoft sign-in address through
+Copy sign-in link and follows it in Playwright Chromium, Firefox and WebKit, and in Microsoft Edge
+on Windows, one sign-in per engine. A local stand-in for `login.microsoftonline.com` answers the
+authorize and token requests with a signed ID token; the app redeems the code through MSAL and
+must show the storage step with the signed-in account. The licensing requests that follow are
+answered by the stand-in too (`www.tenuvault.com`: the health policy and 401 `invalid_token`, as
+production answers an ID token it cannot verify), so the test sends nothing to production;
+production licensing stays with the license canary. It also checks that the listener closes after
+the answer, that an answer with another state is refused, and that a refusal shows the app's error.
 
-The app has no test switch: the test changes only the runner, with a hosts file entry for
-`login.microsoftonline.com` and a throwaway root certificate in the operating system's trust
-store, and removes both afterwards. It refuses to run outside CI. Screenshots, app logs and the
-stand-in log are uploaded as the `sign-in-e2e-*` artifacts.
+| Event | Linux | Windows | macOS |
+|---|---|---|---|
+| Pull request (CI) | packaged (`--linux dir`) | packaged, when installers are built | packaged, when installers are built |
+| Push to `main` (CI) | packaged (`--linux dir`) | no (CI builds no installers on push) | no |
+| Release, nightly or stable (Release workflow) | no (no Linux release) | packaged, signed | packaged, signed |
+
+So every nightly's Windows and macOS packages pass it before they are published, and Linux is
+checked on every pull request and push. The Release workflow takes the test from its own commit
+(`main`), not from the release target, so promoting a nightly that predates the test still runs
+it against that nightly's packaged app.
+
+The app has no test switch: the test changes only the runner, with hosts file entries for both
+hosts and a throwaway root certificate in the operating system's trust store (`runner.mjs`). Each
+change is recorded before it is made; a workflow step that always runs, also after a cancel or a
+timeout, undoes them, reads the machine back and fails the job when an entry or the certificate is
+left. The root's private key is deleted as soon as the stand-in's certificate is issued. The test
+refuses to run outside CI. Every Playwright browser context skips its own certificate check
+(Firefox and WebKit keep trust stores of their own); the app's certificate checks are real.
+
+Credential stores: on Linux the job runs the app in a session bus with an unlocked gnome-keyring
+(`XDG_CURRENT_DESKTOP=GNOME`), because packaged builds refuse to start without OS encryption; on
+macOS the test makes a disposable unlocked keychain the default for its duration, because the
+runner's login keychain can be locked by then.
+
+Screenshots, app logs, `results.txt` and `stand-in.log` are written after every engine and
+uploaded as `sign-in-e2e-<OS>` in CI and `release-sign-in-e2e-<OS>` in releases.
 
 ## Plan boundary changes
 
