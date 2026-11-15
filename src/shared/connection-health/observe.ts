@@ -76,5 +76,5 @@ export function keepEvidence(evidence: Pick<ConnectionRecord, "verified" | "refu
 
 /** Changes already found belong to the earlier sign-in, with their discovery time and no account. */
 export function carryChanges(snapshot: Snapshot | undefined): PermissionChange[] {
-  return [...(snapshot?.carried ?? []), ...(snapshot?.found ?? [])].map((change) => ({ ...change, earlierSignIn: true, foundAt: change.foundAt ?? snapshot!.at }))
+  return [...(snapshot?.carried ?? []), ...(snapshot?.found ?? [])].map((change) => ({ ...change, earlierSignIn: true }))
 }

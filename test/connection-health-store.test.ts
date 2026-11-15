@@ -380,12 +380,14 @@ describe("the observation store", () => {
     store.recordToken(admin, "graph", { at: ago(DAY), permissions: ["User.Read", "Mail.Send"] }, ADMIN)
     store.setSnapshot(admin, { at: ago(2 * DAY), account: ADMIN, permissions: ["User.Read"], lost: ["intune/apps"], carried: [ready], found: [added] })
     store.signedOut(TENANT)
-    expect(store.connections(TENANT)[0]!.snapshot).toEqual({ at: ago(2 * DAY), permissions: ["User.Read", "Mail.Send"], carried: [ready, added].map((change) => ({ ...change, earlierSignIn: true, foundAt: ago(2 * DAY) })) })
+    expect(store.connections(TENANT)[0]!.snapshot).toEqual({ at: ago(2 * DAY), permissions: ["User.Read", "Mail.Send"], carried: [ready, added].map((change) => ({ ...change, earlierSignIn: true })) })
+    // Earlier values had no discovery time: none is invented from the baseline date.
+    expect(store.connections(TENANT)[0]!.snapshot!.carried![0]).not.toHaveProperty("foundAt")
     // Also for an admin whose own sign-in never showed a permission: what was found before them is not theirs to lose.
     store.setSnapshot(admin, { at: ago(2 * DAY), account: OTHER_ADMIN, lost: [], carried: [added] })
     store.recordToken(admin, "graph", { at: ago(1000), failure: { class: "session" } }, OTHER_ADMIN)
     store.signedOut(TENANT)
-    expect(store.connections(TENANT)[0]!.snapshot).toEqual({ at: ago(2 * DAY), carried: [{ ...added, earlierSignIn: true, foundAt: ago(2 * DAY) }] })
+    expect(store.connections(TENANT)[0]!.snapshot).toEqual({ at: ago(2 * DAY), carried: [{ ...added, earlierSignIn: true }] })
   })
 
   it("reads only the changes of a snapshot that are whole", () => {

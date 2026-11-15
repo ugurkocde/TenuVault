@@ -132,7 +132,7 @@ function snapshotOf(value: unknown): Snapshot | undefined {
   if (!at) return undefined
   const account = text(value.account)
   const found = changesOf(value.found)
-  const carried = changesOf(value.carried).map((change): PermissionChange => ({ ...change, earlierSignIn: true, foundAt: change.foundAt ?? at }))
+  const carried = changesOf(value.carried).map((change): PermissionChange => ({ ...change, earlierSignIn: true }))
   const ready = isRecord(value.ready) ? Object.fromEntries(Object.entries(value.ready).filter(([area, present]) => text(area) && typeof present === "boolean").slice(0, MAX_ENTRIES)) : undefined
   const replaced = isRecord(value.replaces) ? text(value.replaces.clientId) : undefined
   return {
