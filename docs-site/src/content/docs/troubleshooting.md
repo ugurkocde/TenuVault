@@ -66,6 +66,29 @@ If Microsoft shows an error in the sign-in window itself (an `AADSTS` code), che
 
 If the browser shows `AADSTS50011` (redirect URI mismatch), the app registration is missing the `http://localhost` redirect URI. Add it under **Authentication** > **Mobile and desktop applications**, as described in [Create the app registration](/getting-started/app-registration/), and sign in again.
 
+### Read the connection health report
+
+Open **Settings > Services and permissions**, choose the tenant and select **Check again**. Graph sign-in, the Backup Reader and backup storage have separate states and next steps. A problem with one is never presented as proof that another is broken.
+
+| Report | What to do |
+| --- | --- |
+| **App registration not found in this tenant** | Check the tenant, client ID and consent. This does not prove deletion: the registration may belong to another tenant or never have been consented to here. |
+| **Enterprise application is disabled** | Ask your Entra administrator to allow sign-in to that enterprise application. |
+| **Enterprise application is missing** | Ask the administrator to check the tenant and provision or consent to the application. |
+| **App registration is not configured** | Check the public client and localhost redirect configuration. |
+| **Account is locked or Microsoft blocked the sign-in address** | Check the sign-in logs. The error code does not distinguish these two causes. |
+| **Permission or admin consent is missing** | Review the registration's permissions and consent with your administrator. When exact permissions are known, expand the missing-permission routes. |
+| **Permissions present, not verified yet** | Run a backup. The new permission has not yet been verified by a read. |
+| **Read refused although the permission is present** | Check the role of the sign-in and the product license. The report cannot tell which applies unless Microsoft gave that cause. |
+| **Backup Reader lost access, your sign-in verified** | Fix the reader's access separately. A successful manual backup does not prove scheduled backups can read the same policies. |
+| **App registration replaced** | Review what the replacement lacks, add only the needed permissions, grant consent, check again and run a backup. |
+
+![The Backup Reader lost access while the admin's backup still verified the area](/images/services/reader-lost-access-dark.png)
+
+The change list may include a dated observation from an earlier sign-in. It does not describe the current account's role or permissions. Health is advisory; it never blocks starting a backup. For a **Coverage incomplete** backup, read the result lines for each type that was not read in full before relying on that backup for recovery.
+
+![A completed backup with incomplete coverage and reasons for the unread types](/images/services/backup-incomplete-light.png)
+
 ## License
 
 | Message | Cause | Fix |

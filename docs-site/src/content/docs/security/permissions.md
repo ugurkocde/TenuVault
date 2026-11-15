@@ -120,9 +120,19 @@ Some settings stay out because Microsoft publishes no read permission TenuVault 
 
 ### Check what the app registration allows
 
-**Settings** > **Services and permissions** lists each service TenuVault covers (Intune, which is on until you turn it off, and Entra Conditional Access, which is off until you turn it on) with whether the tenant's app registration may back it up and restore it, and which permission is missing. With several tenants it starts with an overview of every tenant and service. For a missing permission it offers a link to the app registration's API permissions in Entra and, where TenuVault knows the permission's ID, Azure CLI commands that add it to the existing app registration. A backup type left out or a restore stopped for a missing permission links to this card.
+**Settings > Services and permissions** shows Intune, Entra ID and Defender, with Conditional Access as a separately controlled area inside Entra ID. A tenant selector opens that tenant's report. Entra ID and Defender state plainly when this build has no backup types for them yet.
 
-TenuVault reads this from the sign-in it already has, without a new request to Microsoft; after you add a permission and grant consent, select **Check again**. Roles are not part of this check, because roles you can activate with Privileged Identity Management do not show until you activate them.
+The connection check requests a fresh token without opening a sign-in window. **Permissions present** describes the token, not the admin's role, license or whether the service is onboarded. **Verified by the last backup** names the date and sign-in that read the selected types. After granting permissions, select **Check again**, then run a backup to verify access.
+
+For missing permissions, expand **Add the missing permissions**. The three routes name exactly the missing manifest permissions for the selected access level:
+
+* **Azure CLI commands**, for Bash or zsh, resolve delegated permission IDs from Microsoft's Graph service principal and add those permissions to the connected registration. They never create another registration.
+* **Registration in Entra** opens API permissions for that client ID and lists the exact names to add.
+* **Text for your administrator** includes the tenant ID, client ID, permission names and next steps.
+
+An administrator must review every pending permission on that registration before granting admin consent: Microsoft grants consent to its declared set. Adding permissions in TenuVault itself is not available yet. The **Access to request** choice grants nothing and never blocks a restore the current token permits.
+
+![A missing permission with the commands, registration link and administrator request](/images/services/missing-permission-light.png)
 
 ### Azure Service Management
 

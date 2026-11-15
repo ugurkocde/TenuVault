@@ -81,6 +81,18 @@ For a tenant that backs up Entra ID or Defender, name the services with `-Servic
 
 For Azure Storage, the custom role **TenuVault Backup Writer** allows reading and writing blobs, assigned on the `intune-backups` container only. It has no delete permission and cannot create containers.
 
+## Connection health in Settings
+
+**Settings > Services and permissions** shows the Backup Reader separately from your Graph sign-in and backup storage. It names a certificate that expires within 30 days or has already expired, pending verification, changed permissions, a refusal, throttling or an unanswered check. **Open Backup Reader settings** takes you to the setup, verification and renewal controls in Background runner.
+
+![Certificate expiry shown independently of the admin sign-in and storage](/images/services/reader-expiring-light.png)
+
+An expired certificate makes the reader unavailable, so scheduled backups fall back to your sign-in. That sign-in must still work. A permission change keeps only what the verified reader permissions still cover until you confirm the intended change with your administrator and verify again.
+
+Expand a service's **Areas and access** to see the date and sign-in of its last backup verification. When the reader lost access but your manual backup still reads the policies, both are shown. Fixing your own permissions does not fix the reader's application permissions. A type left out by the reader by design needs no repair; a type that needs a signed-in admin requires a manual backup.
+
+![A reader loss alongside successful verification with the admin's sign-in](/images/services/reader-lost-access-light.png)
+
 ## Requirements
 
 * **Pro or MSP** for the tenant.

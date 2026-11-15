@@ -77,6 +77,12 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 Put these in the next stable release's notes, then remove them here.
 
+- **Services and permissions.** Settings now checks Graph sign-in, the Backup Reader and storage
+  independently, shows exact missing-permission routes and dated backup verification, and requires
+  confirmation before Intune is turned off. Intune off is visible in backup history and schedules.
+  Conditional Access keeps its independent choice inside the Entra ID card. Entra ID and Defender
+  remain off for existing tenants; their cards say when this build has no backup types yet.
+
 - **Connection health history.** Health records now keep the active Backup Reader certificate's
   public SHA-256 thumbprint. Earlier health evidence is discarded when its account, registration,
   storage connection or active reader credential changes, including after restarting the app.

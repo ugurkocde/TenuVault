@@ -42,16 +42,29 @@ To add or remove tenants, use **Tenants**. See [Manage tenants](/tenants/).
 
 ## Services and permissions
 
-Shows, for each connected tenant, which services TenuVault backs up and what the tenant's app registration allows for each one: read permissions for backups and drift detection, write permissions for restores. TenuVault reads this from the sign-in it already has, so the check sends no request to Microsoft and changes nothing. With more than one tenant, an overview at the top lists every tenant; select one to see its details.
+Choose a tenant to see three independent connections: **Microsoft Graph sign-in**, **Backup Reader** and **Backup storage**. Opening Settings checks the connection with a fresh token request (or reuses a check from the last minute). It never opens a sign-in window and never blocks a backup. **Check again** asks Microsoft again, including for the Backup Reader.
+
+![Services and permissions with independent connection states and all three services](/images/services/healthy-light.png)
+
+The cards show **Intune**, **Entra ID** and **Defender**. Expand **Areas and access** for the permissions, backup verification and switches of each area. **Conditional Access** stays independently switchable inside Entra ID, even while the rest of Entra ID is off. Entra ID and Defender currently have no backup types in this build; the card says so. Turning them on saves the choice for the types added in later builds.
 
 | Control | What it does |
 | --- | --- |
-| **Check again** | Gets a new sign-in token and checks again, for example after you granted admin consent to a permission. |
-| **Include in backups** | Turns a service on or off for the tenant. Intune is on until you turn it off; Entra Conditional Access is off until you turn it on. While a service is off, backups leave its policies out, whatever the backup choice says. When Intune is off, the backup results say so. |
-| **Open API permissions in Entra** | Shown when a permission is missing. Opens the tenant's existing app registration in Entra, where you add the permission and grant admin consent. That needs a Global Administrator, Privileged Role Administrator, Cloud Application Administrator or Application Administrator. |
-| **Copy Azure CLI commands** | Shown when only a service's restore permission is missing. Copies the commands that add it to the existing app registration and grant admin consent. |
+| Service switch | Changes what new manual and scheduled backups cover. Turning Intune off asks for confirmation and names what will stop being backed up. Existing backups keep their contents. Backup history and Schedule show **Intune is off** when it is off. |
+| Opt-in area switch | Includes that area only after you choose it. Groups and users and devices explain the personal data stored before you turn them on. Turn the service on before changing its opt-in areas. |
+| **Access to request** | Chooses backup permissions or backup and restore permissions. This grants nothing and never blocks a restore your token allows. |
+| **Add the missing permissions** | Opens Azure CLI commands, a link to the exact registration in Entra and text to copy to an administrator, each for the missing permissions. **Add in the app** is reserved for a later build. |
+| **Check again** | Rechecks current access after a permission, consent or registration change. Run a backup afterwards to verify reads. |
 
-Backup logs, **Backup Details** and the restore wizard link here when a missing permission leaves items out or stops a restore. For the permissions each service needs, see [App registration and delegated permissions](/security/permissions/) and [Conditional Access backups](/backups/conditional-access/).
+**Permissions present** means the token carries the permissions. **Verified by the last backup** means the selected types were actually read, with the date and whether it used your sign-in or the Backup Reader. A Backup Reader loss remains visible even when your own backup verifies the same area. A refusal with the permission present may involve an admin role or license; TenuVault says when it cannot tell which. A type the reader leaves out by design needs no fix.
+
+Changes since the previous snapshot appear above the service cards. Replaced registrations name the previous client ID and the permissions the replacement lacks. Changes found under an earlier sign-in say when they were found without naming the account. Displaying the changes acknowledges exactly that report; observations arriving afterwards stay unacknowledged.
+
+![Missing permission with all three routes expanded](/images/services/missing-permission-light.png)
+
+See [App registration and delegated permissions](/security/permissions/) and [Conditional Access backups](/backups/conditional-access/).
+
+A completed backup with unread types keeps its result open so you can read the coverage warning and the reason for each type. Close it when you have reviewed the result.
 
 ## Storage and recovery
 
