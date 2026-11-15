@@ -154,6 +154,14 @@ try {
   page = await connect(await target(`http://127.0.0.1:${port}/json/list`, t => t.type === "page"))
   const { send, evaluate } = page
   await send("Page.enable")
+  await send("Emulation.setTimezoneOverride", { timezoneId: "Europe/Berlin" })
+  await send("Page.addScriptToEvaluateOnNewDocument", { source: `{
+    const OriginalDate = Date
+    globalThis.Date = class extends OriginalDate {
+      constructor(...args) { super(...(args.length ? args : [${NOW}])) }
+      static now() { return ${NOW} }
+    }
+  }` })
   const waitFor = async (expression) => {
     for (let i = 0; i < 100; i++) { if (await evaluate(expression).catch(() => false)) return; await sleep(200) }
     throw new Error(`Screen did not become ready: ${expression}`)
@@ -172,25 +180,28 @@ try {
     await evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent.trim() === ${JSON.stringify(text)}).click()`)
   }
   const scenes = [
-    "healthy", "first-check", "missing-permission", "graph-consentMissing", "graph-registrationNotFoundInTenant", "graph-applicationDisabled", "registration-replaced", "reader-expiring", "reader-expired", "reader-lost-access", "changes", "personal-data", "intune-confirmation", "intune-off", "entra-no-types",
+    "healthy", "first-check", "missing-permission", "restore-only-gap", "partly-verified", "graph-consentMissing", "graph-registrationNotFoundInTenant", "graph-applicationDisabled", "registration-replaced", "reader-expiring", "reader-expired", "reader-lost-access", "changes", "personal-data", "intune-confirmation", "intune-off", "entra-no-types",
     ...["permission", "notVerifiedYet", "refusedWithPermission", "role", "license", "signedIn", "reader", "notRead"].map(cause => `cause-${cause}`),
     ...["notChecked", "unknown", "signInNeeded", "mfaRequired", "blockedByConditionalAccess", "registrationMisconfigured", "servicePrincipalMissing", "notAssigned", "accountDisabled", "accountLockedOrBlocked", "wrongTenantOrAccount", "throttled", "unreachable"].map(state => `graph-${state}`),
     ...["notSetUp", "pending", "rolesChanged", "refused", "throttled", "unreachable"].map(state => `reader-${state}`),
-    "storage-healthy", "storage-consentMissing", "backup-list-intune-off", "schedule-intune-off", "backup-incomplete",
-  ].filter(state => !process.env.SHOT_STATES || process.env.SHOT_STATES.split(",").includes(state))
-  for (const state of scenes) {
+    ...["healthy", "local", "notChecked", "unknown", "signInNeeded", "mfaRequired", "blockedByConditionalAccess", "consentMissing", "registrationNotFoundInTenant", "registrationMisconfigured", "applicationDisabled", "servicePrincipalMissing", "notAssigned", "accountDisabled", "accountLockedOrBlocked", "wrongTenantOrAccount", "throttled", "unreachable"].map(state => `storage-${state}`),
+    "backup-list-intune-off", "schedule-intune-off", "overview-intune-off", "dashboard-intune-off", "tenants-intune-off", "tenants-list-intune-off", "backup-incomplete",
+  ]
+  const selectedScenes = scenes.filter(state => !process.env.SHOT_STATES || process.env.SHOT_STATES.split(",").includes(state))
+  for (const state of selectedScenes) {
     for (const theme of ["light", "dark"]) {
       console.log(`capturing ${state}-${theme}`)
       const health = healthScene(state.includes("intune-off") ? "intune-off" : state)
       await main.evaluate(`Object.assign(globalThis.__marketingMock, { health: ${JSON.stringify(health)}, loading: ${state === "first-check"}, backup: ${JSON.stringify(incompleteBackupFixture)} })`)
-      const route = state === "schedule-intune-off" ? "#/portal/backup?tab=schedule" : state === "backup-list-intune-off" || state === "backup-incomplete" ? "#/portal/backup" : "#/portal/settings?section=services"
+      const route = state === "overview-intune-off" ? "#/portal/overview" : state === "dashboard-intune-off" ? "#/portal/dashboard" : (state === "tenants-intune-off" || state === "tenants-list-intune-off") ? "#/portal/tenants" : state === "schedule-intune-off" ? "#/portal/backup?tab=schedule" : state === "backup-list-intune-off" || state === "backup-incomplete" ? "#/portal/backup" : "#/portal/settings?section=services"
       await send("Emulation.setDeviceMetricsOverride", { width: 1024, height: 1100, deviceScaleFactor: 1, mobile: false })
       await evaluate(`localStorage.setItem("tenuvault-appearance", "${theme}"); location.hash = ${JSON.stringify(route)}; location.reload()`)
       await waitFor(`document.body?.innerText.includes(${JSON.stringify(state === "first-check" ? "Checking connection health" : route.includes("settings") ? "Microsoft Graph sign-in" : state.includes("intune-off") ? "Intune is off" : "Run Backup")})`)
       await evaluate(`document.documentElement.classList.toggle("dark", ${theme === "dark"}); (() => { const style = document.createElement("style"); style.textContent = "*, *::before, *::after { animation: none !important; transition: none !important; caret-color: transparent !important; }"; document.head.appendChild(style) })()`)
-      if (state === "missing-permission" || state === "registration-replaced") await evaluate(`document.querySelector('[data-service="intune"] [data-permission-routes]').open = true; document.querySelectorAll('[data-service="intune"] [data-permission-routes] details').forEach(e => e.open = true)`)
+      if (state === "missing-permission" || state === "registration-replaced" || state === "restore-only-gap") await evaluate(`document.querySelector('[data-service="intune"] [data-permission-routes]').open = true; document.querySelectorAll('[data-service="intune"] [data-permission-routes] details').forEach(e => e.open = true)`)
+      if (state === "restore-only-gap") await evaluate(`document.querySelector('[data-service="intune"] > details').open = true`)
       if (state === "personal-data") await evaluate(`document.querySelector('[data-service="entra"] > details').open = true`)
-      if (state === "reader-lost-access" || state.startsWith("cause-")) await evaluate(`document.querySelector('[data-service="intune"] > details').open = true`)
+      if (state === "reader-lost-access" || state === "partly-verified" || state.startsWith("cause-")) await evaluate(`document.querySelector('[data-service="intune"] > details').open = true`)
       if (state === "intune-confirmation") {
         await evaluate(`document.querySelector('input[aria-label="Include Intune in backups"]').click()`)
         await waitFor(`document.querySelector('[role="dialog"]')?.innerText.includes("Turn off Intune?")`)
@@ -201,6 +212,10 @@ try {
         await click("Start backup")
         await waitFor(`document.body.innerText.includes("Coverage incomplete")`)
       }
+      if (state === "tenants-list-intune-off") {
+        await evaluate(`document.querySelector('button[aria-label="List view"]').click()`)
+        await waitFor(`document.querySelector('[data-tenant-row]')?.innerText.includes("Intune is off")`)
+      }
       // Keep width at 1024 and fit the real scroll surface vertically, so long states are reviewable in one image.
       const height = await evaluate(`Math.min(4200, Math.max(1100, ...[...document.querySelectorAll('main, #services, [role="dialog"]')].map(e => e.scrollHeight + 220)))`)
       if (state !== "intune-confirmation" && state !== "backup-list-intune-off" && state !== "schedule-intune-off" && state !== "backup-incomplete") await send("Emulation.setDeviceMetricsOverride", { width: 1024, height, deviceScaleFactor: 1, mobile: false })
@@ -208,8 +223,10 @@ try {
       await shot(state, theme)
     }
   }
+  const inventory = "# Services and permissions screenshots\n\nFictional health reports, built desktop app, 1024px width, both themes. Generated with `node scripts/services-shots.mjs`. Storage has its own copy for all 18 supported states.\n\n" + scenes.map(state => `* ${state}-light.png, ${state}-dark.png: ${state.replaceAll("-", " ")}.\n`).join("")
+  for (const folder of [shotsDir, docsDir]) writeFileSync(join(folder, "README.md"), inventory)
   rmSync(join(shotsDir, "failure.png"), { force: true })
-  console.log(`${scenes.length * 2} fixture screenshots saved to ${shotsDir} and ${docsDir}`)
+  console.log(`${selectedScenes.length * 2} fixture screenshots saved to ${shotsDir} and ${docsDir}`)
 } catch (error) {
   exitCode = 1
   console.error(`FAILED: ${error.stack}`)

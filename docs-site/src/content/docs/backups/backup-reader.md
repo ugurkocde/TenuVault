@@ -93,6 +93,8 @@ Expand a service's **Areas and access** to see the date and sign-in of its last 
 
 ![A reader loss alongside successful verification with the admin's sign-in](/images/services/reader-lost-access-light.png)
 
+A successful read keeps **Verified by the last backup on [date] with your sign-in** or **with the Backup Reader**. When selected types could not be read, the card names the date, sign-in and unread types, without saying that the entire backup failed. Opening Services refreshes the current connection's report, and changing the signed-in account clears the previous account's verification. Storage has a separate token check; only a backup proves that files can be written to the selected folder or storage account.
+
 ## Requirements
 
 * **Pro or MSP** for the tenant.
