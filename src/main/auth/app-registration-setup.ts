@@ -5,7 +5,7 @@ import { isGuid, isMicrosoftLoginUrl } from "../../shared/security"
 import { CREATE_BY_HAND } from "../../shared/app-registration"
 import { namedSignInCode, signInErrorRow } from "../../shared/sign-in-errors"
 import { provisionRegistration } from "./registration-provisioning"
-import { checkedChoice } from "../../shared/services/manifest"
+import { checkedOnboardingChoice } from "../../shared/services/onboarding"
 import { loopbackSignIn } from "./loopback-sign-in"
 import type { RegistrationResult, SetupProgress } from "../../shared/ipc"
 import { diagnosticCode, signInResult, type SetupEventInput } from "../setup-diagnostics/events"
@@ -93,7 +93,7 @@ export class AppRegistrationSetup {
     if (this.running) throw new Error("Setup is already running.")
     if (options?.tenant !== undefined && (typeof options.tenant !== "string" || options.tenant.length > 253 || options.tenant !== "" && !isGuid(options.tenant) && !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(options.tenant))) throw new Error("Enter a valid tenant ID or domain.")
     // Checked before anyone signs in, so a choice the manifest does not know never reaches Microsoft.
-    const choice = options?.choice === undefined ? undefined : checkedChoice(options.choice)
+    const choice = options?.choice === undefined ? undefined : checkedOnboardingChoice(options.choice)
     this.running = true
     const controller = new AbortController()
     this.controller = controller

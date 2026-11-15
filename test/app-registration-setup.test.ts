@@ -53,7 +53,7 @@ it("hands a choice of services to the provisioning as it is, and none when the a
   const signIn = async () => ({ account: { tenantId: "tenant", username: "admin" }, accessToken: "ephemeral" })
   state.interactive.mockImplementation(signIn)
   state.provision.mockResolvedValue({ tenantId: "tenant", clientId: "client", username: "admin", reused: false, ready: true, missingConsent: [] })
-  const choice = { entra: { access: "backup", areas: ["groups"] }, defender: { access: "restore" } }
+  const choice = { entra: { access: "backup", areas: ["groups"] }, defender: { access: "backup" } }
   await new AppRegistrationSetup(host()).create({ choice })
   expect(state.provision.mock.calls.at(-1)![0].choice).toEqual(choice)
   await new AppRegistrationSetup(host()).create({ tenant: "example.test" })
@@ -72,6 +72,22 @@ it.each([{}, { sharepoint: { access: "backup" } }, { intune: { access: "everythi
   state.interactive.mockImplementationOnce(async () => ({ account: { tenantId: "tenant", username: "admin" }, accessToken: "ephemeral" }))
   state.provision.mockResolvedValueOnce({ tenantId: "tenant", clientId: "client", username: "admin", reused: false, ready: true, missingConsent: [] })
   await expect(setup.create()).resolves.toMatchObject({ clientId: "client" })
+})
+it.each(["entra", "defender"])("refuses unsupported %s restore before any browser or Graph activity", async service => {
+  const h = host()
+  state.interactive.mockImplementation(async (request: InteractiveRequest) => {
+    await request.openBrowser("https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize")
+    return { account: { tenantId: "tenant", username: "admin" }, accessToken: "ephemeral" }
+  })
+  state.provision.mockResolvedValue({ tenantId: "tenant", clientId: "client", username: "admin", reused: false, ready: true, missingConsent: [] })
+  state.configuration = null
+  await expect(new AppRegistrationSetup(h).create({ choice: { [service]: { access: "restore" } } })).rejects.toThrow("Restore access is not available")
+  expect(state.configuration).toBeNull()
+  expect(state.interactive).not.toHaveBeenCalled()
+  expect(h.openBrowser).not.toHaveBeenCalled()
+  expect(h.fetch).not.toHaveBeenCalled()
+  expect(state.provision).not.toHaveBeenCalled()
+  expect(h.progress).not.toHaveBeenCalled()
 })
 it("cancels the browser wait and ignores a late answer", async () => {
   let finish!: (value: unknown) => void
