@@ -27,7 +27,8 @@ const NSSDB = `sql:${join(homedir(), ".pki", "nssdb")}`
 const PORT_START = "/proc/sys/net/ipv4/ip_unprivileged_port_start"
 let previousPortStart = null
 
-const run = (command, args, options = {}) => execFileSync(command, args, { stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", ...options })
+// A command that waits for a prompt nobody can answer fails instead of holding the job.
+const run = (command, args, options = {}) => execFileSync(command, args, { stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", timeout: 60_000, ...options })
 const sudo = (command, args) => run("sudo", ["-n", command, ...args])
 
 /** A throwaway root and a certificate for LOGIN_HOST signed by it, made with openssl in `dir`. */
@@ -92,7 +93,7 @@ export function install(ca) {
 }
 
 /** Undoes `install`. Every step is tried; failures are returned, not thrown. */
-export function remove(ca) {
+export function remove() {
   const problems = []
   const attempt = (name, fn) => { try { fn() } catch (error) { problems.push(`${name}: ${error.stderr || error.message}`) } }
   attempt("hosts", () => {
@@ -108,7 +109,8 @@ export function remove(ca) {
       sudo("update-ca-certificates", ["--fresh"])
     })
   } else if (process.platform === "darwin") {
-    attempt("trust settings", () => sudo("security", ["remove-trusted-cert", "-d", ca]))
+    // Removing the trust setting asks for authorization even as root; deleting the certificate
+    // leaves nothing for that setting to apply to.
     attempt("keychain", () => sudo("security", ["delete-certificate", "-c", CA_NAME, "/Library/Keychains/System.keychain"]))
   } else if (process.platform === "win32") {
     attempt("root store", () => run("certutil", ["-delstore", "Root", CA_NAME]))

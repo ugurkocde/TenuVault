@@ -244,11 +244,11 @@ try {
   results.push(`FAIL setup: ${error.stderr || error.message}`)
   console.log(results.at(-1))
 } finally {
-  await standIn?.close()
-  const problems = remove(certificates.ca)
-  for (const problem of problems) console.warn(`Could not undo a change: ${problem}`)
   writeFileSync(join(outDir, "stand-in.log"), `${(standIn?.log ?? []).join("\n")}\n`)
   writeFileSync(join(outDir, "results.txt"), `${results.join("\n")}\n`)
+  await standIn?.close()
+  const problems = remove()
+  for (const problem of problems) console.warn(`Could not undo a change: ${problem}`)
 }
 
 if (failures > 0) {

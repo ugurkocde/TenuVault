@@ -23,7 +23,7 @@ const b64url = (value) => Buffer.from(value).toString("base64url")
 const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
 
 /**
- * Starts the stand-in on 127.0.0.1:`port` with the TLS key and certificate for LOGIN_HOST.
+ * Starts the stand-in on port `port` (127.0.0.1, or every address on macOS) with the TLS key and certificate for LOGIN_HOST.
  * `account` is the user every sign-in signs in as. Returns the server, its request log, and
  * `setMode` to choose how the next authorize request answers: "code" (a normal sign-in),
  * "wrong-state" (a code with a state that is not the app's) or "deny" (error=access_denied).
@@ -188,7 +188,8 @@ export async function startStandIn({ key, cert, port = 443, tenantId, clientId, 
   server.on("tlsClientError", (error) => record(`TLS error: ${error.message}`))
   await new Promise((resolve, reject) => {
     server.once("error", reject)
-    server.listen(port, "127.0.0.1", resolve)
+    // macOS lets a process without root listen on a port below 1024 only on the wildcard address.
+    server.listen(port, process.platform === "darwin" ? "0.0.0.0" : "127.0.0.1", resolve)
   })
   return {
     server,
@@ -197,6 +198,10 @@ export async function startStandIn({ key, cert, port = 443, tenantId, clientId, 
     /** The cookie a harness browser sends so that the authorize page answers. */
     cookie: { name: HARNESS_COOKIE, value: secret, domain: LOGIN_HOST, path: "/", secure: true, httpOnly: true, sameSite: "None" },
     setMode: (next) => { mode = next },
-    close: () => new Promise((resolve) => server.close(() => resolve())),
+    // Browsers keep connections open; closing waits for none of them.
+    close: () => new Promise((resolve) => {
+      server.close(() => resolve())
+      server.closeAllConnections()
+    }),
   }
 }
