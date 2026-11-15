@@ -100,6 +100,7 @@ const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
 export function permissionRemediation(report: Pick<ConnectionHealthReport, "tenantId" | "clientId">, missing: readonly string[]) {
   const known = new Set(knownPermissions("delegated")[0]!.permissions)
   const names = [...new Set(missing)].filter(name => known.has(name))
+  const consentFailure = "Consent may have changed because the request may have been applied; check consent in Entra before retrying."
   // Update tenant-wide consent in place so a failed request cannot delete a working grant.
   // Individual consent needs separate administrator review before broadening access.
   const commands = [
@@ -114,19 +115,20 @@ export function permissionRemediation(report: Pick<ConnectionHealthReport, "tena
     '[ "$individualGrants" = "0" ] || { echo "Individual Graph consent exists. Ask your administrator to merge the missing scopes without replacing individual grants." >&2; exit 1; }',
     `existingGrantId=$(az ad app permission list-grants --id ${quote(report.clientId)} --query "[?resourceId=='$graphId' && consentType=='AllPrincipals'].id | [0]" -o tsv) || exit 1`,
     `existingScopes=$(az ad app permission list-grants --id ${quote(report.clientId)} --query "[?resourceId=='$graphId' && consentType=='AllPrincipals'].scope" -o tsv) || exit 1`,
-    ...names.map(name => `permissionId=$(az ad sp show --id 00000003-0000-0000-c000-000000000000 --query "oauth2PermissionScopes[?value=='${name}'].id | [0]" -o tsv) || exit 1\n[ -n "$permissionId" ] || exit 1\naz ad app permission add --id ${quote(report.clientId)} --api 00000003-0000-0000-c000-000000000000 --api-permissions "$permissionId=Scope" || exit 1`),
+    `declaredScopeIds=$(az ad app show --id ${quote(report.clientId)} --query "requiredResourceAccess[?resourceAppId=='00000003-0000-0000-c000-000000000000'].resourceAccess[] | [?type=='Scope'].id" -o tsv) || exit 1`,
+    ...names.map(name => `permissionId=$(az ad sp show --id 00000003-0000-0000-c000-000000000000 --query "oauth2PermissionScopes[?value=='${name}'].id | [0]" -o tsv) || exit 1\n[ -n "$permissionId" ] || exit 1\nif ! printf '%s\\n' "$declaredScopeIds" | grep -Fx "$permissionId" >/dev/null; then\n  az ad app permission add --id ${quote(report.clientId)} --api 00000003-0000-0000-c000-000000000000 --api-permissions "$permissionId=Scope" || exit 1\nfi`),
     `scopes=$(printf '%s\\n' "$existingScopes" ${quote(names.join(" "))} | tr ' \\t' '\\n' | LC_ALL=C sort -u | sed '/^$/d' | paste -sd ' ' -)`,
     'if [ -n "$existingGrantId" ]; then',
     `  body=$(printf '{"scope":"%s"}' "$scopes") || exit 1`,
-    `  az rest --method PATCH --url "https://graph.microsoft.com/v1.0/oauth2PermissionGrants/$existingGrantId" --headers 'Content-Type=application/json' --body "$body" || exit 1`,
+    `  az rest --method PATCH --url "https://graph.microsoft.com/v1.0/oauth2PermissionGrants/$existingGrantId" --headers 'Content-Type=application/json' --body "$body" || { echo ${quote(consentFailure)} >&2; exit 1; }`,
     'else',
     `  clientObjectId=$(az ad sp show --id ${quote(report.clientId)} --query id -o tsv) || exit 1`,
     '  [ -n "$clientObjectId" ] || exit 1',
     `  body=$(printf '{"clientId":"%s","consentType":"AllPrincipals","resourceId":"%s","scope":"%s"}' "$clientObjectId" "$graphId" "$scopes") || exit 1`,
-    `  az rest --method POST --url https://graph.microsoft.com/v1.0/oauth2PermissionGrants --headers 'Content-Type=application/json' --body "$body" || exit 1`,
+    `  az rest --method POST --url https://graph.microsoft.com/v1.0/oauth2PermissionGrants --headers 'Content-Type=application/json' --body "$body" || { echo ${quote(consentFailure)} >&2; exit 1; }`,
     'fi',
     ")",
   ].join("\n")
-  const request = `Please add exactly these delegated Microsoft Graph permissions to TenuVault's app registration ${report.clientId} in tenant ${report.tenantId}: ${names.join(", ")}. Grant tenant-wide delegated consent for these scopes only, preserving existing consent. Do not consent other pending permissions. Run the Azure CLI route as an Application Administrator with delegated DelegatedPermissionGrant.ReadWrite.All access (or a documented higher permission). It updates an existing tenant-wide Graph grant in place with the merged scopes, or creates one only if none exists. It stops if individual grants exist for separate review. It never deletes existing grants. An earlier permission declaration can remain saved if a later step fails. Then I will select Check again in Services and permissions and run a backup to verify access.`
+  const request = `Please add exactly these delegated Microsoft Graph permissions to TenuVault's app registration ${report.clientId} in tenant ${report.tenantId}: ${names.join(", ")}. Grant tenant-wide delegated consent for these scopes only, preserving existing consent. Do not consent other pending permissions. Run the Azure CLI route as an Application Administrator with delegated DelegatedPermissionGrant.ReadWrite.All access (or a documented higher permission). It updates an existing tenant-wide Graph grant in place with the merged scopes, or creates one only if none exists. It stops if individual grants exist for separate review. It never deletes existing grants. An earlier permission declaration can remain saved if a later step fails. If a consent PATCH or POST fails: ${consentFailure} Then I will select Check again in Services and permissions and run a backup to verify access.`
   return { names, commands, request }
 }

@@ -82,6 +82,8 @@ Put these in the next stable release's notes, then remove them here.
   confirmation before Intune is turned off. Intune off is visible in backup history and schedules.
   Conditional Access keeps its independent choice inside the Entra ID card. Entra ID and Defender
   remain off for existing tenants; their cards say when this build has no backup types yet.
+  The Azure CLI permission route skips scopes already declared on the registration. If a consent
+  write fails, check consent in Entra before retrying because the request may have been applied.
 
 - **Connection health history.** Health records now keep the active Backup Reader certificate's
   public SHA-256 thumbprint. Earlier health evidence is discarded when its account, registration,
