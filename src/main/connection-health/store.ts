@@ -1,4 +1,4 @@
-import { MAX_FOLDER_REFUSALS, RUN_MAX_AGE_MS, type ConnectionMode, type ConnectionRecord, type FolderRefusal, type LossEpisode, type PermissionChange, type ReaderObservation, type RunObservation, type SignInFailure, type Snapshot, type TokenObservation } from "../../shared/connection-health/model"
+import { MAX_FOLDER_REFUSALS, RUN_MAX_AGE_MS, type ConnectionMode, type ConnectionRecord, type FolderRefusal, type HealthReceipt, type LossEpisode, type PermissionChange, type ReaderObservation, type RunObservation, type SignInFailure, type Snapshot, type TokenObservation } from "../../shared/connection-health/model"
 import { carryChanges, folderValue, keepEvidence, validFolder } from "../../shared/connection-health/observe"
 import { MODULES, type ModuleId } from "../../shared/services/modules"
 import type { KeyValueStore } from "../storage/secure-store"
@@ -26,6 +26,8 @@ export const MAX_CONNECTIONS = 4
  * last backups selected.
  */
 export const MAX_RUNS = 5
+/** Recent displayed reports that can still be acknowledged; older receipts are harmless no-ops. */
+export const MAX_RECEIPTS = 20
 /** The most entries any list or map of a record holds. */
 export const MAX_ENTRIES = 600
 
@@ -35,6 +37,8 @@ export interface ConnectionKey {
   tenantId: string
   clientId: string
   mode: ConnectionMode
+  owner?: string
+  storageOwner?: string
 }
 
 const sameId = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
@@ -139,7 +143,7 @@ function snapshotOf(value: unknown): Snapshot | undefined {
   const acknowledgedLosses = (Array.isArray(value.acknowledgedLosses) ? value.acknowledgedLosses : []).flatMap((entry): LossEpisode[] => {
     if (!isRecord(entry) || !text(entry.clientId) || (entry.mode !== "delegated" && entry.mode !== "app-only") || !validFolder(entry.folder) || !time(entry.since) || !text(entry.runId)) return []
     const account = entry.mode === "delegated" ? text(entry.account) : undefined
-    return [{ clientId: entry.clientId as string, mode: entry.mode, folder: entry.folder, since: entry.since as string, runId: entry.runId as string, ...(account ? { account } : {}) }]
+    return [{ clientId: entry.clientId as string, mode: entry.mode, ...(text(entry.owner, 1000) ? { owner: entry.owner as string } : {}), folder: entry.folder, since: entry.since as string, runId: entry.runId as string, ...(account ? { account } : {}) }]
   }).slice(0, MAX_ENTRIES)
   const replaced = isRecord(value.replaces) ? text(value.replaces.clientId) : undefined
   return {
@@ -172,6 +176,15 @@ function recordOf(value: unknown): ConnectionRecord | undefined {
   const record: ConnectionRecord = {
     clientId,
     mode: value.mode,
+    ...(text(value.owner, 1000) ? { owner: value.owner as string } : {}),
+    ...(text(value.storageOwner, 1000) ? { storageOwner: value.storageOwner as string } : {}),
+    ...(Number.isSafeInteger(value.acknowledgedRevision) && (value.acknowledgedRevision as number) > 0 ? { acknowledgedRevision: value.acknowledgedRevision as number } : {}),
+    ...(Array.isArray(value.receipts) ? { receipts: value.receipts.flatMap((entry): HealthReceipt[] => {
+      if (!isRecord(entry) || !Number.isSafeInteger(entry.revision) || (entry.revision as number) < 1 || typeof entry.id !== "string" || !/^[a-f0-9]{64}$/.test(entry.id)) return []
+      const snapshot = snapshotOf(entry.snapshot)
+      const shown = snapshotOf(entry.shown)
+      return snapshot && shown ? [{ id: entry.id, revision: entry.revision as number, snapshot, shown }] : []
+    }).slice(-MAX_RECEIPTS) } : {}),
     ...(account ? { account } : {}),
     ...(graph ? { graph } : {}),
     ...(storage ? { storage } : {}),
@@ -212,6 +225,91 @@ export class HealthStore {
     return parsed.connections.flatMap((record) => recordOf(record) ?? []).slice(0, MAX_CONNECTIONS)
   }
 
+  /** Apply the same ownership used by pending writes before any stored evidence is read. */
+  activate(tenantId: string, kind: "admin" | "reader" | "storage", key: ConnectionKey | null): void {
+    const records = this.connections(tenantId)
+    let changed = false
+    for (const record of records.filter((record) => record.mode === (kind === "reader" ? "app-only" : "delegated"))) {
+      const current = key && sameId(record.clientId, key.clientId)
+      if (kind === "storage") {
+        const owner = current ? key.storageOwner : undefined
+        if (record.storageOwner !== owner || (!owner && record.storage)) {
+          delete record.storage
+          record.storageOwner = owner
+          changed = true
+        }
+      } else {
+        const owner = current ? key.owner : undefined
+        if (record.owner === owner && owner) continue
+        if (kind === "reader") {
+          records.splice(records.indexOf(record), 1)
+          changed = true
+          continue
+        }
+        if (!record.owner && !record.graph && !record.storage && !record.runs.length && !record.account && !Object.keys(record.verified).length && !Object.keys(record.refused).length) continue
+        const permissions = record.graph?.permissions ?? record.snapshot?.permissions
+        const carried = carryChanges(record.snapshot)
+        record.snapshot = { at: record.snapshot?.at ?? record.updatedAt, ...(permissions ? { permissions } : {}), ...(record.snapshot?.replaces ? { replaces: record.snapshot.replaces } : {}), ...(carried.length ? { carried } : {}) }
+        delete record.account
+        delete record.graph
+        delete record.storage
+        delete record.storageOwner
+        delete record.receipts
+        delete record.acknowledgedRevision
+        delete record.owner
+        record.runs = []
+        record.verified = {}
+        record.refused = {}
+        changed = true
+      }
+    }
+    if (changed) this.write(tenantId, records)
+  }
+
+  receipt(key: ConnectionKey, receipt: Omit<HealthReceipt, "revision">): void {
+    this.change(key, false, (record) => {
+      if (record.receipts?.some((kept) => kept.id === receipt.id)) return
+      const revision = Math.max(record.acknowledgedRevision ?? 0, ...((record.receipts ?? []).map((receipt) => receipt.revision))) + 1
+      record.receipts = [...(record.receipts ?? []), { ...receipt, revision }].slice(-MAX_RECEIPTS)
+    })
+  }
+
+  acknowledge(key: ConnectionKey, id: string): boolean {
+    const records = this.connections(key.tenantId)
+    const record = records.find((record) => record.mode === key.mode && sameId(record.clientId, key.clientId))
+    const receipt = record?.receipts?.find((receipt) => receipt.id === id)
+    if (!record?.snapshot || !receipt) return false
+    const snapshot = record.snapshot
+    const shown = receipt.shown
+    const exact = (change: PermissionChange) => JSON.stringify(change)
+    const seen = new Set([...(shown.found ?? []), ...(shown.carried ?? [])].map(exact))
+    snapshot.carried = (snapshot.carried ?? []).filter((change) => !seen.has(exact(change)))
+    if (shown.replaces?.clientId === snapshot.replaces?.clientId) delete snapshot.replaces
+    if (receipt.snapshot.permissions && receipt.snapshot.account === snapshot.account && (receipt.revision > (record.acknowledgedRevision ?? 0))) {
+      snapshot.permissions = receipt.snapshot.permissions
+      snapshot.ready = receipt.snapshot.ready
+      snapshot.at = receipt.snapshot.at
+      snapshot.found = (snapshot.found ?? []).flatMap((change): PermissionChange[] => {
+        if (change.kind === "permissionsAdded" || change.kind === "permissionsRemoved") {
+          const acknowledged = new Set((shown.found ?? []).flatMap((seen) => seen.kind === change.kind && "permissions" in seen ? seen.permissions : []))
+          const permissions = change.permissions.filter((permission) => !acknowledged.has(permission))
+          return permissions.length ? [{ ...change, permissions }] : []
+        }
+        return seen.has(exact(change)) ? [] : [change]
+      })
+      record.acknowledgedRevision = receipt.revision
+    }
+    const episodes = [...(snapshot.acknowledgedLosses ?? []), ...(receipt.snapshot.acknowledgedLosses ?? [])]
+    snapshot.acknowledgedLosses = [...new Map(episodes.map((episode) => [JSON.stringify(episode), episode])).values()].slice(-MAX_ENTRIES)
+    for (const reader of records.filter((record) => record.mode === "app-only")) {
+      const episodes = (receipt.snapshot.acknowledgedLosses ?? []).filter((loss) => loss.mode === "app-only" && sameId(loss.clientId, reader.clientId) && loss.owner === reader.owner)
+      const known = [...(reader.snapshot?.acknowledgedLosses ?? []), ...episodes]
+      reader.snapshot = { at: receipt.snapshot.at, acknowledgedLosses: [...new Map(known.map((loss) => [JSON.stringify(loss), loss])).values()].slice(-MAX_ENTRIES) }
+    }
+    this.write(key.tenantId, records, record)
+    return true
+  }
+
   /**
    * Keeps what a token request made for a check was answered with. `account` is the admin it was
    * made for: an answer for another admin than the record's starts the record over for them.
@@ -250,6 +348,7 @@ export class HealthStore {
   setSnapshot(key: ConnectionKey, snapshot: Snapshot): void {
     this.change(key, false, (record) => {
       record.snapshot = snapshotOf(snapshot)
+      if (key.owner && !record.account && snapshot.account) record.account = snapshot.account
     })
   }
 
@@ -313,12 +412,14 @@ export class HealthStore {
       record = { clientId: key.clientId.toLowerCase(), mode: key.mode, runs: [], verified: {}, refused: {}, updatedAt: this.now().toISOString() }
       records.push(record)
     }
+    if (key.owner) record.owner = key.owner
+    if (key.storageOwner) record.storageOwner = key.storageOwner
     apply(record)
     if (observed) record.updatedAt = this.now().toISOString()
     this.write(key.tenantId, records, record)
   }
 
-  /** Writes the tenant's records without what has expired, and without the records used longest ago beyond the cap. */
+  /** Expires observation evidence, keeps registration snapshots and bounds the records used longest ago. */
   private write(tenantId: string, records: ConnectionRecord[], current?: ConnectionRecord): void {
     const oldest = this.now().getTime() - RUN_MAX_AGE_MS
     for (const record of records) {
@@ -331,7 +432,7 @@ export class HealthStore {
       }))
     }
     const kept = records
-      .filter((record) => record === current || Date.parse(record.updatedAt) >= oldest)
+      .filter((record) => record === current || record.snapshot !== undefined || Date.parse(record.updatedAt) >= oldest)
       .sort((a, b) => (a === current ? -1 : b === current ? 1 : Date.parse(b.updatedAt) - Date.parse(a.updatedAt)))
       .slice(0, MAX_CONNECTIONS)
     if (!kept.length) return this.store.delete(KEY + tenantId.toLowerCase())

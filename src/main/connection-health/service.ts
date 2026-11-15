@@ -1,6 +1,7 @@
+import { createHash } from "node:crypto"
 import type { RunOutcomes } from "../../shared/backup-outcomes"
 import { evaluateHealth, type HealthEvaluation, type ServiceChoice } from "../../shared/connection-health/evaluate"
-import type { ConnectionHealthReport, ConnectionMode, ReaderObservation, TokenObservation } from "../../shared/connection-health/model"
+import type { ConnectionHealthReport, ConnectionMode, ReaderObservation, Snapshot, TokenObservation } from "../../shared/connection-health/model"
 import { runObservation } from "../../shared/connection-health/observe"
 import { canBackUp, MODULES, type GrantedPermissions, type ModuleId } from "../../shared/services/modules"
 import { grantedPermissions } from "../../shared/services/token"
@@ -158,20 +159,37 @@ export class ConnectionHealth {
   /** What is known about the tenant now, from what was observed. Asks Microsoft nothing. */
   report(tenantId: string): ConnectionHealthReport {
     this.connectionsChanged(tenantId)
-    return this.evaluate(tenantId.toLowerCase()).report
+    const tenant = tenantId.toLowerCase()
+    const { report, current, baseline } = this.evaluate(tenant)
+    const key = this.adminKey(tenant)
+    if (!key || !current || !baseline) return { ...report, acknowledgement: null }
+    if (!current.account && this.host.account(tenant)) {
+      if (baseline.replaces || !this.observations.connections(tenant).some((record) => record.mode === key.mode && record.clientId === key.clientId)) {
+        this.observations.setSnapshot(key, baseline)
+        if (baseline.replaces) this.observations.dropOthers(key)
+      }
+      return { ...report, acknowledgement: null }
+    }
+    this.observations.setSnapshot(key, baseline)
+    if (baseline.replaces) this.observations.dropOthers(key)
+    // Reading the same evidence again does not evict an earlier displayed report's receipt.
+    const content = [key.owner, current.account, current.permissions, current.ready, current.acknowledgedLosses, baseline.found, baseline.carried, baseline.replaces]
+    const canonical = JSON.stringify(content, (_key, value: unknown) => value && typeof value === "object" && !Array.isArray(value) ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))) : value)
+    this.keepReaderBaseline(tenant, baseline)
+    const id = createHash("sha256").update(canonical).digest("hex")
+    this.observations.receipt(key, { id, snapshot: current, shown: baseline })
+    return { ...report, acknowledgement: id }
   }
 
-  /**
-   * The changes were looked at: the state as it is now is what later changes are compared with.
-   * A replaced registration is no longer named after this.
-   */
-  acknowledge(tenantId: string): ConnectionHealthReport {
+  /** Acknowledge only the report that was displayed, including its exact loss episodes. */
+  acknowledge(tenantId: string, receipt: unknown): ConnectionHealthReport {
+    if (typeof receipt !== "string" || !/^[a-f0-9]{64}$/.test(receipt)) throw new Error("Choose a connection health report to acknowledge.")
     const tenant = tenantId.toLowerCase()
+    this.connectionsChanged(tenant)
+    this.keepBaseline(tenant)
     const key = this.adminKey(tenant)
-    const { current } = this.evaluate(tenant)
-    if (key && current) {
-      this.observations.setSnapshot(key, current)
-      this.observations.dropOthers(key)
+    if (key && this.observations.acknowledge(key, receipt)) {
+      this.keepBaseline(tenant)
       this.host.changed?.(tenant)
     }
     return this.report(tenant)
@@ -248,7 +266,7 @@ export class ConnectionHealth {
     for (const kind of ["admin", "reader", "storage"] as const) this.connection(tenant, kind)
   }
 
-  /** The single definition of the identity of each connection. Credential identifiers stay in memory. */
+  /** The single definition of the identity of each connection. The same non-secret signature is persisted with stored evidence. */
   private connection(tenant: string, kind: ConnectionKind): ConnectionIdentity | null {
     const connected = this.host.tenant(tenant)
     const reader = kind === "reader" ? this.host.reader(tenant) : null
@@ -258,6 +276,7 @@ export class ConnectionHealth {
     if (!connected || !clientId || (kind === "storage" && connected.storage !== "azure")) {
       this.identities.delete(lane)
       this.checkedAt.delete(lane)
+      this.observations.activate(tenant, kind, null)
       return null
     }
     const signature = JSON.stringify([tenant, clientId, account, kind === "reader" ? reader!.credential : kind === "storage" ? connected.storageId ?? connected.storage : undefined])
@@ -267,6 +286,11 @@ export class ConnectionHealth {
       this.identities.set(lane, identity)
       this.checkedAt.delete(lane)
     }
+    if (kind === "storage") {
+      identity.key.storageOwner = signature
+      identity.key.owner = this.connection(tenant, "admin")?.signature
+    } else identity.key.owner = signature
+    this.observations.activate(tenant, kind, identity.key)
     return identity
   }
 
@@ -275,8 +299,7 @@ export class ConnectionHealth {
   }
 
   private adminKey(tenant: string): ConnectionKey | null {
-    const connected = this.host.tenant(tenant)
-    return connected && { tenantId: tenant, clientId: connected.clientId, mode: "delegated" }
+    return this.connection(tenant, "admin")?.key ?? null
   }
 
   private async observe(identity: ConnectionIdentity): Promise<void> {
@@ -299,6 +322,7 @@ export class ConnectionHealth {
     } catch (error) {
       observation = { at: this.now().toISOString(), failure: signInFailure(error) }
     }
+    if (kind !== "reader" && !account && !observation.failure) return
     if (this.unchanged(identity)) this.observations.recordToken(key, kind === "storage" ? "storage" : "graph", observation, account)
   }
 
@@ -312,6 +336,12 @@ export class ConnectionHealth {
     const connected = this.host.tenant(tenant)
     const reader = this.host.reader(tenant)
     const now = this.now()
+    const connections = connected ? this.observations.connections(tenant) : []
+    // Registration changes and reader-only backups need a tenant baseline without inventing an admin token.
+    if (connected && connections.length > 0 && !connections.some((record) => record.mode === "delegated" && record.clientId === connected.clientId.toLowerCase())) {
+      const account = this.host.account(tenant)
+      connections.push({ clientId: connected.clientId, mode: "delegated", ...(account ? { account } : {}), runs: [], verified: {}, refused: {}, updatedAt: now.toISOString() })
+    }
     return evaluateHealth(
       {
         tenantId: tenant,
@@ -321,10 +351,18 @@ export class ConnectionHealth {
         reader: reader ? { ...reader.facts, at: now.toISOString() } : null,
         storage: connected?.storage ?? "local",
         settings: this.host.settings(tenant),
-        connections: connected ? this.observations.connections(tenant) : [],
+        connections,
       },
       now,
     )
+  }
+
+  /** Reader acknowledgements belong to the reader, independently of the admin's registration. */
+  private keepReaderBaseline(tenant: string, baseline: Snapshot): void {
+    const reader = this.connection(tenant, "reader")
+    if (!reader) return
+    const kept = this.observations.connections(tenant).find((record) => record.mode === "app-only" && record.clientId === reader.key.clientId)?.snapshot
+    if (!kept) this.observations.setSnapshot(reader.key, { at: baseline.at, acknowledgedLosses: (baseline.acknowledgedLosses ?? []).filter((loss) => loss.mode === "app-only") })
   }
 
   /**
@@ -339,6 +377,7 @@ export class ConnectionHealth {
     const kept = this.observations.connections(tenant).find((record) => record.mode === "delegated" && record.clientId.toLowerCase() === key.clientId.toLowerCase())?.snapshot
     if (JSON.stringify(kept) !== JSON.stringify(baseline)) this.observations.setSnapshot(key, baseline)
     if (baseline.replaces) this.observations.dropOthers(key)
+    this.keepReaderBaseline(tenant, baseline)
   }
 }
 

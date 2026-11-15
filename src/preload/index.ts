@@ -92,7 +92,7 @@ const bridge: TenuVaultPreloadBridge = {
   health: {
     report: (tenantId) => invoke("health:report", tenantId),
     check: (tenantId, again) => invoke("health:check", tenantId, again === true),
-    acknowledge: (tenantId) => invoke("health:acknowledge", tenantId),
+    acknowledge: (tenantId, receipt) => invoke("health:acknowledge", tenantId, receipt),
     onChanged: (listener) => subscribe<string>("health:changed", listener),
   },
   license: {

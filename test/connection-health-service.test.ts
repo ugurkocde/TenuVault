@@ -38,7 +38,7 @@ function setup(overrides: Partial<HealthHost> = {}) {
   const tokens = vi.fn<HealthHost["token"]>(async () => fresh())
   const readerToken = vi.fn<HealthHost["readerToken"]>(async () => `e30.${Buffer.from(JSON.stringify({ roles: ["DeviceManagementApps.Read.All"] })).toString("base64url")}.sig`)
   const changed = vi.fn()
-  const health = new ConnectionHealth({
+  const host: HealthHost = {
     store: backing,
     now: () => new Date(clock),
     tenant: () => state.tenant,
@@ -49,9 +49,10 @@ function setup(overrides: Partial<HealthHost> = {}) {
     readerToken,
     changed,
     ...overrides,
-  })
+  }
+  const health = new ConnectionHealth(host)
   const stored = () => JSON.parse(backing.get(`connectionHealth.${TENANT}`) ?? "null") as { connections: Array<Record<string, any>> } | null
-  return { health, backing, state, tokens, readerToken, changed, stored, now: () => new Date(clock).toISOString(), pass: (ms: number) => { clock += ms } }
+  return { health, restart: () => new ConnectionHealth(host), backing, state, tokens, readerToken, changed, stored, now: () => new Date(clock).toISOString(), pass: (ms: number) => { clock += ms } }
 }
 
 describe("a check", () => {
@@ -358,11 +359,12 @@ describe("a check whose identity changed", () => {
     const reader = stored()?.connections.find((record) => record.mode === "app-only")
     if (field === "reader") {
       expect(admin).toMatchObject({ graph: { permissions: [...SCOPES].sort() }, storage: { permissions: [...SCOPES].sort() } })
-      expect(reader).not.toHaveProperty("graph")
+      expect(reader?.graph).toBeUndefined()
       expect(changed.mock.calls.map((call) => call[1])).toEqual(["admin", "storage", "admin", "storage"])
       expect(tokens).toHaveBeenCalledTimes(4)
     } else {
-      expect(admin).toBeUndefined()
+      expect(admin?.graph).toBeUndefined()
+      expect(admin?.storage).toBeUndefined()
       expect(reader).toHaveProperty("graph")
       expect(changed.mock.calls.map((call) => call[1])).toEqual(["reader"])
       expect(tokens).toHaveBeenCalledTimes(2)
@@ -613,7 +615,8 @@ describe("backup runs", () => {
     health.runEnded("desktop-1")
     // Nothing of it is kept: it is not the new admin's run, and the admin whose run it was is no longer signed in.
     expect(JSON.stringify(stored())).not.toContain("desktop-1")
-    expect(stored()!.connections[0]).toMatchObject({ account: ADMIN, runs: [], verified: {} })
+    expect(stored()!.connections[0]).toMatchObject({ runs: [], verified: {} })
+    expect(stored()!.connections[0]).not.toHaveProperty("account")
     expect(changed).not.toHaveBeenCalled()
     await health.check(TENANT, "signIn")
     expect(stored()!.connections[0]).toMatchObject({ account: OTHER_ADMIN, runs: [], verified: {} })
@@ -662,7 +665,7 @@ describe("backup runs", () => {
     health.runStarted({ id: "desktop-1", authMode: "app-only" }, REQUEST)
     state.account = OTHER_ADMIN
     health.recordRun(outcomes("desktop-1", now(), [saved("Apps")], "app-only"), REQUEST)
-    expect(stored()!.connections).toMatchObject([{ clientId: READER, mode: "app-only", runs: [{ runId: "desktop-1" }] }])
+    expect(stored()!.connections.find((record) => record.mode === "app-only")).toMatchObject({ clientId: READER, runs: [{ runId: "desktop-1" }] })
     // A reader that was replaced, or removed, while the run went on: the run is neither one's.
     for (const [index, replaced] of [{ clientId: OTHER_READER, credential: "certificate-1", facts: READER_FACTS }, null].entries()) {
       state.reader = { clientId: READER, credential: "certificate-1", facts: READER_FACTS }
@@ -670,8 +673,7 @@ describe("backup runs", () => {
       state.reader = replaced
       health.recordRun(outcomes(`desktop-${index + 2}`, now(), [saved("Apps")], "app-only"), REQUEST)
     }
-    expect(stored()!.connections).toHaveLength(1)
-    expect(stored()!.connections[0]!.runs.map((run: { runId: string }) => run.runId)).toEqual(["desktop-1"])
+    expect(stored()!.connections.every((record) => record.runs.length === 0)).toBe(true)
   })
 
   it("that end after their tenant was signed out of or removed are not kept", async () => {
@@ -750,7 +752,7 @@ describe("backup runs", () => {
     ran(health, outcomes("desktop-10", now(), [denied("Apps")]))
     expect(health.report(TENANT).changes).toMatchObject([{ kind: "lostAccess", area: "apps", since }])
     // Looking at the changes ends the notice, not the state.
-    expect(health.acknowledge(TENANT).changes).toEqual([])
+    expect(health.acknowledge(TENANT, health.report(TENANT).acknowledgement).changes).toEqual([])
     expect(apps().lostAccess).toBe(true)
     // It ends with the backup that reads the apps again.
     pass(DAY)
@@ -818,7 +820,7 @@ describe("changes", () => {
     // They stay until they were looked at, however often the tenant is checked.
     pass(DAY)
     expect((await health.check(TENANT, "launch")).changes).toHaveLength(2)
-    expect(health.acknowledge(TENANT).changes).toEqual([])
+    expect(health.acknowledge(TENANT, health.report(TENANT).acknowledgement).changes).toEqual([])
     expect(health.report(TENANT)).toMatchObject({ changes: [], since: new Date(START.getTime() + 2 * DAY).toISOString() })
   })
 
@@ -857,7 +859,7 @@ describe("changes", () => {
     expect(report.granted).toEqual([...WITHOUT_RBAC].sort())
     pass(DAY)
     expect((await health.check(TENANT, "launch")).changes).toEqual(carried)
-    expect(health.acknowledge(TENANT).changes).toEqual([])
+    expect(health.acknowledge(TENANT, health.report(TENANT).acknowledgement).changes).toEqual([])
     expect((await health.check(TENANT, "again")).changes).toEqual([])
   })
 
@@ -872,7 +874,7 @@ describe("changes", () => {
     pass(DAY)
     state.account = OTHER_ADMIN
     expect((await health.check(TENANT, "signIn")).changes).toEqual(unseen.map((change) => ({ ...change, earlierSignIn: true, foundAt: new Date(START.getTime() + DAY).toISOString() })))
-    expect(health.acknowledge(TENANT).changes).toEqual([])
+    expect(health.acknowledge(TENANT, health.report(TENANT).acknowledgement).changes).toEqual([])
   })
 
   it("name a registration that replaced another, with what it lacks, until they were looked at", async () => {
@@ -889,7 +891,7 @@ describe("changes", () => {
     expect(stored()!.connections.map((record) => record.clientId)).toEqual([NEW_CLIENT])
     pass(DAY)
     expect((await health.check(TENANT, "launch")).changes).toHaveLength(1)
-    expect(health.acknowledge(TENANT).changes).toEqual([])
+    expect(health.acknowledge(TENANT, health.report(TENANT).acknowledgement).changes).toEqual([])
   })
 
   it("name a registration that replaced another after the admin signed out in between", async () => {
@@ -1026,5 +1028,141 @@ describe("with the backup engine", () => {
     expect(report.changes).toMatchObject([{ kind: "lostAccess", service: "intune", area: "apps", cause: "refusedWithPermission", mode: "delegated", folders: ["AppCategories"] }])
     expect(base.stored()!.connections[0]!.refused.AppCategories).toEqual(expect.arrayContaining([expect.objectContaining({ permissionHeld: true })]))
     expect(JSON.stringify(base.stored())).not.toContain("contoso")
+  })
+})
+
+describe("stored evidence and displayed acknowledgements", () => {
+  function finish(base: ReturnType<typeof setup>, id: string, folder: string, cause?: "permission" | "role", mode: ConnectionMode = "delegated", held?: boolean) {
+    base.pass(1000)
+    const request = { tenantId: TENANT, clientId: base.state.tenant!.clientId }
+    base.health.runStarted({ id, authMode: mode }, request)
+    if (held !== undefined) base.health.runToken(id, { kind: mode === "delegated" ? "delegated" : "application", permissions: new Set(held ? SCOPES : []) })
+    base.health.recordRun({ runId: id, tenantId: TENANT, authMode: mode, trigger: "manual", startedAt: base.now(), endedAt: base.now(), status: "Success", coverage: "complete", types: cause ? [{ folder, service: "intune", outcome: "skipped", cause, reason: "Refused" }] : [{ folder, service: "intune", outcome: "saved", saved: 1 }] }, request)
+    base.health.runEnded(id)
+  }
+  const apps = (health: ConnectionHealth) => health.report(TENANT).services[0]!.areas.find((area) => area.id === "apps")!
+
+  it("L: persists credential ownership through restart, removal and two successive replacements", async () => {
+    const base = setup()
+    base.state.reader = { clientId: READER, credential: "public-thumbprint-1", facts: READER_FACTS }
+    await base.health.check(TENANT, "again")
+    finish(base, "read", "Apps", undefined, "app-only")
+    finish(base, "r1", "Apps", "role", "app-only")
+    finish(base, "r2", "Apps", "role", "app-only")
+    expect(apps(base.restart()).lostAccess).toBe(true)
+    for (const credential of ["public-thumbprint-2", "public-thumbprint-3"]) {
+      base.state.reader = { clientId: READER, credential, facts: { ...READER_FACTS, verifiedAt: base.now() } }
+      base.health.connectionsChanged(TENANT)
+      expect(apps(base.restart())).toMatchObject({ lostAccess: false, verified: { state: "noBackup" } })
+      finish(base, `${credential}-read`, "Apps", undefined, "app-only")
+      expect(apps(base.restart()).verified.state).toBe("verified")
+    }
+    base.state.reader = null
+    base.health.connectionsChanged(TENANT)
+    // Even reuse of a public identifier cannot revive records discarded at removal.
+    base.state.reader = { clientId: READER, credential: "public-thumbprint-3", facts: READER_FACTS }
+    expect(apps(base.restart())).toMatchObject({ lostAccess: false, verified: { state: "noBackup" } })
+  })
+
+  it("L: discards earlier reader evidence without a persisted credential identity", () => {
+    const base = setup()
+    base.state.reader = { clientId: READER, credential: "public-thumbprint-new", facts: READER_FACTS }
+    base.backing.set(`connectionHealth.${TENANT}`, JSON.stringify({ version: 1, connections: [{ clientId: READER, mode: "app-only", runs: [], verified: { Apps: new Date(START.getTime() - 3000).toISOString() }, refused: { Apps: [{ runId: "old-1", at: new Date(START.getTime() - 2000).toISOString(), cause: "role" }, { runId: "old-2", at: new Date(START.getTime() - 1000).toISOString(), cause: "role" }] }, updatedAt: base.now() }] }))
+    expect(apps(base.restart())).toMatchObject({ lostAccess: false, verified: { state: "noBackup" } })
+  })
+
+  it("M: shows no old admin or storage evidence before the new check answers, also after returning and restarting", async () => {
+    const base = setup()
+    base.state.tenant = { clientId: CLIENT, storage: "azure", storageId: "storage-A" }
+    await base.health.check(TENANT, "again")
+    finish(base, "a-read", "Apps")
+    base.state.account = OTHER_ADMIN
+    base.health.connectionsChanged(TENANT)
+    const replies: Array<() => void> = []
+    base.tokens.mockImplementation(() => new Promise((resolve) => replies.push(() => resolve(fresh(WITHOUT_APPS)))))
+    const checking = base.health.check(TENANT, "signIn")
+    for (const health of [base.health, base.restart()]) {
+      expect(health.report(TENANT)).toMatchObject({ graph: { state: "notChecked" }, storage: { state: "notChecked" }, granted: null })
+      expect(apps(health).verified.state).toBe("noBackup")
+    }
+    replies.forEach((reply) => reply())
+    await checking
+    base.state.account = ADMIN
+    base.health.connectionsChanged(TENANT)
+    expect(base.restart().report(TENANT).granted).toBeNull()
+    base.tokens.mockResolvedValue(fresh())
+    await base.health.check(TENANT, "again")
+    base.state.tenant.storageId = "storage-B"
+    base.health.connectionsChanged(TENANT)
+    expect(base.restart().report(TENANT)).toMatchObject({ graph: { state: "healthy" }, storage: { state: "notChecked" } })
+    base.state.tenant.storageId = "storage-A"
+    expect(base.restart().report(TENANT).storage.state).toBe("notChecked")
+  })
+
+  it("N: acknowledges only the displayed folder episodes across restart and repeated old acknowledgements", async () => {
+    const base = setup()
+    await base.health.check(TENANT, "launch")
+    finish(base, "read-apps", "Apps")
+    finish(base, "read-config", "DeviceConfigurations")
+    finish(base, "apps-1", "Apps", "role")
+    finish(base, "apps-2", "Apps", "role")
+    const displayed = base.health.report(TENANT)
+    finish(base, "config-1", "DeviceConfigurations", "role")
+    finish(base, "config-2", "DeviceConfigurations", "role")
+    const restarted = base.restart()
+    expect(restarted.acknowledge(TENANT, displayed.acknowledgement).changes).toMatchObject([{ kind: "lostAccess", folders: ["DeviceConfigurations"] }])
+    expect(apps(restarted).lostAccess).toBe(true)
+    const latest = restarted.report(TENANT)
+    expect(restarted.acknowledge(TENANT, latest.acknowledgement).changes).toEqual([])
+    expect(restarted.acknowledge(TENANT, displayed.acknowledgement).changes).toEqual([])
+    for (const invalid of [undefined, null, {}, "", "made-up"]) expect(() => restarted.acknowledge(TENANT, invalid)).toThrow("report to acknowledge")
+    expect(restarted.acknowledge(TENANT, "f".repeat(64)).changes).toEqual([])
+  })
+
+  it("N: retains permission changes discovered after the displayed report", async () => {
+    const base = setup()
+    base.tokens.mockResolvedValueOnce(fresh(WITHOUT_APPS))
+    await base.health.check(TENANT, "launch")
+    base.pass(1000)
+    await base.health.check(TENANT, "again")
+    const shown = base.health.report(TENANT)
+    base.pass(1000)
+    base.tokens.mockResolvedValueOnce(fresh([...SCOPES, "Mail.Read"]))
+    await base.health.check(TENANT, "again")
+    const result = base.health.acknowledge(TENANT, shown.acknowledgement)
+    expect(result.changes).toEqual([{ kind: "permissionsAdded", permissions: ["Mail.Read"] }])
+    const later = base.health.report(TENANT)
+    expect(base.health.acknowledge(TENANT, later.acknowledgement).changes).toEqual([])
+    expect(base.health.acknowledge(TENANT, shown.acknowledgement).changes).toEqual([])
+  })
+
+  it("N: orders acknowledgements by revision even when reports share one clock tick", async () => {
+    const base = setup()
+    base.tokens.mockResolvedValueOnce(fresh(WITHOUT_APPS))
+    await base.health.check(TENANT, "launch")
+    const first = await base.health.check(TENANT, "again")
+    base.tokens.mockResolvedValueOnce(fresh([...SCOPES, "Mail.Read"]))
+    const second = await base.health.check(TENANT, "again")
+    expect(first.evaluatedAt).toBe(second.evaluatedAt)
+    expect(base.health.acknowledge(TENANT, second.acknowledgement).changes).toEqual([])
+    expect(base.restart().acknowledge(TENANT, first.acknowledgement).changes).toEqual([])
+  })
+
+  it("O: uses the newest fresh verification for both reader permissions and check time", async () => {
+    const base = setup()
+    base.state.reader = { clientId: READER, credential: "public-thumbprint", facts: { ...READER_FACTS, verifiedRoles: [], verifiedAt: base.now() } }
+    base.readerToken.mockResolvedValue(jwt({ roles: [] }))
+    await base.health.check(TENANT, "again")
+    finish(base, "reader-read", "Apps", undefined, "app-only")
+    finish(base, "reader-refused-1", "Apps", "permission", "app-only", false)
+    finish(base, "reader-refused-2", "Apps", "permission", "app-only", false)
+    expect(apps(base.health).losses[0]!.cause).toBe("permission")
+    base.pass(1000)
+    base.state.reader.facts = { ...READER_FACTS, verifiedAt: base.now() }
+    const report = base.restart().report(TENANT)
+    expect(report.reader).toMatchObject({ state: "healthy", checkedAt: base.now() })
+    expect(apps(base.restart()).losses[0]).toMatchObject({ folder: "Apps", cause: "notVerifiedYet" })
+    base.pass(8 * DAY)
+    expect(apps(base.restart()).losses[0]!.cause).toBe("permission")
   })
 })

@@ -269,8 +269,8 @@ describe("the state of the Backup Reader", () => {
     // A refusal that came after the verification stands, and so does one whose verification is dated ahead of the clock.
     expect(reader(readerFacts({ verifiedAt: ago(11 * MINUTE) }), refused)).toMatchObject({ state: "refused", checkedAt: ago(10 * MINUTE), code: "AADSTS700027" })
     expect(reader(readerFacts({ verifiedAt: ago(-DAY) }), refused)).toMatchObject({ state: "refused", checkedAt: ago(10 * MINUTE) })
-    // An answer that was no refusal keeps its own time.
-    expect(reader(readerFacts({ verifiedAt: ago(MINUTE) }), healthy([], ago(10 * MINUTE))).checkedAt).toBe(ago(10 * MINUTE))
+    // A newer verification also replaces an earlier successful check.
+    expect(reader(readerFacts({ verifiedAt: ago(MINUTE) }), healthy([], ago(10 * MINUTE))).checkedAt).toBe(ago(MINUTE))
   })
 
   it("forgets a refusal that expired, and falls back to what this device knows", () => {
@@ -459,7 +459,7 @@ describe("lost access", () => {
     expect(lost([refused("r2", 3), refused("r3", 1)], { verified: { [FOLDER]: ago(RUN_MAX_AGE_MS + DAY) } })).toEqual([])
   })
 
-  it("is cleared by a read, and a type that is not configured is a read", () => {
+  it("is cleared by a successful read", () => {
     expect(lost([read("r1", 9), refused("r2", 5), read("r3", 3), refused("r4", 1)])).toEqual([])
     expect(lost([read("r1", 9), refused("r2", 5), refused("r3", 3), read("r4", 1)])).toEqual([])
   })

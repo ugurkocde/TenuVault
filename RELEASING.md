@@ -77,6 +77,12 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 Put these in the next stable release's notes, then remove them here.
 
+- **Connection health history.** Health records now keep the active Backup Reader certificate's
+  public SHA-256 thumbprint. Earlier health evidence is discarded when its account, registration,
+  storage connection or active reader credential changes, including after restarting the app.
+  Older health evidence with no persisted ownership is discarded conservatively at the next read.
+  Acknowledgements use the displayed report's receipt, so later notices remain visible.
+
 - **Connection checks.** TenuVault asks Microsoft for a new token of the signed-in admin when it
   starts (for the tenant that is open only), after a sign-in, and when a backup of a tenant starts
   and ends, and for a new Backup Reader token before a scheduled backup that runs with the reader.

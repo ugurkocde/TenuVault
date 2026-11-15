@@ -1468,7 +1468,7 @@ async function bootstrap(): Promise<void> {
   handleTrusted("health:report", (_event, tenantId: unknown) => health.report(connectedTenant(tenantId)))
   // `again` is the admin asking to check again, which always asks Microsoft; without it a page that opens gets a recent check's answer.
   handleTrusted("health:check", (_event, tenantId: unknown, again: unknown) => health.check(connectedTenant(tenantId), again === true ? "again" : "opened"))
-  handleTrusted("health:acknowledge", (_event, tenantId: unknown) => health.acknowledge(connectedTenant(tenantId)))
+  handleTrusted("health:acknowledge", (_event, tenantId: unknown, receipt: unknown) => health.acknowledge(connectedTenant(tenantId), receipt))
   handleTrusted("backups:failedAttempts", (_event, tenantId: unknown) => (typeof tenantId === "string" ? failedAttempts.list(tenantId) : []))
   handleTrusted("backups:liveRuns", (_event, tenantId: unknown) => (typeof tenantId === "string" ? engine.liveRuns(tenantId) : []))
   handleTrusted("backups:setScope", (_event, tenantId: unknown, scope: unknown) => {

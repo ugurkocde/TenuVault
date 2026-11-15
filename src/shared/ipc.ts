@@ -563,8 +563,8 @@ export interface TenuVaultBridge {
      * asks Microsoft, also for the Backup Reader.
      */
     check: (tenantId: string, again?: boolean) => Promise<ConnectionHealthReport>
-    /** The changes were looked at: later changes are compared with the state as it is now. */
-    acknowledge: (tenantId: string) => Promise<ConnectionHealthReport>
+    /** Acknowledge exactly the changes of the displayed report, using its acknowledgement receipt. */
+    acknowledge: (tenantId: string, receipt: string) => Promise<ConnectionHealthReport>
     /** Called with a tenant ID when what is known about that tenant changed. Returns an unsubscribe function. */
     onChanged: (listener: (tenantId: string) => void) => () => void
   }

@@ -57,7 +57,7 @@ describe("what a backup run says about access", () => {
       trigger: "scheduled",
       status: "CompletedWithWarnings",
       account: ADMIN,
-      read: ["DeviceConfigurations", "Branding"],
+      read: ["DeviceConfigurations"],
       refused: [
         { folder: "Apps", cause: "permission", status: 403, code: "Forbidden" },
         { folder: "ScopeTags", cause: "role" },

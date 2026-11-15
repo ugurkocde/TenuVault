@@ -259,6 +259,12 @@ When a computer is retired or lost, remove its certificate from the app registra
 
 A refusal that retrying cannot fix (an unknown or expired certificate, a missing or disabled app registration, or a workload identity policy) stops that night's backup without retries, notifies you once and tries again at the next scheduled time. Network failures and transient refusals from Microsoft are retried like any other failed scheduled backup.
 
+## Connection health history
+
+Connection health keeps the public SHA-256 thumbprint of the certificate used for requests alongside the reader's application ID, permission names, check times and backup outcomes in the encrypted app state. It never copies the certificate or private key into health history. The thumbprint identifies which credential produced the evidence and changes when a replacement certificate becomes active. Preparing a renewal alone keeps the current credential's history.
+
+Replacing the active certificate or removing the reader discards its earlier health evidence. Setting up the reader again starts fresh, including after restarting TenuVault. A successful verification supplies the latest permission evidence and check time; a backup must still read a previously refused policy type before that type is verified again.
+
 ## Related pages
 
 * [Conditional Access and TenuVault](/security/conditional-access/)

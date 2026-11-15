@@ -218,6 +218,14 @@ You can target the app registration with your own controls, for example:
 * A Conditional Access policy that requires a compliant device or phishing-resistant MFA for TenuVault sign-ins. TenuVault signs in through your system browser, so device-based conditions are checked there. See [Conditional Access](/getting-started/requirements/#conditional-access) for the supported browsers.
 * Sign-in frequency to control how long a TenuVault session lasts before you sign in again. Scheduled backups stop when the session ends; see [Conditional Access and TenuVault](/security/conditional-access/) for ways to keep them running.
 
+## Connection health evidence
+
+Health checks run silently and never open a sign-in window or hold up a backup. Their observations stay in the encrypted app state on this device. Admin evidence belongs to the tenant, signed-in account ID and connected registration. Reader evidence also identifies the active credential by its public certificate thumbprint. Storage evidence belongs to the current storage connection and signed-in account.
+
+Changing an account, registration, storage connection or reader credential clears the affected connection's earlier checks and backup verification. Changing back does not restore that evidence. Registration permission history and unacknowledged registration changes are retained separately. Signing out removes account IDs and account-bound evidence; removing the tenant removes its health history.
+
+A loss needs two distinct refused backups after that connection previously read the policy type. Timeouts, stopped runs, types that are not configured and types left out by scope or by the reader neither establish nor clear a loss. Looking at a report's changes acknowledges only the notices in that report. Newer notices remain, and an acknowledged loss stays in the area's health until a backup reads the type again or its evidence expires. Health retains at most twenty recent report receipts; an older receipt has no effect, so refresh the report before acknowledging it.
+
 ## Related pages
 
 * [A client secret or a delegated sign-in for Intune automation](https://www.tenuvault.com/compare/intune-graph-client-secret-vs-delegated-sign-in): what an app-only script with a client secret exposes, on the product site

@@ -53,7 +53,7 @@ export interface RunObservation {
   status: string
   /** The account that ran it; absent for the Backup Reader. */
   account?: string
-  /** Folders the run read: saved, or found not configured. */
+  /** Folders the run read and saved. Not configured says nothing about earlier access. */
   read: string[]
   /** Folders Microsoft refused to the run. */
   refused: Array<{ folder: string; cause: RefusalCause; permissionHeld?: boolean; status?: number; code?: string }>
@@ -78,6 +78,8 @@ export interface ReaderObservation {
 
 /** The connection, folder and first refusal of one loss, without any account name. */
 export interface LossEpisode {
+  /** The persisted connection incarnation, so another credential cannot inherit an acknowledgement. */
+  owner?: string
   clientId: string
   mode: ConnectionMode
   account?: string
@@ -127,7 +129,19 @@ export interface FolderRefusal {
 /** The refusals kept per folder: the first since its last read, which says since when, and the latest, which says why. */
 export const MAX_FOLDER_REFUSALS = 2
 
+export interface HealthReceipt {
+  id: string
+  revision: number
+  snapshot: Snapshot
+  shown: Snapshot
+}
+
 export interface ConnectionRecord {
+  /** Persisted ownership signatures contain IDs and the public certificate thumbprint, never secrets. */
+  owner?: string
+  storageOwner?: string
+  receipts?: HealthReceipt[]
+  acknowledgedRevision?: number
   clientId: string
   mode: ConnectionMode
   /** Whose sign-in the observations below are; absent for the Backup Reader. */
@@ -305,6 +319,8 @@ export type HealthChange =
   | { kind: "lostAccess"; service: ModuleId; area: string; cause: LossCause; mode: ConnectionMode; folders: string[]; since: string }
 
 export interface ConnectionHealthReport {
+  /** Opaque receipt for exactly the changes shown. Pass it to health.acknowledge. */
+  acknowledgement?: string | null
   tenantId: string
   /** The app registration the tenant is connected with. */
   clientId: string

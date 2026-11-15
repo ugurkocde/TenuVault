@@ -128,14 +128,19 @@ function readerFailureState(failure: SignInFailure): ReaderHealthState {
   return "refused"
 }
 
+/** A successful verification and a health check are both fresh answers about this credential. */
+function readerEvidence(facts: ReaderObservation | null, token: TokenObservation | undefined, now: Date): TokenObservation | undefined {
+  const answered = token && recent(token.at, TOKEN_MAX_AGE_MS, now) ? token : undefined
+  if (facts?.state === "verified" && recent(facts.verifiedAt ?? undefined, TOKEN_MAX_AGE_MS, now) && (!answered || Date.parse(facts.verifiedAt!) > Date.parse(answered.at))) {
+    return { at: facts.verifiedAt!, ...(facts.verifiedRoles ? { permissions: facts.verifiedRoles } : {}) }
+  }
+  return answered
+}
+
 function readerHealth(facts: ReaderObservation | null, connection: ConnectionRecord | undefined, now: Date): ReaderHealth {
   if (!facts) return { state: "notSetUp", checkedAt: null }
   const answered = connection?.graph && recent(connection.graph.at, TOKEN_MAX_AGE_MS, now) ? connection.graph : undefined
-  // A verification asks Microsoft for a new token of the credential in use and succeeds only with one, so it
-  // is a newer answer than a refusal from before it. It has to count here: no ordinary check asks the reader
-  // for a token, so nothing else would replace the refusal.
-  const verified = facts.state === "verified" && !!answered?.failure && recent(facts.verifiedAt ?? undefined, TOKEN_MAX_AGE_MS, now) && Date.parse(facts.verifiedAt!) > Date.parse(answered.at)
-  const token: TokenObservation | undefined = verified ? { at: facts.verifiedAt! } : answered
+  const token = readerEvidence(facts, answered, now)
   const expires = Date.parse(facts.notAfter)
   const daysLeft = Math.ceil((expires - now.getTime()) / 86_400_000)
   const known = { checkedAt: token?.at ?? null, notAfter: facts.notAfter, daysLeft, ...(facts.roleChange ? { roleChange: facts.roleChange } : {}) }
@@ -260,7 +265,7 @@ function lostFolders(record: ConnectionRecord | undefined, now: Date): Map<strin
       if (!byRun.has(refusal.runId) && recent(refusal.at, RUN_MAX_AGE_MS, now) && Date.parse(refusal.at) > Date.parse(readAt!)) byRun.set(refusal.runId, refusal)
     }
     const since = [...byRun.values()].sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
-    if (since.length >= 2) lost.set(folder, { since: since[0]!.at, cause: since.at(-1)!.cause, permissionHeld: since.at(-1)!.permissionHeld, mode: record.mode, clientId: record.clientId, ...(record.account ? { account: record.account } : {}), folder, runId: since[0]!.runId })
+    if (since.length >= 2) lost.set(folder, { since: since[0]!.at, cause: since.at(-1)!.cause, permissionHeld: since.at(-1)!.permissionHeld, mode: record.mode, clientId: record.clientId, ...(record.owner ? { owner: record.owner } : {}), ...(record.account ? { account: record.account } : {}), folder, runId: since[0]!.runId })
   }
   return lost
 }
@@ -336,8 +341,8 @@ function evaluateService(module: ServiceModule, choice: ServiceChoice, granted: 
   }
 }
 
-const episodeKey = (loss: LossEpisode) => JSON.stringify([loss.clientId.toLowerCase(), loss.mode, loss.account, loss.folder, loss.since, loss.runId])
-const episodeOf = ({ clientId, mode, account, folder, since, runId }: LossEpisode): LossEpisode => ({ clientId, mode, ...(account ? { account } : {}), folder, since, runId })
+const episodeKey = (loss: LossEpisode) => JSON.stringify([loss.clientId.toLowerCase(), loss.mode, loss.owner, loss.account, loss.folder, loss.since, loss.runId])
+const episodeOf = ({ clientId, mode, owner, account, folder, since, runId }: LossEpisode): LossEpisode => ({ clientId, mode, ...(owner ? { owner } : {}), ...(account ? { account } : {}), folder, since, runId })
 const sorted = (values: Iterable<string>) => [...values].sort()
 
 /** The registration the tenant used before this one, when another is on record: the one seen last. */
@@ -354,7 +359,7 @@ export function evaluateHealth(input: HealthInput, now: Date): HealthEvaluation 
   const token = delegated?.graph && recent(delegated.graph.at, TOKEN_MAX_AGE_MS, now) ? delegated.graph : undefined
   const granted: GrantedPermissions | undefined = token && !token.failure && token.permissions ? { kind: "delegated", permissions: new Set(token.permissions) } : undefined
 
-  const readerToken = reader?.graph
+  const readerToken = readerEvidence(input.reader, reader?.graph, now)
   const readerGranted: GrantedPermissions | undefined = readerToken?.permissions && !readerToken.failure && recent(readerToken.at, TOKEN_MAX_AGE_MS, now) ? { kind: "application", permissions: new Set(readerToken.permissions) } : undefined
   const evidence = evidenceOf([delegated, reader], now)
   const lostBy = [lostFolders(delegated, now), lostFolders(reader, now)]
@@ -421,18 +426,22 @@ export function evaluateHealth(input: HealthInput, now: Date): HealthEvaluation 
       baseline.lost = previous.lost ? previous.lost.filter((area) => lost.has(area)) : known.lost
       const activeEpisodes = new Set(known.acknowledgedLosses!.map(episodeKey))
       baseline.acknowledgedLosses = previous.acknowledgedLosses ? previous.acknowledgedLosses.filter((loss) => activeEpisodes.has(episodeKey(loss))) : previous.lost ? [] : known.acknowledgedLosses
-      const acknowledged = new Set(baseline.acknowledgedLosses!.map(episodeKey))
-      for (const entry of evaluated) {
-        for (const [area, losses] of entry.lost) {
-          const unseen = losses.filter((loss) => !acknowledged.has(episodeKey(loss)))
-          if (!unseen.length) continue
-          const main = CAUSES.flatMap((cause) => unseen.filter((loss) => loss.cause === cause))[0]!
-          changes.push({ kind: "lostAccess", service: entry.service.id, area: area.slice(entry.service.id.length + 1), cause: main.cause, mode: main.mode, folders: [...new Set(unseen.map((loss) => loss.folder))], since: unseen[0]!.since })
-        }
-      }
-      // Nothing differs from the snapshot, so it holds as of the answer that was compared with it.
-      if (!changes.length && !previous.replaces && permissions && token) baseline.at = token.at
     }
+    // A changed admin or registration cannot acknowledge a loss of the unchanged reader.
+    if (reader?.snapshot?.acknowledgedLosses) {
+      baseline.acknowledgedLosses = [...(baseline.acknowledgedLosses ?? []).filter((loss) => loss.mode === "delegated"), ...reader.snapshot.acknowledgedLosses]
+    }
+    const acknowledged = new Set((baseline.acknowledgedLosses ?? []).map(episodeKey))
+    for (const entry of evaluated) {
+      for (const [area, losses] of entry.lost) {
+        const unseen = losses.filter((loss) => !acknowledged.has(episodeKey(loss)))
+        if (!unseen.length) continue
+        const main = CAUSES.flatMap((cause) => unseen.filter((loss) => loss.cause === cause))[0]!
+        changes.push({ kind: "lostAccess", service: entry.service.id, area: area.slice(entry.service.id.length + 1), cause: main.cause, mode: main.mode, folders: [...new Set(unseen.map((loss) => loss.folder))], since: unseen[0]!.since })
+      }
+    }
+    // Nothing differs from the snapshot, so it holds as of the answer that was compared with it.
+    if (previous && !changes.length && !previous.replaces && permissions && token) baseline.at = token.at
     if (baseline.replaces) {
       const had = baseline.replaces.permissions
       changes.unshift({ kind: "registrationReplaced", previousClientId: baseline.replaces.clientId, lacks: had && permissions ? had.filter((permission) => !held.has(permission)) : [] })

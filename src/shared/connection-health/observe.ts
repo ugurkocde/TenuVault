@@ -7,7 +7,7 @@ export const folderValue = <T>(values: Record<string, T>, folder: string): T | u
 
 /**
  * What a backup run says about access, type by type, without any text of the run:
- * - saved and not configured are reads: Microsoft answered for the type.
+ * - saved is a read. Not configured says nothing about access to previously saved policies.
  * - a type Microsoft refused is a refusal, with the cause the run found.
  * - a type the Backup Reader leaves out, or that only a signed-in admin can read, was never asked
  *   for, so it says nothing about access.
@@ -31,7 +31,8 @@ export function runObservation(outcomes: RunOutcomes, account?: string, permissi
   }
   for (const type of outcomes.types) {
     if (!validFolder(type.folder)) continue
-    if (type.outcome === "saved" || type.outcome === "notConfigured") observation.read.push(type.folder)
+    if (type.outcome === "notConfigured") continue
+    if (type.outcome === "saved") observation.read.push(type.folder)
     else if (type.outcome === "skipped") {
       if (type.reader) observation.excluded.push({ folder: type.folder, cause: "reader" })
       else if (type.cause === "signedIn") observation.excluded.push({ folder: type.folder, cause: "signedIn" })
