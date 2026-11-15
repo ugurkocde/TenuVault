@@ -6,7 +6,7 @@ import { TrialOrKey } from "./PlanChoice"
 import { recordSetup, SetupDiagnosticsCard } from "./SetupDiagnostics"
 
 const POINTS = [
-  { icon: DatabaseBackup, text: "Back up your Intune policies, encrypted on this computer." },
+  { icon: DatabaseBackup, text: "Choose the Microsoft services to protect, with encrypted backups you own." },
   { icon: RotateCcw, text: "Restore a single policy or a whole set when something breaks." },
   { icon: GitCompare, text: "See what changed between backups, down to the setting." },
 ]

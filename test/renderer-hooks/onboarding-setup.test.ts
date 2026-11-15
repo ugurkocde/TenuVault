@@ -8,6 +8,8 @@ import type { SignedInAccount } from "../../src/shared/ipc"
 
 const state = vi.hoisted(() => ({
   createRegistration: vi.fn(),
+  checkPermissions: vi.fn(async () => ({ missing: [] as string[] })),
+  saveServices: vi.fn(async () => undefined),
   cancelCreateRegistration: vi.fn(async () => undefined),
   progress: null as null | ((value: import("../../src/shared/ipc").SetupProgress) => void),
   clipboardIds: vi.fn(async (): Promise<{ tenantId: string; clientId: string } | null> => null),
@@ -39,7 +41,7 @@ vi.mock("../../src/renderer/lib/bridge", () => ({
     },
     auth: { signIn: state.signIn, cancelSignIn: state.cancelSignIn, accounts: state.accounts },
     license: { releaseTenant: state.releaseTenant, clipboardKey: async () => null, checkNewTenant: state.checkNewTenant, tenantTrialAction: state.trialAction },
-    setup: { createRegistration: state.createRegistration, cancelCreateRegistration: state.cancelCreateRegistration, onProgress: (listener: typeof state.progress) => { state.progress = listener; return () => { state.progress = null } }, clipboardIds: state.clipboardIds, saveScript: async () => ({ saved: false }) },
+    setup: { checkPermissions: state.checkPermissions, saveServices: state.saveServices, createRegistration: state.createRegistration, cancelCreateRegistration: state.cancelCreateRegistration, onProgress: (listener: typeof state.progress) => { state.progress = listener; return () => { state.progress = null } }, clipboardIds: state.clipboardIds, saveScript: async () => ({ saved: false }) },
     preferences: { get: async () => ({ firstBackupNoteSeen: true }) },
     schedules: { list: async () => [] },
     backups: { settings: async () => ({ recoveryExported: true }) },
@@ -69,6 +71,8 @@ vi.mock("../../src/renderer/components/StorageChooser", () => ({
   },
 }))
 
+import { DEFAULT_SETUP_CHOICE } from "../../src/shared/services/manifest"
+import { ActivationScreen } from "../../src/renderer/components/ActivationScreen"
 import OnboardingPage from "../../src/renderer/pages/OnboardingPage"
 import { setupCommand, TenantSignInForm } from "../../src/renderer/components/TenantSignInForm"
 import { loadOnboardingDraft, pendingSignInTenant, PENDING_SIGN_IN_MAX_AGE_MS, saveOnboardingDraft } from "../../src/renderer/lib/onboarding-draft"
@@ -84,6 +88,8 @@ const roots: Root[] = []
 beforeEach(() => {
   state.accounts.mockReset()
   state.accounts.mockResolvedValue([])
+  state.checkPermissions.mockReset()
+  state.checkPermissions.mockResolvedValue({ missing: [] })
   state.signIn.mockReset()
   state.createRegistration.mockReset()
   state.clipboardIds.mockReset()
@@ -109,13 +115,14 @@ async function flush() {
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
 }
 
-async function render(element: ReactElement) {
+async function render(element: ReactElement, continueDefault = true) {
   const container = document.createElement("div")
   document.body.appendChild(container)
   const root = createRoot(container)
   roots.push(root)
   act(() => root.render(createElement(MemoryRouter, { initialEntries: ["/portal/onboarding"] }, element)))
   await flush()
+  if (continueDefault && button(container, "Continue with Intune")) await act(async () => button(container, "Continue with Intune")!.click())
   return container
 }
 
@@ -183,8 +190,8 @@ describe("onboarding draft", () => {
   it("keeps progress and drops an empty or broken draft", async () => {
     saveOnboardingDraft({ step: 1, tenant: TENANT, clientId: CLIENT, displayName: "Contoso", account: null })
     await flush()
-    expect(loadOnboardingDraft()).toEqual({ step: 1, tenant: TENANT, clientId: CLIENT, displayName: "Contoso", account: null })
-    saveOnboardingDraft({ step: 0, tenant: "", clientId: "", displayName: "", account: null })
+    expect(loadOnboardingDraft()).toMatchObject({ step: 1, tenant: TENANT, clientId: CLIENT, displayName: "Contoso", account: null })
+    saveOnboardingDraft({ step: -1, tenant: "", clientId: "", displayName: "", account: null })
     await flush()
     expect(state.store.has(DRAFT_KEY)).toBe(false)
     state.store.set(DRAFT_KEY, "{not json")
@@ -453,7 +460,7 @@ describe("in-app tenant setup", () => {
 
   it("explains the setup before it starts", async () => {
     const container = await render(createElement(OnboardingPage))
-    for (const text of ["One Microsoft sign-in.", "It lives in your tenant", "It acts only as you", "No secret to protect", "Backups stay with you", "Microsoft will ask you to approve Microsoft Graph Command Line Tools", "because the setup creates an app registration and grants admin consent", "Your administrator approves once", "Application.ReadWrite.All", "kept in memory only"]) expect(container.textContent).toContain(text)
+    for (const text of ["TenuVault creates its app registration for your chosen services", "It lives in your tenant", "It acts only as you", "No secret to protect", "Backups stay with you", "Microsoft will ask you to approve Microsoft Graph Command Line Tools", "because the setup creates an app registration and grants admin consent", "Your administrator approves once", "Application.ReadWrite.All", "kept in memory only"]) expect(container.textContent).toContain(text)
     // Claims the app cannot stand behind are not made: no time promise, and no "everything stays in your tenant".
     expect(container.textContent).not.toMatch(/about (a|one|two) minutes?|stays in your tenant|no background access/i)
     expect(container.querySelector("#setup-tenant")).not.toBeNull()
@@ -473,7 +480,7 @@ describe("in-app tenant setup", () => {
     expect(container.textContent).toContain("Use the app registration this tenant already has")
     expect(button(container, "Cancel")).toBeDefined()
     await act(async () => { finish(result); await settle() })
-    expect(state.createRegistration).toHaveBeenCalledWith(undefined)
+    expect(state.createRegistration).toHaveBeenCalledWith({ choice: DEFAULT_SETUP_CHOICE })
     expect(state.signIn).toHaveBeenCalledTimes(1)
     expect(state.signIn).toHaveBeenLastCalledWith(TENANT, CLIENT, { loginHint: "admin@contoso.test" })
     expect(container.textContent).toContain("Choose where backups are stored")
@@ -525,7 +532,7 @@ describe("in-app tenant setup", () => {
     const container = await render(createElement(OnboardingPage))
     type(container.querySelector<HTMLInputElement>("#setup-tenant")!, " fabrikam.onmicrosoft.com ")
     await act(async () => { button(container, "Set up with Microsoft sign-in")!.click(); await settle() })
-    expect(state.createRegistration).toHaveBeenCalledWith({ tenant: "fabrikam.onmicrosoft.com" })
+    expect(state.createRegistration).toHaveBeenCalledWith({ tenant: "fabrikam.onmicrosoft.com", choice: DEFAULT_SETUP_CHOICE })
   })
 
   it("keeps the IDs on the Sign in step when the last sign-in fails, and a retry asks for the account again", async () => {
@@ -547,7 +554,6 @@ describe("in-app tenant setup", () => {
     expect(container.textContent).toContain("Choose where backups are stored")
   })
 
-  const MANUAL = "https://docs.tenuvault.com/getting-started/app-registration/#create-the-app-registration-manually"
 
   it("offers the manual route next to an error that needs it, because the setup script is blocked too", async () => {
     state.createRegistration.mockRejectedValueOnce(new Error("This tenant does not let your account sign in to Microsoft Graph Command Line Tools, the Microsoft app that the setup and the setup script sign in through (AADSTS7000112). Ask your Entra administrator to allow it for your account, or create the app registration by hand in the Entra admin center. Nothing was changed."))
@@ -556,7 +562,7 @@ describe("in-app tenant setup", () => {
     const alert = container.querySelector<HTMLElement>('[role="alert"]')!
     expect(alert.textContent).toContain("AADSTS7000112")
     await act(async () => button(alert, "Create it by hand")!.click())
-    expect(state.openExternal).toHaveBeenCalledWith(MANUAL)
+    expect(container.textContent).toContain("Create the app registration manually")
     // Once it exists, the admin goes on from the same place to enter its IDs.
     await act(async () => { button(alert, "I already have an app registration")!.click(); await settle() })
     expect(container.textContent).toContain("Sign in to your tenant")
@@ -595,7 +601,7 @@ describe("in-app tenant setup", () => {
     expect(container.textContent).toContain('If Microsoft says that you need admin approval, this account cannot approve the setup. Select Cancel and use "Someone else is the admin?" below.')
     expect(container.textContent).toContain("the setup script is blocked too")
     await act(async () => button(container, "create the app registration by hand")!.click())
-    expect(state.openExternal).toHaveBeenCalledWith(MANUAL)
+    expect(container.textContent).toContain("Create the app registration manually")
   })
 
   it("does not report a cancelled last sign-in as an error", async () => {
@@ -882,5 +888,68 @@ describe("setup diagnostics hooks", () => {
     expect(order).toEqual(["record", "addTenant"])
     state.record.mockImplementation(async () => undefined)
     state.addTenant.mockImplementation(() => undefined)
+  })
+})
+
+
+describe("onboarding service choices", () => {
+  it("adds exactly one click to the Intune-only quick setup path from Welcome", async () => {
+    // origin/main 8b9f77c8: Welcome > Connect your tenant (1) > Set up with Microsoft sign-in (2), Microsoft opens.
+    // Now: Welcome > Connect your tenant (1) > Continue with Intune (2) > Set up with Microsoft sign-in (3), Microsoft opens.
+    let container = await render(createElement(ActivationScreen, { onSignIn: vi.fn() }), false)
+    await act(async () => button(container, "Connect your tenant")!.click())
+    for (const root of roots.splice(0)) act(() => root.unmount())
+    container = await render(createElement(OnboardingPage), false)
+    expect(container.textContent).toContain("What do you want to back up?")
+    expect(container.querySelector<HTMLInputElement>('[aria-label="Back up Intune"]')!.checked).toBe(true)
+    await act(async () => button(container, "Continue with Intune")!.click())
+    state.createRegistration.mockImplementationOnce(() => new Promise(() => {}))
+    await act(async () => button(container, "Set up with Microsoft sign-in")!.click())
+    expect(state.createRegistration).toHaveBeenCalledWith({ choice: DEFAULT_SETUP_CHOICE })
+  })
+
+  it("keeps an Entra-only choice through restart and follows it in every connect route", async () => {
+    let container = await render(createElement(OnboardingPage), false)
+    await act(async () => container.querySelector<HTMLInputElement>('[aria-label="Back up Intune"]')!.click())
+    await act(async () => container.querySelector<HTMLInputElement>('[aria-label="Back up Entra ID"]')!.click())
+    await act(async () => container.querySelector<HTMLInputElement>('[aria-label="Include Groups"]')!.click())
+    await flush()
+    expect(loadOnboardingDraft()?.services).toEqual({ entra: { access: "backup", areas: ["groups"] } })
+    for (const root of roots.splice(0)) act(() => root.unmount())
+    container = await render(createElement(OnboardingPage), false)
+    await act(async () => button(container, "Continue with Entra ID")!.click())
+    expect(container.textContent).toContain("broader, setup-only access")
+    expect(container.textContent).toContain("A second sign-in follows")
+    await act(async () => button(container, "Use the setup script instead")!.click())
+    expect(container.textContent).toContain("-Services Entra -RestoreAccess None -Areas Groups")
+    const writeText = vi.fn(async (_text: string) => undefined)
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } })
+    await act(async () => button(container, "Someone else is the admin? Copy instructions")!.click())
+    expect(writeText.mock.calls[0]?.[0]).toContain("-Services Entra -RestoreAccess None -Areas Groups")
+    expect(writeText.mock.calls[0]?.[0]).not.toContain("DeviceManagement")
+    await act(async () => button(container, "Create it by hand")!.click())
+    expect(container.textContent).toContain("Create the app registration manually")
+    expect(container.textContent).not.toContain("DeviceManagementApps.ReadWrite.All")
+    state.createRegistration.mockImplementationOnce(() => new Promise(() => {}))
+    await act(async () => button(container, "Set up with Microsoft sign-in")!.click())
+    expect(state.createRegistration).toHaveBeenCalledWith({ choice: { entra: { access: "backup", areas: ["groups"] } } })
+  })
+
+  it("saves an Entra-only choice before adding the tenant and explains missing permissions without blocking", async () => {
+    const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "", account, services: { entra: { access: "backup" } }, signedInAt: Date.now() }))
+    state.accounts.mockResolvedValueOnce([account])
+    state.checkPermissions.mockResolvedValue({ missing: ["Policy.Read.All"] })
+    state.storageChoice = { kind: "local" }
+    const container = await render(createElement(OnboardingPage))
+    expect(container.textContent).toContain("Some chosen permissions are missing")
+    expect(container.textContent).toContain("Azure CLI commands")
+    await act(async () => button(container, "Continue to storage")!.click())
+    await act(async () => button(container, "Continue")!.click())
+    expect(state.saveServices).toHaveBeenCalledWith(TENANT, CLIENT, { entra: { access: "backup" } })
+    expect(state.saveServices.mock.invocationCallOrder[0]).toBeLessThan(state.addTenant.mock.invocationCallOrder[0]!)
+    expect(container.textContent).toContain("backups arrive in a later update")
+    expect(button(container, "Run first backup")).toBeUndefined()
+    expect(container.textContent).not.toContain("It reads your Intune")
   })
 })

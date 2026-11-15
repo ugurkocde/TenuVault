@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest"
 import { provisionRegistration } from "../src/main/auth/registration-provisioning"
 import { CONSENT_ROLES, DESKTOP_APP_PERMISSIONS } from "../src/shared/app-registration"
 import { graphPermissions, knownPermissions, requestedPermissions, type PermissionChoice } from "../src/shared/services/manifest"
+import { onboardingPermissions } from "../src/shared/services/onboarding"
 import type { ModuleId } from "../src/shared/services/modules"
 
 const own = { displayName: "TenuVault Desktop", id: "app", appId: "client", notes: "Used by the TenuVault desktop app", signInAudience: "AzureADMyOrg", publicClient: { redirectUris: ["http://localhost"] }, createdDateTime: "2026-01-01" }
@@ -393,6 +394,8 @@ describe("a choice of services, areas and access levels", () => {
   }
 
   it.each<[string, PermissionChoice]>([
+    ["the onboarding default", onboardingPermissions({ intune: { access: "restore" } })],
+    ["the onboarding choice of Intune and Entra ID with groups", onboardingPermissions({ intune: { access: "restore" }, entra: { access: "backup", areas: ["groups"] } })],
     ["Entra ID to back up", { entra: { access: "backup" } }],
     ["Intune to back up only", { intune: { access: "backup" } }],
     ["Defender to restore and Entra ID with groups and applications to back up", { defender: { access: "restore" }, entra: { access: "backup", areas: ["groups", "applications"] } }],

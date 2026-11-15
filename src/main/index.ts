@@ -1,3 +1,4 @@
+import { checkOnboardingPermissions, saveOnboardingServices } from "./services/onboarding"
 import { requestWindowsContent } from "./app-backup/windows-helper"
 import { requireCaptureEnabled } from "./app-backup/capture-policy"
 import { checkCaptureMetadata } from "./app-backup/capture-preflight"
@@ -1229,6 +1230,19 @@ async function bootstrap(): Promise<void> {
     const result = await registrationSetup.create(options)
     setupSignIn = { tenantId: result.tenantId, clientId: result.clientId, username: result.username }
     return result
+  })
+  const onboardingAccount = (tenantId: unknown, clientId: unknown): { tenantId: string; clientId: string } => {
+    if (typeof tenantId !== "string" || typeof clientId !== "string" || !auth.accounts().some(account => account.tenantId.toLowerCase() === tenantId.toLowerCase() && account.clientId.toLowerCase() === clientId.toLowerCase())) throw new Error("Sign in to this tenant first.")
+    return { tenantId, clientId }
+  }
+  handleTrusted("setup:checkPermissions", (_event, tenantId: unknown, clientId: unknown, choice: unknown) => {
+    const account = onboardingAccount(tenantId, clientId)
+    return checkOnboardingPermissions(choice, () => tokenFor(account.tenantId, account.clientId, RESOURCE_SCOPES.graph, true))
+  })
+  handleTrusted("setup:saveServices", (_event, tenantId: unknown, clientId: unknown, choice: unknown) => {
+    const account = onboardingAccount(tenantId, clientId)
+    if (tenantProfile(account.tenantId)) throw new Error("This tenant is already connected to TenuVault.")
+    saveOnboardingServices(moduleSettings, account.tenantId, choice)
   })
   handleTrusted("setup:cancelCreateRegistration", () => registrationSetup.cancel())
   // Try again on the setup sign-in: stops only a sign-in that still waits for the browser.

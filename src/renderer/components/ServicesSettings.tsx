@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/com
 import { useConfirm } from "~/components/ConfirmDialog"
 import { useTenants } from "~/contexts/TenantContext"
 import type { AreaHealth, ConnectionHealthReport, ServiceHealth, SignInHealth } from "../../shared/connection-health/model"
+import { PERSONAL_DATA } from "../../shared/services/onboarding"
 import { MODULE_BY_ID, entraApiPermissionsUrl } from "../../shared/services/modules"
 import { optionalPermissionStatus, type OptionalPermissionStatus } from "../../shared/services/optional-permissions"
 import { HEALTH_CAUSE_TEXT, READER_HEALTH_TEXT, SIGN_IN_HEALTH_TEXT, STORAGE_HEALTH_TEXT, changeText, healthDate, permissionRemediation, verificationText } from "../lib/connection-health-view"
@@ -34,7 +35,7 @@ function PermissionState({ state }: { state: ServiceHealth["permissions"] }) {
 }
 
 /** These routes change only the exact gaps reported for the selected service or area. */
-function PermissionRoutes({ report, missing }: { report: ConnectionHealthReport; missing: readonly string[] }) {
+export function PermissionRoutes({ report, missing }: { report: Pick<ConnectionHealthReport, "tenantId" | "clientId">; missing: readonly string[] }) {
   const fix = permissionRemediation(report, missing)
   if (!fix.names.length) return null
   return <details data-permission-routes data-no-select className="rounded-xl bg-blue-50 p-3 text-sm text-gray-700">
@@ -68,10 +69,6 @@ function Verification({ value }: { value: AreaHealth["verified"] }) {
   </div>
 }
 
-const PERSONAL_DATA: Record<string, string> = {
-  groups: "Stores group properties and the object IDs of members and owners. These identify people and their group memberships.",
-  usersAndDevices: "Stores user profiles, device properties and organizational contacts. These can include names, email addresses and device identifiers. Passwords and credentials are never stored.",
-}
 
 function Area({ area, service, report, busy, run }: { area: AreaHealth; service: ServiceHealth; report: ConnectionHealthReport; busy: boolean; run: (action: () => Promise<ConnectionHealthReport>) => void }) {
   return <div className="space-y-2 border-t border-border py-3" data-area={area.id}>

@@ -31,7 +31,7 @@ export function offersSignInHandoff(message: string): boolean {
 }
 
 const PURPOSE: Record<string, string> = {
-  "Microsoft Graph": "Reads Intune configuration for backups, and writes it only when you restore or deploy.",
+  "Microsoft Graph": "Reads the chosen services for backups, and writes only when you restore or deploy.",
   "Azure Service Management": "Lists your storage accounts, only if you keep backups in Azure.",
   "Azure Storage": "Reads and writes backup files, only if you keep backups in Azure.",
 }
@@ -66,7 +66,7 @@ export function setupHandoffText(choice: PermissionChoice = DEFAULT_SETUP_CHOICE
   return [
     "Could you create the app registration TenuVault Desktop signs in with? It takes a few minutes.",
     "",
-    "TenuVault Desktop backs up and restores our Intune configuration from an admin's computer. It signs in",
+    "TenuVault Desktop backs up our chosen Microsoft services from an admin's computer. It signs in",
     "as the admin through a public client app registration in our own tenant: no secret, no certificate and",
     "delegated permissions only, so every call is limited by the admin's own roles, MFA and Conditional Access.",
     "",

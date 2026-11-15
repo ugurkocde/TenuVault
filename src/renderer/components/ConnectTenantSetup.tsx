@@ -1,3 +1,4 @@
+import { DEFAULT_SETUP_CHOICE, type PermissionChoice } from "../../shared/services/manifest"
 import { useEffect, useRef, useState } from "react"
 import { AlertCircle, Building2, Check, ChevronDown, Circle, HardDrive, Info, KeyRound, Loader2, Send, ShieldCheck, Sparkles, UserCheck, X } from "lucide-react"
 import { Alert, AlertDescription } from "~/components/ui/alert"
@@ -28,8 +29,9 @@ const PHASES: readonly SetupProgress["phase"][] = ["signingIn", "registration", 
  * through Microsoft Graph, with the reasons beside it and the other routes (another administrator,
  * the setup script, an existing app registration) below.
  */
-export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
+export function ConnectTenantSetup({ trials, onManual, onRegistered, choice = DEFAULT_SETUP_CHOICE }: {
   /** Whether new tenants start with a Pro trial, announced before the setup starts. */
+  choice?: PermissionChoice
   trials: boolean
   /** Continue with IDs the admin already has, on the Sign in step. */
   onManual: () => void
@@ -43,6 +45,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
   const [cancelling, setCancelling] = useState(false)
   const [error, setError] = useState("")
   const [script, setScript] = useState(false)
+  const [manualGuide, setManualGuide] = useState(false)
   const [copied, setCopied] = useState(false)
   const busy = useRef(false)
   // Try again in the recovery panel: the cancelled setup starts once more when it has ended.
@@ -73,7 +76,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
     setCompleting(false)
     let restartNow = false
     try {
-      onRegistered(await bridge.setup.createRegistration(tenant.trim() ? { tenant: tenant.trim() } : undefined))
+      onRegistered(await bridge.setup.createRegistration({ ...(tenant.trim() ? { tenant: tenant.trim() } : {}), choice }))
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : String(caught)
       restartNow = message === CANCELLED && restart.current
@@ -118,7 +121,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
     setError("")
     recordSetup({ name: "setup_route", props: { route: "handoff" } })
     try {
-      await navigator.clipboard.writeText(setupHandoffText())
+      await navigator.clipboard.writeText(setupHandoffText(choice))
       setCopied(true)
     } catch (caught) {
       setError(`Could not copy: ${caught instanceof Error ? caught.message : String(caught)}`)
@@ -134,7 +137,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
   const current = PHASES.indexOf(phase)
   // The setup and the setup script sign in through the same Microsoft app. Where the tenant blocks
   // it, creating the app registration in the Entra admin center is the route that still works.
-  const openManualGuide = () => void bridge.app.openExternal(MANUAL_APP_REGISTRATION_URL)
+  const openManualGuide = () => setManualGuide(true)
   const manual = () => {
     recordSetup({ name: "setup_route", props: { route: "manual" } })
     onManual()
@@ -147,7 +150,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
   return (
     <div data-tenant-connect className="grid items-start gap-5 text-sm text-gray-700 @3xl:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
       <div className="min-w-0 space-y-2">
-        <p className="text-base text-gray-600">One Microsoft sign-in. TenuVault creates its app registration in your tenant and signs you in.</p>
+        <p className="text-base text-gray-600">TenuVault creates its app registration for your chosen services, then signs you in through it.</p>
 
         {error && (
           <Alert variant="destructive" role="alert">
@@ -217,7 +220,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
               <X className="mr-2 h-4 w-4" aria-hidden="true" />
               {cancelling ? "Cancelling..." : "Cancel"}
             </Button>
-            {waitedLong && <SignInRecoveryPanel kind="setup" onTryAgain={() => void tryAgain()} retrying={retrying} />}
+            {waitedLong && <SignInRecoveryPanel choice={choice} kind="setup" onTryAgain={() => void tryAgain()} retrying={retrying} />}
           </div>
         ) : (
           <div className="space-y-3">
@@ -226,8 +229,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
               <Info className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" />
               <span>
                 Microsoft will ask you to approve <span className="font-medium text-gray-900">Microsoft Graph Command Line Tools</span>.
-                That is Microsoft&apos;s own sign-in app. TenuVault uses it once to create the app registration; after that you
-                sign in to TenuVault directly. Leave &quot;Consent on behalf of your organization&quot; unticked; the setup does not need it.
+                This first sign-in uses broader, setup-only access: Application.ReadWrite.All and DelegatedPermissionGrant.ReadWrite.All. It creates the registration and grants consent for your choice. A second sign-in follows through TenuVault, with the chosen permissions. The setup sign-in stays in memory and is dropped when setup ends. Leave &quot;Consent on behalf of your organization&quot; unticked; the setup does not need it.
               </span>
             </p>
             <Button type="button" size="lg" className="w-full bg-blue-600 text-white hover:bg-blue-700 sm:w-auto" onClick={() => void start()}>
@@ -266,7 +268,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
               setup does not need it. To remove it, open Entra admin center &gt; Enterprise applications &gt; Microsoft Graph Command
               Line Tools &gt; Permissions.
             </p>
-            <div className="rounded-2xl bg-gray-50"><PermissionList /></div>
+            <div className="rounded-2xl bg-gray-50"><PermissionList choice={choice} /></div>
             <div className="space-y-1.5">
               <Label htmlFor="setup-tenant">Tenant ID or domain (optional)</Label>
               <Input
@@ -314,6 +316,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
             {copied ? <Check className="mr-2 h-4 w-4" aria-hidden="true" /> : <Send className="mr-2 h-4 w-4" aria-hidden="true" />}
             {copied ? "Copied" : "Someone else is the admin? Copy instructions"}
           </Button>
+          <Button type="button" variant="ghost" size="sm" disabled={running} onClick={openManualGuide}>Create it by hand</Button>
           <Button type="button" variant="ghost" size="sm" disabled={running} onClick={toggleScript} aria-expanded={script}>
             Use the setup script instead
           </Button>
@@ -328,9 +331,11 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
           </p>
         )}
       </div>
+      {manualGuide && <section className="space-y-3 rounded-2xl bg-blue-50 p-4 @3xl:col-span-2"><h3 className="font-medium text-gray-900">Create the app registration manually</h3><p>Create a single-tenant public client with a localhost redirect, no secret and no certificate. Add and consent to the delegated permissions for your choice below, then return with the tenant ID and client ID.</p><PermissionList choice={choice} /><Button variant="outline" onClick={() => void bridge.app.openExternal(MANUAL_APP_REGISTRATION_URL)}>Open the manual guide</Button></section>}
+      {copied && <details className="rounded-2xl bg-blue-50 p-4 @3xl:col-span-2" open><summary className="font-medium">Instructions for your administrator</summary><pre className="mt-3 whitespace-pre-wrap break-words text-xs">{setupHandoffText(choice)}</pre></details>}
       {script && (
         <div className="space-y-4 @3xl:col-span-2">
-          <SetupScriptCard />
+          <SetupScriptCard choice={choice} />
           <div className="flex justify-end">
             <Button type="button" variant="outline" onClick={onManual}>Next: sign in</Button>
           </div>

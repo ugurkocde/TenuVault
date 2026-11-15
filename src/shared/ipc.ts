@@ -494,6 +494,8 @@ export interface TenuVaultBridge {
      * stays in the main process, in memory only. `tenant` is for guest and partner admins.
      */
     /** `choice` names the services, areas and access levels to ask permissions for; without it, what a setup always asked for. */
+    checkPermissions: (tenantId: string, clientId: string, choice: PermissionChoice) => Promise<{ missing: string[]; error?: string }>
+    saveServices: (tenantId: string, clientId: string, choice: PermissionChoice) => Promise<void>
     createRegistration: (options?: { tenant?: string; choice?: PermissionChoice }) => Promise<RegistrationResult>
     /** Stops waiting for the setup sign-in in the browser. */
     cancelCreateRegistration: () => Promise<void>

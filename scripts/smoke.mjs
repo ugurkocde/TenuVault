@@ -338,9 +338,9 @@ await check("hung license checks time out and ignore late responses after retry"
     assert(await evaluate(`window.__licenseTimeout.calls === 4 && ${body}.innerText.includes("Welcome to TenuVault")`), "background check did not keep the loaded status")
     await evaluate(`window.__licenseTimeout.onChanged({ ...window.__licenseTimeout.status, hasKey: true })`)
     // With a key and no tenant the app opens the guided setup, which has the window to itself.
-    assert(await waitForCondition(`${body}.innerText.includes("Set up with Microsoft sign-in")`), "license change was not delivered during the pending check")
+    assert(await waitForCondition(`${body}.innerText.includes("What do you want to back up?")`), "license change was not delivered during the pending check")
     assert(await waitForCondition(`window.__licenseTimeout.expired === 2 && window.__licenseTimeout.timers.size === 0`), "hung background check did not time out")
-    assert(await evaluate(`${body}.innerText.includes("Set up with Microsoft sign-in") && !${body}.querySelector('[role="alert"]')`), "background timeout discarded the loaded status")
+    assert(await evaluate(`${body}.innerText.includes("What do you want to back up?") && !${body}.querySelector('[role="alert"]')`), "background timeout discarded the loaded status")
     await evaluate(`window.__licenseTimeout.refresh()`)
     assert(await waitForCondition(`window.__licenseTimeout.calls === 5 && ${body}.innerText.includes("Welcome to TenuVault")`), "background timeout left the refresh guard locked")
     await evaluate(`window.__licenseTimeout.resolveBackground()`)
@@ -368,6 +368,8 @@ await check("malformed license keys are rejected", async () => {
 await check("Community users can reach the tenant sign-in without a key", async () => {
   await evaluate(`[...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Connect your tenant").click()`)
   assert(await waitForText("Set up TenuVault", 15000), "tenant sign-in did not open")
+  assert(await waitForText("What do you want to back up?"), "service choice missing")
+  await evaluate(`[...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Continue with Intune").click()`)
   assert(await waitForText("Set up with Microsoft sign-in"), "setup checklist missing")
   // Until a tenant is connected the guided setup has the window to itself.
   assert(!(await evaluate(`Boolean(document.querySelector('nav[aria-label="Main navigation"]'))`)), "sidebar shown during the first setup")
@@ -406,8 +408,7 @@ await check("a failed page keeps the sidebar and offers recovery", async () => {
     // React keeps a rejected lazy import. Reload retries the module after the failure is removed.
     await go("#/portal/overview", "This screen could not be loaded")
     await evaluate(`[...document.querySelectorAll('main button')].find(b => b.textContent === 'Reload').click()`)
-    assert(await waitForText("Welcome to TenuVault"), "Reload did not restart the app")
-    await evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent.includes('Connect your tenant')).click()`)
+    assert(await waitForText("All tenants"), "Reload did not restore the page with a saved setup draft")
     await go("#/portal/overview", "All tenants")
     assert(await waitForCondition(`Boolean(document.querySelector('main h1')?.textContent.includes('All tenants'))`), "Reload did not recover the page")
     await go("#/portal/dashboard", "Dashboard")
@@ -581,7 +582,8 @@ await check("tenants page offers delegated sign-in", async () => {
   assert(opened, "Connect tenant button not found")
   // Connect tenant opens the guided setup, the one way to connect a tenant on the desktop.
   assert(await waitForCondition(`location.hash === "#/portal/onboarding"`), "Connect tenant did not open the guided setup")
-  assert(await waitForText("Set up with Microsoft sign-in"), "guided setup did not open")
+  await evaluate(`[...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Continue with Intune")?.click()`)
+  assert(await waitForText("Set up with Microsoft sign-in"), "connect step did not open")
   assert(!(await evaluate(`document.body.innerText.includes("Client Secret")`)), "setup still asks for a client secret")
   await screenshot("03-add-tenant")
 })

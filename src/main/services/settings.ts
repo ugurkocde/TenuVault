@@ -1,3 +1,4 @@
+import type { PermissionChoice } from "../../shared/services/manifest"
 import { MODULES, MODULE_BY_ID, type AccessLevel, type ConnectionId, type ModuleId, type ServiceSelection } from "../../shared/services/modules"
 import type { KeyValueStore } from "../storage/secure-store"
 
@@ -59,6 +60,19 @@ export class ModuleSettings {
       services: on.map((module) => module.id),
       areas: Object.fromEntries(on.map((module) => [module.id, Object.entries(settings[module.id].areas).filter(([, enabled]) => enabled).map(([area]) => area)])),
     }
+  }
+
+  /** A first setup writes the full choice atomically, before any backup can start. */
+  setChoice(tenantId: string, choice: PermissionChoice): void {
+    const all = this.read()
+    const tenant = tenantEntry(all, tenantId)
+    all[tenant.key] = { ...tenant.value, ...Object.fromEntries(MODULES.map(module => [module.id, {
+      ...record(tenant.value[module.id]), connection: "default", enabled: Boolean(choice[module.id]),
+      access: choice[module.id]?.access ?? module.defaultAccess,
+      areas: Object.fromEntries(module.areas.filter(area => area.optIn).map(area => [area.id, choice[module.id]?.areas?.includes(area.id) === true])),
+    }])) }
+    this.store.set(KEY, JSON.stringify(all))
+    this.onChange()
   }
 
   /** Turns a service on or off for the tenant. */

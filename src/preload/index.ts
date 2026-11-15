@@ -61,6 +61,8 @@ const bridge: TenuVaultPreloadBridge = {
     onSavedChanged: (listener) => subscribe<void>("proxy:savedChanged", () => listener()),
   },
   setup: {
+    checkPermissions: (tenantId, clientId, choice) => invoke("setup:checkPermissions", tenantId, clientId, choice),
+    saveServices: (tenantId, clientId, choice) => invoke("setup:saveServices", tenantId, clientId, choice),
     createRegistration: (options) => invoke("setup:createRegistration", options),
     cancelCreateRegistration: () => invoke("setup:cancelCreateRegistration"),
     cancelSignIn: () => invoke("setup:cancelSignIn"),

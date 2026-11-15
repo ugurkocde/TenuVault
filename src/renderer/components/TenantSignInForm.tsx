@@ -1,3 +1,4 @@
+import { DEFAULT_SETUP_CHOICE, requestedPermissions, setupScriptArguments, type PermissionChoice } from "../../shared/services/manifest"
 import { trialKeyRefusalText } from "../../shared/trial-notices"
 import { showCommunityLimitError } from "../lib/plan-dialog"
 import { TrialKeyRefusalActions } from "./TenantTrial"
@@ -12,7 +13,6 @@ import type { SignedInAccount } from "../../shared/ipc"
 import {
   APP_REGISTRATION_GUIDE_URL,
   CONSENT_ROLES_TEXT,
-  DESKTOP_APP_PERMISSIONS,
   MANUAL_APP_REGISTRATION_URL,
   parseSetupOutput,
   SETUP_SCRIPT_FILE_NAME,
@@ -78,7 +78,7 @@ function CommandLine({ command, label, copied, onCopy }: { command: string; labe
 }
 
 /** The permissions the setup script grants, so the admin who consents sees them first. */
-export function PermissionList() {
+export function PermissionList({ choice = DEFAULT_SETUP_CHOICE }: { choice?: PermissionChoice }) {
   return (
     <details className="group rounded-2xl bg-card px-4 py-3">
       <summary className="flex cursor-pointer list-none items-center justify-between gap-2 font-medium text-gray-900">
@@ -88,13 +88,13 @@ export function PermissionList() {
       <div className="mt-3 space-y-3 text-sm text-gray-700">
         <p>
           The setup grants tenant-wide admin consent for these delegated permissions. Every call still runs as the admin
-          who signs in, so it is limited by their own Intune role, MFA and Conditional Access.
+          who signs in, so it is limited by their own roles, MFA and Conditional Access.
         </p>
         <ul className="space-y-2">
-          {DESKTOP_APP_PERMISSIONS.map((entry) => (
+          {requestedPermissions(choice, "delegated").map((entry) => (
             <li key={entry.api}>
               <span className="font-medium text-gray-900">{entry.api}:</span> <span className="font-mono text-xs">{entry.permissions.join(", ")}</span>
-              <span className="block text-xs text-gray-600">{entry.purpose}</span>
+              <span className="block text-xs text-gray-600">{entry.api === "Microsoft Graph" ? "Access for your chosen services, used as the signed-in admin." : "Used only for backups in your Azure storage."}</span>
             </li>
           ))}
         </ul>
@@ -111,7 +111,7 @@ export function PermissionList() {
  * Creating the app registration, step by step: save the script, run it, sign in, bring back the
  * two values it prints. Offers the handoff to another administrator and the manual route.
  */
-export function SetupScriptCard() {
+export function SetupScriptCard({ choice = DEFAULT_SETUP_CHOICE }: { choice?: PermissionChoice }) {
   const [saved, setSaved] = useState<{ folder?: string; fileName?: string } | null>(null)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState("")
@@ -130,7 +130,7 @@ export function SetupScriptCard() {
     }
   }
 
-  const runCommand = setupCommand(saved?.folder, saved?.fileName)
+  const runCommand = setupCommand(saved?.folder, saved?.fileName) + setupScriptArguments(choice)
 
   return (
     <div className="space-y-4 rounded-3xl bg-blue-50/60 p-5 text-sm text-gray-700">
@@ -192,10 +192,10 @@ export function SetupScriptCard() {
         </Step>
       </ol>
 
-      <PermissionList />
+      <PermissionList choice={choice} />
 
       <div className="flex flex-wrap gap-2 border-t border-blue-100 pt-4">
-        <Button type="button" variant="outline" size="sm" onClick={() => void copy("handoff", setupHandoffText())}>
+        <Button type="button" variant="outline" size="sm" onClick={() => void copy("handoff", setupHandoffText(choice))}>
           {copied === "handoff" ? <Check className="mr-2 h-4 w-4" aria-hidden="true" /> : <Send className="mr-2 h-4 w-4" aria-hidden="true" />}
           {copied === "handoff" ? "Copied" : "Someone else is the admin? Copy instructions"}
         </Button>
@@ -226,6 +226,7 @@ export interface SignInFields {
 }
 
 interface TenantSignInFormProps {
+  choice?: PermissionChoice
   onSignedIn: (account: SignedInAccount, displayName: string) => void
   /** Called with every change to the fields, so a caller can keep them. */
   onFieldsChange?: (fields: SignInFields) => void
@@ -241,7 +242,7 @@ interface TenantSignInFormProps {
 }
 
 /** Tenant, client id and optional display name, then interactive Microsoft sign-in. */
-export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Sign in with Microsoft", initial, autoSignIn, hidePaste = false }: TenantSignInFormProps) {
+export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Sign in with Microsoft", initial, autoSignIn, hidePaste = false, choice }: TenantSignInFormProps) {
   const [tenant, setTenant] = useState(initial?.tenant ?? "")
   const [clientId, setClientId] = useState(initial?.clientId ?? "")
   const [displayName, setDisplayName] = useState(initial?.displayName ?? "")
@@ -458,7 +459,7 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
         <X className="mr-2 h-4 w-4" aria-hidden="true" />
         {cancelling ? "Cancelling..." : "Cancel sign-in"}
       </Button>
-      {waitedLong && <SignInRecoveryPanel kind="signin" onTryAgain={() => void tryAgain()} retrying={retrying} />}
+      {waitedLong && <SignInRecoveryPanel choice={choice} kind="signin" onTryAgain={() => void tryAgain()} retrying={retrying} />}
     </div>
   )
 
@@ -494,7 +495,7 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
           <AlertCircle className="h-4 w-4" />
           <AlertDescription>{trialKeyRefusalText(errors.form)}
             <TrialKeyRefusalActions message={errors.form} source="sign-in-trial-key-refused" />
-            <SignInErrorActions message={errors.form} onTryAgain={() => void submit()} />
+            <SignInErrorActions choice={choice} message={errors.form} onTryAgain={() => void submit()} />
           </AlertDescription>
         </Alert>
       )}

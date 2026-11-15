@@ -1,3 +1,7 @@
+import { OnboardingServices } from "../components/OnboardingServices"
+import { PermissionRoutes } from "../components/ServicesSettings"
+import { DEFAULT_ONBOARDING_CHOICE, choiceLabel, hasOnboardingBackups, onboardingPermissions } from "../../shared/services/onboarding"
+import type { PermissionChoice } from "../../shared/services/manifest"
 import { trialKeyRefusalText } from "../../shared/trial-notices"
 import { showCommunityLimitError } from "../lib/plan-dialog"
 import { useEffect, useRef, useState } from "react"
@@ -35,7 +39,7 @@ const STEPS = [
 ]
 
 type JobStatus = BackupJobDisplay
-type Step = 0 | 1 | 2 | 3
+type Step = -1 | 0 | 1 | 2 | 3
 
 /** The first backup's state: running, completed, cancelled by the user (grey) or failed. */
 export function JobStateIcon({ job }: { job: Pick<JobStatus, "isComplete" | "isSuccessful" | "status" | "progressMessage" | "results"> }) {
@@ -61,7 +65,12 @@ export default function OnboardingPage() {
   const { addTenant, updateTenant } = useTenantOperations()
   const { setSelectedTenantId } = useSelectedTenant()
   const [initial] = useState(loadOnboardingDraft)
-  const [step, setStep] = useState<Step>(initial?.step ?? 0)
+  const [step, setStep] = useState<Step>(initial?.step ?? -1)
+  const [services, setServices] = useState<PermissionChoice>(initial?.services ?? DEFAULT_ONBOARDING_CHOICE)
+  const [permissionAccepted, setPermissionAccepted] = useState(false)
+  const [permissionResult, setPermissionResult] = useState<{ missing: string[]; error?: string } | null>(null)
+  const [checkingPermissions, setCheckingPermissions] = useState(false)
+  const permissionGeneration = useRef(0)
   const [fields, setFields] = useState<SignInFields>({ tenant: initial?.tenant ?? "", clientId: initial?.clientId ?? "", displayName: initial?.displayName ?? "" })
   const [account, setAccount] = useState<SignedInAccount | null>(initial?.account ?? null)
   const [resumed, setResumed] = useState(Boolean(initial && (initial.step > 0 || initial.account)))
@@ -128,8 +137,22 @@ export default function OnboardingPage() {
 
   useEffect(() => {
     if (step === 3) clearOnboardingDraft()
-    else saveOnboardingDraft({ step, ...fields, account })
-  }, [step, fields, account])
+    else saveOnboardingDraft({ step, ...fields, account, services })
+  }, [step, fields, account, services])
+
+  useEffect(() => {
+    const sent = ++permissionGeneration.current
+    setPermissionResult(null)
+    setPermissionAccepted(false)
+    if (!account || (step !== 1 && step !== 2)) return
+    setCheckingPermissions(true)
+    void bridge.setup.checkPermissions(account.tenantId, account.clientId, services).then(result => {
+      if (mounted.current && sent === permissionGeneration.current) setPermissionResult(result)
+    }).catch(error => {
+      if (mounted.current && sent === permissionGeneration.current) setPermissionResult({ missing: [], error: error instanceof Error ? error.message : String(error) })
+    }).finally(() => { if (mounted.current && sent === permissionGeneration.current) setCheckingPermissions(false) })
+    return () => { permissionGeneration.current++ }
+  }, [account, services, step])
 
   // Each step starts at its heading, for keyboard and screen reader users too.
   useEffect(() => {
@@ -190,7 +213,7 @@ export default function OnboardingPage() {
     resumeCheck.current = false
     const next = { ...fields, tenant: result.tenantId, clientId: result.clientId }
     setFields(next)
-    saveOnboardingDraft({ step: 1, ...next, account: null })
+    saveOnboardingDraft({ step: 1, ...next, account: null, services })
     setAddError(null)
     if (account) {
       setReleasing(true)
@@ -265,6 +288,7 @@ export default function OnboardingPage() {
       const creds = desktopTenantCredentials(account, fields.displayName, choice)
       const tenant = await buildTenantProfile(creds)
       recordSetup({ name: "storage", props: { kind: choice.kind } })
+      await bridge.setup.saveServices(account.tenantId, account.clientId, services)
       addTenant(tenant)
       setSelectedTenantId(tenant.id)
       setCredentials(creds)
@@ -347,10 +371,11 @@ export default function OnboardingPage() {
   }
 
   const finished = Boolean(displayJob?.isComplete)
+  const hasBackupTypes = hasOnboardingBackups(services)
   const succeeded = Boolean(displayJob?.isComplete && displayJob.isSuccessful)
 
   return (
-    <div className={cn("@container mx-auto space-y-4 p-5 lg:p-6", step === 0 ? "max-w-[96rem]" : "max-w-3xl")}>
+    <div className={cn("@container mx-auto space-y-4 p-5 lg:p-6", step <= 0 ? "max-w-[96rem]" : "max-w-3xl")}>
       {tenants.length > 0 && (
         <Link to="/portal/dashboard" className="group inline-flex items-center gap-3 rounded-full text-sm font-medium text-gray-600 hover:text-gray-900">
           <span className="flex size-10 items-center justify-center rounded-full bg-card transition-colors group-hover:bg-secondary" aria-hidden="true"><ArrowLeft className="h-4 w-4" /></span> Back to dashboard
@@ -369,17 +394,17 @@ export default function OnboardingPage() {
         {STEPS.map((s, i) => (
           <li
             key={s.title}
-            aria-current={i === step ? "step" : undefined}
+            aria-current={i === Math.max(0, step) ? "step" : undefined}
             className={cn(
               "flex items-center gap-2 rounded-full py-1.5 pl-1.5 pr-4 text-sm font-medium",
-              i === step ? "bg-primary text-primary-foreground" : i < step ? "bg-green-50 text-green-700" : "bg-card text-muted-foreground",
+              i === Math.max(0, step) ? "bg-primary text-primary-foreground" : i < Math.max(0, step) ? "bg-green-50 text-green-700" : "bg-card text-muted-foreground",
             )}
           >
-            <span className={cn("flex size-7 flex-shrink-0 items-center justify-center rounded-full", i === step ? "bg-coral-500 text-white" : "bg-secondary")} aria-hidden="true">
-              {i < step ? <CheckCircle2 className="h-4 w-4" /> : <s.icon className="h-4 w-4" />}
+            <span className={cn("flex size-7 flex-shrink-0 items-center justify-center rounded-full", i === Math.max(0, step) ? "bg-coral-500 text-white" : "bg-secondary")} aria-hidden="true">
+              {i < Math.max(0, step) ? <CheckCircle2 className="h-4 w-4" /> : <s.icon className="h-4 w-4" />}
             </span>
             <span className="truncate">{s.title}</span>
-            <span className="sr-only">{i < step ? " (done)" : i === step ? ` (step ${i + 1} of ${STEPS.length})` : ""}</span>
+            <span className="sr-only">{i < Math.max(0, step) ? " (done)" : i === Math.max(0, step) ? ` (step ${i + 1} of ${STEPS.length})` : ""}</span>
           </li>
         ))}
       </ol>
@@ -392,10 +417,12 @@ export default function OnboardingPage() {
       )}
 
       <div className="@container rounded-3xl bg-card p-5 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
+        {step === -1 && <OnboardingServices choice={services} onChange={setServices} onContinue={() => setStep(0)} />}
         {step === 0 && (
           <div className="space-y-4">
             <StepHeading id="setup-step-0">Connect your tenant</StepHeading>
             <ConnectTenantSetup
+              choice={onboardingPermissions(services)}
               trials={Boolean(status?.tenantTrialsEnabled)}
               onManual={() => { setSetupNotice(""); setAutoSignIn(null); setStep(1) }}
               onRegistered={(result) => void registered(result)}
@@ -441,6 +468,7 @@ export default function OnboardingPage() {
               </div>
             ) : (
               <TenantSignInForm
+                choice={onboardingPermissions(services)}
                 initial={fields}
                 autoSignIn={autoSignIn}
                 hidePaste={Boolean(setupNotice)}
@@ -467,10 +495,19 @@ export default function OnboardingPage() {
 
         {step === 2 && account && (
           <div className="space-y-5">
-            <StepHeading id="setup-step-2">Choose where backups are stored</StepHeading>
+            <StepHeading id="setup-step-2">{permissionResult?.missing.length && !permissionAccepted ? "Review your chosen permissions" : "Choose where backups are stored"}</StepHeading>
             <p className="flex items-center gap-2 text-sm text-gray-600">
               <CheckCircle2 className="h-4 w-4 text-green-700" aria-hidden="true" /> Signed in as {account.username}
             </p>
+            {checkingPermissions && <p role="status" className="text-sm text-gray-600">Checking the chosen permissions...</p>}
+            {permissionResult && (permissionResult.missing.length > 0 || permissionResult.error) && <section aria-label="Permission result" className="space-y-3 rounded-2xl bg-blue-50 p-4 text-sm text-gray-700">
+              <h3 className="font-medium text-gray-900">{permissionResult.missing.length ? "Some chosen permissions are missing" : "Permissions could not be checked"}</h3>
+              <p>{permissionResult.error ?? "Your sign-in works. The registration does not allow everything you chose yet. You can fix it now or continue and add permissions later in Settings > Services and permissions."}</p>
+              <PermissionRoutes report={account} missing={permissionResult.missing} />
+              <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => { setAccount({ ...account }) }}>Check again</Button>
+              {permissionResult.missing.length > 0 && !permissionAccepted && <Button onClick={() => setPermissionAccepted(true)}>Continue to storage</Button>}</div>
+            </section>}
+            {(!permissionResult?.missing.length || permissionAccepted) && <>
             <PlanContext tenantId={account.tenantId} username={account.username} />
             {addError && <p role="alert" className="text-sm text-red-700">{addError.message}</p>}
             <StorageChooser tenantId={account.tenantId} clientId={account.clientId} onChange={setChoice} onBlockerChange={setStorageBlocker} />
@@ -481,18 +518,21 @@ export default function OnboardingPage() {
                 {creating ? "Checking the license..." : "Continue"}
               </Button>
             </div>
+            </>}
           </div>
         )}
 
         {step === 3 && (
           <div className="space-y-5">
-            <StepHeading id="setup-step-3">{succeeded ? "Your first backup is done" : "Take a first backup"}</StepHeading>
-            {!succeeded && (
+            <StepHeading id="setup-step-3">{succeeded ? "Your first backup is done" : hasBackupTypes ? "Take a first backup" : "Your tenant is connected"}</StepHeading>
+            {!hasBackupTypes && <p className="text-sm text-gray-700">Your choice of {choiceLabel(services)} is saved. This version sets up its permissions; backups arrive in a later update. There are no backup types to run for this choice yet. Continue to the dashboard, or turn on Intune or Conditional Access in Services and permissions.</p>}
+            {!succeeded && hasBackupTypes && (
               <div className="space-y-2 text-sm text-gray-700">
                 <p>{tenantName ? `${tenantName} is connected.` : "Your tenant is connected."} Take a first backup to check that everything works.</p>
                 <ul className="list-disc space-y-1 pl-5 text-gray-600">
-                  <li>It reads your Intune policies, scripts and settings, and changes nothing in your tenant.</li>
-                  <li>Apps are left out by default to keep it quick. You can change what is backed up later in the backup scope.</li>
+                  <li>It reads the available policies and settings for {choiceLabel(services)}, and changes nothing in your tenant.</li>
+                  {services.intune && <li>Apps are left out by default to keep it quick. You can change what is backed up later in the backup scope.</li>}
+                  {(services.entra || services.defender) && <li>This version sets up permissions for Entra ID and Defender. Their backups arrive in a later update. Conditional Access backups are available if selected.</li>}
                   <li>It usually takes a few minutes, longer for large tenants.</li>
                   <li>A restore needs a backup from before the change, so this first backup cannot bring back a policy already lost. It protects what you back up from now on.</li>
                 </ul>
@@ -545,16 +585,16 @@ export default function OnboardingPage() {
                   <Button variant="outline" onClick={() => void navigate("/portal/dashboard")} disabled={Boolean(displayJob)}>
                     Skip for now
                   </Button>
-                  <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => void runBackup()} disabled={Boolean(displayJob)}>
+                  {hasBackupTypes && <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => void runBackup()} disabled={Boolean(displayJob)}>
                     <Play className="mr-2 h-4 w-4" /> Run first backup
-                  </Button>
+                  </Button>}
                 </>
               )}
             </div>
           </div>
         )}
 
-        {step > 0 && step < 3 && (
+        {step >= 0 && step < 3 && (
           <div className="mt-6 border-t border-gray-100 pt-4">
             <Button variant="ghost" onClick={() => setStep((step - 1) as Step)} disabled={creating || releasing}>
               <ArrowLeft className="mr-2 h-4 w-4" aria-hidden="true" />Previous
