@@ -60,7 +60,7 @@ TenuVault connects to the global Microsoft cloud endpoints below over HTTPS (TCP
 | `www.tenuvault.com` | License checks, and the capture check before an [App Backup](/apps/app-backup/) installer capture | Yes |
 | `management.azure.com` | Listing your subscriptions and storage accounts in the storage picker | Only for Azure storage |
 | `<account>.blob.core.windows.net` | Reading and writing backups in your storage account | Only for Azure storage |
-| `*.manage.microsoft.com` | [App Backup](/apps/app-backup/): Intune's device content service and the installer download, at addresses the Intune agent on the PC and Intune supply | Only to capture an installer, on the enrolled Windows PC |
+| `manage.microsoft.com`, `*.manage.microsoft.com` | [App Backup](/apps/app-backup/): Intune's device content service and the installer download, at addresses the Intune agent on the PC and Intune supply | Only to capture an installer, on the enrolled Windows PC |
 | `*.blob.core.windows.net` | [App Backup](/apps/app-backup/): upload of the installer to the storage address Intune returns. This is not your own storage account | Only for **Restore to tenant** |
 | `github.com`, `release-assets.githubusercontent.com`, `objects.githubusercontent.com` | Automatic updates | For updates |
 | `api.github.com`, `raw.githubusercontent.com` | OpenIntuneBaseline content for the OpenIntuneBaseline section and My baselines | For OpenIntuneBaseline |
@@ -72,6 +72,8 @@ TenuVault uses the device's proxy settings, including a proxy auto-config (PAC) 
 When the proxy asks for a sign-in (HTTP 407), TenuVault asks once per proxy for a user name and password, then uses them for sign-in, license checks, backups and updates. Requests that meet the proxy while the dialog is open wait for that one answer. **Remember on this computer** is on by default and saves the credentials encrypted for your Windows or macOS account, so they survive a restart; without operating system encryption they are kept only until TenuVault quits. If the proxy refuses them, TenuVault forgets them and asks again, at most three times in a row. To remove them, open **Settings** > **Sign-in** and select **Forget proxy sign-in**.
 
 A proxy that signs in with your Windows account (NTLM or Kerberos) usually needs no prompt. If the sign-in is cancelled or refused, errors name proxy authentication, for example `HTTP 407` or `ERR_PROXY_AUTH_REQUESTED`. Allowing the destinations above without proxy authentication avoids the prompt, which also keeps scheduled backups from waiting for an answer while nobody is at the computer.
+
+Installer capture in App Backup is the exception to both paragraphs above. Its capture helper does not receive a proxy sign-in saved in TenuVault and does not sign in to a proxy by itself, and its request to Intune presents the PC's enrollment certificate. On the PC that captures, allow `graph.microsoft.com`, `manage.microsoft.com` and `*.manage.microsoft.com` without proxy authentication, and exclude `manage.microsoft.com` and `*.manage.microsoft.com` from HTTPS inspection. See [Installer capture](/security/data-flows/#installer-capture).
 
 If GitHub is blocked, updates and baseline packs fail, but backup and restore keep working. For what is sent to each destination, see [Network connections and data flows](/security/data-flows/). The App Backup connections are described under [App Backup](/security/data-flows/#app-backup).
 
