@@ -154,6 +154,15 @@ describe("nightly verification gate", () => {
   })
 })
 
+describe("first stable promotion", () => {
+  it("tells how to verify the nightly being promoted once the gate lands", () => {
+    const releasing = readFileSync(resolve(import.meta.dirname, "../RELEASING.md"), "utf8")
+    expect(releasing).toContain("For the first stable\npromotion after it lands, run the verification for the nightly being promoted from `main`")
+    expect(releasing).toContain("(`gh workflow run nightly-verification.yml -f tag=<nightly tag>`) and wait for it to succeed")
+    expect(releasing).toContain("in an emergency promote with `allow_unverified_nightly`.")
+  })
+})
+
 describe("release workflow", () => {
   const release = readFileSync(resolve(import.meta.dirname, "../.github/workflows/release.yml"), "utf8")
   const meta = release.slice(release.indexOf("\n  meta:\n"), release.indexOf("\n  checks:\n"))

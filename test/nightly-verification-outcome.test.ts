@@ -8,11 +8,17 @@ type Outcome = { state: string | null; description: string; record: boolean; ale
 const load = async () => (await import("../.github/scripts/nightly-verification-outcome.mjs" as string)) as {
   CHECKS: string[]
   verificationOutcome: (run: { event: string; ref: string; alertRequested: boolean; resolve: string; tag: string; jobs: Job[] }) => Outcome
-  supersededBy: (statuses: { context: string; target_url?: string; creator?: { login: string } }[], ownRunId: number, repository: string) => number | null
+  supersededBy: (
+    statuses: { context: string; target_url?: string; creator?: { login: string } }[],
+    ownRunId: number,
+    repository: string,
+    getRun: (id: number) => Promise<Record<string, unknown>>,
+  ) => Promise<number | null>
 }
 const loadSecrets = async () => (await import("../scripts/nightly-verification/secrets.mjs" as string)) as {
   hide: (text: string, secrets: Record<string, string>) => string
   matchesTestAccount: (account: { tenantId?: string; username?: string; clientId?: string }, secrets: Record<string, string>) => boolean
+  maskedCapture: (mask: () => unknown, capture: () => unknown) => Promise<boolean>
 }
 const workflowText = () => readFileSync(resolve(import.meta.dirname, "../.github/workflows/nightly-verification.yml"), "utf8")
 const loadAlert = async () => (await import("../scripts/nightly-verification/alert.mjs" as string)) as {
@@ -110,26 +116,64 @@ describe("nightly verification ordering", () => {
     context: "Nightly verification", target_url: `https://github.com/${REPO}/actions/runs/${id}`, creator: { login: "github-actions[bot]" }, ...overrides,
   })
 
+  const run = (id: number, overrides: Record<string, unknown> = {}) => ({
+    id, path: ".github/workflows/nightly-verification.yml", head_branch: "main", event: "workflow_run", repository: { full_name: REPO }, ...overrides,
+  })
+  const runs = (list: Record<string, unknown>[]) => async (id: number) => {
+    const found = list.find((entry) => entry.id === id)
+    if (!found) throw new Error(`GitHub answered 404 for run ${id}.`)
+    return found
+  }
+
   it("never lets an older run write over a newer run's result", async () => {
     const { supersededBy } = await load()
-    expect(supersededBy([], 10, REPO)).toBeNull()
-    // Its own pending status and older runs do not stop a run.
-    expect(supersededBy([at(10), at(9), at(3)], 10, REPO)).toBeNull()
-    // A run started later (a higher id) owns the result, pending or finished.
-    expect(supersededBy([at(10), at(12), at(11)], 10, REPO)).toBe(12)
+    expect(await supersededBy([], 10, REPO, runs([]))).toBeNull()
+    // Its own pending status and older runs do not stop a run, and are not even fetched.
+    expect(await supersededBy([at(10), at(9), at(3)], 10, REPO, runs([]))).toBeNull()
+    // A verification run from main started later (a higher id) owns the result, pending or finished.
+    expect(await supersededBy([at(10), at(12), at(11)], 10, REPO, runs([run(11), run(12)]))).toBe(12)
+    expect(await supersededBy([at(11)], 10, REPO, runs([run(11, { event: "workflow_dispatch" })]))).toBe(11)
     // Statuses of other contexts, accounts or repositories do not count.
-    expect(supersededBy([at(12, { context: "ci" }), at(13, { creator: { login: "someone" } }), at(14, { target_url: "https://github.com/someone/TenuVault/actions/runs/14" })], 10, REPO)).toBeNull()
+    expect(await supersededBy([at(12, { context: "ci" }), at(13, { creator: { login: "someone" } }), at(14, { target_url: "https://github.com/someone/TenuVault/actions/runs/14" })], 10, REPO, runs([]))).toBeNull()
   })
 
-  it("serializes every run and writes the result only when not superseded", () => {
+  it("only counts newer runs from main of this workflow, as the stable gate does", async () => {
+    const { supersededBy } = await load()
+    const others = [
+      run(11, { head_branch: "ci/nightly-verification", event: "push" }),
+      run(12, { path: ".github/workflows/ci.yml" }),
+      run(13, { event: "pull_request" }),
+      run(14, { repository: { full_name: "someone/TenuVault" } }),
+    ]
+    expect(await supersededBy([at(11), at(12), at(13), at(14)], 10, REPO, runs(others))).toBeNull()
+    // A newer main run behind a newer branch run still counts.
+    expect(await supersededBy([at(15), at(11)], 10, REPO, runs([...others, run(15)]))).toBe(15)
+    // A newer run that cannot be fetched stops the write instead of being ignored.
+    await expect(supersededBy([at(16)], 10, REPO, runs([]))).rejects.toThrow("GitHub answered 404 for run 16.")
+  })
+
+  it("writes the result only when not superseded, the result before the status", () => {
     const workflow = workflowText()
-    expect(workflow).toMatch(/\nconcurrency:\n {2}group: nightly-verification\n {2}cancel-in-progress: false\n/)
     for (const step of ["Write the result", "Upload the result", "Set the commit status"]) {
       expect(workflow).toMatch(new RegExp(`- name: ${step}\\n {8}if: steps\\.outcome\\.outputs\\.record == 'true' && steps\\.outcome\\.outputs\\.state != '' && steps\\.outcome\\.outputs\\.superseded == ''\\n`))
     }
     expect(workflow).toMatch(/- name: Email the failure\n {8}if: steps\.outcome\.outputs\.alert == 'true' && steps\.outcome\.outputs\.superseded == ''\n/)
-    // The result is written before the status the gate starts from.
     expect(workflow.indexOf("- name: Upload the result")).toBeLessThan(workflow.indexOf("- name: Set the commit status"))
+    // Every status of the commit is read, page by page, as the gate reads them.
+    expect(workflow.match(/gh api --paginate "repos\/\$GITHUB_REPOSITORY\/commits\/\$(sha|SHA)\/statuses\?per_page=100" --jq '\.\[\]' \| jq -s \./g)).toHaveLength(2)
+  })
+
+  it("queues every run with a published nightly and lets a run with nothing to verify end outside the queues", () => {
+    const workflow = workflowText()
+    const job = (name: string) => workflow.slice(workflow.indexOf(`\n  ${name}:\n`) + 1).split(/\n {2}[a-z-]+:\n/)[0]
+    // No concurrency for the whole run, and none for the job that finds the nightly.
+    expect(workflow).not.toMatch(/^concurrency:/m)
+    expect(job("resolve")).not.toContain("concurrency:")
+    expect(job("sign-in")).not.toContain("concurrency:")
+    // Only jobs that run with a published nightly enter a queue, and the queues keep every waiting run.
+    expect(job("license")).toMatch(/\n {4}if: needs\.resolve\.outputs\.tag != ''\n[\s\S]*?\n {4}concurrency:\n {6}group: nightly-verification-paid-key\n {6}queue: max\n/)
+    expect(job("record")).toMatch(/\n {4}if: always\(\) && needs\.resolve\.result != 'skipped' && \(needs\.resolve\.result != 'success' \|\| needs\.resolve\.outputs\.tag != ''\)\n {4}#.*\n {4}concurrency:\n {6}group: nightly-verification-result\n {6}queue: max\n/)
+    expect(workflow).not.toContain("cancel-in-progress")
   })
 })
 
@@ -171,6 +215,28 @@ describe("nightly verification exposure", () => {
   })
 })
 
+describe("nightly verification screenshots", () => {
+  it("captures nothing when masking fails", async () => {
+    const { maskedCapture } = await loadSecrets()
+    const captured: string[] = []
+    const capture = () => { captured.push("shot") }
+    expect(await maskedCapture(() => Promise.reject(new Error("page closed")), capture)).toBe(false)
+    expect(await maskedCapture(() => { throw new Error("no document") }, capture)).toBe(false)
+    expect(captured).toEqual([])
+    expect(await maskedCapture(async () => undefined, capture)).toBe(true)
+    expect(captured).toEqual(["shot"])
+  })
+
+  it("routes every screenshot through the masked capture", () => {
+    const signIn = readFileSync(resolve(import.meta.dirname, "../scripts/nightly-verification/sign-in.mjs"), "utf8")
+    const app = readFileSync(resolve(import.meta.dirname, "../scripts/nightly-verification/app.mjs"), "utf8")
+    expect(signIn.match(/page\.screenshot\(/g)).toHaveLength(1)
+    expect(signIn).toMatch(/maskedCapture\(\n\s*\(\) => page\.evaluate\(maskPage, hidden\(secrets\)\),\n\s*\(\) => page\.screenshot\(/)
+    expect(app.match(/Page\.captureScreenshot/g)).toHaveLength(1)
+    expect(app).toMatch(/return maskedCapture\(mask, async \(\) => \{\n\s*const \{ result \} = await send\("Page\.captureScreenshot"/)
+  })
+})
+
 describe("nightly verification identity", () => {
   it("requires TenuVault's Apple team, named once and as in RELEASING.md", () => {
     const script = readFileSync(resolve(import.meta.dirname, "../scripts/nightly-verification/install-macos.sh"), "utf8")
@@ -181,10 +247,24 @@ describe("nightly verification identity", () => {
     expect(readFileSync(resolve(import.meta.dirname, "../RELEASING.md"), "utf8")).toContain("Team ID `D259ULY2B4`")
   })
 
+  it("fails when the release lacks an installer, in the paid key job that checks them all", () => {
+    const workflow = workflowText()
+    const license = workflow.slice(workflow.indexOf("\n  license:\n"), workflow.indexOf("\n  sign-in:\n"))
+    const signIn = workflow.slice(workflow.indexOf("\n  sign-in:\n"), workflow.indexOf("\n  record:\n"))
+    expect(license).toContain("-ExpectedPublisher $env:EXPECTED_PUBLISHER -RequireAll")
+    expect(license).toContain('install-macos.sh "$RUNNER_TEMP/installers" /Applications --require-all')
+    expect(signIn).not.toContain("RequireAll")
+    expect(signIn).not.toContain("--require-all")
+    const windows = readFileSync(resolve(import.meta.dirname, "../scripts/nightly-verification/install-windows.ps1"), "utf8")
+    expect(windows).toContain("if ($RequireAll -and $found.Count -ne 1) { throw")
+    const mac = readFileSync(resolve(import.meta.dirname, "../scripts/nightly-verification/install-macos.sh"), "utf8")
+    expect(mac.indexOf('if [ "$require_all" = --require-all ]; then')).toBeLessThan(mac.indexOf('mount "$dmg"'))
+  })
+
   it("checks the publisher of every Windows installer before running one", () => {
     const script = readFileSync(resolve(import.meta.dirname, "../scripts/nightly-verification/install-windows.ps1"), "utf8")
     expect(script.indexOf("Assert-Publisher $msi[0].FullName")).toBeLessThan(script.indexOf("Start-Process msiexec.exe"))
-    expect(script).toContain("$_.Name -like '*-win-arm64.exe' -or $_.Name -like '*-win.exe'")
+    expect(script).toContain("foreach ($pattern in @('*-win-arm64.exe', '*-win.exe')) {")
   })
 })
 

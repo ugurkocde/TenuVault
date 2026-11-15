@@ -6,6 +6,7 @@
 import { spawn, spawnSync } from "node:child_process"
 import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
+import { maskedCapture } from "./secrets.mjs"
 
 export const sleep = (ms) => new Promise((resolveSleep) => setTimeout(resolveSleep, ms))
 
@@ -118,21 +119,27 @@ export async function launch(appPath, profile, shotsDir, { checkVersion = true }
   const waitForText = (text, timeout) => waitFor(`document.body?.innerText.includes(${JSON.stringify(text)})`, timeout)
   /**
    * Saves a screenshot. Every text and field value that contains one of `secrets`, or its last
-   * four characters (as a masked key shows them), is replaced before the capture.
+   * four characters (as a masked key shows them), is replaced before the capture; when that
+   * fails, nothing is captured.
    */
   const screenshot = async (name, secrets = []) => {
     const fragments = [...new Set(secrets.filter(Boolean).flatMap((secret) => [secret, secret.slice(-4)]))].filter((part) => part.length >= 4)
-    if (fragments.length > 0) {
-      await evaluate(`(() => {
+    const mask = async () => {
+      if (fragments.length === 0) return
+      const masked = await evaluate(`(() => {
         const parts = ${JSON.stringify(fragments.map((part) => part.toLowerCase()))}
         const hit = (text) => parts.some((part) => String(text).toLowerCase().includes(part))
         const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT)
         for (let node = walker.nextNode(); node; node = walker.nextNode()) if (hit(node.nodeValue)) node.nodeValue = "[hidden]"
         for (const field of document.querySelectorAll("input, textarea")) if (hit(field.value)) field.value = "[hidden]"
+        return true
       })()`)
+      if (masked !== true) throw new Error("The page was not masked.")
     }
-    const { result } = await send("Page.captureScreenshot", { format: "png" })
-    if (result?.data) writeFileSync(join(shotsDir, `${name}.png`), Buffer.from(result.data, "base64"))
+    return maskedCapture(mask, async () => {
+      const { result } = await send("Page.captureScreenshot", { format: "png" })
+      if (result?.data) writeFileSync(join(shotsDir, `${name}.png`), Buffer.from(result.data, "base64"))
+    })
   }
   /** Clicks the first button whose text is exactly `label`. */
   const click = async (label) => {

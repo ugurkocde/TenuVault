@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Installs a published macOS nightly as users get it and verifies its signature and notarization.
 #
-#   install-macos.sh <folder with the release's dmg and zip files> [install folder, default /Applications]
+#   install-macos.sh <folder with the release's dmg and zip files> [install folder, default /Applications] [--require-all]
 #
 # For this Mac's architecture: the disk image is mounted (its license agreement accepted), the app
 # is copied to the install folder as a user drags it, and the app is checked before anything runs
 # it: the code signature, a Developer ID Application authority of TenuVault's team
 # (EXPECTED_TEAM_ID), the stapled notarization ticket and Gatekeeper's assessment. The update zip
 # gets the same checks. The other architecture's disk image and zip, when they are in the folder,
-# get the same checks without being installed. The installed executable is written to
-# GITHUB_OUTPUT as `app` (or printed without GitHub Actions).
+# get the same checks without being installed; with --require-all a missing one fails. The
+# installed executable is written to GITHUB_OUTPUT as `app` (or printed without GitHub Actions).
 set -euo pipefail
 
 # The Apple Developer Team of TenuVault's Developer ID Application certificate (RELEASING.md,
@@ -18,6 +18,7 @@ EXPECTED_TEAM_ID=D259ULY2B4
 
 downloads="$1"
 target="${2:-/Applications}"
+require_all="${3:-}"
 case "$(uname -m)" in
   arm64) arch=arm64; other=x64 ;;
   x86_64) arch=x64; other=arm64 ;;
@@ -63,6 +64,14 @@ verify_zip() {
   echo "Verified $(basename "$1")"
 }
 
+# Every published file must be there before anything is checked or installed.
+if [ "$require_all" = --require-all ]; then
+  for kind in dmg zip; do
+    if ! ls "$downloads"/*-mac-"$other"."$kind" > /dev/null 2>&1; then
+      echo "::error::The release has no $other $kind, which every release publishes."; exit 1
+    fi
+  done
+fi
 dmg=$(ls "$downloads"/*-mac-"$arch".dmg)
 zip=$(ls "$downloads"/*-mac-"$arch".zip)
 

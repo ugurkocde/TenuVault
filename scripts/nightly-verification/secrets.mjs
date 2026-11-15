@@ -29,3 +29,18 @@ export function matchesTestAccount(account, secrets) {
     same(account?.username, secrets.TENUVAULT_E2E_USERNAME) &&
     same(account?.clientId, secrets.TENUVAULT_E2E_CLIENT_ID)
 }
+
+/**
+ * Captures only once masking succeeded: when `mask` throws or rejects, nothing is captured and
+ * false is returned, so a screenshot never shows what masking was meant to hide.
+ */
+export async function maskedCapture(mask, capture) {
+  try {
+    await mask()
+  } catch {
+    console.log("The screenshot was skipped: the page could not be masked.")
+    return false
+  }
+  await capture()
+  return true
+}

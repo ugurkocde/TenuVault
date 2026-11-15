@@ -22,6 +22,7 @@
  * - A run never overwrites the result of a newer run of the same commit (supersededBy).
  */
 import { appendFileSync, readFileSync } from "node:fs"
+import { runIdOf, runProblem, STATUS_CONTEXT, STATUS_CREATOR } from "./nightly-verified.mjs"
 
 /** The jobs of one run that must all succeed, one per check and platform. */
 export const CHECKS = ["Paid key (Windows)", "Paid key (macOS)", "Microsoft sign-in (Windows)", "Microsoft sign-in (macOS)"]
@@ -83,17 +84,21 @@ export function verificationOutcome({ event, ref, alertRequested, resolve, tag, 
 }
 
 /**
- * The id of a newer run of this workflow that already recorded a status for the commit, or
- * null. statuses: the commit's statuses; ownRunId: this run. A run started after this one
- * (a higher id) owns the result, so this run must not write over it.
+ * The id of a newer verification run from main that already recorded a status for the commit,
+ * or null. statuses: the commit's statuses; ownRunId: this run; getRun(id) fetches a run and
+ * throws on errors. A run started after this one (a higher id) owns the result, so this run must
+ * not write over it. As in the stable gate, only runs of this workflow on main started by a
+ * Release run or by hand count; a branch run's statuses never hold back a run from main.
  */
-export function supersededBy(statuses, ownRunId, repository) {
-  const prefix = `https://github.com/${repository}/actions/runs/`
-  const newer = statuses
-    .filter((status) => status.context === "Nightly verification" && status.creator?.login === "github-actions[bot]" && String(status.target_url ?? "").startsWith(prefix))
-    .map((status) => Number(/^(\d+)/.exec(status.target_url.slice(prefix.length))?.[1]))
-    .filter((id) => Number.isFinite(id) && id > ownRunId)
-  return newer.length > 0 ? Math.max(...newer) : null
+export async function supersededBy(statuses, ownRunId, repository, getRun) {
+  const ids = [...new Set(statuses
+    .filter((status) => status.context === STATUS_CONTEXT && status.creator?.login === STATUS_CREATOR)
+    .map((status) => runIdOf(status, repository))
+    .filter((id) => id !== null && id > ownRunId))].sort((x, y) => y - x)
+  for (const id of ids) {
+    if (!runProblem(await getRun(id), repository)) return id
+  }
+  return null
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
@@ -105,7 +110,16 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   }
   if (process.argv[2] === "superseded") {
     // node nightly-verification-outcome.mjs superseded <statuses.json>
-    write({ superseded: supersededBy(JSON.parse(readFileSync(process.argv[3], "utf8")), Number(GITHUB_RUN_ID), GITHUB_REPOSITORY) })
+    const getRun = async (id) => {
+      const response = await fetch(`https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runs/${id}`, {
+        headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${process.env.GH_TOKEN}`, "X-GitHub-Api-Version": "2022-11-28" },
+        signal: AbortSignal.timeout(30_000),
+      })
+      if (!response.ok) throw new Error(`GitHub answered ${response.status} for run ${id}.`)
+      return response.json()
+    }
+    // An error fails the step, so nothing is written over a result this run could not check.
+    write({ superseded: await supersededBy(JSON.parse(readFileSync(process.argv[3], "utf8")), Number(GITHUB_RUN_ID), GITHUB_REPOSITORY, getRun) })
   } else {
     // node nightly-verification-outcome.mjs <jobs.json>
     const jobs = JSON.parse(readFileSync(process.argv[2], "utf8"))

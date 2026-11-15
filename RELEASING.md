@@ -114,8 +114,10 @@ The paid key check uses the canary's key but its own tenant
 tenant allows five installations, and each verification is a new installation (the app picks a
 random installation ID per profile and keeps it in its encrypted store).
 
-- Runs never overlap: the whole workflow is one concurrency group, and the two platforms' paid
-  key jobs run one after the other.
+- Paid key checks never overlap: every run's paid key jobs wait in one queue
+  (`nightly-verification-paid-key`, `queue: max`, up to 100 waiting in arrival order), and the
+  two platforms run one after the other. A run with nothing to verify ends before any queue, so
+  it never takes the place of a waiting nightly.
 - An activation is released by the check itself; if that step fails, times out or is
   cancelled, by the step "Release a leftover activation", which runs regardless and starts the
   app again with the kept profile (the app also releases the never connected tenant by itself
@@ -141,7 +143,9 @@ run, and the run's `nightly-verification-result` artifact (`{ sha, tag, state, r
 - A cancelled, skipped or missing check records `error` (or `failure` when another check
   failed): the nightly counts as unverified, the stable gate refuses it, and a run with a
   cancelled check never emails.
-- A run never writes over the result of a newer run of the same commit (one started later).
+- A run never writes over the result of a newer verification run from `main` of the same commit
+  (one started later). Results are written one at a time (`nightly-verification-result`,
+  `queue: max`).
 
 The email goes to `https://www.tenuvault.com/api/desktop-license/nightly-verification-alert`
 (TenuVault-Website), authorized with `LICENSING_CANARY_ALERT_SECRET`, with the body
@@ -182,6 +186,11 @@ artifact must name exactly this commit with `success`. Anything else, including 
 reading GitHub, refuses the release. Rerun the verification for the commit's nightly, or in an
 emergency run the stable promotion by hand with `allow_unverified_nightly`; a pushed tag has no
 override.
+
+Nightlies published before this gate existed have no recorded verification. For the first stable
+promotion after it lands, run the verification for the nightly being promoted from `main`
+(`gh workflow run nightly-verification.yml -f tag=<nightly tag>`) and wait for it to succeed, or
+in an emergency promote with `allow_unverified_nightly`.
 
 ## Plan boundary changes
 

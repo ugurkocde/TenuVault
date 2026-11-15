@@ -20,7 +20,7 @@ import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { assert, checker, launch, sleep } from "./app.mjs"
-import { hidden, hide, maskPage, matchesTestAccount } from "./secrets.mjs"
+import { hidden, hide, maskedCapture, maskPage, matchesTestAccount } from "./secrets.mjs"
 
 const SECRETS = ["TENUVAULT_E2E_TENANT_ID", "TENUVAULT_E2E_CLIENT_ID", "TENUVAULT_E2E_USERNAME", "TENUVAULT_E2E_PASSWORD"]
 const BROWSERS = ["chromium", "firefox", "webkit", "msedge"]
@@ -109,8 +109,10 @@ async function signInWith(browserName, playwright, secrets) {
       await completeLogin(page, secrets.TENUVAULT_E2E_USERNAME, secrets.TENUVAULT_E2E_PASSWORD)
     } catch (error) {
       // The repository is public: the test account is hidden before the capture.
-      await page.evaluate(maskPage, hidden(secrets)).catch(() => {})
-      await page.screenshot({ path: join(shotsDir, `fail-${browserName}-login.png`) }).catch(() => {})
+      await maskedCapture(
+        () => page.evaluate(maskPage, hidden(secrets)),
+        () => page.screenshot({ path: join(shotsDir, `fail-${browserName}-login.png`) }),
+      ).catch(() => {})
       throw error
     }
 

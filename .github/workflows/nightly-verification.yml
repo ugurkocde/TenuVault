@@ -25,12 +25,10 @@ on:
 permissions:
   contents: read
 
-# One run at a time, automatic and dispatched alike: two runs never use the canary key together,
-# and results are written in the order the runs started. GitHub keeps at most one run waiting;
-# a newer one replaces it, and the replaced run records nothing.
-concurrency:
-  group: nightly-verification
-  cancel-in-progress: false
+# No concurrency for the whole run: every run starts and finds its nightly, so a Release run that
+# published nothing never waits behind another run or takes a waiting run's place. Only runs with
+# a published nightly enter the two queues below (paid key, result), and `queue: max` keeps up to
+# 100 of them waiting in the order they arrived instead of replacing a waiting one.
 
 jobs:
   resolve:
@@ -93,7 +91,7 @@ jobs:
           fi
           # Only runs from main record a status, and never over a newer run's result.
           if [ "$GITHUB_REF" = refs/heads/main ] && { [ "$EVENT" = workflow_run ] || [ "$EVENT" = workflow_dispatch ]; }; then
-            gh api "repos/$GITHUB_REPOSITORY/commits/$sha/statuses?per_page=100" > "$RUNNER_TEMP/statuses.json"
+            gh api --paginate "repos/$GITHUB_REPOSITORY/commits/$sha/statuses?per_page=100" --jq '.[]' | jq -s . > "$RUNNER_TEMP/statuses.json"
             node .github/scripts/nightly-verification-outcome.mjs superseded "$RUNNER_TEMP/statuses.json" > "$RUNNER_TEMP/superseded.txt"
             if grep -qx 'superseded=' "$RUNNER_TEMP/superseded.txt"; then
               gh api "repos/$GITHUB_REPOSITORY/statuses/$sha" -f state=pending -f context="Nightly verification" \
@@ -109,6 +107,10 @@ jobs:
     name: Paid key (${{ matrix.name }})
     needs: resolve
     if: needs.resolve.outputs.tag != ''
+    # Paid key checks of all runs one at a time: two never use the canary key together.
+    concurrency:
+      group: nightly-verification-paid-key
+      queue: max
     strategy:
       fail-fast: false
       # One installation of the canary key at a time, so the platforms never act on the
@@ -150,13 +152,13 @@ jobs:
         shell: pwsh
         env:
           EXPECTED_PUBLISHER: ${{ secrets.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
-        run: ./scripts/nightly-verification/install-windows.ps1 -Downloads "$env:RUNNER_TEMP/installers" -ExpectedPublisher $env:EXPECTED_PUBLISHER
+        run: ./scripts/nightly-verification/install-windows.ps1 -Downloads "$env:RUNNER_TEMP/installers" -ExpectedPublisher $env:EXPECTED_PUBLISHER -RequireAll
 
       - name: Install and verify the code signature and notarization
         if: runner.os == 'macOS'
         id: install-macos
         run: |
-          scripts/nightly-verification/install-macos.sh "$RUNNER_TEMP/installers" /Applications
+          scripts/nightly-verification/install-macos.sh "$RUNNER_TEMP/installers" /Applications --require-all
           # A signed app keeps its encryption key in the login keychain, which must be there and unlocked.
           login="$HOME/Library/Keychains/login.keychain-db"
           if ! security show-keychain-info "$login"; then
@@ -299,7 +301,13 @@ jobs:
   record:
     name: Record the result
     needs: [resolve, license, sign-in]
-    if: always()
+    # A run that found its nightly records a result, and one whose lookup failed reports that; a
+    # run with nothing to verify ends without entering the queue.
+    if: always() && needs.resolve.result != 'skipped' && (needs.resolve.result != 'success' || needs.resolve.outputs.tag != '')
+    # Results are written one at a time, so the check for a newer run and the write go together.
+    concurrency:
+      group: nightly-verification-result
+      queue: max
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -331,7 +339,7 @@ jobs:
           node .github/scripts/nightly-verification-outcome.mjs "$RUNNER_TEMP/jobs.json"
           # A newer run of the same commit owns the result; this run then writes and alerts nothing.
           if [ -n "$SHA" ]; then
-            gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/statuses?per_page=100" > "$RUNNER_TEMP/statuses.json"
+            gh api --paginate "repos/$GITHUB_REPOSITORY/commits/$SHA/statuses?per_page=100" --jq '.[]' | jq -s . > "$RUNNER_TEMP/statuses.json"
             node .github/scripts/nightly-verification-outcome.mjs superseded "$RUNNER_TEMP/statuses.json"
           else
             echo "superseded=" >> "$GITHUB_OUTPUT"

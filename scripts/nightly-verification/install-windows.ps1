@@ -4,14 +4,17 @@
 #
 # Every installer in the folder must carry a valid Authenticode signature of the expected
 # publisher, all with the same certificate subject, before anything runs: the x64 EXE and MSI,
-# and the arm64 and combined EXE when they are there (those are checked, not installed). The MSI
+# and the arm64 and combined EXE when they are there, or always with -RequireAll (those are
+# checked, not installed). The MSI
 # is installed silently for all users, its app and capture helper signatures are checked, and it
 # is removed again. Then the x64 NSIS installer runs silently for the current user, the same
 # checks run on that installation, and the installed app's subject must match the installers'.
 # Its TenuVault.exe path is written to GITHUB_OUTPUT as `app` (or printed without GitHub Actions).
 param(
     [Parameter(Mandatory = $true)][string]$Downloads,
-    [Parameter(Mandatory = $true)][string]$ExpectedPublisher
+    [Parameter(Mandatory = $true)][string]$ExpectedPublisher,
+    # Every published Windows installer must be there: the arm64 and combined EXE as well.
+    [switch]$RequireAll
 )
 $ErrorActionPreference = 'Stop'
 $checkSignatures = Join-Path $PSScriptRoot '..\check-capture-signatures.ps1'
@@ -58,9 +61,11 @@ $msi = @(Get-ChildItem $Downloads -Filter '*-win-x64.msi')
 if ($exe.Count -ne 1 -or $msi.Count -ne 1) { throw "Expected one x64 EXE and one x64 MSI in $Downloads." }
 Assert-Publisher $exe[0].FullName
 Assert-Publisher $msi[0].FullName
-# The other published installers: signature checks only.
-foreach ($other in @(Get-ChildItem $Downloads -Filter '*.exe' | Where-Object { $_.Name -like '*-win-arm64.exe' -or $_.Name -like '*-win.exe' })) {
-    Assert-Publisher $other.FullName
+# The other published installers: signature checks only. With -RequireAll a missing one fails.
+foreach ($pattern in @('*-win-arm64.exe', '*-win.exe')) {
+    $found = @(Get-ChildItem $Downloads -Filter '*.exe' | Where-Object { $_.Name -like $pattern })
+    if ($RequireAll -and $found.Count -ne 1) { throw "Expected one $pattern installer in the release, found $($found.Count)." }
+    foreach ($other in $found) { Assert-Publisher $other.FullName }
 }
 
 # MSI: per machine, as Intune or Configuration Manager deploy it.
