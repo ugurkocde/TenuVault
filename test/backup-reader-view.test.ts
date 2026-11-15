@@ -149,3 +149,8 @@ describe("Backup Reader handoffs and guidance", () => {
     expect(suggestsBackupReader("Grant consent to continue.")).toBe(false)
   })
 })
+
+it("keeps the existing guidance priority when an error names several sign-in codes", () => {
+  expect(readerErrorGuidance("AADSTS7000222 followed by AADSTS700027")).toEqual(readerErrorGuidance("AADSTS700027"))
+  expect(suggestsBackupReader("AADSTS999999 followed by AADSTS50076")).toBe(true)
+})

@@ -1,4 +1,4 @@
-import { namedSignInCode, signInErrorRow } from "../../shared/sign-in-errors"
+import { signInErrorRow } from "../../shared/sign-in-errors"
 import type { BackupReaderState, BackupReaderStatus } from "../../shared/ipc"
 import { typeForFolder } from "../../shared/intune/registry"
 import { readerScriptArguments } from "../../shared/services/manifest"
@@ -77,14 +77,14 @@ export function readerAzureRequest(storageCommand: string, storageAccountName: s
 /** The next step and docs page for a Backup Reader error or warning, so a failure is actionable rather than just red. */
 export function readerErrorGuidance(message: string): { hint: string; url: string; label: string } {
   const text = message.toLowerCase()
-  const guidance = signInErrorRow(namedSignInCode(message.toUpperCase()))?.readerGuidance
-  if (guidance === "certificate" || text.includes("does not know this certificate")) {
+  const guidance = new Set((message.toUpperCase().match(/AADSTS\d+/g) ?? []).map(code => signInErrorRow(code)?.readerGuidance))
+  if (guidance.has("certificate") || text.includes("does not know this certificate")) {
     return { hint: "The certificate is not on the app registration yet, or Microsoft has not applied it. Ask your Entra administrator to run the setup script, wait a few minutes, then verify again.", url: `${READER_GUIDE_URL}#troubleshooting`, label: "Open troubleshooting" }
   }
-  if (guidance === "renewal" || text.includes("certificate has expired")) {
+  if (guidance.has("renewal") || text.includes("certificate has expired")) {
     return { hint: "Renew the certificate above, have your Entra administrator upload it, then verify.", url: `${READER_GUIDE_URL}#renew-the-certificate`, label: "Open the renewal guide" }
   }
-  if (guidance === "conditionalAccess" || text.includes("workload identities blocked")) {
+  if (guidance.has("conditionalAccess") || text.includes("workload identities blocked")) {
     return { hint: "Your Conditional Access administrator can see which workload identity policy blocked this computer's network.", url: READER_CA_GUIDE_URL, label: "Open the Conditional Access guide" }
   }
   if (text.includes("permissions changed since they were verified")) {
