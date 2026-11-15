@@ -948,7 +948,7 @@ export default function SettingsPage() {
         <SettingsSectionNav section={section} />
         <div className="min-w-0 w-full max-w-5xl flex-1">
           {panel("signin", <div className="space-y-6"><TenantSettings active={section === "signin"} /><ProxySignInSettings /></div>)}
-          {panel("services", <ServicesSettings />)}
+          {panel("services", <ServicesSettings active={section === "services"} />)}
           {panel("storage", <div className="space-y-6"><BackupsOnDevice /><RestoreWrites active={section === "storage"} /></div>)}
           {panel("background", <div className="space-y-6"><BackgroundAndRetention /><BackupReaderSettings /></div>)}
           {panel("notifications", <NotificationSettings />)}

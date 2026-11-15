@@ -154,6 +154,16 @@ it("acknowledges the displayed receipt only once after rendering dated changes",
   expect(mocks.check).toHaveBeenLastCalledWith(HEALTH_TENANT, true)
   expect(mocks.acknowledge).toHaveBeenCalledTimes(1)
 })
+it("never acknowledges a report while the Settings section is hidden", async () => {
+  mocks.check.mockResolvedValue(healthScene("changes"))
+  await render(createElement(ServicesSettings, { active: false }))
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)) })
+  expect(mocks.acknowledge).not.toHaveBeenCalled()
+  await render(createElement(ServicesSettings, { active: true }))
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)) })
+  expect(mocks.acknowledge).toHaveBeenCalledExactlyOnceWith(HEALTH_TENANT, "fixture-receipt")
+})
+
 it.each([false, true])("drops a late answer or error after selecting another tenant (error: %s)", async fail => {
   let resolve!: (value: ReturnType<typeof healthFixture>) => void
   let reject!: (error: Error) => void

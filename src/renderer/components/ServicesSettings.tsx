@@ -133,7 +133,7 @@ function SignInState({ label, state, storage = false }: { label: string; state: 
 }
 
 /** Each mounted tenant owns every request, error and receipt, so late answers cannot cross tenants. */
-function TenantServices({ tenantId, clientId, name }: { tenantId: string; clientId: string; name: string }) {
+function TenantServices({ tenantId, clientId, name, active }: { tenantId: string; clientId: string; name: string; active: boolean }) {
   const [report, setReport] = useState<ConnectionHealthReport | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -164,7 +164,7 @@ function TenantServices({ tenantId, clientId, name }: { tenantId: string; client
   }, [tenantId, clientId])
 
   useEffect(() => {
-    if (!report?.changes.length || !report.acknowledgement || acknowledged.current.has(report.acknowledgement)) return
+    if (!active || !report?.changes.length || !report.acknowledgement || acknowledged.current.has(report.acknowledgement)) return
     const receipt = report.acknowledgement
     const sent = generation.current
     // The change list is expanded in the committed DOM. Wait for a paint before acknowledging it.
@@ -177,7 +177,7 @@ function TenantServices({ tenantId, clientId, name }: { tenantId: string; client
       })
     })
     return () => cancelAnimationFrame(frame)
-  }, [report, tenantId])
+  }, [report, tenantId, active])
 
   const toggle = async (service: ServiceHealth, enabled: boolean) => {
     if (!enabled && MODULE_BY_ID.get(service.id)?.defaultOn) {
@@ -217,7 +217,7 @@ function TenantServices({ tenantId, clientId, name }: { tenantId: string; client
   </div>
 }
 
-export function ServicesSettings() {
+export function ServicesSettings({ active = true }: { active?: boolean }) {
   const tenants = useTenants().filter(tenant => tenant.credentials?.tenantId)
   const [selected, setSelected] = useState(tenants[0]?.credentials?.tenantId ?? "")
   const id = useId()
@@ -226,7 +226,7 @@ export function ServicesSettings() {
     <CardHeader><CardTitle>Services and permissions</CardTitle><CardDescription>Choose what each tenant backs up. Permissions come from a token check; a backup verifies what can actually be read. Health checks never open a sign-in window or block a backup.</CardDescription></CardHeader>
     <CardContent className="space-y-4">
       {tenants.length > 1 && <label data-no-select htmlFor={id} className="flex items-center gap-3 text-sm text-gray-700">Tenant<select id={id} value={current?.credentials?.tenantId} onChange={event => setSelected(event.target.value)} className="rounded-lg border border-border bg-card p-2 text-foreground">{tenants.map(tenant => <option key={tenant.id} value={tenant.credentials!.tenantId}>{tenant.name}</option>)}</select></label>}
-      {current ? <TenantServices key={`${current.credentials!.tenantId}/${current.credentials!.appId}`} tenantId={current.credentials!.tenantId} clientId={current.credentials!.appId} name={current.name} /> : <p className="text-sm text-gray-600">Connect and sign in to a tenant to see its services and permissions.</p>}
+      {current ? <TenantServices key={`${current.credentials!.tenantId}/${current.credentials!.appId}`} tenantId={current.credentials!.tenantId} clientId={current.credentials!.appId} name={current.name} active={active} /> : <p className="text-sm text-gray-600">Connect and sign in to a tenant to see its services and permissions.</p>}
     </CardContent>
   </Card>
 }
