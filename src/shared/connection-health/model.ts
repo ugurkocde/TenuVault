@@ -267,22 +267,30 @@ export interface ServiceHealth {
   areas: AreaHealth[]
 }
 
-export type HealthChange =
+type PermissionChangeDetails =
   | { kind: "permissionsAdded"; permissions: string[] }
   | { kind: "permissionsRemoved"; permissions: string[] }
-  /** The tenant is connected with another app registration than before. `lacks` is what the earlier one had and this one does not. */
-  | { kind: "registrationReplaced"; previousClientId: string; lacks: string[] }
   /** The backup permissions of a service (every area that is on), or of one area, arrived. */
   | { kind: "becameReady"; service: ModuleId; area?: string }
-  /** `cause` and `mode` are those of the connection that lost access: what its own refusals found, and whose sign-in it is. */
-  | { kind: "lostAccess"; service: ModuleId; area: string; cause: LossCause; mode: ConnectionMode; folders: string[]; since: string }
 
 /**
  * A change of what the app registration may do. It is found by comparing two tokens of the same
  * admin, and it holds for the registration whoever signs in next. Lost access is not one: it is
  * about what one account could read.
  */
-export type PermissionChange = Extract<HealthChange, { kind: "permissionsAdded" | "permissionsRemoved" | "becameReady" }>
+export type PermissionChange = PermissionChangeDetails & {
+  /** When this change was first found. Kept in the snapshot and reported when carried. */
+  foundAt?: string
+  /** Found under an earlier sign-in, never a statement about the current admin's permissions. No account is named. */
+  earlierSignIn?: true
+}
+
+export type HealthChange =
+  | PermissionChange
+  /** The tenant is connected with another app registration than before. `lacks` is what the earlier one had and this one does not. */
+  | { kind: "registrationReplaced"; previousClientId: string; lacks: string[] }
+  /** `cause` and `mode` are those of the connection that lost access: what its own refusals found, and whose sign-in it is. */
+  | { kind: "lostAccess"; service: ModuleId; area: string; cause: LossCause; mode: ConnectionMode; folders: string[]; since: string }
 
 export interface ConnectionHealthReport {
   tenantId: string

@@ -717,16 +717,22 @@ describe("changes", () => {
     pass(DAY)
     const unseen = (await health.check(TENANT, "launch")).changes
     expect(unseen).toEqual([{ kind: "permissionsAdded", permissions: ["DeviceManagementApps.ReadWrite.All"] }, { kind: "becameReady", service: "intune" }])
+    const carried = unseen.map((change) => ({ ...change, earlierSignIn: true, foundAt: new Date(START.getTime() + DAY).toISOString() }))
+    // Another check must keep when these notices were first found.
+    pass(MINUTE)
+    await health.check(TENANT, "again")
     // Nobody looked at them before another admin signed in, whose own consent differs.
     pass(DAY)
     state.account = OTHER_ADMIN
     tokens.mockResolvedValue(fresh(WITHOUT_RBAC))
     const report = await health.check(TENANT, "signIn")
-    expect(report.changes).toEqual(unseen)
+    expect(report.changes).toEqual(carried)
+    expect(report.services[0]!.permissions).toBe("missing")
+    expect(JSON.stringify(report.changes)).not.toMatch(/aaaaaaaa|bbbbbbbb/)
     expect(report.since).toBe(START.toISOString())
     expect(report.granted).toEqual([...WITHOUT_RBAC].sort())
     pass(DAY)
-    expect((await health.check(TENANT, "launch")).changes).toEqual(unseen)
+    expect((await health.check(TENANT, "launch")).changes).toEqual(carried)
     expect(health.acknowledge(TENANT).changes).toEqual([])
     expect((await health.check(TENANT, "again")).changes).toEqual([])
   })
@@ -741,7 +747,7 @@ describe("changes", () => {
     health.signedOut(TENANT)
     pass(DAY)
     state.account = OTHER_ADMIN
-    expect((await health.check(TENANT, "signIn")).changes).toEqual(unseen)
+    expect((await health.check(TENANT, "signIn")).changes).toEqual(unseen.map((change) => ({ ...change, earlierSignIn: true, foundAt: new Date(START.getTime() + DAY).toISOString() })))
     expect(health.acknowledge(TENANT).changes).toEqual([])
   })
 

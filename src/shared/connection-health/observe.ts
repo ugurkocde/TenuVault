@@ -1,5 +1,5 @@
 import type { RunOutcomes } from "../backup-outcomes"
-import { MAX_FOLDER_REFUSALS, type ConnectionRecord, type RunObservation } from "./model"
+import { MAX_FOLDER_REFUSALS, type ConnectionRecord, type PermissionChange, type RunObservation, type Snapshot } from "./model"
 
 /**
  * What a backup run says about access, type by type, without any text of the run:
@@ -72,4 +72,9 @@ export function keepEvidence(evidence: Pick<ConnectionRecord, "verified" | "refu
     const since = [...kept, { runId: run.runId, at: run.at, cause, ...(permissionHeld !== undefined ? { permissionHeld } : {}) }].sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
     evidence.refused[folder] = since.length > MAX_FOLDER_REFUSALS ? [since[0]!, ...since.slice(1 - MAX_FOLDER_REFUSALS)] : since
   }
+}
+
+/** Changes already found belong to the earlier sign-in, with their discovery time and no account. */
+export function carryChanges(snapshot: Snapshot | undefined): PermissionChange[] {
+  return [...(snapshot?.carried ?? []), ...(snapshot?.found ?? [])].map((change) => ({ ...change, earlierSignIn: true, foundAt: change.foundAt ?? snapshot!.at }))
 }

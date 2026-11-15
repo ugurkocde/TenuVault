@@ -11,6 +11,7 @@
  * or whether a product was set up: those show when a backup reads a type, or is refused.
  */
 
+import { carryChanges } from "./observe"
 import { INTUNE_TYPES } from "../intune/registry"
 import { areaPermissions, missingForChoice } from "../services/manifest"
 import { canBackUp, checkModules, MODULES, moduleForFolder, type AccessLevel, type AreaCheck, type GrantedPermissions, type ModuleId, type PermissionArea, type ServiceModule } from "../services/modules"
@@ -379,7 +380,7 @@ export function evaluateHealth(input: HealthInput, now: Date): HealthEvaluation 
       const replaces = previous ? previous.replaces : replacedFrom(input)
       // Another admin's token is never compared with the earlier snapshot. What that snapshot had already found stays
       // listed until someone looks at it, dated from that snapshot.
-      const carried = [...(previous?.carried ?? []), ...(previous?.found ?? [])]
+      const carried = carryChanges(previous)
       baseline = { ...known, at: carried.length ? previous!.at : (token?.at ?? known.at), ...(replaces ? { replaces } : {}), ...(carried.length ? { carried } : {}) }
       changes.push(...carried)
     } else {
@@ -407,10 +408,14 @@ export function evaluateHealth(input: HealthInput, now: Date): HealthEvaluation 
           for (const area of arrived) if (!whole || !chosen.includes(area)) found.push({ kind: "becameReady", service: entry.service.id, area })
         }
         // Without a token to compare, what the last comparison found stands in the snapshot.
-        if (found.length) baseline.found = found
+        if (found.length) baseline.found = found.map((change) => {
+          // A repeated comparison must keep when the notice was first found, not today's check time.
+          const earlier = previous.found?.find(({ foundAt: _foundAt, ...kept }) => JSON.stringify(kept) === JSON.stringify(change))
+          return { ...change, foundAt: earlier?.foundAt ?? token!.at }
+        })
         else delete baseline.found
       }
-      changes.push(...(previous.carried ?? []), ...(baseline.found ?? []))
+      changes.push(...(previous.carried ?? []), ...(baseline.found ?? []).map(({ foundAt: _foundAt, ...change }) => change))
       // Access that came back is forgotten, so losing it again is reported again.
       baseline.lost = previous.lost ? previous.lost.filter((area) => lost.has(area)) : known.lost
       for (const entry of evaluated) {

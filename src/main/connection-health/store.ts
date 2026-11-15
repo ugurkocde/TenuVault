@@ -1,5 +1,5 @@
 import { MAX_FOLDER_REFUSALS, RUN_MAX_AGE_MS, type ConnectionMode, type ConnectionRecord, type FolderRefusal, type PermissionChange, type ReaderObservation, type RunObservation, type SignInFailure, type Snapshot, type TokenObservation } from "../../shared/connection-health/model"
-import { keepEvidence } from "../../shared/connection-health/observe"
+import { carryChanges, keepEvidence } from "../../shared/connection-health/observe"
 import { MODULES, type ModuleId } from "../../shared/services/modules"
 import type { KeyValueStore } from "../storage/secure-store"
 
@@ -117,9 +117,11 @@ const SERVICES = new Set<unknown>(MODULES.map((module) => module.id))
 function changesOf(value: unknown): PermissionChange[] {
   const changes = (Array.isArray(value) ? value : []).flatMap((entry): PermissionChange[] => {
     if (!isRecord(entry)) return []
-    if (entry.kind === "permissionsAdded" || entry.kind === "permissionsRemoved") return Array.isArray(entry.permissions) ? [{ kind: entry.kind, permissions: texts(entry.permissions) }] : []
+    const foundAt = time(entry.foundAt)
+    const origin = { ...(foundAt ? { foundAt } : {}), ...(entry.earlierSignIn === true ? { earlierSignIn: true as const } : {}) }
+    if (entry.kind === "permissionsAdded" || entry.kind === "permissionsRemoved") return Array.isArray(entry.permissions) ? [{ kind: entry.kind, permissions: texts(entry.permissions), ...origin }] : []
     const area = text(entry.area)
-    return entry.kind === "becameReady" && SERVICES.has(entry.service) ? [{ kind: "becameReady", service: entry.service as ModuleId, ...(area ? { area } : {}) }] : []
+    return entry.kind === "becameReady" && SERVICES.has(entry.service) ? [{ kind: "becameReady", service: entry.service as ModuleId, ...origin, ...(area ? { area } : {}) }] : []
   })
   return changes.slice(0, MAX_ENTRIES)
 }
@@ -130,7 +132,7 @@ function snapshotOf(value: unknown): Snapshot | undefined {
   if (!at) return undefined
   const account = text(value.account)
   const found = changesOf(value.found)
-  const carried = changesOf(value.carried)
+  const carried = changesOf(value.carried).map((change): PermissionChange => ({ ...change, earlierSignIn: true, foundAt: change.foundAt ?? at }))
   const ready = isRecord(value.ready) ? Object.fromEntries(Object.entries(value.ready).filter(([area, present]) => text(area) && typeof present === "boolean").slice(0, MAX_ENTRIES)) : undefined
   const replaced = isRecord(value.replaces) ? text(value.replaces.clientId) : undefined
   return {
@@ -255,7 +257,7 @@ export class HealthStore {
       if (record.mode !== "delegated") return []
       const permissions = record.graph?.permissions ?? record.snapshot?.permissions
       const snapshot = record.snapshot
-      const carried = [...(snapshot?.carried ?? []), ...(snapshot?.found ?? [])]
+      const carried = carryChanges(snapshot)
       if (!permissions && !snapshot?.replaces && !carried.length) return []
       return [{
         clientId: record.clientId,
