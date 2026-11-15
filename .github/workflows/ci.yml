@@ -115,18 +115,28 @@ jobs:
         run: |
           npm ci --prefix scripts/sign-in-e2e
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libnss3-tools gnome-keyring dbus-x11
+          sudo apt-get install -y --no-install-recommends libnss3-tools gnome-keyring libsecret-tools dbus-x11
           browsers() { node scripts/sign-in-e2e/node_modules/playwright/cli.js install --with-deps chromium firefox webkit; }
           browsers || { sleep 15; browsers; }
 
-      # Packaged builds keep secrets in the OS credential store: a keyring in a session bus.
+      # Packaged builds keep secrets in the OS credential store: an unlocked keyring in a session
+      # bus, checked with secret-tool before the test starts.
       - name: Sign-in end to end in the packaged app
         timeout-minutes: 6
         env:
           TENUVAULT_SMOKE_APP: ${{ github.workspace }}/dist/linux-unpacked/tenuvault-desktop
           XDG_CURRENT_DESKTOP: GNOME
         run: |
-          dbus-run-session -- bash -c 'printf "" | gnome-keyring-daemon --unlock --components=secrets >/dev/null && xvfb-run -a npm run sign-in-e2e -- out/sign-in-e2e'
+          # The inner script expands in the session bus shell, not here.
+          # shellcheck disable=SC2016
+          dbus-run-session -- bash -euo pipefail -c '
+            mkdir -p ~/.local/share/keyrings
+            eval "$(printf "\n" | gnome-keyring-daemon --unlock)"
+            eval "$(printf "\n" | gnome-keyring-daemon --start --components=secrets)"
+            printf probe | secret-tool store --label=probe tenuvault-sign-in-e2e probe
+            test "$(secret-tool lookup tenuvault-sign-in-e2e probe)" = probe
+            xvfb-run -a npm run sign-in-e2e -- out/sign-in-e2e
+          '
 
       - name: Undo the sign-in test's changes to the runner
         if: always()

@@ -101,10 +101,11 @@ async function launchApp(label) {
   const port = 9800 + Math.floor(Math.random() * 1000)
   const profile = mkdtempSync(join(tmpdir(), "tenuvault-sign-in-e2e-"))
   const args = [...(packagedApp ? [] : [desktopDir]), `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`]
-  if (process.platform === "linux") args.push("--no-sandbox")
+  // The unpacked Linux package has no setuid sandbox helper. Its secrets go to the keyring the
+  // workflow starts; naming the store spares Chromium the guess from the desktop environment.
+  if (process.platform === "linux") args.push("--no-sandbox", "--password-store=gnome-libsecret")
   if (process.platform === "linux" && process.env.DISPLAY) args.push("--ozone-platform=x11")
-  // The app keeps its secrets in the operating system's credential store: on macOS the
-  // disposable keychain runner.mjs makes the default, on Linux the keyring the workflow starts.
+  // On macOS the app's secrets go to the disposable keychain runner.mjs makes the default.
   const env = { ...process.env, ELECTRON_ENABLE_LOGGING: "1" }
   delete env.ELECTRON_RUN_AS_NODE
   const child = spawn(packagedApp ?? require("electron"), args, { stdio: ["ignore", "pipe", "pipe"], env })
