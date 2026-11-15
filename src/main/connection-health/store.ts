@@ -1,4 +1,4 @@
-import { MAX_FOLDER_REFUSALS, RUN_MAX_AGE_MS, type ConnectionMode, type ConnectionRecord, type FolderRefusal, type PermissionChange, type ReaderObservation, type RunObservation, type SignInFailure, type Snapshot, type TokenObservation } from "../../shared/connection-health/model"
+import { MAX_FOLDER_REFUSALS, RUN_MAX_AGE_MS, type ConnectionMode, type ConnectionRecord, type FolderRefusal, type LossEpisode, type PermissionChange, type ReaderObservation, type RunObservation, type SignInFailure, type Snapshot, type TokenObservation } from "../../shared/connection-health/model"
 import { carryChanges, folderValue, keepEvidence, validFolder } from "../../shared/connection-health/observe"
 import { MODULES, type ModuleId } from "../../shared/services/modules"
 import type { KeyValueStore } from "../storage/secure-store"
@@ -136,6 +136,11 @@ function snapshotOf(value: unknown): Snapshot | undefined {
   const found = changesOf(value.found)
   const carried = changesOf(value.carried).map((change): PermissionChange => ({ ...change, earlierSignIn: true }))
   const ready = isRecord(value.ready) ? Object.fromEntries(Object.entries(value.ready).filter(([area, present]) => text(area) && typeof present === "boolean").slice(0, MAX_ENTRIES)) : undefined
+  const acknowledgedLosses = (Array.isArray(value.acknowledgedLosses) ? value.acknowledgedLosses : []).flatMap((entry): LossEpisode[] => {
+    if (!isRecord(entry) || !text(entry.clientId) || (entry.mode !== "delegated" && entry.mode !== "app-only") || !validFolder(entry.folder) || !time(entry.since) || !text(entry.runId)) return []
+    const account = entry.mode === "delegated" ? text(entry.account) : undefined
+    return [{ clientId: entry.clientId as string, mode: entry.mode, folder: entry.folder, since: entry.since as string, runId: entry.runId as string, ...(account ? { account } : {}) }]
+  }).slice(0, MAX_ENTRIES)
   const replaced = isRecord(value.replaces) ? text(value.replaces.clientId) : undefined
   return {
     at,
@@ -143,6 +148,7 @@ function snapshotOf(value: unknown): Snapshot | undefined {
     ...(Array.isArray(value.permissions) ? { permissions: texts(value.permissions) } : {}),
     ...(ready ? { ready: ready as Record<string, boolean> } : {}),
     ...(Array.isArray(value.lost) ? { lost: texts(value.lost) } : {}),
+    ...(Array.isArray(value.acknowledgedLosses) ? { acknowledgedLosses } : {}),
     ...(replaced && isRecord(value.replaces) ? { replaces: { clientId: replaced, ...(Array.isArray(value.replaces.permissions) ? { permissions: texts(value.replaces.permissions) } : {}) } } : {}),
     ...(found.length ? { found } : {}),
     ...(carried.length ? { carried } : {}),

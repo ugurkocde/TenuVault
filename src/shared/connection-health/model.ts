@@ -76,6 +76,16 @@ export interface ReaderObservation {
   roleChange: { added: string[]; removed: string[]; at: string } | null
 }
 
+/** The connection, folder and first refusal of one loss, without any account name. */
+export interface LossEpisode {
+  clientId: string
+  mode: ConnectionMode
+  account?: string
+  folder: string
+  since: string
+  runId: string
+}
+
 /**
  * What was known when the changes were last looked at. Changes are reported against it. A value
  * that was not known then is filled in the first time it is, without counting as a change.
@@ -90,6 +100,8 @@ export interface Snapshot {
   ready?: Record<string, boolean>
   /** The "service/area" keys that had lost access. */
   lost?: string[]
+  /** The exact connection, folder and first refusal of each loss that was shown. */
+  acknowledgedLosses?: LossEpisode[]
   /** The registration this one took the tenant over from, with the permissions that one had. */
   replaces?: { clientId: string; permissions?: string[] }
   /**

@@ -28,6 +28,7 @@ import {
   type HealthCause,
   type HealthChange,
   type LossCause,
+  type LossEpisode,
   type PermissionChange,
   type PermissionState,
   type ReaderHealth,
@@ -259,17 +260,15 @@ function lostFolders(record: ConnectionRecord | undefined, now: Date): Map<strin
       if (!byRun.has(refusal.runId) && recent(refusal.at, RUN_MAX_AGE_MS, now) && Date.parse(refusal.at) > Date.parse(readAt!)) byRun.set(refusal.runId, refusal)
     }
     const since = [...byRun.values()].sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
-    if (since.length >= 2) lost.set(folder, { since: since[0]!.at, cause: since.at(-1)!.cause, permissionHeld: since.at(-1)!.permissionHeld, mode: record.mode })
+    if (since.length >= 2) lost.set(folder, { since: since[0]!.at, cause: since.at(-1)!.cause, permissionHeld: since.at(-1)!.permissionHeld, mode: record.mode, clientId: record.clientId, ...(record.account ? { account: record.account } : {}), folder, runId: since[0]!.runId })
   }
   return lost
 }
 
 /** A folder a connection lost access to: since when, the cause its refusals found, and whose sign-in the connection is. */
-interface Loss {
+interface Loss extends LossEpisode {
   permissionHeld?: boolean
-  since: string
   cause: RefusalCause
-  mode: ConnectionMode
 }
 
 const key = (module: ServiceModule, area: PermissionArea) => `${module.id}/${area.id}`
@@ -277,7 +276,7 @@ const key = (module: ServiceModule, area: PermissionArea) => `${module.id}/${are
 interface Evaluated {
   service: ServiceHealth
   /** Per area key: the folders that lost access, since when, and the cause and sign-in of the connection that lost them. */
-  lost: Map<string, { folders: string[]; since: string; cause: LossCause; mode: ConnectionMode }>
+  lost: Map<string, Array<LossEpisode & { cause: LossCause }>>
   /** Per area key: whether its backup permissions are present; empty without a recent token. */
   ready: Record<string, boolean>
 }
@@ -298,11 +297,10 @@ function evaluateService(module: ServiceModule, choice: ServiceChoice, granted: 
     // A read by another connection never clears this connection's own loss.
     const gone = enabled ? area.folders.flatMap((folder) => lostBy.flatMap((folders) => {
       const loss = folders.get(folder)
-      return loss ? [{ folder, since: loss.since, cause: causeNow(folder, loss.cause, current[loss.mode], loss.permissionHeld), mode: loss.mode }] : []
+      return loss ? [{ ...loss, folder, cause: causeNow(folder, loss.cause, current[loss.mode], loss.permissionHeld) }] : []
     })).sort((a, b) => Date.parse(a.since) - Date.parse(b.since)) : []
     if (gone.length) {
-      const main = CAUSES.flatMap((cause) => gone.filter((entry) => entry.cause === cause))[0]!
-      lost.set(key(module, area), { folders: [...new Set(gone.map((entry) => entry.folder))], since: gone.map((entry) => entry.since).sort()[0]!, cause: main.cause, mode: main.mode })
+      lost.set(key(module, area), gone)
     }
     if (checks) ready[key(module, area)] = checks[index]!.backup
     return {
@@ -316,7 +314,7 @@ function evaluateService(module: ServiceModule, choice: ServiceChoice, granted: 
       missing: granted ? areaPermissions(area, choice.access, "delegated", granted.permissions) : [],
       verified: verifiedOf(found),
       lostAccess: gone.length > 0,
-      losses: gone,
+      losses: gone.map(({ folder, since, cause, mode }) => ({ folder, since, cause, mode })),
     }
   })
   const considered = module.areas.flatMap((area, index) => (chosen(area) ? [index] : []))
@@ -338,6 +336,8 @@ function evaluateService(module: ServiceModule, choice: ServiceChoice, granted: 
   }
 }
 
+const episodeKey = (loss: LossEpisode) => JSON.stringify([loss.clientId.toLowerCase(), loss.mode, loss.account, loss.folder, loss.since, loss.runId])
+const episodeOf = ({ clientId, mode, account, folder, since, runId }: LossEpisode): LossEpisode => ({ clientId, mode, ...(account ? { account } : {}), folder, since, runId })
 const sorted = (values: Iterable<string>) => [...values].sort()
 
 /** The registration the tenant used before this one, when another is on record: the one seen last. */
@@ -374,6 +374,7 @@ export function evaluateHealth(input: HealthInput, now: Date): HealthEvaluation 
       ...(delegated.account ? { account: delegated.account } : {}),
       ...(permissions ? { permissions, ready } : {}),
       lost: sorted(lost.keys()),
+      acknowledgedLosses: [...lost.values()].flat().map(episodeOf),
     }
     // The first snapshot of a connection, or the first one of another admin, is where comparing starts: it reports no change of its own.
     if (!previous || previous.account !== delegated.account) {
@@ -418,9 +419,15 @@ export function evaluateHealth(input: HealthInput, now: Date): HealthEvaluation 
       changes.push(...(previous.carried ?? []), ...(baseline.found ?? []).map(({ foundAt: _foundAt, ...change }) => change))
       // Access that came back is forgotten, so losing it again is reported again.
       baseline.lost = previous.lost ? previous.lost.filter((area) => lost.has(area)) : known.lost
+      const activeEpisodes = new Set(known.acknowledgedLosses!.map(episodeKey))
+      baseline.acknowledgedLosses = previous.acknowledgedLosses ? previous.acknowledgedLosses.filter((loss) => activeEpisodes.has(episodeKey(loss))) : previous.lost ? [] : known.acknowledgedLosses
+      const acknowledged = new Set(baseline.acknowledgedLosses!.map(episodeKey))
       for (const entry of evaluated) {
-        for (const [area, gone] of entry.lost) {
-          if (previous.lost && !previous.lost.includes(area)) changes.push({ kind: "lostAccess", service: entry.service.id, area: area.slice(entry.service.id.length + 1), cause: gone.cause, mode: gone.mode, folders: gone.folders, since: gone.since })
+        for (const [area, losses] of entry.lost) {
+          const unseen = losses.filter((loss) => !acknowledged.has(episodeKey(loss)))
+          if (!unseen.length) continue
+          const main = CAUSES.flatMap((cause) => unseen.filter((loss) => loss.cause === cause))[0]!
+          changes.push({ kind: "lostAccess", service: entry.service.id, area: area.slice(entry.service.id.length + 1), cause: main.cause, mode: main.mode, folders: [...new Set(unseen.map((loss) => loss.folder))], since: unseen[0]!.since })
         }
       }
       // Nothing differs from the snapshot, so it holds as of the answer that was compared with it.

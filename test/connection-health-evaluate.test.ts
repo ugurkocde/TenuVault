@@ -635,6 +635,61 @@ describe("lost access", () => {
   })
 })
 
+describe("acknowledging one loss episode", () => {
+  const input = { reader: readerFacts(), readerClientId: READER }
+  const before: Snapshot = { at: ago(80 * DAY), account: ADMIN, lost: [] }
+  const loss = (id: string, folder: string, start: number, reader = false, account = ADMIN) => {
+    const makeRun = reader ? readerRun : (id: string, day: number, parts: Partial<RunObservation>) => run(id, day, { ...parts, account })
+    return [makeRun(`${id}-read`, start, { read: [folder] }), makeRun(`${id}-first`, start - 1, { refused: [refusal(folder, "role")] }), makeRun(`${id}-second`, start - 2, { refused: [refusal(folder, "role")] })]
+  }
+
+  it.each(["delegated", "app-only"] as const)("reports the other connection's Apps loss after acknowledging %s", (mode) => {
+    const adminRuns = mode === "delegated" ? loss("admin", "Apps", 9) : []
+    const readerRuns = mode === "app-only" ? loss("reader", "Apps", 9, true) : []
+    const first = evaluate([delegated({ runs: adminRuns, snapshot: before }), readerConnection({ runs: readerRuns })], input)
+    expect(first.report.changes).toMatchObject([{ kind: "lostAccess", mode }])
+    expect(evaluate([delegated({ runs: adminRuns, snapshot: first.current! }), readerConnection({ runs: readerRuns })], input).report.changes).toEqual([])
+    const nextMode = mode === "delegated" ? "app-only" : "delegated"
+    const next = evaluate([
+      delegated({ runs: mode === "delegated" ? adminRuns : loss("later-admin", "Apps", 6), snapshot: first.current! }),
+      readerConnection({ runs: mode === "app-only" ? readerRuns : loss("later-reader", "Apps", 6, true) }),
+    ], input)
+    expect(next.report.changes).toEqual([{ kind: "lostAccess", service: "intune", area: "apps", mode: nextMode, cause: "role", folders: ["Apps"], since: ago(5 * DAY) }])
+    expect(area(next.report, "intune", "apps").losses).toHaveLength(2)
+    expect(JSON.stringify(next.report)).not.toContain(ADMIN)
+    expect(next.current!.acknowledgedLosses).toHaveLength(2)
+  })
+
+  it("reports another folder in the same area while the acknowledged loss still stands", () => {
+    const firstRuns = loss("apps", "Apps", 9)
+    const first = evaluate([delegated({ runs: firstRuns, snapshot: before })])
+    const next = evaluate([delegated({ runs: [...firstRuns, ...loss("categories", "AppCategories", 6)], snapshot: first.current! })])
+    expect(next.report.changes).toEqual([{ kind: "lostAccess", service: "intune", area: "apps", mode: "delegated", cause: "role", folders: ["AppCategories"], since: ago(5 * DAY) }])
+  })
+
+  it.each(["delegated", "app-only"] as const)("reports a new %s episode even without an evaluation between recovery and loss", (mode) => {
+    const reader = mode === "app-only"
+    const firstRuns = loss("first", "Apps", 9, reader)
+    const records = (runs: RunObservation[], snapshot: Snapshot) => [delegated({ runs: reader ? [] : runs, snapshot }), readerConnection({ runs: reader ? runs : [] })]
+    const first = evaluate(records(firstRuns, before), input)
+    // The reader recovered and lost access again without anyone opening health between those runs.
+    const next = evaluate(records([...firstRuns, ...loss("again", "Apps", 6, reader)], first.current!), input)
+    expect(next.report.changes).toMatchObject([{ kind: "lostAccess", mode, folders: ["Apps"], since: ago(5 * DAY) }])
+    expect(next.baseline!.acknowledgedLosses).toEqual([])
+    expect(next.current!.acknowledgedLosses).toMatchObject([{ runId: "again-first" }])
+  })
+
+  it("never applies an earlier admin's acknowledgement to the current account", () => {
+    const first = evaluate([delegated({ runs: loss("a", "Apps", 9), snapshot: before })])
+    // A changed account gets its own baseline. It has not lost access yet.
+    const nextAccount = evaluate([delegated({ account: OTHER_ADMIN, runs: [], snapshot: first.current! })])
+    const next = evaluate([delegated({ account: OTHER_ADMIN, runs: loss("b", "Apps", 6, false, OTHER_ADMIN), snapshot: nextAccount.baseline! })])
+    expect(next.report.changes).toMatchObject([{ kind: "lostAccess", folders: ["Apps"], since: ago(5 * DAY) }])
+    expect(next.current!.acknowledgedLosses![0]!.account).toBe(OTHER_ADMIN)
+    expect(JSON.stringify(next.report)).not.toContain(OTHER_ADMIN)
+  })
+})
+
 describe("changes since the snapshot", () => {
   const WITHOUT_APPS = DEFAULT_SCOPES.filter((permission) => !permission.startsWith("DeviceManagementApps"))
 

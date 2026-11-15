@@ -4,7 +4,7 @@ import { HEALTH_STORE_VERSION, HealthStore, MAX_CONNECTIONS, MAX_ENTRIES, MAX_RU
 import { RUN_MAX_AGE_MS, type RunObservation } from "../src/shared/connection-health/model"
 import { evaluateHealth } from "../src/shared/connection-health/evaluate"
 import { MODULES } from "../src/shared/services/modules"
-import { runObservation } from "../src/shared/connection-health/observe"
+import { keepEvidence, runObservation } from "../src/shared/connection-health/observe"
 import type { RunOutcomes, TypeOutcome } from "../src/shared/backup-outcomes"
 import { memoryStore } from "./helpers"
 
@@ -359,19 +359,49 @@ describe("the observation store", () => {
     expect(runObservation(outcomesForFolder(folder)).read).toEqual([])
   })
 
+  it("allowlists acknowledged loss episodes and keeps only the existing account ID", () => {
+    const { store, stored } = setup()
+    const episode = { clientId: CLIENT, mode: "delegated", account: ADMIN, folder: "Apps", since: ago(DAY), runId: "first-refusal" }
+    store.setSnapshot(admin, { at: ago(0), acknowledgedLosses: [
+      { ...episode, username: "admin@contoso.com", token: "secret" },
+      { ...episode, mode: "app-only", account: "not-an-admin", clientId: READER },
+      { ...episode, folder: "__proto__" },
+      { ...episode, mode: "unknown" },
+    ] } as never)
+    expect(stored().connections[0].snapshot.acknowledgedLosses).toEqual([episode, { clientId: READER, mode: "app-only", folder: "Apps", since: ago(DAY), runId: "first-refusal" }])
+  })
+
+  it("never reads inherited folder evidence or permission evidence", () => {
+    const evidence = { verified: Object.create({ Apps: ago(2 * DAY) }), refused: Object.create({ Apps: "not a list" }) }
+    keepEvidence(evidence, run("read", 1, { read: ["Apps"] }))
+    expect(Object.hasOwn(evidence.verified, "Apps")).toBe(true)
+    expect(evidence.verified.Apps).toBe(ago(DAY))
+    keepEvidence(evidence, run("refused", 0, { refused: [{ folder: "Apps", cause: "role" }] }))
+    expect(evidence.refused.Apps).toEqual([{ runId: "refused", at: ago(0), cause: "role" }])
+    const outcomes: RunOutcomes = { ...outcomesForFolder("Apps"), types: [{ folder: "Apps", service: "intune", outcome: "skipped", cause: "permission", reason: "Refused" }] }
+    expect(runObservation(outcomes, ADMIN, Object.create({ Apps: false })).refused[0]).not.toHaveProperty("permissionHeld")
+  })
+
   it("never stores a token, however an observation is recorded", () => {
     const { store, backing } = setup()
     const secret = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.secret-token-body.signature"
+    // Check each write before another write could sanitize it on a read.
+    const assertRaw = () => {
+      const raw = backing.get(KEY)!
+      expect(raw).not.toContain("secret-token-body")
+      expect(raw).not.toContain("contoso")
+    }
     // What a careless caller might hand over next to the fields an observation has.
     store.recordToken(admin, "graph", { at: ago(1000), permissions: ["User.Read"], accessToken: secret, account: { username: "admin@contoso.com" } } as never, ADMIN)
+    assertRaw()
     store.recordReader(reader, { at: ago(1000), state: "verified", notAfter: ago(-DAY), verifiedAt: null, verifiedRoles: null, roleChange: null, privateKeyPem: secret } as never)
+    assertRaw()
     store.recordToken(admin, "storage", { at: ago(1000), failure: { class: "consent", code: "AADSTS65001", message: secret }, token: secret } as never, ADMIN)
+    assertRaw()
     store.recordRun(admin, { ...run("private", 1, { read: ["Apps"] }), accessToken: secret, refused: [{ folder: "ScopeTags", cause: "role", message: secret }], excluded: [{ folder: "Branding", cause: "reader", message: secret }] } as never)
+    assertRaw()
     store.setSnapshot(admin, { at: ago(1000), secret, replaces: { clientId: CLIENT, secret }, found: [{ kind: "permissionsAdded", permissions: ["User.Read"], message: secret }] } as never)
-    // Privacy is enforced at the write boundary, including nested fields of every observation kind.
-    const reread = backing.get(KEY)!
-    expect(reread).not.toContain("secret-token-body")
-    expect(reread).not.toContain("contoso")
+    assertRaw()
   })
 
   it("drops what was observed for the account when the admin signs out, and keeps what the registration had", () => {
