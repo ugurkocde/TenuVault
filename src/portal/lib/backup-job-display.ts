@@ -167,6 +167,7 @@ export function summarizeBackupResults(results: BackupResults, finished = false)
 /** A completed backup with warnings: the engine's count, or its message for a job without results. */
 export function completedWithWarnings(job: { isComplete: boolean; isSuccessful: boolean; progressMessage: string; results?: BackupResults }): boolean {
   if (!job.isComplete || !job.isSuccessful) return false
+  if (job.results?.coverage === "incomplete") return true
   return job.results?.warnings !== undefined ? job.results.warnings > 0 : /with \d+ warnings?/.test(job.progressMessage)
 }
 

@@ -22,6 +22,7 @@ import { savedAzureStorage, LOCAL_SWITCH_CONFIRMATION, type StorageChoice } from
 import { toast } from "../lib/toast"
 import { weeklyScheduleNote } from "../lib/plan-notes"
 import { PlanBadge, UpgradeNote } from "./UpgradeNote"
+import { ServiceBackupNotice } from "./ServiceBackupNotice"
 import { BackupScopePicker } from "./BackupScopePicker"
 import { CloudBackupSettings } from "./CloudBackupSettings"
 import { StorageChooser, type StorageChooserDraft } from "./StorageChooser"
@@ -140,6 +141,7 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
       {confirmDialog}
       <div className="space-y-4 lg:col-span-2">
+      <ServiceBackupNotice tenantId={tenantId} />
       <TenantStorageSettings tenant={tenant} tenantName={tenantName} prefs={prefs} community={community} onStorageChange={onStorageChange} cloudOnly={!!cloud.config?.linked && !current?.enabled} />
       <BackupScopeSettings tenantId={tenantId} tenantName={tenantName} hasCloud={!!cloud.config} onSaved={() => setScopeVersion((version) => version + 1)} />
       <div className="space-y-4 rounded-3xl bg-white px-6 py-5 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">

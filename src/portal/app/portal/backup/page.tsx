@@ -1,5 +1,7 @@
 "use client"
 
+import { ServiceBackupNotice } from "../../../../renderer/components/ServiceBackupNotice"
+
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useSearchParams } from "react-router-dom"
 import { AlertCircle, AlertTriangle, Calendar, CheckCircle, Download, GitBranch, Loader2, Play, RefreshCw, Upload } from "lucide-react"
@@ -151,9 +153,9 @@ export default function BackupRestorePage() {
     setShowProgress(true)
   }
 
-  const backupFinished = (success: boolean) => {
-    // Keep failures and cancellations open so their reason can be read.
-    if (success) {
+  const backupFinished = (success: boolean, needsAttention = false) => {
+    // Keep unread types and other problems visible until the admin closes the result.
+    if (success && !needsAttention) {
       setShowProgress(false)
       setJob(null)
     }
@@ -285,6 +287,8 @@ export default function BackupRestorePage() {
           </button>
         ))}
       </nav>
+
+      {activeTab !== "schedule" && selectedTenant?.credentials && <ServiceBackupNotice tenantId={selectedTenant.credentials.tenantId} />}
 
       {tenants.length === 0 && (
         <div className="flex gap-3 rounded-3xl bg-amber-50 p-5">
