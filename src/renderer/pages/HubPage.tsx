@@ -1,4 +1,5 @@
 import { IntunePageGuard } from "../components/IntunePageGuard"
+import { RequestedTenant } from "../components/RequestedTenant"
 import { Suspense, useEffect } from "react"
 import { Link, Navigate, useParams, useSearchParams } from "react-router-dom"
 import { useSelectedTenant, useTenants } from "~/contexts/TenantContext"
@@ -14,9 +15,7 @@ import { useLicense, useTenantPlan } from "../lib/license"
  * below it, whatever that screen stored on an earlier plan.
  */
 export default function HubPage({ hubId }: { hubId: string }) {
-  const { tabId } = useParams()
-  const intune = hubId === "changes" || (hubId === "governance" && !["deviations", "customizations"].includes(tabId ?? "overview"))
-  return intune ? <IntunePageGuard><HubContent hubId={hubId} /></IntunePageGuard> : <HubContent hubId={hubId} />
+  return <RequestedTenant><HubContent hubId={hubId} /></RequestedTenant>
 }
 
 function HubContent({ hubId }: { hubId: string }) {
@@ -41,6 +40,13 @@ function HubContent({ hubId }: { hubId: string }) {
   if (!hub) return <Navigate to="/portal/dashboard" replace />
   const tab = hub.tabs.find((candidate) => candidate.id === tabId) ?? hub.tabs[0]!
   const allowed = canUse(plan, tab.feature)
+  const intune = hubId === "changes" || (hubId === "governance" && !["deviations", "customizations"].includes(tab.id))
+  const content = selectedTenant && <>
+    {known && !allowed && <LockedPreview feature={tab.feature} summary={tab.summary} points={tab.points} />}
+    <Suspense fallback={<div className="h-24 animate-pulse rounded-3xl bg-card" />}>
+      <tab.Component key={`${tab.id}:${selectedTenant.id}`} tenant={selectedTenant} plan={plan} allowed={allowed} />
+    </Suspense>
+  </>
 
   return (
     <div className="mx-auto max-w-[1600px] space-y-6 p-6 lg:p-8">
@@ -74,12 +80,7 @@ function HubContent({ hubId }: { hubId: string }) {
       {!selectedTenant ? (
         <p className="rounded-3xl bg-card p-6 text-sm text-gray-600">Connect or select a tenant to use {hub.title.toLowerCase()}.</p>
       ) : (
-        <>
-          {known && !allowed && <LockedPreview feature={tab.feature} summary={tab.summary} points={tab.points} />}
-          <Suspense fallback={<div className="h-24 animate-pulse rounded-3xl bg-card" />}>
-            <tab.Component key={`${tab.id}:${selectedTenant.id}`} tenant={selectedTenant} plan={plan} allowed={allowed} />
-          </Suspense>
-        </>
+        intune ? <IntunePageGuard>{content}</IntunePageGuard> : content
       )}
     </div>
   )

@@ -29,9 +29,10 @@ const PHASES: readonly SetupProgress["phase"][] = ["signingIn", "registration", 
  * through Microsoft Graph, with the reasons beside it and the other routes (another administrator,
  * the setup script, an existing app registration) below.
  */
-export function ConnectTenantSetup({ trials, onManual, onRegistered, choice = DEFAULT_SETUP_CHOICE }: {
+export function ConnectTenantSetup({ trials, onManual, onRegistered, onRunningChange, choice = DEFAULT_SETUP_CHOICE }: {
   /** Whether new tenants start with a Pro trial, announced before the setup starts. */
   choice?: PermissionChoice
+  onRunningChange?: (running: boolean) => void
   trials: boolean
   /** Continue with IDs the admin already has, on the Sign in step. */
   onManual: () => void
@@ -69,6 +70,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered, choice = DE
     if (!again) recordSetup({ name: "setup_route", props: { route: "auto" } })
     setAttempt((value) => value + 1)
     setRunning(true)
+    onRunningChange?.(true)
     setCancelling(false)
     setError("")
     setReused(false)
@@ -86,6 +88,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered, choice = DE
       busy.current = false
       restart.current = false
       setRunning(false)
+      onRunningChange?.(false)
       setRetrying(false)
     }
     if (restartNow) void start(true)

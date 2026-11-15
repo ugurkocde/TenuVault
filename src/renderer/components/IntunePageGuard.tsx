@@ -4,9 +4,14 @@ import { useSelectedTenant } from "~/contexts/TenantContext"
 import { Button } from "~/components/ui/button"
 import { bridge } from "../lib/bridge"
 import { settingsHref } from "../lib/settings-section"
+import { RequestedTenant } from "./RequestedTenant"
 
 /** Do not mount an Intune workflow for a tenant that chose another service. */
 export function IntunePageGuard({ children }: { children: ReactNode }) {
+  return <RequestedTenant><IntuneContent>{children}</IntuneContent></RequestedTenant>
+}
+
+function IntuneContent({ children }: { children: ReactNode }) {
   const { selectedTenant } = useSelectedTenant()
   const tenantId = selectedTenant?.credentials?.tenantId
   const clientId = selectedTenant?.credentials?.appId

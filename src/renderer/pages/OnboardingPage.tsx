@@ -81,6 +81,7 @@ export default function OnboardingPage() {
   const [credentials, setCredentials] = useState<TenantCredentials | null>(null)
   const [tenantProfileId, setTenantProfileId] = useState<number | null>(null)
   const [tenantName, setTenantName] = useState("")
+  const [setupRunning, setSetupRunning] = useState(false)
   const [creating, setCreating] = useState(false)
   const [releasing, setReleasing] = useState(false)
   const [job, setJob] = useState<JobStatus | null>(null)
@@ -423,6 +424,7 @@ export default function OnboardingPage() {
             <StepHeading id="setup-step-0">Connect your tenant</StepHeading>
             <ConnectTenantSetup
               choice={onboardingPermissions(services)}
+              onRunningChange={setSetupRunning}
               trials={Boolean(status?.tenantTrialsEnabled)}
               onManual={() => { setSetupNotice(""); setAutoSignIn(null); setStep(1) }}
               onRegistered={(result) => void registered(result)}
@@ -596,7 +598,7 @@ export default function OnboardingPage() {
 
         {step >= 0 && step < 3 && (
           <div className="mt-6 border-t border-gray-100 pt-4">
-            <Button variant="ghost" onClick={() => setStep((step - 1) as Step)} disabled={creating || releasing}>
+            <Button variant="ghost" onClick={() => setStep((step - 1) as Step)} disabled={creating || releasing || setupRunning}>
               <ArrowLeft className="mr-2 h-4 w-4" aria-hidden="true" />Previous
             </Button>
           </div>

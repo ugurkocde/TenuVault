@@ -56,9 +56,15 @@ export function loadOnboardingDraft(): OnboardingDraft | null {
     const raw = bridge.storage.getItemSync(KEY)
     if (!raw) return null
     const value = JSON.parse(raw) as Record<string, unknown>
-    const step = value.step === -1 || value.step === 1 || value.step === 2 ? value.step : 0
+    let step: OnboardingDraft["step"] = value.step === -1 || value.step === 1 || value.step === 2 ? value.step : 0
     let services = DEFAULT_ONBOARDING_CHOICE
-    try { if (value.services) services = step === -1 && typeof value.services === "object" && !Array.isArray(value.services) && !Object.keys(value.services).length ? {} : checkedOnboardingChoice(value.services) } catch { /* Keep the defaults for an unreadable choice. */ }
+    if (Object.hasOwn(value, "services")) {
+      try { services = checkedOnboardingChoice(value.services) } catch {
+        // A broken choice must never silently approve the default write permissions.
+        services = {}
+        step = -1
+      }
+    }
     const account = recentAccount(value)
     const draft: OnboardingDraft = {
       step: step === 2 && !account ? 1 : step,

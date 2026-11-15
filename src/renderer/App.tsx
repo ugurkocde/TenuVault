@@ -60,7 +60,7 @@ function Home() {
  * process (sign-in, token requests, local backups, scheduled backups), so the plan is shown in
  * the guided setup once the tenant is known. A setup already in progress skips the welcome.
  */
-function LicenseGate({ children }: { children: ReactNode }) {
+export function LicenseGate({ children }: { children: ReactNode }) {
   const { pathname } = useLocation()
   const { status, error, refresh } = useLicense()
   const tenants = useTenants()

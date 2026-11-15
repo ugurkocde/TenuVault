@@ -32,6 +32,7 @@ const state = vi.hoisted(() => ({
   diagnostics: { state: "ineligible", policy: false, reminder: { setup: false, signin: false } } as import("../../src/shared/ipc").SetupDiagnosticsStatus,
 }))
 
+vi.mock("../../src/renderer/lib/appearance", () => ({}))
 vi.mock("../../src/renderer/lib/bridge", () => ({
   bridge: {
     storage: {
@@ -49,7 +50,8 @@ vi.mock("../../src/renderer/lib/bridge", () => ({
     diagnostics: { record: state.record, status: async () => state.diagnostics, reminderShown: async () => undefined, consent: async () => state.diagnostics, decline: async () => state.diagnostics },
   },
 }))
-vi.mock("../../src/renderer/lib/license", () => ({
+vi.mock("../../src/renderer/lib/license", async original => ({
+  ...(await original<typeof import("../../src/renderer/lib/license")>()),
   useTenantPlan: () => "community",
   useLicense: () => ({ status: state.license, error: null, refresh: async () => undefined }),
   tenantLicense: (status: { tenants?: unknown[] } | undefined) => status?.tenants?.[0],
@@ -72,7 +74,7 @@ vi.mock("../../src/renderer/components/StorageChooser", () => ({
 }))
 
 import { DEFAULT_SETUP_CHOICE } from "../../src/shared/services/manifest"
-import { ActivationScreen } from "../../src/renderer/components/ActivationScreen"
+import { LicenseGate } from "../../src/renderer/App"
 import OnboardingPage from "../../src/renderer/pages/OnboardingPage"
 import { setupCommand, TenantSignInForm } from "../../src/renderer/components/TenantSignInForm"
 import { loadOnboardingDraft, pendingSignInTenant, PENDING_SIGN_IN_MAX_AGE_MS, saveOnboardingDraft } from "../../src/renderer/lib/onboarding-draft"
@@ -896,16 +898,68 @@ describe("onboarding service choices", () => {
   it("adds exactly one click to the Intune-only quick setup path from Welcome", async () => {
     // origin/main 8b9f77c8: Welcome > Connect your tenant (1) > Set up with Microsoft sign-in (2), Microsoft opens.
     // Now: Welcome > Connect your tenant (1) > Continue with Intune (2) > Set up with Microsoft sign-in (3), Microsoft opens.
-    let container = await render(createElement(ActivationScreen, { onSignIn: vi.fn() }), false)
+    state.license = { hasKey: false, tenants: [] }
+    const container = await render(createElement(LicenseGate, { children: createElement(OnboardingPage) }), false)
+    expect(container.textContent).toContain("Welcome to TenuVault")
     await act(async () => button(container, "Connect your tenant")!.click())
-    for (const root of roots.splice(0)) act(() => root.unmount())
-    container = await render(createElement(OnboardingPage), false)
     expect(container.textContent).toContain("What do you want to back up?")
     expect(container.querySelector<HTMLInputElement>('[aria-label="Back up Intune"]')!.checked).toBe(true)
     await act(async () => button(container, "Continue with Intune")!.click())
     state.createRegistration.mockImplementationOnce(() => new Promise(() => {}))
     await act(async () => button(container, "Set up with Microsoft sign-in")!.click())
     expect(state.createRegistration).toHaveBeenCalledWith({ choice: DEFAULT_SETUP_CHOICE })
+  })
+
+  it.each([null, {}, "entra", { entra: { access: "restore" } }, { intune: { access: "everything" } }])("requires confirmation of a corrupt saved service choice before setup or saving: %j", async services => {
+    const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, account, signedInAt: Date.now(), services }))
+    state.accounts.mockResolvedValue([account])
+    expect(loadOnboardingDraft()).toMatchObject({ step: -1, services: {} })
+    const container = await render(createElement(OnboardingPage), false)
+    expect(container.textContent).toContain("What do you want to back up?")
+    expect(container.querySelector<HTMLInputElement>('[aria-label="Back up Intune"]')!.checked).toBe(false)
+    expect(button(container, "Continue with a service")!.disabled).toBe(true)
+    expect(state.createRegistration).not.toHaveBeenCalled()
+    expect(state.saveServices).not.toHaveBeenCalled()
+    expect(state.checkPermissions).not.toHaveBeenCalled()
+    await act(async () => container.querySelector<HTMLInputElement>('[aria-label="Back up Entra ID"]')!.click())
+    await act(async () => button(container, "Continue with Entra ID")!.click())
+    expect(container.textContent).toContain("Connect your tenant")
+  })
+
+  it("keeps the legacy default only when a draft has no services field", () => {
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: TENANT, clientId: CLIENT }))
+    expect(loadOnboardingDraft()).toMatchObject({ step: 1, services: { intune: { access: "restore" } } })
+  })
+
+  it("keeps Previous disabled while a deferred quick setup completes with the confirmed choice", async () => {
+    let finish!: (value: unknown) => void
+    state.createRegistration.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const container = await render(createElement(OnboardingPage))
+    await act(async () => button(container, "Set up with Microsoft sign-in")!.click())
+    expect(button(container, "Previous")!.disabled).toBe(true)
+    await act(async () => button(container, "Previous")!.click())
+    expect(container.textContent).not.toContain("What do you want to back up?")
+    await act(async () => { finish({ tenantId: TENANT, clientId: CLIENT, username: "admin", reused: true, candidateCount: 2, ready: true, missingConsent: [] }) })
+    expect(container.textContent).toContain("Sign in to your tenant")
+    expect(state.createRegistration).toHaveBeenCalledWith({ choice: DEFAULT_SETUP_CHOICE })
+    expect(loadOnboardingDraft()?.services).toEqual({ intune: { access: "restore" } })
+    expect(button(container, "Previous")!.disabled).toBe(false)
+  })
+
+  it("summarizes coverage and read or write counts in cards and groups exact permissions below them", async () => {
+    const container = await render(createElement(OnboardingPage), false)
+    await act(async () => container.querySelector<HTMLInputElement>('[aria-label="Back up Entra ID"]')!.click())
+    const card = container.querySelector('[data-onboarding-service="entra"]')!
+    expect(card.querySelector('[data-permission-count]')?.textContent).toMatch(/\d+ read, 0 write permissions/)
+    expect(card.querySelector('[data-area-coverage]')?.textContent).toContain("Tenant settings")
+    expect(card.textContent).not.toContain("RoleManagement.Read.Directory")
+    const exact = container.querySelector('[data-exact-permissions]')!
+    expect(exact.querySelector('summary')?.textContent).toBe("Show the exact permissions")
+    expect(exact.textContent).toContain("Entra ID: Roles and PIM")
+    expect(exact.textContent).toContain("Read: RoleManagement.Read.Directory")
+    expect(exact.textContent).toContain("Write: DeviceManagementApps.ReadWrite.All")
+    expect(card.contains(exact)).toBe(false)
   })
 
   it("keeps an Entra-only choice through restart and follows it in every connect route", async () => {

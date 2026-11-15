@@ -79,8 +79,12 @@ Backups on this device become unreadable unless you exported their [recovery key
 
 ![Service choice with Intune preselected](/images/onboarding/02-choice-default-light.png)
 
-Expand **Coverage and permissions** on each card to see exact delegated permissions, marked Read or Write, and coverage limits. Entra ID contains a separate Conditional Access switch. Groups, Users and devices, and Applications are opt-in and off initially. Areas with personal data explain what is stored before you turn them on.
+Expand **Coverage and permissions** on a card to see the areas it covers, read and write permission counts, and coverage limits. Details scroll inside the card so Continue stays in view. Select **Show the exact permissions** below the cards for the full delegated permission names, grouped by area and marked Read or Write. Entra ID contains a separate Conditional Access switch. Groups, Users and devices, and Applications are opt-in and off initially. Areas with personal data explain what is stored before you turn them on.
 
 **Customize access** offers Backup only, or Backup and restore where this version has a restore capability. Intune keeps its earlier default, including read access to Conditional Access without enabling those backups. Entra ID and Defender start with backup permissions only. This version prepares their permissions; their backups arrive in a later update. Conditional Access backups work now when selected.
 
 Your service choice and setup progress survive a restart in encrypted app settings. Connecting another tenant uses the same flow with a choice for that tenant.
+
+If a saved service choice cannot be read, setup returns to the service cards with no service selected. Choose the services again and confirm before continuing. Drafts saved before service choices were introduced keep the Intune default.
+
+Links from background jobs select the requested tenant before checking whether Intune is on. Governance keeps its tabs visible when Intune is off, so Accepted deviations and Customizations remain reachable.

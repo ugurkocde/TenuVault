@@ -122,9 +122,10 @@ async function connect(wsUrl) {
 const scenes = [
   ["01-welcome-start", "Welcome, with the setup diagnostics choice."],
   ["02-choice-default", "Intune preselected, with all three service cards visible."],
-  ["03-choice-entra-details", "Entra ID selected with coverage, exact permissions, Conditional Access and opt-in areas."],
-  ["04-choice-defender-details", "Defender coverage limits and exact permissions."],
-  ["04-choice-both-details", "Entra ID and Defender cards both expanded, with their coverage limits and permissions."],
+  ["03-choice-entra-details", "Entra ID selected with area coverage, read and write counts, Conditional Access and opt-in areas."],
+  ["03-choice-exact-permissions", "Exact permissions below the cards, grouped by area and marked read or write."],
+  ["04-choice-defender-details", "Defender area coverage, permission counts and coverage limits."],
+  ["04-choice-both-details", "Entra ID and Defender cards both expanded, with area coverage and permission counts."],
   ["05-choice-personal-data", "Groups opted in with the statement of personal data stored."],
   ["06-choice-customize", "Customize access, Intune restore and Entra backup only."],
   ["07-choice-intune-entra", "Continue with Intune and Entra ID."],
@@ -138,6 +139,7 @@ const scenes = [
   ["10-storage-local", "Storage choice after sign-in."],
   ["11-backup-intune", "First backup for the default Intune choice, with Run first backup available."],
   ["11-backup-first", "First backup for Entra-only, explaining that these backups arrive later."],
+  ["12-hub-intune-required", "Governance with Intune off, keeping all tabs and Accepted deviations and Customizations reachable."],
   ["12-intune-required", "OpenIntuneBaseline on a tenant without Intune, linked to service settings."],
 ]
 let exitCode = 0
@@ -191,15 +193,16 @@ try {
     const license = welcome ? { ...MOCK.license, hasKey: false, plan: null, tenants: [], tenantTrialsEnabled: true } : { ...MOCK.license, tenantTrialsEnabled: true }
     await main.evaluate(`Object.assign(globalThis.__marketingMock, { license: ${JSON.stringify(license)}, missing: ${state === "10-permissions-missing"}, health: ${JSON.stringify(healthScene("intune-off"))} })`)
     await evaluate(`Promise.all([window.tenuvault.storage.setItem("tenuvault_tenants", ${JSON.stringify(JSON.stringify(intuneRequired ? MOCK.tenants : []))}), window.tenuvault.storage.setItem("tenuvault_selected_tenant", "1"), ${draft ? `window.tenuvault.storage.setItem("tenuvault.onboarding.draft", ${JSON.stringify(JSON.stringify(draft))})` : 'window.tenuvault.storage.removeItem("tenuvault.onboarding.draft")'}])`)
-    await send("Emulation.setDeviceMetricsOverride", { width: 1024, height: 1100, deviceScaleFactor: 1, mobile: false })
-    const route = intuneRequired ? "#/portal/oib" : "#/portal/onboarding"
+    await send("Emulation.setDeviceMetricsOverride", { width: 1024, height: 768, deviceScaleFactor: 1, mobile: false })
+    const route = state === "12-hub-intune-required" ? "#/portal/governance/scores" : intuneRequired ? "#/portal/oib" : "#/portal/onboarding"
     await evaluate(`localStorage.setItem("tenuvault-appearance", "${theme}"); location.hash = ${JSON.stringify(route)}; location.reload()`)
     await waitFor(`document.body?.innerText.includes(${JSON.stringify(welcome ? "Welcome to TenuVault" : intuneRequired ? "This page needs Intune" : connectScene ? "Connect your tenant" : afterSignIn ? "Signed in as" : "What do you want to back up?")})`)
     await evaluate(`document.documentElement.classList.toggle("dark", ${theme === "dark"}); (() => { const style = document.createElement("style"); style.textContent = "*, *::before, *::after { animation: none !important; transition: none !important; caret-color: transparent !important; }"; document.head.appendChild(style) })()`)
-    if (["03-choice-entra-details", "04-choice-both-details", "05-choice-personal-data", "06-choice-customize", "07-choice-intune-entra", "08-choice-entra-only"].includes(state)) await evaluate(`document.querySelector('[aria-label="Back up Entra ID"]').click()`)
+    if (["03-choice-entra-details", "03-choice-exact-permissions", "04-choice-both-details", "05-choice-personal-data", "06-choice-customize", "07-choice-intune-entra", "08-choice-entra-only"].includes(state)) await evaluate(`document.querySelector('[aria-label="Back up Entra ID"]').click()`)
     if (["03-choice-entra-details", "04-choice-both-details", "05-choice-personal-data"].includes(state)) await expand('[data-onboarding-service="entra"] details')
     if (["04-choice-defender-details", "04-choice-both-details"].includes(state)) { await evaluate(`document.querySelector('[aria-label="Back up Defender"]').click()`); await expand('[data-onboarding-service="defender"] details') }
-    if (state === "05-choice-personal-data") await evaluate(`document.querySelector('[aria-label="Include Groups"]').click()`)
+    if (state === "05-choice-personal-data") await evaluate(`(() => { const input = document.querySelector('[aria-label="Include Groups"]'); input.click(); const region = input.closest('[aria-label="Entra ID coverage"]'); region.scrollTop += input.closest('div').getBoundingClientRect().top - region.getBoundingClientRect().top })()`)
+    if (state === "03-choice-exact-permissions") await expand("[data-exact-permissions]")
     if (state === "06-choice-customize") await expand('[data-customize-access]')
     if (state === "08-choice-entra-only") await evaluate(`document.querySelector('[aria-label="Back up Intune"]').click()`)
     if (state === "09-connect-script") { await click("Use the setup script instead"); await click("Save setup script") }
@@ -213,16 +216,22 @@ try {
     if (state === "10-permissions-missing") { await waitFor(`document.body.innerText.includes("Some chosen permissions are missing")`); await expand('[data-permission-routes]'); await expand('[data-permission-routes] details') }
     if (state.startsWith("11-backup")) await click("Continue")
     await sleep(250)
-    const height = await evaluate(`Math.min(5000, Math.max(1100, ...[...document.querySelectorAll('main')].map(e => e.scrollHeight + 130)))`)
+    const choiceScreen = state.includes("-choice-")
+    if (choiceScreen) {
+      const action = await evaluate(`(() => { const button = [...document.querySelectorAll('button')].find(b => b.textContent.startsWith('Continue with')); const rect = button.getBoundingClientRect(); return { top: rect.top, bottom: rect.bottom, scrollTop: document.querySelector('main')?.scrollTop ?? 0 } })()`)
+      if (action.top < 0 || action.bottom > 768 || action.scrollTop !== 0) throw new Error(`Continue needs scrolling at 1024 by 768 for ${state}: ${JSON.stringify(action)}`)
+      console.log(`Continue visible at 1024 by 768: ${state}-${theme}, bottom ${action.bottom}`)
+    }
+    const height = choiceScreen && !["03-choice-exact-permissions", "06-choice-customize"].includes(state) ? 768 : await evaluate(`Math.min(5000, Math.max(1100, ...[...document.querySelectorAll('main')].map(e => e.scrollHeight + 130)))`)
     await send("Emulation.setDeviceMetricsOverride", { width: 1024, height, deviceScaleFactor: 1, mobile: false })
-    await evaluate(`[document.scrollingElement, ...document.querySelectorAll('*')].filter(e => e && e.scrollHeight > e.clientHeight + 4 && getComputedStyle(e).overflowY !== "visible").forEach(e => e.scrollTop = 0); document.activeElement?.blur?.()`)
+    await evaluate(`[document.scrollingElement, ...document.querySelectorAll('*')].filter(e => e && e.scrollHeight > e.clientHeight + 4 && getComputedStyle(e).overflowY !== "visible" && !e.hasAttribute("aria-label")).forEach(e => e.scrollTop = 0); document.activeElement?.blur?.()`)
     await sleep(150)
     const overflow = await evaluate(`document.documentElement.scrollWidth > 1024`)
     if (overflow) throw new Error(`Horizontal overflow: ${state}`)
     const { data } = await send("Page.captureScreenshot", { format: "png" })
     for (const folder of [shotsDir, docsDir]) writeFileSync(join(folder, `${state}-${theme}.png`), Buffer.from(data, "base64"))
   }
-  const inventory = "# Onboarding flow screenshots\n\nBuilt desktop app at 1024px with fictional tenant and sign-in results. No Microsoft sign-in or registration writes are made. Generated by `node scripts/onboarding-shots.mjs`. Tall screens include all content so permission details and commands can be reviewed.\n\n" + scenes.map(([state, description]) => `* ${state}-light.png, ${state}-dark.png: ${description}\n`).join("")
+  const inventory = "# Onboarding flow screenshots\n\nBuilt desktop app at 1024px with fictional tenant and sign-in results. No Microsoft sign-in or registration writes are made. Generated by `node scripts/onboarding-shots.mjs`. Choice screens use a 1024 by 768 viewport and assert that Continue is visible without scrolling, including expanded cards. Card details scroll inside their card. The exact permissions disclosure and other tall screens include all content for review.\n\n" + scenes.map(([state, description]) => `* ${state}-light.png, ${state}-dark.png: ${description}\n`).join("")
   for (const folder of [shotsDir, docsDir]) writeFileSync(join(folder, "README.md"), inventory)
 } catch (error) {
   exitCode = 1
