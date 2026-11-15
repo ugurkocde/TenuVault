@@ -252,7 +252,12 @@ async function bootstrap(): Promise<void> {
     return savedProxyAuth.list()
   })
 
-  const accounts = accountStore(appStore)
+  const accounts = accountStore(appStore, (tenantId) => {
+    // Sign-out removes the account before MSAL finishes clearing its cache. Invalidate all pending
+    // observations now, including the reader's, even when that later cache operation fails.
+    if (!accounts.get(tenantId)) health.signedOut(tenantId)
+    else health.connectionsChanged(tenantId)
+  })
   // MSAL token traffic goes through the bridged fetch, which is only created below (it needs
   // the license and token plumbing that auth feeds). AuthManager is handed this late-bound
   // delegate instead: it is first used for a sign-in, long after bootstrap assigns the bridge.
@@ -429,7 +434,7 @@ async function bootstrap(): Promise<void> {
   const failedAttempts = new FailedAttemptLog(appStore)
   // The Backup Reader's tokens reach only the backup engine: never the fetch bridge, tokenFor or a
   // portal route, so no restore, revert or other change can ever run with them.
-  const backupReader = new BackupReaderService(tokenStore, { fetch: bridgedFetch, services: (tenantId) => moduleSettings.selection(tenantId) })
+  const backupReader = new BackupReaderService(tokenStore, { fetch: bridgedFetch, services: (tenantId) => moduleSettings.selection(tenantId), connectionChanged: (tenantId) => health.connectionsChanged(tenantId) })
   // Connection health: what the token checks and the backup runs of each tenant observed, and what
   // that adds up to. A check asks Microsoft for a new token without any window, so it goes straight
   // to the sign-in and not through tokenFor: a check that fails must never ask the window for a sign-in.
@@ -437,14 +442,14 @@ async function bootstrap(): Promise<void> {
     store: appStore,
     tenant: (tenantId) => {
       const profile = tenantProfile(tenantId)
-      return profile && { clientId: profile.clientId, storage: isLocalAccount(profile.storageAccountName) ? "local" : "azure" }
+      return profile && { clientId: profile.clientId, storage: isLocalAccount(profile.storageAccountName) ? "local" : "azure", storageId: profile.storageAccountName }
     },
     account: (tenantId) => accounts.get(tenantId)?.homeAccountId ?? null,
     settings: (tenantId) => moduleSettings.get(tenantId),
     token: (tenantId, clientId, resource) => auth.getAccessToken(tenantId, clientId, RESOURCE_SCOPES[resource], true),
     reader: (tenantId) => {
       const reader = backupReader.status(tenantId)
-      return reader && { clientId: reader.clientId, facts: { state: reader.state, notAfter: reader.notAfter, verifiedAt: reader.verifiedAt, verifiedRoles: reader.verifiedRoles, roleChange: reader.roleChange } }
+      return reader && { clientId: reader.clientId, credential: backupReader.connectionIdentity(tenantId)!, facts: { state: reader.state, notAfter: reader.notAfter, verifiedAt: reader.verifiedAt, verifiedRoles: reader.verifiedRoles, roleChange: reader.roleChange } }
     },
     // A new token of the Backup Reader, asked for the way a scheduled backup does: only on a plan
     // that includes the reader, and after the license check. A tenant without either is not asked.
@@ -1391,10 +1396,17 @@ async function bootstrap(): Promise<void> {
     const text = rendererStorageValue(value)
     // The first tenant saved on this computer is the end of the setup.
     const firstTenant = name === "tenuvault_tenants" && connectedTenantIds().length === 0
+    const previousTenants = name === "tenuvault_tenants" ? connectedTenantIds() : []
     appStore.set(RENDERER_STORAGE_PREFIX + name, text)
+    if (name === "tenuvault_tenants") for (const tenant of new Set([...previousTenants, ...connectedTenantIds()])) health.connectionsChanged(tenant)
     if (firstTenant && connectedTenantIds().length > 0) diagnostics.record({ name: "tenant_added" })
   })
-  handleTrusted("storage:remove", (_event, key: unknown) => appStore.delete(RENDERER_STORAGE_PREFIX + rendererStorageKey(key)))
+  handleTrusted("storage:remove", (_event, key: unknown) => {
+    const name = rendererStorageKey(key)
+    const previousTenants = name === "tenuvault_tenants" ? connectedTenantIds() : []
+    appStore.delete(RENDERER_STORAGE_PREFIX + name)
+    for (const tenant of previousTenants) health.connectionsChanged(tenant)
+  })
 
   let importingArchive = false
   handleTrusted("backups:importArchive", async () => {

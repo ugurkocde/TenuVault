@@ -79,6 +79,7 @@ export type AcquireToken = (credential: { tenantId: string; clientId: string; ce
 const KEY = "backupReader."
 
 export class BackupReaderService {
+  private readonly connectionChanged?: (tenantId: string) => void
   private readonly now: () => Date
   private readonly acquire: AcquireToken
   private readonly services: (tenantId: string) => ServiceSelection
@@ -89,11 +90,18 @@ export class BackupReaderService {
     // requests through the bridge are also license-checked there, so this must stay the bridge.
     // services: what the tenant backs up, which decides the roles its reader needs. When left out,
     // the services that are on by default.
-    options: { now?: () => Date; acquire?: AcquireToken; fetch?: typeof fetch; services?: (tenantId: string) => ServiceSelection } = {},
+    options: { now?: () => Date; acquire?: AcquireToken; fetch?: typeof fetch; services?: (tenantId: string) => ServiceSelection; connectionChanged?: (tenantId: string) => void } = {},
   ) {
+    this.connectionChanged = options.connectionChanged
     this.now = options.now ?? (() => new Date())
     this.acquire = options.acquire ?? msalAcquire(options.fetch)
     this.services = options.services ?? (() => DEFAULT_SELECTION)
+  }
+
+  /** The credential used for requests, never the public certificate waiting beside an active one. */
+  connectionIdentity(tenantId: string): string | null {
+    const credential = this.read(tenantId)
+    return (credential?.active ?? credential?.pending)?.thumbprintSha256 ?? null
   }
 
   status(tenantId: string): BackupReaderStatus | null {
@@ -213,6 +221,7 @@ export class BackupReaderService {
 
   remove(tenantId: string): void {
     this.store.delete(KEY + tenantId.toLowerCase())
+    this.connectionChanged?.(tenantId)
   }
 
   /**
@@ -306,6 +315,7 @@ export class BackupReaderService {
 
   private write(credential: BackupReaderCredential): void {
     this.store.set(KEY + credential.tenantId.toLowerCase(), JSON.stringify(credential))
+    this.connectionChanged?.(credential.tenantId)
   }
 }
 

@@ -90,6 +90,23 @@ describe("checkReaderToken", () => {
 })
 
 describe("BackupReaderService", () => {
+  it("announces credential changes synchronously and identifies the active certificate during renewal", async () => {
+    const identities: Array<string | null> = []
+    const reader = new BackupReaderService(store(), { now: () => new Date("2026-10-26T12:00:00Z"), acquire: async () => ({ accessToken: graphToken() }), connectionChanged: (tenant) => { identities.push(reader.connectionIdentity(tenant)) } })
+    expect(reader.connectionIdentity(TENANT)).toBeNull()
+    const original = reader.prepare(TENANT, "LAPTOP-1").thumbprintSha256
+    await reader.verify(TENANT, READER)
+    const pending = reader.prepare(TENANT, "LAPTOP-1").thumbprintSha256
+    expect(pending).not.toBe(original)
+    expect(reader.connectionIdentity(TENANT)).toBe(original)
+    await reader.verify(TENANT, READER, { renewal: true })
+    expect(reader.connectionIdentity(TENANT)).toBe(pending)
+    reader.remove(TENANT)
+    const recreated = reader.prepare(TENANT, "LAPTOP-1").thumbprintSha256
+    expect(recreated).not.toBe(pending)
+    expect(identities).toEqual([original, original, original, pending, null, recreated])
+  })
+
   it("offers no tokens until the reader is verified", async () => {
     const { reader } = service()
     expect(reader.tokens(scheduled)).toBeNull()

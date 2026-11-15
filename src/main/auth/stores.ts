@@ -34,11 +34,17 @@ function parseStoredAccount(raw: string | null): StoredAccount | null {
   return account as StoredAccount
 }
 
-export function accountStore(store: SecureStore): AuthHost["accountStore"] {
+export function accountStore(store: SecureStore, changed?: (tenantId: string) => void): AuthHost["accountStore"] {
   return {
     get: (tenantId) => parseStoredAccount(store.get(PREFIX + tenantId.toLowerCase())),
-    set: (account) => store.set(PREFIX + account.tenantId.toLowerCase(), JSON.stringify(account)),
-    delete: (tenantId) => store.delete(PREFIX + tenantId.toLowerCase()),
+    set: (account) => {
+      store.set(PREFIX + account.tenantId.toLowerCase(), JSON.stringify(account))
+      changed?.(account.tenantId)
+    },
+    delete: (tenantId) => {
+      store.delete(PREFIX + tenantId.toLowerCase())
+      changed?.(tenantId)
+    },
     list: () =>
       store
         .keys()

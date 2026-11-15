@@ -73,6 +73,20 @@ describe("connection health wiring", () => {
     expect(release).toContain("health.forget(tenantId)")
   })
 
+  it("captures identity changes where the account, reader and tenant profile are written", () => {
+    const accountMutations = main.match(/const accounts = accountStore\(appStore,([\s\S]*?)\n {2}\}\)/)?.[1] ?? ""
+    expect(accountMutations).toContain("if (!accounts.get(tenantId)) health.signedOut(tenantId)")
+    expect(accountMutations).toContain("else health.connectionsChanged(tenantId)")
+    expect(main).toContain("connectionChanged: (tenantId) => health.connectionsChanged(tenantId)")
+    expect(host).toContain("credential: backupReader.connectionIdentity(tenantId)!")
+    expect(host).toContain("storageId: profile.storageAccountName")
+    const save = main.match(/handleTrusted\("storage:set",([\s\S]*?)\n {2}\}\)/)?.[1] ?? ""
+    expect(save.indexOf("health.connectionsChanged(tenant)")).toBeGreaterThan(save.indexOf("appStore.set("))
+    expect(save).toContain("...previousTenants, ...connectedTenantIds()")
+    const remove = main.match(/handleTrusted\("storage:remove",([\s\S]*?)\n {2}\}\)/)?.[1] ?? ""
+    expect(remove.indexOf("health.connectionsChanged(tenant)")).toBeGreaterThan(remove.indexOf("appStore.delete("))
+  })
+
   it("keeps observations in the encrypted app state", () => {
     expect(host).toContain("store: appStore,")
   })

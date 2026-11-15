@@ -4,7 +4,7 @@ import { BackupReaderError } from "../src/main/auth/backup-reader"
 import { SignInRequiredError } from "../src/main/auth/msal"
 import { CHECK_INTERVAL_MS, CHECK_TIMEOUT_MS, ConnectionHealth, selectedTenant, type HealthHost } from "../src/main/connection-health/service"
 import type { ServiceChoice } from "../src/shared/connection-health/evaluate"
-import type { ReaderObservation } from "../src/shared/connection-health/model"
+import type { ConnectionMode, ReaderObservation } from "../src/shared/connection-health/model"
 import { DEFAULT_SETUP_CHOICE, graphPermissions } from "../src/shared/services/manifest"
 import type { ModuleId } from "../src/shared/services/modules"
 import { fixture, jwt, refusal, scriptedGraph, TENANT, CLIENT } from "./helpers/backup-fixture"
@@ -31,9 +31,9 @@ function setup(overrides: Partial<HealthHost> = {}) {
   const backing = memoryStore()
   let clock = START.getTime()
   const state = {
-    tenant: { clientId: CLIENT, storage: "local" as "local" | "azure" } as { clientId: string; storage: "local" | "azure" } | null,
+    tenant: { clientId: CLIENT, storage: "local" as "local" | "azure" } as ReturnType<HealthHost["tenant"]>,
     account: ADMIN as string | null,
-    reader: null as { clientId: string; facts: Omit<ReaderObservation, "at"> } | null,
+    reader: null as { clientId: string; credential: string; facts: Omit<ReaderObservation, "at"> } | null,
   }
   const tokens = vi.fn<HealthHost["token"]>(async () => fresh())
   const readerToken = vi.fn<HealthHost["readerToken"]>(async () => `e30.${Buffer.from(JSON.stringify({ roles: ["DeviceManagementApps.Read.All"] })).toString("base64url")}.sig`)
@@ -142,7 +142,7 @@ describe("a check", () => {
   it("tells the window when what is known about a tenant changed", async () => {
     const { health, changed } = setup()
     await health.check(TENANT.toUpperCase(), "again")
-    expect(changed).toHaveBeenCalledWith(TENANT)
+    expect(changed).toHaveBeenCalledWith(TENANT, "admin")
   })
 })
 
@@ -255,7 +255,7 @@ describe("a tenant that is signed out of or removed while a check runs", () => {
 
   it("is not brought back by a late answer of the Backup Reader", async () => {
     const { health, state, readerToken, backing } = setup()
-    state.reader = { clientId: READER, facts: READER_FACTS }
+    state.reader = { clientId: READER, credential: "certificate-1", facts: READER_FACTS }
     let answer: (token: string) => void = () => undefined
     readerToken.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve }))
     const late = health.check(TENANT, "again")
@@ -332,10 +332,10 @@ describe("a check whose identity changed", () => {
     expect(changed).toHaveBeenCalledTimes(1)
   })
 
-  it.each(["account", "registration", "reader"] as const)("invalidates pending data, errors and follow-ups after a %s change and return", async (field) => {
+  it.each(["account", "registration", "reader"] as const)("invalidates only that connection after a %s change and return", async (field) => {
     const { health, state, tokens, readerToken, stored, changed } = setup()
     state.tenant!.storage = "azure"
-    state.reader = { clientId: READER, facts: READER_FACTS }
+    state.reader = { clientId: READER, credential: "certificate-1", facts: READER_FACTS }
     const answers: Array<() => void> = []
     tokens.mockImplementationOnce(() => new Promise((resolve) => answers.push(() => resolve(fresh()))))
     tokens.mockImplementationOnce(() => new Promise((_resolve, reject) => answers.push(() => reject(new Error("refused")))))
@@ -351,21 +351,145 @@ describe("a check whose identity changed", () => {
     state.reader.clientId = READER
     // Observe the return before the original answers arrive, permanently invalidating both queues.
     health.runStarted({ id: "returned" }, { tenantId: TENANT, clientId: CLIENT })
-    const before = JSON.stringify(stored())
     changed.mockClear()
     for (const answer of answers) answer()
     await Promise.all([running, oldQueue, newQueue])
-    expect(JSON.stringify(stored())).toBe(before)
-    expect(changed).not.toHaveBeenCalled()
-    expect(tokens).toHaveBeenCalledTimes(2)
+    const admin = stored()?.connections.find((record) => record.mode === "delegated")
+    const reader = stored()?.connections.find((record) => record.mode === "app-only")
+    if (field === "reader") {
+      expect(admin).toMatchObject({ graph: { permissions: [...SCOPES].sort() }, storage: { permissions: [...SCOPES].sort() } })
+      expect(reader).not.toHaveProperty("graph")
+      expect(changed.mock.calls.map((call) => call[1])).toEqual(["admin", "storage", "admin", "storage"])
+      expect(tokens).toHaveBeenCalledTimes(4)
+    } else {
+      expect(admin).toBeUndefined()
+      expect(reader).toHaveProperty("graph")
+      expect(changed.mock.calls.map((call) => call[1])).toEqual(["reader"])
+      expect(tokens).toHaveBeenCalledTimes(2)
+    }
     expect(readerToken).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("the identity rule for every pending item", () => {
+  // Each row applies to every pending kind below. True means written, false means dropped.
+  const events = [
+    { event: "another admin", admin: false, reader: true },
+    { event: "admin changed and back", admin: false, reader: true },
+    { event: "same admin after sign-out", admin: false, reader: false },
+    { event: "registration changed", admin: false, reader: true },
+    { event: "registration changed and back", admin: false, reader: true },
+    { event: "certificate replaced", admin: true, reader: false },
+    { event: "reader removed", admin: true, reader: false },
+    { event: "reader removed and set up again", admin: true, reader: false },
+    { event: "sign-out", admin: false, reader: false },
+    { event: "tenant removal", admin: false, reader: false },
+  ] as const
+  const kinds = ["check success", "check failure", "queued follow-up", "change notice", "run verification", "run refusal"] as const
+  const cells = events.flatMap((event) => (["admin", "reader"] as const).flatMap((connection) => kinds.map((kind) => ({ ...event, connection, kind, written: event[connection] }))))
+
+  it.each(cells)("$connection $kind after $event: written=$written", async ({ connection, kind, event, written }) => {
+    const base = setup()
+    const { health, state, tokens, readerToken, backing, stored, changed, now, pass } = base
+    state.reader = { clientId: READER, credential: "certificate-1", facts: READER_FACTS }
+    const mode = connection === "admin" ? "delegated" : "app-only"
+    const request = () => ({ tenantId: TENANT, clientId: state.tenant!.clientId })
+    const finish = (id: string, folder: string, refused = false, authMode: ConnectionMode = mode) => health.recordRun({ runId: id, tenantId: TENANT, authMode, trigger: authMode === "app-only" ? "scheduled" : "manual", startedAt: now(), endedAt: now(), status: "Success", coverage: "complete", types: refused ? [{ folder, service: "intune", outcome: "skipped", cause: "role", reason: "Refused", status: 403 }] : [{ folder, service: "intune", outcome: "saved", saved: 1 }] }, request())
+    let currentRun = ""
+    const change = () => {
+      if (event === "another admin" || event === "admin changed and back") state.account = OTHER_ADMIN
+      if (event.startsWith("registration changed")) state.tenant!.clientId = "new-client"
+      if (event === "certificate replaced") state.reader = { ...state.reader!, credential: "certificate-2", facts: { ...READER_FACTS, verifiedAt: now() } }
+      if (event.startsWith("reader removed")) state.reader = null
+      if (event === "sign-out" || event === "same admin after sign-out") health.signedOut(TENANT)
+      if (event === "tenant removal") health.forget(TENANT)
+      health.connectionsChanged(TENANT)
+      if (event === "admin changed and back") state.account = ADMIN
+      if (event === "registration changed and back") state.tenant!.clientId = CLIENT
+      if (event === "reader removed and set up again") state.reader = { clientId: READER, credential: "certificate-1", facts: READER_FACTS }
+      health.connectionsChanged(TENANT)
+      pass(1)
+      // Record under the identity that is current after the event. No stale write may erase it.
+      const currentMode = connection === "reader" && state.reader ? "app-only" : "delegated"
+      currentRun = "current-identity-run"
+      health.runStarted({ id: currentRun, authMode: currentMode }, request())
+      finish(currentRun, "DeviceConfigurations", false, currentMode)
+      changed.mockClear()
+    }
+
+    if (kind === "run verification" || kind === "run refusal") {
+      health.runStarted({ id: "pending-run", authMode: mode }, request())
+      change()
+      finish("pending-run", "Apps", kind === "run refusal")
+      expect(stored()!.connections.some((record) => record.runs.some((run: { runId: string }) => run.runId === "pending-run"))).toBe(written)
+    } else {
+      let resolve = () => undefined as void
+      let reject = () => undefined as void
+      if (connection === "admin") tokens.mockImplementationOnce(() => new Promise((yes, no) => { resolve = () => yes(fresh(WITHOUT_APPS)); reject = () => no(new SignInRequiredError(TENANT, CLIENT, "Refused")) }))
+      else readerToken.mockImplementationOnce(() => new Promise((yes, no) => { resolve = () => yes(jwt({ roles: ["DeviceManagementApps.Read.All"] })); reject = () => no(new BackupReaderError("Refused", { cause: { errorNo: "700027" } })) }))
+      const running = health.check(TENANT, "again")
+      const queued = kind === "queued follow-up" ? health.check(TENANT, "again") : undefined
+      const target = connection === "admin" ? tokens : readerToken
+      if (kind === "change notice") {
+        // Stop between the answer's write and its queued notice. The notice must recheck ownership.
+        const write = backing.set.bind(backing)
+        let intercepted = false
+        vi.spyOn(backing, "set").mockImplementation((key, value) => {
+          write(key, value)
+          if (!intercepted && key === `connectionHealth.${TENANT}` && JSON.parse(value).connections.some((record: { mode: string; graph?: unknown }) => record.mode === mode && record.graph)) {
+            intercepted = true
+            change()
+          }
+        })
+        resolve()
+        await running
+        expect(intercepted).toBe(true)
+        expect(changed.mock.calls.some((call) => call[1] === connection)).toBe(written)
+      } else {
+        change()
+        if (kind === "check failure") reject()
+        else resolve()
+        await running
+        await queued
+        const record = stored()!.connections.find((record) => record.mode === mode && record.clientId === (mode === "delegated" ? CLIENT : READER))
+        if (kind === "queued follow-up") expect(target).toHaveBeenCalledTimes(written ? 2 : 1)
+        expect(!!record?.graph).toBe(written)
+        if (written && kind === "check failure") expect(record!.graph.failure).toBeDefined()
+      }
+    }
+    const kept = stored()!.connections.find((record) => record.runs.some((run: { runId: string }) => run.runId === currentRun))
+    expect(kept).toBeDefined()
+    expect(kept!.verified.DeviceConfigurations).toBeDefined()
+    if (event === "certificate replaced") expect(health.report(TENANT).reader.state).toBe("healthy")
+  })
+})
+
+describe("the storage connection's identity", () => {
+  it.each([false, true])("drops a storage answer when its account changes, including a change back: %s", async (back) => {
+    const { health, state, tokens, stored } = setup()
+    state.tenant = { clientId: CLIENT, storage: "azure", storageId: "original-storage" }
+    let answer = () => undefined as void
+    tokens.mockImplementation(async (_tenant, _client, resource) => resource === "graph" ? fresh() : new Promise((resolve) => { answer = () => resolve(fresh(["storage-permission"])) }))
+    const waiting = health.check(TENANT, "again")
+    state.tenant.storageId = "other-storage"
+    health.connectionsChanged(TENANT)
+    if (back) {
+      state.tenant.storageId = "original-storage"
+      health.connectionsChanged(TENANT)
+    }
+    answer()
+    const report = await waiting
+    expect(report.graph.state).toBe("healthy")
+    expect(report.storage.state).toBe("notChecked")
+    expect(stored()!.connections[0]!.graph.permissions).toEqual([...SCOPES].sort())
+    expect(stored()!.connections[0]).not.toHaveProperty("storage")
   })
 })
 
 describe("the Backup Reader in a check", () => {
   it("is asked for a token only when the admin checks again or a scheduled backup runs with it", async () => {
     const { health, state, readerToken, pass } = setup()
-    state.reader = { clientId: READER, facts: READER_FACTS }
+    state.reader = { clientId: READER, credential: "certificate-1", facts: READER_FACTS }
     for (const trigger of ["launch", "signIn", "opened", "beforeBackup", "afterBackup"] as const) {
       await health.check(TENANT, trigger)
       pass(2 * MINUTE)
@@ -381,7 +505,7 @@ describe("the Backup Reader in a check", () => {
 
   it("answers for a check that would not have asked it, within the minute", async () => {
     const { health, state, tokens, readerToken } = setup()
-    state.reader = { clientId: READER, facts: READER_FACTS }
+    state.reader = { clientId: READER, credential: "certificate-1", facts: READER_FACTS }
     await health.check(TENANT, "beforeBackup", { reader: true })
     await health.check(TENANT, "opened")
     expect(tokens).toHaveBeenCalledTimes(1)
@@ -393,7 +517,7 @@ describe("the Backup Reader in a check", () => {
 
   it("is never asked before its first verification, and its facts show without any token request", async () => {
     const { health, state, readerToken } = setup()
-    state.reader = { clientId: "", facts: { ...READER_FACTS, state: "pending", verifiedAt: null, verifiedRoles: null } }
+    state.reader = { clientId: "", credential: "certificate-1", facts: { ...READER_FACTS, state: "pending", verifiedAt: null, verifiedRoles: null } }
     expect(health.report(TENANT).reader.state).toBe("pending")
     expect((await health.check(TENANT, "again")).reader.state).toBe("pending")
     expect(readerToken).not.toHaveBeenCalled()
@@ -401,9 +525,9 @@ describe("the Backup Reader in a check", () => {
 
   it("shows a renewed or removed reader in the report without a check", async () => {
     const { health, state } = setup()
-    state.reader = { clientId: READER, facts: { ...READER_FACTS, notAfter: new Date(START.getTime() + 5 * DAY).toISOString() } }
+    state.reader = { clientId: READER, credential: "certificate-1", facts: { ...READER_FACTS, notAfter: new Date(START.getTime() + 5 * DAY).toISOString() } }
     expect(health.report(TENANT).reader).toMatchObject({ state: "certificateExpiring", daysLeft: 5 })
-    state.reader = { clientId: READER, facts: READER_FACTS }
+    state.reader = { clientId: READER, credential: "certificate-1", facts: READER_FACTS }
     expect(health.report(TENANT).reader.state).toBe("healthy")
     state.reader = null
     expect(health.report(TENANT).reader).toEqual({ state: "notSetUp", checkedAt: null })
@@ -411,7 +535,7 @@ describe("the Backup Reader in a check", () => {
 
   it("records Microsoft's refusal of the reader, and nothing when the reader may not be used", async () => {
     const { health, state, readerToken, stored, pass } = setup()
-    state.reader = { clientId: READER, facts: READER_FACTS }
+    state.reader = { clientId: READER, credential: "certificate-1", facts: READER_FACTS }
     readerToken.mockRejectedValueOnce(new BackupReaderError("Microsoft refused the Backup Reader (AADSTS7000112). The Backup Reader app registration is disabled.", { cause: Object.assign(new Error("disabled"), { errorCode: "unauthorized_client", errorNo: "7000112" }) }))
     const refused = await health.check(TENANT, "again")
     expect(refused.reader).toMatchObject({ state: "refused", class: "application", code: "AADSTS7000112", checkedAt: START.toISOString() })
@@ -427,14 +551,14 @@ describe("the Backup Reader in a check", () => {
 describe("the Backup Reader after a refusal", () => {
   it("is healthy again once the admin verified it, without another check asking for its token", async () => {
     const { health, state, readerToken, pass, now } = setup()
-    state.reader = { clientId: READER, facts: READER_FACTS }
+    state.reader = { clientId: READER, credential: "certificate-1", facts: READER_FACTS }
     // 11:50: Microsoft does not know the certificate.
     readerToken.mockRejectedValueOnce(new BackupReaderError("Microsoft refused the Backup Reader (AADSTS700027).", { cause: Object.assign(new Error("invalid_client"), { errorCode: "invalid_client", errorNo: "700027" }) }))
     expect((await health.check(TENANT, "again")).reader).toMatchObject({ state: "refused", code: "AADSTS700027", checkedAt: START.toISOString() })
     // 11:59: the admin uploaded the right certificate and verified, which asked Microsoft for a new token and got one.
     pass(9 * MINUTE)
     const verifiedAt = now()
-    state.reader = { clientId: READER, facts: { ...READER_FACTS, verifiedAt } }
+    state.reader = { clientId: READER, credential: "certificate-1", facts: { ...READER_FACTS, verifiedAt } }
     // 12:00: a page opens. An ordinary check asks the reader for no token, and the verification stands for the refusal before it.
     pass(MINUTE)
     expect((await health.check(TENANT, "opened")).reader).toMatchObject({ state: "healthy", checkedAt: verifiedAt })
@@ -459,7 +583,7 @@ describe("backup runs", () => {
 
   it("are kept under the connection and the account that ran them", () => {
     const { health, state, stored, now, changed } = setup()
-    state.reader = { clientId: READER, facts: READER_FACTS }
+    state.reader = { clientId: READER, credential: "certificate-1", facts: READER_FACTS }
     ran(health, outcomes("desktop-1", now(), [saved("Apps")]))
     ran(health, outcomes("desktop-2", now(), [saved("Apps")], "app-only"))
     const records = stored()!.connections
@@ -533,15 +657,15 @@ describe("backup runs", () => {
   it("of the Backup Reader are credited to the reader they started with", () => {
     const OTHER_READER = "77777777-7777-7777-7777-777777777777"
     const { health, state, stored, now } = setup()
-    state.reader = { clientId: READER, facts: READER_FACTS }
+    state.reader = { clientId: READER, credential: "certificate-1", facts: READER_FACTS }
     // The reader is looked up as the run starts, not when it ends.
     health.runStarted({ id: "desktop-1", authMode: "app-only" }, REQUEST)
     state.account = OTHER_ADMIN
     health.recordRun(outcomes("desktop-1", now(), [saved("Apps")], "app-only"), REQUEST)
     expect(stored()!.connections).toMatchObject([{ clientId: READER, mode: "app-only", runs: [{ runId: "desktop-1" }] }])
     // A reader that was replaced, or removed, while the run went on: the run is neither one's.
-    for (const [index, replaced] of [{ clientId: OTHER_READER, facts: READER_FACTS }, null].entries()) {
-      state.reader = { clientId: READER, facts: READER_FACTS }
+    for (const [index, replaced] of [{ clientId: OTHER_READER, credential: "certificate-1", facts: READER_FACTS }, null].entries()) {
+      state.reader = { clientId: READER, credential: "certificate-1", facts: READER_FACTS }
       health.runStarted({ id: `desktop-${index + 2}`, authMode: "app-only" }, REQUEST)
       state.reader = replaced
       health.recordRun(outcomes(`desktop-${index + 2}`, now(), [saved("Apps")], "app-only"), REQUEST)

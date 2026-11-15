@@ -38,16 +38,19 @@ function answered<T>(request: Promise<T>): Promise<T> {
   return Promise.race([request, timeout]).finally(() => clearTimeout(timer))
 }
 
-/** Whose sign-in a backup run reads with, as it was when the run got its job. */
-interface RunStart {
+type ConnectionKind = "admin" | "reader" | "storage"
+
+/** One marker per connection incarnation, including a change back to an earlier identity. */
+interface ConnectionIdentity {
   tenant: string
-  generation: number
-  mode: ConnectionMode
-  /** The app registration the run signs in to: the tenant's for an admin, the Backup Reader's own for the reader. */
-  clientId: string
-  /** The admin who was signed in; left out for the Backup Reader, and when nobody was. */
+  kind: ConnectionKind
+  signature: string
+  key: ConnectionKey
   account?: string
-  /** Agreement of the run's own tokens on each folder; unknown when their permissions differ. */
+}
+
+interface RunStart {
+  identity: ConnectionIdentity
   permissionHeld?: Record<string, boolean | undefined>
 }
 
@@ -55,7 +58,7 @@ export interface HealthHost {
   store: KeyValueStore
   now?: () => Date
   /** The app registration and the storage of a connected tenant; null for a tenant that is not connected. */
-  tenant: (tenantId: string) => { clientId: string; storage: "local" | "azure" } | null
+  tenant: (tenantId: string) => { clientId: string; storage: "local" | "azure"; storageId?: string } | null
   /** The ID of the account signed in to the tenant, never its name; null when nobody is. */
   account: (tenantId: string) => string | null
   settings: (tenantId: string) => Record<ModuleId, ServiceChoice>
@@ -65,11 +68,11 @@ export interface HealthHost {
    */
   token: (tenantId: string, clientId: string, resource: "graph" | "storage") => Promise<{ accessToken: string; fromCache?: boolean }>
   /** What this device knows about the tenant's Backup Reader; null when it has none. */
-  reader: (tenantId: string) => { clientId: string; facts: Omit<ReaderObservation, "at"> } | null
+  reader: (tenantId: string) => { clientId: string; credential: string; facts: Omit<ReaderObservation, "at"> } | null
   /** Asks Microsoft for a new token of the Backup Reader; null when the reader may not be used now. */
   readerToken: (tenantId: string) => Promise<string | null>
   /** Called when what is known about a tenant changed. */
-  changed?: (tenantId: string) => void
+  changed?: (tenantId: string, connection?: ConnectionKind) => void
 }
 
 /**
@@ -83,19 +86,10 @@ export interface HealthHost {
 export class ConnectionHealth {
   private readonly observations: HealthStore
   private readonly now: () => Date
-  private readonly running = new Map<string, Promise<ConnectionHealthReport>>()
-  /** The check that follows the running one, for triggers that must not be answered by a check that started before them. */
-  private readonly following = new Map<string, { identity: object; promise: Promise<ConnectionHealthReport> }>()
-  /** A new identity gets a new marker, even if an earlier sign-in later comes back. */
-  private readonly identities = new Map<string, { signature: string }>()
+  private readonly running = new Map<string, Promise<void>>()
+  private readonly following = new Map<string, { identity: ConnectionIdentity; promise: Promise<void> }>()
+  private readonly identities = new Map<string, ConnectionIdentity>()
   private readonly checkedAt = new Map<string, number>()
-  /**
-   * Per tenant: how often it was signed out of or removed. A check notes the count when it is asked
-   * for. Whatever it brings after the count moved on belongs to a sign-in that is gone, and is
-   * dropped whole: a token like a refusal, a check that waited like one that ran, and the notice.
-   */
-  private readonly generations = new Map<string, number>()
-  /** The backup runs under way, by run ID, from runStarted to runEnded. */
   private readonly runs = new Map<string, RunStart>()
 
   constructor(private readonly host: HealthHost) {
@@ -105,7 +99,7 @@ export class ConnectionHealth {
 
   /**
    * Checks the tenant's connection and returns the report. Triggers that follow each other are
-   * settled here: one check runs per tenant at a time and everyone who asks meanwhile gets its
+   * settled here: one check runs per connection at a time and everyone who asks meanwhile gets its
    * result, and a trigger within a minute of the last check gets what that check found.
    *
    * The admin asking to check again, a new sign-in and a backup that failed always ask Microsoft,
@@ -117,33 +111,44 @@ export class ConnectionHealth {
    */
   check(tenantId: string, trigger: CheckTrigger, options: { reader?: boolean; failed?: boolean } = {}): Promise<ConnectionHealthReport> {
     const tenant = tenantId.toLowerCase()
-    const identity = this.checkIdentity(tenant)
-    // Every sign-in is followed by a check, so this is where a run under way is seen to have lost its sign-in:
-    // it is credited to nobody, also when that sign-in comes back before the run ends.
-    for (const [runId, started] of this.runs) if (started.tenant === tenant && !this.unchanged(started)) this.runs.delete(runId)
-    const reader = options.reader === true || trigger === "again"
-    const lane = `${tenant}|${reader ? "reader" : "admin"}`
+    this.connectionsChanged(tenant)
+    const connected = this.host.tenant(tenant)
+    if (!connected) return Promise.reject(new Error("Connect this tenant first."))
     const always = trigger === "again" || trigger === "signIn" || (trigger === "afterBackup" && options.failed === true)
-    // A check that also asks the Backup Reader answers for one that would not have.
-    const running = this.running.get(lane) ?? (reader ? undefined : this.running.get(`${tenant}|reader`))
+    const kinds: ConnectionKind[] = ["admin", ...(connected.storage === "azure" ? ["storage" as const] : []), ...(options.reader === true || trigger === "again" ? ["reader" as const] : [])]
+    return Promise.all(kinds.map((kind) => {
+      const identity = this.connection(tenant, kind)
+      return identity ? this.checkConnection(identity, always) : undefined
+    })).then(() => this.report(tenant))
+  }
+
+  private checkConnection(identity: ConnectionIdentity, always: boolean): Promise<void> {
+    const lane = `${identity.tenant}|${identity.kind}`
+    const running = this.running.get(lane)
     if (running && !always) return running
     if (running) {
       const queued = this.following.get(lane)
-      const following: Promise<ConnectionHealthReport> = (queued?.identity === identity ? queued.promise : undefined) ?? running.then(() => undefined, () => undefined).then(() => {
+      if (queued?.identity === identity) return queued.promise
+      const following = running.then(() => undefined, () => undefined).then(() => {
         if (this.following.get(lane)?.promise === following) this.following.delete(lane)
-        // The identity that asked for this check must still be current when its turn comes.
-        return this.checkIdentity(tenant) === identity ? this.start(lane, tenant, reader) : this.report(tenant)
+        if (this.unchanged(identity)) return this.start(identity)
       })
       this.following.set(lane, { identity, promise: following })
       return following
     }
-    const last = Math.max(this.checkedAt.get(`${tenant}|reader`) ?? -Infinity, reader ? -Infinity : (this.checkedAt.get(lane) ?? -Infinity))
-    if (!always && this.now().getTime() - last < CHECK_INTERVAL_MS) return Promise.resolve(this.report(tenant))
-    return this.start(lane, tenant, reader)
+    if (!always && this.now().getTime() - (this.checkedAt.get(lane) ?? -Infinity) < CHECK_INTERVAL_MS) return Promise.resolve()
+    return this.start(identity)
   }
 
-  private start(lane: string, tenant: string, reader: boolean): Promise<ConnectionHealthReport> {
-    const check = this.observe(tenant, reader, this.checkIdentity(tenant)).finally(() => {
+  private start(identity: ConnectionIdentity): Promise<void> {
+    const lane = `${identity.tenant}|${identity.kind}`
+    const check = this.observe(identity).then(() => {
+      // The notice and debounce marker belong to the connection that asked, just like its answer.
+      if (!this.unchanged(identity)) return
+      this.checkedAt.set(lane, this.now().getTime())
+      this.keepBaseline(identity.tenant)
+      this.host.changed?.(identity.tenant, identity.kind)
+    }).finally(() => {
       if (this.running.get(lane) === check) this.running.delete(lane)
     })
     this.running.set(lane, check)
@@ -152,6 +157,7 @@ export class ConnectionHealth {
 
   /** What is known about the tenant now, from what was observed. Asks Microsoft nothing. */
   report(tenantId: string): ConnectionHealthReport {
+    this.connectionsChanged(tenantId)
     return this.evaluate(tenantId.toLowerCase()).report
   }
 
@@ -177,9 +183,9 @@ export class ConnectionHealth {
    */
   runStarted(run: { id: string; authMode?: ConnectionMode }, request: { tenantId: string; clientId: string }): void {
     const tenant = request.tenantId.toLowerCase()
-    this.checkIdentity(tenant)
-    const identity = this.identity(tenant, run.authMode ?? "delegated", request.clientId)
-    if (identity) this.runs.set(run.id, { tenant, generation: this.generation(tenant), ...identity })
+    this.connectionsChanged(tenant)
+    const identity = this.connection(tenant, run.authMode === "app-only" ? "reader" : "admin")
+    if (identity && (identity.kind === "reader" || identity.key.clientId === request.clientId.toLowerCase())) this.runs.set(run.id, { identity })
   }
 
   /**
@@ -190,10 +196,10 @@ export class ConnectionHealth {
   recordRun(outcomes: RunOutcomes, request: { tenantId: string; clientId: string }): void {
     const tenant = request.tenantId.toLowerCase()
     const started = this.runs.get(outcomes.runId)
-    if (!started || started.mode !== outcomes.authMode || started.generation !== this.generation(tenant) || !this.unchanged(started)) return
-    this.observations.recordRun({ tenantId: tenant, clientId: started.clientId, mode: started.mode }, runObservation(outcomes, started.account, started.permissionHeld))
+    if (!started || started.identity.tenant !== tenant || started.identity.key.mode !== outcomes.authMode || !this.unchanged(started.identity)) return
+    this.observations.recordRun(started.identity.key, runObservation(outcomes, started.identity.account, started.permissionHeld))
     this.keepBaseline(tenant)
-    this.host.changed?.(tenant)
+    this.host.changed?.(tenant, started.identity.kind)
   }
 
   /** Permission names from tokens the engine already used, never another token request or a health check. */
@@ -224,53 +230,48 @@ export class ConnectionHealth {
     this.forgetChecks(tenantId)
   }
 
-  private generation(tenant: string): number {
-    return this.generations.get(tenant) ?? 0
-  }
-
-  /**
-   * Moves the tenant's generation on, so nothing a check under way brings is kept, and lets go of
-   * those checks: whoever signs in next gets a check of their own, at once.
-   */
   private forgetChecks(tenantId: string): void {
     const tenant = tenantId.toLowerCase()
-    this.generations.set(tenant, this.generation(tenant) + 1)
-    this.identities.delete(tenant)
-    for (const lane of [`${tenant}|admin`, `${tenant}|reader`]) {
+    for (const kind of ["admin", "reader", "storage"]) {
+      const lane = `${tenant}|${kind}`
+      this.identities.delete(lane)
       this.checkedAt.delete(lane)
       this.running.delete(lane)
       this.following.delete(lane)
     }
-    for (const [runId, started] of this.runs) if (started.tenant === tenant) this.runs.delete(runId)
+    for (const [runId, started] of this.runs) if (started.identity.tenant === tenant) this.runs.delete(runId)
   }
 
-  /** The sign-in a run of this mode reads with now; null for the Backup Reader of a tenant that has none. */
-  private identity(tenant: string, mode: ConnectionMode, clientId: string): Pick<RunStart, "mode" | "clientId" | "account"> | null {
-    if (mode === "app-only") {
-      const reader = this.host.reader(tenant)
-      return reader?.clientId ? { mode, clientId: reader.clientId.toLowerCase() } : null
+  /** Called synchronously at identity mutations, so changing and changing back cannot revive pending work. */
+  connectionsChanged(tenantId: string): void {
+    const tenant = tenantId.toLowerCase()
+    for (const kind of ["admin", "reader", "storage"] as const) this.connection(tenant, kind)
+  }
+
+  /** The single definition of the identity of each connection. Credential identifiers stay in memory. */
+  private connection(tenant: string, kind: ConnectionKind): ConnectionIdentity | null {
+    const connected = this.host.tenant(tenant)
+    const reader = kind === "reader" ? this.host.reader(tenant) : null
+    const account = kind !== "reader" ? this.host.account(tenant) ?? undefined : undefined
+    const clientId = (kind === "reader" ? reader?.clientId : connected?.clientId)?.toLowerCase()
+    const lane = `${tenant}|${kind}`
+    if (!connected || !clientId || (kind === "storage" && connected.storage !== "azure")) {
+      this.identities.delete(lane)
+      this.checkedAt.delete(lane)
+      return null
     }
-    const account = this.host.account(tenant)
-    return { mode, clientId: clientId.toLowerCase(), ...(account ? { account } : {}) }
-  }
-
-  /** Whether the sign-in a run started with is still the tenant's. */
-  private unchanged(started: RunStart): boolean {
-    const connected = this.host.tenant(started.tenant)
-    const now = connected && this.identity(started.tenant, started.mode, connected.clientId)
-    return !!now && now.clientId === started.clientId && now.account === started.account
-  }
-
-  /** Captures every identity a check can observe; a change invalidates answers, waiting checks and notices together. */
-  private checkIdentity(tenant: string): object {
-    const signature = JSON.stringify([this.host.tenant(tenant)?.clientId.toLowerCase(), this.host.account(tenant), this.host.reader(tenant)?.clientId.toLowerCase()])
-    let identity = this.identities.get(tenant)
+    const signature = JSON.stringify([tenant, clientId, account, kind === "reader" ? reader!.credential : kind === "storage" ? connected.storageId ?? connected.storage : undefined])
+    let identity = this.identities.get(lane)
     if (!identity || identity.signature !== signature) {
-      identity = { signature }
-      this.identities.set(tenant, identity)
-      for (const lane of [`${tenant}|admin`, `${tenant}|reader`]) this.checkedAt.delete(lane)
+      identity = { tenant, kind, signature, key: { tenantId: tenant, clientId, mode: kind === "reader" ? "app-only" : "delegated" }, ...(account ? { account } : {}) }
+      this.identities.set(lane, identity)
+      this.checkedAt.delete(lane)
     }
     return identity
+  }
+
+  private unchanged(identity: ConnectionIdentity): boolean {
+    return this.connection(identity.tenant, identity.kind) === identity
   }
 
   private adminKey(tenant: string): ConnectionKey | null {
@@ -278,57 +279,27 @@ export class ConnectionHealth {
     return connected && { tenantId: tenant, clientId: connected.clientId, mode: "delegated" }
   }
 
-  private async observe(tenant: string, reader: boolean, identity: object): Promise<ConnectionHealthReport> {
-    const connected = this.host.tenant(tenant)
-    if (!connected) throw new Error("Connect this tenant first.")
-    const key: ConnectionKey = { tenantId: tenant, clientId: connected.clientId, mode: "delegated" }
-    await Promise.all([
-      this.observeToken(key, "graph", identity),
-      connected.storage === "azure" ? this.observeToken(key, "storage", identity) : undefined,
-      reader ? this.observeReader(tenant, identity) : undefined,
-    ])
-    // A different identity took over meanwhile: no answer or notice belongs to the current one.
-    if (this.checkIdentity(tenant) !== identity) return this.report(tenant)
-    this.checkedAt.set(`${tenant}|${reader ? "reader" : "admin"}`, this.now().getTime())
-    this.keepBaseline(tenant)
-    this.host.changed?.(tenant)
-    return this.report(tenant)
-  }
-
-  /**
-   * One token request for a check, and what came of it. The time kept is when the answer came
-   * back, never a time from inside the token. A token MSAL took from its cache was not issued for
-   * this check, so nothing is kept for it and the last real answer stands.
-   */
-  private async observeToken(key: ConnectionKey, resource: "graph" | "storage", identity: object): Promise<void> {
-    const account = this.host.account(key.tenantId) ?? undefined
+  private async observe(identity: ConnectionIdentity): Promise<void> {
+    const { tenant, key, kind, account } = identity
     let observation: TokenObservation
     try {
-      const token = await answered(this.host.token(key.tenantId, key.clientId, resource))
-      if (token.fromCache !== false) return
-      observation = this.issued(token.accessToken)
+      if (kind === "reader") {
+        const reader = this.host.reader(tenant)
+        if (!reader || !this.unchanged(identity)) return
+        this.observations.recordReader(key, { ...reader.facts, at: this.now().toISOString() })
+        if (reader.facts.state !== "verified") return
+        const token = await answered(this.host.readerToken(tenant))
+        if (token === null) return
+        observation = this.issued(token)
+      } else {
+        const token = await answered(this.host.token(tenant, key.clientId, kind === "admin" ? "graph" : "storage"))
+        if (token.fromCache !== false) return
+        observation = this.issued(token.accessToken)
+      }
     } catch (error) {
       observation = { at: this.now().toISOString(), failure: signInFailure(error) }
     }
-    if (this.checkIdentity(key.tenantId) === identity) this.observations.recordToken(key, resource, observation, account)
-  }
-
-  /** The Backup Reader's facts on this device, and for a verified reader the answer to a new token request. */
-  private async observeReader(tenant: string, identity: object): Promise<void> {
-    const reader = this.host.reader(tenant)
-    if (!reader?.clientId) return
-    const key: ConnectionKey = { tenantId: tenant, clientId: reader.clientId, mode: "app-only" }
-    this.observations.recordReader(key, { ...reader.facts, at: this.now().toISOString() })
-    if (reader.facts.state !== "verified") return
-    let observation: TokenObservation
-    try {
-      const token = await answered(this.host.readerToken(tenant))
-      if (token === null) return
-      observation = this.issued(token)
-    } catch (error) {
-      observation = { at: this.now().toISOString(), failure: signInFailure(error) }
-    }
-    if (this.checkIdentity(tenant) === identity) this.observations.recordToken(key, "graph", observation)
+    if (this.unchanged(identity)) this.observations.recordToken(key, kind === "storage" ? "storage" : "graph", observation, account)
   }
 
   /** What a token Microsoft issued for a check shows: its permissions, as of now. */
