@@ -26,6 +26,28 @@ export const SIGN_IN_HEALTH_TEXT: Record<SignInHealthState, string> = {
   unreachable: "Microsoft did not answer the check. Current access is not known. Check your connection, then check again.",
 }
 
+/** A storage token does not prove the account can write blobs in the selected storage account. */
+export const STORAGE_HEALTH_TEXT: Record<SignInHealthState, string> = {
+  healthy: "Storage token acquired. This does not verify write access to your storage account. Run a backup to prove files can be written.",
+  local: "Backups stay on this computer. No storage token is needed. A backup proves files can be written to the selected folder.",
+  notChecked: "Storage token not checked yet. Write access is not known. Select Check again, then run a backup to prove files can be written.",
+  unknown: "Microsoft refused the storage token check for an unknown reason. Backups may be unable to write files. Check the code and sign-in logs in storage settings, then check again.",
+  signInNeeded: "Storage sign-in needed. Backups may be unable to write files. Sign in again in storage settings, then run a backup to verify writes.",
+  mfaRequired: "Microsoft requires MFA or another challenge for the storage token. Backups may be unable to write files. Sign in again in storage settings and complete the prompt.",
+  blockedByConditionalAccess: "Conditional Access blocked the storage token. Backups may be unable to write files. Ask your administrator to check the sign-in logs and use a device and location the policy allows.",
+  consentMissing: "Permission or admin consent for the storage token is missing. Backups may be unable to write files. Ask your administrator to check Azure Storage delegated permissions and consent, then check again.",
+  registrationNotFoundInTenant: "App registration not found in this tenant during the storage token check. Backups may be unable to write files. Check the tenant, client ID and consent in storage settings.",
+  registrationMisconfigured: "The app registration is not configured for the storage sign-in. Backups may be unable to write files. Ask your administrator to check public client and localhost redirect settings.",
+  applicationDisabled: "The enterprise application is disabled for the storage sign-in. Backups may be unable to write files. Ask your administrator to allow sign-in to that enterprise application.",
+  servicePrincipalMissing: "The enterprise application is missing for the storage sign-in. Backups may be unable to write files. Ask your administrator to check the tenant and provision or consent to the application.",
+  notAssigned: "Your account is not assigned to the storage sign-in application. Backups may be unable to write files. Ask your administrator to assign your account or group.",
+  accountDisabled: "Your account is disabled for the storage sign-in. Backups may be unable to write files. Contact your administrator.",
+  accountLockedOrBlocked: "Your account is locked or Microsoft blocked the storage sign-in address. Backups may be unable to write files. Ask your administrator to check the sign-in logs; this code does not distinguish the causes.",
+  wrongTenantOrAccount: "The tenant or account for the storage token does not match. Backups may be unable to write files. Check the tenant and sign in again in storage settings.",
+  throttled: "Microsoft asked TenuVault to slow down the storage token check. Write access is not known. Wait a few minutes, then check again.",
+  unreachable: "Microsoft did not answer the storage token check. Write access is not known. Check your connection, then check again.",
+}
+
 export const READER_HEALTH_TEXT: Record<ReaderHealthState, string> = {
   healthy: "Connected. The Backup Reader is available for scheduled backups.",
   notSetUp: "Not set up. Scheduled backups use your sign-in. Set up the optional Backup Reader in Background backups if needed.",
@@ -53,9 +75,8 @@ export function verificationText(verified: VerifiedHealth): string {
   const who = verified.mode === "app-only" ? "the Backup Reader" : "your sign-in"
   const date = verified.at ? ` on ${healthDate(verified.at)}` : ""
   if (verified.state === "verified") return `Verified by the last backup${date} with ${who}.`
-  if (verified.state === "partly") return `Partly verified by the last backup${date} with ${who}.`
   if (verified.state === "noBackup") return "Not verified by a recent backup. Run a backup to verify access."
-  return `Not verified by the last backup${date} with ${who}.`
+  return `The backup${date} with ${who} could not read: ${verified.notVerified.join(", ")}.`
 }
 
 export function changeText(change: HealthChange, since: string | null): string {
@@ -79,11 +100,24 @@ const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
 export function permissionRemediation(report: Pick<ConnectionHealthReport, "tenantId" | "clientId">, missing: readonly string[]) {
   const known = new Set(knownPermissions("delegated")[0]!.permissions)
   const names = [...new Set(missing)].filter(name => known.has(name))
+  // The CLI replaces Graph grants, including individual grants. Preserve tenant-wide scopes,
+  // and stop for administrator review when individual grants would be removed or broadened.
   const commands = [
-    `az login --tenant ${quote(report.tenantId)} --allow-no-subscriptions`,
-    ...names.map(name => `permissionId=$(az ad sp show --id 00000003-0000-0000-c000-000000000000 --query "oauth2PermissionScopes[?value=='${name}'].id | [0]" -o tsv)\n[ -n "$permissionId" ] && az ad app permission add --id ${quote(report.clientId)} --api 00000003-0000-0000-c000-000000000000 --api-permissions "$permissionId=Scope"`),
-    `az ad app permission admin-consent --id ${quote(report.clientId)}`,
+    "(",
+    "set -euo pipefail",
+    `az login --tenant ${quote(report.tenantId)} --allow-no-subscriptions || exit 1`,
+    'signedInTenant=$(az account show --query tenantId -o tsv) || exit 1',
+    `[ "$(printf '%s' "$signedInTenant" | tr '[:upper:]' '[:lower:]')" = ${quote(report.tenantId.toLowerCase())} ] || { echo "Wrong tenant. No permissions changed." >&2; exit 1; }`,
+    'graphId=$(az ad sp show --id 00000003-0000-0000-c000-000000000000 --query id -o tsv) || exit 1',
+    '[ -n "$graphId" ] || exit 1',
+    `individualGrants=$(az ad app permission list-grants --id ${quote(report.clientId)} --query "[?resourceId=='$graphId' && consentType=='Principal'] | length(@)" -o tsv) || exit 1`,
+    '[ "$individualGrants" = "0" ] || { echo "Individual Graph consent exists. Ask your administrator to merge the missing scopes without replacing individual grants." >&2; exit 1; }',
+    `existingScopes=$(az ad app permission list-grants --id ${quote(report.clientId)} --query "[?resourceId=='$graphId' && consentType=='AllPrincipals'].scope" -o tsv) || exit 1`,
+    ...names.map(name => `permissionId=$(az ad sp show --id 00000003-0000-0000-c000-000000000000 --query "oauth2PermissionScopes[?value=='${name}'].id | [0]" -o tsv) || exit 1\n[ -n "$permissionId" ] || exit 1\naz ad app permission add --id ${quote(report.clientId)} --api 00000003-0000-0000-c000-000000000000 --api-permissions "$permissionId=Scope" || exit 1`),
+    `scopes=$(printf '%s\\n' "$existingScopes" ${quote(names.join(" "))} | tr ' \\t' '\\n' | LC_ALL=C sort -u | sed '/^$/d' | paste -sd ' ' -)`,
+    `az ad app permission grant --id ${quote(report.clientId)} --api 00000003-0000-0000-c000-000000000000 --consent-type AllPrincipals --scope "$scopes" || exit 1`,
+    ")",
   ].join("\n")
-  const request = `Please add exactly these delegated Microsoft Graph permissions to TenuVault's app registration ${report.clientId} in tenant ${report.tenantId}: ${names.join(", ")}. Grant admin consent after reviewing the registration's pending permissions. Keep its other permissions. Then I will select Check again in Services and permissions and run a backup to verify access.`
+  const request = `Please add exactly these delegated Microsoft Graph permissions to TenuVault's app registration ${report.clientId} in tenant ${report.tenantId}: ${names.join(", ")}. Grant tenant-wide delegated consent for these scopes only, preserving existing consent. Do not consent other pending permissions. The Azure CLI route merges existing tenant-wide Graph scopes and stops if individual grants exist, so they can be preserved separately. Then I will select Check again in Services and permissions and run a backup to verify access.`
   return { names, commands, request }
 }

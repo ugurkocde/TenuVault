@@ -126,11 +126,19 @@ The connection check requests a fresh token without opening a sign-in window. **
 
 For missing permissions, expand **Add the missing permissions**. The three routes name exactly the missing manifest permissions for the selected access level:
 
-* **Azure CLI commands**, for Bash or zsh, resolve delegated permission IDs from Microsoft's Graph service principal and add those permissions to the connected registration. They never create another registration.
+* **Azure CLI commands**, for Bash or zsh, resolve delegated permission IDs from Microsoft's Graph service principal and add those permissions to the connected registration. They stop after a failed or cancelled login, a tenant mismatch, or any failed lookup or add. They never create another registration.
 * **Registration in Entra** opens API permissions for that client ID and lists the exact names to add.
 * **Text for your administrator** includes the tenant ID, client ID, permission names and next steps.
 
-An administrator must review every pending permission on that registration before granting admin consent: Microsoft grants consent to its declared set. Adding permissions in TenuVault itself is not available yet. The **Access to request** choice grants nothing and never blocks a restore the current token permits.
+The CLI grants tenant-wide delegated consent for exactly the missing scopes, keeping the scopes already consented for Microsoft Graph. It does not consent other pending permissions. Azure CLI's `permission grant` replaces the existing grant, so the generated commands read existing tenant-wide scopes and pass their union with the missing scopes. These CLI changes are not transactional: an earlier declaration can remain saved if a later step fails, and a failed grant can leave consent removed. Check consent and rerun after fixing the failure. If individual Graph grants exist, the commands stop before changing anything, so your administrator can preserve those grants separately.
+
+The Entra link includes both the connected tenant and client ID. The portal's **Grant admin consent** action consents the registration's full declared set, including other pending permissions. Review those separately before using that action. See the [Azure CLI reference](https://learn.microsoft.com/en-us/cli/azure/ad/app/permission#az-ad-app-permission-grant) and its [grant implementation](https://github.com/Azure/azure-cli/blob/dev/src/azure-cli/azure/cli/command_modules/role/custom.py).
+
+Backup and restore permission status are shown separately. If backup permissions are present but restore permissions are missing, the card says **Backups work. Restore needs: ...** and names the **Backup and restore** access level that asks for them. Choose **Backup** under **Areas and access** if you only want backup permissions requested.
+
+![Backup permissions present with a restore-only gap](/images/services/restore-only-gap-light.png)
+
+Adding permissions in TenuVault itself is not available yet. The **Access to request** choice grants nothing and never blocks a restore the current token permits.
 
 ![A missing permission with the commands, registration link and administrator request](/images/services/missing-permission-light.png)
 

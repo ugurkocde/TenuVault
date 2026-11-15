@@ -78,12 +78,19 @@ Open **Settings > Services and permissions**, choose the tenant and select **Che
 | **App registration is not configured** | Check the public client and localhost redirect configuration. |
 | **Account is locked or Microsoft blocked the sign-in address** | Check the sign-in logs. The error code does not distinguish these two causes. |
 | **Permission or admin consent is missing** | Review the registration's permissions and consent with your administrator. When exact permissions are known, expand the missing-permission routes. |
+| **Backups work. Restore needs: ...** | Only restore permissions are missing. The Backup and restore access level requests them; select Backup under Areas and access if you only need backup permissions. |
+| **Storage token acquired** | A storage token does not prove writes to your storage account. Run a backup; check the storage data role and firewall if writes fail. |
+| **The backup on [date] with your sign-in could not read: [types]** | Open that backup result for the listed types. This does not mean the whole backup failed. |
 | **Permissions present, not verified yet** | Run a backup. The new permission has not yet been verified by a read. |
 | **Read refused although the permission is present** | Check the role of the sign-in and the product license. The report cannot tell which applies unless Microsoft gave that cause. |
 | **Backup Reader lost access, your sign-in verified** | Fix the reader's access separately. A successful manual backup does not prove scheduled backups can read the same policies. |
 | **App registration replaced** | Review what the replacement lacks, add only the needed permissions, grant consent, check again and run a backup. |
 
 ![The Backup Reader lost access while the admin's backup still verified the area](/images/services/reader-lost-access-dark.png)
+
+If the Azure CLI route stops after login or reports a tenant mismatch, no later permission command runs. Sign in to the connected tenant and rerun. The commands consent only the missing delegated scopes and preserve existing tenant-wide scopes. They stop before any change when individual Graph consent exists; ask your administrator to merge the missing scopes without replacing those grants. Entra's Grant admin consent action also includes other pending permissions.
+
+![A storage token refusal has storage-specific next steps](/images/services/storage-consentMissing-dark.png)
 
 The change list may include a dated observation from an earlier sign-in. It does not describe the current account's role or permissions. Health is advisory; it never blocks starting a backup. For a **Coverage incomplete** backup, read the result lines for each type that was not read in full before relying on that backup for recovery.
 

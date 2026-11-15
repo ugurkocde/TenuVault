@@ -113,6 +113,7 @@ import { backupAuthorization, featureAccess, withRecoveryBackups } from "./featu
 import { TenantRecords } from "./features/records"
 import { DriftJobs, driftScanRoutes } from "./drift/jobs"
 import { afterScheduledBackup } from "./features/reports"
+import { MODULES } from "../shared/services/modules"
 import { ModuleSettings } from "./services/settings"
 import { servicesStatus } from "./services/status"
 import { requireServiceAccess } from "./services/access"
@@ -257,6 +258,7 @@ async function bootstrap(): Promise<void> {
     // observations now, including the reader's, even when that later cache operation fails.
     if (!accounts.get(tenantId)) health.signedOut(tenantId)
     else health.connectionsChanged(tenantId)
+    mainWindow?.webContents.send("auth:accountsChanged", tenantId)
   })
   // MSAL token traffic goes through the bridged fetch, which is only created below (it needs
   // the license and token plumbing that auth feeds). AuthManager is handed this late-bound
@@ -1443,9 +1445,13 @@ async function bootstrap(): Promise<void> {
     return servicesStatus(tenantId, moduleSettings, (force) => tokenFor(tenantId, clientId, RESOURCE_SCOPES.graph, force), refresh)
   }
   handleTrusted("services:status", (_event, tenantId: unknown, clientId: unknown, refresh: unknown) => servicesFor(tenantId, clientId, refresh === true))
-  handleTrusted("services:setEnabled", (_event, tenantId: unknown, clientId: unknown, id: unknown, enabled: unknown) => {
+  handleTrusted("services:setEnabled", (_event, tenantId: unknown, clientId: unknown, id: unknown, enabled: unknown, confirmation: unknown) => {
     // Both IDs are checked before saving, so a refused request never changes what backups include.
     if (typeof tenantId !== "string" || typeof clientId !== "string") throw new Error("Choose a tenant.")
+    const module = MODULES.find(service => service.id === id)
+    if (enabled === false && module?.defaultOn && (!confirmation || typeof confirmation !== "object" || !("confirmed" in confirmation) || confirmation.confirmed !== true)) {
+      throw new Error(`Confirm turning off ${module.label}: new manual and scheduled backups will leave out this service.`)
+    }
     moduleSettings.set(tenantId, id, enabled)
     return servicesFor(tenantId, clientId, false)
   })

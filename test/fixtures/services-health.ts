@@ -27,8 +27,17 @@ export function healthFixture(): ConnectionHealthReport {
   return report
 }
 
+/** Real evaluator output: backups can read with Read.All while requested restore access lacks Write. */
+export function restoreGapFixture(): ConnectionHealthReport {
+  return evaluateHealth({
+    tenantId: HEALTH_TENANT, clientId: HEALTH_CLIENT, reader: null, storage: "local",
+    settings: Object.fromEntries(MODULES.map(module => [module.id, { enabled: module.id === "intune", access: module.defaultAccess, areas: {} }])) as Parameters<typeof evaluateHealth>[0]["settings"],
+    connections: [{ clientId: HEALTH_CLIENT, mode: "delegated", account: "fixture-account", graph: { at: AT, permissions: permissions.filter(name => name !== "DeviceManagementConfiguration.ReadWrite.All") }, runs: [], verified: {}, refused: {}, updatedAt: AT }],
+  }, new Date(AT)).report
+}
+
 export function healthScene(name: string): ConnectionHealthReport {
-  const report = healthFixture()
+  const report = name === "restore-only-gap" ? restoreGapFixture() : healthFixture()
   const intune = report.services.find(service => service.id === "intune")!
   const area = intune.areas[0]!
   const missing = "DeviceManagementConfiguration.ReadWrite.All"
@@ -48,6 +57,10 @@ export function healthScene(name: string): ConnectionHealthReport {
   if (name.startsWith("cause-")) {
     area.verified = { state: "notVerified", cause: name.slice(6) as HealthCause, at: AT, mode: name === "cause-reader" || name === "cause-signedIn" ? "app-only" : "delegated", notVerified: ["ConfigurationPolicies"] }
     intune.verified = { ...area.verified }
+  }
+  if (name === "partly-verified") {
+    area.verified = { state: "notVerified", cause: "notRead", at: AT, mode: "delegated", notVerified: ["ConfigurationPolicies"] }
+    intune.verified = { ...area.verified, state: "partly" }
   }
   if (name === "changes") {
     report.since = "2026-11-12T10:00:00Z"

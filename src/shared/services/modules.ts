@@ -348,8 +348,8 @@ export function restoreAccessCommands(module: Pick<ServiceModule, "restoreAccess
 }
 
 /** The app registration's API permissions page in the Entra admin center. */
-export function entraApiPermissionsUrl(clientId: string): string {
-  return `https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/CallAnAPI/appId/${encodeURIComponent(clientId)}/isMSAApp~/false`
+export function entraApiPermissionsUrl(clientId: string, tenantId?: string): string {
+  return `https://entra.microsoft.com/${tenantId ? encodeURIComponent(tenantId) : ""}#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/CallAnAPI/appId/${encodeURIComponent(clientId)}/isMSAApp~/false`
 }
 
 /**

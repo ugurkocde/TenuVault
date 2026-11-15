@@ -58,7 +58,7 @@ describe("The Settings card reads switchable", () => {
     next.services.find(service => service.id === "intune")!.enabled = false
     state.report.mockResolvedValue(next)
     await act(async () => { serviceSwitch(container, "Intune")!.click() })
-    expect(state.setEnabled).toHaveBeenCalledWith(TENANT, "22222222-2222-2222-2222-222222222222", "intune", false)
+    expect(state.setEnabled).toHaveBeenCalledWith(TENANT, "22222222-2222-2222-2222-222222222222", "intune", false, { confirmed: true })
     expect(serviceSwitch(container, "Intune")?.checked).toBe(false)
     expect(container.textContent).toContain("Off. New manual and scheduled backups leave out this service.")
   })

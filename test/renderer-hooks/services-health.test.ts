@@ -6,11 +6,11 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { ServicesSettings } from "../../src/renderer/components/ServicesSettings"
 import { ServiceBackupNotice } from "../../src/renderer/components/ServiceBackupNotice"
 import { healthDate, HEALTH_CAUSE_TEXT, READER_HEALTH_TEXT, SIGN_IN_HEALTH_TEXT, permissionRemediation } from "../../src/renderer/lib/connection-health-view"
-import { healthFixture, healthScene, HEALTH_TENANT, HEALTH_CLIENT } from "../fixtures/services-health"
+import { healthFixture, healthScene, restoreGapFixture, HEALTH_TENANT, HEALTH_CLIENT } from "../fixtures/services-health"
 
-const mocks = vi.hoisted(() => ({ check: vi.fn(), report: vi.fn(), acknowledge: vi.fn(), setEnabled: vi.fn(), setArea: vi.fn(), setAccess: vi.fn(), tenants: [] as unknown[] }))
+const mocks = vi.hoisted(() => ({ check: vi.fn(), report: vi.fn(), acknowledge: vi.fn(), setEnabled: vi.fn(), setArea: vi.fn(), setAccess: vi.fn(), changed: null as null | ((tenantId: string) => void), tenants: [] as unknown[] }))
 vi.mock("~/contexts/TenantContext", () => ({ useTenants: () => mocks.tenants }))
-vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { health: { check: mocks.check, report: mocks.report, acknowledge: mocks.acknowledge, onChanged: () => () => {} }, services: { setEnabled: mocks.setEnabled, setArea: mocks.setArea, setAccess: mocks.setAccess } } }))
+vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { auth: { onAccountsChanged: (listener: (tenantId: string) => void) => { mocks.changed = listener; return () => { mocks.changed = null } } }, health: { check: mocks.check, report: mocks.report, acknowledge: mocks.acknowledge, onChanged: () => () => {} }, services: { setEnabled: mocks.setEnabled, setArea: mocks.setArea, setAccess: mocks.setAccess } } }))
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 let root: Root
 let container: HTMLDivElement
@@ -64,12 +64,7 @@ for (const [state, text] of Object.entries(SIGN_IN_HEALTH_TEXT)) {
     expect([...container.querySelectorAll("button")].some(button => button.textContent === "Check again")).toBe(true)
     if (!["healthy", "local"].includes(state)) expect(container.querySelector('a[href="/portal/settings?section=signin"]')).not.toBeNull()
   })
-  it(`shows the storage ${state} state separately`, async () => {
-    mocks.check.mockResolvedValue(healthScene(`storage-${state}`))
-    await render()
-    expect(container.textContent).toContain(text)
-    if (!["healthy", "local"].includes(state)) expect(container.querySelector('a[href="/portal/settings?section=storage"]')).not.toBeNull()
-  })
+
 }
 for (const [state, text] of Object.entries(READER_HEALTH_TEXT)) {
   it(`shows the Backup Reader ${state} state and settings action`, async () => {
@@ -101,7 +96,7 @@ it("shows all services, Conditional Access separately and the personal data stat
   await toggle("Include Groups in backups")
   expect(mocks.setArea).toHaveBeenCalledWith(HEALTH_TENANT, "entra", "groups", true)
   await toggle("Include Entra Conditional Access in backups")
-  expect(mocks.setEnabled).toHaveBeenCalledWith(HEALTH_TENANT, HEALTH_CLIENT, "conditionalAccess", false)
+  expect(mocks.setEnabled).toHaveBeenCalledWith(HEALTH_TENANT, HEALTH_CLIENT, "conditionalAccess", false, undefined)
 })
 it("does not turn Intune off before confirmation and leaves it on after Cancel", async () => {
   await render()
@@ -112,7 +107,7 @@ it("does not turn Intune off before confirmation and leaves it on after Cancel",
   expect(mocks.setEnabled).not.toHaveBeenCalled()
   await toggle("Include Intune in backups")
   await click("Turn off Intune")
-  expect(mocks.setEnabled).toHaveBeenCalledExactlyOnceWith(HEALTH_TENANT, HEALTH_CLIENT, "intune", false)
+  expect(mocks.setEnabled).toHaveBeenCalledExactlyOnceWith(HEALTH_TENANT, HEALTH_CLIENT, "intune", false, { confirmed: true })
 })
 it("saves the requested access without granting permissions", async () => {
   await render()
@@ -126,7 +121,9 @@ it("shows exactly the missing permissions in all three routes and leaves the in-
   const routes = container.querySelector("[data-permission-routes]")!
   expect(routes.textContent).toContain("Azure CLI commands")
   expect(routes.textContent).toContain("Text for your administrator")
-  expect(routes.querySelector('a[href*="CallAnAPI"]')?.getAttribute("href")).toContain(HEALTH_CLIENT)
+  const registration = routes.querySelector('a[href*="CallAnAPI"]')!.getAttribute("href")!
+  expect(new URL(registration).pathname).toBe(`/${HEALTH_TENANT}`)
+  expect(registration).toContain(`/appId/${HEALTH_CLIENT}/`)
   expect(routes.textContent).toContain("DeviceManagementConfiguration.ReadWrite.All")
   expect(routes.textContent).not.toContain("Policy.ReadWrite.ConditionalAccess")
   expect(routes.textContent).toContain("Add in the app: not available yet")
@@ -198,4 +195,93 @@ it("generates commands for only manifest gaps, with no duplicate or unknown perm
   expect(fix.commands).toContain("oauth2PermissionScopes[?value=='Policy.Read.All']")
   expect(fix.commands).not.toContain("Not.A.Permission")
   expect(fix.request).toContain(HEALTH_TENANT)
+})
+
+it("distinguishes backup permission from restore-only gaps using real evaluator output", async () => {
+  const report = restoreGapFixture()
+  const intune = report.services.find(service => service.id === "intune")!
+  expect(intune.permissions).toBe("present")
+  expect(intune.areas.some(area => area.restore === "missing")).toBe(true)
+  mocks.check.mockResolvedValue(report)
+  await render()
+  const card = container.querySelector('[data-service="intune"]')!
+  expect(card.textContent).toContain("Backup: Permissions present. Restore: Permissions missing.")
+  expect(card.textContent).toContain("Backups work. Restore needs: DeviceManagementConfiguration.ReadWrite.All.")
+  expect(card.textContent).toContain("The Backup and restore access level asks for these permissions. Choose Backup under Areas and access")
+})
+
+it.each(["notVerified", "partly"] as const)("names exactly what the %s backup could not read", async state => {
+  const report = healthScene("cause-notRead")
+  report.services[0]!.verified.state = state
+  mocks.check.mockResolvedValue(report)
+  await render()
+  expect(container.textContent).toContain(`The backup on ${healthDate("2026-11-15T10:00:00Z")} with your sign-in could not read: ConfigurationPolicies.`)
+  expect(container.textContent).not.toContain("Not verified by the last backup")
+})
+
+it("reloads on activation after the same tenant switches account and hides the previous verification while loading", async () => {
+  await render()
+  expect(container.textContent).toContain("with your sign-in")
+  await render(createElement(ServicesSettings, { active: false }))
+  let resolve!: (report: ReturnType<typeof healthFixture>) => void
+  mocks.check.mockReturnValue(new Promise(done => { resolve = done }))
+  await render(createElement(ServicesSettings, { active: true }))
+  expect(mocks.check).toHaveBeenCalledTimes(2)
+  expect(container.textContent).not.toContain("with your sign-in")
+  const next = restoreGapFixture()
+  await act(async () => resolve(next))
+  expect(container.textContent).not.toContain("with your sign-in")
+  expect(container.textContent).toContain("Not verified by a recent backup")
+})
+
+it("refreshes a changed account while active and drops the pending previous account answer", async () => {
+  let resolve!: (report: ReturnType<typeof healthFixture>) => void
+  mocks.check.mockReturnValue(new Promise(done => { resolve = done }))
+  await render()
+  const next = healthScene("graph-signInNeeded")
+  next.services.forEach(service => { service.verified = { state: "noBackup", notVerified: [] }; service.areas.forEach(area => { area.verified = service.verified }) })
+  mocks.check.mockResolvedValue(next)
+  await act(async () => mocks.changed!(HEALTH_TENANT))
+  await act(async () => resolve(healthFixture()))
+  expect(mocks.check).toHaveBeenCalledTimes(2)
+  expect(container.textContent).toContain("Sign-in needed")
+  expect(container.textContent).not.toContain("Verified by the last backup")
+})
+
+it("reloads when the connected client ID changes within a tenant", async () => {
+  await render()
+  const next = { ...healthFixture(), clientId: "replacement" }
+  mocks.tenants = [{ id: 1, name: "Contoso", credentials: { tenantId: HEALTH_TENANT, appId: "replacement" } }]
+  mocks.check.mockResolvedValue(next)
+  await render()
+  expect(mocks.check).toHaveBeenCalledTimes(2)
+})
+
+const storageExpectations = {
+  healthy: "Storage token acquired. This does not verify write access to your storage account. Run a backup to prove files can be written.",
+  local: "Backups stay on this computer. No storage token is needed. A backup proves files can be written to the selected folder.",
+  notChecked: "Storage token not checked yet.",
+  unknown: "Microsoft refused the storage token check for an unknown reason.",
+  signInNeeded: "Storage sign-in needed.",
+  mfaRequired: "Microsoft requires MFA or another challenge for the storage token.",
+  blockedByConditionalAccess: "Conditional Access blocked the storage token.",
+  consentMissing: "Permission or admin consent for the storage token is missing.",
+  registrationNotFoundInTenant: "App registration not found in this tenant during the storage token check.",
+  registrationMisconfigured: "The app registration is not configured for the storage sign-in.",
+  applicationDisabled: "The enterprise application is disabled for the storage sign-in.",
+  servicePrincipalMissing: "The enterprise application is missing for the storage sign-in.",
+  notAssigned: "Your account is not assigned to the storage sign-in application.",
+  accountDisabled: "Your account is disabled for the storage sign-in.",
+  accountLockedOrBlocked: "Your account is locked or Microsoft blocked the storage sign-in address.",
+  wrongTenantOrAccount: "The tenant or account for the storage token does not match.",
+  throttled: "Microsoft asked TenuVault to slow down the storage token check.",
+  unreachable: "Microsoft did not answer the storage token check.",
+}
+it.each(Object.entries(storageExpectations))("explains storage %s independently of Graph read access", async (state, expected) => {
+  mocks.check.mockResolvedValue(healthScene(`storage-${state}`))
+  await render()
+  const storage = [...container.querySelectorAll("h3")].find(h => h.textContent === "Backup storage")!.parentElement!
+  expect(storage.textContent).toContain(expected)
+  expect(storage.textContent).not.toContain("what can be read")
+  if (!["healthy", "local"].includes(state)) expect(storage.querySelector('a[href="/portal/settings?section=storage"]')).not.toBeNull()
 })

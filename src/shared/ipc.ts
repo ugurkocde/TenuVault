@@ -448,6 +448,8 @@ export interface TenuVaultBridge {
     signIn: (tenant: string, clientId: string, options?: { loginHint?: string }) => Promise<SignedInAccount>
     signOut: (tenantId: string) => Promise<void>
     accounts: () => Promise<SignedInAccount[]>
+    /** Called after an account is saved or removed, before any old verification is reused. */
+    onAccountsChanged: (listener: (tenantId: string) => void) => () => void
     /** Signs in again to an existing tenant profile, for `scope` (Microsoft Graph when omitted). */
     reauthenticate: (tenantId: string, clientId: string, scope?: string) => Promise<SignedInAccount>
     /** Called when a background request needs the admin to sign in again. Returns an unsubscribe function. */
@@ -539,7 +541,7 @@ export interface TenuVaultBridge {
     /** The tenant's service modules that have types to back up, and what its app registration may do with each. `refresh` gets a new token, so recent consent changes show. */
     status: (tenantId: string, clientId: string, refresh?: boolean) => Promise<ServicesStatus>
     /** Turns a service module on or off for the tenant's backups. */
-    setEnabled: (tenantId: string, clientId: string, id: ModuleId, enabled: boolean) => Promise<ServicesStatus>
+    setEnabled: (tenantId: string, clientId: string, id: ModuleId, enabled: boolean, confirmation?: { confirmed: true }) => Promise<ServicesStatus>
     /**
      * Sets what TenuVault asks for at setup for a service of the tenant: read access for backups, or
      * read and write access so it can also restore. Answers with the tenant's connection health,

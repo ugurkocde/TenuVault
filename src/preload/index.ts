@@ -41,6 +41,7 @@ const bridge: TenuVaultPreloadBridge = {
     signIn: (tenant, clientId, options) => invoke("auth:signIn", tenant, clientId, options),
     signOut: (tenantId) => invoke("auth:signOut", tenantId),
     accounts: () => invoke("auth:accounts"),
+    onAccountsChanged: (listener) => subscribe<string>("auth:accountsChanged", listener),
     reauthenticate: (tenantId, clientId, scope) => invoke("auth:reauthenticate", tenantId, clientId, scope),
     cancelSignIn: () => invoke("auth:cancelSignIn"),
     copySignInLink: (kind) => invoke("auth:copySignInLink", kind),
@@ -85,7 +86,7 @@ const bridge: TenuVaultPreloadBridge = {
   },
   services: {
     status: (tenantId, clientId, refresh) => invoke("services:status", tenantId, clientId, refresh === true),
-    setEnabled: (tenantId, clientId, id, enabled) => invoke("services:setEnabled", tenantId, clientId, id, enabled),
+    setEnabled: (tenantId, clientId, id, enabled, confirmation) => invoke("services:setEnabled", tenantId, clientId, id, enabled, confirmation),
     setAccess: (tenantId, id, access) => invoke("services:setAccess", tenantId, id, access),
     setArea: (tenantId, id, area, enabled) => invoke("services:setArea", tenantId, id, area, enabled),
   },

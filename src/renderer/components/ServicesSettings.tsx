@@ -9,7 +9,7 @@ import { useTenants } from "~/contexts/TenantContext"
 import type { AreaHealth, ConnectionHealthReport, ServiceHealth, SignInHealth } from "../../shared/connection-health/model"
 import { MODULE_BY_ID, entraApiPermissionsUrl } from "../../shared/services/modules"
 import { optionalPermissionStatus, type OptionalPermissionStatus } from "../../shared/services/optional-permissions"
-import { HEALTH_CAUSE_TEXT, READER_HEALTH_TEXT, SIGN_IN_HEALTH_TEXT, changeText, healthDate, permissionRemediation, verificationText } from "../lib/connection-health-view"
+import { HEALTH_CAUSE_TEXT, READER_HEALTH_TEXT, SIGN_IN_HEALTH_TEXT, STORAGE_HEALTH_TEXT, changeText, healthDate, permissionRemediation, verificationText } from "../lib/connection-health-view"
 import { bridge } from "../lib/bridge"
 import { settingsHref } from "../lib/settings-section"
 import { toast } from "../lib/toast"
@@ -41,15 +41,15 @@ function PermissionRoutes({ report, missing }: { report: ConnectionHealthReport;
     <summary className="cursor-pointer font-medium text-blue-800">Add the missing permissions ({fix.names.length})</summary>
     <div className="mt-3 space-y-3">
       <p className="break-words">{fix.names.join(", ")}</p>
-      <p>Add these as delegated Microsoft Graph permissions and grant admin consent. An administrator must review all pending permissions on the registration before granting consent.</p>
+      <p>Add these as delegated Microsoft Graph permissions. The CLI grants tenant-wide consent for only these scopes, preserves existing tenant-wide scopes and stops if individual consent needs separate review. Other pending permissions are not consented.</p>
       <details><summary className="cursor-pointer font-medium">Azure CLI commands</summary>
         <p className="mt-2 text-xs">Run in Bash or zsh with Azure CLI installed. These add permissions to this registration; they do not create a new one.</p>
         <pre className="my-2 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-card p-3 text-xs">{fix.commands}</pre>
         <Button variant="outline" size="sm" onClick={() => void copy(fix.commands, "the Azure CLI commands")}>Copy Azure CLI commands</Button>
       </details>
       <details><summary className="cursor-pointer font-medium">Registration in Entra</summary>
-        <p className="my-2 text-xs">API permissions, Add a permission, Microsoft Graph, Delegated permissions. Add exactly the names above, review pending permissions, then grant admin consent.</p>
-        <a className="inline-flex items-center gap-1 underline" href={entraApiPermissionsUrl(report.clientId)} target="_blank" rel="noreferrer">Open API permissions in Entra<ExternalLink aria-hidden="true" className="size-3" /></a>
+        <p className="my-2 text-xs">API permissions, Add a permission, Microsoft Graph, Delegated permissions. Add exactly the names above. Use the CLI route to consent only these scopes. The portal’s Grant admin consent action also consents other pending permissions; review those with your administrator first.</p>
+        <a className="inline-flex items-center gap-1 underline" href={entraApiPermissionsUrl(report.clientId, report.tenantId)} target="_blank" rel="noreferrer">Open API permissions in Entra<ExternalLink aria-hidden="true" className="size-3" /></a>
       </details>
       <details><summary className="cursor-pointer font-medium">Text for your administrator</summary>
         <p className="my-2 break-words text-xs">{fix.request}</p>
@@ -65,7 +65,6 @@ function Verification({ value }: { value: AreaHealth["verified"] }) {
   return <div className="space-y-1 text-xs text-gray-600">
     <p>{verificationText(value)}</p>
     {value.cause && <p>{HEALTH_CAUSE_TEXT[value.cause]}</p>}
-    {value.notVerified.length > 0 && <p className="break-words">Not read: {value.notVerified.join(", ")}.</p>}
   </div>
 }
 
@@ -81,7 +80,8 @@ function Area({ area, service, report, busy, run }: { area: AreaHealth; service:
       {area.optIn && <Switch checked={area.enabled} disabled={busy || !service.enabled} label={`Include ${area.label} in backups`} onChange={enabled => run(() => bridge.services.setArea(report.tenantId, service.id, area.id, enabled))} />}
     </div>
     {area.personalData && <p className="text-xs text-gray-600">{PERSONAL_DATA[area.id] ?? "Stores personal data in backup files. Review who can access your backup storage before turning this area on."}</p>}
-    <PermissionState state={area.permissions} />
+    <p className="text-xs text-gray-600">Backup: <PermissionState state={area.permissions} />. Restore: <PermissionState state={area.restore} />.</p>
+    {area.enabled && area.permissions === "present" && area.restore === "missing" && service.access === "restore" && <p className="text-xs text-gray-600">Backups work. Restore needs: {area.missing.join(", ")}. The Backup and restore access level asks for these permissions. Choose Backup under Areas and access to request only backup permissions.</p>}
     {area.enabled ? service.hasTypes ? <Verification value={area.verified} /> : <p className="text-xs text-gray-500">Not verified: this version has no backup types for this area yet.</p> : <p className="text-xs text-gray-500">Not included in backups.</p>}
     {area.losses.map(loss => <p key={`${loss.mode}/${loss.folder}`} className="break-words text-xs text-amber-800">
       {loss.mode === "app-only" ? "Scheduled backups with the Backup Reader cannot read" : "Backups with your sign-in cannot read"} {loss.folder}, since {healthDate(loss.since)}. {HEALTH_CAUSE_TEXT[loss.cause]}
@@ -92,6 +92,8 @@ function Area({ area, service, report, busy, run }: { area: AreaHealth; service:
 
 function Service({ service, conditionalAccess, report, busy, toggle, run }: { service: ServiceHealth; conditionalAccess?: ServiceHealth; report: ConnectionHealthReport; busy: boolean; toggle: (service: ServiceHealth, enabled: boolean) => void; run: (action: () => Promise<ConnectionHealthReport>) => void }) {
   const losses = service.areas.flatMap(area => area.losses)
+  const included = service.areas.filter(area => area.enabled)
+  const restore = !included.length ? "unknown" : included.every(area => area.restore === "present") ? "present" : included.some(area => area.restore === "missing") ? "missing" : "unknown"
   return <section className="rounded-2xl border border-border p-4" data-service={service.id}>
     <div className="flex items-center justify-between gap-3">
       <h3 className="font-medium text-gray-900">{service.label}</h3>
@@ -99,7 +101,8 @@ function Service({ service, conditionalAccess, report, busy, toggle, run }: { se
     </div>
     <p className="mt-1 text-xs text-gray-500">{MODULE_BY_ID.get(service.id)?.description}</p>
     <div className="mt-3 space-y-1">
-      <PermissionState state={service.permissions} />
+      <p className="text-xs text-gray-600">Backup: <PermissionState state={service.permissions} />. Restore: <PermissionState state={restore} />.</p>
+      {service.enabled && service.permissions === "present" && service.access === "restore" && service.missing.length > 0 && <p className="text-sm text-gray-600">Backups work. Restore needs: {service.missing.join(", ")}. The Backup and restore access level asks for these permissions. Choose Backup under Areas and access to request only backup permissions.</p>}
       {!service.enabled && <p className="text-sm text-gray-600">Off. New manual and scheduled backups leave out this service.</p>}
       {!service.hasTypes ? <p className="text-sm text-gray-600">This version has no backup types for {service.label} yet. Turning it on saves your choice; it does not back up these areas yet.</p> : service.enabled ? <Verification value={service.verified} /> : null}
       {losses.length > 0 && <p className="text-sm text-amber-800">{losses.some(loss => loss.mode === "app-only") ? "The Backup Reader lost access, even if your sign-in verified a backup." : "Your sign-in lost access."} See the affected areas below.</p>}
@@ -125,7 +128,7 @@ function Service({ service, conditionalAccess, report, busy, toggle, run }: { se
 function SignInState({ label, state, storage = false }: { label: string; state: SignInHealth; storage?: boolean }) {
   return <div className="min-w-0 rounded-xl bg-muted p-3">
     <h3 className="text-sm font-medium text-gray-900">{label}</h3>
-    <p className="mt-1 text-xs text-gray-600">{SIGN_IN_HEALTH_TEXT[state.state]}</p>
+    <p className="mt-1 text-xs text-gray-600">{(storage ? STORAGE_HEALTH_TEXT : SIGN_IN_HEALTH_TEXT)[state.state]}</p>
     {state.checkedAt && <p className="mt-1 text-xs text-gray-500">Checked {healthDate(state.checkedAt)}</p>}
     {state.code && <p className="mt-1 break-words text-xs text-gray-600">{state.code}{state.link && <>: <a href={state.link} target="_blank" rel="noreferrer" className="underline">Microsoft's description</a></>}</p>}
     {state.state !== "healthy" && state.state !== "local" && <Link className="mt-2 inline-block text-xs font-medium text-blue-700 underline" to={settingsHref(storage ? "storage" : "signin")}>{storage ? "Open storage settings" : "Open sign-in settings"}</Link>}
@@ -159,9 +162,17 @@ function TenantServices({ tenantId, clientId, name, active }: { tenantId: string
   }
   useEffect(() => {
     alive.current = true
-    void run(() => bridge.health.check(tenantId))
-    return () => { alive.current = false; generation.current++ }
-  }, [tenantId, clientId])
+    // Hidden Settings panels stay mounted. Discard old account evidence before each activation.
+    setReport(null)
+    if (active) void run(() => bridge.health.check(tenantId))
+    const unsubscribe = bridge.auth?.onAccountsChanged?.(changed => {
+      if (active && changed.toLowerCase() === tenantId.toLowerCase()) {
+        setReport(null)
+        void run(() => bridge.health.check(tenantId))
+      }
+    })
+    return () => { alive.current = false; generation.current++; unsubscribe?.() }
+  }, [tenantId, clientId, active])
 
   useEffect(() => {
     if (!active || !report?.changes.length || !report.acknowledgement || acknowledged.current.has(report.acknowledgement)) return
@@ -180,11 +191,14 @@ function TenantServices({ tenantId, clientId, name, active }: { tenantId: string
   }, [report, tenantId, active])
 
   const toggle = async (service: ServiceHealth, enabled: boolean) => {
+    const sent = generation.current
+    let confirmed = false
     if (!enabled && MODULE_BY_ID.get(service.id)?.defaultOn) {
       const ok = await confirm({ title: `Turn off ${service.label}?`, description: `${MODULE_BY_ID.get(service.id)?.description} New manual backups and scheduled backups will stop backing up ${service.label}. Existing backups stay available.`, confirmLabel: `Turn off ${service.label}`, destructive: true })
-      if (!ok || !alive.current) return
+      if (!ok || !alive.current || sent !== generation.current) return
+      confirmed = true
     }
-    await run(async () => { await bridge.services.setEnabled(tenantId, clientId, service.id, enabled); return bridge.health.report(tenantId) })
+    await run(async () => { await bridge.services.setEnabled(tenantId, clientId, service.id, enabled, confirmed ? { confirmed: true } : undefined); return bridge.health.report(tenantId) })
   }
   return <div className="space-y-4">
     {confirmDialog}
@@ -212,7 +226,7 @@ function TenantServices({ tenantId, clientId, name, active }: { tenantId: string
         <ul className="list-disc space-y-2 pl-4">{report.changes.map((change, index) => <li key={index} className="break-words">{changeText(change, report.since)}</li>)}</ul>
       </section>}
       {report.services.filter(service => service.id !== "conditionalAccess").map(service => <Service key={service.id} service={service} conditionalAccess={service.id === "entra" ? report.services.find(entry => entry.id === "conditionalAccess") : undefined} report={report} busy={busy} toggle={(service, enabled) => void toggle(service, enabled)} run={action => void run(action)} />)}
-      <OptionalPermissions entries={optionalPermissionStatus(report.granted ? { kind: "delegated", permissions: new Set(report.granted) } : undefined)} clientId={clientId} checking={busy} />
+      <OptionalPermissions tenantId={tenantId} entries={optionalPermissionStatus(report.granted ? { kind: "delegated", permissions: new Set(report.granted) } : undefined)} clientId={clientId} checking={busy} />
     </>}
   </div>
 }
@@ -234,7 +248,7 @@ export function ServicesSettings({ active = true }: { active?: boolean }) {
  * Delegated permissions the setup script only adds on request. Each one turns on a single
  * feature; without it that feature fails while the rest keeps working.
  */
-function OptionalPermissions({ entries, clientId, checking }: { entries: OptionalPermissionStatus[]; clientId: string; checking: boolean }) {
+function OptionalPermissions({ entries, clientId, tenantId, checking }: { entries: OptionalPermissionStatus[]; clientId: string; tenantId: string; checking: boolean }) {
   return (
     <section aria-labelledby="optional-permissions-heading" className="space-y-2 border-t border-gray-100 pt-4 dark:border-gray-800">
       <h3 id="optional-permissions-heading" className="text-sm font-medium text-gray-900">Optional permissions</h3>
@@ -255,7 +269,7 @@ function OptionalPermissions({ entries, clientId, checking }: { entries: Optiona
             {entry.granted === false && (
               <span className="ml-auto flex flex-wrap items-center gap-2 text-xs text-gray-500">
                 <span>New app registration: <span className="font-mono">{entry.setupSwitch}</span></span>
-                <a href={entraApiPermissionsUrl(clientId)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 underline underline-offset-2">Open in Entra<ExternalLink className="h-3 w-3" aria-hidden="true" /></a>
+                <a href={entraApiPermissionsUrl(clientId, tenantId)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 underline underline-offset-2">Open in Entra<ExternalLink className="h-3 w-3" aria-hidden="true" /></a>
               </span>
             )}
           </li>
