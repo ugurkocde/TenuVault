@@ -84,6 +84,8 @@ be paused if the preview's Intune integration needs a fix, or an app update may 
 This check is free and sends no Microsoft token, tenant ID or license key. An unavailable
 control service prevents a new capture; existing backups remain available to export offline.
 
+For every address that App Backup contacts, what is sent to it and what to allow through a firewall or proxy, see [Network connections and data flows](/security/data-flows/#app-backup).
+
 Backup does not change assignments or start an installation. **Changing an app to Required can cause Intune to install it independently of TenuVault.** There is no background watcher waiting for that installation, and TenuVault does not reconstruct an installer from Program Files or an installed app. A successful enrollment check or an already-installed app alone does not prove that Intune will grant installer access.
 
 The helper reads the Intune agent's recently discovered service address. If it cannot find that address, sync the PC with Intune and retry. This preview requires your Windows account to be a local administrator. Approval with a different Windows account is not supported. Cancelling approval or the capture leaves no completed backup. If a Windows approval prompt remains after cancellation, dismiss it; its expired request cannot continue.
@@ -140,7 +142,7 @@ Open **Backups** to view the encrypted folder for the selected tenant. Intune ca
 
 Each stored item also offers **Open local folder**. This folder contains encrypted backup files; use **Export installer** in TenuVault to produce a usable installer payload. When viewing one completed backup, **View all backups** returns to the full catalog.
 
-An installer capture must match the requested tenant, live app and committed version, then pass HMAC, size and plaintext SHA-256 checks before publication. Its receipt retains a hash of the opaque device content service identifier; that fingerprint is not a Microsoft Graph file ID. Interrupted or failed staging is not listed as a backup. The Windows payload is a source ZIP, not a byte-identical copy of the outer `.intunewin` originally uploaded to Intune. New captures also retain encrypted app settings. Restore verifies the captured ZIP, encrypts it with fresh upload keys, uploads it through Microsoft Graph beta and checks Intune’s content commit and app publication before reporting success.
+An installer capture must match the requested tenant, live app and committed version, then pass HMAC, size and plaintext SHA-256 checks before publication. Its receipt retains a hash of the opaque device content service identifier; that fingerprint is not a Microsoft Graph file ID. Interrupted or failed staging is not listed as a backup. The Windows payload is a source ZIP, not a byte-identical copy of the outer `.intunewin` originally uploaded to Intune. New captures also retain encrypted app settings. Restore verifies the captured ZIP, encrypts it with fresh upload keys, uploads it to the Azure Storage address that Intune returns through Microsoft Graph beta and checks Intune’s content commit and app publication before reporting success.
 
 <figure class="docs-screenshot">
   <a href="/images/screenshots/app-backup-installers.webp" aria-label="Open full-size screenshot: app backup installers">
@@ -176,7 +178,7 @@ Restore creates a new app; it does not overwrite an existing destination app or 
 
 Assignments, group IDs, assignment filters, categories and custom scope tags are not copied. The new app uses the destination's default scope tag. Apps with dependencies, supersedence or Intune-hosted install/uninstall script references require additional mapping or script-upload support and are blocked before creation. This is a deliberate restore operation, not continuous synchronization.
 
-Capture requires an enrolled Windows PC. Restoring an existing supported Win32 backup uses Microsoft Graph and does not require enrollment in the destination or Windows elevation. The source tenant can be offline when the backup already contains its settings; destination access is always required.
+Capture requires an enrolled Windows PC. Restoring an existing supported Win32 backup uses Microsoft Graph and the Azure Storage upload address that Intune returns. It does not require enrollment in the destination or Windows elevation. The source tenant can be offline when the backup already contains its settings; destination access is always required.
 
 ### Verify a restored app before deploying broadly
 
@@ -216,3 +218,4 @@ If a folder cannot be read, check its location and import the matching key. Afte
 - [Connect your tenant](/getting-started/connect-tenant/)
 - [What gets backed up](/backups/coverage/): app settings and installer content are separate.
 - [Encryption and recovery key](/security/encryption/)
+- [Network connections and data flows](/security/data-flows/#app-backup): the addresses App Backup contacts and what is sent to each.
