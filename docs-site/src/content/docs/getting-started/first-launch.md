@@ -14,7 +14,7 @@ While no tenant is connected, TenuVault always opens the guided setup, **Set up 
 
 ## What the welcome screen shows
 
-* Three short points on what TenuVault does: back up your Intune policies encrypted on this computer, restore a single policy or a whole set, and see what changed between backups.
+* Three short points on what TenuVault does: choose Microsoft services to protect with encrypted backups you own, restore a single policy or a whole set, and see what changed between backups.
 * **Connect your tenant**: opens **Set up TenuVault**.
 * A note that new tenants start with a Pro trial, no card and no email needed, that setup takes a few minutes (connect your tenant with Microsoft sign-in and take a first backup), and that one tenant continues on Community Free afterwards.
 * **I have a license key**.
@@ -24,7 +24,8 @@ To buy a license or ask for an invoice, use the **License** page after setup. Se
 ## Connect your tenant
 
 1. Select **Connect your tenant**.
-2. TenuVault opens **Set up TenuVault** on the **Connect** step, where one Microsoft sign-in creates the app registration in your tenant. Continue with [Create the app registration](/getting-started/app-registration/).
+2. Choose services on **What do you want to back up?** Intune is preselected. Select **Continue with Intune**, or choose Entra ID and Defender too.
+3. On **Connect**, review the setup-only access before signing in. Continue with [Create the app registration](/getting-started/app-registration/).
 
 The first tenant you sign in to without a key starts its 14 day Pro trial, unless that tenant already had one. If your organization shares a TenuVault license with that tenant, TenuVault picks it up when you sign in, and the tenant uses that plan instead. You can also start the trial or enter a key later, on the **Storage** step of the setup or on the **License** page.
 
@@ -73,3 +74,13 @@ Backups on this device become unreadable unless you exported their [recovery key
 ## Next step
 
 [Create the app registration](/getting-started/app-registration/).
+
+## Choose services
+
+![Service choice with Intune preselected](/images/onboarding/02-choice-default-light.png)
+
+Expand **Coverage and permissions** on each card to see exact delegated permissions, marked Read or Write, and coverage limits. Entra ID contains a separate Conditional Access switch. Groups, Users and devices, and Applications are opt-in and off initially. Areas with personal data explain what is stored before you turn them on.
+
+**Customize access** offers Backup only, or Backup and restore where this version has a restore capability. Intune keeps its earlier default, including read access to Conditional Access without enabling those backups. Entra ID and Defender start with backup permissions only. This version prepares their permissions; their backups arrive in a later update. Conditional Access backups work now when selected.
+
+Your service choice and setup progress survive a restart in encrypted app settings. Connecting another tenant uses the same flow with a choice for that tenant.

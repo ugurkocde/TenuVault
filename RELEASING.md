@@ -75,6 +75,8 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 ## Compatibility notes for the next release
 
+* Setup now keeps a service choice per tenant. Intune keeps its previous default permissions, including read access to Conditional Access while its backups stay off. Entra ID and Defender can be chosen to prepare backup permissions; their backup types arrive in later updates. Intune-only workflows direct tenants without Intune to Services and permissions.
+
 Put these in the next stable release's notes, then remove them here.
 
 - **Services and permissions.** Settings now checks Graph sign-in, the Backup Reader and storage

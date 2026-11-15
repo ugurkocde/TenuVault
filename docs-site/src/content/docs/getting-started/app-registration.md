@@ -279,3 +279,13 @@ Assigning a group to an enterprise application requires Microsoft Entra ID P1 or
 ## Next step
 
 [Sign in to your tenant](/getting-started/connect-tenant/) with the two values the script printed.
+
+## Permissions for a service choice
+
+During setup, choose services before Connect. The permission list in the app and the command under **Use the setup script instead** follow that choice. For example, an Entra ID setup with no restore access uses:
+
+```powershell
+./New-TenuVaultDesktopApp.ps1 -Services Entra -RestoreAccess None
+```
+
+Use the permission list shown in TenuVault when following the manual guide. The handoff message also contains this list and the generated command. Do not use the Intune default list for an Entra-only registration. Existing registrations are left unchanged by quick setup; missing chosen permissions are reported after sign-in.
