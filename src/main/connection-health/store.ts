@@ -178,6 +178,8 @@ function recordOf(value: unknown): ConnectionRecord | undefined {
     for (const run of [...record.runs].sort((a, b) => Date.parse(a.at) - Date.parse(b.at))) {
       if (record.mode === "app-only" || run.account === record.account) keepEvidence(record, run)
     }
+    record.verified = Object.fromEntries(Object.entries(record.verified).sort((a, b) => Date.parse(b[1]) - Date.parse(a[1])).slice(0, MAX_ENTRIES))
+    record.refused = Object.fromEntries(Object.entries(record.refused).filter(([folder]) => Object.hasOwn(record.verified, folder)).slice(0, MAX_ENTRIES))
   }
   return record
 }

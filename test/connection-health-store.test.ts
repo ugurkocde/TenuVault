@@ -202,6 +202,17 @@ describe("the observation store", () => {
     expect(store.connections(TENANT)[0]!.refused).toEqual({})
   })
 
+  it("bounds the evidence rebuilt from earlier records", () => {
+    const { backing, store } = setup()
+    const folders = Array.from({ length: MAX_ENTRIES }, (_, index) => `Folder${index}`)
+    const runs = [run("old", 3, { read: ["Apps"] }), run("new", 2, { read: folders }), run("refused", 1, { refused: folders.map((folder) => ({ folder, cause: "role" })) })]
+    backing.set(KEY, JSON.stringify({ version: 1, connections: [{ clientId: CLIENT, mode: "delegated", account: ADMIN, updatedAt: ago(0), verified: {}, runs }] }))
+    const record = store.connections(TENANT)[0]!
+    expect(Object.keys(record.verified)).toHaveLength(MAX_ENTRIES)
+    expect(record.verified).not.toHaveProperty("Apps")
+    expect(Object.keys(record.refused)).toHaveLength(MAX_ENTRIES)
+  })
+
   it("keeps the first and the latest refusal of a folder, each run once, and none from before its last read", () => {
     const { store } = setup()
     const refusedBy = () => (store.connections(TENANT)[0]!.refused.Apps ?? []).map((refusal) => refusal.runId)
