@@ -36,7 +36,12 @@ describe("free App Backup account read", () => {
     for (const path of ["/portal/app-backup", "/portal/app-backup/versions"]) expect(isAppBackupPath(path)).toBe(true)
     for (const path of ["/portal/backup", "/portal/app-backup-other", "/api/app-backup/recovery-start", "/license"]) expect(isAppBackupPath(path)).toBe(false)
     const main = await readFile("src/main/index.ts", "utf8"), start = main.indexOf("const appSources = new AppSourceService"), end = main.indexOf('handleTrusted("app:info"', start)
-    expect(main.slice(start, end)).not.toMatch(/requireEntitlement|featureDeps\.graph|withPlanError|requireRecovery|tenantProfile|tokenFor\(/)
+    const section = main.slice(start, end)
+    expect(section).not.toMatch(/requireEntitlement|featureDeps\.graph|requireRecovery|tenantProfile|tokenFor\(/)
+    // Only a restore into another tenant can need a plan; no other App Backup handler reports plan errors.
+    expect(section.match(/withPlanError/g)).toHaveLength(1)
+    expect(section).toContain('handleTrusted("appSources:restore", (_event, tenant: unknown, operation: unknown, source: unknown, target: unknown, name: unknown, settingsHash: unknown) => withPlanError(')
+    expect(section).toContain("restorePlan: appRestorePlan,")
     const product = await Promise.all(["src/main/app-sources/service.ts", "src/main/app-backup/account.ts", "src/main/app-backup/device-check.ts"].map(path => readFile(path, "utf8")))
     expect(product.join("\n")).not.toMatch(/authorizeAttach|requireEntitlement|requireRecovery|CommunityLimit|plan-errors/)
   })

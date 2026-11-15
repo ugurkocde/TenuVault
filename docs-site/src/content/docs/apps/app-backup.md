@@ -1,9 +1,9 @@
 ---
 title: "App Backup: Intune installers"
-description: Back up Win32 installer content from Intune on an enrolled Windows PC, keep it encrypted, export it offline and restore it to another tenant. App Backup is free.
+description: Back up Win32 installer content from Intune on an enrolled Windows PC, keep it encrypted, export it offline and restore it to the same or another tenant. App Backup is free on every plan; restoring into another tenant needs Pro or MSP for that tenant.
 faq:
   - question: "Is TenuVault App Backup free?"
-    answer: "Yes. App Backup is completely free for every configured tenant. It does not require a paid product license or Community tenant selection. Microsoft authentication and Intune permissions still apply to tenant reads."
+    answer: "Yes. App Backup is free on every plan, Community included: listing apps, details, print, script download, the enrollment and assignment checks, installer capture, export and Restore to tenant into the tenant the installer was captured from. Restoring a captured installer into another tenant needs Pro or MSP for that destination tenant, and a Pro trial counts. Microsoft authentication and Intune permissions still apply to tenant reads."
   - question: "Do I need to choose an installer from my computer?"
     answer: "No. App Backup is intended to retrieve installer content from Intune. Selecting an existing local file is not an Intune backup. The manual attachment action has been removed."
   - question: "Can this build retrieve Windows or macOS installers from Intune?"
@@ -18,7 +18,7 @@ faq:
     answer: "No. TenuVault checks device targeting and explains exclusions, filters and missing information. If a targeting change is needed, the administrator makes it in Intune, syncs the PC and selects Recheck assignments. Use a dedicated device group because Required targeting can install the app automatically."
 ---
 
-**App Backup is completely free** for every configured tenant. Open it below **Backup & Restore** in the desktop sidebar.
+**App Backup is free on every plan**, Community included. Restoring a captured installer into a tenant other than the one it was captured from needs Pro or MSP for that destination tenant. Open App Backup below **Backup & Restore** in the desktop sidebar.
 
 App Backup's purpose is to retrieve installer content from Intune and retain an encrypted backup. The **Windows capture preview** retrieves system-context Win32 installers on an enrolled Windows PC. Restore can upload a captured Win32 installer to the same or another connected tenant. macOS installer capture is not available yet.
 
@@ -36,7 +36,7 @@ The earlier manual-file workflow has been removed. Files already saved by an ear
 | Browse, reconnect and export legacy archives | Available offline with the matching recovery key |
 | Retrieve Windows installer content from Intune | Windows preview, system context, up to 2 GiB |
 | Retrieve macOS PKG or DMG installer content from Intune | Not available in this build |
-| Restore an app using a captured installer | Create a new, unassigned Win32 app in a connected tenant; restrictions below |
+| Restore an app using a captured installer | Create a new, unassigned Win32 app in a connected tenant; restrictions below. Into the source tenant on every plan; into another tenant with Pro or MSP for that tenant |
 
 macOS support means retrieving the installer from Intune, not downloading a substitute from a vendor or copying an installed `.app` directory. It needs its own tested device adapter. Windows app metadata can be viewed on a Mac; a Mac cannot perform the Windows enrollment check.
 
@@ -163,10 +163,10 @@ Export remains available while signed out, provided the tenant is configured and
 
 ## Restore to the same or another tenant
 
-1. Connect the destination tenant in TenuVault. App Backup and this restore flow remain free for every configured tenant.
+1. Connect the destination tenant in TenuVault. Restoring into the tenant the installer was captured from is free on every plan. Restoring into another tenant needs Pro or MSP for that destination tenant; a Pro trial counts. The source tenant's plan does not matter.
 2. In the source tenant, open **App Backup → Backups**, then **Restore to tenant…** on a captured installer.
 3. Review the app settings. For a backup created before settings snapshots were available, choose **Load current app settings**. This reads the source tenant and accepts settings only when the committed content version still matches the captured installer. These are labeled as current settings, not settings from the original backup date. If the source session has expired, use **Reconnect source and load settings**; destination sign-in stays separate. If the source app changed version or is unavailable, make a new backup instead.
-4. Choose the destination tenant and enter the new app name. TenuVault reuses its existing Microsoft session. Sign in only if that destination has no active session. The account needs Intune permission to create apps, and the configured registration needs delegated `DeviceManagementApps.ReadWrite.All`.
+4. Choose the destination tenant and enter the new app name. The source tenant is selected by default and marked **(source tenant)**. Another tenant whose plan does not include this restore is marked **(Pro)**, and the dialog shows a note with the plan options before you start. TenuVault reuses its existing Microsoft session. Sign in only if that destination has no active session. The account needs Intune permission to create apps, and the configured registration needs delegated `DeviceManagementApps.ReadWrite.All`.
 5. Confirm the destination and choose **Restore unassigned app**. Before the first change to that tenant, review and accept the tenant disclaimer. Cancelling it makes no changes. The installer is verified, encrypted with fresh keys and uploaded without plaintext staging files.
 6. Wait for Intune to confirm the content and publish the app. Choose **Open restored app** to inspect it in the destination tenant before assigning it.
 

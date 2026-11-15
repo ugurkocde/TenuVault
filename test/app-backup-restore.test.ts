@@ -9,6 +9,9 @@ import { spawn } from "node:child_process"
 import { once } from "node:events"
 import { AppSourceStore } from "../src/main/app-sources/store"
 import { AppSourceService } from "../src/main/app-sources/service"
+import { restoreDestinationPlan } from "../src/main/app-backup/restore-plan"
+import { CommunityChoicePendingError, CommunityLimitError, withPlanError } from "../src/shared/plan-errors"
+import { PlanRequired, type Plan } from "../src/shared/plans"
 import { ingestContent, type ContentEncryption } from "../src/main/app-backup/content-stream"
 import { restoreCapturedApp } from "../src/main/app-backup/restore"
 import { restoreGraph, putRestoreBlock, type RestoreGraph } from "../src/main/app-backup/restore-graph"
@@ -257,12 +260,64 @@ describe("cross-tenant restore engine", () => {
 
 it("binds service restore to both configured tenants, captured provenance and the reviewed settings hash", async () => {
   const f = await fixture(), restore = vi.fn(async () => ({ appId: randomUUID(), tenantId: target, name: "Restored", contentVersion: "1", sourceId: f.source.id }))
-  const service = new AppSourceService({ restore, knownTenant: t => [tenant, target].includes(t), folder: () => f.root, keys: () => [f.master], setFolder: vi.fn(), pickFolder: vi.fn(), pickExport: vi.fn(), openFolder: vi.fn(), confirmNewStore: vi.fn(), checkDevice: vi.fn(), signIn: vi.fn(), details: vi.fn(), apps: vi.fn(), printDetails: vi.fn(), downloadScript: vi.fn() })
+  const service = new AppSourceService({ restore, restorePlan: async () => "pro", knownTenant: t => [tenant, target].includes(t), folder: () => f.root, keys: () => [f.master], setFolder: vi.fn(), pickFolder: vi.fn(), pickExport: vi.fn(), openFolder: vi.fn(), confirmNewStore: vi.fn(), checkDevice: vi.fn(), signIn: vi.fn(), details: vi.fn(), apps: vi.fn(), printDetails: vi.fn(), downloadScript: vi.fn() })
   expect((await service.restoreReview(tenant, f.source.id)).settingsHash).toBe(snapshotHash(snapshot))
   expect(() => service.restore(tenant, randomUUID(), f.source.id, randomUUID(), "Restored", snapshotHash(snapshot))).toThrow("configured")
   await expect(service.restore(tenant, randomUUID(), f.source.id, target, "Restored", "0".repeat(64))).rejects.toThrow("changed")
   await service.restore(tenant, randomUUID(), f.source.id, target, "Restored", snapshotHash(snapshot))
   expect(restore).toHaveBeenCalledOnce()
+})
+
+describe("restore into another tenant needs the destination's plan", () => {
+  const restored = (destination: string) => ({ appId: randomUUID(), tenantId: destination, name: "Restored", contentVersion: "1", sourceId: "" })
+  async function planService(plan: Plan | null, lookup = true) {
+    const f = await fixture(), restore = vi.fn(async (_s: unknown, _c: unknown, _n: unknown, destination: string) => restored(destination)), restorePlan = vi.fn(async () => plan)
+    const service = new AppSourceService({ restore, ...(lookup ? { restorePlan } : {}), knownTenant: t => [tenant, target].includes(t), folder: () => f.root, keys: () => [f.master], setFolder: vi.fn(), pickFolder: vi.fn(), pickExport: vi.fn(), openFolder: vi.fn(), confirmNewStore: vi.fn(), checkDevice: vi.fn(), signIn: vi.fn(), details: vi.fn(), apps: vi.fn(), printDetails: vi.fn(), downloadScript: vi.fn() })
+    return { f, service, restore, restorePlan, run: (destination: string) => service.restore(tenant, randomUUID(), f.source.id, destination, "Restored", snapshotHash(snapshot)) }
+  }
+  // A Pro trial is a "pro" plan from the entitlement check, like a paid Pro license.
+  it.each([["Community", "community"], ["no plan", null], ["Pro trial", "pro"], ["Pro", "pro"], ["MSP", "msp"]] as const)("restores into the source tenant on %s without asking for a plan", async (_label, plan) => {
+    for (const destination of [tenant, tenant.toUpperCase()]) {
+      const { run, restore, restorePlan } = await planService(plan)
+      await expect(run(destination)).resolves.toMatchObject({ tenantId: tenant })
+      expect(restore).toHaveBeenCalledOnce()
+      expect(restorePlan).not.toHaveBeenCalled()
+    }
+  })
+  it.each([["Community", "community"], ["no plan", null]] as const)("refuses another tenant on %s before any destination write", async (_label, plan) => {
+    for (const destination of [target, target.toUpperCase()]) {
+      const { run, restore, restorePlan } = await planService(plan)
+      const error = await run(destination).catch((e: unknown) => e)
+      expect(error).toBeInstanceOf(PlanRequired)
+      expect((error as PlanRequired).feature).toBe("appRestoreOtherTenant")
+      expect(restorePlan).toHaveBeenCalledExactlyOnceWith(target)
+      expect(restore).not.toHaveBeenCalled()
+    }
+  })
+  it.each([["Pro trial", "pro"], ["Pro", "pro"], ["MSP", "msp"]] as const)("restores into another tenant on %s", async (_label, plan) => {
+    const { run, restore, restorePlan } = await planService(plan)
+    await expect(run(target.toUpperCase())).resolves.toMatchObject({ tenantId: target })
+    expect(restorePlan).toHaveBeenCalledExactlyOnceWith(target)
+    expect(restore).toHaveBeenCalledOnce()
+  })
+  it("refuses another tenant when this build has no plan lookup", async () => {
+    const { run, restore } = await planService("msp", false)
+    await expect(run(target)).rejects.toBeInstanceOf(PlanRequired)
+    expect(restore).not.toHaveBeenCalled()
+    await expect(run(tenant)).resolves.toMatchObject({ tenantId: tenant })
+  })
+  it("sends the refusal as the plan error the plan dialog reads", async () => {
+    const { run } = await planService("community")
+    expect(await withPlanError(() => run(target))).toEqual({ planError: { code: "plan_required", message: expect.stringContaining("included in TenuVault Pro and MSP"), upgrade: "appRestoreOtherTenant" } })
+  })
+  it("reads the destination plan from the entitlement check and treats Community refusals as no plan", async () => {
+    const check = vi.fn(async (): Promise<Plan> => "pro")
+    expect(await restoreDestinationPlan(check)(target)).toBe("pro")
+    expect(check).toHaveBeenCalledWith(target, { retry: true })
+    expect(await restoreDestinationPlan(async () => { throw new CommunityLimitError(target, "Community covers one tenant") })(target)).toBeNull()
+    expect(await restoreDestinationPlan(async () => { throw new CommunityChoicePendingError() })(target)).toBeNull()
+    await expect(restoreDestinationPlan(async () => { throw new Error("offline") })(target)).rejects.toThrow("offline")
+  })
 })
 
 it("keeps destination tokens off storage and rejects foreign origins before fetching", async () => {
