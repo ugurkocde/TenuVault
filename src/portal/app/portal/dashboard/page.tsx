@@ -1,5 +1,6 @@
 "use client"
 
+import { ServiceBackupNotice } from "@desktop/components/ServiceBackupNotice"
 import { useState, useEffect, Suspense } from "react"
 import { useRouter } from "next/navigation"
 import { Link } from "react-router-dom"
@@ -438,6 +439,7 @@ function DashboardContent() {
             {schedulesError ? <Chip tone="warning">Unknown</Chip> : schedule?.enabled ? <Chip tone="success">On</Chip> : <Chip>Off</Chip>}
           </div>
           <TileLabel className="mt-6">Next Backup</TileLabel>
+          <ServiceBackupNotice tenantId={tenantGuid} />
           {schedulesError ? (
             <>
               <BigValue className="mt-1">Unavailable</BigValue>

@@ -58,6 +58,16 @@ The cards show **Intune**, **Entra ID** and **Defender**. Expand **Areas and acc
 
 **Permissions present** means the token carries the permissions. **Verified by the last backup** means the selected types were actually read, with the date and whether it used your sign-in or the Backup Reader. A Backup Reader loss remains visible even when your own backup verifies the same area. A refusal with the permission present may involve an admin role or license; TenuVault says when it cannot tell which. A type the reader leaves out by design needs no fix.
 
+Backup and restore permission status are separate. A restore-only gap says **Backups work. Restore needs: ...**. **Backup and restore** asks for write permissions; select **Backup** under **Areas and access** to request backup permissions only. Changing the level grants nothing.
+
+When a backup could not read selected types, the report says **The backup on [date] with your sign-in could not read: [types]**. This describes those types, not the result of the whole backup. Reopening Services refreshes the report, and a changed connection clears verification from the previous sign-in while the current report loads.
+
+Storage reports the storage token check separately. A token does not verify the storage account's write access, data role or firewall. A backup proves files can be written. Local storage needs no token; run a backup to verify writes to the selected folder.
+
+Intune's confirmation is enforced when the setting is saved. With Intune off, All tenants, the dashboard's Next Backup tile, tenant summaries in grid and list view, backup history and schedules say that new backups leave out Intune. The schedule and existing backups stay available.
+
+![Intune excluded beside the next scheduled backup](/images/services/dashboard-intune-off-light.png)
+
 Changes since the previous snapshot appear above the service cards. Replaced registrations name the previous client ID and the permissions the replacement lacks. Changes found under an earlier sign-in say when they were found without naming the account. Displaying the changes acknowledges exactly that report; observations arriving afterwards stay unacknowledged.
 
 ![Missing permission with all three routes expanded](/images/services/missing-permission-light.png)
