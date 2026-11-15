@@ -56,7 +56,7 @@ const readerRun = (runId: string, daysAgo: number, parts: Partial<RunObservation
   const { account: _account, ...rest } = run(runId, daysAgo, { trigger: "scheduled", ...parts })
   return rest
 }
-const refusal = (folder: string, cause: "permission" | "role" | "license" = "permission") => ({ folder, cause, status: 403 })
+const refusal = (folder: string, cause: "permission" | "role" | "license" = "permission", permissionHeld?: boolean) => ({ folder, cause, status: 403, ...(permissionHeld !== undefined ? { permissionHeld } : {}) })
 
 const readerFacts = (parts: Partial<ReaderObservation> = {}): ReaderObservation => ({ at: NOW.toISOString(), state: "verified", notAfter: ago(-200 * DAY), verifiedAt: ago(30 * DAY), verifiedRoles: ["DeviceManagementConfiguration.Read.All"], roleChange: null, ...parts })
 
@@ -333,7 +333,9 @@ describe.each(MODULES.map((module) => [module.label, module] as const))("%s", (_
   const refusedReads: Array<[cause: string, outcome: Partial<RunObservation>, granted: string[]]> = [
     ["permission", { refused: [refusal(folder, "permission")] }, []],
     // The run lacked a permission that the token carries now: that cause is gone, and nothing says the role is what is left.
-    ["notVerifiedYet", { refused: [refusal(folder, "permission")] }, scopes],
+    ["notVerifiedYet", { refused: [refusal(folder, "permission", false)] }, scopes],
+    ["refusedWithPermission", { refused: [refusal(folder, "permission", true)] }, scopes],
+    ["refusedWithPermission", { refused: [refusal(folder, "permission")] }, scopes],
     // The cause a run found with its own token stays, whatever the token of today carries.
     ["role", { refused: [refusal(folder, "role")] }, []],
     ["role", { refused: [refusal(folder, "role")] }, scopes],
@@ -596,7 +598,7 @@ describe("lost access", () => {
 
   it("keeps the cause the refused runs found, and never works out a role from the token of today", () => {
     const WITHOUT = DEFAULT_SCOPES.filter((permission) => !permission.startsWith("DeviceManagementConfiguration"))
-    const refusedFor = (cause: "permission" | "role" | "license") => [read("r1", 9), refused("r2", 5, { refused: [refusal(FOLDER, cause)] }), refused("r3", 3, { refused: [refusal(FOLDER, cause)] })]
+    const refusedFor = (cause: "permission" | "role" | "license", held?: boolean) => [read("r1", 9), refused("r2", 5, { refused: [refusal(FOLDER, cause, held)] }), refused("r3", 3, { refused: [refusal(FOLDER, cause, held)] })]
     // The runs found the role with the token they had.
     expect(lost(refusedFor("role"), { graph: healthy() })).toMatchObject([{ cause: "role", mode: "delegated" }])
     expect(lost(refusedFor("role"), { graph: healthy(WITHOUT) })).toMatchObject([{ cause: "role" }])
@@ -605,7 +607,8 @@ describe("lost access", () => {
     expect(lost(refusedFor("permission"), { graph: healthy(WITHOUT) })).toMatchObject([{ cause: "permission" }])
     expect(lost(refusedFor("permission"))).toMatchObject([{ cause: "permission" }])
     // Once the token carries it, the cause is gone and the type waits for a backup to read it.
-    expect(lost(refusedFor("permission"), { graph: healthy() })).toMatchObject([{ cause: "notVerifiedYet", mode: "delegated" }])
+    expect(lost(refusedFor("permission", false), { graph: healthy() })).toMatchObject([{ cause: "notVerifiedYet", mode: "delegated" }])
+    for (const held of [true, undefined]) expect(lost(refusedFor("permission", held), { graph: healthy() })).toMatchObject([{ cause: "refusedWithPermission", mode: "delegated" }])
   })
 
   it("never takes the admin's token for what the Backup Reader may read", () => {

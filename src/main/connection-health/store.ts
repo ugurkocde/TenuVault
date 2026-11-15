@@ -74,7 +74,7 @@ function runOf(value: unknown): RunObservation | undefined {
     const folder = isRecord(entry) ? text(entry.folder) : undefined
     if (!folder || !isRecord(entry) || !isCause(entry.cause)) return []
     const code = text(entry.code, 80)
-    return [{ folder, cause: entry.cause, ...(typeof entry.status === "number" ? { status: entry.status } : {}), ...(code ? { code } : {}) }]
+    return [{ folder, cause: entry.cause, ...(typeof entry.permissionHeld === "boolean" ? { permissionHeld: entry.permissionHeld } : {}), ...(typeof entry.status === "number" ? { status: entry.status } : {}), ...(code ? { code } : {}) }]
   })
   const excluded = (Array.isArray(value.excluded) ? value.excluded : []).flatMap((entry): RunObservation["excluded"] => {
     const folder = isRecord(entry) ? text(entry.folder) : undefined
@@ -89,7 +89,7 @@ function refusalsOf(value: unknown): ConnectionRecord["refused"] {
     const refusals = (Array.isArray(entries) ? entries : []).flatMap((entry): FolderRefusal[] => {
       const runId = isRecord(entry) ? text(entry.runId) : undefined
       const at = isRecord(entry) ? time(entry.at) : undefined
-      return runId && at && isRecord(entry) && isCause(entry.cause) ? [{ runId, at, cause: entry.cause }] : []
+      return runId && at && isRecord(entry) && isCause(entry.cause) ? [{ runId, at, cause: entry.cause, ...(typeof entry.permissionHeld === "boolean" ? { permissionHeld: entry.permissionHeld } : {}) }] : []
     })
     return text(folder) && refusals.length ? [[folder, refusals.slice(0, MAX_FOLDER_REFUSALS)]] : []
   })

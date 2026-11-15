@@ -449,8 +449,9 @@ describe("backup runs", () => {
   const saved = (folder: string) => ({ folder, service: "intune", outcome: "saved", saved: 1 })
   const REQUEST = { tenantId: TENANT, clientId: CLIENT }
   /** A run from its start to its end, as the engine hands it over: it got its job, how it ended, and its job ended. */
-  const ran = (health: ConnectionHealth, run: ReturnType<typeof outcomes>) => {
+  const ran = (health: ConnectionHealth, run: ReturnType<typeof outcomes>, permissions?: string[]) => {
     health.runStarted({ id: run.runId, authMode: run.authMode }, REQUEST)
+    if (permissions) health.runToken(run.runId, { kind: run.authMode === "delegated" ? "delegated" : "application", permissions: new Set(permissions) })
     health.recordRun(run, REQUEST)
     health.runEnded(run.runId)
   }
@@ -641,7 +642,7 @@ describe("backup runs", () => {
     await health.check(TENANT, "launch")
     pass(DAY)
     const refusedAt = now()
-    ran(health, outcomes("desktop-1", now(), [denied("Apps"), saved("DeviceConfigurations")]))
+    ran(health, outcomes("desktop-1", now(), [denied("Apps"), saved("DeviceConfigurations")]), WITHOUT_APPS)
     expect(apps()).toMatchObject({ permissions: "missing", verified: { state: "notVerified", cause: "permission" } })
     // The permission is added to the app registration, and a check sees it. No backup ran since.
     pass(DAY)
@@ -651,6 +652,17 @@ describe("backup runs", () => {
     pass(DAY)
     ran(health, outcomes("desktop-2", now(), [saved("Apps"), saved("DeviceConfigurations")]))
     expect(apps().verified).toEqual({ state: "verified", at: now(), mode: "delegated", notVerified: [] })
+  })
+
+  it("keeps permission evidence from the run's own tokens and treats conflicting tokens as unknown", async () => {
+    const { health, now, stored } = setup()
+    await health.check(TENANT, "launch")
+    health.runToken("not-started", { kind: "delegated", permissions: new Set() })
+    health.runStarted({ id: "mixed", authMode: "delegated" }, REQUEST)
+    for (const scopes of [WITHOUT_APPS, SCOPES, WITHOUT_APPS]) health.runToken("mixed", { kind: "delegated", permissions: new Set(scopes) })
+    health.recordRun(outcomes("mixed", now(), [denied("Apps")]), REQUEST)
+    expect(stored()!.connections[0]!.runs[0].refused[0]).not.toHaveProperty("permissionHeld")
+    expect(health.report(TENANT).services[0]!.areas.find((area) => area.id === "apps")!.verified.cause).toBe("refusedWithPermission")
   })
 
   it("of another admin count for nothing once someone else signed in", async () => {
@@ -802,6 +814,7 @@ describe("with the backup engine", () => {
         checks.push(health.check(request.tenantId, "beforeBackup", { reader: job.authMode === "app-only" }).catch(() => undefined))
       },
       onOutcomes: (outcomes, request) => health.recordRun(outcomes, request),
+      onToken: (runId, granted) => health.runToken(runId, granted),
       onFinished: (job, request) => {
         health.runEnded(job.id)
         checks.push(health.check(request.tenantId, "afterBackup", { reader: job.authMode === "app-only", failed: job.status === "Failed" }).catch(() => undefined))
@@ -879,8 +892,9 @@ describe("with the backup engine", () => {
     await settled()
     const report = health.report(TENANT)
     // A denied Intune read does not say whether the permission or the account's role was missing, and the runs
-    // recorded no role. The token carries the permission, so that much is known: present, and not verified.
-    expect(report.changes).toMatchObject([{ kind: "lostAccess", service: "intune", area: "apps", cause: "notVerifiedYet", mode: "delegated", folders: ["AppCategories"] }])
+    // recorded no role. Their own token held the permission, so nothing says the cause is gone.
+    expect(report.changes).toMatchObject([{ kind: "lostAccess", service: "intune", area: "apps", cause: "refusedWithPermission", mode: "delegated", folders: ["AppCategories"] }])
+    expect(base.stored()!.connections[0]!.refused.AppCategories).toEqual(expect.arrayContaining([expect.objectContaining({ permissionHeld: true })]))
     expect(JSON.stringify(base.stored())).not.toContain("contoso")
   })
 })

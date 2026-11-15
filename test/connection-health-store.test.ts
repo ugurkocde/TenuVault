@@ -136,6 +136,18 @@ describe("the observation store", () => {
     })
   })
 
+  it.each([true, false, undefined])("round trips only the known permission fact of a refused run: %s", (permissionHeld) => {
+    const { store } = setup()
+    store.recordRun(admin, run("read", 3, { read: ["Apps"] }))
+    const outcomes: RunOutcomes = { runId: "refused", tenantId: TENANT, authMode: "delegated", trigger: "manual", startedAt: ago(2 * DAY), endedAt: ago(DAY), status: "Success", coverage: "incomplete", types: [{ folder: "Apps", service: "intune", outcome: "failed", saved: 0, status: 403, error: "Forbidden" }] }
+    store.recordRun(admin, runObservation(outcomes, ADMIN, { Apps: permissionHeld }))
+    const record = store.connections(TENANT)[0]!
+    const expected = permissionHeld === undefined ? { cause: "permission" } : { cause: "permission", permissionHeld }
+    expect(record.runs[1]!.refused[0]).toMatchObject(expected)
+    expect(record.refused.Apps![0]).toMatchObject(expected)
+    if (permissionHeld === undefined) expect(record.refused.Apps![0]).not.toHaveProperty("permissionHeld")
+  })
+
   it("keeps a run once, whatever it says the second time", () => {
     const { store } = setup()
     store.recordRun(admin, run("desktop-1", 2, { refused: [{ folder: "Apps", cause: "permission" }] }))

@@ -496,6 +496,7 @@ async function bootstrap(): Promise<void> {
       void health.check(request.tenantId, "beforeBackup", { reader: job.authMode === "app-only" }).catch(() => undefined)
     },
     onOutcomes: (outcomes, request) => health.recordRun(outcomes, request),
+    onToken: (runId, granted) => health.runToken(runId, granted),
     onFinished: (job, request) => {
       failedAttempts.finished(job, request)
       // Manual backup outcomes notify here; scheduled and tray outcomes notify from the

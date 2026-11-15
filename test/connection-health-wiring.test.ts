@@ -38,6 +38,7 @@ describe("connection health wiring", () => {
 
   it("hands every run's outcomes to connection health, and checks as a backup starts and after it ended", () => {
     expect(main).toContain("onOutcomes: (outcomes, request) => health.recordRun(outcomes, request),")
+    expect(main).toContain("onToken: (runId, granted) => health.runToken(runId, granted),")
     const started = main.match(/onStarted: \(job, request\) => \{([\s\S]*?)\n    \},/)?.[1] ?? ""
     expect(started).toContain('void health.check(request.tenantId, "beforeBackup", { reader: job.authMode === "app-only" }).catch(() => undefined)')
     const finished = main.match(/onFinished: \(job, request\) => \{([\s\S]*?)\n    \},/)?.[1] ?? ""
@@ -122,7 +123,7 @@ describe("the start of a backup", () => {
   })
 
   it("goes on when the listener throws", async () => {
-    const backups = fixture(scriptedGraph({}), { services: () => ({ services: ["intune"] }), onStarted: () => { throw new Error("listener failed") } })
+    const backups = fixture(scriptedGraph({}), { services: () => ({ services: ["intune"] }), onStarted: () => { throw new Error("listener failed") }, onToken: () => { throw new Error("listener failed") } })
     expect((await backups.run()).status).toBe("Completed")
   })
 })

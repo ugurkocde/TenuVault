@@ -163,6 +163,7 @@ interface Entry {
   time: number
   at: string
   mode: ConnectionMode
+  permissionHeld?: boolean
   kind: "read" | "refused" | "unread" | "excluded"
   cause?: "permission" | "role" | "license" | "reader" | "signedIn"
 }
@@ -183,7 +184,7 @@ function evidenceOf(records: ReadonlyArray<ConnectionRecord | undefined>, now: D
     for (const run of runsOf(record, now)) {
       const base = { time: Date.parse(run.at), at: run.at, mode: record.mode }
       for (const folder of run.read) add(folder, { ...base, kind: "read" })
-      for (const refusal of run.refused) add(refusal.folder, { ...base, kind: "refused", cause: refusal.cause })
+      for (const refusal of run.refused) add(refusal.folder, { ...base, kind: "refused", cause: refusal.cause, permissionHeld: refusal.permissionHeld })
       for (const folder of run.unread) add(folder, { ...base, kind: "unread" })
       for (const left of run.excluded) add(left.folder, { ...base, kind: "excluded", cause: left.cause })
     }
@@ -191,7 +192,7 @@ function evidenceOf(records: ReadonlyArray<ConnectionRecord | undefined>, now: D
       if (recent(at, RUN_MAX_AGE_MS, now)) add(folder, { time: Date.parse(at), at, mode: record.mode, kind: "read" })
     }
     for (const [folder, refusals] of Object.entries(record.refused)) {
-      for (const refusal of refusals) if (recent(refusal.at, RUN_MAX_AGE_MS, now)) add(folder, { time: Date.parse(refusal.at), at: refusal.at, mode: record.mode, kind: "refused", cause: refusal.cause })
+      for (const refusal of refusals) if (recent(refusal.at, RUN_MAX_AGE_MS, now)) add(folder, { time: Date.parse(refusal.at), at: refusal.at, mode: record.mode, kind: "refused", cause: refusal.cause, permissionHeld: refusal.permissionHeld })
     }
   }
   for (const entries of byFolder.values()) entries.sort((a, b) => b.time - a.time)
@@ -200,15 +201,10 @@ function evidenceOf(records: ReadonlyArray<ConnectionRecord | undefined>, now: D
 
 type Verdict = { folder: string; at: string; time: number; mode: ConnectionMode } & ({ read: true } | { read: false; cause: HealthCause; mode: ConnectionMode })
 
-/**
- * The cause of a refusal as it stands now: the cause the run found with the token it had. The
- * token of today says nothing about why a run was refused then, so a permission that is present
- * now never makes the account's role the cause. One thing does follow from it: a run of the admin
- * that lacked a permission the token carries now was refused for a cause that is gone, and the
- * type waits for a backup to read it.
- */
-function causeNow(folder: string, cause: RefusalCause, mode: ConnectionMode, granted: GrantedPermissions | undefined): LossCause {
-  return cause === "permission" && mode === "delegated" && granted && canBackUp(folder, granted) ? "notVerifiedYet" : cause
+/** Only a permission the run is known to have lacked can be described as a cause that is gone. */
+function causeNow(folder: string, cause: RefusalCause, granted: GrantedPermissions | undefined, permissionHeld?: boolean): LossCause {
+  if (cause !== "permission" || !granted || !canBackUp(folder, granted)) return cause
+  return permissionHeld === false ? "notVerifiedYet" : "refusedWithPermission"
 }
 
 /**
@@ -216,7 +212,7 @@ function causeNow(folder: string, cause: RefusalCause, mode: ConnectionMode, gra
  * folder out by design says nothing, so an earlier read still stands; when no backup ever said
  * anything, the reason it was left out is the cause, which is never a refusal: nothing was asked.
  */
-function verdictOf(folder: string, entries: readonly Entry[] | undefined, granted: GrantedPermissions | undefined): Verdict | undefined {
+function verdictOf(folder: string, entries: readonly Entry[] | undefined, current: Partial<Record<ConnectionMode, GrantedPermissions>>): Verdict | undefined {
   if (!entries?.length) return undefined
   const said = entries.find((entry) => entry.kind !== "excluded")
   if (!said) {
@@ -226,11 +222,11 @@ function verdictOf(folder: string, entries: readonly Entry[] | undefined, grante
   const base = { folder, at: said.at, time: said.time, mode: said.mode }
   if (said.kind === "read") return { ...base, read: true }
   if (said.kind === "unread") return { ...base, read: false, cause: "notRead", mode: said.mode }
-  return { ...base, read: false, cause: causeNow(folder, said.cause as RefusalCause, said.mode, granted), mode: said.mode }
+  return { ...base, read: false, cause: causeNow(folder, said.cause as RefusalCause, current[said.mode], said.permissionHeld), mode: said.mode }
 }
 
 /** In the order a tie is settled: the cause an admin can fix first, and last the two that need no fix. */
-const CAUSES: readonly HealthCause[] = ["permission", "role", "license", "signedIn", "notRead", "notVerifiedYet", "reader"]
+const CAUSES: readonly HealthCause[] = ["permission", "refusedWithPermission", "role", "license", "signedIn", "notRead", "notVerifiedYet", "reader"]
 
 function verifiedOf(verdicts: readonly Verdict[]): VerifiedHealth {
   if (!verdicts.length) return { state: "noBackup", notVerified: [] }
@@ -262,13 +258,14 @@ function lostFolders(record: ConnectionRecord | undefined, now: Date): Map<strin
       if (!byRun.has(refusal.runId) && recent(refusal.at, RUN_MAX_AGE_MS, now) && Date.parse(refusal.at) > Date.parse(readAt!)) byRun.set(refusal.runId, refusal)
     }
     const since = [...byRun.values()].sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
-    if (since.length >= 2) lost.set(folder, { since: since[0]!.at, cause: since.at(-1)!.cause, mode: record.mode })
+    if (since.length >= 2) lost.set(folder, { since: since[0]!.at, cause: since.at(-1)!.cause, permissionHeld: since.at(-1)!.permissionHeld, mode: record.mode })
   }
   return lost
 }
 
 /** A folder a connection lost access to: since when, the cause its refusals found, and whose sign-in the connection is. */
 interface Loss {
+  permissionHeld?: boolean
   since: string
   cause: RefusalCause
   mode: ConnectionMode
@@ -284,7 +281,8 @@ interface Evaluated {
   ready: Record<string, boolean>
 }
 
-function evaluateService(module: ServiceModule, choice: ServiceChoice, granted: GrantedPermissions | undefined, evidence: Map<string, Entry[]>, lostBy: ReadonlyArray<Map<string, Loss>>): Evaluated {
+function evaluateService(module: ServiceModule, choice: ServiceChoice, granted: GrantedPermissions | undefined, evidence: Map<string, Entry[]>, lostBy: ReadonlyArray<Map<string, Loss>>, readerGranted: GrantedPermissions | undefined): Evaluated {
+  const current = { delegated: granted, "app-only": readerGranted }
   const checks: AreaCheck[] | undefined = granted && checkModules(granted, [module])[0]!.areas
   const chosen = (area: PermissionArea) => !area.optIn || choice.areas[area.id] === true
   const state = (held: boolean | undefined): PermissionState => (held === undefined ? "unknown" : held ? "present" : "missing")
@@ -294,12 +292,12 @@ function evaluateService(module: ServiceModule, choice: ServiceChoice, granted: 
   const areas = module.areas.map((area, index): AreaHealth => {
     const enabled = choice.enabled && chosen(area)
     // A service or an area that is off is outside what backups cover: nothing is verified for it, and nothing is lost.
-    const found = enabled ? area.folders.flatMap((folder) => verdictOf(folder, evidence.get(folder), granted) ?? []) : []
+    const found = enabled ? area.folders.flatMap((folder) => verdictOf(folder, evidence.get(folder), current) ?? []) : []
     verdicts.push(...found)
     // A read by another connection never clears this connection's own loss.
     const gone = enabled ? area.folders.flatMap((folder) => lostBy.flatMap((folders) => {
       const loss = folders.get(folder)
-      return loss ? [{ folder, since: loss.since, cause: causeNow(folder, loss.cause, loss.mode, granted), mode: loss.mode }] : []
+      return loss ? [{ folder, since: loss.since, cause: causeNow(folder, loss.cause, current[loss.mode], loss.permissionHeld), mode: loss.mode }] : []
     })).sort((a, b) => Date.parse(a.since) - Date.parse(b.since)) : []
     if (gone.length) {
       const main = CAUSES.flatMap((cause) => gone.filter((entry) => entry.cause === cause))[0]!
@@ -355,9 +353,11 @@ export function evaluateHealth(input: HealthInput, now: Date): HealthEvaluation 
   const token = delegated?.graph && recent(delegated.graph.at, TOKEN_MAX_AGE_MS, now) ? delegated.graph : undefined
   const granted: GrantedPermissions | undefined = token && !token.failure && token.permissions ? { kind: "delegated", permissions: new Set(token.permissions) } : undefined
 
+  const readerToken = reader?.graph
+  const readerGranted: GrantedPermissions | undefined = readerToken?.permissions && !readerToken.failure && recent(readerToken.at, TOKEN_MAX_AGE_MS, now) ? { kind: "application", permissions: new Set(readerToken.permissions) } : undefined
   const evidence = evidenceOf([delegated, reader], now)
   const lostBy = [lostFolders(delegated, now), lostFolders(reader, now)]
-  const evaluated = MODULES.map((module) => evaluateService(module, input.settings[module.id], granted, evidence, lostBy))
+  const evaluated = MODULES.map((module) => evaluateService(module, input.settings[module.id], granted, evidence, lostBy, readerGranted))
   const lost = new Map(evaluated.flatMap((entry) => [...entry.lost]))
   const ready: Record<string, boolean> = Object.assign({}, ...evaluated.map((entry) => entry.ready))
 

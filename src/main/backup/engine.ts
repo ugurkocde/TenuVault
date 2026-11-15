@@ -129,6 +129,8 @@ export interface BackupEngineDeps {
    * selected type ended. The same outcomes are in the backup's manifest when the run wrote one.
    */
   onOutcomes?: (outcomes: RunOutcomes, request: BackupRequest) => void
+  /** Permission names of a Graph token the run used, for health only; never changes its outcomes. */
+  onToken?: (runId: string, granted: ReturnType<typeof grantedPermissions>) => void
 }
 
 /** A Graph path of the given version, or an absolute nextLink that must be on the Graph origin and of that version. */
@@ -484,7 +486,22 @@ export class BackupEngine {
     this.write(job, `Backup folder: ${backupFolder}`)
     if (tokens.mode === "app-only") this.write(job, "Reading as the tenant's Backup Reader (app-only, read-only).")
 
-    const graphToken = (options?: { fresh: true }) => tokenOrStop(() => (options ? tokens.graph(options) : tokens.graph()), outcome)
+    const observeToken = (granted: ReturnType<typeof grantedPermissions>) => {
+      try {
+        this.deps.onToken?.(job.id, granted)
+      } catch (error) {
+        console.warn("[backup] Could not hand over token permissions:", error)
+      }
+    }
+    let lastToken: string | undefined
+    const graphToken = async (options?: { fresh: true }) => {
+      const token = await tokenOrStop(() => (options ? tokens.graph(options) : tokens.graph()), outcome)
+      if (token !== lastToken) {
+        lastToken = token
+        observeToken(grantedPermissions(token))
+      }
+      return token
+    }
     const storageToken = local ? async () => "" : () => tokenOrStop(tokens.storage, outcome)
 
     const concurrency = this.deps.concurrency ?? CONCURRENCY
@@ -502,6 +519,7 @@ export class BackupEngine {
     // A service with a token pre-check that is on but whose read permission the token lacks is left out up front with
     // the missing permission named, instead of failing on a refused read. Intune keeps its long-standing per-type handling.
     const granted = await moduleGrants(tokens, includedTypes(scope).some((type) => !moduleOff.has(type.folder) && moduleForFolder(type.folder)?.module.precheck))
+    if (granted) observeToken(granted)
     const signIn: SignInMode = tokens.mode === "app-only" ? "application" : "delegated"
     // A type only a signed-in admin can read is left out of a Backup Reader run whatever its token says: no permission changes that.
     const adminOnly = (type: IntuneType) => tokens.mode === "app-only" && signedInOnly(type.folder)

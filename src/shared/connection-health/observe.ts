@@ -13,7 +13,7 @@ import { MAX_FOLDER_REFUSALS, type ConnectionRecord, type RunObservation } from 
  *
  * `account` is the admin who ran it; left out for a Backup Reader run.
  */
-export function runObservation(outcomes: RunOutcomes, account?: string): RunObservation {
+export function runObservation(outcomes: RunOutcomes, account?: string, permissionHeld: Record<string, boolean | undefined> = {}): RunObservation {
   const observation: RunObservation = {
     runId: outcomes.runId,
     at: outcomes.endedAt,
@@ -33,6 +33,10 @@ export function runObservation(outcomes: RunOutcomes, account?: string): RunObse
       else observation.refused.push({ folder: type.folder, cause: type.cause, ...answer(type) })
     } else if (type.status === 403) observation.refused.push({ folder: type.folder, cause: "permission", ...answer(type) })
     else observation.unread.push(type.folder)
+  }
+  for (const refusal of observation.refused) {
+    const held = permissionHeld[refusal.folder]
+    if (held !== undefined) refusal.permissionHeld = held
   }
   return observation
 }
@@ -60,12 +64,12 @@ export function keepEvidence(evidence: Pick<ConnectionRecord, "verified" | "refu
     if (since.length) evidence.refused[folder] = since
     else delete evidence.refused[folder]
   }
-  for (const { folder, cause } of run.refused) {
+  for (const { folder, cause, permissionHeld } of run.refused) {
     const readAt = evidence.verified[folder]
     if (!readAt || Date.parse(readAt) >= ended) continue
     const kept = evidence.refused[folder] ?? []
     if (kept.some((refusal) => refusal.runId === run.runId)) continue
-    const since = [...kept, { runId: run.runId, at: run.at, cause }].sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
+    const since = [...kept, { runId: run.runId, at: run.at, cause, ...(permissionHeld !== undefined ? { permissionHeld } : {}) }].sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
     evidence.refused[folder] = since.length > MAX_FOLDER_REFUSALS ? [since[0]!, ...since.slice(1 - MAX_FOLDER_REFUSALS)] : since
   }
 }

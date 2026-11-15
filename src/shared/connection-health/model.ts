@@ -56,7 +56,7 @@ export interface RunObservation {
   /** Folders the run read: saved, or found not configured. */
   read: string[]
   /** Folders Microsoft refused to the run. */
-  refused: Array<{ folder: string; cause: RefusalCause; status?: number; code?: string }>
+  refused: Array<{ folder: string; cause: RefusalCause; permissionHeld?: boolean; status?: number; code?: string }>
   /** Folders the run could not read for another reason, such as a failed request. It says nothing about access. */
   unread: string[]
   /** Folders left out by design: the Backup Reader does not read them, or only a signed-in admin can. It says nothing about access. */
@@ -108,6 +108,8 @@ export interface FolderRefusal {
   /** When that run ended. */
   at: string
   cause: RefusalCause
+  /** Whether the run's own token held the folder's read permission; absent when not known. */
+  permissionHeld?: boolean
 }
 
 /** The refusals kept per folder: the first since its last read, which says since when, and the latest, which says why. */
@@ -197,15 +199,17 @@ export type PermissionState = "present" | "missing" | "unknown"
 
 /**
  * Why access to a type was lost: the cause the refused runs found with the token they had
- * (license also covers a product never set up), or notVerifiedYet: a run of the admin lacked a
- * permission that the admin's token carries now, so that cause is gone, and whether the read works
- * shows when a backup reads the type. The token of today never turns a cause into another one.
+ * (license also covers a product never set up), or notVerifiedYet: a run is known to have lacked a
+ * permission that its connection's token carries now, so that cause is gone, and whether the read works
+ * shows when a backup reads the type. refusedWithPermission means only that the read was refused
+ * although the permission is present now, and the run was not known to lack it. For an admin this
+ * often involves their role or a license, but neither is proven. It never says the cause is gone.
  */
-export type LossCause = RefusalCause | "notVerifiedYet"
+export type LossCause = RefusalCause | "notVerifiedYet" | "refusedWithPermission"
 
 /**
  * Why the last backup did not read a type:
- * - permission, role, license, notVerifiedYet: Microsoft refused the read (see LossCause).
+ * - permission, role, license, notVerifiedYet, refusedWithPermission: Microsoft refused the read (see LossCause).
  * - signedIn: only a signed-in admin can read it, and only the Backup Reader ran.
  * - reader: only the Backup Reader ran, and it leaves the type out by design. Nothing was asked of
  *   Microsoft and nothing is to fix.

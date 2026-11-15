@@ -2,7 +2,7 @@ import type { RunOutcomes } from "../../shared/backup-outcomes"
 import { evaluateHealth, type HealthEvaluation, type ServiceChoice } from "../../shared/connection-health/evaluate"
 import type { ConnectionHealthReport, ConnectionMode, ReaderObservation, TokenObservation } from "../../shared/connection-health/model"
 import { runObservation } from "../../shared/connection-health/observe"
-import type { ModuleId } from "../../shared/services/modules"
+import { canBackUp, MODULES, type GrantedPermissions, type ModuleId } from "../../shared/services/modules"
 import { grantedPermissions } from "../../shared/services/token"
 import type { KeyValueStore } from "../storage/secure-store"
 import { signInFailure } from "./failure"
@@ -47,6 +47,8 @@ interface RunStart {
   clientId: string
   /** The admin who was signed in; left out for the Backup Reader, and when nobody was. */
   account?: string
+  /** Agreement of the run's own tokens on each folder; unknown when their permissions differ. */
+  permissionHeld?: Record<string, boolean | undefined>
 }
 
 export interface HealthHost {
@@ -189,9 +191,20 @@ export class ConnectionHealth {
     const tenant = request.tenantId.toLowerCase()
     const started = this.runs.get(outcomes.runId)
     if (!started || started.mode !== outcomes.authMode || started.generation !== this.generation(tenant) || !this.unchanged(started)) return
-    this.observations.recordRun({ tenantId: tenant, clientId: started.clientId, mode: started.mode }, runObservation(outcomes, started.account))
+    this.observations.recordRun({ tenantId: tenant, clientId: started.clientId, mode: started.mode }, runObservation(outcomes, started.account, started.permissionHeld))
     this.keepBaseline(tenant)
     this.host.changed?.(tenant)
+  }
+
+  /** Permission names from tokens the engine already used, never another token request or a health check. */
+  runToken(runId: string, granted: GrantedPermissions | undefined): void {
+    const started = this.runs.get(runId)
+    if (!started) return
+    const held = Object.fromEntries(MODULES.flatMap((module) => module.areas.flatMap((area) => area.folders.map((folder) => [folder, granted ? canBackUp(folder, granted) : undefined]))))
+    if (!started.permissionHeld) started.permissionHeld = held
+    else for (const [folder, present] of Object.entries(held)) {
+      if (started.permissionHeld[folder] !== present) started.permissionHeld[folder] = undefined
+    }
   }
 
   /** The job of a backup run ended, with outcomes or without: its start is no longer needed. */
@@ -287,7 +300,7 @@ export class ConnectionHealth {
    * back, never a time from inside the token. A token MSAL took from its cache was not issued for
    * this check, so nothing is kept for it and the last real answer stands.
    */
-  private async observeToken(key: ConnectionKey, resource: "graph" | "storage", identity: number): Promise<void> {
+  private async observeToken(key: ConnectionKey, resource: "graph" | "storage", identity: object): Promise<void> {
     const account = this.host.account(key.tenantId) ?? undefined
     let observation: TokenObservation
     try {
