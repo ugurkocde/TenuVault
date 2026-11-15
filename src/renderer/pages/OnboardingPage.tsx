@@ -340,10 +340,14 @@ export default function OnboardingPage() {
 
   const cancelBackup = async () => {
     if (!runningJobId) return
+    const jobId = runningJobId
     setCancelling(true)
     try {
-      await bridge.backups.cancel(runningJobId)
+      await bridge.backups.cancel(jobId)
     } catch (error) {
+      // The answer can arrive after the backup ended or another one started. It then says nothing
+      // the admin can act on.
+      if (completedBackup.current === jobId || handledPollError.current === jobId || leavingBackup.current.runningJobId !== jobId) return
       setJobError(error instanceof Error ? error.message : "Could not cancel the backup. Try again.")
       setCancelling(false)
     }
@@ -354,9 +358,10 @@ export default function OnboardingPage() {
   // A backup that could not start or ended with an error. Cancelling is the admin's own choice, and
   // an error next to a backup that is on screen is a failed cancel, not a failed backup.
   const backupFailed = (Boolean(jobError) && !displayJob) || (finished && !succeeded && displayJob?.status !== "Cancelled")
-  // An error on the Sign in step that leaves the admin stuck. A tenant that is already connected
-  // does not: that error has its own way on.
-  const signInStuck = Boolean(addError && !addError.alreadyConnected)
+  // The license refusal that sent the admin back to the Sign in step leaves them stuck there. A
+  // tenant that is already connected has its own way on, and a message of the Storage step that
+  // is still set after Previous is not an error of this step.
+  const signInStuck = Boolean(addError?.license)
 
   return (
     <div className={cn("@container mx-auto space-y-4 p-5 lg:p-6", step === 0 ? "max-w-[96rem]" : "max-w-3xl")}>
