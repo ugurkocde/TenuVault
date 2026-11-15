@@ -685,6 +685,18 @@ describe("changes since the snapshot", () => {
     }
   })
 
+  it("keeps unacknowledged permission changes in the report without a usable token", () => {
+    const snapshot = evaluate([delegated({ graph: healthy(WITHOUT_APPS, ago(3 * DAY)) })]).baseline!
+    const found = evaluate([delegated({ graph: healthy([...WITHOUT_APPS, "DeviceManagementApps.Read.All"]), snapshot })])
+    expect(found.report.changes).toContainEqual({ kind: "permissionsAdded", permissions: ["DeviceManagementApps.Read.All"] })
+    for (const graph of [failed({ class: "session" }), healthy(DEFAULT_SCOPES, ago(8 * DAY)), { at: ago(MINUTE) }]) {
+      const ended = evaluate([delegated({ graph, snapshot: found.baseline! })])
+      expect(ended.report.changes).toEqual(found.report.changes)
+      expect(ended.baseline!.found).toEqual(found.baseline!.found)
+      expect(evaluate([delegated({ graph, snapshot: ended.current! })]).report.changes).toEqual([])
+    }
+  })
+
   it("fills in what the snapshot did not know, without calling it a change", () => {
     const snapshot: Snapshot = { at: ago(3 * DAY), account: ADMIN, lost: [] }
     const { report, baseline } = evaluate([delegated({ graph: healthy(), snapshot })])

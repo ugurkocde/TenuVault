@@ -410,7 +410,7 @@ export function evaluateHealth(input: HealthInput, now: Date): HealthEvaluation 
         if (found.length) baseline.found = found
         else delete baseline.found
       }
-      changes.push(...(previous.carried ?? []), ...found)
+      changes.push(...(previous.carried ?? []), ...(baseline.found ?? []))
       // Access that came back is forgotten, so losing it again is reported again.
       baseline.lost = previous.lost ? previous.lost.filter((area) => lost.has(area)) : known.lost
       for (const entry of evaluated) {
