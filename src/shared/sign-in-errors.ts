@@ -15,7 +15,7 @@
  * time, so a code without a row is never guessed at: it is shown with its number.
  */
 
-import { CONSENT_ROLES_TEXT, CREATE_BY_HAND } from "./app-registration"
+import { CONSENT_ROLES_TEXT, CREATE_BY_HAND } from "./sign-in-words"
 
 /**
  * What kind of refusal a code is, which says who can end it:
@@ -99,6 +99,9 @@ export interface SignInErrorRow {
    */
   setup?: string
   /** What the Backup Reader adds when the code is a refusal no retry can fix. */
+  handoff?: true
+  suggestReader?: true
+  readerGuidance?: "certificate" | "renewal" | "conditionalAccess"
   reader?: string
 }
 
@@ -121,16 +124,16 @@ const ROWS: readonly Row[] = [
   { code: "AADSTS50132", class: "session", state: "signInNeeded", meaning: "The session is not valid or has expired." },
   { code: "AADSTS50089", class: "session", state: "signInNeeded", meaning: "The flow token expired." },
   { code: "AADSTS70043", class: "session", state: "signInNeeded", meaning: "The refresh token expired under a Conditional Access sign-in frequency." },
-  { code: "AADSTS70044", class: "session", state: "signInNeeded", meaning: "The session expired under a Conditional Access sign-in frequency." },
+  { code: "AADSTS70044", suggestReader: true, class: "session", state: "signInNeeded", meaning: "The session expired under a Conditional Access sign-in frequency." },
   { code: "AADSTS50055", class: "session", state: "signInNeeded", meaning: "The password has expired." },
 
   // Multifactor authentication or another challenge.
   {
-    code: "AADSTS50076", class: "mfa", state: "mfaRequired", meaning: "Multifactor authentication is required for the resource.",
+    code: "AADSTS50076", suggestReader: true, handoff: true, class: "mfa", state: "mfaRequired", meaning: "Multifactor authentication is required for the resource.",
     firstSignIn: "Microsoft asks for multifactor authentication for this sign-in, because of a Conditional Access policy, per-user MFA or a new location, and it was not completed. Sign in again and complete the MFA prompt in the browser. If no prompt appears, ask your Entra administrator to check the sign-in logs in the Entra admin center.",
   },
   {
-    code: "AADSTS50079", class: "mfa", state: "mfaRequired", meaning: "The account has to register for multifactor authentication, or a federated provider has to supply the claim.",
+    code: "AADSTS50079", suggestReader: true, handoff: true, class: "mfa", state: "mfaRequired", meaning: "The account has to register for multifactor authentication, or a federated provider has to supply the claim.",
     firstSignIn: "Microsoft requires multifactor authentication for this sign-in, because of a Conditional Access policy, per-user MFA or a new location, and your account cannot complete it yet. If your account is managed in Entra ID, register your security info at https://mysignins.microsoft.com/security-info and sign in again. If your account signs in through another identity provider (a federated account), that provider must supply the MFA claim: ask your administrator to set it up.",
   },
   { code: "AADSTS50074", class: "mfa", state: "mfaRequired", meaning: "Strong authentication is required and the challenge was not passed." },
@@ -140,18 +143,18 @@ const ROWS: readonly Row[] = [
 
   // Conditional Access.
   {
-    code: "AADSTS53000", class: "conditionalAccess", state: "blockedByConditionalAccess", meaning: "Conditional Access requires a compliant device.",
+    code: "AADSTS53000", handoff: true, class: "conditionalAccess", state: "blockedByConditionalAccess", meaning: "Conditional Access requires a compliant device.",
     firstSignIn: "Conditional Access requires a compliant or registered device. Use a browser that passes the device identity, such as Microsoft Edge signed in to your work profile, as the default browser and try again.",
     setup: "firstSignIn",
   },
   {
-    code: "AADSTS53001", class: "conditionalAccess", state: "blockedByConditionalAccess", meaning: "Conditional Access requires a domain-joined device.",
+    code: "AADSTS53001", handoff: true, class: "conditionalAccess", state: "blockedByConditionalAccess", meaning: "Conditional Access requires a domain-joined device.",
     firstSignIn: "Conditional Access requires a domain-joined device. Use a browser that passes the device identity, such as Microsoft Edge signed in to your work profile, as the default browser and try again.",
     setup: "firstSignIn",
   },
   { code: "AADSTS53002", class: "conditionalAccess", state: "blockedByConditionalAccess", meaning: "Conditional Access requires an approved app." },
   {
-    code: "AADSTS53003", class: "conditionalAccess", state: "blockedByConditionalAccess", meaning: "Conditional Access policies blocked the token.",
+    code: "AADSTS53003", readerGuidance: "conditionalAccess", handoff: true, class: "conditionalAccess", state: "blockedByConditionalAccess", meaning: "Conditional Access policies blocked the token.",
     firstSignIn: "Conditional Access blocked this sign-in. Check the sign-in logs in the Entra admin center for the policy, or sign in from a device and location it allows.",
     // A Conditional Access refusal may be about the device or the location, which the manual
     // route does not get around either, so the message names both ways on.
@@ -162,7 +165,7 @@ const ROWS: readonly Row[] = [
 
   // Permissions and consent.
   {
-    code: "AADSTS65001", class: "consent", state: "consentMissing", meaning: "No user or administrator has consented to the application.",
+    code: "AADSTS65001", handoff: true, class: "consent", state: "consentMissing", meaning: "No user or administrator has consented to the application.",
     noConsent: true,
     setup: setupNotApproved("AADSTS65001"),
   },
@@ -173,7 +176,7 @@ const ROWS: readonly Row[] = [
     setup: `You declined Microsoft's request to approve Microsoft Graph Command Line Tools (AADSTS65004). Select Try again and accept it, or use "Someone else is the admin?".`,
   },
   {
-    code: "AADSTS90094", class: "consent", state: "consentMissing", meaning: "Administrator consent is required.",
+    code: "AADSTS90094", handoff: true, class: "consent", state: "consentMissing", meaning: "Administrator consent is required.",
     firstSignIn: `Administrator consent is required: this tenant does not let your account grant the permissions the TenuVault app registration asks for. Ask a ${CONSENT_ROLES_TEXT} to grant admin consent for it, or send them the setup instructions.`,
     setup: setupNotApproved("AADSTS90094"),
   },
@@ -243,12 +246,12 @@ const ROWS: readonly Row[] = [
 
   // The Backup Reader's certificate.
   {
-    code: "AADSTS700027", class: "credential", state: "refused", meaning: "The client assertion failed signature validation: Microsoft does not accept the certificate that signed it.",
+    code: "AADSTS700027", readerGuidance: "certificate", class: "credential", state: "refused", meaning: "The client assertion failed signature validation: Microsoft does not accept the certificate that signed it.",
     reader: "Microsoft does not know this certificate. Upload the exported certificate with the setup script, then verify again.",
   },
   // Microsoft words this code for client secret keys, so it does not prove that the certificate expired.
   {
-    code: "AADSTS7000222", class: "credential", state: "refused", meaning: "The client secret keys that were provided for the application have expired.",
+    code: "AADSTS7000222", readerGuidance: "renewal", class: "credential", state: "refused", meaning: "The client secret keys that were provided for the application have expired.",
     reader: "The certificate has expired. Create a renewal certificate in Settings and upload it.",
   },
   // May pass on a retry, for example after a clock correction, so the Backup Reader keeps trying.
@@ -276,3 +279,6 @@ export function signInErrorLink(code: string): string {
 export function namedSignInCode(text: string): string | undefined {
   return /AADSTS\d+/.exec(text)?.[0]
 }
+
+/** Compatibility export, derived from the one error table. */
+export const HANDOFF_SIGN_IN_CODES: readonly string[] = SIGN_IN_ERRORS.filter(row => row.handoff).map(row => row.code)

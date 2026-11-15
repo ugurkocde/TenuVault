@@ -1,6 +1,8 @@
 // The app registration TenuVault Desktop signs in with, as the setup script creates it
 // (resources/New-TenuVaultDesktopApp.ps1). Shown in the guided setup before anyone consents.
 
+import { signInErrorRow } from "./sign-in-errors"
+import { CONSENT_ROLES, CREATE_BY_HAND } from "./sign-in-words"
 import { DEFAULT_SETUP_CHOICE, requestedPermissions, setupScriptArguments, type PermissionChoice } from "./services/manifest"
 
 export const SETUP_SCRIPT_FILE_NAME = "New-TenuVaultDesktopApp.ps1"
@@ -8,21 +10,9 @@ export const SETUP_SCRIPT_DOWNLOAD_URL = "https://docs.tenuvault.com/downloads/N
 export const APP_REGISTRATION_GUIDE_URL = "https://docs.tenuvault.com/getting-started/app-registration/"
 export const MANUAL_APP_REGISTRATION_URL = `${APP_REGISTRATION_GUIDE_URL}#create-the-app-registration-manually`
 
-/**
- * The Entra roles that can run the setup: each can both create the app registration and grant
- * tenant-wide admin consent for delegated permissions. A Privileged Role Administrator can grant
- * the consent, but creates an app registration only where every user may, so it is not listed.
- */
-export const CONSENT_ROLES = ["Global Administrator", "Cloud Application Administrator", "Application Administrator"] as const
-/** The roles in a sentence: "A, B or C". */
-export const CONSENT_ROLES_TEXT = `${CONSENT_ROLES.slice(0, -1).join(", ")} or ${CONSENT_ROLES.at(-1)}`
+export { CONSENT_ROLES, CONSENT_ROLES_TEXT, CREATE_BY_HAND } from "./sign-in-words"
+export { HANDOFF_SIGN_IN_CODES } from "./sign-in-errors"
 
-/**
- * The route that works when the tenant blocks Microsoft Graph Command Line Tools, which the setup
- * and the setup script both sign in through. Setup errors that need it say these words, and the
- * Connect step then offers the manual guide next to the error.
- */
-export const CREATE_BY_HAND = "create the app registration by hand"
 export function suggestsCreatingByHand(message: string): boolean {
   return message.toLowerCase().includes(CREATE_BY_HAND)
 }
@@ -35,15 +25,9 @@ export function isSignInTimeout(message: string): boolean {
   return message.includes(FIRST_SIGN_IN_TIMEOUT_MESSAGE)
 }
 
-/**
- * The first sign-in refusals another administrator or the manual setup can get around: Conditional
- * Access (53000, 53001, 53003), missing consent or approval (65001, 90094) and MFA (50076, 50079).
- */
-export const HANDOFF_SIGN_IN_CODES: readonly string[] = ["AADSTS53000", "AADSTS53001", "AADSTS53003", "AADSTS65001", "AADSTS90094", "AADSTS50076", "AADSTS50079"]
-
 /** Whether a first sign-in error names one of the codes the sign-in form offers the handoff for. */
 export function offersSignInHandoff(message: string): boolean {
-  return (message.match(/AADSTS\d+/g) ?? []).some((code) => HANDOFF_SIGN_IN_CODES.includes(code))
+  return (message.match(/AADSTS\d+/g) ?? []).some((code) => signInErrorRow(code)?.handoff === true)
 }
 
 const PURPOSE: Record<string, string> = {
