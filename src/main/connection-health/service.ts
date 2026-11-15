@@ -243,7 +243,8 @@ export class ConnectionHealth {
 
   /** Whether the sign-in a run started with is still the tenant's. */
   private unchanged(started: RunStart): boolean {
-    const now = this.identity(started.tenant, started.mode, started.clientId)
+    const connected = this.host.tenant(started.tenant)
+    const now = connected && this.identity(started.tenant, started.mode, connected.clientId)
     return !!now && now.clientId === started.clientId && now.account === started.account
   }
 

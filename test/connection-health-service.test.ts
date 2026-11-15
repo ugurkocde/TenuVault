@@ -514,6 +514,21 @@ describe("backup runs", () => {
     expect(stored()!.connections[0]).toMatchObject({ account: ADMIN, runs: [], verified: {}, refused: {} })
   })
 
+  it.each([false, true])("drops an admin run after its registration changes, also if it returns: %s", async (returns) => {
+    const { health, state, stored, now } = setup()
+    await health.check(TENANT, "launch")
+    health.runStarted({ id: "old-registration", authMode: "delegated" }, REQUEST)
+    state.tenant!.clientId = "66666666-6666-6666-6666-666666666666"
+    if (returns) {
+      await health.check(TENANT, "signIn")
+      state.tenant!.clientId = CLIENT
+      await health.check(TENANT, "signIn")
+    }
+    health.recordRun(outcomes("old-registration", now(), [saved("Apps"), denied("ScopeTags")]), REQUEST)
+    expect(JSON.stringify(stored())).not.toContain("old-registration")
+    expect(stored()!.connections[0]).toMatchObject({ runs: [], verified: {}, refused: {} })
+  })
+
   it("of the Backup Reader are credited to the reader they started with", () => {
     const OTHER_READER = "77777777-7777-7777-7777-777777777777"
     const { health, state, stored, now } = setup()
