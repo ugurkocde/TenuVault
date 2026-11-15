@@ -8,6 +8,7 @@ import { APP_REGISTRATION_GUIDE_URL, CONSENT_ROLES_TEXT, MANUAL_APP_REGISTRATION
 import type { RegistrationResult, SetupProgress } from "../../shared/ipc"
 import { bridge } from "../lib/bridge"
 import { PermissionList, SetupScriptCard } from "./TenantSignInForm"
+import { SetupCallLink } from "./SetupCallLink"
 import { recordSetup, SetupDiagnosticsReminder } from "./SetupDiagnostics"
 import { SignInRecoveryPanel, useWaitedLong } from "./SignInRecovery"
 
@@ -42,6 +43,9 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
   const [reused, setReused] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   const [error, setError] = useState("")
+  // Whether the message is the error a setup attempt ended with. A cancel or a copy that failed
+  // says nothing about the setup, so it does not offer the setup call.
+  const [attemptFailed, setAttemptFailed] = useState(false)
   const [script, setScript] = useState(false)
   const [copied, setCopied] = useState(false)
   const busy = useRef(false)
@@ -68,6 +72,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
     setRunning(true)
     setCancelling(false)
     setError("")
+    setAttemptFailed(false)
     setReused(false)
     setPhase("signingIn")
     setCompleting(false)
@@ -78,7 +83,10 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
       const message = caught instanceof Error ? caught.message : String(caught)
       restartNow = message === CANCELLED && restart.current
       // Cancelling is the admin's own choice, not something to report back to them.
-      if (message !== CANCELLED) setError(message)
+      if (message !== CANCELLED) {
+        setError(message)
+        setAttemptFailed(true)
+      }
     } finally {
       busy.current = false
       restart.current = false
@@ -95,6 +103,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
     } catch (caught) {
       setCancelling(false)
       setError(caught instanceof Error ? caught.message : String(caught))
+      setAttemptFailed(false)
     }
   }
 
@@ -111,17 +120,21 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
       restart.current = false
       setRetrying(false)
       setError(caught instanceof Error ? caught.message : String(caught))
+      setAttemptFailed(false)
     }
   }
 
   const copyHandoff = async () => {
     setError("")
+    setAttemptFailed(false)
     recordSetup({ name: "setup_route", props: { route: "handoff" } })
     try {
       await navigator.clipboard.writeText(setupHandoffText())
       setCopied(true)
     } catch (caught) {
+      // The copy can fail after a setup attempt that started meanwhile has failed.
       setError(`Could not copy: ${caught instanceof Error ? caught.message : String(caught)}`)
+      setAttemptFailed(false)
     }
   }
 
@@ -160,6 +173,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
                   <Button type="button" variant="ghost" size="sm" onClick={manual}>I already have an app registration</Button>
                 </div>
               )}
+              {attemptFailed && <SetupCallLink source="setup-error" variant="hint" className="mt-3" />}
             </AlertDescription>
           </Alert>
         )}

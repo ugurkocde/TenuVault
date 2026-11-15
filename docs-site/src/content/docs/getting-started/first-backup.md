@@ -22,7 +22,7 @@ The first backup uses the default scope, **Everything except apps**: policies, s
 
 To do it later, select **Skip for now**. TenuVault opens the dashboard, and you can run the backup from **Backup & Restore** at any time.
 
-If the first backup fails or you cancel it, select **Try again** to run it again, or **Go to Backup & Restore** to continue there.
+If the first backup fails or you cancel it, select **Try again** to run it again, or **Go to Backup & Restore** to continue there. Under a first backup that failed or could not start, **Stuck here? Book a free setup call** opens the [free setup call](/getting-started/#free-setup-call) page in your browser. A backup you cancelled does not show it.
 
 ### Next steps
 

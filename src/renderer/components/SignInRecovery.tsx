@@ -3,6 +3,7 @@ import { Check, Copy, ExternalLink, RotateCcw, Send } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import { isSignInTimeout, MANUAL_APP_REGISTRATION_URL, offersSignInHandoff, setupHandoffText } from "../../shared/app-registration"
 import { bridge } from "../lib/bridge"
+import { SetupCallLink } from "./SetupCallLink"
 import { recordSetup } from "./SetupDiagnostics"
 
 /** How long a sign-in waits for the browser before the recovery panel offers other ways on. */
@@ -119,6 +120,7 @@ export function SignInRecoveryPanel({ kind, onTryAgain, retrying = false }: {
           {copied === "link" ? "Copied" : "Copy sign-in link"}
         </Button>
         <HandoffButton copied={copied === "handoff"} onCopy={() => void copyHandoff(show, setError)} />
+        <SetupCallLink source="signin-waiting" variant="button" />
       </div>
       <Notes copied={copied} error={error} />
     </div>

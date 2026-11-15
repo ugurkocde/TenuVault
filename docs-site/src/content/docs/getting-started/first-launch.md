@@ -17,6 +17,7 @@ While no tenant is connected, TenuVault always opens the guided setup, **Set up 
 * Three short points on what TenuVault does: back up your Intune policies encrypted on this computer, restore a single policy or a whole set, and see what changed between backups.
 * **Connect your tenant**: opens **Set up TenuVault**.
 * A note that new tenants start with a Pro trial, no card and no email needed, that setup takes a few minutes (connect your tenant with Microsoft sign-in and take a first backup), and that one tenant continues on Community Free afterwards.
+* **Rather do it together? Book a free setup call**: opens the [free setup call](/getting-started/#free-setup-call) page in your browser. The call takes 30 minutes and is free on every plan. You share your screen and we set it up in your tenant.
 * **I have a license key**.
 
 To buy a license or ask for an invoice, use the **License** page after setup. See [Activate and manage your license](/licensing/manage/). For what each plan includes, see [Plans and features](/licensing/).
@@ -30,9 +31,9 @@ The first tenant you sign in to without a key starts its 14 day Pro trial, unles
 
 <figure class="docs-screenshot">
   <a href="/images/screenshots/welcome.webp" aria-label="Open full-size screenshot: welcome">
-    <img src="/images/screenshots/welcome.webp" alt="The welcome screen offers Connect your tenant, setup diagnostics and license-key entry" width="1440" height="891" loading="lazy" decoding="async" />
+    <img src="/images/screenshots/welcome.webp" alt="The welcome screen offers Connect your tenant, a free setup call, setup diagnostics and license-key entry" width="1280" height="893" loading="lazy" decoding="async" />
   </a>
-  <figcaption>The welcome screen offers Connect your tenant, setup diagnostics and license-key entry. Captured from the desktop app. Select the image to view it full size.</figcaption>
+  <figcaption>The welcome screen offers Connect your tenant, a free setup call, setup diagnostics and license-key entry. Captured from the desktop app. Select the image to view it full size.</figcaption>
 </figure>
 
 ## Start a trial

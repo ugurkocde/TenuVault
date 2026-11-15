@@ -74,6 +74,8 @@ The app talks to TenuVault services on `www.tenuvault.com`: the licensing servic
 
 When you open the pricing page or the checkout (`https://www.tenuvault.com/api/desktop-checkout`) from the app, the link names the screen it was opened from (for example `src=app-license-page`) and carries no identifier.
 
+The link to the free setup call page (`https://www.tenuvault.com/setup-call`) works the same way: it names the screen it was opened from (for example `src=app-welcome`) and carries no identifier. Only your browser visits that page, and only when you click the link. The app does not request the page and does not contact a booking service.
+
 ### When the app connects
 
 * The first time you use a tenant, to activate it.
@@ -291,7 +293,7 @@ A local notification option shows a system notification on your machine and make
 
 ## Links that open in your browser
 
-Some buttons open a web page in your default browser instead of making a request from the app, for example **Buy now**, **Buy Pro**, **Compare plans**, **Manage subscription** and **Setup guide**. These pages are visited by your browser only when you click them. TenuVault only opens `https` and `mailto` links, and never loads external pages inside the app window.
+Some buttons open a web page in your default browser instead of making a request from the app, for example **Buy now**, **Buy Pro**, **Compare plans**, **Manage subscription**, **Setup guide**, **Free setup call** and **Book a free setup call**. These pages are visited by your browser only when you click them. TenuVault only opens `https` and `mailto` links, and never loads external pages inside the app window.
 
 ## Firewall allow list
 

@@ -19,6 +19,7 @@ import {
   setupHandoffText,
 } from "../../shared/app-registration"
 import { bridge } from "../lib/bridge"
+import { SetupCallLink } from "./SetupCallLink"
 import { SetupDiagnosticsReminder } from "./SetupDiagnostics"
 import { SignInErrorActions, SignInRecoveryPanel, useWaitedLong } from "./SignInRecovery"
 
@@ -257,7 +258,7 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
   // then the license check. Only the browser step before them offers the recovery panel.
   const [afterBrowser, setAfterBrowser] = useState<"completing" | "license" | null>(null)
   const waitedLong = useWaitedLong(busy && !afterBrowser, attempt)
-  const [errors, setErrors] = useState<{ tenant?: string; clientId?: string; form?: string }>({})
+  const [errors, setErrors] = useState<{ tenant?: string; clientId?: string; form?: string; attempt?: boolean }>({})
   const notify = useRef(onFieldsChange)
   notify.current = onFieldsChange
 
@@ -360,7 +361,9 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
       if (!active.current) return
       const message = error instanceof Error ? error.message : "Sign-in failed."
       again = message === CANCELLED && restart.current
-      if (message !== CANCELLED && !showCommunityLimitError(error)) setErrors({ form: message })
+      // `attempt` marks the error a sign-in ended with, which offers the setup call. A cancel that
+      // failed does not.
+      if (message !== CANCELLED && !showCommunityLimitError(error)) setErrors({ form: message, attempt: true })
     } finally {
       signingIn.current = false
       restart.current = false
@@ -495,6 +498,7 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
           <AlertDescription>{trialKeyRefusalText(errors.form)}
             <TrialKeyRefusalActions message={errors.form} source="sign-in-trial-key-refused" />
             <SignInErrorActions message={errors.form} onTryAgain={() => void submit()} />
+            {errors.attempt && <SetupCallLink source="signin-error" variant="hint" className="mt-3" />}
           </AlertDescription>
         </Alert>
       )}
