@@ -310,6 +310,58 @@ describe("a tenant that is signed out of or removed while a check runs", () => {
   })
 })
 
+describe("a check whose identity changed", () => {
+  it.each(["token", "refusal"] as const)("drops admin A's late %s without deleting admin B's completed backup", async (answer) => {
+    const { health, state, tokens, stored, changed, now } = setup()
+    let resolve = (_value: ReturnType<typeof fresh>) => undefined as void
+    let reject = (_error: Error) => undefined as void
+    tokens.mockImplementationOnce(() => new Promise((yes, no) => { resolve = yes; reject = no }))
+    const earlier = health.check(TENANT, "launch")
+    state.account = OTHER_ADMIN
+    const queued = health.check(TENANT, "signIn")
+    health.runStarted({ id: "b-read", authMode: "delegated" }, { tenantId: TENANT, clientId: CLIENT })
+    health.recordRun({ runId: "b-read", tenantId: TENANT, authMode: "delegated", trigger: "manual", startedAt: now(), endedAt: now(), status: "Success", coverage: "complete", types: [{ folder: "Apps", service: "intune", outcome: "saved", saved: 1 }] }, { tenantId: TENANT, clientId: CLIENT })
+    const evidence = stored()!.connections[0]!
+    changed.mockClear()
+    if (answer === "token") resolve(fresh(WITHOUT_APPS))
+    else reject(new SignInRequiredError(TENANT, CLIENT, "Sign in again."))
+    await earlier
+    await queued
+    expect(tokens).toHaveBeenCalledTimes(2)
+    expect(stored()!.connections[0]).toMatchObject({ account: OTHER_ADMIN, runs: evidence.runs, verified: { Apps: now() } })
+    expect(changed).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(["account", "registration", "reader"] as const)("invalidates pending data, errors and follow-ups after a %s change and return", async (field) => {
+    const { health, state, tokens, readerToken, stored, changed } = setup()
+    state.tenant!.storage = "azure"
+    state.reader = { clientId: READER, facts: READER_FACTS }
+    const answers: Array<() => void> = []
+    tokens.mockImplementationOnce(() => new Promise((resolve) => answers.push(() => resolve(fresh()))))
+    tokens.mockImplementationOnce(() => new Promise((_resolve, reject) => answers.push(() => reject(new Error("refused")))))
+    readerToken.mockImplementationOnce(() => new Promise((resolve) => answers.push(() => resolve(token(SCOPES)))))
+    const running = health.check(TENANT, "again")
+    const oldQueue = health.check(TENANT, "signIn")
+    if (field === "account") state.account = OTHER_ADMIN
+    else if (field === "registration") state.tenant!.clientId = "new-client"
+    else state.reader.clientId = "new-reader"
+    const newQueue = health.check(TENANT, "signIn")
+    state.account = ADMIN
+    state.tenant!.clientId = CLIENT
+    state.reader.clientId = READER
+    // Observe the return before the original answers arrive, permanently invalidating both queues.
+    health.runStarted({ id: "returned" }, { tenantId: TENANT, clientId: CLIENT })
+    const before = JSON.stringify(stored())
+    changed.mockClear()
+    for (const answer of answers) answer()
+    await Promise.all([running, oldQueue, newQueue])
+    expect(JSON.stringify(stored())).toBe(before)
+    expect(changed).not.toHaveBeenCalled()
+    expect(tokens).toHaveBeenCalledTimes(2)
+    expect(readerToken).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe("the Backup Reader in a check", () => {
   it("is asked for a token only when the admin checks again or a scheduled backup runs with it", async () => {
     const { health, state, readerToken, pass } = setup()

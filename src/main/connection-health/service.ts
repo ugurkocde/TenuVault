@@ -83,7 +83,9 @@ export class ConnectionHealth {
   private readonly now: () => Date
   private readonly running = new Map<string, Promise<ConnectionHealthReport>>()
   /** The check that follows the running one, for triggers that must not be answered by a check that started before them. */
-  private readonly following = new Map<string, Promise<ConnectionHealthReport>>()
+  private readonly following = new Map<string, { identity: object; promise: Promise<ConnectionHealthReport> }>()
+  /** A new identity gets a new marker, even if an earlier sign-in later comes back. */
+  private readonly identities = new Map<string, { signature: string }>()
   private readonly checkedAt = new Map<string, number>()
   /**
    * Per tenant: how often it was signed out of or removed. A check notes the count when it is asked
@@ -113,6 +115,7 @@ export class ConnectionHealth {
    */
   check(tenantId: string, trigger: CheckTrigger, options: { reader?: boolean; failed?: boolean } = {}): Promise<ConnectionHealthReport> {
     const tenant = tenantId.toLowerCase()
+    const identity = this.checkIdentity(tenant)
     // Every sign-in is followed by a check, so this is where a run under way is seen to have lost its sign-in:
     // it is credited to nobody, also when that sign-in comes back before the run ends.
     for (const [runId, started] of this.runs) if (started.tenant === tenant && !this.unchanged(started)) this.runs.delete(runId)
@@ -123,13 +126,13 @@ export class ConnectionHealth {
     const running = this.running.get(lane) ?? (reader ? undefined : this.running.get(`${tenant}|reader`))
     if (running && !always) return running
     if (running) {
-      const generation = this.generation(tenant)
-      const following: Promise<ConnectionHealthReport> = this.following.get(lane) ?? running.then(() => undefined, () => undefined).then(() => {
-        if (this.following.get(lane) === following) this.following.delete(lane)
-        // Signed out of or removed while it waited: the check was asked for under a sign-in that is gone, so it asks Microsoft nothing.
-        return this.generation(tenant) === generation ? this.start(lane, tenant, reader) : this.report(tenant)
+      const queued = this.following.get(lane)
+      const following: Promise<ConnectionHealthReport> = (queued?.identity === identity ? queued.promise : undefined) ?? running.then(() => undefined, () => undefined).then(() => {
+        if (this.following.get(lane)?.promise === following) this.following.delete(lane)
+        // The identity that asked for this check must still be current when its turn comes.
+        return this.checkIdentity(tenant) === identity ? this.start(lane, tenant, reader) : this.report(tenant)
       })
-      this.following.set(lane, following)
+      this.following.set(lane, { identity, promise: following })
       return following
     }
     const last = Math.max(this.checkedAt.get(`${tenant}|reader`) ?? -Infinity, reader ? -Infinity : (this.checkedAt.get(lane) ?? -Infinity))
@@ -138,7 +141,7 @@ export class ConnectionHealth {
   }
 
   private start(lane: string, tenant: string, reader: boolean): Promise<ConnectionHealthReport> {
-    const check = this.observe(tenant, reader, this.generation(tenant)).finally(() => {
+    const check = this.observe(tenant, reader, this.checkIdentity(tenant)).finally(() => {
       if (this.running.get(lane) === check) this.running.delete(lane)
     })
     this.running.set(lane, check)
@@ -172,6 +175,7 @@ export class ConnectionHealth {
    */
   runStarted(run: { id: string; authMode?: ConnectionMode }, request: { tenantId: string; clientId: string }): void {
     const tenant = request.tenantId.toLowerCase()
+    this.checkIdentity(tenant)
     const identity = this.identity(tenant, run.authMode ?? "delegated", request.clientId)
     if (identity) this.runs.set(run.id, { tenant, generation: this.generation(tenant), ...identity })
   }
@@ -218,6 +222,7 @@ export class ConnectionHealth {
   private forgetChecks(tenantId: string): void {
     const tenant = tenantId.toLowerCase()
     this.generations.set(tenant, this.generation(tenant) + 1)
+    this.identities.delete(tenant)
     for (const lane of [`${tenant}|admin`, `${tenant}|reader`]) {
       this.checkedAt.delete(lane)
       this.running.delete(lane)
@@ -242,22 +247,34 @@ export class ConnectionHealth {
     return !!now && now.clientId === started.clientId && now.account === started.account
   }
 
+  /** Captures every identity a check can observe; a change invalidates answers, waiting checks and notices together. */
+  private checkIdentity(tenant: string): object {
+    const signature = JSON.stringify([this.host.tenant(tenant)?.clientId.toLowerCase(), this.host.account(tenant), this.host.reader(tenant)?.clientId.toLowerCase()])
+    let identity = this.identities.get(tenant)
+    if (!identity || identity.signature !== signature) {
+      identity = { signature }
+      this.identities.set(tenant, identity)
+      for (const lane of [`${tenant}|admin`, `${tenant}|reader`]) this.checkedAt.delete(lane)
+    }
+    return identity
+  }
+
   private adminKey(tenant: string): ConnectionKey | null {
     const connected = this.host.tenant(tenant)
     return connected && { tenantId: tenant, clientId: connected.clientId, mode: "delegated" }
   }
 
-  private async observe(tenant: string, reader: boolean, generation: number): Promise<ConnectionHealthReport> {
+  private async observe(tenant: string, reader: boolean, identity: object): Promise<ConnectionHealthReport> {
     const connected = this.host.tenant(tenant)
     if (!connected) throw new Error("Connect this tenant first.")
     const key: ConnectionKey = { tenantId: tenant, clientId: connected.clientId, mode: "delegated" }
     await Promise.all([
-      this.observeToken(key, "graph", generation),
-      connected.storage === "azure" ? this.observeToken(key, "storage", generation) : undefined,
-      reader ? this.observeReader(tenant, generation) : undefined,
+      this.observeToken(key, "graph", identity),
+      connected.storage === "azure" ? this.observeToken(key, "storage", identity) : undefined,
+      reader ? this.observeReader(tenant, identity) : undefined,
     ])
-    // Signed out of or removed meanwhile: the answers were dropped, so nothing was checked and nothing changed.
-    if (this.generation(tenant) !== generation) return this.report(tenant)
+    // A different identity took over meanwhile: no answer or notice belongs to the current one.
+    if (this.checkIdentity(tenant) !== identity) return this.report(tenant)
     this.checkedAt.set(`${tenant}|${reader ? "reader" : "admin"}`, this.now().getTime())
     this.keepBaseline(tenant)
     this.host.changed?.(tenant)
@@ -269,7 +286,7 @@ export class ConnectionHealth {
    * back, never a time from inside the token. A token MSAL took from its cache was not issued for
    * this check, so nothing is kept for it and the last real answer stands.
    */
-  private async observeToken(key: ConnectionKey, resource: "graph" | "storage", generation: number): Promise<void> {
+  private async observeToken(key: ConnectionKey, resource: "graph" | "storage", identity: number): Promise<void> {
     const account = this.host.account(key.tenantId) ?? undefined
     let observation: TokenObservation
     try {
@@ -279,11 +296,11 @@ export class ConnectionHealth {
     } catch (error) {
       observation = { at: this.now().toISOString(), failure: signInFailure(error) }
     }
-    if (this.generation(key.tenantId) === generation) this.observations.recordToken(key, resource, observation, account)
+    if (this.checkIdentity(key.tenantId) === identity) this.observations.recordToken(key, resource, observation, account)
   }
 
   /** The Backup Reader's facts on this device, and for a verified reader the answer to a new token request. */
-  private async observeReader(tenant: string, generation: number): Promise<void> {
+  private async observeReader(tenant: string, identity: object): Promise<void> {
     const reader = this.host.reader(tenant)
     if (!reader?.clientId) return
     const key: ConnectionKey = { tenantId: tenant, clientId: reader.clientId, mode: "app-only" }
@@ -297,7 +314,7 @@ export class ConnectionHealth {
     } catch (error) {
       observation = { at: this.now().toISOString(), failure: signInFailure(error) }
     }
-    if (this.generation(tenant) === generation) this.observations.recordToken(key, "graph", observation)
+    if (this.checkIdentity(tenant) === identity) this.observations.recordToken(key, "graph", observation)
   }
 
   /** What a token Microsoft issued for a check shows: its permissions, as of now. */
