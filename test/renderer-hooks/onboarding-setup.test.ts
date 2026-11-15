@@ -1,4 +1,4 @@
-import { act, createElement, useEffect, type ReactElement } from "react"
+import { act, createElement, Profiler, useEffect, type ReactElement } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -1038,6 +1038,66 @@ describe("onboarding service choices", () => {
       expect(container.textContent).not.toContain("Some chosen permissions are missing")
       await act(async () => button(container, "Continue")!.click())
       expect(state.addTenant).toHaveBeenCalledOnce()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("clears the 20-second permission timer on unmount", async () => {
+    const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: TENANT, clientId: CLIENT, account: null }))
+    state.signIn.mockResolvedValueOnce(account)
+    state.checkPermissions.mockImplementationOnce(() => new Promise(() => {}))
+    const container = await render(createElement(OnboardingPage))
+    vi.useFakeTimers()
+    try {
+      await act(async () => button(container, "Sign in with Microsoft")!.click())
+      await act(async () => vi.advanceTimersByTime(0))
+      expect(container.textContent).toContain("Checking permissions")
+      expect(vi.getTimerCount()).toBe(1)
+      act(() => roots.pop()!.unmount())
+      expect(vi.getTimerCount()).toBe(0)
+      await act(async () => vi.advanceTimersByTime(20_000))
+      expect(container.textContent).toBe("")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("clears permission timers when leaving a step and ignores answers after leaving", async () => {
+    const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: TENANT, clientId: CLIENT, account: null }))
+    state.signIn.mockResolvedValueOnce(account)
+    const answers: ((result: { missing: string[] }) => void)[] = []
+    state.checkPermissions.mockImplementation(() => new Promise(resolve => { answers.push(resolve) }))
+    const onRender = vi.fn()
+    const container = await render(createElement(Profiler, { id: "permission-wait", onRender }, createElement(OnboardingPage)))
+    vi.useFakeTimers()
+    try {
+      await act(async () => button(container, "Sign in with Microsoft")!.click())
+      await act(async () => vi.advanceTimersByTime(0))
+      expect(container.textContent).toContain("Checking permissions")
+      expect(vi.getTimerCount()).toBe(1)
+      await act(async () => vi.advanceTimersByTime(5000))
+      await act(async () => button(container, "Previous")!.click())
+      await act(async () => vi.advanceTimersByTime(0))
+      expect(state.checkPermissions).toHaveBeenCalledTimes(2)
+      expect(vi.getTimerCount()).toBe(1)
+      await act(async () => vi.advanceTimersByTime(15_000))
+      expect(vi.getTimerCount()).toBe(1)
+      await act(async () => button(container, "Previous")!.click())
+      expect(container.querySelector("#setup-step-0")).not.toBeNull()
+      await act(async () => vi.advanceTimersByTime(0))
+      expect(vi.getTimerCount()).toBe(0)
+      const content = container.textContent
+      const commits = onRender.mock.calls.length
+      await act(async () => { for (const answer of answers) answer({ missing: ["Policy.Read.All"] }) })
+      await act(async () => vi.advanceTimersByTime(20_000))
+      expect(onRender).toHaveBeenCalledTimes(commits)
+      expect(container.textContent).toBe(content)
+      expect(container.querySelector('[aria-label="Permission result"]')).toBeNull()
+      expect(state.addTenant).not.toHaveBeenCalled()
+      expect(state.saveServices).not.toHaveBeenCalled()
     } finally {
       vi.useRealTimers()
     }

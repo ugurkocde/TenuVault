@@ -1,11 +1,11 @@
-import { act, createElement, createContext, useContext, useState } from "react"
+import { act, createElement, createContext, useContext, useEffect, useState } from "react"
 import { createRoot } from "react-dom/client"
 import { MemoryRouter, Route, Routes, useSearchParams } from "react-router-dom"
 import { afterEach, expect, it, vi } from "vitest"
 
-const state = vi.hoisted(() => ({ tenant: { id: 1, name: "Contoso", credentials: { tenantId: "one", appId: "client" } }, tenants: [] as { id: number; name: string; credentials: { tenantId: string; appId: string } }[], select: (_id: number | null) => {}, status: vi.fn(), workflowMounted: vi.fn(), changed: null as null | ((id: string) => void) }))
-vi.mock("~/contexts/TenantContext", () => ({ useSelectedTenant: () => { const id = useContext(SelectionContext); return { selectedTenant: state.tenants.find(tenant => tenant.id === id) ?? state.tenant, setSelectedTenantId: state.select } }, useTenants: () => state.tenants }))
-vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { services: { status: state.status }, health: { onChanged: (listener: typeof state.changed) => { state.changed = listener; return () => {} } } } }))
+const state = vi.hoisted(() => ({ tenant: { id: 1, name: "Contoso", credentials: { tenantId: "one", appId: "client" } }, tenants: [] as { id: number; name: string; credentials: { tenantId: string; appId: string } }[], select: (_id: number | null) => {}, status: vi.fn(), workflowMounted: vi.fn(), workflowUnmounted: vi.fn(), unsubscribe: vi.fn(), changed: null as null | ((id: string) => void) }))
+vi.mock("~/contexts/TenantContext", () => ({ useSelectedTenant: () => { const id = useContext(SelectionContext); return { selectedTenant: state.tenants.find(tenant => tenant.id === id) ?? state.tenant, setSelectedTenantId: state.select } }, useTenants: () => state.tenants, useTenantsLoaded: () => true }))
+vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { services: { status: state.status }, health: { onChanged: (listener: typeof state.changed) => { state.changed = listener; return () => { state.unsubscribe(); state.changed = null } } } } }))
 vi.mock("../../src/renderer/lib/license", () => ({ useTenantPlan: () => "pro", useLicense: () => ({ status: {} }) }))
 vi.mock("../../src/renderer/features/scores/ScoresTab", () => ({ default: ({ tenant }: { tenant: { name: string } }) => { state.workflowMounted(); return createElement("p", null, `Scores for ${tenant.name}`) } }))
 vi.mock("../../src/renderer/features/governance/DeviationsTab", () => ({ default: () => createElement("p", null, "Deviation register") }))
@@ -52,6 +52,7 @@ function TenantHost({ children }: { children: React.ReactNode }) {
 
 function FrameworkJob() {
   state.workflowMounted()
+  useEffect(() => () => { state.workflowUnmounted() }, [])
   const [params] = useSearchParams()
   return createElement("p", null, `Framework job ${params.get("job")} for ${state.tenant.name}`)
 }
@@ -66,18 +67,19 @@ async function openLink(route: string, removedTenantId?: string) {
   const container = document.createElement("div")
   const root = createRoot(container)
   roots.push(root)
-  await act(async () => root.render(createElement(MemoryRouter, { initialEntries: [route] },
+  const rerender = () => root.render(createElement(MemoryRouter, { initialEntries: [route] },
     createElement(TenantHost, { children: createElement(Routes, null,
       createElement(Route, { path: "/portal/frameworks/:frameworkId", element: createElement(IntunePageGuard, { children: createElement(FrameworkJob) }) }),
       createElement(Route, { path: "/portal/governance/:tabId", element: createElement(HubPage, { hubId: "governance" }) }),
     ) }),
-  )))
-  return container
+  ))
+  await act(async () => rerender())
+  return { container, rerender }
 }
 
 it.each([true, false])("checks the destination tenant for a CIS job link before mounting its workflow (Intune %s)", async enabled => {
   state.status.mockImplementation(async (tenantId: string) => ({ tenantId, modules: [{ id: "intune", enabled: tenantId === "two" ? enabled : !enabled }] }))
-  const container = await openLink("/portal/frameworks/cis-intune?tenant=TWO&job=saved-job")
+  const { container } = await openLink("/portal/frameworks/cis-intune?tenant=TWO&job=saved-job")
   expect(state.status.mock.calls.map(call => call[0])).toEqual(["two"])
   if (enabled) expect(container.textContent).toContain("Framework job saved-job for Fabrikam")
   else {
@@ -88,7 +90,7 @@ it.each([true, false])("checks the destination tenant for a CIS job link before 
 
 it("resolves a hub tenant link and keeps Governance navigation usable while Intune is off", async () => {
   state.status.mockImplementation(async (tenantId: string) => ({ tenantId, modules: [{ id: "intune", enabled: false }] }))
-  const container = await openLink("/portal/governance/scores?tenant=TWO")
+  const { container } = await openLink("/portal/governance/scores?tenant=TWO")
   expect(state.status.mock.calls.map(call => call[0])).toEqual(["two"])
   expect(container.textContent).toContain("Intune is off for Fabrikam")
   expect(container.querySelector('nav[aria-label="Governance sections"]')).not.toBeNull()
@@ -102,7 +104,7 @@ it("resolves a hub tenant link and keeps Governance navigation usable while Intu
 
 it("opens the requested hub tenant when Intune is enabled there", async () => {
   state.status.mockImplementation(async (tenantId: string) => ({ tenantId, modules: [{ id: "intune", enabled: tenantId === "two" }] }))
-  const container = await openLink("/portal/governance/scores?tenant=TWO")
+  const { container } = await openLink("/portal/governance/scores?tenant=TWO")
   expect(container.textContent).toContain("Scores for Fabrikam")
   expect(container.textContent).not.toContain("This page needs Intune")
 })
@@ -113,10 +115,30 @@ it.each([
 ])("does not mount any workflow for a tenant link that is %s", async (_label, tenantId, removedTenantId) => {
   state.status.mockImplementation(async (id: string) => ({ tenantId: id, modules: [{ id: "intune", enabled: true }] }))
   for (const route of ["/portal/frameworks/cis-intune", "/portal/governance/scores"]) {
-    const container = await openLink(`${route}?tenant=${tenantId}&job=saved-job`, removedTenantId)
+    const { container } = await openLink(`${route}?tenant=${tenantId}&job=saved-job`, removedTenantId)
     expect(state.workflowMounted).not.toHaveBeenCalled()
     expect(state.status).not.toHaveBeenCalled()
     expect(container.textContent).toContain("The linked tenant is not connected")
     expect(container.querySelector("a")?.getAttribute("href")).toBe("/portal/tenants")
   }
+})
+
+it("unmounts the linked workflow and shows the notice when its tenant is removed while open", async () => {
+  state.status.mockImplementation(async (tenantId: string) => ({ tenantId, modules: [{ id: "intune", enabled: true }] }))
+  const { container, rerender } = await openLink("/portal/frameworks/cis-intune?tenant=two&job=saved-job")
+  expect(container.textContent).toContain("Framework job saved-job for Fabrikam")
+  expect(state.workflowUnmounted).not.toHaveBeenCalled()
+  const mounted = state.workflowMounted.mock.calls.length
+  await act(async () => {
+    state.tenants = state.tenants.filter(tenant => tenant.credentials.tenantId !== "two")
+    rerender()
+  })
+  expect(state.workflowUnmounted).toHaveBeenCalledOnce()
+  expect(state.unsubscribe).toHaveBeenCalledOnce()
+  expect(container.textContent).not.toContain("Framework job")
+  expect(container.textContent).toContain("The linked tenant is not connected")
+  expect(container.querySelector("a")?.getAttribute("href")).toBe("/portal/tenants")
+  await act(async () => state.changed?.("two"))
+  expect(state.workflowMounted).toHaveBeenCalledTimes(mounted)
+  expect(container.textContent).toContain("The linked tenant is not connected")
 })
