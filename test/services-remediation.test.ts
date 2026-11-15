@@ -7,68 +7,114 @@ import { permissionRemediation } from "../src/renderer/lib/connection-health-vie
 
 const tenantId = "11111111-1111-1111-1111-111111111111"
 const clientId = "22222222-2222-2222-2222-222222222222"
+const graphId = "33333333-3333-3333-3333-333333333333"
+const clientObjectId = "44444444-4444-4444-4444-444444444444"
+const grant = { id: "existing-grant", clientId: clientObjectId, resourceId: graphId, consentType: "AllPrincipals", scope: "User.Read Policy.Read.All" }
+const unrelated = { ...grant, id: "other-api-grant", resourceId: "other-api", scope: "Other.Read" }
 const folders: string[] = []
 afterEach(() => folders.splice(0).forEach(folder => rmSync(folder, { recursive: true, force: true })))
 
-function shell(shell: string, failure = "", individual = false) {
+function shell(shell: string, failure = "", individual = false, existing = true) {
   const folder = mkdtempSync(join(tmpdir(), "tv-cli-")); folders.push(folder)
   const log = join(folder, "calls.jsonl")
+  const stateFile = join(folder, "state.json")
+  const initial = { grants: [unrelated, ...(existing ? [grant] : []), ...(individual ? [{ ...grant, id: "individual-grant", consentType: "Principal" }] : [])] }
+  writeFileSync(stateFile, JSON.stringify(initial))
   writeFileSync(join(folder, "az"), `#!/usr/bin/env node
 const fs = require("node:fs")
 const args = process.argv.slice(2)
 fs.appendFileSync(process.env.TV_CLI_LOG, JSON.stringify(args) + "\\n")
-const step = args[0] === "login" ? "login" : args[0] === "account" ? "tenant" : args.includes("list-grants") ? args.includes("[?resourceId=='graph-object' && consentType=='Principal'] | length(@)") ? "individual" : "existing" : args.includes("add") ? "add" : args.includes("grant") ? "grant" : args.includes("oauth2PermissionScopes[?value=='Policy.Read.All'].id | [0]") ? "lookup" : "graph"
+const state = JSON.parse(fs.readFileSync(process.env.TV_CLI_STATE, "utf8"))
+const save = () => fs.writeFileSync(process.env.TV_CLI_STATE, JSON.stringify(state))
+const value = flag => args[args.indexOf(flag) + 1]
+const query = value("--query")
+const step = args[0] === "login" ? "login" : args[0] === "account" ? "tenant" : args[0] === "rest" ? value("--method").toLowerCase() : args.includes("list-grants") ? query.includes("Principal']") ? "individual" : query.includes(".id") ? "grantId" : "existing" : args.includes("add") ? "add" : args.includes("grant") ? "grant" : query.includes("oauth2PermissionScopes") ? "lookup" : value("--id") === "${clientId}" ? "client" : "graph"
+// Model the old CLI's deletion before creation, so the regression detects consent loss.
+if (step === "grant") { state.grants = state.grants.filter(g => g.resourceId !== "${graphId}"); save() }
 if (process.env.TV_CLI_FAIL === "cancelled" && step === "login") process.exit(130)
-if (process.env.TV_CLI_FAIL === step) process.exit(1)
+if (process.env.TV_CLI_FAIL === step || (process.env.TV_CLI_FAIL === "consent" && ["grant", "patch", "post"].includes(step))) process.exit(1)
 if (step === "tenant") console.log(process.env.TV_CLI_FAIL === "wrongTenant" ? "other-tenant" : "${tenantId}")
-if (step === "graph") console.log("graph-object")
-if (step === "individual") console.log(process.env.TV_CLI_INDIVIDUAL === "true" ? "1" : "0")
-if (step === "existing" && process.env.TV_CLI_FAIL !== "noExisting") console.log("User.Read Policy.Read.All")
-if (step === "lookup") { if (process.env.TV_CLI_FAIL !== "emptyLookup") console.log("permission-id") }
+if (step === "graph" && process.env.TV_CLI_FAIL !== "emptyGraph") console.log("${graphId}")
+if (step === "client" && process.env.TV_CLI_FAIL !== "emptyClient") console.log("${clientObjectId}")
+const grants = state.grants.filter(g => g.resourceId === "${graphId}")
+if (step === "individual") console.log(grants.filter(g => g.consentType === "Principal").length)
+if (step === "grantId" && grants.length) console.log(grants[0].id)
+if (step === "existing" && grants.length) console.log(grants[0].scope)
+if (step === "lookup" && process.env.TV_CLI_FAIL !== "emptyLookup") console.log(query.includes("Policy.Read.All") ? "policy-permission-id" : "group-permission-id")
+if (step === "patch" || step === "post") {
+  if (value("--headers") !== "Content-Type=application/json") process.exit(1)
+  const body = JSON.parse(value("--body"))
+  if (step === "patch") {
+    const target = state.grants.find(g => value("--url").endsWith("/" + g.id))
+    if (!target) process.exit(1)
+    Object.assign(target, body)
+  } else state.grants.push({ id: "new-grant", ...body })
+  save()
+}
 `)
   chmodSync(join(folder, "az"), 0o755)
   const fix = permissionRemediation({ tenantId, clientId }, ["Policy.Read.All", "Group.Read.All"])
-  const result = spawnSync(shell, ["-c", fix.commands], { encoding: "utf8", env: { ...process.env, PATH: `${folder}:${process.env.PATH}`, TV_CLI_LOG: log, TV_CLI_FAIL: failure, TV_CLI_INDIVIDUAL: String(individual) } })
-  return { result, calls: readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line) as string[]) }
+  const result = spawnSync(shell, ["-c", fix.commands], { encoding: "utf8", env: { ...process.env, PATH: `${folder}:${process.env.PATH}`, TV_CLI_LOG: log, TV_CLI_STATE: stateFile, TV_CLI_FAIL: failure } })
+  return { result, initial, state: JSON.parse(readFileSync(stateFile, "utf8")) as typeof initial, calls: readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line) as string[]) }
 }
 
 it.each(["bash", "zsh"])("%s stops all later commands if login fails or is cancelled", shellName => {
-  const { result, calls } = shell(shellName, "login")
-  expect(result.status).not.toBe(0)
-  expect(calls).toEqual([["login", "--tenant", tenantId, "--allow-no-subscriptions"]])
+  for (const failure of ["login", "cancelled"]) {
+    const { result, calls } = shell(shellName, failure)
+    expect(result.status).not.toBe(0)
+    expect(calls).toEqual([["login", "--tenant", tenantId, "--allow-no-subscriptions"]])
+  }
 })
-it.each(["tenant", "wrongTenant", "graph", "individual", "existing", "lookup", "emptyLookup", "add"])("stops before any later mutation after %s fails", failure => {
-  const { result, calls } = shell("bash", failure)
+it.each(["tenant", "wrongTenant", "graph", "emptyGraph", "individual", "grantId", "existing", "lookup", "emptyLookup", "add"])("stops before any later mutation after %s fails", failure => {
+  const { result, calls, initial, state } = shell("bash", failure)
   expect(result.status).not.toBe(0)
-  expect(calls.some(args => args.includes("grant"))).toBe(false)
+  expect(calls.some(args => args[0] === "rest" || args.includes("grant"))).toBe(false)
+  expect(state).toEqual(initial)
   if (failure !== "add") expect(calls.some(args => args.includes("add"))).toBe(false)
   if (failure === "wrongTenant") expect(calls).toHaveLength(2)
 })
-it("preserves existing tenant-wide scopes while consenting exactly the missing delegated scopes", () => {
-  const { result, calls } = shell("bash")
-  expect(result.status).toBe(0)
-  const grant = calls.find(args => args.includes("grant"))!
-  expect(grant).toEqual(["ad", "app", "permission", "grant", "--id", clientId, "--api", "00000003-0000-0000-c000-000000000000", "--consent-type", "AllPrincipals", "--scope", "Group.Read.All Policy.Read.All User.Read"])
-  expect(calls.some(args => args.includes("admin-consent"))).toBe(false)
+it.each(["bash", "zsh"])("%s updates existing consent in place with the union and leaves other grants alone", shellName => {
+  const { result, calls, state } = shell(shellName)
+  expect(result.status, result.stderr).toBe(0)
+  expect(state.grants).toEqual([unrelated, { ...grant, scope: "Group.Read.All Policy.Read.All User.Read" }])
+  const writes = calls.filter(args => args[0] === "rest")
+  expect(writes).toEqual([["rest", "--method", "PATCH", "--url", `https://graph.microsoft.com/v1.0/oauth2PermissionGrants/${grant.id}`, "--headers", "Content-Type=application/json", "--body", JSON.stringify({ scope: "Group.Read.All Policy.Read.All User.Read" })]])
+  expect(calls.filter(args => args.includes("add"))).toEqual(["policy-permission-id", "group-permission-id"].map(id => ["ad", "app", "permission", "add", "--id", clientId, "--api", "00000003-0000-0000-c000-000000000000", "--api-permissions", `${id}=Scope`]))
+  expect(calls.findIndex(args => args[0] === "rest")).toBeGreaterThan(calls.findLastIndex(args => args.includes("add")))
+  expect(calls.some(args => args.includes("grant") || args.includes("admin-consent"))).toBe(false)
 })
-it("stops for review before replacing or broadening individual grants", () => {
-  const { result, calls } = shell("bash", "", true)
+it.each(["bash", "zsh"])("%s keeps every existing scope when the consent update fails", shellName => {
+  const { result, calls, initial, state } = shell(shellName, "consent")
+  expect(result.status).not.toBe(0)
+  expect(state).toEqual(initial)
+  expect(calls.at(-1)).toContain("PATCH")
+  expect(calls.filter(args => args[0] === "rest")).toHaveLength(1)
+})
+it.each(["bash", "zsh"])("%s stops for review before changing individual grants", shellName => {
+  const { result, calls, initial, state } = shell(shellName, "", true)
   expect(result.status).not.toBe(0)
   expect(result.stderr).toContain("Individual Graph consent exists")
-  expect(calls.some(args => args.includes("add") || args.includes("grant"))).toBe(false)
+  expect(calls.some(args => args.includes("add") || args.includes("grant") || args[0] === "rest")).toBe(false)
+  expect(state).toEqual(initial)
 })
-
-it("also stops after a cancelled login", () => {
-  const { result, calls } = shell("bash", "cancelled")
+it.each(["bash", "zsh"])("%s creates one grant using service principal object IDs when no tenant-wide grant exists", shellName => {
+  const { result, calls, state } = shell(shellName, "", false, false)
+  expect(result.status, result.stderr).toBe(0)
+  const body = { clientId: clientObjectId, consentType: "AllPrincipals", resourceId: graphId, scope: "Group.Read.All Policy.Read.All" }
+  expect(calls.filter(args => args[0] === "rest")).toEqual([["rest", "--method", "POST", "--url", "https://graph.microsoft.com/v1.0/oauth2PermissionGrants", "--headers", "Content-Type=application/json", "--body", JSON.stringify(body)]])
+  expect(state.grants).toEqual([unrelated, { id: "new-grant", ...body }])
+  expect(calls.some(args => args.includes("grant") || args.includes("admin-consent"))).toBe(false)
+})
+it.each(["bash", "zsh"])("%s leaves consent unchanged when creating the grant fails", shellName => {
+  const { result, calls, initial, state } = shell(shellName, "consent", false, false)
   expect(result.status).not.toBe(0)
-  expect(calls).toHaveLength(1)
+  expect(state).toEqual(initial)
+  expect(calls.at(-1)).toContain("POST")
+  expect(calls.filter(args => args[0] === "rest")).toHaveLength(1)
 })
-it("creates only the missing scopes when there is no existing tenant-wide grant", () => {
-  const { result, calls } = shell("zsh", "noExisting")
-  expect(result.status).toBe(0)
-  const grant = calls.find(args => args.includes("grant"))!
-  expect(grant.at(-1)).toBe("Group.Read.All Policy.Read.All")
-})
-it("reports a failed grant as a failure", () => {
-  expect(shell("bash", "grant").result.status).not.toBe(0)
+it.each(["client", "emptyClient"])("stops without creating consent after %s lookup fails", failure => {
+  const { result, calls, initial, state } = shell("bash", failure, false, false)
+  expect(result.status).not.toBe(0)
+  expect(calls.some(args => args[0] === "rest")).toBe(false)
+  expect(state).toEqual(initial)
 })

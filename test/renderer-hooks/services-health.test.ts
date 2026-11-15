@@ -206,7 +206,11 @@ it("distinguishes backup permission from restore-only gaps using real evaluator 
   await render()
   const card = container.querySelector('[data-service="intune"]')!
   expect(card.textContent).toContain("Backup: Permissions present. Restore: Permissions missing.")
-  expect(card.textContent).toContain("Backups work. Restore needs: DeviceManagementConfiguration.ReadWrite.All.")
+  expect(card.textContent).toContain("Backup permissions are present. Restore needs: DeviceManagementConfiguration.ReadWrite.All.")
+  expect(card.textContent).not.toContain("Backups work")
+  expect(card.textContent).toContain("Not verified by a recent backup")
+  const area = card.querySelector('[data-area="configuration"]')!
+  expect(area.textContent).toContain("Backup permissions are present. Restore needs:")
   expect(card.textContent).toContain("The Backup and restore access level asks for these permissions. Choose Backup under Areas and access")
 })
 

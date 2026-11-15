@@ -58,7 +58,7 @@ The cards show **Intune**, **Entra ID** and **Defender**. Expand **Areas and acc
 
 **Permissions present** means the token carries the permissions. **Verified by the last backup** means the selected types were actually read, with the date and whether it used your sign-in or the Backup Reader. A Backup Reader loss remains visible even when your own backup verifies the same area. A refusal with the permission present may involve an admin role or license; TenuVault says when it cannot tell which. A type the reader leaves out by design needs no fix.
 
-Backup and restore permission status are separate. A restore-only gap says **Backups work. Restore needs: ...**. **Backup and restore** asks for write permissions; select **Backup** under **Areas and access** to request backup permissions only. Changing the level grants nothing.
+Backup and restore permission status are separate. A restore-only gap says **Backup permissions are present. Restore needs: ...**. A backup still needs to verify read access. **Backup and restore** asks for write permissions; select **Backup** under **Areas and access** to request backup permissions only. Changing the level grants nothing.
 
 When a backup could not read selected types, the report says **The backup on [date] with your sign-in could not read: [types]**. This describes those types, not the result of the whole backup. Reopening Services refreshes the report, and a changed connection clears verification from the previous sign-in while the current report loads.
 

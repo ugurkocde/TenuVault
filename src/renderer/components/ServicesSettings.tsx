@@ -43,7 +43,7 @@ function PermissionRoutes({ report, missing }: { report: ConnectionHealthReport;
       <p className="break-words">{fix.names.join(", ")}</p>
       <p>Add these as delegated Microsoft Graph permissions. The CLI grants tenant-wide consent for only these scopes, preserves existing tenant-wide scopes and stops if individual consent needs separate review. Other pending permissions are not consented.</p>
       <details><summary className="cursor-pointer font-medium">Azure CLI commands</summary>
-        <p className="mt-2 text-xs">Run in Bash or zsh with Azure CLI installed. These add permissions to this registration; they do not create a new one.</p>
+        <p className="mt-2 text-xs">Run in Bash or zsh with Azure CLI installed. Sign in as an Application Administrator. Azure CLI needs delegated DelegatedPermissionGrant.ReadWrite.All access or a documented higher permission. These commands add permissions to this registration, update existing tenant-wide consent in place, or create consent only if none exists. They never delete grants. An earlier permission declaration can remain saved if a later step fails.</p>
         <pre className="my-2 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-card p-3 text-xs">{fix.commands}</pre>
         <Button variant="outline" size="sm" onClick={() => void copy(fix.commands, "the Azure CLI commands")}>Copy Azure CLI commands</Button>
       </details>
@@ -81,7 +81,7 @@ function Area({ area, service, report, busy, run }: { area: AreaHealth; service:
     </div>
     {area.personalData && <p className="text-xs text-gray-600">{PERSONAL_DATA[area.id] ?? "Stores personal data in backup files. Review who can access your backup storage before turning this area on."}</p>}
     <p className="text-xs text-gray-600">Backup: <PermissionState state={area.permissions} />. Restore: <PermissionState state={area.restore} />.</p>
-    {area.enabled && area.permissions === "present" && area.restore === "missing" && service.access === "restore" && <p className="text-xs text-gray-600">Backups work. Restore needs: {area.missing.join(", ")}. The Backup and restore access level asks for these permissions. Choose Backup under Areas and access to request only backup permissions.</p>}
+    {area.enabled && area.permissions === "present" && area.restore === "missing" && service.access === "restore" && <p className="text-xs text-gray-600">Backup permissions are present. Restore needs: {area.missing.join(", ")}. The Backup and restore access level asks for these permissions. Choose Backup under Areas and access to request only backup permissions.</p>}
     {area.enabled ? service.hasTypes ? <Verification value={area.verified} /> : <p className="text-xs text-gray-500">Not verified: this version has no backup types for this area yet.</p> : <p className="text-xs text-gray-500">Not included in backups.</p>}
     {area.losses.map(loss => <p key={`${loss.mode}/${loss.folder}`} className="break-words text-xs text-amber-800">
       {loss.mode === "app-only" ? "Scheduled backups with the Backup Reader cannot read" : "Backups with your sign-in cannot read"} {loss.folder}, since {healthDate(loss.since)}. {HEALTH_CAUSE_TEXT[loss.cause]}
@@ -102,7 +102,7 @@ function Service({ service, conditionalAccess, report, busy, toggle, run }: { se
     <p className="mt-1 text-xs text-gray-500">{MODULE_BY_ID.get(service.id)?.description}</p>
     <div className="mt-3 space-y-1">
       <p className="text-xs text-gray-600">Backup: <PermissionState state={service.permissions} />. Restore: <PermissionState state={restore} />.</p>
-      {service.enabled && service.permissions === "present" && service.access === "restore" && service.missing.length > 0 && <p className="text-sm text-gray-600">Backups work. Restore needs: {service.missing.join(", ")}. The Backup and restore access level asks for these permissions. Choose Backup under Areas and access to request only backup permissions.</p>}
+      {service.enabled && service.permissions === "present" && service.access === "restore" && service.missing.length > 0 && <p className="text-sm text-gray-600">Backup permissions are present. Restore needs: {service.missing.join(", ")}. The Backup and restore access level asks for these permissions. Choose Backup under Areas and access to request only backup permissions.</p>}
       {!service.enabled && <p className="text-sm text-gray-600">Off. New manual and scheduled backups leave out this service.</p>}
       {!service.hasTypes ? <p className="text-sm text-gray-600">This version has no backup types for {service.label} yet. Turning it on saves your choice; it does not back up these areas yet.</p> : service.enabled ? <Verification value={service.verified} /> : null}
       {losses.length > 0 && <p className="text-sm text-amber-800">{losses.some(loss => loss.mode === "app-only") ? "The Backup Reader lost access, even if your sign-in verified a backup." : "Your sign-in lost access."} See the affected areas below.</p>}
