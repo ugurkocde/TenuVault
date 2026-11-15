@@ -63,6 +63,23 @@ changed a licensing file (`src/main/license/`, `src/main/storage/secure-store.ts
 hours (`.github/scripts/license-soak.mjs`). In an emergency, run the stable promotion by hand
 with `allow_unsoaked_license_change`; a pushed tag has no override.
 
+## Sign-in test
+
+Every pull request, every push to `main` and every release build runs a complete first browser
+sign-in in the built app (Linux) and the packaged app (Windows and macOS), so no manual sign-in
+check is needed per release. `scripts/sign-in-e2e/` starts the app with a fresh profile, enters a
+tenant and client ID, starts the sign-in, takes the Microsoft sign-in address through Copy sign-in
+link and follows it in Playwright Chromium, Firefox and WebKit, and in Microsoft Edge on Windows,
+one sign-in per engine. A local stand-in for `login.microsoftonline.com` answers the authorize and
+token requests with a signed ID token; the app redeems the code through MSAL and must show the
+storage step with the signed-in account. It also checks that the listener closes after the
+answer, that an answer with another state is refused, and that a refusal shows the app's error.
+
+The app has no test switch: the test changes only the runner, with a hosts file entry for
+`login.microsoftonline.com` and a throwaway root certificate in the operating system's trust
+store, and removes both afterwards. It refuses to run outside CI. Screenshots, app logs and the
+stand-in log are uploaded as the `sign-in-e2e-*` artifacts.
+
 ## Plan boundary changes
 
 A change to what a plan includes (`src/shared/plans.ts`, `src/main/api/plan-gates.ts`) takes
