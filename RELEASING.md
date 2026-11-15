@@ -54,14 +54,95 @@ rationale live in
   tenant and an installation, never to an email address or a signed-in user. Do not add an
   email, UPN, or OID comparison to any licensing route.
 
-Before promoting a nightly to stable, confirm on a machine running that nightly with a real paid
-key that the License page still shows the plan active and a manual refresh succeeds.
+Paid key activation and a real Microsoft sign-in are verified for every nightly by the
+[nightly verification](#nightly-verification), not by hand.
 
 A stable release, by tag or by promotion, fails when a commit since the previous stable release
 changed a licensing file (`src/main/license/`, `src/main/storage/secure-store.ts`,
 `scripts/license-public-key.ts`, `electron.vite.config.ts`) and has not been in a nightly for 24
 hours (`.github/scripts/license-soak.mjs`). In an emergency, run the stable promotion by hand
 with `allow_unsoaked_license_change`; a pushed tag has no override.
+
+## Nightly verification
+
+Every published nightly is installed and used as users get it, by
+`.github/workflows/nightly-verification.yml`. It starts when a Release run that published a
+nightly completes, and checks:
+
+- **Installers and signatures.** On `windows-latest` the x64 MSI installs silently for all users,
+  is checked and removed, then the x64 NSIS installer installs silently for the current user. The
+  Authenticode signatures of both installers, `TenuVault.exe` and
+  `resources/app-backup/TenuVault.Capture.exe` must be valid and carry the publisher in
+  `AZURE_TRUSTED_SIGNING_PUBLISHER_NAME`. On `macos-latest` the disk image for the runner's
+  architecture is mounted (license accepted) and the app copied to `/Applications`; it and the
+  app in the update zip must pass `codesign --verify --deep --strict` with a Developer ID
+  Application authority, carry a stapled notarization ticket, and be accepted by Gatekeeper as
+  notarized.
+- **Paid key** (`scripts/nightly-verification/license.mjs`). The installed app starts with a
+  throwaway profile and is driven over the DevTools protocol like the smoke test. It saves the
+  licensing canary's Pro key (`LICENSING_CANARY_KEY`) on the welcome screen, activates it against
+  production for the canary tenant the [licensing canary](.github/workflows/license-canary.yml)
+  uses (the check a first sign-in runs), and checks the License page shows the tenant as Active,
+  Pro. The key must not be readable in plain text in the profile, a refresh must reach the
+  service and keep Pro, the key must come back after a restart (the operating system credential
+  store round trip; on macOS the login keychain, which must be unlocked), and the activation is
+  released at the end, also after a failure. On start the app itself releases activations of
+  tenants that are not connected, so the canary tenant's activation may already be gone after the
+  restart; that is expected.
+- **Microsoft sign-in** (`scripts/nightly-verification/sign-in.mjs`). With a fresh profile per
+  browser, the installed app goes through Connect your tenant, I already have an app
+  registration, the test tenant and client IDs, and Sign in with Microsoft. The harness copies
+  the sign-in link the app offers for another browser, completes Microsoft's login page in
+  Playwright Chromium, Firefox and WebKit (and Microsoft Edge on Windows), answers "Stay signed
+  in?" with No, and checks the app shows "Signed in as" the test user. No license key is used.
+
+Both harnesses run with the `DisableAutoUpdate` policy set (as managed deployments use it) and
+check after every start that the running app is the nightly under test, so a newer release the
+app would otherwise update to is never what gets verified.
+
+The result is the commit status `Nightly verification` on the nightly's commit, the newest one
+counts (`.github/scripts/nightly-verification-outcome.mjs` has the rules):
+
+- Only runs from `main` record it: the run a Release run starts, or a manual run from `main`.
+  Runs from other branches, pushes and pull requests record nothing and never alert.
+- `success` needs all four checks (paid key and sign-in, Windows and macOS) to pass.
+- A failed or timed out check records `failure`, fails the run (GitHub emails the maintainer) and
+  is emailed with the subject "TenuVault release: nightly verification failed", naming each check
+  and how it ended. The release-triggered run always emails; a manual run only with `alert`.
+- A cancelled, skipped or missing check records `error`: the nightly counts as unverified, the
+  stable gate refuses it, and nothing is emailed. Rerun it.
+
+The email goes to `https://www.tenuvault.com/api/desktop-license/nightly-verification-alert`,
+authorized with `LICENSING_CANARY_ALERT_SECRET`, with the body `{ failures: string[], runUrl }`.
+The website must serve that route with its own subject; until it does, the request answers 404,
+no email is sent, and GitHub's failed run email is the only alert. Screenshots are uploaded as
+run artifacts.
+
+Rerun it for a nightly, for example after fixing a secret or a flaky Microsoft page:
+
+```bash
+gh workflow run nightly-verification.yml -f tag=v0.5.3-nightly.20261114180404
+gh workflow run nightly-verification.yml -f tag=v0.5.3-nightly.20261114180404 -f alert=true
+```
+
+Secrets (Settings > Secrets and variables > Actions):
+
+| Secret | Value |
+|---|---|
+| `LICENSING_CANARY_KEY` | The canary Pro key, shared with the licensing canary |
+| `LICENSING_CANARY_ALERT_SECRET` | The canary's alert secret, also authorizing the nightly verification alert route |
+| `AZURE_TRUSTED_SIGNING_PUBLISHER_NAME` | The expected Authenticode publisher, shared with signing |
+| `TENUVAULT_E2E_TENANT_ID` | The test tenant's ID |
+| `TENUVAULT_E2E_CLIENT_ID` | Its TenuVault app registration: public client, redirect `http://localhost`, tenant-wide admin consent |
+| `TENUVAULT_E2E_USERNAME` | A dedicated test user without an admin role, without MFA and outside Conditional Access |
+| `TENUVAULT_E2E_PASSWORD` | Its password |
+
+Without the sign-in secrets the sign-in jobs fail and say which are missing; they never pass.
+
+A stable release, by promotion or by tag, fails unless the newest `Nightly verification` status
+of its commit is a success set by the workflow (`.github/scripts/nightly-verified.mjs`). Rerun
+the verification for the commit's nightly, or in an emergency run the stable promotion by hand
+with `allow_unverified_nightly`; a pushed tag has no override.
 
 ## Plan boundary changes
 
@@ -194,7 +275,7 @@ Both maintainers have the same rights and follow the same rules; nobody can bypa
 - Merging to `main` needs a pull request and green CI (typecheck, tests, smoke test, Windows and
   macOS packaging), no approval. Every merge becomes a nightly.
 - A stable release promotes the newest nightly's commit, so stable only ships a build nightly
-  users already ran. Any maintainer may start one.
+  users already ran. That commit's nightly must also have passed the nightly verification. Any maintainer may start one.
 - Releases only build commits reachable from `main`, and manual runs must be started from `main`.
 - Pull request installers are unsigned and receive no signing credentials. Manual CI builds
   are also unsigned unless `signed_windows` is explicitly selected. That option uses the

@@ -25,6 +25,10 @@ on:
         description: Emergency only. Promote even though a licensing change has been on nightly for less than 24 hours.
         type: boolean
         default: false
+      allow_unverified_nightly:
+        description: Emergency only. Promote even though the nightly of this commit has not passed the nightly verification.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -40,6 +44,10 @@ jobs:
     # Nightlies only follow a CI run that passed on a push to main.
     if: github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # The nightly verification result is a commit status.
+      statuses: read
     outputs:
       channel: ${{ steps.resolve.outputs.channel }}
       version: ${{ steps.resolve.outputs.version }}
@@ -60,6 +68,7 @@ jobs:
           DISPATCH_CHANNEL: ${{ inputs.channel }}
           DISPATCH_VERSION: ${{ inputs.version }}
           ALLOW_UNSOAKED: ${{ inputs.allow_unsoaked_license_change }}
+          ALLOW_UNVERIFIED: ${{ inputs.allow_unverified_nightly }}
           RUN_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
@@ -114,6 +123,13 @@ jobs:
               echo "::warning::Licensing soak check skipped by allow_unsoaked_license_change."
             else
               node .github/scripts/license-soak.mjs "$sha"
+            fi
+            # Stable only ships a commit whose nightly installed, activated a paid key and signed in
+            # on Windows and macOS (.github/workflows/nightly-verification.yml).
+            if [ "$EVENT" = "workflow_dispatch" ] && [ "$ALLOW_UNVERIFIED" = "true" ]; then
+              echo "::warning::Nightly verification check skipped by allow_unverified_nightly."
+            else
+              node .github/scripts/nightly-verified.mjs "$sha"
             fi
           fi
           tag=$(echo "$meta" | jq -r .tag)

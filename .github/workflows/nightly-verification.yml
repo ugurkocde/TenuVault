@@ -1,0 +1,313 @@
+name: Nightly verification
+
+# Every published nightly, as users get it: the signed installers from the release are installed on
+# Windows and macOS and their signatures checked; the installed app activates the licensing
+# canary's Pro key against production and releases it again (paid key), and signs in to the test
+# tenant through Microsoft's real login page in every browser engine (sign-in). The result is the
+# commit status "Nightly verification" on the nightly's commit, which stable releases require
+# (.github/scripts/nightly-verified.mjs). Only runs from main record it, and only a failed check
+# of the release-triggered run (or a dispatch with alert) is emailed. Rerun for a tag with:
+# gh workflow run nightly-verification.yml -f tag=<tag>
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Nightly release tag, such as v0.5.3-nightly.20261114180404
+        required: true
+      alert:
+        description: Email a failure to the release inbox, as the run after a Release does.
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-verification-${{ inputs.tag || github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: Find the nightly
+    # A Release run that failed published nothing.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: write
+    outputs:
+      tag: ${{ steps.find.outputs.tag }}
+      sha: ${{ steps.find.outputs.sha }}
+      version: ${{ steps.find.outputs.version }}
+    steps:
+      - name: Resolve the tag and commit
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          RELEASE_STARTED: ${{ github.event.workflow_run.run_started_at }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "workflow_run" ]; then
+            # The nightly this Release run published, if it published one: stable releases and
+            # nightlies skipped for lack of app changes publish none.
+            tag=$(gh release list -R "$GITHUB_REPOSITORY" --limit 50 --json tagName,isPrerelease,createdAt |
+              jq -r --arg started "$RELEASE_STARTED" '[.[] | select(.isPrerelease and (.tagName | test("-nightly\\.")) and .createdAt >= $started)] | sort_by(.createdAt) | .[0].tagName // ""')
+            if [ -z "$tag" ]; then
+              echo "::notice::This Release run published no nightly, so there is nothing to verify."
+              exit 0
+            fi
+          else
+            tag="$INPUT_TAG"
+          fi
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]{14}$ ]]; then
+            echo "::error::$tag is not a nightly tag such as v0.5.3-nightly.20261114180404."
+            exit 1
+          fi
+          gh release view "$tag" -R "$GITHUB_REPOSITORY" --json isPrerelease --jq 'if .isPrerelease then empty else error("not a prerelease") end'
+          sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha)
+          # Only runs from main record a status (nightly-verification-outcome.mjs).
+          if [ "$GITHUB_REF" = refs/heads/main ] && { [ "$EVENT" = workflow_run ] || [ "$EVENT" = workflow_dispatch ]; }; then
+            gh api "repos/$GITHUB_REPOSITORY/statuses/$sha" -f state=pending -f context="Nightly verification" \
+              -f description="$tag is being verified" -f target_url="$RUN_URL" > /dev/null
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "::notice::Verifying $tag ($sha)"
+
+  license:
+    name: Paid key (${{ matrix.name }})
+    needs: resolve
+    if: needs.resolve.outputs.tag != ''
+    strategy:
+      fail-fast: false
+      # One installation of the canary key for the canary tenant at a time, so the platforms never
+      # act on the same tenant's activations together.
+      max-parallel: 1
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+          - name: macOS
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      - name: Download the published installers
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "Windows" ]; then patterns=(-p '*-win-x64.exe' -p '*-win-x64.msi')
+          else arch=$([ "$(uname -m)" = arm64 ] && echo arm64 || echo x64); patterns=(-p "*-mac-$arch.dmg" -p "*-mac-$arch.zip"); fi
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D "$RUNNER_TEMP/installers" "${patterns[@]}"
+          ls -l "$RUNNER_TEMP/installers"
+
+      - name: Install and verify the Authenticode signatures
+        if: runner.os == 'Windows'
+        id: install-windows
+        shell: pwsh
+        env:
+          EXPECTED_PUBLISHER: ${{ secrets.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
+        run: ./scripts/nightly-verification/install-windows.ps1 -Downloads "$env:RUNNER_TEMP/installers" -ExpectedPublisher $env:EXPECTED_PUBLISHER
+
+      - name: Install and verify the code signature and notarization
+        if: runner.os == 'macOS'
+        id: install-macos
+        run: |
+          scripts/nightly-verification/install-macos.sh "$RUNNER_TEMP/installers" /Applications
+          # A signed app keeps its encryption key in the login keychain, which must be there and unlocked.
+          login="$HOME/Library/Keychains/login.keychain-db"
+          if ! security show-keychain-info "$login"; then
+            echo "::error::The runner's login keychain is missing or locked, so the app cannot use secure storage."
+            exit 1
+          fi
+
+      # The installed nightly must stay the one under test: the DisableAutoUpdate policy managed
+      # deployments use keeps it from updating itself to a newer release during the run.
+      - name: Turn off automatic updates by policy
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then MSYS_NO_PATHCONV=1 reg add 'HKCU\SOFTWARE\Policies\TenuVault' /v DisableAutoUpdate /t REG_DWORD /d 1 /f
+          else defaults write com.tenuvault.desktop DisableAutoUpdate -bool true; fi
+
+      - name: Activate, show, keep, refresh and release the canary Pro key
+        shell: bash
+        env:
+          NIGHTLY_VERIFY_APP: ${{ steps.install-windows.outputs.app || steps.install-macos.outputs.app }}
+          NIGHTLY_VERIFY_VERSION: ${{ needs.resolve.outputs.version }}
+          LICENSING_CANARY_KEY: ${{ secrets.LICENSING_CANARY_KEY }}
+        run: node scripts/nightly-verification/license.mjs "$RUNNER_TEMP/shots"
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nightly-license-${{ matrix.name }}
+          path: ${{ runner.temp }}/shots
+          if-no-files-found: ignore
+
+  sign-in:
+    name: Microsoft sign-in (${{ matrix.name }})
+    needs: resolve
+    if: needs.resolve.outputs.tag != ''
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            browsers: chromium,firefox,webkit,msedge
+          - name: macOS
+            os: macos-latest
+            browsers: chromium,firefox,webkit
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: scripts/nightly-verification/package-lock.json
+
+      - name: Install Playwright and its browsers
+        shell: bash
+        run: |
+          npm ci --prefix scripts/nightly-verification --no-audit --no-fund
+          node scripts/nightly-verification/node_modules/playwright/cli.js install chromium firefox webkit
+
+      - name: Download the published installers
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "Windows" ]; then patterns=(-p '*-win-x64.exe' -p '*-win-x64.msi')
+          else arch=$([ "$(uname -m)" = arm64 ] && echo arm64 || echo x64); patterns=(-p "*-mac-$arch.dmg" -p "*-mac-$arch.zip"); fi
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D "$RUNNER_TEMP/installers" "${patterns[@]}"
+
+      - name: Install and verify the Authenticode signatures
+        if: runner.os == 'Windows'
+        id: install-windows
+        shell: pwsh
+        env:
+          EXPECTED_PUBLISHER: ${{ secrets.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
+        run: ./scripts/nightly-verification/install-windows.ps1 -Downloads "$env:RUNNER_TEMP/installers" -ExpectedPublisher $env:EXPECTED_PUBLISHER
+
+      - name: Install and verify the code signature and notarization
+        if: runner.os == 'macOS'
+        id: install-macos
+        run: scripts/nightly-verification/install-macos.sh "$RUNNER_TEMP/installers" /Applications
+
+      # The installed nightly must stay the one under test: the DisableAutoUpdate policy managed
+      # deployments use keeps it from updating itself to a newer release during the run.
+      - name: Turn off automatic updates by policy
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then MSYS_NO_PATHCONV=1 reg add 'HKCU\SOFTWARE\Policies\TenuVault' /v DisableAutoUpdate /t REG_DWORD /d 1 /f
+          else defaults write com.tenuvault.desktop DisableAutoUpdate -bool true; fi
+
+      - name: Sign in to the test tenant in ${{ matrix.browsers }}
+        shell: bash
+        env:
+          NIGHTLY_VERIFY_APP: ${{ steps.install-windows.outputs.app || steps.install-macos.outputs.app }}
+          NIGHTLY_VERIFY_VERSION: ${{ needs.resolve.outputs.version }}
+          TENUVAULT_E2E_TENANT_ID: ${{ secrets.TENUVAULT_E2E_TENANT_ID }}
+          TENUVAULT_E2E_CLIENT_ID: ${{ secrets.TENUVAULT_E2E_CLIENT_ID }}
+          TENUVAULT_E2E_USERNAME: ${{ secrets.TENUVAULT_E2E_USERNAME }}
+          TENUVAULT_E2E_PASSWORD: ${{ secrets.TENUVAULT_E2E_PASSWORD }}
+        run: node scripts/nightly-verification/sign-in.mjs "${{ matrix.browsers }}" "$RUNNER_TEMP/shots"
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nightly-sign-in-${{ matrix.name }}
+          path: ${{ runner.temp }}/shots
+          if-no-files-found: ignore
+
+  record:
+    name: Record the result
+    needs: [resolve, license, sign-in]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      statuses: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            .github/scripts
+            scripts/nightly-verification
+
+      # Which checks passed, failed or were cancelled, and whether this run may record and alert
+      # (.github/scripts/nightly-verification-outcome.mjs has the rules).
+      - name: Decide the outcome
+        id: outcome
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          ALERT_REQUESTED: ${{ inputs.alert }}
+          RESOLVE: ${{ needs.resolve.result }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?filter=latest&per_page=100" --jq '[.jobs[] | {name, conclusion}]' > "$RUNNER_TEMP/jobs.json"
+          node .github/scripts/nightly-verification-outcome.mjs "$RUNNER_TEMP/jobs.json"
+
+      - name: Set the commit status
+        if: steps.outcome.outputs.record == 'true' && steps.outcome.outputs.state != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.resolve.outputs.sha }}
+          STATE: ${{ steps.outcome.outputs.state }}
+          DESCRIPTION: ${{ steps.outcome.outputs.description }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        # Context: Nightly verification (.github/scripts/nightly-verified.mjs reads it).
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$SHA" -f state="$STATE" -f context="Nightly verification" \
+            -f description="$DESCRIPTION" -f target_url="$RUN_URL" > /dev/null
+          echo "::notice::$STATE: $DESCRIPTION"
+
+      - name: Email the failure
+        if: steps.outcome.outputs.alert == 'true'
+        env:
+          LICENSING_CANARY_ALERT_SECRET: ${{ secrets.LICENSING_CANARY_ALERT_SECRET }}
+          MESSAGE: ${{ steps.outcome.outputs.message }}
+        run: node scripts/nightly-verification/alert.mjs "$MESSAGE"
+
+      - name: Report
+        env:
+          STATE: ${{ steps.outcome.outputs.state }}
+          RESOLVE: ${{ needs.resolve.result }}
+          MESSAGE: ${{ steps.outcome.outputs.message }}
+        run: |
+          # A failed check fails the run, so GitHub emails the maintainer as well. A cancelled one
+          # leaves the nightly unverified without calling it broken.
+          if [ "$STATE" = failure ] || [ "$RESOLVE" = failure ]; then echo "::error::$MESSAGE"; exit 1; fi
+          if [ "$STATE" = error ]; then echo "::warning::$MESSAGE"; fi

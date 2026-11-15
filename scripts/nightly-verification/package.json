@@ -1,0 +1,9 @@
+{
+  "name": "tenuvault-nightly-verification",
+  "private": true,
+  "description": "Dependencies of the nightly verification harness (.github/workflows/nightly-verification.yml). Not part of the app.",
+  "type": "module",
+  "dependencies": {
+    "playwright": "1.64.1"
+  }
+}
