@@ -1,3 +1,4 @@
+import { IntunePageGuard } from "../components/IntunePageGuard"
 import { Suspense, useEffect } from "react"
 import { Link, Navigate, useParams, useSearchParams } from "react-router-dom"
 import { useSelectedTenant, useTenants } from "~/contexts/TenantContext"
@@ -13,6 +14,12 @@ import { useLicense, useTenantPlan } from "../lib/license"
  * below it, whatever that screen stored on an earlier plan.
  */
 export default function HubPage({ hubId }: { hubId: string }) {
+  const { tabId } = useParams()
+  const intune = hubId === "changes" || (hubId === "governance" && !["deviations", "customizations"].includes(tabId ?? "overview"))
+  return intune ? <IntunePageGuard><HubContent hubId={hubId} /></IntunePageGuard> : <HubContent hubId={hubId} />
+}
+
+function HubContent({ hubId }: { hubId: string }) {
   const { tabId } = useParams()
   const { selectedTenant, setSelectedTenantId } = useSelectedTenant()
   const tenants = useTenants()
