@@ -5,7 +5,7 @@ faq:
   - question: "Which Intune objects does TenuVault back up?"
     answer: "41 Intune object types in nine areas: device configuration, compliance, endpoint security, scripts and remediations, Windows updates, apps, app protection and configuration, enrollment, and tenant administration. Each object is saved as it is in Microsoft Graph (beta), with its settings and, where Intune has them, its assignments."
   - question: "Does TenuVault back up app installer files?"
-    answer: "Configuration backups save app details, assignments, categories, and dependency and supersedence links, not installers. The separate, free App Backup Windows preview retrieves supported Win32 installer content on an enrolled Windows PC. A captured installer can be restored as a new, unassigned app in the same or another connected tenant."
+    answer: "Configuration backups save app details, assignments, categories, and dependency and supersedence links, not installers. The separate, free App Backup Windows preview retrieves supported Win32 installer content on an enrolled Windows PC. A captured installer can be restored as a new, unassigned app in the same tenant on every plan, or in another connected tenant with Pro or MSP for that tenant."
   - question: "Are the groups that assignments target backed up?"
     answer: "No. Assignments are saved as references to groups; the groups themselves are not part of the backup."
   - question: "Are Windows update rings included?"
@@ -20,7 +20,7 @@ The area and type names below are the ones the **Back up** dialog shows under **
 
 For the product overview of how to [back up Intune policies](https://www.tenuvault.com/intune-backup), see the backup page on the product site.
 
-Installer content stays separate from this metadata. The free [App Backup Windows preview](/apps/app-backup/#back-up-a-windows-installer) retrieves supported Win32 installers on a PC enrolled in the source tenant. Its captured backups can be restored as new, unassigned apps in the same or another connected tenant. Earlier local archives remain exportable but do not qualify for that restore flow. macOS installer capture is not available yet.
+Installer content stays separate from this metadata. The free [App Backup Windows preview](/apps/app-backup/#back-up-a-windows-installer) retrieves supported Win32 installers on a PC enrolled in the source tenant. Its captured backups can be restored as new, unassigned apps in the same tenant on every plan, or in another connected tenant with Pro or MSP for that tenant. Earlier local archives remain exportable but do not qualify for that restore flow. macOS installer capture is not available yet.
 
 ## How to read the tables
 

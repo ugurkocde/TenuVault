@@ -14,7 +14,7 @@ faq:
 
 Most Intune items restore directly from a backup. A few cannot, because Intune does not export everything needed to recreate them. This page lists those cases and explains **Restore write history**, which protects you from duplicate writes when a restore is interrupted.
 
-[App Backup](/apps/app-backup/) covers installer content separately. Its Windows preview retrieves supported Win32 installers on an enrolled PC and restores captured backups to the same or another connected tenant as new, unassigned apps. The configuration-backup wizard described below does not use those installer captures; start that restore from **App Backup → Backups → Restore to tenant…**. Earlier administrator-selected archives remain exportable, but do not qualify as captured backups for restore.
+[App Backup](/apps/app-backup/) covers installer content separately. Its Windows preview retrieves supported Win32 installers on an enrolled PC and restores captured backups as new, unassigned apps to the same tenant on every plan, or to another connected tenant with Pro or MSP for that tenant. The configuration-backup wizard described below does not use those installer captures; start that restore from **App Backup → Backups → Restore to tenant…**. Earlier administrator-selected archives remain exportable, but do not qualify as captured backups for restore.
 
 ## Items that cannot be restored
 

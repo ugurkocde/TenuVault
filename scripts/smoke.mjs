@@ -979,7 +979,7 @@ await check("App Backup keeps stored access independent of sign-in and exposes g
   await go("#/portal/app-backup", "Installer backups from Intune")
   await assertPageInMain("Your Win32 apps in Intune", "App Backup")
   await go("#/portal/app-backup/versions", "Installer backups")
-  await assertPageInMain("Completely free for every configured tenant", "free App Backup")
+  await assertPageInMain("Free on every plan. Restoring into another tenant needs Pro or MSP for that tenant.", "free App Backup")
   assert(!(await evaluate(`document.body.innerText.includes("Choose your Community tenant") || document.body.innerText.includes("Try Pro free with no card or email")`)), "App Backup displayed license-selection or upgrade prompts")
   assert(await waitForText("No Intune backups yet"), "backup catalog did not load for signed-out configured tenant")
   assert(await evaluate(`typeof window.tenuvault.appSources.list === "function" && typeof window.tenuvault.appSources.export === "function" && typeof window.tenuvault.appSources.openFolder === "function" && typeof window.tenuvault.appSources.signIn === "function" && typeof window.tenuvault.appSources.capture === "function" && typeof window.tenuvault.appSources.captureProgress === "function" && typeof window.tenuvault.appSources.assignments === "function"`), "source IPC namespace missing")
