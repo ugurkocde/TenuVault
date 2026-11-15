@@ -293,17 +293,35 @@ jobs:
           TENUVAULT_SMOKE_APP: ${{ github.workspace }}/${{ matrix.app }}
         run: npm run smoke -- out/smoke
 
-      # The nightly is published only when the packaged app completes a browser sign-in.
-      - name: Install browsers for the sign-in test
+      # The release is published only when the packaged app completes a browser sign-in. The test
+      # comes from this workflow's own commit (main), not from the release target: a promoted
+      # nightly can predate it. It drives the target's packaged app from the target's checkout.
+      - name: Check out the sign-in test
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .sign-in-test
+          sparse-checkout: scripts/sign-in-e2e
+          persist-credentials: false
+
+      - name: Install the sign-in test
         shell: bash
-        run: npx playwright install chromium firefox webkit
+        run: |
+          npm ci --prefix .sign-in-test/scripts/sign-in-e2e
+          browsers() { node .sign-in-test/scripts/sign-in-e2e/node_modules/playwright/cli.js install chromium firefox webkit; }
+          browsers || { sleep 15; browsers; }
 
       - name: Sign-in end to end in the packaged app
         timeout-minutes: 6
         shell: bash
         env:
           TENUVAULT_SMOKE_APP: ${{ github.workspace }}/${{ matrix.app }}
-        run: npm run sign-in-e2e -- out/sign-in-e2e
+        run: node .sign-in-test/scripts/sign-in-e2e/run.mjs out/sign-in-e2e
+
+      - name: Undo the sign-in test's changes to the runner
+        if: always() && hashFiles('.sign-in-test/scripts/sign-in-e2e/runner.mjs') != ''
+        shell: bash
+        run: node .sign-in-test/scripts/sign-in-e2e/runner.mjs cleanup
 
       - name: Upload installers
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

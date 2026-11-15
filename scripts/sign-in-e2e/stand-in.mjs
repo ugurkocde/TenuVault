@@ -9,6 +9,9 @@
  * audience, tenant and nonce claims. Nothing in the app is told about it: the runner's hosts file
  * and trust store send the app's traffic here (see redirect.mjs).
  *
+ * It also answers the two licensing requests that follow a first sign-in (LICENSE_HOST), so the
+ * test sends nothing to the production licensing service.
+ *
  * Only a browser the harness drives completes a sign-in: the authorize page posts an answer only
  * when the request carries the harness cookie. Any other browser on the machine (the app also
  * opens the system default browser) gets a page that does nothing.
@@ -17,6 +20,22 @@ import { createServer } from "node:https"
 import { createHash, generateKeyPairSync, randomBytes, randomUUID, sign } from "node:crypto"
 
 export const LOGIN_HOST = "login.microsoftonline.com"
+/** The licensing service the app checks a new tenant with after the sign-in. */
+export const LICENSE_HOST = "www.tenuvault.com"
+
+/**
+ * The licensing service's answers to what the app asks after a first sign-in, as production gave
+ * them on 2026-11-15 for an ID token it cannot verify: the health policy, and 401 invalid_token on
+ * the organization license route. The app then goes on as Community, as it does against
+ * production. Production licensing is checked by the license canary, not by this test.
+ */
+const LICENSE_HEALTH = {
+  ok: true,
+  missing: [],
+  organizationLicenses: { ok: true, missing: [] },
+  tenantTrials: { days: 14, extensionDays: 14, extensionWindowDays: 5, extensionGraceDays: 14, enabled: true, ok: true, missing: [] },
+  desktopFeedback: { ok: true, missing: [] },
+}
 export const HARNESS_COOKIE = "tenuvault_sign_in_e2e"
 
 const b64url = (value) => Buffer.from(value).toString("base64url")
@@ -159,14 +178,30 @@ export async function startStandIn({ key, cert, port = 443, tenantId, clientId, 
     })
   }
 
+  const licensing = async (url, request, response) => {
+    if (request.method === "GET" && url.pathname === "/api/desktop-license/health") return json(response, 200, LICENSE_HEALTH)
+    if (request.method === "POST" && url.pathname === "/api/desktop-license/tenant") {
+      const chunks = []
+      for await (const chunk of request) chunks.push(chunk)
+      let body = {}
+      try { body = JSON.parse(Buffer.concat(chunks).toString("utf8")) } catch { /* answered below */ }
+      record(`licensing: tenant route, action ${String(body.action)}, answered 401 invalid_token`)
+      return json(response, 401, { error: "The Microsoft sign-in could not be verified.", reason: "invalid_token" })
+    }
+    record(`licensing: not served: ${request.method} ${url.pathname}`)
+    json(response, 404, { error: "not_found" })
+  }
+
   const server = createServer({ key, cert }, (request, response) => {
     const url = new URL(request.url ?? "/", `https://${LOGIN_HOST}`)
     record(`${request.method} ${request.headers.host ?? ""}${url.pathname}`)
     const segments = url.pathname.split("/").filter(Boolean)
     const tenant = segments[0] ?? ""
     const rest = segments.slice(1).join("/")
-    Promise.resolve().then(() => {
-      if (request.headers.host?.split(":")[0] !== LOGIN_HOST) return json(response, 421, { error: "misdirected_request" })
+    Promise.resolve().then(async () => {
+      const host = request.headers.host?.split(":")[0]
+      if (host === LICENSE_HOST) return licensing(url, request, response)
+      if (host !== LOGIN_HOST) return json(response, 421, { error: "misdirected_request" })
       if (request.method === "GET" && tenant === "common" && rest === "discovery/instance") {
         return json(response, 200, {
           tenant_discovery_endpoint: `https://${LOGIN_HOST}/${tenantId}/v2.0/.well-known/openid-configuration`,

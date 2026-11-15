@@ -105,16 +105,32 @@ jobs:
           path: out/smoke
           if-no-files-found: ignore
 
-      # A complete first sign-in in every browser engine, against a local stand-in for
-      # login.microsoftonline.com that the runner's hosts file and trust store point to.
-      - name: Install browsers for the sign-in test
-        run: |
-          sudo apt-get install -y --no-install-recommends libnss3-tools
-          npx playwright install --with-deps chromium firefox webkit
+      # A complete first sign-in in every browser engine, in the packaged Linux app, against a
+      # local stand-in for login.microsoftonline.com and the licensing service that the runner's
+      # hosts file and trust store point to (scripts/sign-in-e2e).
+      - name: Package the Linux app
+        run: npx electron-builder --config electron-builder.config.cjs --linux dir --publish never
 
-      - name: Sign-in end to end
+      - name: Install the sign-in test
+        run: |
+          npm ci --prefix scripts/sign-in-e2e
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libnss3-tools gnome-keyring dbus-x11
+          browsers() { node scripts/sign-in-e2e/node_modules/playwright/cli.js install --with-deps chromium firefox webkit; }
+          browsers || { sleep 15; browsers; }
+
+      # Packaged builds keep secrets in the OS credential store: a keyring in a session bus.
+      - name: Sign-in end to end in the packaged app
         timeout-minutes: 6
-        run: xvfb-run -a npm run sign-in-e2e -- out/sign-in-e2e
+        env:
+          TENUVAULT_SMOKE_APP: ${{ github.workspace }}/dist/linux-unpacked/tenuvault-desktop
+          XDG_CURRENT_DESKTOP: GNOME
+        run: |
+          dbus-run-session -- bash -c 'printf "" | gnome-keyring-daemon --unlock --components=secrets >/dev/null && xvfb-run -a npm run sign-in-e2e -- out/sign-in-e2e'
+
+      - name: Undo the sign-in test's changes to the runner
+        if: always()
+        run: node scripts/sign-in-e2e/runner.mjs cleanup
 
       - name: Upload sign-in results
         if: always()
@@ -235,9 +251,12 @@ jobs:
           TENUVAULT_SMOKE_APP: ${{ github.workspace }}/${{ matrix.app }}
         run: npm run smoke -- out/smoke
 
-      - name: Install browsers for the sign-in test
+      - name: Install the sign-in test
         shell: bash
-        run: npx playwright install chromium firefox webkit
+        run: |
+          npm ci --prefix scripts/sign-in-e2e
+          browsers() { node scripts/sign-in-e2e/node_modules/playwright/cli.js install chromium firefox webkit; }
+          browsers || { sleep 15; browsers; }
 
       - name: Sign-in end to end in the packaged app
         timeout-minutes: 6
@@ -245,6 +264,11 @@ jobs:
         env:
           TENUVAULT_SMOKE_APP: ${{ github.workspace }}/${{ matrix.app }}
         run: npm run sign-in-e2e -- out/sign-in-e2e
+
+      - name: Undo the sign-in test's changes to the runner
+        if: always()
+        shell: bash
+        run: node scripts/sign-in-e2e/runner.mjs cleanup
 
       - name: Upload installers
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
