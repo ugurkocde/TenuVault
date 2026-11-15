@@ -15,7 +15,9 @@ import { useLicense } from "../../lib/license"
 import { restoreDestinationPlan } from "../../lib/app-restore-plan"
 import type { AppDeviceCode, AppRestoreProgress, AppRestoreResult, AppRestoreReview, CapturedAppSource } from "../../../shared/app-sources/types"
 
-export function RestoreAppDialog({ tenant, source, onClose, onBusy }: { tenant: string; source: CapturedAppSource; onClose: () => void; onBusy: (busy: boolean) => void }) {
+export function RestoreAppDialog({ tenant: sourceTenantId, source, onClose, onBusy }: { tenant: string; source: CapturedAppSource; onClose: () => void; onBusy: (busy: boolean) => void }) {
+  // Stored tenant IDs can be upper case; every comparison below uses this lower-case source ID.
+  const tenant = sourceTenantId.toLowerCase()
   const tenants = useTenants()
   const { status } = useLicense()
   const connected = tenants.filter(t => t.credentials?.tenantId)
@@ -41,7 +43,7 @@ export function RestoreAppDialog({ tenant, source, onClose, onBusy }: { tenant: 
   const destination = tenants.find(t => t.credentials?.tenantId.toLowerCase() === target)
   const authenticated = signedIn.includes(target)
   const targetPlan = target ? restoreDestinationPlan(status, tenant, target) : "unknown"
-  const planNote = targetPlan === "excluded" || targetPlan === "uncovered"
+  const planNote = targetPlan === "excluded"
   const refreshAccounts = async () => {
     const accounts = await bridge.auth.accounts()
     if (alive.current) setSignedIn(accounts.map(a => a.tenantId.toLowerCase()))
@@ -146,8 +148,8 @@ export function RestoreAppDialog({ tenant, source, onClose, onBusy }: { tenant: 
             <p className="text-xs text-muted-foreground">{review.currentSettings ? "Current source settings loaded" : "Settings captured with this backup"} {review.observedAt ? new Date(review.observedAt).toLocaleString() : ""}.</p>
           </section>
           {review.blocker ? <p role="alert" className="rounded-xl bg-secondary p-4 text-sm">{review.blocker}</p> : <>
-            <div><label htmlFor="restore-target" className="mb-2 block text-sm font-medium">Destination tenant</label><select id="restore-target" name="restoreTarget" disabled={running || signingIn || deviceStarting || !!deviceCode} value={target} onChange={e => { setTarget(e.target.value); setConfirmed(false); setError("") }} className="h-11 w-full rounded-xl border bg-background px-3 text-sm"><option value="">Choose a connected tenant…</option>{[...connected].sort((a, b) => Number(b.credentials!.tenantId.toLowerCase() === tenant) - Number(a.credentials!.tenantId.toLowerCase() === tenant)).map(t => { const id = t.credentials!.tenantId.toLowerCase(), plan = restoreDestinationPlan(status, tenant, id); return <option key={t.id} value={id}>{t.name}{id === tenant ? " (source tenant)" : plan === "excluded" || plan === "uncovered" ? ` (${planLabel(FEATURE_PLAN.appRestoreOtherTenant)})` : ""}</option> })}</select></div>
-            {planNote && <UpgradeNote feature="appRestoreOtherTenant" message="Restoring into the source tenant is free on every plan. Restoring into another tenant is included in TenuVault Pro and MSP for that tenant." />}
+            <div><label htmlFor="restore-target" className="mb-2 block text-sm font-medium">Destination tenant</label><select id="restore-target" name="restoreTarget" disabled={running || signingIn || deviceStarting || !!deviceCode} value={target} onChange={e => { setTarget(e.target.value); setConfirmed(false); setError("") }} className="h-11 w-full rounded-xl border bg-background px-3 text-sm"><option value="">Choose a connected tenant…</option>{[...connected].sort((a, b) => Number(b.credentials!.tenantId.toLowerCase() === tenant) - Number(a.credentials!.tenantId.toLowerCase() === tenant)).map(t => { const id = t.credentials!.tenantId.toLowerCase(), plan = restoreDestinationPlan(status, tenant, id); return <option key={t.id} value={id}>{t.name}{id === tenant ? " (source tenant)" : plan === "excluded" ? ` (${planLabel(FEATURE_PLAN.appRestoreOtherTenant)})` : ""}</option> })}</select></div>
+            {planNote && <UpgradeNote feature="appRestoreOtherTenant" message="Restoring into the source tenant is free on every plan. Restoring into another tenant is included in TenuVault Pro and MSP for that tenant." tenantId={target} />}
             {target && (!authenticated || !!error) && <div className="space-y-2"><p className="text-sm text-muted-foreground">Use a destination account with permission to create Intune apps. Your source session stays connected.</p><Button variant="outline" disabled={signingIn || running || deviceStarting || !!deviceCode} onClick={() => void signIn()}>{signingIn ? "Signing in…" : authenticated ? "Reconnect destination" : "Sign in to destination"}</Button><Button variant="ghost" disabled={running || deviceStarting || !!deviceCode} onClick={() => void startDeviceCode()}>{deviceStarting ? "Getting Microsoft code…" : "Use a device code"}</Button></div>}
             {deviceCode && <div role="status" className="space-y-3 rounded-xl border p-4 text-sm"><p>On your Mac or another device, open <button type="button" className="underline underline-offset-4" onClick={() => void bridge.app.openExternal(deviceCode.verificationUri)}>{deviceCode.verificationUri}</button> and enter:</p><p className="font-mono text-2xl font-semibold tracking-widest select-all">{deviceCode.userCode}</p><p>Sign in to {destination?.name}. This authorizes TenuVault on this computer. The code expires at {new Date(deviceCode.expiresAt).toLocaleTimeString()}.</p><p className="text-xs text-muted-foreground">Microsoft MFA and Conditional Access still apply. If your organization blocks device codes, use browser sign-in on this computer.</p><Button variant="outline" onClick={() => void cancelCode().catch(e => setError(e instanceof Error ? e.message : "Sign-in cancellation failed."))}>Cancel device sign-in</Button></div>}
             <div><label htmlFor="restore-name" className="mb-2 block text-sm font-medium">New app name</label><Input id="restore-name" name="restoreName" autoComplete="off" maxLength={200} value={name} disabled={running} onChange={e => { setName(e.target.value); setConfirmed(false) }} /></div>
@@ -159,7 +161,7 @@ export function RestoreAppDialog({ tenant, source, onClose, onBusy }: { tenant: 
         {error && <p role="alert" className="rounded-xl border p-4 text-sm">{error}</p>}
       </div>}
       <div className="flex flex-wrap justify-end gap-2 border-t pt-4"><Button variant="outline" disabled={running || loading || signingIn} onClick={onClose}>{result ? "Done" : "Close"}</Button>{!result && <Button disabled={running || loading || signingIn || deviceStarting || !!deviceCode || !authenticated || !confirmed || targetPlan === "excluded" || !review?.settingsHash || !!review.blocker || !name.trim()} onClick={() => void restore()}>{running ? "Restoring…" : "Restore unassigned app"}</Button>}</div>
-      <UpgradeDialog feature="appRestoreOtherTenant" open={planDialog} onOpenChange={setPlanDialog} />
+      <UpgradeDialog feature="appRestoreOtherTenant" open={planDialog} onOpenChange={setPlanDialog} tenantId={target || null} />
     </DialogContent>
   </Dialog>
 }

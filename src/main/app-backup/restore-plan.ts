@@ -1,15 +1,12 @@
-import { CommunityChoicePendingError, CommunityLimitError } from "../../shared/plan-errors"
 import type { Plan } from "../../shared/plans"
 
 /**
- * The plan of an App Backup restore destination other than the installer's source tenant, from the
- * license service's entitlement check. A tenant outside every license and the Community allowance has
- * none, so the restore asks for a plan instead of showing the Community tenant choice. Other failures,
- * such as an unreachable licensing service, stay errors. Restores into the source tenant never ask.
+ * The plan of an App Backup restore destination other than the installer's source tenant, as already
+ * on record on this installation: the same cached entitlement and Community choice the license status
+ * shows. It is a read only: no licensing request, no activation, no trial and no Community choice, so a
+ * refused or cancelled restore leaves the license state as it was and sends nothing to tenuvault.com.
+ * A tenant with no plan on record has none, and the restore asks for a plan.
  */
-export function restoreDestinationPlan(requireEntitlement: (tenantId: string, options: { retry: boolean }) => Promise<Plan>): (tenantId: string) => Promise<Plan | null> {
-  return async (tenantId) => {
-    try { return await requireEntitlement(tenantId, { retry: true }) }
-    catch (error) { if (error instanceof CommunityLimitError || error instanceof CommunityChoicePendingError) return null; throw error }
-  }
+export function restoreDestinationPlan(license: { plan: (tenantId: string) => Plan | null }): (tenantId: string) => Promise<Plan | null> {
+  return async (tenantId) => license.plan(tenantId)
 }

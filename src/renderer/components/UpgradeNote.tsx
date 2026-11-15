@@ -6,14 +6,15 @@ import { PlanPromptButton } from "./PlanPromptButton"
 /**
  * Explains that the tenant's plan does not include a feature, with the trial, the checkout or
  * the plans.
- * message replaces the standard text when one note covers several features.
+ * message replaces the standard text when one note covers several features. tenantId names the tenant the
+ * prompt acts on when it is not the selected tenant, such as a restore destination.
  */
-export function UpgradeNote({ feature, message, className }: { feature: Feature; message?: string; className?: string }) {
+export function UpgradeNote({ feature, message, className, tenantId }: { feature: Feature; message?: string; className?: string; tenantId?: string | null }) {
   return (
     <div className={cn("flex flex-wrap items-center gap-3 rounded-3xl bg-blue-50/60 px-5 py-4 text-sm text-gray-700", className)}>
       <Sparkles className="h-4 w-4 flex-shrink-0 text-coral-600" aria-hidden="true" />
       <p className="min-w-0 flex-1">{message ?? upgradeMessage(feature)}</p>
-      <PlanPromptButton plan={FEATURE_PLAN[feature]} source={`note-${feature.toLowerCase()}`} variant="outline" size="sm" />
+      <PlanPromptButton plan={FEATURE_PLAN[feature]} source={`note-${feature.toLowerCase()}`} variant="outline" size="sm" tenantId={tenantId} />
     </div>
   )
 }

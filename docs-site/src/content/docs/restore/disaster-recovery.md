@@ -121,7 +121,7 @@ On **Choose what to restore**, expand **Recovery readiness for N objects**. For 
 
 Backup metadata cannot recreate private keys, installer payloads or Apple credentials that the Microsoft Graph API does not export.
 
-* **Apps with installers:** for a supported Win32 installer captured earlier, use [App Backup → Restore to tenant](/apps/app-backup/#restore-to-the-same-or-another-tenant) to create an unassigned app in the same or another connected tenant. Review and test it before deployment. For unsupported apps or missing captures, obtain the original installer from a trusted source, verify its publisher and upload it through Intune. Review any dependency mapping separately.
+* **Apps with installers:** for a supported Win32 installer captured earlier, use [App Backup → Restore to tenant](/apps/app-backup/#restore-to-the-same-or-another-tenant) to create an unassigned app in the same tenant on every plan, or in another connected tenant with Pro, MSP or a Pro trial on record for that tenant. Review and test it before deployment. For unsupported apps or missing captures, obtain the original installer from a trusted source, verify its publisher and upload it through Intune. Review any dependency mapping separately.
 * **Apple automated device enrollment:** renew or upload the enrollment token through Apple Business Manager or Apple School Manager and Intune. Use the backed-up enrollment profiles as a reference.
 * **Masked secrets:** a profile whose backup holds a masked OMA-URI value (`****`) needs a new backup before it can be restored.
 

@@ -11,7 +11,8 @@ vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { appSources: api, app
 vi.mock("../../src/renderer/lib/disclaimer", () => ({ requestAcknowledgement: api.acknowledge }))
 const license = vi.hoisted(() => ({ status: null as unknown }))
 vi.mock("../../src/renderer/lib/license", async importOriginal => ({ ...await importOriginal<typeof import("../../src/renderer/lib/license")>(), useLicense: () => ({ status: license.status, signedInTenantIds: undefined, refresh: async () => undefined }) }))
-vi.mock("~/contexts/TenantContext", () => ({ useTenants: () => [{ id: 1, name: "Source", credentials: { tenantId: "11111111-1111-1111-1111-111111111111" } }, { id: 2, name: "Destination", credentials: { tenantId: "22222222-2222-2222-2222-222222222222" } }] }))
+const stored = vi.hoisted(() => ({ source: "11111111-1111-1111-1111-111111111111" }))
+vi.mock("~/contexts/TenantContext", () => ({ useTenants: () => [{ id: 2, name: "Destination", credentials: { tenantId: "22222222-2222-2222-2222-222222222222" } }, { id: 1, name: "Source", credentials: { tenantId: stored.source } }] }))
 import { RestoreAppDialog } from "../../src/renderer/features/app-backup/RestoreAppDialog"
 const source = { id: "33333333-3333-3333-3333-333333333333", appName: "Finance" } as CapturedAppSource
 const review: AppRestoreReview = { settingsHash: "a".repeat(64), observedAt: "2026-11-14T12:00:00Z", currentSettings: false, name: "Finance", version: "1", publisher: "Example", installCommand: "setup.exe", uninstallCommand: "setup.exe /uninstall", runAs: "system", detectionRules: 1, requirementRules: 0, blocker: null }
@@ -28,8 +29,8 @@ beforeEach(() => {
   api.restoreReview.mockResolvedValue(review); api.accounts.mockResolvedValue([{ tenantId: target }]); api.restoreProgress.mockResolvedValue(null); api.cancel.mockResolvedValue(undefined)
   api.restore.mockResolvedValue({ appId: "44444444-4444-4444-4444-444444444444", tenantId: target, name: "Finance (restored)", contentVersion: "1", sourceId: source.id })
 })
-afterEach(() => { act(() => root?.unmount()); root = undefined; document.body.innerHTML = ""; vi.resetAllMocks() })
-async function mount() { const node = document.createElement("div"); document.body.append(node); root = createRoot(node); await act(async () => root!.render(createElement(RestoreAppDialog, { tenant, source, onClose: vi.fn(), onBusy: vi.fn() }))) }
+afterEach(() => { act(() => root?.unmount()); root = undefined; document.body.innerHTML = ""; vi.resetAllMocks(); stored.source = tenant })
+async function mount(sourceTenant = tenant) { const node = document.createElement("div"); document.body.append(node); root = createRoot(node); await act(async () => root!.render(createElement(RestoreAppDialog, { tenant: sourceTenant, source, onClose: vi.fn(), onBusy: vi.fn() }))) }
 const button = (label: string) => [...document.querySelectorAll("button")].find(b => b.textContent?.trim() === label)!
 async function selectTarget() { const select = document.querySelector("select")!; await act(async () => { select.value = target; select.dispatchEvent(new Event("change", { bubbles: true })) }) }
 async function confirm() { await act(async () => (document.querySelector('input[type="checkbox"]') as HTMLInputElement).click()) }
@@ -139,18 +140,21 @@ describe("restore into another tenant on the destination's plan", () => {
     expect(api.restore).toHaveBeenCalledWith(tenant, expect.any(String), source.id, tenant, "Finance (restored)", review.settingsHash)
   })
   it.each([
-    ["Community", () => tenantStatus(target, "community", false)],
-    ["an ended license", () => tenantStatus(target, null, false)],
-    ["a tenant outside the license", () => null],
-  ])("shows the plan note and does not start a restore into another tenant on %s", async (_label, destination) => {
-    license.status = statusWith(destination())
+    ["Community", (): TenantLicenseStatus | null => tenantStatus(target, "community", false), null],
+    ["an ended license", (): TenantLicenseStatus | null => tenantStatus(target, null, false), null],
+    ["a tenant outside the license", (): TenantLicenseStatus | null => null, null],
+    ["no plan on record on a key install", (): TenantLicenseStatus | null => null, "pro"],
+  ] as const)("shows the plan note and blocks a restore into another tenant on %s", async (_label, destination, keyPlan) => {
+    license.status = statusWith(destination(), keyPlan)
     await mount(); await selectTarget()
+    expect(options()).toContain("Destination (Pro)")
     expect(document.body.textContent).toContain(note)
-    // The existing Pro prompt of plan notes; outside a router it offers the plans.
-    expect(button("See plans")).toBeDefined()
+    // The existing Pro prompt of plan notes; outside a router it offers the plans or the checkout.
+    expect([...document.querySelectorAll("button")].some(b => ["See plans", "Buy Pro"].includes(b.textContent?.trim() ?? ""))).toBe(true)
     await confirm()
-    expect((document.querySelector('input[type="checkbox"]') as HTMLInputElement).checked).toBe(_label === "Community" ? false : true)
-    expect(button("Restore unassigned app").disabled).toBe(_label === "Community")
+    expect((document.querySelector('input[type="checkbox"]') as HTMLInputElement).checked).toBe(false)
+    expect(button("Restore unassigned app").disabled).toBe(true)
+    expect(api.restore).not.toHaveBeenCalled()
   })
   it.each([["Pro trial", true, "pro"], ["Pro", false, "pro"], ["MSP", false, "msp"]] as const)("restores into another tenant on %s without a plan note", async (_label, trial, plan) => {
     license.status = statusWith(tenantStatus(target, plan, true, trial))
@@ -160,16 +164,20 @@ describe("restore into another tenant on the destination's plan", () => {
     await confirm(); await act(async () => button("Restore unassigned app").click())
     expect(api.restore).toHaveBeenCalledWith(tenant, expect.any(String), source.id, target, "Finance (restored)", review.settingsHash)
   })
-  it("leaves a tenant this machine's key can still cover to the main process", async () => {
-    license.status = statusWith(null, "pro")
-    await mount(); await selectTarget()
+  it("lower-cases an upper-case stored source tenant ID for the default, the order and the label", async () => {
+    const upper = "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE"
+    stored.source = upper
+    license.status = statusWith(tenantStatus(target, "community", false))
+    api.accounts.mockResolvedValue([{ tenantId: upper.toLowerCase() }])
+    await mount(upper)
+    expect((document.querySelector("select") as HTMLSelectElement).value).toBe(upper.toLowerCase())
+    expect(options()).toEqual(["Choose a connected tenant…", "Source (source tenant)", "Destination (Pro)"])
     expect(document.body.textContent).not.toContain(note)
-    expect(button("Restore unassigned app").disabled).toBe(true)
-    await confirm()
-    expect(button("Restore unassigned app").disabled).toBe(false)
+    await confirm(); await act(async () => button("Restore unassigned app").click())
+    expect(api.restore).toHaveBeenCalledWith(upper.toLowerCase(), expect.any(String), source.id, upper.toLowerCase(), "Finance (restored)", review.settingsHash)
   })
   it("shows the plan dialog when the main process refuses another tenant", async () => {
-    license.status = statusWith(null, "pro")
+    // The status still shows Pro, but the plan on record changed before the restore started.
     api.restore.mockRejectedValue(new FeatureApiError("Restoring an App Backup installer into another tenant: included in TenuVault Pro and MSP. Upgrade on the License page.", 402, "appRestoreOtherTenant"))
     await mount(); await selectTarget(); await confirm(); await act(async () => button("Restore unassigned app").click())
     expect(document.body.textContent).toContain("Included in TenuVault Pro and MSP")

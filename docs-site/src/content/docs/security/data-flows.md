@@ -129,7 +129,7 @@ Tenant configuration, backups, policy names, device or user records from your te
 
 Tenants that are already active keep working offline for up to 14 days after their last successful check. A new tenant cannot be activated on a paid plan until the service is reachable. On a machine without a license key, the Community tenant works without any connection to tenuvault.com.
 
-On every plan, a new installer capture in [App Backup](#app-backup) needs its [capture check](#capture-check) each time. Listing apps, exporting installers you already captured and **Restore to tenant** do not use it.
+On every plan, a new installer capture in [App Backup](#app-backup) needs its [capture check](#capture-check) each time. Listing apps, exporting installers you already captured and **Restore to tenant** do not use it. **Restore to tenant** sends nothing to tenuvault.com: restoring into another tenant checks the plan already on record on this computer for that tenant, with no licensing request.
 
 ### CIS Benchmarks content
 

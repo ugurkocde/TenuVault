@@ -1471,7 +1471,7 @@ async function bootstrap(): Promise<void> {
     )
   })
 
-  const appRestorePlan = restoreDestinationPlan((tenantId, options) => license.requireEntitlement(tenantId, options))
+  const appRestorePlan = restoreDestinationPlan(license)
   const appSources = new AppSourceService({
     restorePlan: appRestorePlan,
     restoreOwner: () => {
