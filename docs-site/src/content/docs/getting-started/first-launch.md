@@ -31,7 +31,7 @@ The first tenant you sign in to without a key starts its 14 day Pro trial, unles
 
 <figure class="docs-screenshot">
   <a href="/images/screenshots/welcome.webp" aria-label="Open full-size screenshot: welcome">
-    <img src="/images/screenshots/welcome.webp" alt="The welcome screen offers Connect your tenant, a free setup call, setup diagnostics and license-key entry" width="2880" height="1776" loading="lazy" decoding="async" />
+    <img src="/images/screenshots/welcome.webp" alt="The welcome screen offers Connect your tenant, a free setup call, setup diagnostics and license-key entry" width="1280" height="893" loading="lazy" decoding="async" />
   </a>
   <figcaption>The welcome screen offers Connect your tenant, a free setup call, setup diagnostics and license-key entry. Captured from the desktop app. Select the image to view it full size.</figcaption>
 </figure>
