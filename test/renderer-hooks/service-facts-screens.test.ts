@@ -83,7 +83,7 @@ describe("The scope picker follows the tenant's selection", () => {
     expect(text).toContain("Entra ID: Authentication")
     expect(text).not.toContain("Intune: Device configuration")
     expect(text).not.toContain("Entra ID: Groups")
-    expect(text).toContain("All of 28 types")
+    expect(text).toContain("All of 54 types")
   })
   it("uses the explicit tenant choice even when the service defaults change", () => {
     withFacts("conditionalAccess", { defaultOn: true })

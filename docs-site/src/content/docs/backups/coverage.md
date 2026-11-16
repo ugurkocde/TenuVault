@@ -3,7 +3,7 @@ title: "What gets backed up"
 description: Every Intune object type TenuVault backs up, grouped by area, and what is not covered.
 faq:
   - question: "Which Intune objects does TenuVault back up?"
-    answer: "41 Intune object types in nine areas: device configuration, compliance, endpoint security, scripts and remediations, Windows updates, apps, app protection and configuration, enrollment, and tenant administration. Each object is saved as it is in Microsoft Graph (beta), with its settings and, where Intune has them, its assignments."
+    answer: "41 Intune object types in nine areas: device configuration, compliance, endpoint security, scripts and remediations, Windows updates, apps, app protection and configuration, enrollment, and tenant administration. Each object is saved as it is in Microsoft Graph (beta for Intune, v1.0 or beta as declared for Entra), with its settings and, where Intune has them, its assignments."
   - question: "Does TenuVault back up app installer files?"
     answer: "Policy backups save app details, assignments, categories, and dependency and supersedence links, not installers. App Backup is a separate, free feature for installer content. Production capture and app-content restore are not available yet; earlier local archives remain exportable."
   - question: "Are the groups that assignments target backed up?"
@@ -14,7 +14,7 @@ faq:
     answer: "TenuVault skips types it is denied access to, for example when the app registration lacks a permission or its admin consent, or when your Intune role excludes the type. A scheduled backup made by the optional Backup Reader also leaves out device categories and device clean-up rules unless the reader has the optional device inventory permission. The backup log and Backup Details say which types were skipped."
 ---
 
-TenuVault backs up 41 Intune object types in nine areas, plus [30 Entra ID configuration types](/backups/entra/) and [three Conditional Access types](/backups/conditional-access/) when their services and areas are turned on. Each object is saved as it is in Microsoft Graph (beta), with its settings and, where Intune has them, its assignments.
+TenuVault backs up 41 Intune object types in nine areas, plus [56 Entra ID configuration types](/backups/entra/) and [three Conditional Access types](/backups/conditional-access/) when their services and areas are turned on. Each object is saved as it is in Microsoft Graph (beta for Intune, v1.0 or beta as declared for Entra), with its settings and, where Intune has them, its assignments.
 
 The area and type names below are the ones the **Back up** dialog shows under **Custom**. See [Choose what to back up](/backups/#choose-what-to-back-up).
 
@@ -25,7 +25,7 @@ Installer content stays separate from this metadata. [App Backup](/apps/app-back
 ## How to read the tables
 
 * **Assignments**: whether the backup holds the object's assignments (the groups and filters it targets). Restoring assignments is a separate choice. See [Restore modes and assignments](/restore/modes/).
-* **Everything except apps**: every type is included in this choice except **Apps**. **Everything** includes every supported type of the services and opt-in areas that are on. With every supported area enabled, there are 74 types.
+* **Everything except apps**: every type is included in this choice except **Apps**. **Everything** includes every supported type of the services and opt-in areas that are on. With every supported area enabled, there are 100 types.
 * Built-in objects that Intune creates itself are skipped. The backup log reports how many were skipped.
 
 ## Device configuration

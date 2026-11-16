@@ -77,6 +77,7 @@ function Area({ area, service, report, busy, run }: { area: AreaHealth; service:
       <h4 className="text-sm font-medium text-gray-900">{area.label} <span className="text-xs font-normal text-gray-500">{area.enabled ? "On" : "Off"}</span></h4>
       {area.optIn && <Switch checked={area.enabled} disabled={busy || !service.enabled} label={`Include ${area.label} in backups`} onChange={enabled => run(() => bridge.services.setArea(report.tenantId, service.id, area.id, enabled))} />}
     </div>
+    {service.id === "entra" && area.id === "externalIdentities" && area.hasTypes && <p className="text-xs text-gray-600">API connectors require the Backup Reader. Their delegated read permission has not been verified.</p>}
     {area.personalData && <p className="text-xs text-gray-600">{PERSONAL_DATA[area.id] ?? "Stores personal data in backup files. Review who can access your backup storage before turning this area on."}</p>}
     <p className="text-xs text-gray-600">Backup: <PermissionState state={area.permissions} />. Restore: <PermissionState state={area.restore} />.</p>
     {area.enabled && area.permissions === "present" && area.restore === "missing" && service.access === "restore" && <p className="text-xs text-gray-600">Backup permissions are present. Restore needs: {area.missing.join(", ")}. The Backup and restore access level asks for these permissions. Choose Backup under Areas and access to request only backup permissions.</p>}

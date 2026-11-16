@@ -75,7 +75,8 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 ## Compatibility notes for the next release
 
-- Entra ID now backs up 30 configuration types in Tenant settings, Authentication and two opt-in Groups settings. Existing tenants keep Entra ID off. These types are backup and comparison only; Azure Automation remains Intune and Conditional Access only. Four types need a signed-in admin. Branding stores JSON up to 1 MiB, without image or CSS streams. Directory settings include custom banned password words. Refused domain federation sub-reads keep the domain and report incomplete coverage.
+- Entra ID now backs up 56 configuration types in Tenant settings, Authentication, External identities, Roles and PIM, and two opt-in Groups settings. Existing tenants keep Entra ID off. These types are backup and comparison only; Azure Automation remains Intune and Conditional Access only. Four types need a signed-in admin. Branding stores JSON up to 1 MiB, without image or CSS streams. Directory settings include custom banned password words. Refused domain federation sub-reads keep the domain and report incomplete coverage.
+- PIM group discovery now needs GroupMember.Read.All alongside the existing schedule read permissions. API connectors are app-only until delegated read access is verified. New Entra types remain backup-only; role assignments and schedules store principal IDs without profiles.
 
 - Adding permissions checks the connected access token's delegated claims for existing consent and refreshed access. This avoids false refusals when the sign-in response lists fully qualified scopes or `.default`. Unreadable and app-only tokens require a delegated sign-in. Scope names and known registration GUIDs are compared without regard to case, while existing consented scopes keep their spelling when updated.
 

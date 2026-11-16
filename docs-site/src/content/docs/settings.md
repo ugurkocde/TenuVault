@@ -46,7 +46,7 @@ Choose a tenant to see three independent connections: **Microsoft Graph sign-in*
 
 ![Services and permissions with independent connection states and all three services](/images/services/healthy-light.png)
 
-The cards show **Intune**, **Entra ID** and **Defender**. Expand **Areas and access** for the permissions, backup verification and switches of each area. **Conditional Access** stays independently switchable inside Entra ID, even while the rest of Entra ID is off. Entra ID now has [30 configuration backup types](/backups/entra/) in Tenant settings, Authentication and the opt-in Groups area. Each area says whether this build has types for it. Defender still prepares permissions only.
+The cards show **Intune**, **Entra ID** and **Defender**. Expand **Areas and access** for the permissions, backup verification and switches of each area. **Conditional Access** stays independently switchable inside Entra ID, even while the rest of Entra ID is off. Entra ID now has [56 configuration backup types](/backups/entra/) in Tenant settings, Authentication, External identities, Roles and PIM, and the opt-in Groups area. Each area says whether this build has types for it. Defender still prepares permissions only.
 
 | Control | What it does |
 | --- | --- |

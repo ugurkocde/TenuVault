@@ -5,6 +5,7 @@ Built desktop app at 1024px with fictional tenant and sign-in results. No Micros
 * 01-welcome-start-light.png, 01-welcome-start-dark.png: Welcome, with the setup diagnostics choice.
 * 02-choice-default-light.png, 02-choice-default-dark.png: Intune preselected, with all three service cards visible.
 * 03-choice-entra-details-light.png, 03-choice-entra-details-dark.png: Entra ID selected with area coverage, read and write counts, Conditional Access and opt-in areas.
+* 03-choice-external-roles-light.png, 03-choice-external-roles-dark.png: Entra ID external identities and roles coverage, with the app-only API connector note.
 * 03-choice-exact-permissions-light.png, 03-choice-exact-permissions-dark.png: Exact permissions below the cards, grouped by area and marked read or write.
 * 04-choice-defender-details-light.png, 04-choice-defender-details-dark.png: Defender area coverage, permission counts and coverage limits.
 * 04-choice-both-details-light.png, 04-choice-both-details-dark.png: Entra ID and Defender cards both expanded, with area coverage and permission counts.
