@@ -188,7 +188,7 @@ try {
     ["no-tenant-consent", "This registration lacks tenant-wide consent for the Graph scopes of the connected account. Use the other permission routes. Nothing was changed by this check."],
     ["role-refused", "The account lacks permission or an administrator role for this action. Use an Application Administrator, Cloud Application Administrator, Privileged Role Administrator or Global Administrator. Azure CLI, Entra and the text for your administrator remain available."],
     ["individual-consent", "Individual Graph consent exists. An administrator must review these grants separately using the other routes. Nothing was changed by this check."],
-    ["changed-since-preview", null],
+    ["changed-since-preview", null], ["concurrent-result", null],
   ]
   for (const [state, refusal] of scenes) {
     for (const theme of ["light", "dark"]) {
@@ -198,7 +198,7 @@ try {
         Object.assign(globalThis.__marketingMock, { health: ${JSON.stringify(healthScene("missing-permission"))}, loading: false })
         handle("services:previewAddition", () => { ${refusal ? `throw new Error(${JSON.stringify(refusal)})` : `return ${JSON.stringify(preview)}`} })
         handle("services:cancelAddition", () => {})
-        handle("services:confirmAddition", () => (${JSON.stringify(state === "partial-result" ? { ...complete, state: "partial", consented: [], missingConsent: preview.consent, message: "Only part of the approved change could be verified. No rollback was attempted. A write did not return a successful answer and may have been applied. Read-back was attempted before reporting; start a new preview before retrying." } : state === "changed-since-preview" ? { ...complete, state: "changed", declared: [], consented: [], preview: { ...preview, consented: [...preview.consented, "Group.Read.All"] }, message: "The registration or consent changed since the preview. Nothing was written. Review the current state below and start a new preview." } : complete)}))
+        handle("services:confirmAddition", () => (${JSON.stringify(state === "concurrent-result" ? { ...complete, state: "partial", message: "Only part of the approved change could be verified. No rollback was attempted. Another change happened at the same time; check in Entra before retrying. No further write was attempted." } : state === "partial-result" ? { ...complete, state: "partial", consented: [], missingConsent: preview.consent, message: "Only part of the approved change could be verified. No rollback was attempted. A write did not return a successful answer and may have been applied. Read-back was attempted before reporting; start a new preview before retrying." } : state === "changed-since-preview" ? { ...complete, state: "changed", declared: [], consented: [], preview: { ...preview, consented: [...preview.consented, "Group.Read.All"] }, message: "The registration or consent changed since the preview. Nothing was written. Review the current state below and start a new preview." } : complete)}))
       })()`)
       await send("Emulation.setDeviceMetricsOverride", { width: 1024, height: 1100, deviceScaleFactor: 1, mobile: false })
       await evaluate(`localStorage.setItem("tenuvault-appearance", "${theme}"); location.hash = "#/portal/settings?section=services"; location.reload()`)
@@ -209,9 +209,9 @@ try {
         await click("Sign in to preview")
         await waitFor(`document.querySelector('[role="dialog"]')?.innerText.includes(${JSON.stringify(refusal ? "Nothing was changed" : "Review permission additions")}) || !!document.querySelector('[role="alert"]')`)
       }
-      if (["result", "partial-result", "changed-since-preview"].includes(state)) {
+      if (["result", "partial-result", "changed-since-preview", "concurrent-result"].includes(state)) {
         await click("Add approved permissions")
-        await waitFor(`document.querySelector('[role="dialog"]')?.innerText.includes(${JSON.stringify(state === "result" ? "Permission result" : state === "partial-result" ? "Permissions partly added" : "Changed since the preview")})`)
+        await waitFor(`document.querySelector('[role="dialog"]')?.innerText.includes(${JSON.stringify(state === "result" ? "Permission result" : ["partial-result", "concurrent-result"].includes(state) ? "Permissions partly added" : "Changed since the preview")})`)
       }
       await shot(state, theme)
     }

@@ -12,3 +12,4 @@ Fictional data in the built desktop app, 1024px width, light then dark for each 
 8. role-refused-light.png, role-refused-dark.png: role refused.
 9. individual-consent-light.png, individual-consent-dark.png: individual consent.
 10. changed-since-preview-light.png, changed-since-preview-dark.png: changed since preview.
+11. concurrent-result-light.png, concurrent-result-dark.png: concurrent result.

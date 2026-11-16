@@ -103,3 +103,17 @@ it.each([{ tenantId: "bad", names: ["Policy.Read.All"] }, { tenantId: tenant, na
   expect(host.signIn).not.toHaveBeenCalled()
   expect(writes).toEqual([])
 })
+it("refreshes after declarations were saved but a later consent change stopped the flow", async () => {
+  const { flow, host, state, writes } = fixture()
+  const preview = await flow.preview(tenant, ["Policy.Read.All"])
+  let checks = 0
+  host.connection.mockImplementation(async () => {
+    if (++checks === 3) state.grants[0]!.scope = "User.Read Concurrent.Read"
+    return structuredClone(additionConnection)
+  })
+  const result = await flow.confirm(tenant, preview.id)
+  expect(result.state).toBe("changed")
+  expect(result.message).toContain("Declarations were written")
+  expect(writes).toHaveLength(1)
+  expect(host.refresh).toHaveBeenCalledWith(additionConnection, ["Policy.Read.All"])
+})

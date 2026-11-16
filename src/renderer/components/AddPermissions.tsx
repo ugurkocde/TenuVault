@@ -43,7 +43,7 @@ export function AddPermissions({ tenantId, clientId, missing }: { tenantId: stri
     <Dialog open={open} onOpenChange={value => { if (!value) close() }}>
       <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto" hideClose={busy === "applying"} onEscapeKeyDown={event => { if (busy === "applying") event.preventDefault() }} onInteractOutside={event => event.preventDefault()}>
         <DialogHeader><DialogTitle>{result?.state === "changed" ? "Changed since the preview" : result?.state === "partial" ? "Permissions partly added" : result ? "Permission result" : preview ? "Review permission additions" : "Add permissions in the app"}</DialogTitle>
-          <DialogDescription>Change only the app registration this tenant is connected with. Existing permissions are kept. The Backup Reader has its own permissions.</DialogDescription>
+          <DialogDescription>Change only the app registration this tenant is connected with. Adds only the permissions you approve. The Backup Reader has its own permissions.</DialogDescription>
         </DialogHeader>
         <div className="space-y-4 text-sm text-gray-700">
           {!preview && <>
@@ -58,12 +58,13 @@ export function AddPermissions({ tenantId, clientId, missing }: { tenantId: stri
             <Names title="Permissions to declare" names={preview.declare} />
             <Names title="Scopes to add to tenant-wide consent" names={preview.consent} />
             <p className="text-xs">Only these additions are approved. Other pending permissions will not be consented. The registration and consent are read again before writing.</p>
+            <p className="text-xs">Microsoft Graph replaces these values as a whole and offers no documented conditional update. A change by someone else in the same second can be lost. TenuVault reads again right before writing to make this unlikely.</p>
             {!result && !error && <Button disabled={!!busy} onClick={() => void run(true)}>Add approved permissions</Button>}
           </>}
           {busy && <p role="status">{busy === "signingIn" ? "Finish the Microsoft sign-in in your browser. Reading the registration for your preview..." : "Checking for changes, adding approved permissions and verifying access..."}</p>}
           {result && <section role="status" className="space-y-3 rounded-xl bg-muted p-3">
             <p>{result.message}</p>
-            {result.state === "changed" ? <details open><summary>Current registration and consent</summary><Names title="Current declarations (API / type / permission ID)" names={result.preview.declared} /><Names title="Current tenant-wide Graph consent" names={result.preview.consented} /></details> : <>
+            {result.state === "changed" ? <><Names title="Verified declaration additions" names={result.declared} /><details open><summary>Current registration and consent</summary><Names title="Current declarations (API / type / permission ID)" names={result.preview.declared} /><Names title="Current tenant-wide Graph consent" names={result.preview.consented} /></details></> : <>
               <Names title="Verified declaration additions" names={result.declared} />
               <Names title="Verified consent additions" names={result.consented} />
               <Names title="Declarations still missing or unverified" names={result.missingDeclarations} />

@@ -73,7 +73,7 @@ export class AddPermissionsFlow {
     try {
       await assertConnection()
       const result = await session.run.apply(assertConnection)
-      if (result.state !== "changed") {
+      if (result.state !== "changed" || result.declared.length || result.consented.length) {
         try { await assertConnection(); await this.host.refresh(session.connection, [...new Set([...session.run.preview.declare, ...session.run.preview.consent])]) }
         catch (error) { result.state = "partial"; result.message += ` The tenant token refresh or health check did not complete: ${error instanceof Error ? error.message : String(error)} Select Check again, or sign in again, to verify access.` }
       }

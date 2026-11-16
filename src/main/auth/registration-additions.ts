@@ -18,21 +18,28 @@ const ROOT = "https://graph.microsoft.com/v1.0"
 const APP_FIELDS = "id,appId,displayName,signInAudience,publicClient,web,spa,passwordCredentials,keyCredentials,requiredResourceAccess"
 const eq = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
 const scopes = (value: string) => value.split(/\s+/).filter(Boolean)
+// The loopback listener accepts only the root path. Keep the textual host check strict so
+// URL normalization cannot turn other IP spellings, credentials or paths into accepted redirects.
+function localRedirect(uri: string): boolean {
+  const match = /^http:\/\/(?:localhost|127\.0\.0\.1)(?::(\d+))?\/?$/i.exec(uri)
+  return !!match && (!match[1] || (Number(match[1]) > 0 && Number(match[1]) <= 65535))
+}
 const protocol = new Set(["openid", "profile", "email", "offline_access"])
 const declaredIds = (app: Application) => app.requiredResourceAccess.filter(r => eq(r.resourceAppId, GRAPH_APP_ID)).flatMap(r => r.resourceAccess.filter(a => a.type === "Scope").map(a => a.id.toLowerCase()))
 const consentedScopes = (snapshot: Snapshot) => snapshot.grants.filter(g => g.consentType === "AllPrincipals").flatMap(g => scopes(g.scope))
 const sameSet = (a: readonly string[], b: readonly string[]) => JSON.stringify([...new Set(a)].sort()) === JSON.stringify([...new Set(b)].sort())
-// Object property order and array order are not meaningful to Graph's declaration and consent sets.
+// Property and array order are not meaningful to Graph's sets. The context annotation
+// describes the response envelope and differs between an exact GET and a collection entry.
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return JSON.stringify(value.map(canonical).sort())
-  if (value && typeof value === "object") return JSON.stringify(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, entry]) => [key, canonical(entry)]))
+  if (value && typeof value === "object") return JSON.stringify(Object.entries(value).filter(([key]) => key !== "@odata.context").sort(([a], [b]) => a.localeCompare(b)).map(([key, entry]) => [key, canonical(entry)]))
   return JSON.stringify(value)
 }
 function signature(s: Snapshot): string {
   return canonical({ app: { ...s.app, requiredResourceAccess: s.app.requiredResourceAccess.map(r => ({ ...r, resourceAppId: r.resourceAppId.toLowerCase(), resourceAccess: r.resourceAccess.map(a => ({ ...a, id: a.id.toLowerCase() })) })) }, client: s.client, resource: s.resource, grants: s.grants.map(g => ({ ...g, scope: [...new Set(scopes(g.scope))].sort() })) })
 }
 
-/** A read-preview-confirm transaction, independent of MSAL and Electron and tested with injected fetch. */
+/** A read-preview-confirm flow, independent of MSAL and Electron and tested with injected fetch. */
 export class RegistrationAdditions {
   readonly preview: PermissionAdditionPreview
   private snapshot!: Snapshot
@@ -103,7 +110,7 @@ export class RegistrationAdditions {
   }
   private guard(s: Snapshot): void {
     const { app, client, grants } = s
-    if (!eq(app.appId, this.options.connection.clientId) || app.signInAudience !== "AzureADMyOrg" || !Array.isArray(app.publicClient?.redirectUris) || !app.publicClient.redirectUris.some(uri => /^http:\/\/localhost\/?$/i.test(uri)) || !app.publicClient.redirectUris.every(uri => /^http:\/\/localhost(?::\d+)?\/?$/i.test(uri)) || app.web?.redirectUris?.length !== 0 || app.spa?.redirectUris?.length !== 0) throw new Error("This registration is not a single-tenant public client with only local redirects. Use the other permission routes. Nothing was changed by this check.")
+    if (!eq(app.appId, this.options.connection.clientId) || app.signInAudience !== "AzureADMyOrg" || !Array.isArray(app.publicClient?.redirectUris) || !app.publicClient.redirectUris.length || !app.publicClient.redirectUris.every(localRedirect) || app.web?.redirectUris?.length !== 0 || app.spa?.redirectUris?.length !== 0) throw new Error("This registration is not a single-tenant public client with only local redirects. Use the other permission routes. Nothing was changed by this check.")
     if (![app.passwordCredentials, app.keyCredentials, client.passwordCredentials, client.keyCredentials].every(value => Array.isArray(value) && value.length === 0)) throw new Error("This registration or enterprise application has credentials, or their absence could not be verified. Use the other permission routes. Nothing was changed by this check.")
     if (!client.accountEnabled || !Array.isArray(app.requiredResourceAccess)) throw new Error("The registration is disabled or its declarations could not be read. Nothing was changed by this check.")
     if (grants.some(g => !eq(g.clientId, client.id) || g.consentType !== "AllPrincipals" || g.principalId !== null)) throw new Error("Individual Graph consent exists. An administrator must review these grants separately using the other routes. Nothing was changed by this check.")
@@ -116,59 +123,100 @@ export class RegistrationAdditions {
     const consented = consentedScopes(s)
     return { displayName: s.app.displayName, declare: this.options.additions.filter(n => !held.includes(this.ids.get(n)!.toLowerCase())), consent: this.options.additions.filter(n => !consented.includes(n)), declared: s.app.requiredResourceAccess.flatMap(r => r.resourceAccess.map(a => `${r.resourceAppId}/${a.type}/${a.id}`)), consented }
   }
-  private async verify(test: (s: Snapshot) => boolean): Promise<Snapshot> {
+  private async verify(test: (s: Snapshot) => boolean, preserved: (s: Snapshot) => boolean): Promise<Snapshot> {
     let latest!: Snapshot
     for (let attempt = 0; attempt < 4; attempt++) {
       if (attempt) await (this.options.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms))))([500, 1500, 3000][attempt - 1]!)
       latest = await this.read()
-      if (test(latest)) break
+      if (!preserved(latest) || test(latest)) break
     }
     return latest
+  }
+  // Replication can delay our additions, but must not excuse a change to any other entry.
+  private preserved(before: Snapshot, after: Snapshot, declare: readonly string[], consent: readonly string[]): boolean {
+    const additionIds = declare.map(n => this.ids.get(n)!.toLowerCase())
+    const app = { ...after.app, requiredResourceAccess: after.app.requiredResourceAccess.map(r => eq(r.resourceAppId, GRAPH_APP_ID)
+      ? { ...r, resourceAccess: r.resourceAccess.filter(a => a.type !== "Scope" || !additionIds.includes(a.id.toLowerCase())) } : r)
+      .filter(r => !eq(r.resourceAppId, GRAPH_APP_ID) || r.resourceAccess.length || before.app.requiredResourceAccess.some(old => eq(old.resourceAppId, GRAPH_APP_ID))) }
+    const grants = after.grants.map(g => ({ ...g, scope: scopes(g.scope).filter(n => !consent.includes(n)).join(" ") }))
+    return signature({ ...after, app, grants }) === signature(before)
   }
   /** Called once for the exact stored preview. There is deliberately no automatic write retry. */
   async apply(assertConnection: () => Promise<void> = async () => {}): Promise<PermissionAdditionResult> {
     if (this.used) throw new Error("This preview was already used. Start a new preview.")
     this.used = true
-    let latest = await this.read()
-    await assertConnection()
-    if (signature(latest) !== signature(this.snapshot)) return { state: "changed", preview: { ...this.preview, ...this.difference(latest) }, declared: [], consented: [], missingDeclarations: [], missingConsent: [], message: "The registration or consent changed since the preview. Nothing was written. Review the current state below and start a new preview." }
-    this.guard(latest)
+    let latest = this.snapshot
+    let expected = this.snapshot
     let issue = ""
     let uncertain = false
+    let changed = false
+    let wroteDeclarations = false
     const declarationDone = (s: Snapshot) => this.options.additions.every(n => declaredIds(s.app).includes(this.ids.get(n)!.toLowerCase()))
     const consentDone = (s: Snapshot) => this.options.additions.every(n => consentedScopes(s).includes(n))
+    const stopIfChanged = () => {
+      if (signature(latest) === signature(expected)) return false
+      changed = true
+      issue = `The registration or consent changed since the preview. ${wroteDeclarations ? "Declarations were written, but consent was not written." : "Nothing was written."} Review the current state below and start a new preview.`
+      return true
+    }
+    const concurrent = "Another change happened at the same time; check in Entra before retrying. No further write was attempted."
     try {
-      if (this.preview.declare.length) {
-        const requiredResourceAccess = structuredClone(latest.app.requiredResourceAccess)
-        let resource = requiredResourceAccess.find(r => eq(r.resourceAppId, GRAPH_APP_ID))
-        if (!resource) requiredResourceAccess.push(resource = { resourceAppId: GRAPH_APP_ID, resourceAccess: [] })
-        resource.resourceAccess.push(...this.preview.declare.map(n => ({ id: this.ids.get(n)!, type: "Scope" })))
-        try { await this.graph("PATCH", `/applications/${encodeURIComponent(latest.app.id)}`, { requiredResourceAccess }) }
-        catch (error) { uncertain = true; issue = error instanceof Error ? error.message : String(error) }
-        latest = await this.verify(declarationDone)
-        // No further write after a refused or unanswered write, even when read-back found it applied.
-        if (issue || !declarationDone(latest)) throw new Error(issue || "The permission declarations could not all be verified yet.")
-        const expected = { ...this.snapshot, app: { ...this.snapshot.app, requiredResourceAccess } }
-        if (signature(latest) !== signature(expected)) throw new Error("The registration or consent changed during verification. Consent was not written. Start a new preview.")
-      }
-      if (this.preview.consent.length) {
+      await assertConnection()
+      latest = await this.read()
+      if (!stopIfChanged()) {
         this.guard(latest)
-        await assertConnection()
-        const grant = latest.grants[0]!
-        const scope = [...new Set([...scopes(grant.scope), ...this.preview.consent])].join(" ")
-        try {
-          // Existing tenant-wide consent is a prerequisite. No grant is ever replaced or created.
-          await this.graph("PATCH", `/oauth2PermissionGrants/${encodeURIComponent(grant.id)}`, { scope })
-        } catch (error) { uncertain = true; issue = error instanceof Error ? error.message : String(error) }
-        latest = await this.verify(s => declarationDone(s) && consentDone(s))
+        if (this.preview.declare.length) {
+          // All awaited checks finish first. Graph documents no conditional update here, so
+          // read the exact value and trust fields last, then PATCH without another await.
+          latest = { ...latest, app: await this.graph<Application>("GET", `/applications/${encodeURIComponent(latest.app.id)}?$select=${APP_FIELDS}`) }
+          if (!stopIfChanged()) {
+            this.guard(latest)
+            const before = latest
+            const requiredResourceAccess = structuredClone(before.app.requiredResourceAccess)
+            let resource = requiredResourceAccess.find(r => eq(r.resourceAppId, GRAPH_APP_ID))
+            if (!resource) requiredResourceAccess.push(resource = { resourceAppId: GRAPH_APP_ID, resourceAccess: [] })
+            resource.resourceAccess.push(...this.preview.declare.map(n => ({ id: this.ids.get(n)!, type: "Scope" })))
+            wroteDeclarations = true
+            try { await this.graph("PATCH", `/applications/${encodeURIComponent(before.app.id)}`, { requiredResourceAccess }) }
+            catch (error) { uncertain = true; issue = error instanceof Error ? error.message : String(error) }
+            const preserved = (s: Snapshot) => this.preserved(before, s, this.preview.declare, [])
+            latest = await this.verify(declarationDone, preserved)
+            if (!preserved(latest)) throw new Error(concurrent)
+            // No further write after a refused or unanswered write, even if it was applied.
+            if (issue || !declarationDone(latest)) throw new Error(issue || "The permission declarations could not all be verified yet.")
+            expected = { ...before, app: { ...before.app, requiredResourceAccess } }
+          }
+        }
+        if (!changed && this.preview.consent.length) {
+          await assertConnection()
+          latest = await this.read()
+          if (!stopIfChanged()) {
+            this.guard(latest)
+            // Read the exact approved tenant-wide grant last, not a value from the earlier list.
+            const grant = await this.graph<Grant>("GET", `/oauth2PermissionGrants/${encodeURIComponent(latest.grants[0]!.id)}`)
+            latest = { ...latest, grants: [grant] }
+            if (!stopIfChanged()) {
+              this.guard(latest)
+              const before = latest
+              const scope = [...new Set([...scopes(grant.scope), ...this.preview.consent])].join(" ")
+              try {
+                // Existing tenant-wide consent is a prerequisite. No grant is created or deleted.
+                await this.graph("PATCH", `/oauth2PermissionGrants/${encodeURIComponent(grant.id)}`, { scope })
+              } catch (error) { uncertain = true; issue = error instanceof Error ? error.message : String(error) }
+              const preserved = (s: Snapshot) => this.preserved(before, s, [], this.preview.consent)
+              latest = await this.verify(s => declarationDone(s) && consentDone(s), preserved)
+              if (!preserved(latest)) throw new Error(concurrent)
+            }
+          }
+        }
       }
     } catch (error) { issue = error instanceof Error ? error.message : String(error) }
     const declared = this.preview.declare.filter(n => declaredIds(latest.app).includes(this.ids.get(n)!.toLowerCase()))
     const consented = this.preview.consent.filter(n => consentedScopes(latest).includes(n))
     const missingDeclarations = this.options.additions.filter(n => !declaredIds(latest.app).includes(this.ids.get(n)!.toLowerCase()))
     const missingConsent = this.options.additions.filter(n => !consentedScopes(latest).includes(n))
-    const complete = !missingDeclarations.length && !missingConsent.length
-    return { state: complete ? "complete" : "partial", preview: this.preview, declared, consented, missingDeclarations, missingConsent, message: `${complete ? "The approved permissions are declared and consented." : "Only part of the approved change could be verified. No rollback was attempted."}${uncertain ? " A write did not return a successful answer and may have been applied. Read-back was attempted before reporting; start a new preview before retrying." : ""}${issue ? ` ${issue}` : ""}` }
+    const complete = !issue && !missingDeclarations.length && !missingConsent.length
+    return { state: changed ? "changed" : complete ? "complete" : "partial", preview: changed ? { ...this.preview, ...this.difference(latest) } : this.preview, declared, consented, missingDeclarations, missingConsent, message: changed ? issue : `${complete ? "The approved permissions are declared and consented." : "Only part of the approved change could be verified. No rollback was attempted."}${uncertain ? " A write did not return a successful answer and may have been applied. Read-back was attempted before reporting; start a new preview before retrying." : ""}${issue ? ` ${issue}` : ""}` }
   }
 }
 
