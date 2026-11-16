@@ -11,7 +11,6 @@
           {
             "id": "example",
             "displayName": "Example campaign",
-            "source": "tenant",
             "createdBy": {
               "id": "00000000-0000-4000-8000-000000000001",
               "displayName": "Example person",
@@ -27,20 +26,17 @@
               "mail": "person@example.test"
             },
             "status": "running",
-            "launchDateTime": "2026-11-01T00:00:00Z",
-            "includedAccountTarget": {
-              "type": "addressBook",
-              "accountTargetEmails": [
-                "person@example.test"
-              ]
-            },
-            "trainingSetting": {
-              "settingType": "noTraining"
-            },
-            "report": {
-              "count": 42
-            },
-            "nextRunDateTime": "2026-11-17T00:00:00Z"
+            "nextRunDateTime": "2026-11-17T00:00:00Z",
+            "lastRunDateTime": "2026-11-01T00:00:00Z",
+            "runs": [
+              {
+                "id": "run",
+                "status": "succeeded",
+                "startDateTime": "2026-11-01T00:00:00Z",
+                "endDateTime": "2026-11-02T00:00:00Z",
+                "simulationId": "simulation"
+              }
+            ]
           }
         ]
       }
@@ -50,7 +46,6 @@
       "body": {
         "id": "example",
         "displayName": "Example campaign",
-        "source": "tenant",
         "createdBy": {
           "id": "00000000-0000-4000-8000-000000000001",
           "displayName": "Example person",
@@ -66,24 +61,17 @@
           "mail": "person@example.test"
         },
         "status": "running",
-        "launchDateTime": "2026-11-01T00:00:00Z",
-        "includedAccountTarget": {
-          "type": "addressBook",
-          "accountTargetEmails": [
-            "person@example.test"
-          ]
-        },
-        "trainingSetting": {
-          "settingType": "custom",
-          "assignedTo": [
-            "allUsers",
-            "clickedPayload"
-          ]
-        },
-        "report": {
-          "count": 42
-        },
-        "nextRunDateTime": "2026-11-17T00:00:00Z"
+        "nextRunDateTime": "2026-11-17T00:00:00Z",
+        "lastRunDateTime": "2026-11-01T00:00:00Z",
+        "runs": [
+          {
+            "id": "run",
+            "status": "succeeded",
+            "startDateTime": "2026-11-01T00:00:00Z",
+            "endDateTime": "2026-11-02T00:00:00Z",
+            "simulationId": "simulation"
+          }
+        ]
       }
     }
   }

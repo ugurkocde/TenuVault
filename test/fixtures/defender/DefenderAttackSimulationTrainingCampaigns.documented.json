@@ -11,7 +11,6 @@
           {
             "id": "example",
             "displayName": "Example campaign",
-            "source": "tenant",
             "createdBy": {
               "id": "00000000-0000-4000-8000-000000000001",
               "displayName": "Example person",
@@ -26,8 +25,6 @@
               "userPrincipalName": "person@example.test",
               "mail": "person@example.test"
             },
-            "status": "running",
-            "launchDateTime": "2026-11-01T00:00:00Z",
             "includedAccountTarget": {
               "type": "addressBook",
               "accountTargetEmails": [
@@ -35,12 +32,36 @@
               ]
             },
             "trainingSetting": {
-              "settingType": "noTraining"
+              "@odata.type": "#microsoft.graph.microsoftCustomTrainingSetting",
+              "settingType": "microsoftCustom",
+              "trainingAssignmentMappings": [
+                {
+                  "assignedTo": [
+                    "allUsers",
+                    "clickedPayload"
+                  ],
+                  "training": {
+                    "id": "training-b"
+                  }
+                },
+                {
+                  "assignedTo": [
+                    "allUsers"
+                  ],
+                  "training": {
+                    "id": "training-a"
+                  }
+                }
+              ]
             },
             "report": {
               "count": 42
             },
-            "nextRunDateTime": "2026-11-17T00:00:00Z"
+            "campaignSchedule": {
+              "status": "inProgress",
+              "launchDateTime": "2026-11-01T00:00:00Z",
+              "completionDateTime": "2026-12-01T00:00:00Z"
+            }
           }
         ]
       }
@@ -50,7 +71,6 @@
       "body": {
         "id": "example",
         "displayName": "Example campaign",
-        "source": "tenant",
         "createdBy": {
           "id": "00000000-0000-4000-8000-000000000001",
           "displayName": "Example person",
@@ -65,8 +85,6 @@
           "userPrincipalName": "person@example.test",
           "mail": "person@example.test"
         },
-        "status": "running",
-        "launchDateTime": "2026-11-01T00:00:00Z",
         "includedAccountTarget": {
           "type": "addressBook",
           "accountTargetEmails": [
@@ -74,16 +92,36 @@
           ]
         },
         "trainingSetting": {
-          "settingType": "custom",
-          "assignedTo": [
-            "allUsers",
-            "clickedPayload"
+          "@odata.type": "#microsoft.graph.microsoftCustomTrainingSetting",
+          "settingType": "microsoftCustom",
+          "trainingAssignmentMappings": [
+            {
+              "assignedTo": [
+                "allUsers",
+                "clickedPayload"
+              ],
+              "training": {
+                "id": "training-b"
+              }
+            },
+            {
+              "assignedTo": [
+                "allUsers"
+              ],
+              "training": {
+                "id": "training-a"
+              }
+            }
           ]
         },
         "report": {
           "count": 42
         },
-        "nextRunDateTime": "2026-11-17T00:00:00Z"
+        "campaignSchedule": {
+          "status": "inProgress",
+          "launchDateTime": "2026-11-01T00:00:00Z",
+          "completionDateTime": "2026-12-01T00:00:00Z"
+        }
       }
     }
   }

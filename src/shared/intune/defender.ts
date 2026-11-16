@@ -12,7 +12,7 @@ const attack = "security/attackSimulation"
 const campaign = (folder: string, label: string, collection: string): IntuneType => ({
   ...base(folder, label, `${attack}/${collection}`, "Email and collaboration"),
   // Launch and completion dates are authored campaign settings. Runs and generated schedules are data.
-  neverStored: ["report", "runs", "status", "lastRunDateTime", "nextRunDateTime", "lastRunDetails", "lastModifiedDateTime"],
+  neverStored: ["report", "runs", "status", "campaignSchedule.status", "lastRunDateTime", "nextRunDateTime", "lastRunDetails", "lastModifiedDateTime"],
   unorderedCollections: { "trainingSetting.trainingAssignmentMappings": "$content" },
 })
 const content = (folder: string, label: string, collection: string): IntuneType => ({
@@ -95,9 +95,10 @@ export const DEFENDER_TYPES: IntuneType[] = [
   },
   {
     ...base("DefenderRoleDefinitions", "Defender role definitions", "roleManagement/defender/roleDefinitions", "Posture and access"), apiVersion: "beta",
-    unorderedCollections: { rolePermissions: "$content" },
+    unorderedCollections: { rolePermissions: "$content", inheritsPermissionsFrom: "id" },
   },
   {
     ...base("DefenderRoleAssignments", "Defender role assignments", "roleManagement/defender/roleAssignments", "Posture and access"), apiVersion: "beta",
+    unorderedCollections: { principals: "id" },
   },
 ]

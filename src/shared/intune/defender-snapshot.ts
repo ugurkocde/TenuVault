@@ -9,7 +9,7 @@ export function tenantControlStates(item: Item): Item[] {
 const guid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const references = new Set(["principal", "principals", "user", "users", "targetUsers", "author", "authors", "createdBy", "lastModifiedBy", "modifiedBy", "updatedBy", "policyReviewers", "reviewers", "payload", "loginPage", "landingPage"])
 const profiles = new Set(["userPrincipalName", "mail", "givenName", "surname", "principalName", "accountTargetEmails", "email", "emailAddress", "createdByUpn", "lastUpdatedByUpn"])
-const sets = new Set(["principalIds", "appScopeIds", "directoryScopeIds", "resourceScopes", "allowedResourceActions", "excludedResourceActions", "payloadTags", "supportedLocales", "assignedTo", "mitreTechniques", "recommendedActions", "accountTargetIds"])
+const sets = new Set(["principalIds", "appScopeIds", "directoryScopeIds", "resourceScopes", "allowedResourceActions", "excludedResourceActions", "payloadTags", "supportedLocales", "assignedTo", "mitreTechniques", "recommendedActions", "accountTargetIds", "scopeNames", "deviceGroupNames", "domainControllerDnsNames"])
 
 /** People are references by ID. Configured reporting mailbox addresses remain policy settings. */
 export function defenderSnapshot(snapshot: Item): Item {

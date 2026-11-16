@@ -14,7 +14,7 @@ TenuVault backs up 17 Defender configuration types when you enable **Defender** 
 | Security workbooks (`DefenderWorkbooks`) | beta | Name and complete JSON document, explicitly selected on the detail read. No creator UPN, updater UPN, timestamps or ETag. Documents over 4 MiB are reported unread. Workbook section order is preserved. These are security workbooks, not Excel files. |
 | Attack simulations (`DefenderAttackSimulations`) | v1.0 | Campaign definition, authored launch and completion dates, training settings, target selectors and payload, landing page and login page IDs. No reports, run history or generated status. |
 | Simulation automations (`DefenderAttackSimulationAutomations`) | v1.0 | The automation definition Graph exposes. No runs, last run time, next run time or runtime status. |
-| Training campaigns (`DefenderAttackSimulationTrainingCampaigns`) | beta | Campaign schedule and training definition. No reports or execution state. |
+| Training campaigns (`DefenderAttackSimulationTrainingCampaigns`) | beta | Campaign schedule and training definition, including authored launch and completion dates. No reports or execution state, including `campaignSchedule.status`. |
 | Tenant payloads (`DefenderAttackSimulationPayloads`) | v1.0 | Tenant-authored payloads and their detail, including message HTML and coach marks. No Microsoft global catalog content. |
 | Tenant landing pages (`DefenderAttackSimulationLandingPages`) | v1.0 | Tenant-authored metadata and localized content details. No Microsoft global pages. |
 | Tenant login pages (`DefenderAttackSimulationLoginPages`) | v1.0 | Tenant-authored page configuration and content. No Microsoft global pages. |
@@ -29,7 +29,7 @@ TenuVault backs up 17 Defender configuration types when you enable **Defender** 
 
 Attack content sends `source eq 'tenant'` on every list page and refuses global content in list and detail answers. Campaign references to Microsoft pages or payloads are IDs only; the referenced global content itself is excluded. People are stored only by object ID. Graph's address-book campaign targets expose email addresses instead of IDs, so those addresses are omitted rather than resolved into people. Campaigns with these targets are records of the exposed definition, not complete executable copies. Author names, user principal names and personal email addresses are excluded.
 
-Object collections without an authored order are sorted by stable identity. Advancing run state does not make unchanged configuration appear changed. Each type has a shared 120-second and 500-request read budget across its pages, details, retries and sub-reads. Exhausting it leaves that type incomplete and other types continue.
+Object collections without an authored order are sorted by stable identity, including role assignment principals and inherited role references. Detection scope names, response action device groups and sensor domain controller references are also treated as unordered sets. Workbook document order is preserved. Advancing run state does not make unchanged configuration appear changed. Each type has a shared 120-second and 500-request read budget across its pages, details, retries and sub-reads. Exhausting it leaves that type incomplete and other types continue.
 
 ## Permissions and outcomes
 

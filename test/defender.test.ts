@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs"
+import { setTimeout as realSetTimeout, clearTimeout as realClearTimeout } from "node:timers"
 import { describe, expect, it, vi } from "vitest"
 import { DEFENDER_TYPES as TYPES } from "../src/shared/intune/defender"
 import { INTUNE_TYPES, restoreCapability, type Item } from "../src/shared/intune/registry"
@@ -114,12 +115,14 @@ describe("tenant-owned stable configuration", () => {
           else if (folder === "DefenderCustomDetectionRules") Object.assign(answer.body, { status: day, lastRunDetails: { run: day } })
           else Object.assign(answer.body, { status: day, lastRunDetails: { run: day }, lastRunDateTime: day, nextRunDateTime: day, report: { total: day }, runs: [{ id: day }] })
           if (folder === "DefenderCustomDetectionRules") answer.body.schedule = { period: "24H", nextRunDateTime: day }
+          if (folder === "DefenderAttackSimulationTrainingCampaigns") (answer.body.campaignSchedule as Item).status = day === "01" ? "scheduled" : "inProgress"
         }
         const setup = fixture(scriptedGraph(routes(data)))
         const job = await setup.run({ scope: only(folder) })
         expect(job.outcomes?.coverage).toBe("complete")
         const file = (await setup.files(job)).find(file => file.startsWith(folder + "/"))!
         snapshots.push((await setup.file(job, file)) as Item)
+        if (folder === "DefenderAttackSimulationTrainingCampaigns") expect(snapshots.at(-1)!.campaignSchedule).toEqual({ launchDateTime: "2026-11-01T00:00:00Z", completionDateTime: "2026-12-01T00:00:00Z" })
         manifests.push((await setup.manifest(job)).Items)
       }
       expect(sameSnapshot(...snapshots as [Item, Item])).toBe(true)
@@ -132,6 +135,42 @@ describe("tenant-owned stable configuration", () => {
     const type = typeOf("DefenderEmailSubmissionPolicies")
     const result = await readDefenderType(type, replay(recorded(type.folder, true), type))
     expect(result.objects[0]).toMatchObject({ customizedReportRecipientEmailAddress: "reporting@example.test", customizedNotificationSenderEmailAddress: "notifications@example.test", policyReviewers: [{ id: "00000000-0000-4000-8000-000000000001" }] })
+  })
+
+  it.each([
+    ["DefenderRoleAssignments", { principalIds: ["b", "a"], principals: [{ id: "b", displayName: "Private Person" }, { id: "a", displayName: "Private Person" }] }],
+    ["DefenderRoleDefinitions", { inheritsPermissionsFrom: [{ id: "b" }, { id: "a" }] }],
+    ["DefenderCustomDetectionRules", { detectionAction: { organizationalScope: { scopeType: "deviceGroup", scopeNames: ["b", "a"] }, responseActions: [{ "@odata.type": "#microsoft.graph.security.blockFileResponseAction", deviceGroupNames: ["b", "a"], identifier: "sha1" }] } }],
+    ["DefenderIdentitySensors", { settings: { domainControllerDnsNames: ["b.example.test", "a.example.test"] } }],
+  ] as const)("%s: compares reversed reference collections through stored backups", async (folder, properties) => {
+    const snapshots: Item[] = []
+    const manifests = []
+    for (const reverse of [false, true]) {
+      const data = recorded(folder, true)
+      const fields = structuredClone(properties)
+      const shuffle = (value: unknown): void => {
+        if (!value || typeof value !== "object") return
+        if (Array.isArray(value)) { if (reverse) value.reverse(); value.forEach(shuffle) }
+        else Object.values(value).forEach(shuffle)
+      }
+      shuffle(fields)
+      for (const answer of Object.values(data.responses)) if (typeof answer.body === "object" && answer.body.id === "example") Object.assign(answer.body, fields)
+      const setup = fixture(scriptedGraph(routes(data)))
+      const job = await setup.run({ scope: only(folder) })
+      expect(job.outcomes?.coverage).toBe("complete")
+      const file = (await setup.files(job)).find(file => file.startsWith(folder + "/"))!
+      snapshots.push((await setup.file(job, file)) as Item)
+      manifests.push((await setup.manifest(job)).Items)
+    }
+    expect(sameSnapshot(...snapshots as [Item, Item])).toBe(true)
+    expect(compareObjects(snapshots[0]!, snapshots[1]!)).toEqual([])
+    expect(compareBackups({ Status: "Success", Items: manifests[0] }, { Status: "Success", Items: manifests[1] })).toEqual([])
+    if (folder === "DefenderRoleAssignments") {
+      expect(snapshots[0]!.principals).toEqual([{ id: "a" }, { id: "b" }])
+      const changed = { ...snapshots[1], principalIds: ["a", "c"], principals: [{ id: "a" }, { id: "c" }] }
+      expect(sameSnapshot(snapshots[0]!, changed)).toBe(false)
+      expect(compareObjects(snapshots[0]!, changed)).not.toEqual([])
+    }
   })
 
   it("sorts unordered object and ID sets but retains workbook document order", async () => {
@@ -222,9 +261,20 @@ describe("endpoint refusal and throttle isolation", () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] })
     try {
       const type = typeOf("DefenderCustomDetectionRules")
-      const setup = fixture(async request => new URL(request.url).pathname.includes(type.path) ? refusal(429, "TooManyRequests", "Throttled", { "Retry-After": "60" })() : scriptedGraph(intune)(request))
+      let reached!: () => void
+      const requested = new Promise<void>(resolve => { reached = resolve })
+      const setup = fixture(async request => {
+        if (new URL(request.url).pathname === "/beta/deviceManagement/deviceConfigurations") reached()
+        return new URL(request.url).pathname.includes(type.path) ? refusal(429, "TooManyRequests", "Throttled", { "Retry-After": "60" })() : scriptedGraph(intune)(request)
+      }, {
+        // A slow token lookup must not turn the isolation assertion into an event-loop race.
+        getToken: async () => { await new Promise(resolve => realSetTimeout(resolve, 100)); return "fixture" },
+      })
       const pending = setup.run({ scope: only(type.folder, "DeviceConfigurations") })
-      for (let i = 0; i < 1000 && !setup.requests.some(request => request.path === "/beta/deviceManagement/deviceConfigurations"); i++) await new Promise(resolve => setImmediate(resolve))
+      let timeout: ReturnType<typeof realSetTimeout> | undefined
+      try {
+        await Promise.race([requested, new Promise<never>((_resolve, reject) => { timeout = realSetTimeout(() => reject(new Error("Intune request did not arrive")), 3_000) })])
+      } finally { realClearTimeout(timeout) }
       expect(setup.requests.some(request => request.path === "/beta/deviceManagement/deviceConfigurations")).toBe(true)
       await vi.advanceTimersByTimeAsync(120_000)
       const job = await pending
