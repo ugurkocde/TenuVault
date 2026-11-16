@@ -313,15 +313,15 @@
           <td class="purpose">License and CIS</td>
           <td class="dest"><code>www.tenuvault.com</code></td>
           <td>License key (if any), tenant ID, random install ID, OS, app version and, when signed in, your client ID and a
-            short-lived Microsoft ID token. The service reads only the tenant and client ID from the token; name and UPN
-            are not stored. License checks run at start, every 6 hours, on first use of a tenant and on license changes. On
-            Pro and MSP, opening the CIS page or loading a benchmark downloads CIS content (signed entitlement, logged)</td>
+            short-lived Microsoft ID token, of which the service reads only the tenant and client ID (name and UPN are not
+            stored). Checks run at start, every 6 hours, on first use of a tenant and on license changes. On Pro and MSP,
+            opening the CIS page or a benchmark downloads CIS content (signed entitlement, logged)</td>
         </tr>
         <tr>
           <td class="purpose">App Backup</td>
-          <td class="dest"><code>www.tenuvault.com</code><br><code>*.manage.microsoft.com</code></td>
-          <td>Windows capture only: a check that sends just a one-time nonce, nothing from the tenant, then the
-            installer download from Intune</td>
+          <td class="dest"><code>www.tenuvault.com</code><br><code>*.manage.microsoft.com</code><br><code>*.blob.core.windows.net</code></td>
+          <td>Capture, Windows only: a check with just a one-time nonce, then a request to Intune (account, device and
+            app IDs, enrollment certificate, PC name) and the download. Restore uploads to storage Intune names</td>
         </tr>
         <tr>
           <td class="purpose">Feedback</td>

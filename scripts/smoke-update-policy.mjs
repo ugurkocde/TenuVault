@@ -9,7 +9,7 @@
  * Linux reads no policy and installs no updates from a smoke build, so nothing is changed there.
  */
 import { spawnSync } from "node:child_process"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -20,10 +20,14 @@ const failed = (result) => (result.error?.message || result.stderr || result.std
 
 function macos() {
   // The value as a plist fragment keeps its type (boolean, integer, string, ...) for the restore.
+  // defaults writes a value given as a plist fragment with that fragment's type.
   const exported = run("defaults", ["export", DOMAIN, "-"])
-  const extracted = exported.status === 0 ? spawnSync("plutil", ["-extract", NAME, "xml1", "-o", "-", "-"], { input: exported.stdout, encoding: "utf8" }) : null
-  const previous = extracted?.status === 0 ? extracted.stdout.match(/<plist[^>]*>\s*([\s\S]*?)\s*<\/plist>/)?.[1] ?? null : null
-  if (extracted?.status === 0 && previous === null) return { error: "could not read the existing DisableAutoUpdate preference" }
+  if (exported.status !== 0) return { error: `could not read the ${NAME} preference: ${failed(exported)}` }
+  const extracted = spawnSync("plutil", ["-extract", NAME, "xml1", "-o", "-", "-"], { input: exported.stdout, encoding: "utf8" })
+  const missing = extracted.status !== 0 && /No value at that key path/i.test(extracted.stderr ?? "")
+  const previous = extracted.status === 0 ? extracted.stdout.match(/<plist[^>]*>\s*([\s\S]*?)\s*<\/plist>/)?.[1] ?? null : null
+  // Change nothing unless the earlier state is known: a value to write back, or no value at all.
+  if (!missing && previous === null) return { error: `could not read the ${NAME} preference: ${failed(extracted)}` }
   if (previous === "<true/>") return { restore() {} }
   const write = run("defaults", ["write", DOMAIN, NAME, "-bool", "true"])
   if (write.status !== 0) return { error: failed(write) }
@@ -43,24 +47,44 @@ function windows() {
   const key = "HKCU\\SOFTWARE\\Policies\\TenuVault"
   const keyExisted = run(reg, ["query", key]).status === 0
   const valueExisted = keyExisted && run(reg, ["query", key, "/v", NAME]).status === 0
-  // reg export keeps every value of the key with its exact type and data, spaces and empty data included.
+  // reg export keeps the value's exact type and data, spaces and empty data included. Only the
+  // DisableAutoUpdate entry is kept for the restore, so other values of the key are never touched.
   const folder = mkdtempSync(join(tmpdir(), "tenuvault-smoke-policy-"))
   const snapshot = join(folder, "policy.reg")
+  const cleanUp = () => rmSync(folder, { recursive: true, force: true })
   if (valueExisted) {
     const exported = run(reg, ["export", key, snapshot, "/y"])
-    if (exported.status !== 0) { rmSync(folder, { recursive: true, force: true }); return { error: failed(exported) } }
+    const entry = exported.status === 0 ? onlyValue(readFileSync(snapshot, "utf16le")) : null
+    if (!entry) { cleanUp(); return { error: exported.status === 0 ? `could not find ${NAME} in the exported policy key` : failed(exported) } }
+    writeFileSync(snapshot, `\ufeff${entry}`, "utf16le")
   }
   const add = run(reg, ["add", key, "/v", NAME, "/t", "REG_DWORD", "/d", "1", "/f"])
-  if (add.status !== 0) { rmSync(folder, { recursive: true, force: true }); return { error: failed(add) } }
+  if (add.status !== 0) { cleanUp(); return { error: failed(add) } }
   return {
     restore() {
-      const result = !keyExisted ? run(reg, ["delete", key, "/f"])
-        : !valueExisted ? run(reg, ["delete", key, "/v", NAME, "/f"])
-        : run(reg, ["import", snapshot])
+      const result = valueExisted ? run(reg, ["import", snapshot]) : run(reg, ["delete", key, "/v", NAME, "/f"])
       if (result.status !== 0) console.warn(`Could not restore the ${NAME} policy: ${failed(result)}`)
-      rmSync(folder, { recursive: true, force: true })
+      // A key this run created is removed only when nothing else was added to it meanwhile.
+      if (!keyExisted) {
+        const left = run(reg, ["query", key, "/s"])
+        const entries = (left.stdout ?? "").split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !/^HKEY_CURRENT_USER\\SOFTWARE\\Policies\\TenuVault$/i.test(line))
+        if (left.status === 0 && entries.length === 0) run(reg, ["delete", key, "/f"])
+      }
+      cleanUp()
     },
   }
+}
+
+/** The header, the key line and the DisableAutoUpdate entry (with continuation lines) of a .reg export. */
+function onlyValue(text) {
+  const lines = text.replace(/^\ufeff/, "").split(/\r?\n/)
+  const header = lines.findIndex((line) => line.startsWith("Windows Registry Editor"))
+  const keyLine = lines.findIndex((line) => /^\[HKEY_CURRENT_USER\\SOFTWARE\\Policies\\TenuVault\]$/i.test(line))
+  const start = lines.findIndex((line) => line.toLowerCase().startsWith(`"${NAME.toLowerCase()}"=`))
+  if (header < 0 || keyLine < 0 || start < 0) return null
+  let end = start
+  while (lines[end]?.endsWith("\\") && end + 1 < lines.length) end++
+  return [lines[header], "", lines[keyLine], ...lines.slice(start, end + 1), "", ""].join("\r\n")
 }
 
 /**
