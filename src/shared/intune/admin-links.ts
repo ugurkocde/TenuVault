@@ -117,6 +117,17 @@ export function adminCenterLink(folder: string, id: string, item: Item = {}): Ad
     case "AdministrativeUnits": return entra("Microsoft_AAD_IAM/AdministrativeUnitsMenuBlade/~/AllAdministrativeUnits", false)
     case "AttributeSets":
     case "CustomSecurityAttributeDefinitions": return entra("Microsoft_AAD_IAM/CustomSecurityAttributesMenuBlade/~/AttributeSets", false)
+    case "AccessPackageCatalogs":
+    case "AccessPackages":
+    case "AccessPackageAssignmentPolicies":
+    case "ConnectedOrganizations":
+    case "EntitlementManagementSettings": return entra("Microsoft_AAD_ERM/DashboardBlade", false)
+    case "AccessReviewDefinitions":
+    case "AccessReviewPolicy": return entra("Microsoft_AAD_ERM/AccessReviewsBlade", false)
+    case "LifecycleWorkflows":
+    case "LifecycleWorkflowCustomTaskExtensions":
+    case "LifecycleWorkflowSettings": return entra("Microsoft_AAD_LifecycleWorkflows/LifecycleWorkflowsMenuBlade/~/overview", false)
+    case "TermsOfUseAgreements": return CONDITIONAL_ACCESS("TermsOfUse")
     case "DeviceConfigurations": return configurationPage(id, 0)
     case "CompliancePolicies":
     case "DeviceCompliancePolicies": return configurationPage(id, 1)

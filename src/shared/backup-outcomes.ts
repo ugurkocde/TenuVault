@@ -121,7 +121,7 @@ export type Verdict = { outcome: "notConfigured" } | { outcome: "skipped"; cause
 export interface AnswerContext {
   /** The type's own answers that mean it was never set up. */
   notConfigured?: readonly AnswerPattern[]
-  /** Availability answers declared for the type's own list request only. */
+  /** Availability answers declared for the type's own list request only. An explicit empty list disables heuristic license classification. */
   unavailable?: readonly AnswerPattern[]
   /** Whether the sign-in's token holds the permission the type needs; undefined when the token could not be read. */
   held?: boolean
@@ -164,7 +164,7 @@ export function classifyAnswer(answer: RefusedAnswer, context: AnswerContext): V
     // Some endpoints answer a missing permission with 401, one of them with an HTML page.
     return signInRefused(answer) ? { outcome: "failed" } : { outcome: "skipped", cause: "permission" }
   }
-  if ((answer.status === 403 || answer.status === 400) && NOT_AVAILABLE.test(said)) return { outcome: "skipped", cause: "license" }
+  if ((answer.status === 403 || answer.status === 400) && NOT_AVAILABLE.test(said)) return context.unavailable === undefined ? { outcome: "skipped", cause: "license" } : { outcome: "failed" }
   if (answer.status !== 403) return { outcome: "failed" }
   if (NAMES_PERMISSION.test(said)) return { outcome: "skipped", cause: "permission" }
   // Refused although the token holds the permission: for a signed-in admin that is the account's role.

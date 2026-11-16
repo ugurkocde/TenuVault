@@ -1,10 +1,10 @@
-import { ENTRA_TYPES, ENTRA_5B_TYPES } from "../src/shared/intune/entra"
+import { ENTRA_TYPES, ENTRA_5B_TYPES, ENTRA_5C_TYPES } from "../src/shared/intune/entra"
 import { entraFixtureResponses } from "./helpers/entra-5a"
 import { detailPath, listPath, graphVersion } from "../src/shared/intune/read"
 
 /** Small documented responses keep this selection test independent of the lab's PIM policy volume. */
 function responsesFor(folder: string): ReturnType<typeof entraFixtureResponses> {
-  const type = ENTRA_5B_TYPES.find(type => type.folder === folder)
+  const type = [...ENTRA_5B_TYPES, ...ENTRA_5C_TYPES].find(type => type.folder === folder)
   if (!type) return entraFixtureResponses(folder)
   if (type.backupMode === "application") return {}
   const root = `/${graphVersion(type)}/`

@@ -1,0 +1,82 @@
+{
+  "folder": "AccessPackageCatalogs",
+  "outcome": "saved",
+  "objectCount": 1,
+  "source": "Documented synthetic configuration, not a live successful detail read",
+  "responses": {
+    "/v1.0/identityGovernance/entitlementManagement/catalogs": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "example",
+            "displayName": "Example catalog"
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/entitlementManagement/catalogs/example": {
+      "status": 200,
+      "body": {
+        "id": "example",
+        "displayName": "Example catalog",
+        "state": "published",
+        "catalogType": "userManaged",
+        "isExternallyVisible": true
+      }
+    },
+    "/v1.0/identityGovernance/entitlementManagement/catalogs/example/resources?$expand=roles,scopes": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "resource",
+            "originId": "group-id",
+            "originSystem": "AadGroup",
+            "roles": [
+              {
+                "id": "b",
+                "originId": "Member"
+              },
+              {
+                "id": "a",
+                "originId": "Owner"
+              }
+            ],
+            "scopes": [
+              {
+                "id": "scope",
+                "isRootScope": true
+              }
+            ],
+            "attributes": [
+              {
+                "name": "department",
+                "source": {
+                  "@odata.type": "#microsoft.graph.accessPackageResourceAttributeQuestion",
+                  "question": {
+                    "id": "attribute-question",
+                    "text": "Department",
+                    "localizations": [
+                      {
+                        "languageCode": "en-US",
+                        "text": "Department"
+                      },
+                      {
+                        "languageCode": "de-DE",
+                        "text": "Abteilung"
+                      }
+                    ]
+                  }
+                },
+                "destination": {
+                  "@odata.type": "#microsoft.graph.accessPackageUserDirectoryAttributeStore"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

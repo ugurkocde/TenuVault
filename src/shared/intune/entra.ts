@@ -162,4 +162,56 @@ export const ENTRA_5B_TYPES: IntuneType[] = [
   },
 ]
 
-export const ENTRA_TYPES = [...ENTRA_5A_TYPES, ...ENTRA_5B_TYPES]
+const governance = (folder: string, label: string, path: string): IntuneType => ({
+  ...base(folder, label, path, "Governance"),
+  unavailable: [],
+  readBudget: { durationMs: 120_000, maxRequests: 500 },
+})
+const entitlement = "identityGovernance/entitlementManagement"
+const workflows = "identityGovernance/lifecycleWorkflows"
+const agreements = "identityGovernance/termsOfUse/agreements"
+const lifecycleUnavailable = [{ status: 403, code: "Access denied", message: "Insufficient license to complete this operation. User workflows require an Entra ID Governance license." }]
+
+export const ENTRA_5C_TYPES: IntuneType[] = [
+  {
+    ...governance("AccessPackageCatalogs", "Access package catalogs", `${entitlement}/catalogs`),
+    extras: [{ property: "resources", path: id => `${entitlement}/catalogs/${id}/resources?$expand=roles,scopes` }],
+    unorderedCollections: { resources: "id", "resources.roles": "id", "resources.scopes": "id", "resources.attributes": "name", "resources.attributes.source.question.localizations": "languageCode", "resources.attributes.source.question.choices.localizations": "languageCode" },
+    requiredCollections: ["resources.roles", "resources.scopes"],
+  },
+  {
+    ...governance("AccessPackages", "Access packages", `${entitlement}/accessPackages`),
+    expand: "catalog($select=id),resourceRoleScopes($expand=role,scope)",
+    extras: ["incompatibleAccessPackages", "incompatibleGroups"].map(property => ({ property, path: id => `${entitlement}/accessPackages/${id}/${property}?$select=id`, ids: true })),
+    unorderedCollections: { resourceRoleScopes: "id" }, requiredCollections: ["resourceRoleScopes"],
+  },
+  { ...governance("AccessPackageAssignmentPolicies", "Access package assignment policies", `${entitlement}/assignmentPolicies`), expand: "accessPackage($select=id),questions,customExtensionStageSettings($expand=customExtension)",
+    requiredCollections: ["questions", "customExtensionStageSettings"],
+    unorderedCollections: { questions: "id", "questions.localizations": "languageCode", "questions.choices.localizations": "languageCode", customExtensionStageSettings: "id", specificAllowedTargets: "$content", "requestApprovalSettings.stages.primaryApprovers": "$content", "requestApprovalSettings.stages.fallbackPrimaryApprovers": "$content", "requestApprovalSettings.stages.escalationApprovers": "$content", "requestApprovalSettings.stages.fallbackEscalationApprovers": "$content", "reviewSettings.primaryReviewers": "$content", "reviewSettings.fallbackReviewers": "$content" },
+  },
+  {
+    ...governance("ConnectedOrganizations", "Connected organizations", `${entitlement}/connectedOrganizations`),
+    unorderedCollections: { identitySources: "$content" },
+    extras: ["internalSponsors", "externalSponsors"].map(property => ({ property, path: id => `${entitlement}/connectedOrganizations/${id}/${property}?$select=id`, ids: true })),
+  },
+  { ...governance("EntitlementManagementSettings", "Entitlement management settings", `${entitlement}/settings`), singleton: { id: "EntitlementManagementSettings", name: "Entitlement management settings" } },
+  { ...governance("AccessReviewDefinitions", "Access review definitions", "identityGovernance/accessReviews/definitions"), unorderedCollections: { reviewers: "$content", fallbackReviewers: "$content", backupReviewers: "$content", additionalNotificationRecipients: "$content", stageSettings: "stageId", "stageSettings.reviewers": "$content", "stageSettings.fallbackReviewers": "$content", "stageSettings.recommendationInsightsSettings": "$content", "settings.applyActions": "$content", "settings.recommendationInsightSettings": "$content", "settings.defaultReviewers": "$content", "settings.fallbackReviewers": "$content" }, neverStored: ["instances"] },
+  { ...governance("AccessReviewPolicy", "Access review policy", "policies/accessReviewPolicy"), apiVersion: "beta", singleton: { id: "AccessReviewPolicy", name: "Access review policy" } },
+  {
+    ...governance("LifecycleWorkflows", "Lifecycle workflows", `${workflows}/workflows`), unavailable: lifecycleUnavailable,
+    extras: [{ property: "tasks", path: id => `${workflows}/workflows/${id}/tasks` }],
+    unorderedCollections: { tasks: "id", "tasks.arguments": "name" },
+    // Versions and execution history are not current configuration.
+    neverStored: ["versions", "runs", "userProcessingResults"],
+  },
+  { ...governance("LifecycleWorkflowCustomTaskExtensions", "Lifecycle workflow custom task extensions", `${workflows}/customTaskExtensions`), unavailable: lifecycleUnavailable },
+  { ...governance("LifecycleWorkflowSettings", "Lifecycle workflow settings", `${workflows}/settings`), unavailable: lifecycleUnavailable, singleton: { id: "LifecycleWorkflowSettings", name: "Lifecycle workflow settings" } },
+  {
+    ...governance("TermsOfUseAgreements", "Terms of use agreements", agreements), expand: "files($select=id,displayName,fileName,language,isDefault,isMajorVersion,createdDateTime)",
+    unorderedCollections: { files: "id" }, requiredCollections: ["files"], maxSnapshotBytes: 1024 * 1024,
+    // PDFs may be returned inline as fileData, even though their transport is JSON.
+    neverStoredKeys: [...neverStored, "fileData"], neverStored: ["acceptances"],
+  },
+]
+
+export const ENTRA_TYPES = [...ENTRA_5A_TYPES, ...ENTRA_5B_TYPES, ...ENTRA_5C_TYPES]

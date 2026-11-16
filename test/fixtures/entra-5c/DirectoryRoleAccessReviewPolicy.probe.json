@@ -1,0 +1,37 @@
+{
+  "folder": "DirectoryRoleAccessReviewPolicy",
+  "source": "Diagnostic GET with broad app token; no requestable read permission established; excluded from backups",
+  "responses": {
+    "/beta/policies/directoryRoleAccessReviewPolicy": {
+      "status": 200,
+      "body": {
+        "id": "default",
+        "settings": {
+          "mailNotificationsEnabled": true,
+          "reminderNotificationsEnabled": true,
+          "justificationRequiredOnApproval": false,
+          "defaultDecisionEnabled": false,
+          "defaultDecision": "Approve",
+          "instanceDurationInDays": 7,
+          "autoApplyDecisionsEnabled": false,
+          "recommendationsEnabled": true,
+          "recommendationLookBackDuration": null,
+          "decisionHistoriesForReviewersEnabled": false,
+          "isAgenticExperienceEnabled": false,
+          "recurrence": {
+            "pattern": null,
+            "range": {
+              "type": "noEnd",
+              "numberOfOccurrences": 0,
+              "recurrenceTimeZone": null,
+              "startDate": null,
+              "endDate": null
+            }
+          },
+          "applyActions": [],
+          "recommendationInsightSettings": []
+        }
+      }
+    }
+  }
+}

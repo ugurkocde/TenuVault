@@ -1,0 +1,14 @@
+{
+  "folder": "LifecycleWorkflowSettings",
+  "outcome": "saved",
+  "objectCount": 1,
+  "source": "Documented synthetic configuration, not a live successful detail read",
+  "responses": {
+    "/v1.0/identityGovernance/lifecycleWorkflows/settings": {
+      "status": 200,
+      "body": {
+        "workflowScheduleIntervalInHours": 3
+      }
+    }
+  }
+}

@@ -87,15 +87,7 @@ export async function readObject(type: IntuneType, id: string, graph: GraphReade
   let detail = type.singleton ? singletonObject(type.singleton, read) : read
   if (type.staticIds) detail = { ...detail, id }
   detail = withIdentity(type, detail)
-  // Large expanded collections (such as Settings Catalog settings) page like lists.
-  for (const [key, value] of Object.entries(detail)) {
-    if (key.endsWith("@odata.nextLink") && typeof value === "string") {
-      const property = key.slice(0, -"@odata.nextLink".length)
-      if (!Array.isArray(detail[property])) throw new Error(`Invalid expanded collection ${property}`)
-      detail[property] = [...(detail[property] as Item[]), ...(await graph.list(value))]
-      delete detail[key]
-    }
-  }
+  await completeExpanded(detail, graph)
   // A type that keeps only some properties keeps them of the object itself; what its extras read is stored next to them.
   if (type.keep) detail = keptSnapshot(type.keep, detail)
   // Extra paths are built from Graph-returned IDs, so each ID is encoded as one path segment.
@@ -126,6 +118,7 @@ export async function readObject(type: IntuneType, id: string, graph: GraphReade
           }
         }
       }
+      for (const entry of entries) await completeExpanded(entry, graph)
       detail[extra.property] = entries
     } catch (error) {
       const answer = error as { status?: number; answer?: { code?: string; message?: string } }
@@ -166,19 +159,51 @@ export function listSnapshot(type: IntuneType, item: Item): Item {
   return orderedSnapshot(type, withoutNeverStored(type, type.keep ? keptSnapshot(type.keep, copy) : copy))
 }
 
-/** Sort only collections the type declares unordered; ordered settings keep their response order. */
+/** Read every expanded page, including nested resource roles and scopes, before storing it. */
+async function completeExpanded(value: Json, graph: GraphReader): Promise<void> {
+  if (!value || typeof value !== "object") return
+  if (Array.isArray(value)) { for (const entry of value) await completeExpanded(entry, graph); return }
+  for (const [key, next] of Object.entries(value)) {
+    if (!key.endsWith("@odata.nextLink") || typeof next !== "string") continue
+    const property = key.slice(0, -"@odata.nextLink".length)
+    if (!Array.isArray(value[property])) throw new Error(`Invalid expanded collection ${property}`)
+    value[property] = [...value[property] as Json[], ...await graph.list(next)]
+    delete value[key]
+  }
+  for (const child of Object.values(value)) await completeExpanded(child, graph)
+}
+
+/** Sort declared unordered collections at any depth; ordered settings keep their response order. */
 function orderedSnapshot(type: IntuneType, snapshot: Item): Item {
   for (const [property, key] of Object.entries(type.unorderedCollections ?? {})) {
-    const entries = snapshot[property]
-    if (entries === undefined || entries === null) continue
-    if (!Array.isArray(entries) || entries.some(entry => !entry || typeof entry !== "object" || Array.isArray(entry) || typeof entry[key] !== "string" || !entry[key])) throw new Error(`Microsoft Graph returned an entry without ${key} in ${property}`)
-    snapshot[property] = [...entries].sort((a, b) => {
-      const left = (a as Item)[key] as string
-      const right = (b as Item)[key] as string
-      return left < right ? -1 : left > right ? 1 : 0
-    })
+    const order = (value: Json, path: string[]): void => {
+      if (Array.isArray(value)) { for (const entry of value) order(entry, path); return }
+      if (!value || typeof value !== "object") return
+      const [name, ...rest] = path
+      const entries = value[name!]
+      if (entries === undefined || entries === null) {
+        if (type.requiredCollections?.includes(property)) throw new Error(`Microsoft Graph did not return the expanded collection ${property}`)
+        return
+      }
+      if (rest.length) { order(entries, rest); return }
+      const identity = (entry: Item): string | undefined => key === "$content" ? stableContent(entry) : typeof entry[key] === "string" ? entry[key] as string : undefined
+      if (!Array.isArray(entries) || entries.some(entry => !entry || typeof entry !== "object" || Array.isArray(entry) || !identity(entry))) throw new Error(`Microsoft Graph returned an entry without ${key} in ${property}`)
+      value[name!] = [...entries].sort((a, b) => {
+        const left = identity(a as Item)!
+        const right = identity(b as Item)!
+        return left < right ? -1 : left > right ? 1 : 0
+      })
+    }
+    order(snapshot, property.split("."))
   }
   return snapshot
+}
+
+/** Subject sets have no Graph ID; their complete query or typed target defines their identity. */
+function stableContent(value: Json): string {
+  if (!value || typeof value !== "object") return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map(stableContent).join(",")}]`
+  return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableContent(value[key]!)}`).join(",")}}`
 }
 
 /** The IDs of a collection's entries, each once and in a fixed order, so two reads of the same set compare equal. */

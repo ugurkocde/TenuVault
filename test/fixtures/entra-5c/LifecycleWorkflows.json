@@ -1,0 +1,23 @@
+{
+  "folder": "LifecycleWorkflows",
+  "path": "identityGovernance/lifecycleWorkflows/workflows",
+  "apiVersion": "v1.0",
+  "shape": "list",
+  "signIn": "both",
+  "objectCount": 0,
+  "verified": "2026-11-16",
+  "source": "Live app-only read through GraphSession and readObject",
+  "outcome": "skipped",
+  "cause": "license",
+  "responses": {
+    "/v1.0/identityGovernance/lifecycleWorkflows/workflows": {
+      "status": 403,
+      "body": {
+        "error": {
+          "code": "Access denied",
+          "message": "Insufficient license to complete this operation. User workflows require an Entra ID Governance license. Agent-related workflows require a Microsoft Agent 365 or Microsoft 365 E7 license. See https://aka.ms/LCWLicenseInfo."
+        }
+      }
+    }
+  }
+}

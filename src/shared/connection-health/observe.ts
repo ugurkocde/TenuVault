@@ -40,7 +40,9 @@ export function runObservation(outcomes: RunOutcomes, account?: string, permissi
       else if (type.reader) observation.excluded.push({ folder: type.folder, cause: "reader" })
       else if (type.cause === "signedIn") observation.excluded.push({ folder: type.folder, cause: "signedIn" })
       else observation.refused.push({ folder: type.folder, cause: type.cause, ...answer(type) })
-    } else if (type.status === 403) observation.refused.push({ folder: type.folder, cause: "permission", ...answer(type) })
+    // A type with explicit availability rules can fail on an unclassified license refusal.
+    // That 403 is unread configuration, not evidence of a missing permission.
+    } else if (type.status === 403 && typeForFolder(type.folder)?.unavailable === undefined) observation.refused.push({ folder: type.folder, cause: "permission", ...answer(type) })
     else observation.unread.push(type.folder)
   }
   for (const refusal of observation.refused) {

@@ -1,3 +1,4 @@
+import { ENTRA_5C_TYPES } from "../src/shared/intune/entra"
 import { describe, expect, it } from "vitest"
 import { buildChangeReport, changeReportJson, changeReportMarkdown, describeAssignment, describeValue, publicAuditNote, reportFileName, reportTitle, summaryLine, type ReportAudit } from "../src/shared/reports/change-report"
 import { buildChangeReportDocument } from "../src/shared/reports/change-report-html"
@@ -74,6 +75,15 @@ describe("change report model", () => {
     expect(report.items.find(item => item.type === "Settings Catalog policy")?.activity).toEqual([expect.objectContaining({ source: "Intune", who: "admin@contoso.test" })])
     expect(report.items.find(item => item.type === "Conditional Access policies")?.activity).toEqual([expect.objectContaining({ source: "Conditional Access", who: "ca-admin@contoso.test" })])
     expect(report.summary.attributed).toBe(2)
+  })
+
+  it("keeps Governance attribution separate from matching Intune and Conditional Access events", () => {
+    const intune = auditEvent("intune", "2026-11-05T10:00:00Z", "shared-id", "Finance")
+    const report = buildChangeReport(result(ENTRA_5C_TYPES.map(type => drift({ type: type.label, configId: "shared-id", configName: "Finance", backupFile: `${type.folder}/Finance.json` }))), { changes: [intune, { ...intune, auditId: "ca", source: "Conditional Access" }] }, options)
+    expect(report.items).toHaveLength(11)
+    expect(report.items.every(item => item.activity.length === 0)).toBe(true)
+    expect(report.summary.attributed).toBe(0)
+    expect(report.otherActivity).toHaveLength(2)
   })
 
   it("leaves actors unknown for Entra configuration and unknown types without a backup path", () => {

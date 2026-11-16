@@ -1,0 +1,15 @@
+{
+  "folder": "AccessReviewPolicy",
+  "outcome": "saved",
+  "objectCount": 1,
+  "source": "Documented synthetic configuration, not a live successful detail read",
+  "responses": {
+    "/beta/policies/accessReviewPolicy": {
+      "status": 200,
+      "body": {
+        "displayName": "Access Review Policy",
+        "isGroupOwnerManagementEnabled": false
+      }
+    }
+  }
+}

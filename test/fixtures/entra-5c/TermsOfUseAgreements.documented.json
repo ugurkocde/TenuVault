@@ -1,0 +1,48 @@
+{
+  "folder": "TermsOfUseAgreements",
+  "outcome": "saved",
+  "objectCount": 1,
+  "source": "Documented synthetic configuration, not a live successful detail read",
+  "responses": {
+    "/v1.0/identityGovernance/termsOfUse/agreements": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "example",
+            "displayName": "Example terms"
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/termsOfUse/agreements/example?$expand=files($select=id,displayName,fileName,language,isDefault,isMajorVersion,createdDateTime)": {
+      "status": 200,
+      "body": {
+        "id": "example",
+        "displayName": "Example terms",
+        "isViewingBeforeAcceptanceRequired": true,
+        "isPerDeviceAcceptanceRequired": false,
+        "files": [
+          {
+            "id": "file-b",
+            "fileName": "terms-de.pdf",
+            "language": "de-DE",
+            "isDefault": false,
+            "fileData": {
+              "data": "JVBERg=="
+            }
+          },
+          {
+            "id": "file-a",
+            "fileName": "terms-en.pdf",
+            "language": "en-US",
+            "isDefault": true,
+            "fileData": {
+              "data": "JVBERg=="
+            }
+          }
+        ]
+      }
+    }
+  }
+}

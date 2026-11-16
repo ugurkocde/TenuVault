@@ -6,7 +6,7 @@ import { BACKUP_CANCELLED_MESSAGE, BACKUP_OWNER_FILE } from "../../shared/consta
 import { resolveBackupOwnership, type OwnershipFile } from "../../shared/backup-ownership"
 import { BlobWriter } from "./blob-writer"
 import { GraphSession, type GraphItem, type ReadControl } from "./graph-session"
-import { withReadBudget } from "./read-budget"
+import { ReadBudgetError, typeReadBudget, withReadBudget } from "./read-budget"
 import { GRAPH, BlobClaimError, GraphError, GraphUnansweredError, InventoryDamagedError, ProtectedBlobError, RequestTimeoutError, StorageError, TokenError, isUnreachable } from "./request"
 import { RetryDelayError } from "../graph-retry"
 import { isLocalAccount } from "../storage/blob-emulator"
@@ -608,12 +608,19 @@ export class BackupEngine {
       if (!session) sessions.set(id, (session = new GraphSession(fetchImpl, graphToken, network, { service: id, isolated: module?.isolated })))
       return { id, module, isolated: module?.isolated === true, session }
     }
+    const typeBudgets = new Map<string, ReturnType<typeof typeReadBudget>>()
     const readerOf = (type: IntuneType, control: ReadControl = {}): GraphReader => {
       const { session } = serviceOf(type)
       const version = graphVersion(type)
+      let budget = typeBudgets.get(type.folder)
+      if (!budget && type.readBudget) {
+        budget = typeReadBudget(network.signal, type.readBudget)
+        typeBudgets.set(type.folder, budget)
+      }
+      const read = <T>(operation: (control: ReadControl) => Promise<T>) => budget ? budget(operation) : operation(control)
       return organizationReader({
-        get: (path: string) => session.get<Item>(graphUrl(version, path, type.additionalReadVersions), type.headers, control),
-        list: (path: string) => session.list(graphUrl(version, path, type.additionalReadVersions), { ...control, headers: type.headers, ...(path === listPath(type) ? { filter: type.filter } : {}) }) as Promise<Item[]>,
+        get: (path: string) => read(control => session.get<Item>(graphUrl(version, path, type.additionalReadVersions), type.headers, control)),
+        list: (path: string) => read(control => session.list(graphUrl(version, path, type.additionalReadVersions), { ...control, headers: type.headers, ...(path === listPath(type) ? { filter: type.filter } : {}) }) as Promise<Item[]>),
       })
     }
 
@@ -651,7 +658,7 @@ export class BackupEngine {
       endedTypes.add(type.folder)
       const { module } = serviceOf(type)
       const answer = error instanceof GraphError ? { status: error.status, ...error.answer } : null
-      const verdict = answer ? classifyAnswer(answer, { held: granted ? canBackUp(type.folder, granted) : undefined, mode: tokens.mode, ...(ownList ? { unavailable: type.unavailable } : {}) }) : { outcome: "failed" as const }
+      const verdict = answer ? classifyAnswer(answer, { held: granted ? canBackUp(type.folder, granted) : undefined, mode: tokens.mode, ...(type.unavailable !== undefined ? { unavailable: ownList ? type.unavailable : [] } : {}) }) : { outcome: "failed" as const }
       const evidence = answer ? { status: answer.status, ...(answer.code ? { code: answer.code } : {}) } : {}
       const entry = result(type.folder)
       if (verdict.outcome === "skipped") {
@@ -881,7 +888,7 @@ export class BackupEngine {
         if (service.isolated && !signInEnded(error) && !network.signal.aborted) {
           // A refusal, a pause longer than the bound or a request without an answer holds for every object of the type: the type ends, the backup goes on.
           const refused = error instanceof GraphError && classifyAnswer({ status: error.status, ...error.answer }, { mode: tokens.mode }).outcome === "skipped"
-          if (refused || error instanceof RetryDelayError || error instanceof GraphUnansweredError || endedTypes.has(type.folder)) {
+          if (refused || error instanceof ReadBudgetError || error instanceof RetryDelayError || error instanceof GraphUnansweredError || endedTypes.has(type.folder)) {
             endType(type, error)
             done++
             return

@@ -1,0 +1,16 @@
+{
+  "folder": "EntitlementManagementSettings",
+  "outcome": "saved",
+  "objectCount": 1,
+  "source": "Documented synthetic configuration, not a live successful detail read",
+  "responses": {
+    "/v1.0/identityGovernance/entitlementManagement/settings": {
+      "status": 200,
+      "body": {
+        "id": "singleton",
+        "externalUserLifecycleAction": "blockSignInAndDelete",
+        "durationUntilExternalUserDeletedAfterBlocked": "P30D"
+      }
+    }
+  }
+}
