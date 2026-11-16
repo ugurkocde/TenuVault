@@ -1,6 +1,8 @@
 import type { AuditChange, AuditChangeType } from "../notifications/audit"
 import type { Drift, DriftBackupRef, DriftChange, DriftResult, SettingNames } from "../intune/drift"
 import { formatValue, settingLabel } from "../intune/drift-format"
+import { INTUNE_TYPES, typeForFolder } from "../intune/registry"
+import { backupTypeUse } from "../services/backup-use"
 import { redactText } from "../compliance/export"
 
 /**
@@ -129,7 +131,12 @@ export function buildChangeReport(drift: DriftResult, audit: ReportAudit, option
   const items = drift.drifts.map((entry): ReportItem => {
     const ids = new Set([entry.configId.toLowerCase()].filter(Boolean))
     const names = new Set([entry.configName, entry.previousName].filter((name): name is string => Boolean(name)).map((name) => name.toLowerCase()))
+    const folder = entry.backupFile?.split("/").at(-2)
+    const type = folder ? typeForFolder(folder === "DeviceCompliancePolicies" ? "CompliancePolicies" : folder) : INTUNE_TYPES.find(type => type.label.toLowerCase() === entry.type.toLowerCase())
+    const service = type && backupTypeUse(type).auditService
+    const source = service === "intune" ? "Intune" : service === "conditionalAccess" ? "Conditional Access" : undefined
     const matching = events.filter((event) => {
+      if (!source || event.source !== source) return false
       const byId = !!event.resourceId && ids.has(event.resourceId.toLowerCase())
       // A name match only when the event names no ID at all, so two items sharing a name are not mixed up.
       const byName = !event.resourceId && event.resourceName !== null && names.has(event.resourceName.toLowerCase())

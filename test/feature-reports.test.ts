@@ -11,7 +11,7 @@ function driftResult(comparison = "backup-2026-11-06-020000"): DriftResult {
   const drift = {
     id: "d1", tenant: "", tenantId: "", severity: "warning", type: "Settings Catalog policy", configName: "Defender", configId: "p-1", changeType: "modified",
     detectedAt: "", fromBackup: "backup-2026-11-05-020000", toBackup: comparison, description: "", impact: "", affectedPolicies: 1, affectedDevices: 0,
-    changes: [{ field: "passwordMinimumLength", oldValue: 8, newValue: 12 }],
+    backupFile: "ConfigurationPolicies/Defender.json", changes: [{ field: "passwordMinimumLength", oldValue: 8, newValue: 12 }],
   } as Drift
   return {
     drifts: [drift],
