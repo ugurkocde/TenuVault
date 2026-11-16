@@ -63,6 +63,53 @@ changed a licensing file (`src/main/license/`, `src/main/storage/secure-store.ts
 hours (`.github/scripts/license-soak.mjs`). In an emergency, run the stable promotion by hand
 with `allow_unsoaked_license_change`; a pushed tag has no override.
 
+## Sign-in test
+
+A complete first browser sign-in runs in the packaged app before anything ships, so no manual
+sign-in check is needed per release. `scripts/sign-in-e2e/` starts the app with a fresh profile,
+enters a tenant and client ID, starts the sign-in, takes the Microsoft sign-in address through
+Copy sign-in link and follows it in Playwright Chromium, Firefox and WebKit, and in Microsoft Edge
+on Windows, one sign-in per engine. A local stand-in for `login.microsoftonline.com` answers the
+authorize and token requests with a signed ID token; the app redeems the code through MSAL and
+must show the storage step with the signed-in account. The licensing requests that follow are
+answered by the stand-in too (`www.tenuvault.com`: the health policy and 401 `invalid_token`, as
+production answers an ID token it cannot verify), so the test sends nothing to production;
+production licensing stays with the license canary. It also checks that the listener closes after
+the answer, that an answer with another state is refused, and that a refusal shows the app's error.
+
+| Event | Linux | Windows | macOS |
+|---|---|---|---|
+| Pull request (CI) | packaged (`--linux dir`) | packaged, when installers are built | packaged, when installers are built |
+| Push to `main` (CI) | packaged (`--linux dir`) | no (CI builds no installers on push) | no |
+| Nightly, or stable by promotion (Release workflow on `main`) | no (no Linux release) | packaged, signed | packaged, signed |
+| Stable release from a pushed tag | no | packaged, signed, only when the tagged commit has the test | same as Windows |
+
+So every nightly's Windows and macOS packages pass it before they are published, and Linux is
+checked on every pull request and push. A nightly or a promotion (the Release workflow run on
+`main`) takes the test from the workflow's own commit, not from the release target, so promoting a
+nightly that predates the test still runs it against that nightly's packaged app. A pushed tag runs
+the Release workflow from the tagged commit itself: a tag on a commit from before the test runs no
+sign-in test, so prefer the promotion for such a release.
+
+The app has no test switch: the test changes only the runner, with hosts file entries for both
+hosts and a throwaway root certificate in the operating system's trust store (`runner.mjs`). Each
+change is recorded before it is made; a workflow step that always runs, also after a cancel or a
+timeout, undoes them, reads the machine back and fails the job when an entry or the certificate is
+left, when the macOS keychain default or search list is not restored, or when a store could not be
+inspected (a failed or empty listing never counts as "removed", and the state is kept for another
+cleanup). On Linux a pending regeneration of the CA bundle is retried until the generated bundle
+no longer holds the root's fingerprint. The root's private key is deleted as soon as the stand-in's certificate is issued. The test
+refuses to run outside CI. Every Playwright browser context skips its own certificate check
+(Firefox and WebKit keep trust stores of their own); the app's certificate checks are real.
+
+Credential stores: on Linux the job runs the app in a session bus with an unlocked gnome-keyring
+(`XDG_CURRENT_DESKTOP=GNOME`), because packaged builds refuse to start without OS encryption; on
+macOS the test makes a disposable unlocked keychain the default for its duration, because the
+runner's login keychain can be locked by then.
+
+Screenshots, app logs, `results.txt` and `stand-in.log` are written after every engine and
+uploaded as `sign-in-e2e-<OS>` in CI and `release-sign-in-e2e-<OS>` in releases.
+
 ## Nightly verification
 
 Every published nightly is installed and used as users get it, by
