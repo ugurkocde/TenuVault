@@ -107,7 +107,7 @@
   }
   td { padding: 1mm 2mm 1mm 0; border-bottom: 1px solid var(--line); vertical-align: top; }
   table.perms td { padding: 0.6mm 2mm 0.6mm 0; }
-  table.flows td { padding: 0.6mm 2mm 0.6mm 0; font-size: 7.5pt; line-height: 1.3; }
+  table.flows td { padding: 0.5mm 2mm 0.5mm 0; font-size: 7.5pt; line-height: 1.22; }
   table.flows code { font-size: 7.1pt; }
   td.purpose { font-weight: 600; color: var(--ink); white-space: nowrap; }
   code, .mono { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 7.6pt; color: var(--ink); }
@@ -316,6 +316,12 @@
             short-lived Microsoft ID token. The service reads only the tenant and client ID from the token; name and UPN
             are not stored. License checks run at start, every 6 hours, on first use of a tenant and on license changes. On
             Pro and MSP, opening the CIS page or loading a benchmark downloads CIS content (signed entitlement, logged)</td>
+        </tr>
+        <tr>
+          <td class="purpose">App Backup</td>
+          <td class="dest"><code>www.tenuvault.com</code><br><code>*.manage.microsoft.com</code></td>
+          <td>Windows capture only: a check that sends just a one-time nonce, nothing from the tenant, then the
+            installer download from Intune</td>
         </tr>
         <tr>
           <td class="purpose">Feedback</td>

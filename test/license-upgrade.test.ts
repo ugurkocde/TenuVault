@@ -31,6 +31,7 @@ describe.each(releases)("license state written by %s", (release) => {
   const folder = join(FIXTURES, release)
   const capture = JSON.parse(readFileSync(join(folder, "capture.json"), "utf8")) as Capture
   const hasTenantTrial = release !== "v0.4.2"
+  const hasTenantTrialInstallLimit = release === "v0.5.3"
   const signer = readFileSync(join(folder, "signer-public-key.txt"), "utf8")
   const { TENANT_A, TENANT_B, TENANT_ORG, TENANT_REMOVED, TENANT_COMMUNITY } = capture.tenants
   let fetchMock: ReturnType<typeof vi.fn>
@@ -62,10 +63,10 @@ describe.each(releases)("license state written by %s", (release) => {
 
   it("keeps the store keys the license is saved under", () => {
     const keys = new Set<string>()
-    for (const name of ["paid", "trial", "community", ...(hasTenantTrial ? ["tenant-trial"] : [])]) {
+    for (const name of ["paid", "trial", "community", ...(hasTenantTrial ? ["tenant-trial"] : []), ...(hasTenantTrialInstallLimit ? ["tenant-trial-install-limit"] : [])]) {
       for (const key of Object.keys(JSON.parse(readFileSync(join(folder, `${name}.app-state.bin`), "utf8")) as object)) keys.add(key)
     }
-    expect([...keys].sort()).toEqual([...STATE_KEYS, ...(hasTenantTrial ? ["license.tenantTrials"] : [])].sort())
+    expect([...keys].sort()).toEqual([...STATE_KEYS, ...(hasTenantTrial ? ["license.tenantTrials"] : []), ...(hasTenantTrialInstallLimit ? ["license.tenantTrialInstallLimit"] : [])].sort())
   })
 
   it("keeps a paid key entitled offline, with the same installation", async () => {
@@ -125,6 +126,15 @@ describe.each(releases)("license state written by %s", (release) => {
     await service.checkTrialHealth()
     expect(service.trialUsageTally(TENANT_A)).toEqual(tally)
     expect(service.trialUsagePeriod(TENANT_A)).toEqual({ since: (capture.capturedAt - 10 * 86400) * 1000, until: end })
+  })
+
+  it.skipIf(!hasTenantTrialInstallLimit)("keeps the installation's tenant trial limit", () => {
+    const { store, service } = open("tenant-trial-install-limit")
+    expect(store.get("license.installId")).toBe(capture.installId)
+    expect(store.get("license.tenantTrialInstallLimit")).toBe(capture.installId)
+    expect(service.status([]).tenantTrialInstallLimit).toBe(true)
+    expect(store.get("license.installId")).toBe(capture.installId)
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it("writes state the next start reads the same way", async () => {

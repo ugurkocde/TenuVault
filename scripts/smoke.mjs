@@ -19,6 +19,7 @@ import { join, resolve } from "node:path"
 import { checkSchedulePanel } from "./schedule-panel-smoke.mjs"
 import { checkBackupCancel } from "./backup-cancel-smoke.mjs"
 import { checkAppBackupCompletion } from "./app-backup-completion-smoke.mjs"
+import { disableAutoUpdate } from "./smoke-update-policy.mjs"
 
 const require = createRequire(import.meta.url)
 const electronPath = require("electron")
@@ -44,7 +45,14 @@ if (process.platform === "darwin" && (!packagedApp || process.env.TENUVAULT_SMOK
 // Tools that are themselves Electron apps may export ELECTRON_RUN_AS_NODE, which would start plain Node.
 const env = { ...process.env, ELECTRON_ENABLE_LOGGING: "1" }
 delete env.ELECTRON_RUN_AS_NODE
+// A packaged build would check for updates like an installed app; the suite switches the update
+// channel, so a release could download and, on macOS, replace the app under test when it quits.
+const updatePolicy = packagedApp ? disableAutoUpdate() : null
+if (updatePolicy?.error) console.warn(`Could not turn automatic updates off for this run: ${updatePolicy.error}`)
+process.on("exit", () => updatePolicy?.restore())
 const app = spawn(packagedApp ?? electronPath, args, { stdio: ["ignore", "pipe", "pipe"], env })
+// An interrupted run still puts the update policy back (the exit handler above).
+for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => { app.kill(); process.exit(1) })
 let appLog = ""
 app.stdout.on("data", (d) => (appLog += d))
 app.stderr.on("data", (d) => (appLog += d))
