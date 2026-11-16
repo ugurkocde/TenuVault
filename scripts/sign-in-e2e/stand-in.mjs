@@ -7,7 +7,7 @@
  * token endpoint checks the code, the client, the redirect URI and the PKCE verifier before it
  * issues an RS256 ID token signed with a key published in its own JWKS, with Microsoft's issuer,
  * audience, tenant and nonce claims. Nothing in the app is told about it: the runner's hosts file
- * and trust store send the app's traffic here (see redirect.mjs).
+ * and trust store send the app's traffic here (see runner.mjs).
  *
  * It also answers the two licensing requests that follow a first sign-in (LICENSE_HOST), so the
  * test sends nothing to the production licensing service.

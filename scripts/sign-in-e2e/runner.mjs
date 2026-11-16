@@ -18,10 +18,13 @@
  *
  *   node scripts/sign-in-e2e/runner.mjs cleanup
  *
- * It then reads the machine back and exits 1 when a hosts entry or the root certificate is
- * still there. These are changes to the whole machine: run this only on a throwaway CI runner.
+ * It then reads the machine back and exits 1 when a hosts entry, the root certificate or the
+ * macOS keychain setting is still there, or when a store could not be inspected. Only a store
+ * listing that succeeded counts as "the root is gone"; a query that fails, times out or finds no
+ * store keeps the recovery state for the next cleanup. These are changes to the whole machine: run this only on a throwaway CI runner.
  */
 import { execFileSync } from "node:child_process"
+import { X509Certificate } from "node:crypto"
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
@@ -31,7 +34,6 @@ import { LICENSE_HOST, LOGIN_HOST } from "./stand-in.mjs"
 export const HOSTS_NAMES = [LOGIN_HOST, LICENSE_HOST]
 const MARKER = "# tenuvault-sign-in-e2e"
 export const CA_NAME = "TenuVault sign-in e2e test root"
-const SYSTEM_KEYCHAIN = "/Library/Keychains/System.keychain"
 
 /** The real machine. Tests pass their own, with a fake `exec` and a hosts file of their own. */
 export function realSystem() {
@@ -42,7 +44,10 @@ export function realSystem() {
     stateDir: join(process.env.RUNNER_TEMP ?? tmpdir(), "tenuvault-sign-in-e2e"),
     home: homedir(),
     portStartPath: "/proc/sys/net/ipv4/ip_unprivileged_port_start",
-    bundleFile: "/usr/local/share/ca-certificates/tenuvault-sign-in-e2e.crt",
+    // The root's source file for update-ca-certificates, and the bundle it generates.
+    bundleSource: "/usr/local/share/ca-certificates/tenuvault-sign-in-e2e.crt",
+    bundleOutput: "/etc/ssl/certs/ca-certificates.crt",
+    systemKeychain: "/Library/Keychains/System.keychain",
     // A command that waits for a prompt nobody can answer fails instead of holding the job.
     exec: (command, args) => execFileSync(command, args, { stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", timeout: 60_000 }),
   }
@@ -60,13 +65,64 @@ const sudo = (system, command, args) => system.exec("sudo", ["-n", command, ...a
 const nssdb = (system) => `sql:${join(system.home, ".pki", "nssdb")}`
 const eol = (system) => (system.platform === "win32" ? "\r\n" : "\n")
 
-/** Whether the root is in a store: the query must succeed and name it. */
-const inStore = (system, command, args) => {
-  try { return String(system.exec(command, args)).includes(CA_NAME) } catch { return false }
+/** A store could not be read, so whether the root is still in it is unknown. */
+export class InspectionError extends Error {}
+
+const firstLine = (error) => String(error.stderr || error.message).trim().split(/\r?\n/)[0]
+const query = (system, what, command, args) => {
+  try { return String(system.exec(command, args)) } catch (error) {
+    throw new InspectionError(`could not inspect ${what}: ${firstLine(error)}`)
+  }
 }
-const inNss = (system) => inStore(system, "certutil", ["-d", nssdb(system), "-L"])
-const inSystemKeychain = (system) => inStore(system, "security", ["find-certificate", "-a", "-c", CA_NAME, SYSTEM_KEYCHAIN])
-const inWindowsRoot = (system) => inStore(system, "certutil", ["-store", "Root", CA_NAME])
+
+/** A fingerprint as uppercase hex without separators. */
+const hex = (value) => String(value).replace(/[^0-9a-f]/gi, "").toUpperCase()
+const fingerprints = (pem) => {
+  const certificate = new X509Certificate(pem)
+  return { caSha1: hex(certificate.fingerprint), caSha256: hex(certificate.fingerprint256) }
+}
+/** Whether a store listing names the root or shows one of its fingerprints on a line. */
+const mentions = (text, state) => text.includes(CA_NAME) ||
+  text.split(/\r?\n/).some((line) => [state.caSha1, state.caSha256].some((fingerprint) => fingerprint && hex(line).includes(fingerprint)))
+
+/** The NSS database lists every certificate it holds; no database holds none. */
+const inNss = (system) => {
+  if (!existsSync(join(system.home, ".pki", "nssdb", "cert9.db"))) return false
+  return query(system, "the NSS database", "certutil", ["-d", nssdb(system), "-L"]).includes(CA_NAME)
+}
+/** The bundle update-ca-certificates generates, read certificate by certificate. */
+const inLinuxBundle = (system, state) => {
+  let text
+  try { text = readFileSync(system.bundleOutput, "utf8") } catch (error) {
+    throw new InspectionError(`could not inspect ${system.bundleOutput}: ${firstLine(error)}`)
+  }
+  return [...text.matchAll(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g)].some(([pem]) => {
+    const found = fingerprints(pem)
+    return found.caSha256 === state.caSha256 || new X509Certificate(pem).subject.includes(CA_NAME)
+  })
+}
+/**
+ * Every certificate in the System keychain with its hashes. `security` answers a search without
+ * a match, and even a keychain path that does not exist, with exit 0 and no output, so the
+ * keychain file has to exist for an empty answer to mean "not there".
+ */
+const inSystemKeychain = (system, state) => {
+  if (!existsSync(system.systemKeychain)) throw new InspectionError(`could not inspect the System keychain: ${system.systemKeychain} does not exist`)
+  let text
+  try { text = String(system.exec("security", ["find-certificate", "-a", "-Z", system.systemKeychain])) } catch (error) {
+    // Older versions exit 44 when the search finds nothing.
+    if (error.status === 44 && /could not be found/i.test(String(error.stderr))) return false
+    throw new InspectionError(`could not inspect the System keychain: ${firstLine(error)}`)
+  }
+  return mentions(text, state)
+}
+/** The whole LocalMachine Root store; a listing without certificates is not a real answer. */
+const inWindowsRoot = (system, state) => {
+  const text = query(system, "the LocalMachine Root store", "certutil", ["-store", "Root"])
+  if (!/=+ Certificate \d+ =+/.test(text)) throw new InspectionError("could not inspect the LocalMachine Root store: the listing shows no certificates")
+  return mentions(text, state)
+}
+const keychainPaths = (text) => text.split("\n").map((line) => line.trim().replace(/^"|"$/g, "")).filter(Boolean)
 
 /**
  * A throwaway root and a certificate for the stand-in's hosts signed by it, made with openssl.
@@ -124,7 +180,7 @@ const hostsLines = (system) => readFileSync(system.hostsPath, "utf8").split(/\r?
  * when a step fails; whatever was done until then is undone by `cleanup`.
  */
 export function install(ca, system = realSystem()) {
-  const state = { ...readState(system), certDir: join(system.stateDir, "certs") }
+  const state = { ...readState(system), certDir: join(system.stateDir, "certs"), ...fingerprints(readFileSync(ca)) }
   const step = (name, fn) => {
     state[name] = true
     saveState(system, state)
@@ -149,10 +205,13 @@ export function install(ca, system = realSystem()) {
         system.exec("certutil", ["-d", nssdb(system), "-N", "--empty-password"])
       }
       system.exec("certutil", ["-d", nssdb(system), "-A", "-t", "C,,", "-n", CA_NAME, "-i", ca])
-      sudo(system, "cp", [ca, system.bundleFile])
+      // From here the generated bundle may hold the root until it is regenerated without it.
+      state.bundlePending = true
+      saveState(system, state)
+      sudo(system, "cp", [ca, system.bundleSource])
       sudo(system, "update-ca-certificates", [])
     } else if (system.platform === "darwin") {
-      sudo(system, "security", ["add-trusted-cert", "-d", "-r", "trustRoot", "-k", SYSTEM_KEYCHAIN, ca])
+      sudo(system, "security", ["add-trusted-cert", "-d", "-r", "trustRoot", "-k", system.systemKeychain, ca])
     } else if (system.platform === "win32") {
       system.exec("certutil", ["-addstore", "-f", "Root", ca])
     }
@@ -162,8 +221,8 @@ export function install(ca, system = realSystem()) {
     // runner's login keychain, which can be locked by the time the test runs.
     state.keychain ??= {
       path: join(system.stateDir, "sign-in-e2e.keychain-db"),
-      default: system.exec("security", ["default-keychain", "-d", "user"]).trim().replace(/^"|"$/g, ""),
-      list: system.exec("security", ["list-keychains", "-d", "user"]).split("\n").map((line) => line.trim().replace(/^"|"$/g, "")).filter(Boolean),
+      default: keychainPaths(system.exec("security", ["default-keychain", "-d", "user"]))[0] ?? "",
+      list: keychainPaths(system.exec("security", ["list-keychains", "-d", "user"])),
     }
     step("keychainCreated", () => {
       const { path } = state.keychain
@@ -189,17 +248,40 @@ export function forgetAppSecret(system = realSystem()) {
   }
 }
 
-/** What is still on the machine: hosts entries and the root certificate in each store. */
+/**
+ * What is still on the machine: hosts entries, the root certificate in each store, and on macOS
+ * a keychain setting that was not restored. A store that could not be inspected is reported too,
+ * because the root may still be in it.
+ */
 export function leftovers(system = realSystem()) {
+  const state = readState(system)
   const found = []
-  if (existsSync(system.hostsPath) && hostsLines(system).some((line) => line.includes(MARKER))) found.push(`hosts entries in ${system.hostsPath}`)
+  const check = (fn) => {
+    try { fn() } catch (error) { found.push(error instanceof InspectionError ? error.message : `could not inspect: ${firstLine(error)}`) }
+  }
+  check(() => {
+    if (existsSync(system.hostsPath) && hostsLines(system).some((line) => line.includes(MARKER))) found.push(`hosts entries in ${system.hostsPath}`)
+  })
   if (system.platform === "linux") {
-    if (inNss(system)) found.push("root certificate in the NSS database")
-    if (existsSync(system.bundleFile)) found.push(`root certificate at ${system.bundleFile}`)
+    check(() => { if (inNss(system)) found.push("root certificate in the NSS database") })
+    check(() => { if (existsSync(system.bundleSource)) found.push(`root certificate at ${system.bundleSource}`) })
+    check(() => { if (state.bundlePending) found.push(`${system.bundleOutput} not yet regenerated without the root`) })
+    check(() => { if (inLinuxBundle(system, state)) found.push(`root certificate in ${system.bundleOutput}`) })
   } else if (system.platform === "darwin") {
-    if (inSystemKeychain(system)) found.push("root certificate in the System keychain")
+    check(() => { if (inSystemKeychain(system, state)) found.push("root certificate in the System keychain") })
+    if (state.keychain) {
+      check(() => {
+        const current = keychainPaths(query(system, "the default keychain", "security", ["default-keychain", "-d", "user"]))[0] ?? ""
+        if (state.keychain.default && current !== state.keychain.default) found.push(`default keychain is ${current}, not ${state.keychain.default}`)
+      })
+      check(() => {
+        const current = keychainPaths(query(system, "the keychain search list", "security", ["list-keychains", "-d", "user"]))
+        if (state.keychain.list.length && current.join("\n") !== state.keychain.list.join("\n")) found.push(`keychain search list is ${current.join(", ")}, not ${state.keychain.list.join(", ")}`)
+      })
+      check(() => { if (existsSync(state.keychain.path)) found.push(`disposable keychain at ${state.keychain.path}`) })
+    }
   } else if (system.platform === "win32") {
-    if (inWindowsRoot(system)) found.push("root certificate in the LocalMachine Root store")
+    check(() => { if (inWindowsRoot(system, state)) found.push("root certificate in the LocalMachine Root store") })
   }
   return found
 }
@@ -223,17 +305,23 @@ export function cleanup(system = realSystem()) {
     attempt("nss", () => {
       for (let i = 0; i < 5 && inNss(system); i++) system.exec("certutil", ["-d", nssdb(system), "-D", "-n", CA_NAME])
     })
+    // Regenerated while the source is there or a regeneration is still pending, also when an
+    // earlier cleanup deleted the source and then failed to regenerate.
     attempt("system bundle", () => {
-      if (!existsSync(system.bundleFile)) return
-      sudo(system, "rm", ["-f", system.bundleFile])
+      if (!existsSync(system.bundleSource) && !state.bundlePending) return
+      state.bundlePending = true
+      saveState(system, state)
+      if (existsSync(system.bundleSource)) sudo(system, "rm", ["-f", system.bundleSource])
       sudo(system, "update-ca-certificates", ["--fresh"])
+      state.bundlePending = false
+      saveState(system, state)
     })
     if (state.portStart && Number(state.portStart) > 443) attempt("port", () => sudo(system, "sysctl", ["-w", `net.ipv4.ip_unprivileged_port_start=${state.portStart}`]))
   } else if (system.platform === "darwin") {
     // Deleting the certificate is enough: removing its trust setting asks for authorization even
     // as root, and a setting for a certificate that is gone applies to nothing.
     attempt("System keychain", () => {
-      for (let i = 0; i < 5 && inSystemKeychain(system); i++) sudo(system, "security", ["delete-certificate", "-c", CA_NAME, SYSTEM_KEYCHAIN])
+      for (let i = 0; i < 5 && inSystemKeychain(system, state); i++) sudo(system, "security", ["delete-certificate", "-c", CA_NAME, system.systemKeychain])
     })
     if (state.keychain) {
       attempt("keychain list", () => {
@@ -246,7 +334,7 @@ export function cleanup(system = realSystem()) {
     }
   } else if (system.platform === "win32") {
     attempt("root store", () => {
-      for (let i = 0; i < 5 && inWindowsRoot(system); i++) system.exec("certutil", ["-delstore", "Root", CA_NAME])
+      for (let i = 0; i < 5 && inWindowsRoot(system, state); i++) system.exec("certutil", ["-delstore", "Root", CA_NAME])
     })
   }
   const left = leftovers(system)
@@ -266,5 +354,5 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     console.error(`Still on this machine after cleanup: ${left.join("; ")}`)
     process.exit(1)
   }
-  console.log("The sign-in test's changes to this machine are undone: no hosts entries, no test root certificate.")
+  console.log("The sign-in test's changes to this machine are undone and read back: no hosts entries, no test root certificate in any store.")
 }

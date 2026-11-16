@@ -81,18 +81,24 @@ the answer, that an answer with another state is refused, and that a refusal sho
 |---|---|---|---|
 | Pull request (CI) | packaged (`--linux dir`) | packaged, when installers are built | packaged, when installers are built |
 | Push to `main` (CI) | packaged (`--linux dir`) | no (CI builds no installers on push) | no |
-| Release, nightly or stable (Release workflow) | no (no Linux release) | packaged, signed | packaged, signed |
+| Nightly, or stable by promotion (Release workflow on `main`) | no (no Linux release) | packaged, signed | packaged, signed |
+| Stable release from a pushed tag | no | packaged, signed, only when the tagged commit has the test | same as Windows |
 
 So every nightly's Windows and macOS packages pass it before they are published, and Linux is
-checked on every pull request and push. The Release workflow takes the test from its own commit
-(`main`), not from the release target, so promoting a nightly that predates the test still runs
-it against that nightly's packaged app.
+checked on every pull request and push. A nightly or a promotion (the Release workflow run on
+`main`) takes the test from the workflow's own commit, not from the release target, so promoting a
+nightly that predates the test still runs it against that nightly's packaged app. A pushed tag runs
+the Release workflow from the tagged commit itself: a tag on a commit from before the test runs no
+sign-in test, so prefer the promotion for such a release.
 
 The app has no test switch: the test changes only the runner, with hosts file entries for both
 hosts and a throwaway root certificate in the operating system's trust store (`runner.mjs`). Each
 change is recorded before it is made; a workflow step that always runs, also after a cancel or a
 timeout, undoes them, reads the machine back and fails the job when an entry or the certificate is
-left. The root's private key is deleted as soon as the stand-in's certificate is issued. The test
+left, when the macOS keychain default or search list is not restored, or when a store could not be
+inspected (a failed or empty listing never counts as "removed", and the state is kept for another
+cleanup). On Linux a pending regeneration of the CA bundle is retried until the generated bundle
+no longer holds the root's fingerprint. The root's private key is deleted as soon as the stand-in's certificate is issued. The test
 refuses to run outside CI. Every Playwright browser context skips its own certificate check
 (Firefox and WebKit keep trust stores of their own); the app's certificate checks are real.
 
