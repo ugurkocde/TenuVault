@@ -1,3 +1,4 @@
+import { INTUNE_TYPES } from "../../shared/intune/registry"
 import { Button } from "~/components/ui/button"
 import { MODULE_BY_ID, type ModuleId } from "../../shared/services/modules"
 import { areaPermissions, BASE_PERMISSIONS, REQUEST_ORDER, type PermissionChoice } from "../../shared/services/manifest"
@@ -50,16 +51,17 @@ export function OnboardingServices({ choice, onChange, onContinue }: { choice: P
           <label data-no-select className="flex items-center justify-between gap-3 font-medium text-gray-900">{module.label}
             <input type="checkbox" aria-label={`Back up ${module.label}`} checked={Boolean(picked)} onChange={event => toggle(id, event.target.checked)} className="size-4 accent-primary" /></label>
           <p className="mt-3 text-sm text-gray-600">{DESCRIPTIONS[id]}</p>
-          {id !== "intune" && <p className="mt-3 text-sm font-medium text-gray-700">Permissions setup only. Backups arrive later.</p>}
+          {!areas.some(area => area.folders.some(folder => INTUNE_TYPES.some(type => type.folder === folder))) && <p className="mt-3 text-sm font-medium text-gray-700">Permissions setup only. Backups arrive later.</p>}
           <p className="mt-3 text-xs font-medium text-gray-700" data-permission-count>{counts(permissions)} permissions{!picked && " if selected"}</p>
           <details className="mt-3" data-choice-details>
             <summary className="cursor-pointer text-sm font-medium text-blue-700">Coverage and permissions</summary>
             <div className="mt-3 max-h-40 space-y-3 overflow-y-auto overscroll-contain pr-1 text-xs text-gray-600" role="region" tabIndex={0} aria-label={`${module.label} coverage`}>
-              <ul className="space-y-1" data-area-coverage>{areas.map(area => <li key={area.id}><span className="font-medium text-gray-900">{area.label}</span>{COVERAGE[`${id}:${area.id}`] && <span className="block">{COVERAGE[`${id}:${area.id}`]}</span>}<span className="block">{counts(area.permissions)} permissions</span></li>)}</ul>
+              <ul className="space-y-1" data-area-coverage>{areas.map(area => <li key={area.id}><span className="font-medium text-gray-900">{area.label}</span>{COVERAGE[`${id}:${area.id}`] && <span className="block">{COVERAGE[`${id}:${area.id}`]}</span>}<span className="block">{area.folders.some(folder => INTUNE_TYPES.some(type => type.folder === folder)) ? "Backups are available for the supported types in this area." : "This version has no backup types for this area yet."}</span><span className="block">{counts(area.permissions)} permissions</span></li>)}</ul>
               <p>{id === "defender" ? "Only policies exposed by Microsoft Graph are covered. Defender policies outside Graph and security event data are not included." : id === "entra" ? "Global Secure Access, passwords, secrets and user authentication methods are not included." : "Backs up policies, scripts and settings. App installers have a separate App Backup page."}</p>
               {id === "entra" && <label data-no-select className="flex items-start gap-2"><input type="checkbox" role="switch" aria-label="Include Conditional Access" checked={Boolean(choice.conditionalAccess)} onChange={event => toggle("conditionalAccess", event.target.checked)} className="mt-0.5 accent-primary" /><span>Conditional Access: policies, named locations and authentication strengths. Backups are available now.</span></label>}
               {module.areas.filter(area => area.optIn).map(area => <div key={area.id} className="space-y-1 border-t border-border pt-2">
                 <label data-no-select className="flex items-center gap-2"><input type="checkbox" role="switch" aria-label={`Include ${area.label}`} disabled={!picked} checked={picked?.areas?.includes(area.id) ?? false} onChange={event => onChange({ ...choice, [id]: { ...picked!, areas: event.target.checked ? [...(picked?.areas ?? []), area.id] : picked?.areas?.filter(value => value !== area.id) } })} className="accent-primary" />{area.label} (opt-in)</label>
+                <p>{area.folders.some(folder => INTUNE_TYPES.some(type => type.folder === folder)) ? "Backups are available for the supported types in this area." : "This version has no backup types for this area yet."}</p>
                 {area.personalData && <p>{PERSONAL_DATA[area.id]}</p>}
               </div>)}
               {id === "intune" && <p>Includes the read access to Conditional Access from earlier Intune setups. Its backups stay off unless you turn them on inside Entra ID.</p>}

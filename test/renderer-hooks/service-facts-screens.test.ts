@@ -74,27 +74,21 @@ describe("The Settings card reads switchable", () => {
   })
 })
 
-describe("The scope picker reads defaultOn", () => {
-  const note = (label: string) => `Backed up only when ${label} is turned on for the tenant in Settings, under Services and permissions.`
-  const picker = () => mount(createElement(BackupScopePicker, { value: { excluded: ["DeviceConfigurations"] }, onChange: () => undefined }))
-
-  it("says a service that starts off needs turning on, and says nothing for Intune", () => {
-    const text = picker().textContent ?? ""
-    expect(text.split(note("Entra Conditional Access"))).toHaveLength(2)
-    expect(text).not.toContain(note("Intune"))
+describe("The scope picker follows the tenant's selection", () => {
+  const picker = (services: Array<"intune" | "conditionalAccess" | "entra">) => mount(createElement(BackupScopePicker, { selection: { services }, value: { excluded: ["DeviceConfigurations"] }, onChange: () => undefined }))
+  it("offers only the services that are on", () => {
+    expect(picker(["intune"]).textContent).not.toContain("Entra ID: Authentication")
+    expect(picker(["intune"]).textContent).not.toContain("Entra Conditional Access: Conditional Access")
+    const text = picker(["entra"]).textContent ?? ""
+    expect(text).toContain("Entra ID: Authentication")
+    expect(text).not.toContain("Intune: Device configuration")
+    expect(text).not.toContain("Entra ID: Groups")
+    expect(text).toContain("All of 28 types")
   })
-
-  it("follows the fact when it changes, and not the other two", () => {
-    withFacts("conditionalAccess", { switchable: false, precheck: false })
-    withFacts("intune", { switchable: false, precheck: true })
-    expect(picker().textContent).toContain(note("Entra Conditional Access"))
-    expect(picker().textContent).not.toContain(note("Intune"))
-
+  it("uses the explicit tenant choice even when the service defaults change", () => {
     withFacts("conditionalAccess", { defaultOn: true })
     withFacts("intune", { defaultOn: false })
-    const text = picker().textContent ?? ""
-    expect(text).not.toContain(note("Entra Conditional Access"))
-    // Every Intune area carries the note once Intune would start off.
-    expect(text.split(note("Intune")).length - 1).toBe(9)
+    expect(picker(["intune"]).textContent).toContain("Intune: Device configuration")
+    expect(picker(["intune"]).textContent).not.toContain("Entra Conditional Access: Conditional Access")
   })
 })

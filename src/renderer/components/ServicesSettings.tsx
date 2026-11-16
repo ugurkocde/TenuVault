@@ -80,7 +80,7 @@ function Area({ area, service, report, busy, run }: { area: AreaHealth; service:
     {area.personalData && <p className="text-xs text-gray-600">{PERSONAL_DATA[area.id] ?? "Stores personal data in backup files. Review who can access your backup storage before turning this area on."}</p>}
     <p className="text-xs text-gray-600">Backup: <PermissionState state={area.permissions} />. Restore: <PermissionState state={area.restore} />.</p>
     {area.enabled && area.permissions === "present" && area.restore === "missing" && service.access === "restore" && <p className="text-xs text-gray-600">Backup permissions are present. Restore needs: {area.missing.join(", ")}. The Backup and restore access level asks for these permissions. Choose Backup under Areas and access to request only backup permissions.</p>}
-    {area.enabled ? service.hasTypes ? <Verification value={area.verified} /> : <p className="text-xs text-gray-500">Not verified: this version has no backup types for this area yet.</p> : <p className="text-xs text-gray-500">Not included in backups.</p>}
+    {!area.hasTypes ? <p className="text-xs text-gray-500">Not verified: this version has no backup types for this area yet.</p> : area.enabled ? <Verification value={area.verified} /> : <p className="text-xs text-gray-500">Not included in backups.</p>}
     {area.losses.map(loss => <p key={`${loss.mode}/${loss.folder}`} className="break-words text-xs text-amber-800">
       {loss.mode === "app-only" ? "Scheduled backups with the Backup Reader cannot read" : "Backups with your sign-in cannot read"} {loss.folder}, since {healthDate(loss.since)}. {HEALTH_CAUSE_TEXT[loss.cause]}
     </p>)}

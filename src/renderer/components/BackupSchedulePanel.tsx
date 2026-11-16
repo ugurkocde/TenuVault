@@ -26,6 +26,7 @@ import { ServiceBackupNotice } from "./ServiceBackupNotice"
 import { BackupScopePicker } from "./BackupScopePicker"
 import { CloudBackupSettings } from "./CloudBackupSettings"
 import { StorageChooser, type StorageChooserDraft } from "./StorageChooser"
+import { DEFAULT_SELECTION, type ServiceSelection } from "../../shared/services/modules"
 import { describeScope, includedTypes, normalizeScope, type BackupScope } from "../../shared/intune/scope"
 
 const REFUSALS_SHOWN = 5
@@ -492,6 +493,7 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
 function BackupScopeSettings({ tenantId, tenantName, hasCloud, onSaved }: BackupSchedulePanelProps & { hasCloud?: boolean; onSaved?: () => void }) {
   const [saved, setSaved] = useState<BackupScope | null>(null)
   const [isSaved, setIsSaved] = useState(false)
+  const [selection, setSelection] = useState<ServiceSelection>(DEFAULT_SELECTION)
   const [scope, setScope] = useState<BackupScope | null>(null)
   const [saving, setSaving] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -500,6 +502,7 @@ function BackupScopeSettings({ tenantId, tenantName, hasCloud, onSaved }: Backup
   const load = () => {
     setLoadError(null)
     bridge.backups.scope(tenantId).then((setting) => {
+      setSelection(setting.selection ?? DEFAULT_SELECTION)
       setSaved(setting.scope)
       setScope(setting.scope)
       setIsSaved(setting.saved)
@@ -520,7 +523,7 @@ function BackupScopeSettings({ tenantId, tenantName, hasCloud, onSaved }: Backup
     )
   }
   const dirty = normalizeScope(scope).excluded.join() !== normalizeScope(saved).excluded.join()
-  const empty = includedTypes(scope).length === 0
+  const empty = includedTypes(scope, selection).length === 0
 
   const save = async () => {
     setSaving(true)
@@ -566,7 +569,7 @@ function BackupScopeSettings({ tenantId, tenantName, hasCloud, onSaved }: Backup
             Used by backups on this computer and "Back up all tenants now", preselected when you run a backup by hand, and
             copied into cloud setup. Existing cloud backups keep the scope from their Azure setup: run cloud setup again after changing this.
           </p>
-          <BackupScopePicker value={scope} onChange={setScope} disabled={saving} />
+          <BackupScopePicker selection={selection} value={scope} onChange={setScope} disabled={saving} />
           <div className="flex items-center gap-3">
             <Button disabled={!dirty || empty || saving} onClick={() => void save()}>
               {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}

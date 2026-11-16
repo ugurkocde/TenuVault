@@ -5,7 +5,7 @@ import type { PlanIpcError } from "./plan-errors"
 import type { BackupScope } from "./intune/scope"
 import type { ReportPayload } from "./oib/report"
 import type { PdfBranding } from "./pdf/theme"
-import type { AccessLevel, ModuleCheck, ModuleId } from "./services/modules"
+import type { AccessLevel, ModuleCheck, ModuleId, ServiceSelection } from "./services/modules"
 import type { ConnectionHealthReport } from "./connection-health/model"
 import type { PermissionChoice } from "./services/manifest"
 import type { FeedbackInput, FeedbackSendResult, FeedbackSnapshot } from "./feedback"
@@ -254,6 +254,8 @@ export interface BackupSettings {
 
 /** What a tenant backs up. `saved` is false while the tenant uses the default. */
 export interface BackupScopeSetting {
+  /** Current service choices, returned with the scope but never persisted in it. */
+  selection?: ServiceSelection
   scope: BackupScope
   saved: boolean
 }

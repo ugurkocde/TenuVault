@@ -259,6 +259,8 @@ export interface VerifiedHealth {
 }
 
 export interface AreaHealth {
+  /** Whether this version can back up any type of the area. */
+  hasTypes: boolean
   id: string
   label: string
   optIn: boolean

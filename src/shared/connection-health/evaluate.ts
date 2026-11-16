@@ -309,6 +309,7 @@ function evaluateService(module: ServiceModule, choice: ServiceChoice, granted: 
     }
     if (checks) ready[key(module, area)] = checks[index]!.backup
     return {
+      hasTypes: area.folders.some(folder => INTUNE_TYPES.some(type => type.folder === folder)),
       id: area.id,
       label: area.label,
       optIn: area.optIn === true,

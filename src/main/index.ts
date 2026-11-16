@@ -1454,7 +1454,7 @@ async function bootstrap(): Promise<void> {
   })
   handleTrusted("backups:scope", (_event, tenantId: unknown) => {
     if (typeof tenantId !== "string") throw new Error("Choose a tenant.")
-    return scopes.get(tenantId)
+    return { ...scopes.get(tenantId), selection: moduleSettings.selection(tenantId) }
   })
   const servicesFor = (tenantId: unknown, clientId: unknown, refresh: boolean) => {
     if (typeof tenantId !== "string" || typeof clientId !== "string") throw new Error("Choose a tenant.")

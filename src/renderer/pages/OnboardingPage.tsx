@@ -541,7 +541,8 @@ export default function OnboardingPage() {
                 <ul className="list-disc space-y-1 pl-5 text-gray-600">
                   <li>It reads the available policies and settings for {choiceLabel(services)}, and changes nothing in your tenant.</li>
                   {services.intune && <li>Apps are left out by default to keep it quick. You can change what is backed up later in the backup scope.</li>}
-                  {(services.entra || services.defender) && <li>This version sets up permissions for Entra ID and Defender. Their backups arrive in a later update. Conditional Access backups are available if selected.</li>}
+                  {services.entra && <li>Entra ID backs up the supported types in your selected areas. Areas without backup types are listed in Services and permissions.</li>}
+                  {services.defender && <li>This version prepares Defender permissions only. Defender backups arrive in a later update.</li>}
                   <li>It usually takes a few minutes, longer for large tenants.</li>
                   <li>A restore needs a backup from before the change, so this first backup cannot bring back a policy already lost. It protects what you back up from now on.</li>
                 </ul>

@@ -62,12 +62,12 @@ The **Back up** dialog offers three choices:
 | Choice | What it covers |
 | --- | --- |
 | **Everything except apps** | "Policies, scripts, updates, enrollment and tenant settings." Every type except apps. App categories, policy sets, app configuration and app protection policies are still included. |
-| **Everything** | "Also app details and assignments. Installer files are never included." All 41 types. |
+| **Everything** | "Also app details and assignments. Installer files are never included." Every supported type of the services and opt-in areas that are on. |
 | **Custom** | "Choose areas and individual types." |
 
 With **Custom**, TenuVault lists the areas (for example **Device configuration** or **Enrollment**). Tick an area to include all of its types, or expand it to tick individual types. When the tenant has an earlier backup, each area and type shows how many items it held last time, and the dialog estimates the total number of items.
 
-The line under the choices shows how many of the 41 types the backup covers. **Start backup** is unavailable until at least one type is ticked ("Choose at least one type.").
+The line under the choices shows how many of the available types the backup covers, grouped by service and area. **Start backup** is unavailable until at least one type is ticked ("Choose at least one type.").
 
 When apps are included, a note explains that apps are saved as their Intune details and assignments, which makes them the slowest type to back up, and that installer files are never downloaded.
 
@@ -104,7 +104,7 @@ The log lists what TenuVault did, with a time stamp per line. Typical lines:
 
 | Log line | Meaning |
 | --- | --- |
-| "Leaving out N of 41 types: ..." | The backup choice excludes these types |
+| "Leaving out N of M types: ..." | The backup choice excludes these types |
 | "Intune is turned off for this tenant, so its types are not backed up. ..." | Intune is off for the tenant under **Settings** > **Services and permissions**, so this backup holds no Intune policies. Turn it on there to back them up again. |
 | "Found N ... (N built-in skipped)." | Items found for a type. Built-in objects Intune recreates itself are skipped. |
 | "Backed up N ..." | All items of a type are saved |
@@ -176,7 +176,7 @@ The **Backup History** tab of **Backup & Restore** shows the **Backup Timeline**
 Each entry shows:
 
 * the date and time
-* what the backup covered: **Everything**, **Everything except apps**, or the number of types, for example "12 of 41 types"
+* what the backup covered: **Everything**, **Everything except apps**, or the number of types, for example "12 of 74 types"
 * how it started: **Manual**, **Scheduled** or **From tray**
 * the result, when it is not **Complete**
 * **Items**, **Size**, **Duration** and **Changes** since the previous backup (see [Compare backups](/backups/compare/))
