@@ -294,3 +294,14 @@ it.each(Object.entries(storageExpectations))("explains storage %s independently 
   expect(storage.textContent).not.toContain("what can be read")
   if (!["healthy", "local"].includes(state)) expect(storage.querySelector('a[href="/portal/settings?section=storage"]')).not.toBeNull()
 })
+
+it("shows Defender coverage without offering switches for entirely pending directory areas", async () => {
+  mocks.check.mockResolvedValue(healthScene("defender-backup-types"))
+  await render()
+  const card = container.querySelector('[data-service="defender"]')!
+  expect(card.textContent).toContain("17 Microsoft Graph configuration types")
+  expect(card.textContent).toContain("Anti-phishing, Safe Links, Safe Attachments")
+  expect(card.textContent).not.toContain("no backup types")
+  const pending = container.querySelector('[data-service="entra"] [data-area="usersAndDevices"]')!
+  expect(pending.querySelector('input[role="switch"]')).toBeNull()
+})

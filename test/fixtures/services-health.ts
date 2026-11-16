@@ -71,6 +71,11 @@ export function healthScene(name: string): ConnectionHealthReport {
     entra.enabled = true
     entra.areas.forEach(area => { area.enabled = !area.optIn })
   }
+  if (name === "defender-backup-types") {
+    const defender = report.services.find(service => service.id === "defender")!
+    defender.enabled = true
+    defender.areas.forEach(area => { area.enabled = true })
+  }
   if (name === "intune-off") { intune.enabled = false; intune.areas.forEach(area => { area.enabled = false }) }
   if (name.startsWith("graph-")) report.graph = { state: name.slice(6) as SignInHealthState, checkedAt: AT }
   if (name.startsWith("storage-")) report.storage = { state: name.slice(8) as SignInHealthState, checkedAt: AT }

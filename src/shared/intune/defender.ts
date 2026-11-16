@@ -101,4 +101,3 @@ export const DEFENDER_TYPES: IntuneType[] = [
     ...base("DefenderRoleAssignments", "Defender role assignments", "roleManagement/defender/roleAssignments", "Posture and access"), apiVersion: "beta",
   },
 ]
-

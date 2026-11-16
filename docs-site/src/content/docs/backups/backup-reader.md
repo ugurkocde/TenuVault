@@ -66,7 +66,7 @@ For a tenant that backs up Entra ID or Defender, name the services with `-Servic
 <!-- permissions:defender:begin -->
 | Area | Application permissions |
 | --- | --- |
-| Detection and response | `CustomDetection.Read.All`, `CaseManagement.Read.All` |
+| Detection and response | `CustomDetection.Read.All`, `Workbooks.Read.All`, `CaseManagement.Read.All` |
 | Email and collaboration | `AttackSimulation.Read.All`, `ThreatSubmission.Read.All` |
 | Identity | `SecurityIdentitiesSensors.Read.All`, `SecurityIdentitiesAutoConfig.Read.All` |
 | Posture and access | `SecurityEvents.Read.All`, `RoleManagement.Read.Defender` |
@@ -286,3 +286,5 @@ Replacing the active certificate or removing the reader discards its earlier hea
 * [Create a storage account for TenuVault](/getting-started/create-storage-account/#optional-let-the-backup-reader-write-backups): the Azure administrator's half of step 3
 * [App registration and delegated permissions](/security/permissions/)
 * [Settings](/settings/#backup-reader): where the card and its controls are described
+
+Defender scheduled backups include the [17 supported configuration types](/backups/defender/). Detection and response also needs `Workbooks.Read.All`. Cloud scopes and content repositories remain outside coverage. No Defender type is restorable.

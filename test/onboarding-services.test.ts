@@ -11,6 +11,7 @@ it("keeps today's exact default permissions while enabling only Intune backups",
   expect(choiceLabel({})).toBe("a service")
   expect(hasOnboardingBackups(DEFAULT_ONBOARDING_CHOICE)).toBe(true)
   expect(hasOnboardingBackups({ entra: { access: "backup" } })).toBe(true)
+  expect(hasOnboardingBackups({ defender: { access: "backup" } })).toBe(true)
 })
 it("offers restore only where a writable backup type exists", () => {
   expect(canRequestRestore("intune")).toBe(true)

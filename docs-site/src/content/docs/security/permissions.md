@@ -101,7 +101,7 @@ The setup requests the permissions above unless you choose other services. When 
 <!-- permissions:defender:begin -->
 | Area | Backup | Restore adds |
 | --- | --- | --- |
-| Detection and response | `CustomDetection.Read.All`, `CaseManagement.Read.All` | `CustomDetection.ReadWrite.All` |
+| Detection and response | `CustomDetection.Read.All`, `Workbooks.Read.All`, `CaseManagement.Read.All` | `CustomDetection.ReadWrite.All` |
 | Email and collaboration | `AttackSimulation.Read.All`, `ThreatSubmission.Read.All` | `ThreatSubmissionPolicy.ReadWrite.All` |
 | Identity | `SecurityIdentitiesSensors.Read.All`, `SecurityIdentitiesAutoConfig.Read.All` | `SecurityIdentitiesSensors.ReadWrite.All`, `SecurityIdentitiesAutoConfig.ReadWrite.All` |
 | Posture and access | `SecurityEvents.Read.All`, `RoleManagement.Read.Defender` | `SecurityEvents.ReadWrite.All`, `RoleManagement.ReadWrite.Defender` |
@@ -116,11 +116,11 @@ How to read the tables:
 * Two write permissions are never requested, because they reach far beyond the settings they would restore: `Directory.ReadWrite.All`, which restoring group expiration policies needs, and `Policy.ReadWrite.ConditionalAccess` for the legacy continuous access evaluation policy. For Intune, `DeviceManagementManagedDevices.ReadWrite.All` stays out in the same way. Add one by hand if you want to restore those settings.
 * What a signed-in admin can do also depends on their Entra role: Global Reader reads these settings, and a restore needs the administrator role of the setting, such as Security Administrator or Privileged Role Administrator.
 
-Some settings stay out because Microsoft publishes no read permission TenuVault could request for them: service principal creation policies, the setting that restricts access to the Entra admin center, the directory role access review policy, feature rollout policies, on-premises authentication policies, application proxy connector groups, and in Defender cloud scopes, workbooks and content repositories.
+Some settings stay out because no requestable read permission was verified for them: service principal creation policies, the setting that restricts access to the Entra admin center, the directory role access review policy, feature rollout policies, on-premises authentication policies, application proxy connector groups, and in Defender cloud scopes and content repositories. Workbooks now have a published read contract and a successful application read and are included. Cloud scopes lack a lab grant; repositories require a delegated verification.
 
 ### Check what the app registration allows
 
-**Settings > Services and permissions** shows Intune, Entra ID and Defender, with Conditional Access as a separately controlled area inside Entra ID. A tenant selector opens that tenant's report. Entra ID has [67 configuration types](/backups/entra/). Each area states when this build has no types for it yet. Defender still prepares permissions only.
+**Settings > Services and permissions** shows Intune, Entra ID and Defender, with Conditional Access as a separately controlled area inside Entra ID. A tenant selector opens that tenant's report. Entra ID has [67 configuration types](/backups/entra/). Each area states when this build has no types for it yet. Defender has [17 configuration backup types](/backups/defender/), with no restore yet.
 
 The connection check requests a fresh token without opening a sign-in window. **Permissions present** describes the token, not the admin's role, license or whether the service is onboarded. **Verified by the last backup** names the date and sign-in that read the selected types. After granting permissions, select **Check again**, then run a backup to verify access.
 
@@ -279,3 +279,5 @@ MDM and MAM enrollment policies, ownerless group policy and on-premises synchron
 Directory settings include custom banned password words. Organization properties can include contact details and notification addresses. Public certificates are stored for certificate-based authentication; private keys, credential values and token seeds are excluded recursively. Branding stores at most 1 MiB of JSON and omits image and CSS streams.
 
 External identities and Roles and PIM now contribute 26 additional backup types. PIM group discovery requires the additional read permission `GroupMember.Read.All`; the narrowly scoped schedule permissions alone cannot discover which groups to read. Group-ID enumeration was verified live app-only and is documented for both modes. API connectors remain app-only until a delegated read is verified. The setup manifest still records the unconfirmed delegated permission; its presence never enables that backup type for an admin sign-in. Credential fields are removed recursively, including the entire API connector authentication configuration. See [Entra ID backups](/backups/entra/) for feature availability and omissions.
+
+Defender adds `Workbooks.Read.All` for both delegated and application backup in Detection and response. No workbook write permission is requested. The new [Defender coverage page](/backups/defender/) distinguishes policy mailbox configuration, which is kept, from personal profiles, which are excluded.

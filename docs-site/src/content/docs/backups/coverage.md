@@ -14,7 +14,7 @@ faq:
     answer: "TenuVault skips types it is denied access to, for example when the app registration lacks a permission or its admin consent, or when your Intune role excludes the type. A scheduled backup made by the optional Backup Reader also leaves out device categories and device clean-up rules unless the reader has the optional device inventory permission. The backup log and Backup Details say which types were skipped."
 ---
 
-TenuVault backs up 41 Intune object types in nine areas, plus [67 Entra ID configuration types](/backups/entra/) and [three Conditional Access types](/backups/conditional-access/) when their services and areas are turned on. Each object is saved as it is in Microsoft Graph (beta for Intune, v1.0 or beta as declared for Entra), with its settings and, where Intune has them, its assignments.
+TenuVault backs up 41 Intune object types in nine areas, plus [17 Defender configuration types](/backups/defender/), [67 Entra ID configuration types](/backups/entra/) and [three Conditional Access types](/backups/conditional-access/) when their services and areas are turned on. Each object is saved as it is in Microsoft Graph (beta for Intune, v1.0 or beta as declared for Entra), with its settings and, where Intune has them, its assignments.
 
 The area and type names below are the ones the **Back up** dialog shows under **Custom**. See [Choose what to back up](/backups/#choose-what-to-back-up).
 
@@ -165,3 +165,5 @@ Some backed-up items cannot be restored in full, for example apps that need an i
 
 * [Intune backup](https://www.tenuvault.com/intune-backup): coverage and plans, on the product site
 * [Your own Intune export script or a backup app](https://www.tenuvault.com/compare/intune-export-script-vs-backup-app): what a Graph script has to read and restore, on the product site
+
+Defender covers only Microsoft Graph configuration, with no restore. [Defender coverage and exclusions](/backups/defender/) names every supported type and the threat policies Graph does not expose.

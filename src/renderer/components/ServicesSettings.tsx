@@ -75,7 +75,7 @@ function Area({ area, service, report, busy, run }: { area: AreaHealth; service:
   return <div className="space-y-2 border-t border-border py-3" data-area={area.id}>
     <div className="flex flex-wrap items-center justify-between gap-2">
       <h4 className="text-sm font-medium text-gray-900">{area.label} <span className="text-xs font-normal text-gray-500">{area.enabled ? "On" : "Off"}</span></h4>
-      {area.optIn && <Switch checked={area.enabled} disabled={busy || !service.enabled} label={`Include ${area.label} in backups`} onChange={enabled => run(() => bridge.services.setArea(report.tenantId, service.id, area.id, enabled))} />}
+      {area.optIn && area.hasTypes && <Switch checked={area.enabled} disabled={busy || !service.enabled} label={`Include ${area.label} in backups`} onChange={enabled => run(() => bridge.services.setArea(report.tenantId, service.id, area.id, enabled))} />}
     </div>
     {service.id === "entra" && area.id === "externalIdentities" && area.hasTypes && <p className="text-xs text-gray-600">API connectors require the Backup Reader. Their delegated read permission has not been verified.</p>}
     {service.id === "entra" && area.id === "governance" && area.hasTypes && <p className="text-xs text-gray-600">Access packages, review definitions, lifecycle workflows and terms of use. Some features need Entra ID P2 or ID Governance. PDFs, review decisions and workflow history are excluded.</p>}
@@ -100,6 +100,7 @@ function Service({ service, conditionalAccess, report, busy, toggle, run }: { se
       {MODULE_BY_ID.get(service.id)?.switchable && <Switch checked={service.enabled} disabled={busy} label={`Include ${service.label} in backups`} onChange={enabled => toggle(service, enabled)} />}
     </div>
     <p className="mt-1 text-xs text-gray-500">{MODULE_BY_ID.get(service.id)?.description}</p>
+    {service.id === "defender" && <p className="mt-2 text-xs text-gray-600">Backs up 17 Microsoft Graph configuration types, including tenant attack simulation content. Anti-phishing, Safe Links, Safe Attachments, anti-spam, anti-malware and quarantine policies, the Tenant Allow/Block List and Defender for Endpoint settings are not covered. Restore is not available yet.</p>}
     <div className="mt-3 space-y-1">
       <p className="text-xs text-gray-600">Backup: <PermissionState state={service.permissions} />. Restore: <PermissionState state={restore} />.</p>
       {service.enabled && service.permissions === "present" && service.access === "restore" && service.missing.length > 0 && <p className="text-sm text-gray-600">Backup permissions are present. Restore needs: {service.missing.join(", ")}. The Backup and restore access level asks for these permissions. Choose Backup under Areas and access to request only backup permissions.</p>}

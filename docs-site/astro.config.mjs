@@ -154,6 +154,7 @@ export default defineConfig({
 								{ label: 'Backup Reader for scheduled backups', slug: 'backups/backup-reader' },
 								{ label: 'Conditional Access backups', slug: 'backups/conditional-access' },
 								{ label: 'Entra ID configuration backups', slug: 'backups/entra' },
+								{ label: 'Defender configuration backups', slug: 'backups/defender' },
 								{ label: 'Compare backups', slug: 'backups/compare' },
 							],
 						},

@@ -7,7 +7,7 @@ it("captures and inventories every storage state and changed surface at 1024px i
   const inventory = readFileSync(new URL("README.md", folder), "utf8")
   expect(inventory).not.toContain("entra-no-types")
   expect(inventory).toContain("Entra ID enabled with configuration backup types available")
-  for (const state of [...storageStates.map(state => `storage-${state}`), "entra-backup-types", "restore-only-gap", "partly-verified", "missing-permission", "cause-notRead", "overview-intune-off", "dashboard-intune-off", "tenants-intune-off", "tenants-list-intune-off"]) {
+  for (const state of [...storageStates.map(state => `storage-${state}`), "entra-backup-types", "defender-backup-types", "restore-only-gap", "partly-verified", "missing-permission", "cause-notRead", "overview-intune-off", "dashboard-intune-off", "tenants-intune-off", "tenants-list-intune-off"]) {
     for (const theme of ["light", "dark"]) {
       const file = `${state}-${theme}.png`
       expect(inventory).toContain(file)

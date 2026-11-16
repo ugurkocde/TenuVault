@@ -10,7 +10,7 @@ const counts = (permissions: readonly string[]) => `${permissions.filter(name =>
 const DESCRIPTIONS = {
   intune: "Policies, apps, scripts, enrollment and tenant settings.",
   entra: "Tenant settings, sign-in policies, identity access and governance.",
-  defender: "Detection rules, email security, identity and posture settings.",
+  defender: "Detection rules, attack simulations, identity and posture configuration.",
 }
 const COVERAGE: Record<string, string> = {
   "entra:tenantSettings": "Tenant policies, branding and domains",
@@ -18,10 +18,10 @@ const COVERAGE: Record<string, string> = {
   "entra:externalIdentities": "Guest access, identity providers and user flows",
   "entra:roles": "Custom roles, privileged access, administrative units and attribute definitions",
   "entra:governance": "Access packages, review definitions, lifecycle workflows and terms of use",
-  "defender:detection": "Custom detection rules and case settings",
+  "defender:detection": "Custom detection rules, security workbooks and case settings",
   "defender:email": "Attack simulation configuration and submission policies",
   "defender:identity": "Identity sensors and automatic auditing settings",
-  "defender:posture": "Secure Score settings and security roles",
+  "defender:posture": "Tenant Secure Score control states and security roles",
 }
 
 function permissionAreas(id: ModuleId, picked: NonNullable<PermissionChoice[ModuleId]>) {
@@ -56,11 +56,12 @@ export function OnboardingServices({ choice, onChange, onContinue }: { choice: P
           <details className="mt-3" data-choice-details>
             <summary className="cursor-pointer text-sm font-medium text-blue-700">Coverage and permissions</summary>
             <div className="mt-3 max-h-40 space-y-3 overflow-y-auto overscroll-contain pr-1 text-xs text-gray-600" role="region" tabIndex={0} aria-label={`${module.label} coverage`}>
+              {id === "defender" && <p>17 Microsoft Graph configuration types. Anti-phishing, Safe Links, Safe Attachments, anti-spam, anti-malware and quarantine policies, the Tenant Allow/Block List and Defender for Endpoint settings are not covered. Security events and campaign reports are excluded.</p>}
               <ul className="space-y-1" data-area-coverage>{areas.map(area => <li key={area.id}><span className="font-medium text-gray-900">{area.label}</span>{COVERAGE[`${id}:${area.id}`] && <span className="block">{COVERAGE[`${id}:${area.id}`]}</span>}<span className="block">{area.folders.some(folder => INTUNE_TYPES.some(type => type.folder === folder)) ? "Backups are available for the supported types in this area." : "This version has no backup types for this area yet."}</span>{id === "entra" && area.id === "governance" && <span className="block">Some features need Entra ID P2 or ID Governance. PDFs, review decisions and workflow history are excluded.</span>}{id === "entra" && area.id === "externalIdentities" && <span className="block">API connectors require the Backup Reader.</span>}<span className="block">{counts(area.permissions)} permissions</span></li>)}</ul>
-              <p>{id === "defender" ? "Only policies exposed by Microsoft Graph are covered. Defender policies outside Graph and security event data are not included." : id === "entra" ? "Global Secure Access, passwords, secrets and user authentication methods are not included." : "Backs up policies, scripts and settings. App installers have a separate App Backup page."}</p>
+              <p>{id === "defender" ? "People are stored by object ID only. Authored reporting mailbox addresses are kept as policy configuration." : id === "entra" ? "Global Secure Access, passwords, secrets and user authentication methods are not included." : "Backs up policies, scripts and settings. App installers have a separate App Backup page."}</p>
               {id === "entra" && <label data-no-select className="flex items-start gap-2"><input type="checkbox" role="switch" aria-label="Include Conditional Access" checked={Boolean(choice.conditionalAccess)} onChange={event => toggle("conditionalAccess", event.target.checked)} className="mt-0.5 accent-primary" /><span>Conditional Access: policies, named locations and authentication strengths. Backups are available now.</span></label>}
               {module.areas.filter(area => area.optIn).map(area => <div key={area.id} className="space-y-1 border-t border-border pt-2">
-                <label data-no-select className="flex items-center gap-2"><input type="checkbox" role="switch" aria-label={`Include ${area.label}`} disabled={!picked} checked={picked?.areas?.includes(area.id) ?? false} onChange={event => onChange({ ...choice, [id]: { ...picked!, areas: event.target.checked ? [...(picked?.areas ?? []), area.id] : picked?.areas?.filter(value => value !== area.id) } })} className="accent-primary" />{area.label} (opt-in)</label>
+                <label data-no-select className="flex items-center gap-2"><input type="checkbox" role="switch" aria-label={`Include ${area.label}`} disabled={!picked || !area.folders.some(folder => INTUNE_TYPES.some(type => type.folder === folder))} checked={picked?.areas?.includes(area.id) ?? false} onChange={event => onChange({ ...choice, [id]: { ...picked!, areas: event.target.checked ? [...(picked?.areas ?? []), area.id] : picked?.areas?.filter(value => value !== area.id) } })} className="accent-primary" />{area.label} (opt-in)</label>
                 <p>{area.folders.some(folder => INTUNE_TYPES.some(type => type.folder === folder)) ? "Backups are available for the supported types in this area." : "This version has no backup types for this area yet."}</p>
                 {area.personalData && <p>{PERSONAL_DATA[area.id]}</p>}
               </div>)}

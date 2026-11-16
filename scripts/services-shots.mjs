@@ -180,7 +180,7 @@ try {
     await evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent.trim() === ${JSON.stringify(text)}).click()`)
   }
   const scenes = [
-    "healthy", "first-check", "missing-permission", "restore-only-gap", "partly-verified", "graph-consentMissing", "graph-registrationNotFoundInTenant", "graph-applicationDisabled", "registration-replaced", "reader-expiring", "reader-expired", "reader-lost-access", "changes", "personal-data", "intune-confirmation", "intune-off", "entra-backup-types",
+    "healthy", "first-check", "missing-permission", "restore-only-gap", "partly-verified", "graph-consentMissing", "graph-registrationNotFoundInTenant", "graph-applicationDisabled", "registration-replaced", "reader-expiring", "reader-expired", "reader-lost-access", "changes", "personal-data", "intune-confirmation", "intune-off", "entra-backup-types", "defender-backup-types",
     ...["permission", "notVerifiedYet", "refusedWithPermission", "role", "license", "signedIn", "reader", "notRead"].map(cause => `cause-${cause}`),
     ...["notChecked", "unknown", "signInNeeded", "mfaRequired", "blockedByConditionalAccess", "registrationMisconfigured", "servicePrincipalMissing", "notAssigned", "accountDisabled", "accountLockedOrBlocked", "wrongTenantOrAccount", "throttled", "unreachable"].map(state => `graph-${state}`),
     ...["notSetUp", "pending", "rolesChanged", "refused", "throttled", "unreachable"].map(state => `reader-${state}`),
@@ -205,6 +205,10 @@ try {
         if (await evaluate(`document.querySelector('[data-service="entra"]').innerText.includes("no backup types for Entra ID yet")`)) throw new Error("Entra ID backup types are missing from Services and permissions")
         await evaluate(`document.querySelector('[data-service="entra"] > details').open = true`)
         if (await evaluate(`["externalIdentities", "roles", "governance"].some(id => document.querySelector('[data-service="entra"] [data-area="' + id + '"]').innerText.includes("no backup types"))`)) throw new Error("Entra configuration types are missing")
+      }
+      if (state === "defender-backup-types") {
+        await evaluate(`document.querySelector('[data-service="defender"] > details').open = true`)
+        if (await evaluate(`document.querySelector('[data-service="defender"]').innerText.includes("no backup types" )`)) throw new Error("Defender configuration types are missing")
       }
       if (state === "personal-data") await evaluate(`document.querySelector('[data-service="entra"] > details').open = true`)
       if (state === "reader-lost-access" || state === "partly-verified" || state.startsWith("cause-")) await evaluate(`document.querySelector('[data-service="intune"] > details').open = true`)

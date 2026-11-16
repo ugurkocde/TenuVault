@@ -75,6 +75,8 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 ## Compatibility notes for the next release
 
+- Defender is opt-in and now backs up 17 Microsoft Graph configuration types. It does not cover Office 365 threat policies or Defender for Endpoint settings. Restore remains unavailable. Workbooks add Workbooks.Read.All to Detection and response. Existing Intune selections stay unchanged.
+
 - Entra configuration references now store people by ID without subject descriptions, actor names or principal profiles. Configured notification recipient email addresses remain stored as policy settings. On-behalf requestors use stable subject identity. Workflow execution times and other runtime status are excluded from storage and drift; existing backups are not rewritten and a comparison with an older backup can show the excluded fields being removed once.
 - Governance adds entitlement management, review definitions, current lifecycle workflows/tasks and terms metadata. Lifecycle license refusals leave coverage incomplete. Review decisions, workflow versions and PDF content are excluded. Each Governance type has a 120-second, 500-GET budget that leaves other types running.
 - Entra ID now backs up 67 configuration types in Tenant settings, Authentication, External identities, Roles and PIM, Governance, and two opt-in Groups settings. Existing tenants keep Entra ID off. These types are backup and comparison only; Azure Automation remains Intune and Conditional Access only. Four types need a signed-in admin. Branding stores JSON up to 1 MiB, without image or CSS streams. Directory settings include custom banned password words. Refused domain federation sub-reads keep the domain and report incomplete coverage.
