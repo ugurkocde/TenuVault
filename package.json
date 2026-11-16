@@ -24,8 +24,7 @@
     "license:keypair": "node scripts/generate-license-keypair.mjs",
     "postinstall": "electron-builder install-app-deps",
     "test:e2e": "vitest run --mode e2e",
-    "smoke": "node scripts/smoke.mjs",
-    "sign-in-e2e": "node scripts/sign-in-e2e/run.mjs"
+    "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
     "@azure/msal-node": "^7.0.1",

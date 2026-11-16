@@ -135,7 +135,7 @@ jobs:
             eval "$(printf "\n" | gnome-keyring-daemon --start --components=secrets)"
             printf probe | secret-tool store --label=probe tenuvault-sign-in-e2e probe
             test "$(secret-tool lookup tenuvault-sign-in-e2e probe)" = probe
-            xvfb-run -a npm run sign-in-e2e -- out/sign-in-e2e
+            xvfb-run -a node scripts/sign-in-e2e/run.mjs out/sign-in-e2e
           '
 
       - name: Undo the sign-in test's changes to the runner

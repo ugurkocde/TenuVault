@@ -34,6 +34,7 @@ export type Feature =
   | "backupReader"
   | "changeReports"
   | "sync"
+  | "appRestoreOtherTenant"
 
 /** The lowest plan that includes a feature. */
 export const FEATURE_PLAN: Record<Feature, Exclude<Plan, "community">> = {
@@ -62,6 +63,7 @@ export const FEATURE_PLAN: Record<Feature, Exclude<Plan, "community">> = {
   backupReader: "pro",
   changeReports: "pro",
   sync: "pro",
+  appRestoreOtherTenant: "pro",
 }
 
 const FEATURE_NAMES: Record<Feature, string> = {
@@ -90,6 +92,7 @@ const FEATURE_NAMES: Record<Feature, string> = {
   backupReader: "Scheduled backups with a read-only Backup Reader that Conditional Access sign-in frequency does not interrupt",
   changeReports: "Change reports with who changed what, as PDF, Markdown or email after every scheduled backup",
   sync: "Sync",
+  appRestoreOtherTenant: "Restoring an App Backup installer into another tenant",
 }
 
 /** Licensed CIS content: its assessments and reports need baselineAllPlatforms; other frameworks are free. */

@@ -25,6 +25,10 @@ on:
         description: Emergency only. Promote even though a licensing change has been on nightly for less than 24 hours.
         type: boolean
         default: false
+      allow_unverified_nightly:
+        description: Emergency only. Promote even though the nightly of this commit has not passed the nightly verification.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -40,6 +44,12 @@ jobs:
     # Nightlies only follow a CI run that passed on a push to main.
     if: github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # The nightly verification result is a commit status, bound to its run and the run's result
+      # artifact (.github/scripts/nightly-verified.mjs).
+      statuses: read
+      actions: read
     outputs:
       channel: ${{ steps.resolve.outputs.channel }}
       version: ${{ steps.resolve.outputs.version }}
@@ -60,6 +70,7 @@ jobs:
           DISPATCH_CHANNEL: ${{ inputs.channel }}
           DISPATCH_VERSION: ${{ inputs.version }}
           ALLOW_UNSOAKED: ${{ inputs.allow_unsoaked_license_change }}
+          ALLOW_UNVERIFIED: ${{ inputs.allow_unverified_nightly }}
           RUN_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
@@ -114,6 +125,13 @@ jobs:
               echo "::warning::Licensing soak check skipped by allow_unsoaked_license_change."
             else
               node .github/scripts/license-soak.mjs "$sha"
+            fi
+            # Stable only ships a commit whose nightly installed, activated a paid key and signed in
+            # on Windows and macOS (.github/workflows/nightly-verification.yml).
+            if [ "$EVENT" = "workflow_dispatch" ] && [ "$ALLOW_UNVERIFIED" = "true" ]; then
+              echo "::warning::Nightly verification check skipped by allow_unverified_nightly."
+            else
+              node .github/scripts/nightly-verified.mjs "$sha"
             fi
           fi
           tag=$(echo "$meta" | jq -r .tag)
@@ -399,9 +417,22 @@ jobs:
             stamp="${VERSION##*.}"
             title="Nightly ${stamp:0:4}-${stamp:4:2}-${stamp:6:2} ${stamp:8:2}:${stamp:10:2} UTC"
             gh release create "$TAG" artifacts/* --target "$SHA" --title "$title" --notes-file notes.md --prerelease --latest=false
+            # What was published, for the nightly verification of this run (published-nightly below).
+            jq -n --arg tag "$TAG" --arg sha "$SHA" '{tag: $tag, sha: $sha}' > published-nightly.json
           else
             gh release create "$TAG" artifacts/* --target "$SHA" --title "$VERSION" --notes-file notes.md --latest
           fi
+
+      # The nightly verification verifies exactly this tag and commit, whatever later steps do, also
+      # when the run is cancelled after the release was created. No file: nothing was published.
+      - name: Record the published nightly
+        if: always() && needs.meta.outputs.channel == 'nightly'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: published-nightly
+          path: published-nightly.json
+          if-no-files-found: ignore
+          retention-days: 30
 
       # Keep the release page readable: the newest 20 nightlies stay, older ones and their tags go.
       - name: Remove old nightlies

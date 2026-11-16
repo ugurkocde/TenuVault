@@ -20,7 +20,7 @@ export default function AppBackupPage() {
   useEffect(() => { window.scrollTo(0, 0) }, [tenant])
   // A tenant switch unmounts its operation view. Its cancellation stays bound to the old tenant.
   return <div className="mx-auto max-w-[1600px] space-y-6 p-6 lg:p-8">
-    <header><h1 className="text-4xl font-light tracking-tight text-gray-900">App Backup</h1><p className="mt-2 text-sm text-gray-600">Installer backups from Intune. Completely free for every configured tenant. {selectedTenant ? `Tenant: ${selectedTenant.name}.` : ""}</p></header>
+    <header><h1 className="text-4xl font-light tracking-tight text-gray-900">App Backup</h1><p className="mt-2 text-sm text-gray-600">Installer backups from Intune. Free on every plan. Restoring into another tenant needs Pro or MSP for that tenant. {selectedTenant ? `Tenant: ${selectedTenant.name}.` : ""}</p></header>
     {tenant ? <SourceWorkspace key={tenant} tenant={tenant} /> : <div className="rounded-3xl bg-card p-6 text-sm text-gray-600">Select a configured tenant to view or store its installers. <Link to="/portal/tenants" className="ml-2 underline underline-offset-4">Connect a tenant</Link></div>}
   </div>
 }

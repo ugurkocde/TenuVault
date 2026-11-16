@@ -2,6 +2,7 @@ import { requestWindowsContent } from "./app-backup/windows-helper"
 import { requireCaptureEnabled } from "./app-backup/capture-policy"
 import { checkCaptureMetadata } from "./app-backup/capture-preflight"
 import { restoreCapturedApp } from "./app-backup/restore"
+import { restoreDestinationPlan } from "./app-backup/restore-plan"
 import { restoreGraph } from "./app-backup/restore-graph"
 import { readRestoreSnapshot, sameRestoreSettings } from "./app-backup/restore-snapshot"
 import { downloadCapturedContent } from "./app-backup/capture-download"
@@ -1470,7 +1471,9 @@ async function bootstrap(): Promise<void> {
     )
   })
 
+  const appRestorePlan = restoreDestinationPlan(license)
   const appSources = new AppSourceService({
+    restorePlan: appRestorePlan,
     restoreOwner: () => {
       let id = appStore.get("appSources.restoreOwner")
       if (!id || !isGuid(id)) { id = randomUUID(); appStore.set("appSources.restoreOwner", id) }
@@ -1549,7 +1552,7 @@ async function bootstrap(): Promise<void> {
   handleTrusted("appSources:cancelDeviceSignIn", (_event, tenant: unknown) => appSources.cancelDeviceSignIn(tenant))
   handleTrusted("appSources:restoreReview", (_event, tenant: unknown, source: unknown) => appSources.restoreReview(tenant, source))
   handleTrusted("appSources:loadRestoreSettings", (_event, tenant: unknown, source: unknown) => appSources.loadRestoreSettings(tenant, source))
-  handleTrusted("appSources:restore", (_event, tenant: unknown, operation: unknown, source: unknown, target: unknown, name: unknown, settingsHash: unknown) => appSources.restore(tenant, operation, source, target, name, settingsHash))
+  handleTrusted("appSources:restore", (_event, tenant: unknown, operation: unknown, source: unknown, target: unknown, name: unknown, settingsHash: unknown) => withPlanError(() => appSources.restore(tenant, operation, source, target, name, settingsHash)))
   handleTrusted("appSources:restoreProgress", (_event, tenant: unknown, operation: unknown) => appSources.restoreProgress(tenant, operation))
   handleTrusted("appSources:capture", (_event, tenant: unknown, operation: unknown, id: unknown) => appSources.capture(tenant, operation, id))
   handleTrusted("appSources:assignments", (_event, tenant: unknown, id: unknown) => appSources.assignments(tenant, id))

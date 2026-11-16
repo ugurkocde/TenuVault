@@ -5,12 +5,15 @@ import type { AppDeviceCode, AppDeviceSignInStatus, AppRestoreProgress, AppResto
 import { restoreBody, snapshotHash, type AppRestoreSnapshot } from "../app-backup/restore-snapshot"
 import { AppSourceStore, sourceTenant } from "./store"
 import type { AcknowledgementRequired } from "../../shared/disclaimer"
+import { allows, PlanRequired, type Plan } from "../../shared/plans"
 
 export interface AppSourceHost {
   restoreOwner?: () => string
   signInWithDeviceCode?: (tenant: string, onCode: (code: AppDeviceCode) => void, signal: AbortSignal) => Promise<void>
   restore?: (store: AppSourceStore, source: CapturedAppSource, snapshot: AppRestoreSnapshot, target: string, name: string, signal: AbortSignal, progress: (value: AppRestoreProgress) => void) => Promise<AppRestoreResult | AcknowledgementRequired>
   loadRestoreSettings?: (tenant: string, appId: string) => Promise<AppRestoreSnapshot>
+  /** The plan of a restore destination that is not the installer's source tenant, or null when it has none. */
+  restorePlan?: (tenant: string) => Promise<Plan | null>
   assignments?: (tenant: string, appId: string) => ReturnType<AppSourcesBridge["assignments"]>
   capture?: (tenant: string, appId: string, jobId: string, store: AppSourceStore, signal: AbortSignal, progress: (value: AppCaptureProgress) => void) => Promise<CapturedAppSource>
   ensureKeys?: () => void
@@ -31,7 +34,11 @@ export interface AppSourceHost {
   apps: (tenant: string) => ReturnType<AppSourcesBridge["apps"]>
 }
 
-/** Local actions are free for every configured tenant and need no live token. */
+/**
+ * Local actions are free for every configured tenant and need no live token. Restoring a captured
+ * installer into its source tenant is free too; only a restore into another tenant needs that
+ * destination's plan to include appRestoreOtherTenant.
+ */
 export class AppSourceService {
   private readonly deviceSignIns = new Map<string, { abort: AbortController; ready: Promise<AppDeviceCode>; state: AppDeviceSignInStatus }>()
   private readonly jobs = new Map<string, { tenant: string; abort: AbortController; progress?: AppCaptureProgress; restoreProgress?: AppRestoreProgress }>()
@@ -149,11 +156,19 @@ export class AppSourceService {
       if (!snapshot || snapshotHash(snapshot) !== settingsHash) throw new Error("The app settings changed. Review them before restoring.")
       if (!this.host.restore) throw new Error("App restore is unavailable in this build.")
       restoreBody(snapshot, name); this.tenant(destination)
+      await this.requireDestinationPlan(captured, destination)
+      signal.throwIfAborted(); this.tenant(destination)
       return this.host.restore(store, captured, snapshot, destination, name, signal, value => {
         const job = this.jobs.get(operationId)
         if (job?.tenant === tenant) job.restoreProgress = value
       })
     })
+  }
+  /** A destination other than the tenant the installer was captured from needs a plan with appRestoreOtherTenant. */
+  private async requireDestinationPlan(captured: CapturedAppSource, destination: string): Promise<void> {
+    if (captured.receipt.tenantId.toLowerCase() === destination.toLowerCase()) return
+    const plan = this.host.restorePlan ? await this.host.restorePlan(destination) : null
+    if (plan === null || !allows(plan, "appRestoreOtherTenant")) throw new PlanRequired("appRestoreOtherTenant")
   }
   restoreProgress(raw: unknown, operation: unknown): AppRestoreProgress | null {
     const tenant = this.tenant(raw), job = this.jobs.get(sourceTenant(operation))

@@ -5,7 +5,7 @@ description: Compare the Community, Pro and MSP plans and see which features eac
 
 TenuVault has three plans: Community, which is free, and the paid Pro and MSP plans. Every tenant you connect is licensed on its own, and the plan decides how many tenants you can use and which features are available for them.
 
-[App Backup](/apps/app-backup/) is free for every configured tenant, including tenants outside paid coverage. Existing archives remain exportable while signed out and do not use the Community tenant allowance. The limits below describe the other backup, restore and automation workflows.
+[App Backup](/apps/app-backup/) is free on every plan, including tenants outside paid coverage. Existing archives remain exportable while signed out and do not use the Community tenant allowance. Restoring a captured installer into a tenant other than the one it was captured from needs Pro, MSP or a Pro trial on record for that destination tenant. The limits below describe the other backup, restore and automation workflows.
 
 ## Plans at a glance
 
@@ -44,7 +44,8 @@ Eligible nonprofits can use Pro at no cost. Email [support@tenuvault.com](mailto
 
 | Feature | Community | Pro | MSP |
 | --- | --- | --- | --- |
-| [App Backup](/apps/app-backup/): app inventory and installer backups | Free for every configured tenant | Free for every configured tenant | Free for every configured tenant |
+| [App Backup](/apps/app-backup/): app inventory, installer backups, export and restore into the source tenant | Yes | Yes | Yes |
+| [App Backup](/apps/app-backup/#restore-to-the-same-or-another-tenant): restore an installer into another tenant | | Yes | Yes |
 | Manual backups | Yes | Yes | Yes |
 | Weekly scheduled backups | Yes | Yes | Yes |
 | Daily scheduled backups | | Yes | Yes |

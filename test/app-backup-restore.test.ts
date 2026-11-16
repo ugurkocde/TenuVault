@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, afterAll, describe, expect, it, vi } from "vitest"
 import { createCipheriv, createHash, createHmac, randomBytes, randomUUID } from "node:crypto"
 import { mkdtemp, readFile, rm, writeFile, readdir, mkdir } from "node:fs/promises"
+import { readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import JSZip from "jszip"
@@ -9,13 +10,18 @@ import { spawn } from "node:child_process"
 import { once } from "node:events"
 import { AppSourceStore } from "../src/main/app-sources/store"
 import { AppSourceService } from "../src/main/app-sources/service"
+import { restoreDestinationPlan } from "../src/main/app-backup/restore-plan"
+import { withPlanError } from "../src/shared/plan-errors"
+import { LicenseService } from "../src/main/license/service"
+import { memoryStore } from "./helpers"
+import { PlanRequired, type Plan } from "../src/shared/plans"
 import { ingestContent, type ContentEncryption } from "../src/main/app-backup/content-stream"
 import { restoreCapturedApp } from "../src/main/app-backup/restore"
 import { restoreGraph, putRestoreBlock, type RestoreGraph } from "../src/main/app-backup/restore-graph"
 import { assertRestoredSettings, readRestoreSnapshot, restoreBody, snapshotHash, type AppRestoreSnapshot } from "../src/main/app-backup/restore-snapshot"
 import { encryptRestoreContent, newRestoreSecrets } from "../src/main/app-backup/restore-encryption"
 
-const tenant = "11111111-1111-1111-1111-111111111111", target = "22222222-2222-2222-2222-222222222222", appId = "33333333-3333-3333-3333-333333333333"
+const tenant = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", target = "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff", appId = "33333333-3333-3333-3333-333333333333"
 const identity = { tenantId: tenant, appId, contentVersion: "1", contentFileId: `sha256:${"a".repeat(64)}`, appType: "#microsoft.graph.win32LobApp" as const }
 const snapshot: AppRestoreSnapshot = { schema: 1, tenantId: tenant, appId, contentVersion: "1", observedAt: "2026-11-14T12:00:00Z", origin: "capture", relationships: [], app: {
   id: appId, "@odata.type": "#microsoft.graph.win32LobApp", committedContentVersion: "1", displayName: "Example", description: "An example", publisher: "Example Ltd", fileName: "Example.intunewin", setupFilePath: "setup.exe", installCommandLine: "setup.exe /quiet", uninstallCommandLine: "setup.exe /uninstall", rules: [{ "@odata.type": "#microsoft.graph.win32LobAppPowerShellScriptRule", ruleType: "detection", scriptContent: "ZXhpdCAw" }], installExperience: { runAsAccount: "system", deviceRestartBehavior: "suppress" }, returnCodes: [{ returnCode: 0, type: "success" }], roleScopeTagIds: ["987"], assignments: [{ target: { groupId: randomUUID() } }], categories: [{ id: randomUUID() }], size: 9,
@@ -257,12 +263,100 @@ describe("cross-tenant restore engine", () => {
 
 it("binds service restore to both configured tenants, captured provenance and the reviewed settings hash", async () => {
   const f = await fixture(), restore = vi.fn(async () => ({ appId: randomUUID(), tenantId: target, name: "Restored", contentVersion: "1", sourceId: f.source.id }))
-  const service = new AppSourceService({ restore, knownTenant: t => [tenant, target].includes(t), folder: () => f.root, keys: () => [f.master], setFolder: vi.fn(), pickFolder: vi.fn(), pickExport: vi.fn(), openFolder: vi.fn(), confirmNewStore: vi.fn(), checkDevice: vi.fn(), signIn: vi.fn(), details: vi.fn(), apps: vi.fn(), printDetails: vi.fn(), downloadScript: vi.fn() })
+  const service = new AppSourceService({ restore, restorePlan: async () => "pro", knownTenant: t => [tenant, target].includes(t), folder: () => f.root, keys: () => [f.master], setFolder: vi.fn(), pickFolder: vi.fn(), pickExport: vi.fn(), openFolder: vi.fn(), confirmNewStore: vi.fn(), checkDevice: vi.fn(), signIn: vi.fn(), details: vi.fn(), apps: vi.fn(), printDetails: vi.fn(), downloadScript: vi.fn() })
   expect((await service.restoreReview(tenant, f.source.id)).settingsHash).toBe(snapshotHash(snapshot))
   expect(() => service.restore(tenant, randomUUID(), f.source.id, randomUUID(), "Restored", snapshotHash(snapshot))).toThrow("configured")
   await expect(service.restore(tenant, randomUUID(), f.source.id, target, "Restored", "0".repeat(64))).rejects.toThrow("changed")
   await service.restore(tenant, randomUUID(), f.source.id, target, "Restored", snapshotHash(snapshot))
   expect(restore).toHaveBeenCalledOnce()
+})
+
+describe("restore into another tenant needs the destination's plan", () => {
+  const restored = (destination: string) => ({ appId: randomUUID(), tenantId: destination, name: "Restored", contentVersion: "1", sourceId: "" })
+  async function planService(plan: Plan | null, lookup = true) {
+    const f = await fixture(), restore = vi.fn(async (_s: unknown, _c: unknown, _n: unknown, destination: string) => restored(destination)), restorePlan = vi.fn(async () => plan)
+    const service = new AppSourceService({ restore, ...(lookup ? { restorePlan } : {}), knownTenant: t => [tenant, target].includes(t), folder: () => f.root, keys: () => [f.master], setFolder: vi.fn(), pickFolder: vi.fn(), pickExport: vi.fn(), openFolder: vi.fn(), confirmNewStore: vi.fn(), checkDevice: vi.fn(), signIn: vi.fn(), details: vi.fn(), apps: vi.fn(), printDetails: vi.fn(), downloadScript: vi.fn() })
+    return { f, service, restore, restorePlan, run: (destination: string) => service.restore(tenant, randomUUID(), f.source.id, destination, "Restored", snapshotHash(snapshot)) }
+  }
+  // A Pro trial is a "pro" plan from the entitlement check, like a paid Pro license.
+  it.each([["Community", "community"], ["no plan", null], ["Pro trial", "pro"], ["Pro", "pro"], ["MSP", "msp"]] as const)("restores into the source tenant on %s without asking for a plan", async (_label, plan) => {
+    for (const destination of [tenant, tenant.toUpperCase()]) {
+      const { run, restore, restorePlan } = await planService(plan)
+      await expect(run(destination)).resolves.toMatchObject({ tenantId: tenant })
+      expect(restore).toHaveBeenCalledOnce()
+      expect(restorePlan).not.toHaveBeenCalled()
+    }
+  })
+  it.each([["Community", "community"], ["no plan", null]] as const)("refuses another tenant on %s before any destination write", async (_label, plan) => {
+    for (const destination of [target, target.toUpperCase()]) {
+      const { run, restore, restorePlan } = await planService(plan)
+      const error = await run(destination).catch((e: unknown) => e)
+      expect(error).toBeInstanceOf(PlanRequired)
+      expect((error as PlanRequired).feature).toBe("appRestoreOtherTenant")
+      expect(restorePlan).toHaveBeenCalledExactlyOnceWith(target)
+      expect(restore).not.toHaveBeenCalled()
+    }
+  })
+  it.each([["Pro trial", "pro"], ["Pro", "pro"], ["MSP", "msp"]] as const)("restores into another tenant on %s", async (_label, plan) => {
+    const { run, restore, restorePlan } = await planService(plan)
+    await expect(run(target.toUpperCase())).resolves.toMatchObject({ tenantId: target })
+    expect(restorePlan).toHaveBeenCalledExactlyOnceWith(target)
+    expect(restore).toHaveBeenCalledOnce()
+  })
+  it("refuses another tenant when this build has no plan lookup", async () => {
+    const { run, restore } = await planService("msp", false)
+    await expect(run(target)).rejects.toBeInstanceOf(PlanRequired)
+    expect(restore).not.toHaveBeenCalled()
+    await expect(run(tenant)).resolves.toMatchObject({ tenantId: tenant })
+  })
+  it("sends the refusal as the plan error the plan dialog reads", async () => {
+    const { run } = await planService("community")
+    expect(await withPlanError(() => run(target))).toEqual({ planError: { code: "plan_required", message: expect.stringContaining("included in TenuVault Pro and MSP"), upgrade: "appRestoreOtherTenant" } })
+  })
+})
+
+describe("the restore reads the destination plan on record without changing the license", () => {
+  const contract = JSON.parse(readFileSync(join(__dirname, "fixtures/license-contract.json"), "utf8")) as { tenantId: string; installId: string; publicKey: string; tokens: { name: string; payload: { act: string; iat: number }; token: string }[] }
+  const destination = contract.tenantId, token = (name: string) => contract.tokens.find(entry => entry.name === name)!
+  const MUTATING = ["requireEntitlement", "requireRecovery", "checkNewTenant", "startTenantTrial", "tenantTrialAction", "setKey", "replaceKey", "setShared", "refreshAll", "retry", "releaseTenant", "deactivate", "chooseCommunity", "recordTrialUsage"] as const
+  afterEach(() => { vi.useRealTimers() })
+  async function attempt(state: Record<string, string>) {
+    vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime((contract.tokens[0]!.payload.iat + 3600) * 1000)
+    const store = memoryStore(); store.set("license.installId", contract.installId)
+    for (const [key, value] of Object.entries(state)) store.set(key, value)
+    const fetcher = vi.fn(async () => Response.json({ reason: "unexpected" }, { status: 500 }))
+    const license = new LicenseService({ store, persist: true, publicKey: contract.publicKey, apiBase: "https://www.tenuvault.com", appVersion: "0.5.3", platform: "win32", idToken: async () => "header.payload.signature", clientId: () => "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f", fetch: fetcher as typeof fetch })
+    license.status([tenant, destination])
+    const mutations = MUTATING.map(name => vi.spyOn(license, name))
+    const before = new Map(store.values)
+    const f = await fixture(), restore = vi.fn(async () => ({ appId: randomUUID(), tenantId: destination, name: "Restored", contentVersion: "1", sourceId: f.source.id }))
+    const service = new AppSourceService({ restore, restorePlan: restoreDestinationPlan(license), knownTenant: t => [tenant, destination].includes(t), folder: () => f.root, keys: () => [f.master], setFolder: vi.fn(), pickFolder: vi.fn(), pickExport: vi.fn(), openFolder: vi.fn(), confirmNewStore: vi.fn(), checkDevice: vi.fn(), signIn: vi.fn(), details: vi.fn(), apps: vi.fn(), printDetails: vi.fn(), downloadScript: vi.fn() })
+    const outcome = await service.restore(tenant, randomUUID(), f.source.id, destination, "Restored", snapshotHash(snapshot)).then(() => "restored", (error: unknown) => error)
+    for (const spy of mutations) expect(spy, spy.getMockName()).not.toHaveBeenCalled()
+    expect(fetcher).not.toHaveBeenCalled()
+    expect(new Map(store.values)).toEqual(before)
+    return { outcome, restore, store }
+  }
+  const activation = (name: string, key = "TENU-RESTORE-KEY-0001") => ({ "license.state": JSON.stringify({ key, activations: { [destination]: { activationId: token(name).payload.act, token: token(name).token, ...(name.includes("tenant trial") ? { source: "trial" } : {}) } } }) })
+  it("refuses a Community install with two tenants and no Community tenant chosen, and leaves the choice unset", async () => {
+    const { outcome, restore, store } = await attempt({})
+    expect(outcome).toBeInstanceOf(PlanRequired)
+    expect(restore).not.toHaveBeenCalled()
+    expect(store.get("license.communityTenant")).toBeNull()
+  })
+  it("refuses a destination that is the Community tenant", async () => {
+    const { outcome, restore } = await attempt({ "license.communityTenant": destination })
+    expect(outcome).toBeInstanceOf(PlanRequired); expect(restore).not.toHaveBeenCalled()
+  })
+  it("refuses a key install whose destination is not activated, without activating it", async () => {
+    const { outcome, restore, store } = await attempt({ "license.state": JSON.stringify({ key: "TENU-RESTORE-KEY-0001", activations: {} }) })
+    expect(outcome).toBeInstanceOf(PlanRequired); expect(restore).not.toHaveBeenCalled()
+    expect(JSON.parse(store.get("license.state")!).activations).toEqual({})
+  })
+  it.each([["Pro", "v1 pro"], ["MSP", "v1 msp"], ["Pro trial", "v2 tenant trial"]])("restores into a destination with %s on record", async (_label, name) => {
+    const { outcome, restore } = await attempt(activation(name))
+    expect(outcome).toBe("restored"); expect(restore).toHaveBeenCalledOnce()
+  })
 })
 
 it("keeps destination tokens off storage and rejects foreign origins before fetching", async () => {
