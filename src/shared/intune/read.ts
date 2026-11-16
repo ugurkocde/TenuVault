@@ -36,7 +36,7 @@ export interface ReadOptions {
    * restorable (see the registry's restorable checks), so it can only record that the value exists.
    */
   keepMasked?: (error: unknown) => boolean
-  /** Records a refused optional sub-read. Without this callback it fails the object. */
+  /** Records an unread optional sub-read. Without this callback it fails the object. */
   onUnreadExtra?: (property: string, error: unknown) => void
 }
 
@@ -93,7 +93,7 @@ export async function readObject(type: IntuneType, id: string, graph: GraphReade
     } catch (error) {
       const answer = error as { status?: number; answer?: { code?: string; message?: string } }
       const matches = (pattern: NonNullable<IntuneType["notConfigured"]>[number]) => pattern.status === answer.status && (!pattern.code || pattern.code.toLowerCase() === answer.answer?.code?.toLowerCase()) && (!pattern.message || answer.answer?.message?.toLowerCase().includes(pattern.message.toLowerCase()))
-      if (extra.notConfigured?.some(matches)) { detail[extra.property] = []; continue }
+      if (extra.notConfigured?.some(matches) && (!extra.notConfiguredWhen || extra.notConfiguredWhen(detail))) { detail[extra.property] = []; continue }
       if (!options.onUnreadExtra || !extra.optional?.some(matches)) throw error
       // An absent property means unread, never an empty collection that could mean not configured.
       delete detail[extra.property]
@@ -261,6 +261,13 @@ export function withoutUnreadAssignments<T extends Item>(type: IntuneType | unde
   return [before as T, after as T]
 }
 
+/** Keeps a resolver failure distinct from an answer from the requested type's endpoint. */
+export class OrganizationResolutionError extends Error {
+  constructor(override readonly cause: unknown) {
+    super(`Could not resolve the organization ID: ${cause instanceof Error ? cause.message : String(cause)}`, { cause })
+  }
+}
+
 /** Resolves the organization-scoped paths without embedding a tenant ID in the registry. */
 export function organizationReader(graph: GraphReader): GraphReader {
   let organization: Promise<string> | undefined
@@ -269,7 +276,7 @@ export function organizationReader(graph: GraphReader): GraphReader {
     organization ??= graph.list("organization?$select=id").then(entries => {
       if (entries.length !== 1 || typeof entries[0]?.id !== "string" || !entries[0].id) throw new Error("Microsoft Graph did not return exactly one organization ID")
       return encodeURIComponent(entries[0].id)
-    })
+    }).catch(error => { throw new OrganizationResolutionError(error) })
     return path.replaceAll("{organizationId}", await organization)
   }
   return { get: async path => graph.get(await resolve(path)), list: async path => graph.list(await resolve(path)) }

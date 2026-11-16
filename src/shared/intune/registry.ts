@@ -44,10 +44,12 @@ export interface Extra {
    * object, so a list of IDs is never shorter than the collection.
    */
   ids?: true
-  /** A refused sub-read may keep the parent, only when the caller records incomplete coverage. */
+  /** An unread sub-read may keep the parent, only when the caller records incomplete coverage. */
   optional?: readonly AnswerPattern[]
   /** A sub-collection that does not exist before customization is stored as an empty list. */
   notConfigured?: readonly AnswerPattern[]
+  /** Whether the parent configuration permits treating this sub-read as not configured. */
+  notConfiguredWhen?: (parent: Item) => boolean
   /**
    * Read for every entry of this extra, when Graph cannot expand it (max $expand depth is 1) or returns it
    * incomplete. With `property` the collection is stored on the entry; without, the object is merged into it.

@@ -184,6 +184,96 @@ describe("Entra backup integration", () => {
     expect((await setup.manifest(job)).SkippedTypes).toContain("Domains")
   })
 
+  for (const authenticationType of ["Managed", "Federated", undefined]) it(`treats a federation 404 as empty only for a managed domain (${authenticationType ?? "unknown"})`, async () => {
+    const setup = fixture(scriptedGraph({
+      "/v1.0/domains": { value: [{ id: "example.test" }] },
+      "/v1.0/domains/example.test": { id: "example.test", ...(authenticationType ? { authenticationType } : {}) },
+      "/v1.0/domains/example.test/federationConfiguration": refusal(404, "Request_ResourceNotFound", "Not found"),
+      "/v1.0/domains/example.test/verificationDnsRecords": { value: [] },
+      "/v1.0/domains/example.test/serviceConfigurationRecords": { value: [] },
+    }))
+    const job = await setup.run({ scope: only("Domains") })
+    const files = (await setup.files(job)).filter(file => file.startsWith("Domains/"))
+    expect(files).toHaveLength(1)
+    const saved = await setup.file(job, files[0]!)
+    if (authenticationType === "Managed") {
+      expect(saved?.federationConfiguration).toEqual([])
+      expect(job.outcomes).toMatchObject({ coverage: "complete", types: [{ outcome: "saved", saved: 1 }] })
+    } else {
+      expect(saved).not.toHaveProperty("federationConfiguration")
+      expect(job.outcomes).toMatchObject({ coverage: "incomplete", types: [{ outcome: "failed", saved: 1 }] })
+    }
+  })
+
+  for (const failure of ["read", "write"]) it(`records a later ${failure} failure after an optional federation refusal without claiming the parent was kept`, async () => {
+    const setup = fixture(scriptedGraph({
+      "/v1.0/domains": { value: [{ id: "example.test" }] },
+      "/v1.0/domains/example.test": { id: "example.test", authenticationType: "Federated" },
+      "/v1.0/domains/example.test/federationConfiguration": refusal(403, "Authorization_RequestDenied", "Insufficient privileges"),
+      "/v1.0/domains/example.test/verificationDnsRecords": failure === "read" ? refusal(400, "BadRequest", "DNS read failed") : { value: [] },
+      "/v1.0/domains/example.test/serviceConfigurationRecords": { value: [] },
+    }))
+    if (failure === "write") {
+      const put = setup.store.put.bind(setup.store)
+      vi.spyOn(setup.store, "put").mockImplementation((...args) => {
+        if (args[2].includes("/Domains/")) throw new Error("Domain write failed")
+        return put(...args)
+      })
+    }
+    const job = await setup.run({ scope: only("Domains") })
+    expect(job.outcomes).toMatchObject({ coverage: "incomplete", types: [{ outcome: "failed", saved: 0 }] })
+    expect(job.results?.types[0]).toMatchObject({ failed: 1, saved: 0 })
+    expect((await setup.files(job)).filter(file => file.startsWith("Domains/"))).toEqual([])
+    expect(JSON.stringify(job)).not.toContain("the parent configuration was kept")
+    const manifest = await setup.manifest(job)
+    expect(manifest.Outcomes[0]).toMatchObject({ Outcome: "failed", Saved: 0 })
+    expect(JSON.stringify(manifest)).not.toContain("the parent configuration was kept")
+  })
+
+  for (const failureFirst of [true, false]) it(`does not let a partial read hide another domain's failure (failure first: ${failureFirst})`, async () => {
+    const setup = fixture(scriptedGraph({
+      "/v1.0/domains": { value: (failureFirst ? ["a.test", "b.test"] : ["b.test", "a.test"]).map(id => ({ id })) },
+      "/v1.0/domains/a.test": refusal(400, "BadRequest", "Domain read failed"),
+      "/v1.0/domains/b.test": { id: "b.test", authenticationType: "Federated" },
+      "/v1.0/domains/b.test/federationConfiguration": refusal(403, "Authorization_RequestDenied", "Insufficient privileges"),
+      "/v1.0/domains/b.test/verificationDnsRecords": { value: [] },
+      "/v1.0/domains/b.test/serviceConfigurationRecords": { value: [] },
+    }), { concurrency: 1 })
+    const job = await setup.run({ scope: only("Domains") })
+    expect(job.outcomes).toMatchObject({ coverage: "incomplete", types: [{ outcome: "failed", saved: 1 }] })
+  })
+
+  for (const status of [403, 404]) it(`does not classify an organization resolver ${status} as absent company branding`, async () => {
+    const setup = fixture(scriptedGraph({
+      "/v1.0/organization?$select=id": refusal(status, "Request_ResourceNotFound", "Organization lookup failed"),
+    }))
+    const job = await setup.run({ scope: only("EntraCompanyBranding") })
+    expect(job.outcomes?.coverage).toBe("incomplete")
+    expect(job.outcomes?.types[0]?.outcome).not.toBe("notConfigured")
+    expect(setup.requests.map(request => request.path)).toEqual(["/v1.0/organization?$select=id"])
+    expect((await setup.manifest(job)).Coverage).toBe("Incomplete")
+  })
+
+  it("keeps permission refusals from organization resolution during an object read incomplete", async () => {
+    let lookups = 0
+    const setup = fixture(scriptedGraph({
+      "/v1.0/organization?$select=id": () => ++lookups === 1 ? Response.json({ value: [{ id: "example" }] }) : refusal(403, "Authorization_RequestDenied", "Organization lookup denied")(),
+      "/v1.0/organization/example/certificateBasedAuthConfiguration": { value: [{ id: "certificate-config" }] },
+    }))
+    const job = await setup.run({ scope: only("CertificateBasedAuthConfigurations") })
+    expect(job.outcomes).toMatchObject({ coverage: "incomplete", types: [{ outcome: "skipped", cause: "permission" }] })
+    expect(setup.requests.map(request => request.path)).not.toContain("/v1.0/organization/example/certificateBasedAuthConfiguration/certificate-config")
+  })
+
+  it("accepts a not-configured answer from the branding endpoint itself", async () => {
+    const setup = fixture(scriptedGraph({
+      "/v1.0/organization?$select=id": { value: [{ id: "example" }] },
+      "/v1.0/organization/example/branding": refusal(404, "Request_ResourceNotFound", "Branding not configured"),
+    }))
+    const job = await setup.run({ scope: only("EntraCompanyBranding") })
+    expect(job.outcomes).toMatchObject({ coverage: "complete", types: [{ outcome: "notConfigured" }] })
+  })
+
   it("requires a caller to record incomplete coverage before tolerating a refused optional sub-read", async () => {
     const type = ENTRA_TYPES.find(type => type.folder === "Domains")!
     await expect(readObject(type, "example.test", { get: async () => ({ id: "example.test" }), list: async () => { throw new GraphError("Denied", 403) } })).rejects.toThrow("Denied")

@@ -59,7 +59,7 @@ export const ENTRA_TYPES: IntuneType[] = [
     ...base("Domains", "Domains", "domains"),
     extras: [
       // Domain-InternalFederation.Read.All may be refused even when the domain itself is readable.
-      { property: "federationConfiguration", path: id => `domains/${id}/federationConfiguration`, optional: [{ status: 403 }], notConfigured: [{ status: 404, code: "Request_ResourceNotFound" }] },
+      { property: "federationConfiguration", path: id => `domains/${id}/federationConfiguration`, optional: [{ status: 403 }, { status: 404, code: "Request_ResourceNotFound" }], notConfigured: [{ status: 404, code: "Request_ResourceNotFound" }], notConfiguredWhen: parent => parent.authenticationType === "Managed" },
       { property: "verificationDnsRecords", path: id => `domains/${id}/verificationDnsRecords` },
       { property: "serviceConfigurationRecords", path: id => `domains/${id}/serviceConfigurationRecords` },
     ],

@@ -11,7 +11,7 @@ import { RetryDelayError } from "../graph-retry"
 import { isLocalAccount } from "../storage/blob-emulator"
 import { FetchApplicationError } from "../api/network-error"
 import { INTUNE_TYPES, itemName, typeForFolder, type GraphVersion, type IntuneType, type Item } from "../../shared/intune/registry"
-import { detailPath, organizationReader, graphVersion, listPath, listSnapshot, readObject, withMaskedSecrets, type GraphReader } from "../../shared/intune/read"
+import { detailPath, OrganizationResolutionError, organizationReader, graphVersion, listPath, listSnapshot, readObject, withMaskedSecrets, type GraphReader } from "../../shared/intune/read"
 import { comparableSnapshot } from "../../shared/intune/compare"
 import type { BackupItems } from "../../shared/intune/backup-changes"
 import { EVERYTHING, includedTypes, normalizeScope, restorableFolders, type BackupScope } from "../../shared/intune/scope"
@@ -532,22 +532,23 @@ export class BackupEngine {
     }
     job.results = results
     const result = (folder: string) => results.types.find((entry) => entry.folder === folder)!
-    // How each selected type ended. The first outcome stands: a read still under way when its type ended changes nothing.
+    // A failure takes precedence over a refusal, including one recorded after an optional sub-read.
     const settled = new Map<string, TypeOutcome>()
     const settle = (folder: string, ending: { outcome: "notConfigured" } | { outcome: "skipped"; cause: SkipCause; reason: string; reader?: true; status?: number; code?: string } | { outcome: "failed"; error: string; status?: number; code?: string }) => {
-      if (!settled.has(folder)) settled.set(folder, { folder, service: moduleForFolder(folder)?.module.id ?? null, ...ending, ...(ending.outcome === "failed" ? { saved: 0 } : {}) } as TypeOutcome)
+      if (!settled.has(folder) || (ending.outcome === "failed" && settled.get(folder)?.outcome !== "failed")) settled.set(folder, { folder, service: moduleForFolder(folder)?.module.id ?? null, ...ending, ...(ending.outcome === "failed" ? { saved: 0 } : {}) } as TypeOutcome)
     }
     // Every selected type has an outcome at any moment: the settled one, or what its result says so far.
     const typesNow = (stopped: boolean) =>
       results.types.map((entry): TypeOutcome => {
         const known = settled.get(entry.folder)
+        const base = { folder: entry.folder, service: moduleForFolder(entry.folder)?.module.id ?? null }
+        // A failed object takes precedence over an optional sub-read refusal on another object.
+        if (entry.failed > 0) return { ...base, outcome: "failed", error: `${entry.failed} of ${entry.found ?? entry.saved + entry.failed} could not be saved. ${entry.errors?.[0] ?? ""}`.trim(), saved: entry.saved }
         // Objects saved before the type ended stay in the backup, so the outcome names how many.
         if (known?.outcome === "failed") return { ...known, saved: entry.saved }
         if (known?.outcome === "skipped") return entry.saved ? { ...known, saved: entry.saved } : known
         if (known) return known
-        const base = { folder: entry.folder, service: moduleForFolder(entry.folder)?.module.id ?? null }
         if (entry.state === "reading" && stopped) return { ...base, outcome: "failed", error: "The backup stopped before this type was read in full.", saved: entry.saved }
-        if (entry.failed > 0) return { ...base, outcome: "failed", error: `${entry.failed} of ${entry.found ?? entry.saved + entry.failed} could not be saved. ${entry.errors?.[0] ?? ""}`.trim(), saved: entry.saved }
         return { ...base, outcome: "saved", saved: entry.saved }
       })
     const outcomesNow = (status: string, ended: Date, stopped: boolean): RunOutcomes => {
@@ -689,10 +690,12 @@ export class BackupEngine {
         this.write(job, `Found ${items.length} ${type.label}${skipped ? ` (${skipped} built-in skipped)` : ""}.`)
         Object.assign(result(type.folder), { found: items.length, ...(skipped ? { builtInSkipped: skipped } : {}), ...(items.length === 0 ? { state: "empty" } : {}) })
         lists[index] = { type, items }
-      } catch (error) {
+      } catch (caught) {
+        const resolverFailed = caught instanceof OrganizationResolutionError
+        const error = caught instanceof OrganizationResolutionError ? caught.cause : caught
         // The answer the type declares for a tenant that never set it up: nothing to save, and nothing missing.
         // A sign-in Microsoft no longer accepts is never that answer, whatever status the type declares.
-        if (!network.signal.aborted && !signInEnded(error) && notSetUp(type, error)) {
+        if (!network.signal.aborted && !signInEnded(error) && !resolverFailed && notSetUp(type, error)) {
           result(type.folder).state = "notConfigured"
           settle(type.folder, { outcome: "notConfigured" })
           this.write(job, `${type.label.charAt(0).toUpperCase()}${type.label.slice(1)} is not set up in this tenant.`)
@@ -815,18 +818,13 @@ export class BackupEngine {
       job.progressMessage = `Backing up ${type.label}`
       try {
         let masked = false
+        const unreadExtras: Array<{ property: string; error: unknown }> = []
         // A list-only type's list entry already holds everything its snapshot keeps.
         const detail = type.listOnly ? listSnapshot(type, item as Item) : await readObject(type, item.id, readerOf(type), {
           ...(keepMasked ? { keepMasked: (error: unknown) => (masked = keepMasked(error)) } : {}),
           onUnreadExtra: (property, error) => {
-            const reason = `${type.label}: ${property} could not be read; the parent configuration was kept.`
-            const verdict = error instanceof GraphError ? classifyAnswer({ status: error.status, ...error.answer }, { mode: tokens.mode }) : { outcome: "failed" as const }
-            if (verdict.outcome === "skipped") {
-              if (!skippedTypes.includes(type.folder)) skippedTypes.push(type.folder)
-              settle(type.folder, { outcome: "skipped", cause: verdict.cause, reason })
-              Object.assign(result(type.folder), { state: "skipped", reason })
-            } else throw error
-            this.write(job, reason, "warning")
+            if (signInEnded(error)) throw error
+            unreadExtras.push({ property, error })
           },
         })
         const body = JSON.stringify(detail, null, 2)
@@ -844,7 +842,25 @@ export class BackupEngine {
         counts[type.folder]!++
         result(type.folder).saved++
         outcome.saved++
-      } catch (error) {
+        // Only a committed snapshot can say that the parent configuration was kept.
+        for (const { property, error } of unreadExtras) {
+          const reason = `${type.label}: ${property} could not be read; the parent configuration was kept.`
+          const verdict = error instanceof GraphError ? classifyAnswer({ status: error.status, ...error.answer }, { mode: tokens.mode }) : { outcome: "failed" as const }
+          if (verdict.outcome === "skipped") {
+            if (!skippedTypes.includes(type.folder)) skippedTypes.push(type.folder)
+            settle(type.folder, { outcome: "skipped", cause: verdict.cause, reason })
+            Object.assign(result(type.folder), { state: "skipped", reason })
+          } else {
+            recordFailure(outcome, error)
+            failures++
+            const entry = result(type.folder)
+            entry.failed++
+            if ((entry.errors ??= []).length < MAX_ITEM_ERRORS) entry.errors.push(reason)
+          }
+          this.write(job, reason, "warning")
+        }
+      } catch (caught) {
+        const error = caught instanceof OrganizationResolutionError ? caught.cause : caught
         if (service.isolated && !signInEnded(error) && !network.signal.aborted) {
           // A refusal, a pause longer than the bound or a request without an answer holds for every object of the type: the type ends, the backup goes on.
           const refused = error instanceof GraphError && classifyAnswer({ status: error.status, ...error.answer }, { mode: tokens.mode }).outcome === "skipped"

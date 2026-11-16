@@ -50,7 +50,9 @@ Paths are relative to Microsoft Graph. `{organizationId}` is resolved through th
 
 Company branding uses `Accept-Language: 0` to read the default branding, then lists its localizations. See Microsoft's [branding read contract](https://learn.microsoft.com/en-us/graph/api/organizationalbranding-get?view=graph-rest-1.0). Stream properties such as background images, logos, favicon and custom CSS are not downloaded. URL metadata may be present but does not contain the binary content. If JSON exceeds 1 MiB, the type fails visibly instead of saving truncated configuration.
 
-A managed domain can return 404 for federationConfiguration, stored as an empty list. A 403 for that sub-read leaves the property absent, preserves the domain and remaining DNS reads, and reports incomplete coverage. It does not claim that no federation settings exist.
+A managed domain can return 404 for federationConfiguration, stored as an empty list only when the domain explicitly reports Managed authentication. For a federated domain or an unknown authentication type, that 404 leaves the federation property unread and coverage incomplete. A 403 for that sub-read also leaves the property absent and reports incomplete coverage. The parent domain and remaining DNS records are preserved if their reads and the file write succeed. A later read or storage failure is reported as a failure, even after an optional sub-read was refused.
+
+Company branding is reported as not configured only when the branding endpoint itself returns its documented not-found answer. A failed organization lookup leaves branding unread with incomplete coverage.
 
 ## Comparison, counts and other features
 
