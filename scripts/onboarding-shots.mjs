@@ -123,6 +123,7 @@ const scenes = [
   ["01-welcome-start", "Welcome, with the setup diagnostics choice."],
   ["02-choice-default", "Intune preselected, with all three service cards visible."],
   ["03-choice-entra-details", "Entra ID selected with area coverage, read and write counts, Conditional Access and opt-in areas."],
+  ["03-choice-governance", "Governance configuration and licensing limits, with Continue visible."],
   ["03-choice-external-roles", "Entra ID external identities and roles coverage, with the app-only API connector note."],
   ["03-choice-exact-permissions", "Exact permissions below the cards, grouped by area and marked read or write."],
   ["04-choice-defender-details", "Defender area coverage, permission counts and coverage limits."],
@@ -203,9 +204,10 @@ try {
     await evaluate(`localStorage.setItem("tenuvault-appearance", "${theme}"); location.hash = ${JSON.stringify(route)}; location.reload()`)
     await waitFor(`document.body?.innerText.includes(${JSON.stringify(welcome ? "Welcome to TenuVault" : tenantUnavailable ? "The linked tenant is not connected" : intuneRequired ? "This page needs Intune" : connectScene ? "Connect your tenant" : afterSignIn ? "Signed in as" : "What do you want to back up?")})`)
     await evaluate(`document.documentElement.classList.toggle("dark", ${theme === "dark"}); (() => { const style = document.createElement("style"); style.textContent = "*, *::before, *::after { animation: none !important; transition: none !important; caret-color: transparent !important; }"; document.head.appendChild(style) })()`)
-    if (["03-choice-entra-details", "03-choice-external-roles", "03-choice-exact-permissions", "04-choice-both-details", "05-choice-personal-data", "06-choice-customize", "07-choice-intune-entra", "08-choice-entra-only"].includes(state)) await evaluate(`document.querySelector('[aria-label="Back up Entra ID"]').click()`)
-    if (["03-choice-entra-details", "03-choice-external-roles", "04-choice-both-details", "05-choice-personal-data"].includes(state)) await expand('[data-onboarding-service="entra"] details')
+    if (["03-choice-entra-details", "03-choice-governance", "03-choice-external-roles", "03-choice-exact-permissions", "04-choice-both-details", "05-choice-personal-data", "06-choice-customize", "07-choice-intune-entra", "08-choice-entra-only"].includes(state)) await evaluate(`document.querySelector('[aria-label="Back up Entra ID"]').click()`)
+    if (["03-choice-entra-details", "03-choice-governance", "03-choice-external-roles", "04-choice-both-details", "05-choice-personal-data"].includes(state)) await expand('[data-onboarding-service="entra"] details')
     if (["04-choice-defender-details", "04-choice-both-details"].includes(state)) { await evaluate(`document.querySelector('[aria-label="Back up Defender"]').click()`); await expand('[data-onboarding-service="defender"] details') }
+    if (state === "03-choice-governance") await evaluate(`(() => { const region = document.querySelector('[aria-label="Entra ID coverage"]'); const target = [...region.querySelectorAll('li')].find(e => e.textContent.startsWith("Governance")); region.scrollTop = target.offsetTop - region.offsetTop })()`)
     if (state === "03-choice-external-roles") await evaluate(`(() => { const region = document.querySelector('[aria-label="Entra ID coverage"]'); const target = [...region.querySelectorAll('li')].find(e => e.textContent.startsWith("External identities")); region.scrollTop = target.offsetTop - region.offsetTop })()`)
     if (state === "05-choice-personal-data") await evaluate(`(() => { const input = document.querySelector('[aria-label="Include Groups"]'); input.click(); const region = input.closest('[aria-label="Entra ID coverage"]'); region.scrollTop += input.closest('div').getBoundingClientRect().top - region.getBoundingClientRect().top })()`)
     if (state === "03-choice-exact-permissions") await expand("[data-exact-permissions]")

@@ -204,7 +204,7 @@ try {
         await waitFor(`document.querySelector('[data-service="entra"]')?.innerText.includes("Backup: Permissions present")`)
         if (await evaluate(`document.querySelector('[data-service="entra"]').innerText.includes("no backup types for Entra ID yet")`)) throw new Error("Entra ID backup types are missing from Services and permissions")
         await evaluate(`document.querySelector('[data-service="entra"] > details').open = true`)
-        if (await evaluate(`["externalIdentities", "roles"].some(id => document.querySelector('[data-service="entra"] [data-area="' + id + '"]').innerText.includes("no backup types"))`)) throw new Error("External identities or Roles and PIM types are missing")
+        if (await evaluate(`["externalIdentities", "roles", "governance"].some(id => document.querySelector('[data-service="entra"] [data-area="' + id + '"]').innerText.includes("no backup types"))`)) throw new Error("Entra configuration types are missing")
       }
       if (state === "personal-data") await evaluate(`document.querySelector('[data-service="entra"] > details').open = true`)
       if (state === "reader-lost-access" || state === "partly-verified" || state.startsWith("cause-")) await evaluate(`document.querySelector('[data-service="intune"] > details').open = true`)

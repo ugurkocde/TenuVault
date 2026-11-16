@@ -63,6 +63,16 @@ describe("The Settings card reads switchable", () => {
     expect(container.textContent).toContain("Off. New manual and scheduled backups leave out this service.")
   })
 
+  it("shows Governance coverage and license limits in Settings", async () => {
+    state.check.mockResolvedValue(answer())
+    const container = mount(createElement(ServicesSettings))
+    await act(async () => undefined)
+    const governance = container.querySelector('[data-service="entra"] [data-area="governance"]')!
+    expect(governance.textContent).toContain("Some features need Entra ID P2 or ID Governance")
+    expect(governance.textContent).toContain("PDFs, review decisions and workflow history are excluded")
+    expect(governance.textContent).not.toContain("no backup types")
+  })
+
   it("shows no switch for a service that cannot be switched, whatever else is true of it", async () => {
     withFacts("intune", { switchable: false })
     state.check.mockResolvedValue(answer())
@@ -83,7 +93,8 @@ describe("The scope picker follows the tenant's selection", () => {
     expect(text).toContain("Entra ID: Authentication")
     expect(text).not.toContain("Intune: Device configuration")
     expect(text).not.toContain("Entra ID: Groups")
-    expect(text).toContain("All of 54 types")
+    expect(text).toContain("All of 65 types")
+    expect(text).toContain("Entra ID: Governance")
   })
   it("uses the explicit tenant choice even when the service defaults change", () => {
     withFacts("conditionalAccess", { defaultOn: true })

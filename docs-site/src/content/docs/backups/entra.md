@@ -1,9 +1,9 @@
 ---
 title: Entra ID configuration backups
-description: Back up Entra ID tenant settings, authentication, external identities, roles, PIM policies and administrative units with TenuVault.
+description: Back up Entra ID tenant settings, authentication, external identities, roles, PIM policies, administrative units and governance with TenuVault.
 ---
 
-Entra ID configuration backups cover **56 types**: 20 in **Tenant settings**, eight in **Authentication**, 14 in **External identities**, 12 in **Roles and PIM**, and two tenant-wide settings in the opt-in **Groups** area. Conditional Access adds its [three existing types](/backups/conditional-access/) through an independent switch. Intune still has 41 types. With every supported service and area enabled, the desktop registry has 100 types.
+Entra ID configuration backups cover **67 types**: 20 in **Tenant settings**, eight in **Authentication**, 14 in **External identities**, 12 in **Roles and PIM**, 11 in **Governance**, and two tenant-wide settings in the opt-in **Groups** area. Conditional Access adds its [three existing types](/backups/conditional-access/) through an independent switch. Intune still has 41 types. With every supported service and area enabled, the desktop registry has 111 types.
 
 Turn on **Entra ID** in **Settings > Services and permissions**. Existing tenants keep Entra ID off after updating, even with an **Everything** backup scope. **Groups** must be enabled separately. The scope picker offers only types of services and opt-in areas that are on. Areas without types in this build say so in Settings and setup.
 
@@ -15,7 +15,7 @@ These new types are **backup and comparison only**. Restore, drift revert, Sync,
 
 Paths are relative to Microsoft Graph. `{organizationId}` is resolved through the organization's ID, not a name. A singleton is stored under a stable type ID, including an object that Graph returns without an ID. Reference sub-collections are stored as sorted unique IDs, without expanding people or groups.
 
-| Folder | What is saved | Path | Version | Sign-in | Additional limits |
+| Folder or configuration | What is saved | Path | Version | Sign-in | Limits or exclusion reason |
 |---|---|---|---|---|---|
 | AuthorizationPolicy | Authorization settings and default user role overrides | `/policies/authorizationPolicy` | v1.0, overrides beta | Both | Role and permission references stay as IDs |
 | SecurityDefaults | Security defaults settings | `/policies/identitySecurityDefaultsEnforcementPolicy` | v1.0 | Both | No restore; successful Retry-After headers do not pause backups |
@@ -47,6 +47,61 @@ Paths are relative to Microsoft Graph. `{organizationId}` is resolved through th
 | HardwareOathDevices | Hardware OATH device metadata | `/directory/authenticationMethodDevices/hardwareOathDevices` | beta | Both | No seeds; inventory counted separately from policies |
 | GroupLifecyclePolicies | Tenant-wide group expiration policy | `/groupLifecyclePolicies` | v1.0 | Both | Groups area opt-in; group objects and membership excluded |
 | OwnerlessGroupPolicy | Tenant-wide ownerless group notification policy | `/policies/ownerlessGroupPolicy` | v1.0 | Admin | Groups area opt-in; the Backup Reader leaves it out |
+| CrossTenantAccessPolicy | Root policy and allowed clouds | `/policies/crossTenantAccessPolicy` | v1.0 | Both | Credentials and runtime history excluded |
+| CrossTenantAccessDefault | Default B2B access settings | `/policies/crossTenantAccessPolicy/default` | v1.0 | Both | Credentials and runtime history excluded |
+| CrossTenantAccessPartners | Partner settings with identity synchronization; keyed by tenant ID; partner names excluded | `/policies/crossTenantAccessPolicy/partners` | v1.0 | Both | Credentials and runtime history excluded |
+| CrossTenantAccessMtoTemplates | Two templates, read separately under fixed identities | `/policies/crossTenantAccessPolicy/templates/multiTenantOrganizationIdentitySynchronization` and `.../multiTenantOrganizationPartnerConfiguration` | v1.0 | Both | Credentials and runtime history excluded |
+| ExternalIdentitiesPolicy | Guest leave and data removal settings | `/policies/externalIdentitiesPolicy` | beta | Both | Credentials and runtime history excluded |
+| B2bManagementPolicies | Legacy B2B domain restrictions | `/policies/b2bManagementPolicies` | beta | Both | Credentials and runtime history excluded |
+| IdentityProviders | Provider configuration from the complete list; client secrets excluded | `/identity/identityProviders` | v1.0 | Both | Credentials and runtime history excluded |
+| UserFlows | Self-service user flows with provider IDs, attribute assignments and language configuration | `/identity/b2xUserFlows` | v1.0 | Both | Credentials and runtime history excluded |
+| UserFlowAttributes | User flow attribute definitions | `/identity/userFlowAttributes` | v1.0 | Both | Credentials and runtime history excluded |
+| AuthenticationEventsFlows | Authentication event flow definitions; workforce tenants may lack the feature | `/identity/authenticationEventsFlows` | v1.0 | Both | Credentials and runtime history excluded |
+| AuthenticationEventListeners | Event listener configuration | `/identity/authenticationEventListeners` | v1.0 | Both | Credentials and runtime history excluded |
+| CustomAuthenticationExtensions | Extension endpoint and application references; credentials excluded | `/identity/customAuthenticationExtensions` | v1.0 | Both | Credentials and runtime history excluded |
+| ApiConnectors | Connector configuration; authentication configuration, passwords and certificate credentials excluded | `/identity/apiConnectors` | v1.0 | App-only | Credentials and runtime history excluded |
+| MultiTenantOrganization | Organization settings and tenant references; tenant names excluded | `/tenantRelationships/multiTenantOrganization` | v1.0 | Both | Credentials and runtime history excluded |
+| EntraRoleDefinitions | Custom roles only, isBuiltIn eq false; no small page-size limit | `/roleManagement/directory/roleDefinitions` | v1.0 | Both | Credentials and runtime history excluded |
+| EntraRoleAssignments | Principal, role and scope IDs; no expanded principals | `/roleManagement/directory/roleAssignments` | v1.0 | Both | Credentials and runtime history excluded |
+| RoleEligibilitySchedules | Eligibility configuration and principal IDs | `/roleManagement/directory/roleEligibilitySchedules` | v1.0 | Both | Credentials and runtime history excluded |
+| RoleAssignmentSchedules | Assignment schedule configuration and principal IDs | `/roleManagement/directory/roleAssignmentSchedules` | v1.0 | Both | Credentials and runtime history excluded |
+| RoleManagementPolicies | Directory-role policies with their configurable rules; derived effectiveRules excluded | `/policies/roleManagementPolicies` | v1.0 | Both | Credentials and runtime history excluded |
+| RoleManagementPolicyAssignments | Directory-role policy-to-role mappings | `/policies/roleManagementPolicyAssignments` | v1.0 | Both | Credentials and runtime history excluded |
+| PimGroupEligibilitySchedules | Eligibility schedules scoped to each discovered PIM group | `/identityGovernance/privilegedAccess/group/eligibilitySchedules` | v1.0 | Both | Credentials and runtime history excluded |
+| PimGroupAssignmentSchedules | Assignment schedules scoped to each discovered PIM group | `/identityGovernance/privilegedAccess/group/assignmentSchedules` | v1.0 | Both | Credentials and runtime history excluded |
+| PimAlertConfigurations | Directory-role alert settings | `/identityGovernance/roleManagementAlerts/alertConfigurations` | beta | Both | Credentials and runtime history excluded |
+| AdministrativeUnits | Unit properties, dynamic rules, member and scoped-role-membership IDs; no expanded people | `/directory/administrativeUnits` | v1.0 | Both | Credentials and runtime history excluded |
+| AttributeSets | Custom security attribute sets | `/directory/attributeSets` | v1.0 | Both | Credentials and runtime history excluded |
+| CustomSecurityAttributeDefinitions | Definitions with allowed values; user attribute assignments excluded | `/directory/customSecurityAttributeDefinitions` | v1.0 | Both | Credentials and runtime history excluded |
+| AccessPackageCatalogs | Catalog properties and resources with roles and scopes | `/identityGovernance/entitlementManagement/catalogs` | v1.0 | Both | Resource definitions only; group, site and app profiles are not expanded |
+| AccessPackages | Package settings, catalog ID, resource role scopes and incompatible package/group IDs | `/identityGovernance/entitlementManagement/accessPackages` | v1.0 | Both | No assignments, requests or subject profiles |
+| AccessPackageAssignmentPolicies | Assignment policy definitions, questions, extension stage configuration, approval stages and access package ID | `/identityGovernance/entitlementManagement/assignmentPolicies` | v1.0 | Both | Approval and target references stay as IDs or queries; no runtime decisions |
+| ConnectedOrganizations | Organization configuration, identity sources and sponsor IDs | `/identityGovernance/entitlementManagement/connectedOrganizations` | v1.0 | Both | Sponsors are sorted unique IDs, without profiles |
+| EntitlementManagementSettings | External-user lifecycle settings | `/identityGovernance/entitlementManagement/settings` | v1.0 | Both | Singleton; no external user objects |
+| AccessReviewDefinitions | Review definitions, scopes, reviewers and recurrence | `/identityGovernance/accessReviews/definitions` | v1.0 | Both | Instances, decisions and review history excluded |
+| AccessReviewPolicy | Tenant-wide review policy | `/policies/accessReviewPolicy` | beta | Both | Singleton with a stable stored ID |
+| LifecycleWorkflows | Current workflow configuration and tasks with arguments | `/identityGovernance/lifecycleWorkflows/workflows` | v1.0 | Both | Versions, runs and execution results excluded |
+| LifecycleWorkflowCustomTaskExtensions | Custom task endpoint and authentication resource references | `/identityGovernance/lifecycleWorkflows/customTaskExtensions` | v1.0 | Both | No Logic App definitions or credential values |
+| LifecycleWorkflowSettings | Workflow schedule settings | `/identityGovernance/lifecycleWorkflows/settings` | v1.0 | Both | Singleton; Governance licensing may be required |
+| TermsOfUseAgreements | Agreement settings and localized file metadata | `/identityGovernance/termsOfUse/agreements` | v1.0 | Both | PDF fileData and acceptances excluded; stored JSON limited to 1 MiB |
+| ServicePrincipalCreationPolicies | Not covered | /policies/servicePrincipalCreationPolicies | n/a | n/a | No requestable read permission proven; app-only refusal |
+| EntraUxSetting | Not covered | /admin/entra/uxSetting | n/a | n/a | Broad token reads it, but no requestable read permission is established |
+| FeatureRolloutPolicies | Not covered | /policies/featureRolloutPolicies | n/a | n/a | Application permission unconfirmed; no delegated verification |
+| OnPremisesAuthenticationPolicies | Not covered | /policies/onPremisesAuthenticationPolicy | n/a | n/a | Delegated permission unverified; app-only refused |
+| DirectoryRoleAccessReviewPolicy | Not covered | /policies/directoryRoleAccessReviewPolicy | n/a | n/a | Broad app token returns 200; index publishes no read permission; least privilege unproven |
+| ApplicationProxyConnectorGroups | Not covered | /onPremisesPublishingProfiles/applicationProxy/connectorGroups | n/a | n/a | Broad app token returns 200; index lists delegated Directory.ReadWrite.All only; no read permission confirmed |
+| Groups, Users, Applications, ServicePrincipals, OAuth2PermissionGrants, EntraDevices, OrgContacts | Not covered | Directory object endpoints | n/a | n/a | Deferred until the scale infrastructure in layers 7a and 7b |
+| SSPR configuration | Not covered | Not exposed by these Graph APIs | n/a | n/a | Only the admin SSPR flag in authorization policy is included |
+| Legacy MFA settings | Not covered | Not exposed by these Graph APIs | n/a | n/a | Trusted IPs, app passwords, remembered MFA and lockout excluded |
+| Legacy Identity Protection policies and notifications | Not covered | Not exposed by these Graph APIs | n/a | n/a | Current Conditional Access equivalents use the independent switch |
+| Diagnostic settings, Azure RBAC, management groups, elevated access | Not covered | Azure Resource Manager | n/a | n/a | Outside Microsoft Graph configuration coverage |
+| Entra Connect rules and connector configuration | Not covered | On-premises server | n/a | n/a | Only synchronization feature flags are covered |
+| Verified ID authorities and contracts | Not covered | Separate Verified ID API | n/a | n/a | Outside these Graph endpoints |
+| Enterprise State Roaming, preview toggles, LinkedIn connections, My Apps collections, My Groups toggles | Not covered | Not exportable through these endpoints | n/a | n/a | Group creation rights exposed in authorization and directory settings are covered |
+| Global Secure Access | Not covered | /networkAccess | n/a | n/a | Outside 0.6 |
+| Secrets and user authentication methods | Not covered | Not exported | n/a | n/a | Passwords, private keys, app and provider secrets, API connector credentials, OATH seeds and tunnel keys excluded |
+| Runtime and history data | Not covered | Review instances, decisions, acceptances, workflow versions/runs, sign-in and audit history | n/a | n/a | Current configuration only |
+| Binary branding and terms content | Not covered | Branding streams, custom CSS and agreement fileData | n/a | n/a | JSON configuration and file metadata only; no binary streaming in this layer |
 
 Company branding uses `Accept-Language: 0` to read the default branding, then lists its localizations. See Microsoft's [branding read contract](https://learn.microsoft.com/en-us/graph/api/organizationalbranding-get?view=graph-rest-1.0). Stream properties such as background images, logos, favicon and custom CSS are not downloaded. URL metadata may be present but does not contain the binary content. If JSON exceeds 1 MiB, the type fails visibly instead of saving truncated configuration.
 
@@ -54,41 +109,8 @@ A managed domain can return 404 for federationConfiguration, stored as an empty 
 
 Company branding is reported as not configured only when the branding endpoint itself returns its documented not-found answer. A failed organization lookup leaves branding unread with incomplete coverage.
 
-## External identities
-
-| Folder | What is stored or omitted | Graph path | Version | Sign-in |
-|---|---|---|---|---|
-| CrossTenantAccessPolicy | Root policy and allowed clouds | `/policies/crossTenantAccessPolicy` | v1.0 | Both |
-| CrossTenantAccessDefault | Default B2B access settings | `/policies/crossTenantAccessPolicy/default` | v1.0 | Both |
-| CrossTenantAccessPartners | Partner settings with identity synchronization; keyed by tenant ID; partner names excluded | `/policies/crossTenantAccessPolicy/partners` | v1.0 | Both |
-| CrossTenantAccessMtoTemplates | Two templates, read separately under fixed identities | `/policies/crossTenantAccessPolicy/templates/multiTenantOrganizationIdentitySynchronization` and `.../multiTenantOrganizationPartnerConfiguration` | v1.0 | Both |
-| ExternalIdentitiesPolicy | Guest leave and data removal settings | `/policies/externalIdentitiesPolicy` | beta | Both |
-| B2bManagementPolicies | Legacy B2B domain restrictions | `/policies/b2bManagementPolicies` | beta | Both |
-| IdentityProviders | Provider configuration from the complete list; client secrets excluded | `/identity/identityProviders` | v1.0 | Both |
-| UserFlows | Self-service user flows with provider IDs, attribute assignments and language configuration | `/identity/b2xUserFlows` | v1.0 | Both |
-| UserFlowAttributes | User flow attribute definitions | `/identity/userFlowAttributes` | v1.0 | Both |
-| AuthenticationEventsFlows | Authentication event flow definitions; workforce tenants may lack the feature | `/identity/authenticationEventsFlows` | v1.0 | Both |
-| AuthenticationEventListeners | Event listener configuration | `/identity/authenticationEventListeners` | v1.0 | Both |
-| CustomAuthenticationExtensions | Extension endpoint and application references; credentials excluded | `/identity/customAuthenticationExtensions` | v1.0 | Both |
-| ApiConnectors | Connector configuration; authentication configuration, passwords and certificate credentials excluded | `/identity/apiConnectors` | v1.0 | App-only |
-| MultiTenantOrganization | Organization settings and tenant references; tenant names excluded | `/tenantRelationships/multiTenantOrganization` | v1.0 | Both |
-
 ## Roles and PIM
 
-| Folder | What is stored or omitted | Graph path | Version | Sign-in |
-|---|---|---|---|---|
-| EntraRoleDefinitions | Custom roles only, isBuiltIn eq false; no small page-size limit | `/roleManagement/directory/roleDefinitions` | v1.0 | Both |
-| EntraRoleAssignments | Principal, role and scope IDs; no expanded principals | `/roleManagement/directory/roleAssignments` | v1.0 | Both |
-| RoleEligibilitySchedules | Eligibility configuration and principal IDs | `/roleManagement/directory/roleEligibilitySchedules` | v1.0 | Both |
-| RoleAssignmentSchedules | Assignment schedule configuration and principal IDs | `/roleManagement/directory/roleAssignmentSchedules` | v1.0 | Both |
-| RoleManagementPolicies | Directory-role policies with their configurable rules; derived effectiveRules excluded | `/policies/roleManagementPolicies` | v1.0 | Both |
-| RoleManagementPolicyAssignments | Directory-role policy-to-role mappings | `/policies/roleManagementPolicyAssignments` | v1.0 | Both |
-| PimGroupEligibilitySchedules | Eligibility schedules scoped to each discovered PIM group | `/identityGovernance/privilegedAccess/group/eligibilitySchedules` | v1.0 | Both |
-| PimGroupAssignmentSchedules | Assignment schedules scoped to each discovered PIM group | `/identityGovernance/privilegedAccess/group/assignmentSchedules` | v1.0 | Both |
-| PimAlertConfigurations | Directory-role alert settings | `/identityGovernance/roleManagementAlerts/alertConfigurations` | beta | Both |
-| AdministrativeUnits | Unit properties, dynamic rules, member and scoped-role-membership IDs; no expanded people | `/directory/administrativeUnits` | v1.0 | Both |
-| AttributeSets | Custom security attribute sets | `/directory/attributeSets` | v1.0 | Both |
-| CustomSecurityAttributeDefinitions | Definitions with allowed values; user attribute assignments excluded | `/directory/customSecurityAttributeDefinitions` | v1.0 | Both |
 
 PIM group schedules first list group IDs with `$select=id`, `$top=999` and an advanced filter for security or Microsoft 365 groups that are cloud-only and use assigned membership, then read schedules filtered by each group ID. This adds `GroupMember.Read.All` to the area because schedule permissions cannot list groups. The group list reads IDs only; group profiles and memberships are not backed up by this discovery. The PIM resources endpoint is insufficient: it returned zero resources in the lab while a directory group returned assignment schedules.
 
@@ -104,28 +126,33 @@ Provider secrets, API connector credentials, passwords, private keys, token seed
 
 ## Comparison, counts and other features
 
-All 56 types can be compared between backups, including singletons. Reports show configuration changes without inventing audit actors. Hardware OATH devices are inventory and do not increase policy counts. The other 55 types count as configuration on backup lists, results and dashboards. Hygiene has no rules for these Entra ID types and excludes them. Live change watching and audit alert suggestions continue to cover Intune and Conditional Access only; new Entra settings do not masquerade as Intune policies.
+All 67 types can be compared between backups, including singletons. Reports show configuration changes without inventing audit actors. Hardware OATH devices are inventory and do not increase policy counts. The other 66 types count as configuration on backup lists, results and dashboards. Hygiene has no rules for these Entra ID types and excludes them. Live change watching and audit alert suggestions continue to cover Intune and Conditional Access only; new Entra settings do not masquerade as Intune policies.
 
 Azure Automation cloud backups remain limited to Intune and the separately configured Conditional Access types in 0.6. Use desktop manual or desktop scheduled backups for these Entra ID types. The Backup Reader cannot read the four Admin-only types above.
 
-## Not covered in this part
+## Governance verification and limits
 
-Governance, users, groups with membership, applications, enterprise apps, grants, devices and contacts have no new backup types in this part. Their manifest permissions may already be shown during setup. Turning on an area without types prepares that choice, and the app says that no types exist for it yet.
+Governance and PIM features can require Entra ID P2 or ID Governance. Lifecycle workflows require the applicable Governance license. The lab's 58-permission app token read the General catalog, entitlement settings and access review policy. Access packages, assignment policies, connected organizations, review definitions and agreements returned covered empty lists. All three lifecycle endpoints returned HTTP 403 with code `Access denied` and an explicit insufficient-license message. Those exact answers on each type's own list or singleton read are classified as license or not onboarded, with incomplete coverage. They do not say the app lacks a permission. Detail and sub-read errors keep their own meaning; unknown license errors fail visibly.
 
-Four researched settings remain excluded because no requestable read permission was proven for the endpoint and sign-in mode:
+Each Governance type has a shared 120-second deadline starting at its first read and at most 500 actual Graph GETs, including list pages, detail reads, sub-collections, retries and expanded pages. Reaching a limit ends only that type with incomplete coverage. Other types and services continue. Cancellation also interrupts these reads. No unread resource or page is counted as covered.
 
-- Service principal creation policies: the app-only read returns 403 without a confirmed read permission.
-- Entra admin center restriction (`/admin/entra/uxSetting`): a broad lab token can read it, but that does not identify which permission to request.
-- Feature rollout policies: an empty app-only response does not establish the undocumented application permission. The index's delegated permission has not been verified by a signed-in admin.
-- On-premises authentication policies: delegated-only permission in the index, without a verified delegated read; the app-only lab read is refused.
+Catalog resources use v1.0 `catalogs/{id}/resources?$expand=roles,scopes`, rather than the older beta catalog paths. Package resource role scopes include their role and scope definitions. Assignment policies expand their questions and custom extension stage settings. A required expanded collection omitted by Graph fails the read instead of counting as covered. Expanded pages are followed, including nested roles and scopes. Unordered collections are sorted by stable identity; ID-less reviewer queries, allowed targets and identity sources use their complete content. Approval stage order is retained, and tasks keep their execution sequence settings.
 
-The following configuration cannot be exported through these Microsoft Graph endpoints:
+Workflow versions are history and are excluded. Only current workflow tasks are saved. Access reviews save definitions only, without instances or decisions. Terms of use store agreement settings and localized file metadata (name, language, default/version flags and dates), with a 1 MiB JSON limit. PDF content is excluded even when Graph returns it inline as base64 `fileData`, similar to the excluded branding binary streams. Export those files separately if you need them.
 
-- Full SSPR scope, registration, notifications and password writeback settings. Only the admin SSPR flag in the authorization policy is included.
-- Legacy MFA service settings, trusted IPs, app passwords, remember MFA and account lockout.
-- Legacy Identity Protection risk policies and notification settings. Current Conditional Access equivalents remain in the separate area.
-- Diagnostic log export settings, Azure RBAC, management groups and the elevated access toggle, which use Azure Resource Manager.
-- Entra Connect synchronization rules and connector configuration, which live on the sync server.
-- Verified ID authorities and contracts, which use a separate API.
-- Enterprise State Roaming settings, preview feature toggles, LinkedIn account connections, My Apps collections and self-service My Groups toggles. Group creation rights exposed by authorization and directory settings are included.
-- Global Secure Access, event history, passwords, user authentication methods, private keys, app secrets, identity provider secrets, API connector credentials and OATH seeds.
+Nonempty package relationships, sponsors, review definitions, terms files and licensed lifecycle configurations were unavailable in this lab. Their offline fixtures are labelled documented synthetic configuration. No delegated Governance read or least-privilege isolated token read is claimed. No Governance type needs another application permission grant in this lab. Rerun lifecycle reads in a licensed tenant, and the other empty collections with configuration present.
+
+The table above is the complete configuration inventory across all three Entra parts, including exclusions and their reasons. Azure Automation remains Intune and Conditional Access only.
+
+## Screenshots
+
+![Governance coverage in Settings](/images/services/entra-backup-types-light.png)
+![Governance coverage during setup](/images/onboarding/03-choice-governance-light.png)
+
+See the dark-mode variants in the [Services screenshot inventory](/images/services/README.md) and [onboarding screenshot inventory](/images/onboarding/README.md).
+
+## Graph references
+
+- [Catalog resources and their roles and scopes](https://learn.microsoft.com/en-us/graph/api/accesspackagecatalog-list-resources?view=graph-rest-1.0)
+- [Package resource role scopes](https://learn.microsoft.com/en-us/graph/api/accesspackage-list-resourcerolescopes?view=graph-rest-1.0)
+- [Agreement localized file metadata](https://learn.microsoft.com/en-us/graph/api/agreement-list-files?view=graph-rest-1.0)

@@ -176,7 +176,7 @@ The **Backup History** tab of **Backup & Restore** shows the **Backup Timeline**
 Each entry shows:
 
 * the date and time
-* what the backup covered: **Everything**, **Everything except apps**, or the number of types, for example "12 of 100 types"
+* what the backup covered: **Everything**, **Everything except apps**, or the number of types, for example "12 of 111 types"
 * how it started: **Manual**, **Scheduled** or **From tray**
 * the result, when it is not **Complete**
 * **Items**, **Size**, **Duration** and **Changes** since the previous backup (see [Compare backups](/backups/compare/))

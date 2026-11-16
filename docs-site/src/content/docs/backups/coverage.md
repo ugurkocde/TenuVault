@@ -14,7 +14,7 @@ faq:
     answer: "TenuVault skips types it is denied access to, for example when the app registration lacks a permission or its admin consent, or when your Intune role excludes the type. A scheduled backup made by the optional Backup Reader also leaves out device categories and device clean-up rules unless the reader has the optional device inventory permission. The backup log and Backup Details say which types were skipped."
 ---
 
-TenuVault backs up 41 Intune object types in nine areas, plus [56 Entra ID configuration types](/backups/entra/) and [three Conditional Access types](/backups/conditional-access/) when their services and areas are turned on. Each object is saved as it is in Microsoft Graph (beta for Intune, v1.0 or beta as declared for Entra), with its settings and, where Intune has them, its assignments.
+TenuVault backs up 41 Intune object types in nine areas, plus [67 Entra ID configuration types](/backups/entra/) and [three Conditional Access types](/backups/conditional-access/) when their services and areas are turned on. Each object is saved as it is in Microsoft Graph (beta for Intune, v1.0 or beta as declared for Entra), with its settings and, where Intune has them, its assignments.
 
 The area and type names below are the ones the **Back up** dialog shows under **Custom**. See [Choose what to back up](/backups/#choose-what-to-back-up).
 
@@ -25,7 +25,7 @@ Installer content stays separate from this metadata. [App Backup](/apps/app-back
 ## How to read the tables
 
 * **Assignments**: whether the backup holds the object's assignments (the groups and filters it targets). Restoring assignments is a separate choice. See [Restore modes and assignments](/restore/modes/).
-* **Everything except apps**: every type is included in this choice except **Apps**. **Everything** includes every supported type of the services and opt-in areas that are on. With every supported area enabled, there are 100 types.
+* **Everything except apps**: every type is included in this choice except **Apps**. **Everything** includes every supported type of the services and opt-in areas that are on. With every supported area enabled, there are 111 types.
 * Built-in objects that Intune creates itself are skipped. The backup log reports how many were skipped.
 
 ## Device configuration

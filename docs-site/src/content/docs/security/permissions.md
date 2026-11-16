@@ -120,7 +120,7 @@ Some settings stay out because Microsoft publishes no read permission TenuVault 
 
 ### Check what the app registration allows
 
-**Settings > Services and permissions** shows Intune, Entra ID and Defender, with Conditional Access as a separately controlled area inside Entra ID. A tenant selector opens that tenant's report. Entra ID has [56 configuration types](/backups/entra/). Each area states when this build has no types for it yet. Defender still prepares permissions only.
+**Settings > Services and permissions** shows Intune, Entra ID and Defender, with Conditional Access as a separately controlled area inside Entra ID. A tenant selector opens that tenant's report. Entra ID has [67 configuration types](/backups/entra/). Each area states when this build has no types for it yet. Defender still prepares permissions only.
 
 The connection check requests a fresh token without opening a sign-in window. **Permissions present** describes the token, not the admin's role, license or whether the service is onboarded. **Verified by the last backup** names the date and sign-in that read the selected types. After granting permissions, select **Check again**, then run a backup to verify access.
 
@@ -272,7 +272,7 @@ A loss needs two distinct refused backups after that connection previously read 
 
 ## Entra ID configuration reads
 
-[Entra ID coverage](/backups/entra/) lists the 56 supported types, their sign-in modes and omissions. The manifest's Tenant settings area uses Policy.Read.All, Policy.Read.PermissionGrant, Policy.Read.DeviceConfiguration, GroupSettings.Read.All, Organization.Read.All and Domain.Read.All for application reads. Authentication also uses AuthenticationContext.Read.All and PublicKeyInfrastructure.Read.All. Authentication methods use the existing Policy.Read.All permission. PIM group discovery adds GroupMember.Read.All to the area.
+[Entra ID coverage](/backups/entra/) lists the 67 supported types, their sign-in modes and omissions. The manifest's Tenant settings area uses Policy.Read.All, Policy.Read.PermissionGrant, Policy.Read.DeviceConfiguration, GroupSettings.Read.All, Organization.Read.All and Domain.Read.All for application reads. Authentication also uses AuthenticationContext.Read.All and PublicKeyInfrastructure.Read.All. Authentication methods use the existing Policy.Read.All permission. PIM group discovery adds GroupMember.Read.All to the area. Governance uses EntitlementManagement.Read.All, AccessReview.Read.All, Policy.Read.All, LifecycleWorkflows.Read.All and Agreement.Read.All for both modes. Governance or P2 licensing is separate from permissions; an exact recorded lifecycle license refusal is shown as license or not onboarded. Review decisions, workflow history, terms PDF content and credentials are excluded. Directory role review defaults and application proxy connector groups remain outside coverage because no requestable read permission was proven, even though a broad app token reads them.
 
 MDM and MAM enrollment policies, ownerless group policy and on-premises synchronization require a signed-in admin. The optional Groups area uses Directory.Read.All for group lifecycle policies and delegated Group.Read.All for ownerless group policy. These two policies do not enable group object or membership backups. Domain federation settings may need access beyond the readable domain list; refusal preserves domain properties and reports incomplete coverage. All new types have no restore capability, regardless of permissions held by the sign-in.
 
