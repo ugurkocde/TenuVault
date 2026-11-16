@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import type { Configuration } from "@azure/msal-node"
 import type { LoopbackSignInRequest } from "../src/main/auth/loopback-sign-in"
+import { readFileSync } from "node:fs"
+import { transformSync } from "esbuild"
 const mock = vi.hoisted(() => ({ signIn: vi.fn(), clear: vi.fn(), config: null as Configuration | null }))
 vi.mock("@azure/msal-node", () => ({ PublicClientApplication: class { constructor(config: Configuration) { mock.config = config }; clearCache = mock.clear } }))
 vi.mock("../src/main/auth/loopback-sign-in", () => ({ loopbackSignIn: mock.signIn }))
-import { AddPermissionsFlow, signInForPermissionAddition } from "../src/main/auth/add-permissions-flow"
+import { AddPermissionsFlow, permissionAdditionScopes, signInForPermissionAddition, verifyPermissionAdditionToken } from "../src/main/auth/add-permissions-flow"
 import { additionConnection, additionGraph } from "./fixtures/registration-additions"
 const tenant = additionConnection.tenantId
 const controllers: AddPermissionsFlow[] = []
@@ -16,6 +18,54 @@ function fixture() {
   const flow = new AddPermissionsFlow(host); controllers.push(flow)
   return { flow, host, ...fake }
 }
+function token(claims: object) { return `header.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.signature` }
+// Execute the actual host wiring so tests cover both token acquisition boundaries in index.ts.
+function connectedFlow(original: { accessToken: string; scopes: string[] }, refreshed = original) {
+  const fake = additionGraph()
+  const main = readFileSync(new URL("../src/main/index.ts", import.meta.url), "utf8")
+  const source = main.slice(main.indexOf("  const permissionAdditions = new AddPermissionsFlow("), main.indexOf('  handleTrusted("services:previewAddition"'))
+  const health = { check: vi.fn(async () => {}) }
+  const auth = { getAccessToken: vi.fn(async (_tenant: string, _client: string, _scope: string, force?: boolean) => force ? refreshed : original) }
+  const signIn = vi.fn(async () => "ephemeral")
+  const context = { AddPermissionsFlow, permissionAdditionScopes, verifyPermissionAdditionToken, chromiumFetch: fake.request,
+    connectedTenant: () => tenant, accounts: new Map([[tenant, additionConnection]]), tenantProfile: () => additionConnection,
+    moduleSettings: { get: () => ({}) }, additionPermissions: () => additionConnection.allowed, auth,
+    RESOURCE_SCOPES: { graph: "https://graph.microsoft.com/.default" }, signInForPermissionAddition: signIn, shell: {}, health }
+  const flow: AddPermissionsFlow = new Function(...Object.keys(context), `${transformSync(source, { loader: "ts" }).code}\nreturn permissionAdditions`)(...Object.values(context))
+  controllers.push(flow)
+  return { flow, auth, health, signIn, ...fake }
+}
+it.each([{ scopes: ["https://graph.microsoft.com/User.Read"] }, { scopes: ["https://graph.microsoft.com/.default", "openid", "profile"] }])("reads connected and refreshed delegated claims instead of MSAL response scopes $scopes", async ({ scopes }) => {
+  const { flow, writes, auth, health } = connectedFlow(
+    { accessToken: token({ scp: "user.read" }), scopes },
+    { accessToken: token({ scp: "USER.READ policy.read.all" }), scopes },
+  )
+  const preview = await flow.preview(tenant, ["Policy.Read.All"])
+  expect(preview.consent).toEqual(["Policy.Read.All"])
+  expect((await flow.confirm(tenant, preview.id)).state).toBe("complete")
+  expect(writes).toHaveLength(2)
+  expect(auth.getAccessToken).toHaveBeenLastCalledWith(tenant, additionConnection.clientId, "https://graph.microsoft.com/.default", true)
+  expect(health.check).toHaveBeenCalledWith(tenant, "again")
+})
+it("reports a partial result when only MSAL response scopes contain an approved addition", async () => {
+  const { flow } = connectedFlow({ accessToken: token({ scp: "User.Read" }), scopes: ["User.Read", "Policy.Read.All"] })
+  const preview = await flow.preview(tenant, ["Policy.Read.All"])
+  const result = await flow.confirm(tenant, preview.id)
+  expect(result.state).toBe("partial")
+  expect(result.message).toContain("The refreshed token still lacks Policy.Read.All")
+})
+it.each([token({ roles: ["User.Read", "Policy.Read.All"] }), "unreadable", token({})])("refuses unreadable or application claims at both connected token boundaries", async accessToken => {
+  const invalid = { accessToken, scopes: ["User.Read", "Policy.Read.All"] }
+  const previewHost = connectedFlow(invalid)
+  await expect(previewHost.flow.preview(tenant, ["Policy.Read.All"])).rejects.toThrow("delegated Graph account")
+  expect(previewHost.signIn).not.toHaveBeenCalled()
+  expect(previewHost.writes).toEqual([])
+  const refreshHost = connectedFlow({ accessToken: token({ scp: "User.Read" }), scopes: [] }, invalid)
+  const preview = await refreshHost.flow.preview(tenant, ["Policy.Read.All"])
+  const result = await refreshHost.flow.confirm(tenant, preview.id)
+  expect(result.state).toBe("partial")
+  expect(result.message).toContain("delegated Graph account")
+})
 it("uses the exact setup-only scopes in an ephemeral Microsoft client with a tenant and account hint", async () => {
   const browser = vi.fn(async () => {})
   mock.signIn.mockImplementation(async (request: LoopbackSignInRequest) => {

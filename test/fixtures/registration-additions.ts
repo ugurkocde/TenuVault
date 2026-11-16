@@ -33,9 +33,9 @@ export function additionGraph() {
     }
     if (state.readFailure) return new Response("", { status: 503 })
     const value = url.pathname.includes("federatedIdentityCredentials") ? { value: state.federated }
-      : (url.pathname.includes("/applications(") || url.pathname === "/v1.0/applications/app-object") ? state.app
+      : (url.pathname.includes("/applications(") || url.pathname.toLowerCase() === `/v1.0/applications/${state.app.id.toLowerCase()}`) ? state.app
       : url.pathname === "/v1.0/oauth2PermissionGrants/grant-id" ? state.grants[0]
-      : url.pathname.endsWith("servicePrincipals") ? { value: [url.searchParams.get("$filter")?.includes(additionConnection.clientId) ? state.client : state.resource] }
+      : url.pathname.endsWith("servicePrincipals") ? { value: [url.searchParams.get("$filter")?.toLowerCase().includes(state.client.appId.toLowerCase()) ? state.client : state.resource] }
       : { value: state.grants, ...(state.badPage ? { "@odata.nextLink": state.badPage } : {}) }
     return Response.json(value)
   }) as unknown as typeof fetch

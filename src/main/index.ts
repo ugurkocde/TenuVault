@@ -1,4 +1,4 @@
-import { AddPermissionsFlow, signInForPermissionAddition } from "./auth/add-permissions-flow"
+import { AddPermissionsFlow, permissionAdditionScopes, signInForPermissionAddition, verifyPermissionAdditionToken } from "./auth/add-permissions-flow"
 import { additionPermissions } from "./services/addition-permissions"
 import { checkOnboardingPermissions, saveOnboardingServices } from "./services/onboarding"
 import { requestWindowsContent } from "./app-backup/windows-helper"
@@ -1486,14 +1486,13 @@ async function bootstrap(): Promise<void> {
       if (!account || !profile || account.clientId.toLowerCase() !== profile.clientId.toLowerCase()) throw new Error("Sign in to the connected registration first.")
       const settings = moduleSettings.get(tenantId)
       const token = await auth.getAccessToken(tenantId, account.clientId, RESOURCE_SCOPES.graph)
-      return { tenantId, clientId: account.clientId, username: account.username, homeAccountId: account.homeAccountId, scopes: token.scopes, allowed: additionPermissions(settings) }
+      return { tenantId, clientId: account.clientId, username: account.username, homeAccountId: account.homeAccountId, scopes: permissionAdditionScopes(token), allowed: additionPermissions(settings) }
     },
     signIn: (connection, signal) => signInForPermissionAddition(connection, chromiumFetch, url => shell.openExternal(url), signal),
     refresh: async (connection, approved) => {
       const token = await auth.getAccessToken(connection.tenantId, connection.clientId, RESOURCE_SCOPES.graph, true)
       await health.check(connection.tenantId, "again")
-      const missing = approved.filter(name => !token.scopes.includes(name))
-      if (missing.length) throw new Error(`The refreshed token still lacks ${missing.join(", ")}.`)
+      verifyPermissionAdditionToken(token, approved)
     },
   })
   handleTrusted("services:previewAddition", (_event, tenantId: unknown, missing: unknown) => permissionAdditions.preview(tenantId, missing))

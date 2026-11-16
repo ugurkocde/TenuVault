@@ -107,6 +107,56 @@ it("writes nothing when already declared and consented", async () => {
   expect((await run.apply()).state).toBe("complete")
   expect(fake.writes).toEqual([])
 })
+it("compares scope names without regard to case and keeps the existing grant spelling", async () => {
+  const fake = additionGraph()
+  fake.state.grants[0]!.scope = "user.read UNKNOWN.Read unknown.read policy.READ.all"
+  const { run } = await prepare(fake)
+  expect(run.preview.consent).toEqual(["Group.Read.All"])
+  expect((await run.apply()).state).toBe("complete")
+  expect(fake.state.grants[0]!.scope).toBe("user.read UNKNOWN.Read policy.READ.all Group.Read.All")
+})
+it("accepts case-only changes in consent before confirmation and in approved additions after writing", async () => {
+  const fake = additionGraph()
+  const { run } = await prepare(fake)
+  fake.state.grants[0]!.scope = fake.state.grants[0]!.scope.toUpperCase()
+  const request = vi.mocked(fake.request)
+  const implementation = request.getMockImplementation()!
+  request.mockImplementation(async (input, init) => {
+    const answer = await implementation(input, init)
+    if (init?.method === "PATCH" && String(input).includes("/oauth2PermissionGrants/")) fake.state.grants[0]!.scope = fake.state.grants[0]!.scope.toLowerCase()
+    return answer
+  })
+  const result = await run.apply()
+  expect(result).toMatchObject({ state: "complete", consented: ["Policy.Read.All", "Group.Read.All"], missingConsent: [] })
+  expect(fake.writes[1]!.body).toEqual({ scope: "USER.READ UNKNOWN.READ Policy.Read.All Group.Read.All" })
+})
+it.each(["app.id", "app.appId", "client.id", "client.appId", "resource.id", "resource.appId", "grant.clientId", "grant.resourceId"])("accepts case-only changes to the GUID identity %s since preview", async field => {
+  const fake = additionGraph()
+  const clientId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+  const connection = { ...additionConnection, clientId }
+  Object.assign(fake.state.app, { id: "abcdefab-1111-2222-3333-444444444444", appId: clientId })
+  Object.assign(fake.state.client, { id: "abcdefab-2222-3333-4444-555555555555", appId: clientId })
+  fake.state.resource.id = "abcdefab-3333-4444-5555-666666666666"
+  for (const grant of fake.state.grants) grant.clientId = fake.state.client.id
+  fake.state.grants[0]!.resourceId = fake.state.resource.id
+  const run = await RegistrationAdditions.prepare({ fetch: fake.request, token: "ephemeral", connection, additions: ["Policy.Read.All"], sleep: async () => {} })
+  const [object, key] = field.split(".") as ["app" | "client" | "resource" | "grant", "id" | "appId" | "clientId" | "resourceId"]
+  const target = (object === "grant" ? fake.state.grants[0]! : fake.state[object]) as unknown as Record<string, string>
+  target[key] = target[key]!.toUpperCase()
+  expect((await run.apply()).state).toBe("complete")
+  expect(fake.writes).toHaveLength(2)
+})
+it.each(["displayName", "unknownIdentity", "unknownDeclaration", "grantId"])("still detects case-only changes to %s outside known GUID fields", async field => {
+  const fake = additionGraph()
+  Object.assign(fake.state.app, { unknownIdentity: "abcdefab-1111-2222-3333-444444444444" })
+  const { run } = await prepare(fake)
+  if (field === "displayName") fake.state.app.displayName = fake.state.app.displayName.toUpperCase()
+  if (field === "unknownIdentity") Object.assign(fake.state.app, { unknownIdentity: "ABCDEFAB-1111-2222-3333-444444444444" })
+  if (field === "unknownDeclaration") fake.state.app.requiredResourceAccess[0]!.resourceAccess[0]!.extra = "KEEP"
+  if (field === "grantId") fake.state.grants[0]!.id = fake.state.grants[0]!.id.toUpperCase()
+  expect((await run.apply()).state).toBe("changed")
+  expect(fake.writes).toEqual([])
+})
 it.each([{ additions: [] }, { additions: ["Directory.ReadWrite.All"] }])("rejects an invalid permission choice $additions", async ({ additions }) => {
   await expect(prepare(additionGraph(), additions)).rejects.toThrow("Choose permissions")
 })
@@ -117,6 +167,7 @@ it.each(["https://evil.test/v1.0/oauth2PermissionGrants", "https://graph.microso
 })
 it("compares the account, tenant, registration, scopes and approved access without relying on renderer state", () => {
   expect(sameAdditionConnection(additionConnection, { ...additionConnection, clientId: additionConnection.clientId.toUpperCase(), allowed: [...additionConnection.allowed].reverse() })).toBe(true)
+  expect(sameAdditionConnection(additionConnection, { ...additionConnection, scopes: additionConnection.scopes.map(name => name.toUpperCase()) })).toBe(true)
   for (const change of [{ homeAccountId: "different" }, { username: "other@test" }, { scopes: [] }, { allowed: [] }, { tenantId: "other" }]) expect(sameAdditionConnection(additionConnection, { ...additionConnection, ...change })).toBe(false)
 })
 

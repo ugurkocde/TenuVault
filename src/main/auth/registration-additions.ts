@@ -12,12 +12,23 @@ interface Application {
 interface Principal { id: string; appId: string; accountEnabled: boolean; passwordCredentials: unknown[]; keyCredentials: unknown[]; oauth2PermissionScopes: { id: string; value: string; isEnabled: boolean }[] }
 interface Grant { id: string; clientId: string; resourceId: string; consentType: string; principalId: string | null; scope: string }
 interface Snapshot { app: Application; client: Principal; resource: Principal; grants: Grant[] }
+// Scopes come only from the connected access token's delegated claims, never MSAL's response scopes.
 export interface AdditionConnection { tenantId: string; clientId: string; username: string; homeAccountId: string; scopes: string[]; allowed: readonly string[] }
 export interface AdditionOptions { fetch: typeof fetch; token: string; connection: AdditionConnection; additions: readonly string[]; sleep?: (ms: number) => Promise<void> }
 const ROOT = "https://graph.microsoft.com/v1.0"
 const APP_FIELDS = "id,appId,displayName,signInAudience,publicClient,web,spa,passwordCredentials,keyCredentials,requiredResourceAccess"
 const eq = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
 const scopes = (value: string) => value.split(/\s+/).filter(Boolean)
+const scopeSet = (names: readonly string[]) => new Set(names.map(name => name.toLowerCase()))
+function scopeUnion(names: readonly string[]): string[] {
+  const seen = new Set<string>()
+  return names.filter(name => {
+    const key = name.toLowerCase()
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
 // The loopback listener accepts only the root path. Keep the textual host check strict so
 // URL normalization cannot turn other IP spellings, credentials or paths into accepted redirects.
 function localRedirect(uri: string): boolean {
@@ -36,7 +47,8 @@ function canonical(value: unknown): string {
   return JSON.stringify(value)
 }
 function signature(s: Snapshot): string {
-  return canonical({ app: { ...s.app, requiredResourceAccess: s.app.requiredResourceAccess.map(r => ({ ...r, resourceAppId: r.resourceAppId.toLowerCase(), resourceAccess: r.resourceAccess.map(a => ({ ...a, id: a.id.toLowerCase() })) })) }, client: s.client, resource: s.resource, grants: s.grants.map(g => ({ ...g, scope: [...new Set(scopes(g.scope))].sort() })) })
+  const principal = (p: Principal) => ({ ...p, id: p.id.toLowerCase(), appId: p.appId.toLowerCase(), oauth2PermissionScopes: p.oauth2PermissionScopes.map(scope => ({ ...scope, id: scope.id.toLowerCase() })) })
+  return canonical({ app: { ...s.app, id: s.app.id.toLowerCase(), appId: s.app.appId.toLowerCase(), requiredResourceAccess: s.app.requiredResourceAccess.map(r => ({ ...r, resourceAppId: r.resourceAppId.toLowerCase(), resourceAccess: r.resourceAccess.map(a => ({ ...a, id: a.id.toLowerCase() })) })) }, client: principal(s.client), resource: principal(s.resource), grants: s.grants.map(g => ({ ...g, clientId: g.clientId.toLowerCase(), resourceId: g.resourceId.toLowerCase(), scope: [...scopeSet(scopes(g.scope))].sort() })) })
 }
 
 /** A read-preview-confirm flow, independent of MSAL and Electron and tested with injected fetch. */
@@ -55,7 +67,7 @@ export class RegistrationAdditions {
     run.snapshot = await run.read()
     run.guard(run.snapshot)
     for (const name of run.options.additions) {
-      const permission = run.snapshot.resource.oauth2PermissionScopes.find(p => p.value === name && p.isEnabled)
+      const permission = run.snapshot.resource.oauth2PermissionScopes.find(p => eq(p.value, name) && p.isEnabled)
       if (!permission) throw new Error(`Microsoft Graph does not publish the enabled delegated permission ${name}. Nothing was changed.`)
       run.ids.set(name, permission.id)
     }
@@ -115,13 +127,15 @@ export class RegistrationAdditions {
     if (!client.accountEnabled || !Array.isArray(app.requiredResourceAccess)) throw new Error("The registration is disabled or its declarations could not be read. Nothing was changed by this check.")
     if (grants.some(g => !eq(g.clientId, client.id) || g.consentType !== "AllPrincipals" || g.principalId !== null)) throw new Error("Individual Graph consent exists. An administrator must review these grants separately using the other routes. Nothing was changed by this check.")
     if (grants.length > 1) throw new Error("Multiple tenant-wide Graph grants need separate administrator review. Nothing was changed by this check.")
-    const connected = this.options.connection.scopes.filter(name => !protocol.has(name))
-    if (!connected.length || connected.some(name => !consentedScopes(s).includes(name))) throw new Error("This registration lacks tenant-wide consent for the Graph scopes of the connected account. Use the other permission routes. Nothing was changed by this check.")
+    const connected = this.options.connection.scopes.filter(name => !protocol.has(name.toLowerCase()))
+    const consented = scopeSet(consentedScopes(s))
+    if (!connected.length || connected.some(name => !consented.has(name.toLowerCase()))) throw new Error("This registration lacks tenant-wide consent for the Graph scopes of the connected account. Use the other permission routes. Nothing was changed by this check.")
   }
   private difference(s: Snapshot): Omit<PermissionAdditionPreview, "id" | "tenantId" | "clientId"> {
     const held = declaredIds(s.app)
     const consented = consentedScopes(s)
-    return { displayName: s.app.displayName, declare: this.options.additions.filter(n => !held.includes(this.ids.get(n)!.toLowerCase())), consent: this.options.additions.filter(n => !consented.includes(n)), declared: s.app.requiredResourceAccess.flatMap(r => r.resourceAccess.map(a => `${r.resourceAppId}/${a.type}/${a.id}`)), consented }
+    const consentedSet = scopeSet(consented)
+    return { displayName: s.app.displayName, declare: this.options.additions.filter(n => !held.includes(this.ids.get(n)!.toLowerCase())), consent: this.options.additions.filter(n => !consentedSet.has(n.toLowerCase())), declared: s.app.requiredResourceAccess.flatMap(r => r.resourceAccess.map(a => `${r.resourceAppId}/${a.type}/${a.id}`)), consented }
   }
   private async verify(test: (s: Snapshot) => boolean, preserved: (s: Snapshot) => boolean): Promise<Snapshot> {
     let latest!: Snapshot
@@ -138,7 +152,8 @@ export class RegistrationAdditions {
     const app = { ...after.app, requiredResourceAccess: after.app.requiredResourceAccess.map(r => eq(r.resourceAppId, GRAPH_APP_ID)
       ? { ...r, resourceAccess: r.resourceAccess.filter(a => a.type !== "Scope" || !additionIds.includes(a.id.toLowerCase())) } : r)
       .filter(r => !eq(r.resourceAppId, GRAPH_APP_ID) || r.resourceAccess.length || before.app.requiredResourceAccess.some(old => eq(old.resourceAppId, GRAPH_APP_ID))) }
-    const grants = after.grants.map(g => ({ ...g, scope: scopes(g.scope).filter(n => !consent.includes(n)).join(" ") }))
+    const consentSet = scopeSet(consent)
+    const grants = after.grants.map(g => ({ ...g, scope: scopes(g.scope).filter(n => !consentSet.has(n.toLowerCase())).join(" ") }))
     return signature({ ...after, app, grants }) === signature(before)
   }
   /** Called once for the exact stored preview. There is deliberately no automatic write retry. */
@@ -152,7 +167,7 @@ export class RegistrationAdditions {
     let changed = false
     let wroteDeclarations = false
     const declarationDone = (s: Snapshot) => this.options.additions.every(n => declaredIds(s.app).includes(this.ids.get(n)!.toLowerCase()))
-    const consentDone = (s: Snapshot) => this.options.additions.every(n => consentedScopes(s).includes(n))
+    const consentDone = (s: Snapshot) => this.options.additions.every(n => scopeSet(consentedScopes(s)).has(n.toLowerCase()))
     const stopIfChanged = () => {
       if (signature(latest) === signature(expected)) return false
       changed = true
@@ -198,7 +213,7 @@ export class RegistrationAdditions {
             if (!stopIfChanged()) {
               this.guard(latest)
               const before = latest
-              const scope = [...new Set([...scopes(grant.scope), ...this.preview.consent])].join(" ")
+              const scope = scopeUnion([...scopes(grant.scope), ...this.preview.consent]).join(" ")
               try {
                 // Existing tenant-wide consent is a prerequisite. No grant is created or deleted.
                 await this.graph("PATCH", `/oauth2PermissionGrants/${encodeURIComponent(grant.id)}`, { scope })
@@ -212,14 +227,15 @@ export class RegistrationAdditions {
       }
     } catch (error) { issue = error instanceof Error ? error.message : String(error) }
     const declared = this.preview.declare.filter(n => declaredIds(latest.app).includes(this.ids.get(n)!.toLowerCase()))
-    const consented = this.preview.consent.filter(n => consentedScopes(latest).includes(n))
+    const latestConsent = scopeSet(consentedScopes(latest))
+    const consented = this.preview.consent.filter(n => latestConsent.has(n.toLowerCase()))
     const missingDeclarations = this.options.additions.filter(n => !declaredIds(latest.app).includes(this.ids.get(n)!.toLowerCase()))
-    const missingConsent = this.options.additions.filter(n => !consentedScopes(latest).includes(n))
+    const missingConsent = this.options.additions.filter(n => !latestConsent.has(n.toLowerCase()))
     const complete = !issue && !missingDeclarations.length && !missingConsent.length
     return { state: changed ? "changed" : complete ? "complete" : "partial", preview: changed ? { ...this.preview, ...this.difference(latest) } : this.preview, declared, consented, missingDeclarations, missingConsent, message: changed ? issue : `${complete ? "The approved permissions are declared and consented." : "Only part of the approved change could be verified. No rollback was attempted."}${uncertain ? " A write did not return a successful answer and may have been applied. Read-back was attempted before reporting; start a new preview before retrying." : ""}${issue ? ` ${issue}` : ""}` }
   }
 }
 
 export function sameAdditionConnection(a: AdditionConnection, b: AdditionConnection): boolean {
-  return eq(a.tenantId, b.tenantId) && eq(a.clientId, b.clientId) && eq(a.username, b.username) && a.homeAccountId === b.homeAccountId && sameSet(a.scopes, b.scopes) && sameSet(a.allowed, b.allowed)
+  return eq(a.tenantId, b.tenantId) && eq(a.clientId, b.clientId) && eq(a.username, b.username) && a.homeAccountId === b.homeAccountId && sameSet([...scopeSet(a.scopes)], [...scopeSet(b.scopes)]) && sameSet(a.allowed, b.allowed)
 }

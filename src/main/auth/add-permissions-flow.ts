@@ -6,6 +6,19 @@ import { setupSignInError } from "./app-registration-setup"
 import { isGuid, isMicrosoftLoginUrl } from "../../shared/security"
 import { RegistrationAdditions, sameAdditionConnection, type AdditionConnection } from "./registration-additions"
 import type { PermissionAdditionPreview, PermissionAdditionResult } from "../../shared/registration-additions"
+import { grantedPermissions } from "../../shared/services/token"
+
+export function permissionAdditionScopes(result: { accessToken: string }): string[] {
+  const granted = grantedPermissions(result.accessToken)
+  if (granted?.kind !== "delegated") throw new Error("Sign in with a delegated Graph account whose permissions can be read before adding permissions.")
+  return [...granted.permissions]
+}
+
+export function verifyPermissionAdditionToken(result: { accessToken: string }, approved: readonly string[]): void {
+  const scopes = new Set(permissionAdditionScopes(result).map(name => name.toLowerCase()))
+  const missing = approved.filter(name => !scopes.has(name.toLowerCase()))
+  if (missing.length) throw new Error(`The refreshed token still lacks ${missing.join(", ")}.`)
+}
 
 /** Setup-only consent is never persisted in the tenant's normal MSAL cache. */
 export async function signInForPermissionAddition(connection: AdditionConnection, request: typeof fetch, openBrowser: (url: string) => Promise<void>, signal: AbortSignal): Promise<string> {

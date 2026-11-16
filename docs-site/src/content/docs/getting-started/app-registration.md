@@ -312,3 +312,5 @@ For **Add in the app**:
 ![A partial result names what was verified and what remains missing](/images/add-permissions/partial-result-light.png)
 
 The in-app route refuses a registration that is not a single-tenant public client with only root-path `http://localhost` or `http://127.0.0.1` redirects (with or without a port), has credentials (including federated credentials or credentials on its enterprise application), lacks tenant-wide consent for the connected scopes, or has individual Graph consent. A missing administrator role is shown as a refusal from Microsoft. Close the dialog to use the other routes or ask your administrator to review the registration. Quick setup still never changes a registration it did not create.
+
+Consent is checked against the delegated permissions in your connected access token, including after the final refresh. If those permissions cannot be read or the token is app-only, sign in again with a delegated account. Case-only differences in scope names or registration GUIDs do not count as a change since the preview. Existing consented scope names keep their spelling.

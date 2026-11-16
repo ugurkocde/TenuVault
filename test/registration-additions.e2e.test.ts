@@ -2,7 +2,7 @@ import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { expect, it } from "vitest"
 import { PublicClientApplication } from "@azure/msal-node"
-import { AddPermissionsFlow, signInForPermissionAddition } from "../src/main/auth/add-permissions-flow"
+import { AddPermissionsFlow, permissionAdditionScopes, signInForPermissionAddition, verifyPermissionAdditionToken } from "../src/main/auth/add-permissions-flow"
 import { loopbackSignIn } from "../src/main/auth/loopback-sign-in"
 import { ERROR_PAGE, page } from "../src/main/auth/msal"
 import { isGuid, isMicrosoftLoginUrl } from "../src/shared/security"
@@ -32,10 +32,10 @@ it.skipIf(process.env.TENUVAULT_ADDITIONS_WRITE_APPROVED !== "yes")("adds the ap
   const signal = AbortSignal.timeout(15 * 60_000)
   const original = await loopbackSignIn({ app: client, scopes: ["https://graph.microsoft.com/.default"], prompt: "select_account", openBrowser, successPage: page("Go back to the test", "The target connection is signed in."), errorPage: ERROR_PAGE, signal })
   expect(original.account?.tenantId.toLowerCase()).toBe(tenantId.toLowerCase())
-  const connection = { tenantId, clientId, username: original.account!.username, homeAccountId: original.account!.homeAccountId, scopes: original.scopes, allowed }
+  const connection = { tenantId, clientId, username: original.account!.username, homeAccountId: original.account!.homeAccountId, scopes: permissionAdditionScopes(original), allowed }
   const flow = new AddPermissionsFlow({ fetch, connection: async () => connection, signIn: (c, s) => signInForPermissionAddition(c, fetch, openBrowser, s), refresh: async () => {
     const token = await client.acquireTokenSilent({ account: original.account!, scopes: ["https://graph.microsoft.com/.default"], forceRefresh: true })
-    for (const name of additions) expect(token.scopes).toContain(name)
+    verifyPermissionAdditionToken(token, additions)
   } })
   try {
     const preview = await flow.preview(tenantId, additions)
