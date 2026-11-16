@@ -1,10 +1,11 @@
 import type { Extra, IntuneType } from "./registry"
+import { entraSnapshot } from "./entra-snapshot"
 
 /** Configuration only. Every type stays backup-only until its restore rules are implemented. */
 const limitation = "Entra ID configuration restore is not available yet."
 const neverStored = ["clientSecret", "password", "privateKey", "sharedSecret", "secretKey", "tokenSeed", "seed", "tunnelKey", "keyCredentials", "passwordCredentials", "secret", "accessToken", "refreshToken", "clientAssertion", "pfx", "pkcs12", "secretText"]
 const base = (folder: string, label: string, path: string, area: IntuneType["area"] = "Tenant settings"): IntuneType => ({
-  folder, label, path, area, nameKey: "displayName", apiVersion: "v1.0", limitation, neverStoredKeys: neverStored,
+  folder, label, path, area, nameKey: "displayName", apiVersion: "v1.0", limitation, neverStoredKeys: neverStored, normalizeSnapshot: entraSnapshot,
 })
 const singleton = (folder: string, label: string, path: string, area?: IntuneType["area"]): IntuneType => ({
   ...base(folder, label, path, area), singleton: { id: folder, name: label },
@@ -45,7 +46,7 @@ export const ENTRA_5A_TYPES: IntuneType[] = [
     extras: [{ property: "includedGroups", path: (id: string) => `policies/${path}/${id}/includedGroups?$select=id`, ids: true as const }],
   })),
   base("DirectorySettings", "Directory settings", "groupSettings"),
-  { ...singleton("Organization", "Organization", "organization"), singleton: { id: "Organization", name: "Organization", collection: true } },
+  { ...singleton("Organization", "Organization", "organization"), singleton: { id: "Organization", name: "Organization", collection: true }, neverStored: ["onPremisesLastSyncDateTime", "onPremisesLastPasswordSyncDateTime", "onPremisesSyncStatus"] },
   {
     ...singleton("EntraCompanyBranding", "Company branding", `${organization}/branding`),
     extras: [{ property: "localizations", path: () => `${organization}/branding/localizations` }],
@@ -57,6 +58,7 @@ export const ENTRA_5A_TYPES: IntuneType[] = [
   },
   {
     ...base("Domains", "Domains", "domains"),
+    neverStored: ["federationConfiguration.signingCertificateUpdateStatus"],
     extras: [
       // Domain-InternalFederation.Read.All may be refused even when the domain itself is readable.
       { property: "federationConfiguration", path: id => `domains/${id}/federationConfiguration`, optional: [{ status: 403 }, { status: 404, code: "Request_ResourceNotFound" }], notConfigured: [{ status: 404, code: "Request_ResourceNotFound" }], notConfiguredWhen: parent => parent.authenticationType === "Managed" },
@@ -72,6 +74,7 @@ export const ENTRA_5A_TYPES: IntuneType[] = [
   base("CertificateBasedAuthConfigurations", "Certificate-based authentication configurations", `${organization}/certificateBasedAuthConfiguration`, "Authentication"),
   {
     ...base("CertificateBasedAuthPki", "Certificate-based authentication PKI", "directory/publicKeyInfrastructure/certificateBasedAuthConfigurations", "Authentication"),
+    neverStored: ["status", "statusDetails"],
     extras: [{ property: "certificateAuthorities", path: id => `directory/publicKeyInfrastructure/certificateBasedAuthConfigurations/${id}/certificateAuthorities` }],
   },
   {
@@ -82,7 +85,7 @@ export const ENTRA_5A_TYPES: IntuneType[] = [
     ...singleton("ContinuousAccessEvaluationPolicy", "Continuous access evaluation policy", "identity/continuousAccessEvaluationPolicy", "Authentication"), apiVersion: "beta",
     notConfigured: [{ status: 404, message: "CAE settings not found" }],
   },
-  { ...base("HardwareOathDevices", "Hardware OATH devices", "directory/authenticationMethodDevices/hardwareOathDevices", "Authentication"), nameKey: "serialNumber", apiVersion: "beta", inventory: true },
+  { ...base("HardwareOathDevices", "Hardware OATH devices", "directory/authenticationMethodDevices/hardwareOathDevices", "Authentication"), nameKey: "serialNumber", apiVersion: "beta", inventory: true, neverStored: ["lastUsedDateTime", "status"] },
   base("GroupLifecyclePolicies", "Group lifecycle policies", "groupLifecyclePolicies", "Groups"),
   singleton("OwnerlessGroupPolicy", "Ownerless group policy", "policies/ownerlessGroupPolicy", "Groups"),
 ]
@@ -97,6 +100,7 @@ const selfServiceUnavailable = [{ status: 400, code: "AADB2C99039", message: "Th
 const groupSchedules = (folder: string, label: string, collection: string): IntuneType => ({
   ...roles(folder, label, `identityGovernance/privilegedAccess/group/${collection}`),
   listOnly: true,
+  neverStored: ["status"],
   headers: { "Accept-Language": "en-US", "ConsistencyLevel": "eventual" },
   listSource: { budget: { durationMs: PIM_GROUP_READ_BUDGET_MS, maxRequests: PIM_GROUP_SCHEDULE_REQUEST_LIMIT }, path: "groups?$select=id&$top=999&$count=true&$filter=" + encodeURIComponent("(securityEnabled eq true or groupTypes/any(c:c eq 'Unified')) and onPremisesSyncEnabled ne true and not groupTypes/any(c:c eq 'DynamicMembership')"), filter: id => `groupId eq '${id.replaceAll("'", "''")}'` },
 })
@@ -133,15 +137,15 @@ export const ENTRA_5B_TYPES: IntuneType[] = [
     ...singleton("MultiTenantOrganization", "Multitenant organization", "tenantRelationships/multiTenantOrganization", "External identities"),
     unorderedCollections: { tenants: "tenantId" },
     extras: [{ property: "tenants", path: () => "tenantRelationships/multiTenantOrganization/tenants" }],
-    neverStored: ["tenants.displayName"],
+    neverStored: ["tenants.displayName", "tenants.transitionDetails.status", "tenants.transitionDetails.details"],
   },
   { ...roles("EntraRoleDefinitions", "Custom Entra role definitions", "roleManagement/directory/roleDefinitions"), filter: "isBuiltIn eq false", skip: item => item.isBuiltIn === true ? "Built-in role" : undefined },
   roles("EntraRoleAssignments", "Entra role assignments", "roleManagement/directory/roleAssignments"),
-  roles("RoleEligibilitySchedules", "Role eligibility schedules", "roleManagement/directory/roleEligibilitySchedules"),
-  roles("RoleAssignmentSchedules", "Role assignment schedules", "roleManagement/directory/roleAssignmentSchedules"),
+  { ...roles("RoleEligibilitySchedules", "Role eligibility schedules", "roleManagement/directory/roleEligibilitySchedules"), neverStored: ["status"] },
+  { ...roles("RoleAssignmentSchedules", "Role assignment schedules", "roleManagement/directory/roleAssignmentSchedules"), neverStored: ["status"] },
   {
     ...roles("RoleManagementPolicies", "Role management policies", "policies/roleManagementPolicies"), filter: directoryScope,
-    expand: "rules", unorderedCollections: { rules: "id" },
+    expand: "rules", unorderedCollections: { rules: "id" }, neverStored: ["effectiveRules"],
   },
   { ...roles("RoleManagementPolicyAssignments", "Role management policy assignments", "policies/roleManagementPolicyAssignments"), filter: directoryScope, listOnly: true },
   groupSchedules("PimGroupEligibilitySchedules", "PIM group eligibility schedules", "eligibilitySchedules"),
@@ -178,6 +182,7 @@ export const ENTRA_5C_TYPES: IntuneType[] = [
     extras: [{ property: "resources", path: id => `${entitlement}/catalogs/${id}/resources?$expand=roles,scopes` }],
     unorderedCollections: { resources: "id", "resources.roles": "id", "resources.scopes": "id", "resources.attributes": "name", "resources.attributes.source.question.localizations": "languageCode", "resources.attributes.source.question.choices.localizations": "languageCode" },
     requiredCollections: ["resources.roles", "resources.scopes"],
+    neverStored: ["resources.isPendingOnboarding"],
   },
   {
     ...governance("AccessPackages", "Access packages", `${entitlement}/accessPackages`),
@@ -187,7 +192,7 @@ export const ENTRA_5C_TYPES: IntuneType[] = [
   },
   { ...governance("AccessPackageAssignmentPolicies", "Access package assignment policies", `${entitlement}/assignmentPolicies`), expand: "accessPackage($select=id),questions,customExtensionStageSettings($expand=customExtension)",
     requiredCollections: ["questions", "customExtensionStageSettings"],
-    unorderedCollections: { questions: "id", "questions.localizations": "languageCode", "questions.choices.localizations": "languageCode", customExtensionStageSettings: "id", specificAllowedTargets: "$content", "requestApprovalSettings.stages.primaryApprovers": "$content", "requestApprovalSettings.stages.fallbackPrimaryApprovers": "$content", "requestApprovalSettings.stages.escalationApprovers": "$content", "requestApprovalSettings.stages.fallbackEscalationApprovers": "$content", "reviewSettings.primaryReviewers": "$content", "reviewSettings.fallbackReviewers": "$content" },
+    unorderedCollections: { questions: "id", "questions.localizations": "languageCode", "questions.choices.localizations": "languageCode", customExtensionStageSettings: "id", specificAllowedTargets: "$content", "requestorSettings.onBehalfRequestors": "$content", "requestApprovalSettings.stages.primaryApprovers": "$content", "requestApprovalSettings.stages.fallbackPrimaryApprovers": "$content", "requestApprovalSettings.stages.escalationApprovers": "$content", "requestApprovalSettings.stages.fallbackEscalationApprovers": "$content", "reviewSettings.primaryReviewers": "$content", "reviewSettings.fallbackReviewers": "$content" },
   },
   {
     ...governance("ConnectedOrganizations", "Connected organizations", `${entitlement}/connectedOrganizations`),
@@ -195,14 +200,14 @@ export const ENTRA_5C_TYPES: IntuneType[] = [
     extras: ["internalSponsors", "externalSponsors"].map(property => ({ property, path: id => `${entitlement}/connectedOrganizations/${id}/${property}?$select=id`, ids: true })),
   },
   { ...governance("EntitlementManagementSettings", "Entitlement management settings", `${entitlement}/settings`), singleton: { id: "EntitlementManagementSettings", name: "Entitlement management settings" } },
-  { ...governance("AccessReviewDefinitions", "Access review definitions", "identityGovernance/accessReviews/definitions"), unorderedCollections: { reviewers: "$content", fallbackReviewers: "$content", backupReviewers: "$content", additionalNotificationRecipients: "$content", stageSettings: "stageId", "stageSettings.reviewers": "$content", "stageSettings.fallbackReviewers": "$content", "stageSettings.recommendationInsightsSettings": "$content", "settings.applyActions": "$content", "settings.recommendationInsightSettings": "$content", "settings.defaultReviewers": "$content", "settings.fallbackReviewers": "$content" }, neverStored: ["instances"] },
+  { ...governance("AccessReviewDefinitions", "Access review definitions", "identityGovernance/accessReviews/definitions"), unorderedCollections: { reviewers: "$content", fallbackReviewers: "$content", backupReviewers: "$content", additionalNotificationRecipients: "$content", stageSettings: "stageId", "stageSettings.reviewers": "$content", "stageSettings.fallbackReviewers": "$content", "stageSettings.recommendationInsightsSettings": "$content", "settings.applyActions": "$content", "settings.recommendationInsightSettings": "$content", "settings.defaultReviewers": "$content", "settings.fallbackReviewers": "$content" }, neverStored: ["instances", "status"] },
   { ...governance("AccessReviewPolicy", "Access review policy", "policies/accessReviewPolicy"), apiVersion: "beta", singleton: { id: "AccessReviewPolicy", name: "Access review policy" } },
   {
     ...governance("LifecycleWorkflows", "Lifecycle workflows", `${workflows}/workflows`), unavailable: lifecycleUnavailable,
     extras: [{ property: "tasks", path: id => `${workflows}/workflows/${id}/tasks` }],
     unorderedCollections: { tasks: "id", "tasks.arguments": "name" },
     // Versions and execution history are not current configuration.
-    neverStored: ["versions", "runs", "userProcessingResults"],
+    neverStored: ["versions", "runs", "userProcessingResults", "subjectProcessingResults", "taskReports", "executionScope", "previewScope", "nextScheduleRunDateTime", "lastExecutionDateTime", "quarantineDetails"],
   },
   { ...governance("LifecycleWorkflowCustomTaskExtensions", "Lifecycle workflow custom task extensions", `${workflows}/customTaskExtensions`), unavailable: lifecycleUnavailable },
   { ...governance("LifecycleWorkflowSettings", "Lifecycle workflow settings", `${workflows}/settings`), unavailable: lifecycleUnavailable, singleton: { id: "LifecycleWorkflowSettings", name: "Lifecycle workflow settings" } },

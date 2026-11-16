@@ -143,7 +143,7 @@ export async function readObject(type: IntuneType, id: string, graph: GraphReade
     secret.apply(plain.value)
   }
   delete detail["@odata.context"]
-  const snapshot = orderedSnapshot(type, withoutNeverStored(type, type.singleton ? singletonSnapshot(type, detail) : detail))
+  const snapshot = storedSnapshot(type, type.singleton ? singletonSnapshot(type, detail) : detail)
   if (type.maxSnapshotBytes && new TextEncoder().encode(JSON.stringify(snapshot, null, 2)).byteLength > type.maxSnapshotBytes) throw new Error(`The ${type.label} JSON exceeds the ${type.maxSnapshotBytes} byte limit`)
   return snapshot
 }
@@ -156,7 +156,11 @@ export function listSnapshot(type: IntuneType, item: Item): Item {
   // Removing nested properties must not change the list entry itself.
   const copy = type.neverStored?.length || type.neverStoredKeys?.length ? structuredClone(item) : { ...item }
   delete copy["@odata.context"]
-  return orderedSnapshot(type, withoutNeverStored(type, type.keep ? keptSnapshot(type.keep, copy) : copy))
+  return storedSnapshot(type, type.keep ? keptSnapshot(type.keep, copy) : copy)
+}
+
+function storedSnapshot(type: IntuneType, snapshot: Item): Item {
+  return orderedSnapshot(type, withoutNeverStored(type, type.normalizeSnapshot ? type.normalizeSnapshot(snapshot) : snapshot))
 }
 
 /** Read every expanded page, including nested resource roles and scopes, before storing it. */

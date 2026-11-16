@@ -134,6 +134,8 @@ Devices are counted as items of the backup, not as policies, and hygiene checks 
 | Device clean-up rules | No | In a scheduled backup made by the [Backup Reader](/backups/backup-reader/), only with its optional device inventory permission; otherwise left out |
 | Multi admin approval policies | No | Restoring them always needs a second administrator's approval. In a tenant that has no access policy yet, the restore marks them **Approval required**; send them from **Waiting for approval** with a justification. See [Multi Admin Approval and TenuVault](/restore/multi-admin-approval/). |
 
+Entra ID configuration stores people by ID, excluding subject descriptions and returned personal profiles. Configured notification recipient email addresses remain stored as policy settings. Runtime state, including workflow next-run times, is excluded so it does not appear as configuration drift. See the [per-type Entra ID table](/backups/entra/) for stored data and exclusions.
+
 ## Entra Conditional Access (opt-in)
 
 Off until you turn the service on for the tenant in **Settings** > **Services and permissions**. **Everything** does not include these types while the service is off. See [Conditional Access backups](/backups/conditional-access/).

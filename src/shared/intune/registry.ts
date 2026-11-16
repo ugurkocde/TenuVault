@@ -162,6 +162,8 @@ export interface IntuneType {
   requiredCollections?: readonly string[]
   /** Unordered collections at dotted paths, sorted by identity after all pages. $content identifies ID-less subject sets by their complete content. */
   unorderedCollections?: Readonly<Record<string, string>>
+  /** Normalize references after all reads, before exclusions, ordering and fingerprinting. Must not mutate the response. */
+  normalizeSnapshot?: (snapshot: Item) => Item
   /**
    * Properties that are never stored: values that change on their own, or that must not leave the
    * tenant. They are removed before a snapshot is written or fingerprinted. A dotted path reaches into
