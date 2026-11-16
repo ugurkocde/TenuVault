@@ -180,7 +180,7 @@ try {
     await evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent.trim() === ${JSON.stringify(text)}).click()`)
   }
   const scenes = [
-    "healthy", "first-check", "missing-permission", "restore-only-gap", "partly-verified", "graph-consentMissing", "graph-registrationNotFoundInTenant", "graph-applicationDisabled", "registration-replaced", "reader-expiring", "reader-expired", "reader-lost-access", "changes", "personal-data", "intune-confirmation", "intune-off", "entra-no-types",
+    "healthy", "first-check", "missing-permission", "restore-only-gap", "partly-verified", "graph-consentMissing", "graph-registrationNotFoundInTenant", "graph-applicationDisabled", "registration-replaced", "reader-expiring", "reader-expired", "reader-lost-access", "changes", "personal-data", "intune-confirmation", "intune-off", "entra-backup-types",
     ...["permission", "notVerifiedYet", "refusedWithPermission", "role", "license", "signedIn", "reader", "notRead"].map(cause => `cause-${cause}`),
     ...["notChecked", "unknown", "signInNeeded", "mfaRequired", "blockedByConditionalAccess", "registrationMisconfigured", "servicePrincipalMissing", "notAssigned", "accountDisabled", "accountLockedOrBlocked", "wrongTenantOrAccount", "throttled", "unreachable"].map(state => `graph-${state}`),
     ...["notSetUp", "pending", "rolesChanged", "refused", "throttled", "unreachable"].map(state => `reader-${state}`),
@@ -200,6 +200,10 @@ try {
       await evaluate(`document.documentElement.classList.toggle("dark", ${theme === "dark"}); (() => { const style = document.createElement("style"); style.textContent = "*, *::before, *::after { animation: none !important; transition: none !important; caret-color: transparent !important; }"; document.head.appendChild(style) })()`)
       if (state === "missing-permission" || state === "registration-replaced" || state === "restore-only-gap") await evaluate(`document.querySelector('[data-service="intune"] [data-permission-routes]').open = true; document.querySelectorAll('[data-service="intune"] [data-permission-routes] details').forEach(e => e.open = true)`)
       if (state === "restore-only-gap") await evaluate(`document.querySelector('[data-service="intune"] > details').open = true`)
+      if (state === "entra-backup-types") {
+        await waitFor(`document.querySelector('[data-service="entra"]')?.innerText.includes("Backup: Permissions present")`)
+        if (await evaluate(`document.querySelector('[data-service="entra"]').innerText.includes("no backup types for Entra ID yet")`)) throw new Error("Entra ID backup types are missing from Services and permissions")
+      }
       if (state === "personal-data") await evaluate(`document.querySelector('[data-service="entra"] > details').open = true`)
       if (state === "reader-lost-access" || state === "partly-verified" || state.startsWith("cause-")) await evaluate(`document.querySelector('[data-service="intune"] > details').open = true`)
       if (state === "intune-confirmation") {
@@ -223,7 +227,7 @@ try {
       await shot(state, theme)
     }
   }
-  const inventory = "# Services and permissions screenshots\n\nFictional health reports, built desktop app, 1024px width, both themes. Generated with `node scripts/services-shots.mjs`. Storage has its own copy for all 18 supported states.\n\n" + scenes.map(state => `* ${state}-light.png, ${state}-dark.png: ${state.replaceAll("-", " ")}.\n`).join("")
+  const inventory = "# Services and permissions screenshots\n\nFictional health reports, built desktop app, 1024px width, both themes. Generated with `node scripts/services-shots.mjs`. Storage has its own copy for all 18 supported states.\n\n" + scenes.map(state => `* ${state}-light.png, ${state}-dark.png: ${state === "entra-backup-types" ? "Entra ID enabled with configuration backup types available" : state.replaceAll("-", " ")}.\n`).join("")
   for (const folder of [shotsDir, docsDir]) writeFileSync(join(folder, "README.md"), inventory)
   rmSync(join(shotsDir, "failure.png"), { force: true })
   console.log(`${selectedScenes.length * 2} fixture screenshots saved to ${shotsDir} and ${docsDir}`)

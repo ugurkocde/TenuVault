@@ -140,7 +140,7 @@ const scenes = [
   ["10-permissions-missing", "After sign-in, chosen permissions missing, with the existing remediation routes and a way to continue."],
   ["10-storage-local", "Storage choice after sign-in."],
   ["11-backup-intune", "First backup for the default Intune choice, with Run first backup available."],
-  ["11-backup-first", "First backup for Entra-only, explaining that these backups arrive later."],
+  ["11-backup-first", "First backup for Entra-only, with configuration backup available and Run first backup enabled."],
   ["12-hub-intune-required", "Governance with Intune off, keeping all tabs and Accepted deviations and Customizations reachable."],
   ["12-intune-required", "OpenIntuneBaseline on a tenant without Intune, linked to service settings."],
   ["13-tenant-unavailable", "A notification link for an unavailable tenant, with a link to Tenants and no workflow mounted."],
@@ -222,6 +222,10 @@ try {
     if (state === "10-storage-local") await waitFor(`document.body.innerText.includes("Choose where backups are stored")`)
     if (state === "10-permissions-missing") { await waitFor(`document.body.innerText.includes("Some chosen permissions are missing")`); await expand('[data-permission-routes]'); await expand('[data-permission-routes] details') }
     if (state.startsWith("11-backup")) await click("Continue")
+    if (state === "11-backup-first") {
+      await waitFor(`document.body.innerText.includes("Entra ID") && [...document.querySelectorAll('button')].some(b => b.textContent.trim() === "Run first backup" && !b.disabled)`)
+      if (await evaluate(`document.body.innerText.includes("no backup types for Entra ID yet")`)) throw new Error("Entra ID backup types are missing from onboarding")
+    }
     await sleep(250)
     const choiceScreen = state.includes("-choice-")
     if (choiceScreen) {

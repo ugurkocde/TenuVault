@@ -18,7 +18,7 @@ Fictional health reports, built desktop app, 1024px width, both themes. Generate
 * personal-data-light.png, personal-data-dark.png: personal data.
 * intune-confirmation-light.png, intune-confirmation-dark.png: intune confirmation.
 * intune-off-light.png, intune-off-dark.png: intune off.
-* entra-no-types-light.png, entra-no-types-dark.png: entra no types.
+* entra-backup-types-light.png, entra-backup-types-dark.png: Entra ID enabled with configuration backup types available.
 * cause-permission-light.png, cause-permission-dark.png: cause permission.
 * cause-notVerifiedYet-light.png, cause-notVerifiedYet-dark.png: cause notVerifiedYet.
 * cause-refusedWithPermission-light.png, cause-refusedWithPermission-dark.png: cause refusedWithPermission.

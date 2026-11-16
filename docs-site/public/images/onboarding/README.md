@@ -22,7 +22,7 @@ Built desktop app at 1024px with fictional tenant and sign-in results. No Micros
 * 10-permissions-missing-light.png, 10-permissions-missing-dark.png: After sign-in, chosen permissions missing, with the existing remediation routes and a way to continue.
 * 10-storage-local-light.png, 10-storage-local-dark.png: Storage choice after sign-in.
 * 11-backup-intune-light.png, 11-backup-intune-dark.png: First backup for the default Intune choice, with Run first backup available.
-* 11-backup-first-light.png, 11-backup-first-dark.png: First backup for Entra-only, explaining that these backups arrive later.
+* 11-backup-first-light.png, 11-backup-first-dark.png: First backup for Entra-only, with configuration backup available and Run first backup enabled.
 * 12-hub-intune-required-light.png, 12-hub-intune-required-dark.png: Governance with Intune off, keeping all tabs and Accepted deviations and Customizations reachable.
 * 12-intune-required-light.png, 12-intune-required-dark.png: OpenIntuneBaseline on a tenant without Intune, linked to service settings.
 * 13-tenant-unavailable-light.png, 13-tenant-unavailable-dark.png: A notification link for an unavailable tenant, with a link to Tenants and no workflow mounted.

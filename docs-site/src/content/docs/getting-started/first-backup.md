@@ -92,6 +92,6 @@ Once you have a successful backup, [practice an Intune restore](https://www.tenu
 
 ## Your chosen services
 
-The first backup step names the services selected during setup. Intune is included only if you chose it. Entra ID now has [30 configuration types](/backups/entra/). Areas without types and Defender still prepare permissions only. Conditional Access backups are already available when selected. For a tenant with only services whose backup types have not arrived, the step explains that there are no backup types to run yet and offers **Skip for now**. Apps are left out by default only for an Intune backup.
+The first backup step names the services selected during setup. Intune is included only if you chose it. Entra ID now has [30 configuration types](/backups/entra/), so an Entra-only setup can use **Run first backup** immediately. Areas without types and Defender still prepare permissions only. Conditional Access backups are already available when selected. For a tenant with only services whose backup types have not arrived, the step explains that there are no backup types to run yet and offers **Skip for now**. Apps are left out by default only for an Intune backup.
 
 ![First backup for an Entra-only setup](/images/onboarding/11-backup-first-light.png)

@@ -66,7 +66,7 @@ export function healthScene(name: string): ConnectionHealthReport {
     report.since = "2026-11-12T10:00:00Z"
     report.changes = [{ kind: "permissionsAdded", permissions: ["Policy.Read.All"] }, { kind: "permissionsRemoved", permissions: ["Group.Read.All"], earlierSignIn: true, foundAt: "2026-11-13T10:00:00Z" }]
   }
-  if (name === "personal-data" || name === "entra-no-types") {
+  if (name === "personal-data" || name === "entra-backup-types") {
     const entra = report.services.find(service => service.id === "entra")!
     entra.enabled = true
     entra.areas.forEach(area => { area.enabled = !area.optIn })

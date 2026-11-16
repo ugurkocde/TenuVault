@@ -5,7 +5,9 @@ const storageStates = ["healthy", "local", "notChecked", "unknown", "signInNeede
 it("captures and inventories every storage state and changed surface at 1024px in both themes", () => {
   const folder = new URL("../docs-site/public/images/services/", import.meta.url)
   const inventory = readFileSync(new URL("README.md", folder), "utf8")
-  for (const state of [...storageStates.map(state => `storage-${state}`), "restore-only-gap", "partly-verified", "missing-permission", "cause-notRead", "overview-intune-off", "dashboard-intune-off", "tenants-intune-off", "tenants-list-intune-off"]) {
+  expect(inventory).not.toContain("entra-no-types")
+  expect(inventory).toContain("Entra ID enabled with configuration backup types available")
+  for (const state of [...storageStates.map(state => `storage-${state}`), "entra-backup-types", "restore-only-gap", "partly-verified", "missing-permission", "cause-notRead", "overview-intune-off", "dashboard-intune-off", "tenants-intune-off", "tenants-list-intune-off"]) {
     for (const theme of ["light", "dark"]) {
       const file = `${state}-${theme}.png`
       expect(inventory).toContain(file)
