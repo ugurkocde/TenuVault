@@ -233,6 +233,65 @@ describe("sign-in test runner changes", () => {
     expect(existsSync(disposable)).toBe(false)
   })
 
+  it("keeps the state and reports a failed Linux port restoration even when nothing is left", () => {
+    const m = machine("linux")
+    install(m.root.path, m.system)
+    m.fail = (call) => call.command === "sysctl" && call.args.includes("net.ipv4.ip_unprivileged_port_start=1024")
+    const first = cleanup(m.system)
+    expect(first.left).toEqual([])
+    expect(first.problems).toEqual([expect.stringMatching(/^port: /)])
+    expect(JSON.parse(readFileSync(join(m.system.stateDir as string, "state.json"), "utf8")).portStart).toBe("1024")
+
+    m.fail = () => false
+    expect(cleanup(m.system)).toEqual({ problems: [], left: [] })
+    expect(m.calls.filter((call) => call.command === "sysctl" && call.args.includes("net.ipv4.ip_unprivileged_port_start=1024"))).toHaveLength(2)
+    expect(existsSync(m.system.stateDir as string)).toBe(false)
+  })
+
+  it("keeps the state and reports a failed macOS default keychain restoration", () => {
+    const m = machine("darwin")
+    install(m.root.path, m.system)
+    m.fail = (call) => call.args[0] === "default-keychain" && call.args.includes("-s")
+    const first = cleanup(m.system)
+    expect(first.problems).toEqual([expect.stringMatching(/^keychain list: /)])
+    expect(existsSync(m.system.stateDir as string)).toBe(true)
+
+    m.fail = () => false
+    expect(cleanup(m.system)).toEqual({ problems: [], left: [] })
+    expect(m.keychains.default).toBe(LOGIN_KEYCHAIN)
+  })
+
+  it("forgets the app's key until security reports none, and stops on any other failure", () => {
+    const m = machine("darwin")
+    install(m.root.path, m.system)
+    const exec = m.system.exec as (command: string, args: string[]) => string
+    const deleting = (call: string[]) => call[0] === "delete-generic-password"
+    let keys = 2
+    m.system.exec = (command: string, args: string[]) => {
+      if (command !== "security" || !deleting(args)) return exec(command, args)
+      if (keys === 0) throw Object.assign(new Error("Command failed"), { status: 44, stderr: "security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain." })
+      keys--
+      return ""
+    }
+    expect(() => forgetAppSecret(m.system)).not.toThrow()
+    expect(keys).toBe(0)
+
+    m.system.exec = (command: string, args: string[]) => {
+      if (command === "security" && deleting(args)) throw Object.assign(new Error("Command failed"), { status: 51, stderr: "security: SecKeychainItemDelete: User interaction is not allowed." })
+      return exec(command, args)
+    }
+    expect(() => forgetAppSecret(m.system)).toThrow(/Could not remove the app's key from the disposable keychain: security: SecKeychainItemDelete: User interaction is not allowed/)
+
+    // Five keys deleted in a row: it stops after five attempts without an error.
+    let attempts = 0
+    m.system.exec = (command: string, args: string[]) => {
+      if (command === "security" && deleting(args)) { attempts++; return "" }
+      return exec(command, args)
+    }
+    forgetAppSecret(m.system)
+    expect(attempts).toBe(5)
+  })
+
   it("reports a root certificate it could not remove and keeps the state for another cleanup", () => {
     const m = machine("win32")
     install(m.root.path, m.system)

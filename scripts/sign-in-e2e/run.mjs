@@ -113,14 +113,21 @@ async function launchApp(label) {
   let log = ""
   child.stdout.on("data", (d) => (log += d))
   child.stderr.on("data", (d) => (log += d))
+  // Stops the app and removes its profile before a failed start is reported.
+  const stop = async () => {
+    const exited = new Promise((r) => child.once("exit", r))
+    child.kill()
+    await Promise.race([exited, sleep(5000)])
+    writeFileSync(join(outDir, `app-${label}.log`), log)
+    try { rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) } catch { /* Windows may hold it briefly */ }
+  }
   let browser
   for (let i = 0; i < 60 && !browser; i++) {
     browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`).catch(() => undefined)
     if (!browser) await sleep(500)
   }
   if (!browser) {
-    child.kill()
-    writeFileSync(join(outDir, `app-${label}.log`), log)
+    await stop()
     throw new LaunchError(`the app did not open its debugging port. App log:\n${log.slice(-3000)}`)
   }
   let page
@@ -129,20 +136,16 @@ async function launchApp(label) {
     if (!page) await sleep(250)
   }
   if (!page) {
-    child.kill()
-    writeFileSync(join(outDir, `app-${label}.log`), log)
+    await browser.close().catch(() => undefined)
+    await stop()
     throw new LaunchError("the app opened no window")
   }
   return {
     page,
     log: () => log,
     async close() {
-      writeFileSync(join(outDir, `app-${label}.log`), log)
       await browser.close().catch(() => undefined)
-      const exited = new Promise((r) => child.once("exit", r))
-      child.kill()
-      await Promise.race([exited, sleep(5000)])
-      try { rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) } catch { /* Windows may hold it briefly */ }
+      await stop()
     },
   }
 }
@@ -192,6 +195,8 @@ async function openBrowser(engine, standIn) {
 }
 
 async function signInWith(engine, standIn) {
+  // Only what the stand-in records from here on belongs to this engine's sign-in.
+  const logStart = standIn.log.length
   const app = await launchApp(engine.name)
   let browser
   try {
@@ -209,7 +214,7 @@ async function signInWith(engine, standIn) {
     await opened.page.screenshot({ path: join(outDir, `${engine.name}-browser.png`) })
     await app.page.getByText("Choose where backups are stored").waitFor({ timeout: 30_000 })
     await app.page.getByText(`Signed in as ${ACCOUNT.username}`).waitFor()
-    assert(standIn.log.some((line) => line.includes("licensing: tenant route")), "the license check after the sign-in did not reach the local stand-in")
+    assert(standIn.log.slice(logStart).some((line) => line.includes("licensing: tenant route")), "the license check after this sign-in did not reach the local stand-in")
     await app.page.screenshot({ path: join(outDir, `${engine.name}-app.png`) })
     // The listener takes one answer and closes.
     let closed = false
@@ -271,7 +276,11 @@ async function refusals(standIn) {
 // Undo whatever an earlier, interrupted run left, then the changes of this run.
 function undo() {
   const { problems, left } = cleanup()
-  for (const problem of problems) console.warn(`Could not undo a change: ${problem}`)
+  for (const problem of problems) {
+    failures++
+    results.push(`FAIL cleanup: could not undo a change: ${problem}`)
+    console.log(results.at(-1))
+  }
   if (left.length) {
     failures++
     results.push(`FAIL cleanup: still on this machine: ${left.join("; ")}`)

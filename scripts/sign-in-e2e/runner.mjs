@@ -244,7 +244,14 @@ export function forgetAppSecret(system = realSystem()) {
   const path = readState(system).keychain?.path
   if (system.platform !== "darwin" || !path) return
   for (let i = 0; i < 5; i++) {
-    try { system.exec("security", ["delete-generic-password", "-s", "TenuVault Safe Storage", path]) } catch { return }
+    try {
+      system.exec("security", ["delete-generic-password", "-s", "TenuVault Safe Storage", path])
+    } catch (error) {
+      // Exit 44, "could not be found": no key is left. Anything else may leave the earlier key,
+      // and the app would then fail to start, so it stops the test before the app starts.
+      if (error.status === 44 && /could not be found/i.test(String(error.stderr))) return
+      throw new Error(`Could not remove the app's key from the disposable keychain: ${firstLine(error)}`, { cause: error })
+    }
   }
 }
 
@@ -338,8 +345,9 @@ export function cleanup(system = realSystem()) {
     })
   }
   const left = leftovers(system)
-  // The state goes only once nothing is left, so a later cleanup can still use it.
-  if (!left.length) rmSync(system.stateDir, { recursive: true, force: true })
+  // The state goes only once every undo step worked and nothing is left, so a later cleanup can
+  // still retry a restoration that failed (the Linux port setting, the macOS keychains).
+  if (!left.length && !problems.length) rmSync(system.stateDir, { recursive: true, force: true })
   return { problems, left }
 }
 
@@ -349,10 +357,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     process.exit(2)
   }
   const { problems, left } = cleanup()
-  for (const problem of problems) console.warn(`Could not undo a change: ${problem}`)
-  if (left.length) {
-    console.error(`Still on this machine after cleanup: ${left.join("; ")}`)
-    process.exit(1)
-  }
+  for (const problem of problems) console.error(`Could not undo a change: ${problem}`)
+  if (left.length) console.error(`Still on this machine after cleanup: ${left.join("; ")}`)
+  if (problems.length || left.length) process.exit(1)
   console.log("The sign-in test's changes to this machine are undone and read back: no hosts entries, no test root certificate in any store.")
 }
