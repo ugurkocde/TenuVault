@@ -18,3 +18,18 @@ from a checkout of its release tag against a scripted licensing service: a paid 
 tenants with an organization license and a removed tenant (`paid`), a no-card trial key
 (`trial`), and the free Community tenant (`community`). From v0.5.0, captures also include
 automatic tenant trial activation, one extension and a local usage tally (`tenant-trial`).
+
+The v0.5.3 capture used a temporary detached worktree of tag `v0.5.3` and a scratch script
+outside the repository, bundled for Node to run that tag's `LicenseService` and `SecureStore`.
+The script supplied an identity cipher and a fake licensing fetch handler, with tokens signed
+by a fresh Ed25519 key held only in process memory. It seeded the installation ID through
+`SecureStore`, then used the service's public methods to activate paid and trial keys, check
+organization coverage, attempt an offline tenant removal, claim Community, and start and extend
+an automatic tenant trial with five recorded feature uses. The trial started ten days before
+the capture and was extended at capture time, matching the earlier fixture scenarios.
+
+From v0.5.3, `tenant-trial-install-limit.app-state.bin` separately captures a trial request
+refused with `install_limit`. After a successful trial health check, the fake service refused
+`startTenantTrial`, so the released service wrote `license.tenantTrialInstallLimit` with the
+installation ID and saved the tenant's refusal record. The capture script and temporary
+worktree were removed afterwards. Only the public signing key is retained.

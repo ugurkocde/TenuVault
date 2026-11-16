@@ -3,11 +3,12 @@ import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import type { AppRestoreReview, CapturedAppSource } from "../../src/shared/app-sources/types"
 import type { LicenseStatus, TenantLicenseStatus } from "../../src/shared/ipc"
+import { FeatureApiError } from "../../src/renderer/lib/feature-api"
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 // The source is the tenant selected in the sidebar; the plan prompt of the restore dialog must act on the destination.
 const source = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", destination = "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff"
-const api = vi.hoisted(() => ({ restoreReview: vi.fn(), accounts: vi.fn(), startTenantTrial: vi.fn(), cancel: vi.fn(), restoreProgress: vi.fn(), cancelDeviceSignIn: vi.fn(), open: vi.fn() }))
+const api = vi.hoisted(() => ({ restoreReview: vi.fn(), accounts: vi.fn(), startTenantTrial: vi.fn(), restore: vi.fn(), cancel: vi.fn(), restoreProgress: vi.fn(), cancelDeviceSignIn: vi.fn(), open: vi.fn() }))
 const license = vi.hoisted(() => ({ status: null as LicenseStatus | null }))
 vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { appSources: api, auth: api, license: api, app: api } }))
 vi.mock("../../src/renderer/lib/disclaimer", () => ({ requestAcknowledgement: vi.fn() }))
@@ -50,4 +51,24 @@ it("does not offer the source tenant's trial when the destination cannot start o
   expect(document.body.textContent).toContain("Restoring into another tenant is included in TenuVault Pro and MSP for that tenant.")
   expect(trialButton()).toBeUndefined()
   expect(api.startTenantTrial).not.toHaveBeenCalled()
+})
+
+it("offers the destination's trial, not the source's, in the plan dialog after the main process refuses the restore", async () => {
+  // The status the dialog opened with showed the destination on a Pro trial; the plan on record ended
+  // before the restore reached the main process, and the next status offers both tenants a trial.
+  license.status = { hasKey: false, plan: null, tenantTrialsEnabled: true, tenants: [tenantStatus(source, false), { ...tenantStatus(destination, false), activated: true, entitled: true, source: "trial", plan: "pro", trial: true }] } as unknown as LicenseStatus
+  api.restore.mockRejectedValue(new FeatureApiError("Restoring an App Backup installer into another tenant: included in TenuVault Pro and MSP. Upgrade on the License page.", 402, "appRestoreOtherTenant"))
+  await mount()
+  expect(document.body.textContent).not.toContain("Restoring into another tenant is included in TenuVault Pro and MSP for that tenant.")
+  await act(async () => (document.querySelector('input[type="checkbox"]') as HTMLInputElement).click())
+  license.status = { hasKey: false, plan: null, tenantTrialsEnabled: true, tenants: [tenantStatus(source, false), tenantStatus(destination, false)] } as unknown as LicenseStatus
+  await act(async () => [...document.querySelectorAll("button")].find(b => b.textContent?.trim() === "Restore unassigned app")!.click())
+  expect(api.restore).toHaveBeenCalledOnce()
+  expect(api.restore.mock.calls[0]?.[3]).toBe(destination)
+  const dialog = [...document.querySelectorAll('[role="dialog"]')].find(d => d.textContent?.includes("Included in TenuVault Pro and MSP"))
+  expect(dialog).toBeDefined()
+  const dialogTrial = [...dialog!.querySelectorAll("button")].find(b => b.textContent?.trim() === "Try Pro free")
+  expect(dialogTrial).toBeDefined()
+  await act(async () => dialogTrial!.click())
+  expect(api.startTenantTrial).toHaveBeenCalledExactlyOnceWith(destination)
 })
