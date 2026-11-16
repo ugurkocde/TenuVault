@@ -19,7 +19,7 @@ const run = (command, args) => spawnSync(command, args, { encoding: "utf8", maxB
 const failed = (result) => (result.error?.message || result.stderr || result.stdout || `exit ${result.status}`).trim()
 
 function macos() {
-  // The value as a plist fragment keeps its type (boolean, integer, string, ...) for the restore.
+  // The value as a plist fragment keeps its type (boolean, integer, string, ...) for the restore:
   // defaults writes a value given as a plist fragment with that fragment's type.
   const exported = run("defaults", ["export", DOMAIN, "-"])
   if (exported.status !== 0) return { error: `could not read the ${NAME} preference: ${failed(exported)}` }
@@ -29,14 +29,13 @@ function macos() {
   // Change nothing unless the earlier state is known: a value to write back, or no value at all.
   if (!missing && previous === null) return { error: `could not read the ${NAME} preference: ${failed(extracted)}` }
   if (previous === "<true/>") return { restore() {} }
-  const write = run("defaults", ["write", DOMAIN, NAME, "-bool", "true"])
-  if (write.status !== 0) return { error: failed(write) }
-  return {
-    restore() {
-      const result = previous === null ? run("defaults", ["delete", DOMAIN, NAME]) : run("defaults", ["write", DOMAIN, NAME, previous])
-      if (result.status !== 0) console.warn(`Could not restore the ${NAME} preference: ${failed(result)}`)
-    },
+  const restore = () => {
+    const result = previous === null ? run("defaults", ["delete", DOMAIN, NAME]) : run("defaults", ["write", DOMAIN, NAME, previous])
+    if (result.status !== 0 && !(previous === null && /does not exist|Could not find/i.test(result.stderr ?? ""))) console.warn(`Could not restore the ${NAME} preference: ${failed(result)}`)
   }
+  // A write that failed or was interrupted may still have taken effect, so the restore comes back with the error.
+  const write = run("defaults", ["write", DOMAIN, NAME, "-bool", "true"])
+  return write.status === 0 ? { restore } : { error: failed(write), restore }
 }
 
 function windows() {
@@ -67,21 +66,20 @@ function windows() {
     if (!entry) { cleanUp(); return { error: exported.status === 0 ? `could not find ${NAME} in the exported policy key` : failed(exported) } }
     writeFileSync(snapshot, `\ufeff${entry}`, "utf16le")
   }
-  const add = run(reg, ["add", key, "/v", NAME, "/t", "REG_DWORD", "/d", "1", "/f"])
-  if (add.status !== 0) { cleanUp(); return { error: failed(add) } }
-  return {
-    restore() {
-      const result = valueExisted ? run(reg, ["import", snapshot]) : run(reg, ["delete", key, "/v", NAME, "/f"])
-      if (result.status !== 0) console.warn(`Could not restore the ${NAME} policy: ${failed(result)}`)
-      // A key this run created is removed only when nothing else was added to it meanwhile.
-      if (!keyExisted) {
-        const left = run(reg, ["query", key, "/s"])
-        const entries = (left.stdout ?? "").split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !/^HKEY_CURRENT_USER\\SOFTWARE\\Policies\\TenuVault$/i.test(line))
-        if (left.status === 0 && entries.length === 0) run(reg, ["delete", key, "/f"])
-      }
-      cleanUp()
-    },
+  const restore = () => {
+    const result = valueExisted ? run(reg, ["import", snapshot]) : run(reg, ["delete", key, "/v", NAME, "/f"])
+    if (result.status !== 0) console.warn(`Could not restore the ${NAME} policy: ${failed(result)}`)
+    // A key this run created is removed only when nothing else was added to it meanwhile.
+    if (!keyExisted) {
+      const left = run(reg, ["query", key, "/s"])
+      const entries = (left.stdout ?? "").split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !/^HKEY_CURRENT_USER\\SOFTWARE\\Policies\\TenuVault$/i.test(line))
+      if (left.status === 0 && entries.length === 0) run(reg, ["delete", key, "/f"])
+    }
+    cleanUp()
   }
+  // A write that failed or was interrupted may still have taken effect, so the restore comes back with the error.
+  const add = run(reg, ["add", key, "/v", NAME, "/t", "REG_DWORD", "/d", "1", "/f"])
+  return add.status === 0 ? { restore } : { error: failed(add), restore }
 }
 
 /** The header, the key line and the DisableAutoUpdate entry (with continuation lines) of a .reg export. */
@@ -97,18 +95,19 @@ function onlyValue(text) {
 }
 
 /**
- * Makes sure updates are off by policy. Returns { error } when that failed, otherwise { restore },
- * which puts back the earlier state and is safe to call more than once.
+ * Makes sure updates are off by policy. Returns { restore }, which puts back the earlier state and is
+ * safe to call more than once, and { error } when the policy could not be set. Call restore after an
+ * error too: a write that failed may still have taken effect.
  */
 export function disableAutoUpdate(platform = process.platform) {
   const change = platform === "darwin" ? macos() : platform === "win32" ? windows() : { restore() {} }
-  if (change.error) return { error: change.error, restore() {} }
   let restored = false
   return {
+    error: change.error,
     restore() {
       if (restored) return
       restored = true
-      change.restore()
+      change.restore?.()
     },
   }
 }
