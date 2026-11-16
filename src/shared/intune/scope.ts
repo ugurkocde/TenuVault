@@ -1,3 +1,4 @@
+import { disabledFolders, type ServiceSelection } from "../services/modules"
 import { INTUNE_TYPES, type Area, type IntuneType } from "./registry"
 
 /**
@@ -29,8 +30,8 @@ export function normalizeScope(scope: Partial<BackupScope> | null | undefined): 
   return { excluded: INTUNE_TYPES.map((type) => type.folder).filter((folder) => excluded.has(folder) && FOLDERS.has(folder)) }
 }
 
-export function includedTypes(scope: BackupScope): IntuneType[] {
-  const excluded = new Set(scope.excluded)
+export function includedTypes(scope: BackupScope, selection?: ServiceSelection): IntuneType[] {
+  const excluded = new Set([...scope.excluded, ...(selection ? disabledFolders(selection) : [])])
   return INTUNE_TYPES.filter((type) => !excluded.has(type.folder))
 }
 

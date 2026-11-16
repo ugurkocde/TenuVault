@@ -1,3 +1,4 @@
+import { backupTypeUse } from "../../../shared/services/backup-use"
 import { mapLimit } from "../../../shared/map-limit"
 import { INTUNE_TYPES, itemName, typeForFolder, type Item } from "../../../shared/intune/registry"
 import { normalizeBackupStatus } from "../../../portal/lib/backup-health"
@@ -84,14 +85,14 @@ export async function collectFromBackup(deps: FeatureDeps, tenantId: string, bac
   const covered: string[] = []
   // Inventory such as Autopilot devices is not configuration, so hygiene neither reads nor reports it.
   for (const type of INTUNE_TYPES) {
-    if (type.inventory) continue
+    if (!backupTypeUse(type).hygiene) continue
     const reason = excluded.has(type.folder) ? "excluded" : skipped.has(type.folder) ? "skipped" : failed.has(type.folder) ? "failed" : null
     if (reason) notCollected.push({ folder: type.folder, label: type.label, reason })
     else covered.push(type.folder)
   }
 
   const paths = (content.groups ?? [])
-    .filter((group) => !(typeof group.folder === "string" && typeForFolder(group.folder)?.inventory))
+    .filter(group => { const type = typeForFolder(group.folder ?? ""); return type && backupTypeUse(type).hygiene })
     .flatMap((group) => (group.policies ?? []).map((policy) => policy.path).filter((path): path is string => typeof path === "string"))
   const items: InventoryItem[] = []
   const unreadableFolders = new Set<string>()
@@ -100,7 +101,7 @@ export async function collectFromBackup(deps: FeatureDeps, tenantId: string, bac
     const preview = await json(await deps.api("/api/restore-preview", tenantId, { backupId: chosen.id, paths: paths.slice(start, start + PREVIEW_CHUNK) }), "Reading the backup")
     for (const entry of (Array.isArray(preview.items) ? preview.items : []) as Array<{ folder?: string; snapshot?: Item; error?: string }>) {
       const type = typeof entry.folder === "string" ? typeForFolder(entry.folder) : undefined
-      if (!type) continue
+      if (!type || !backupTypeUse(type).hygiene) continue
       const snapshot = entry.snapshot
       if (!snapshot || typeof snapshot.id !== "string" || entry.error) {
         unreadable++

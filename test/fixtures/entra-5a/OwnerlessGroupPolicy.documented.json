@@ -1,0 +1,26 @@
+{
+  "folder": "OwnerlessGroupPolicy",
+  "source": "Documented resource shape, synthetic values, no delegated lab read",
+  "documentation": "https://learn.microsoft.com/graph/api/resources/ownerlessgrouppolicy?view=graph-rest-1.0",
+  "outcome": "saved",
+  "responses": {
+    "/v1.0/policies/ownerlessGroupPolicy": {
+      "status": 200,
+      "body": {
+        "isEnabled": true,
+        "enabledGroupIds": [
+          "example-group"
+        ],
+        "maxMembersToNotify": 5,
+        "notificationDurationInWeeks": 4,
+        "targetOwners": {
+          "securityGroups": []
+        },
+        "emailInfo": {
+          "subject": "Example notification",
+          "body": "Example body"
+        }
+      }
+    }
+  }
+}

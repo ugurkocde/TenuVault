@@ -1,0 +1,65 @@
+{
+  "folder": "AuthorizationPolicy",
+  "path": "policies/authorizationPolicy",
+  "apiVersion": "v1.0",
+  "shape": "singleton",
+  "signIn": "both",
+  "objectCount": 1,
+  "verified": "2026-11-15",
+  "source": "Live app-only read through GraphSession and readObject",
+  "outcome": "saved",
+  "responses": {
+    "/v1.0/policies/authorizationPolicy": {
+      "status": 200,
+      "body": {
+        "id": "authorizationPolicy",
+        "allowInvitesFrom": "everyone",
+        "allowedToSignUpEmailBasedSubscriptions": true,
+        "allowedToUseSSPR": true,
+        "allowEmailVerifiedUsersToJoinOrganization": false,
+        "allowUserConsentForRiskyApps": null,
+        "blockMsolPowerShell": false,
+        "displayName": "Example displayName",
+        "description": "Example description",
+        "guestUserRoleId": "00000000-0000-4000-8000-1f803efe83eb",
+        "defaultUserRolePermissions": {
+          "allowedToCreateApps": true,
+          "allowedToCreateSecurityGroups": true,
+          "allowedToCreateTenants": true,
+          "allowedToReadBitlockerKeysForOwnedDevice": true,
+          "allowedToReadOtherUsers": true,
+          "permissionGrantPoliciesAssigned": [
+            "ManagePermissionGrantsForSelf.microsoft-user-default-recommended",
+            "ManagePermissionGrantsForSelf.microsoft-user-default-allow-consent-apps",
+            "ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-team",
+            "ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-chat"
+          ]
+        }
+      }
+    },
+    "/beta/policies/authorizationPolicy/authorizationPolicy/defaultUserRoleOverrides": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "ServicePrincipalLimitedCreate",
+            "isDefault": true,
+            "rolePermissions": [
+              {
+                "allowedResourceActions": [
+                  "microsoft.directory/servicePrincipals/limitedCreateIfCanConsent"
+                ],
+                "condition": null
+              }
+            ]
+          },
+          {
+            "id": "AccessReviewCreateForOwnedGroups",
+            "isDefault": true,
+            "rolePermissions": []
+          }
+        ]
+      }
+    }
+  }
+}

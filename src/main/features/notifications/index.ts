@@ -1,3 +1,4 @@
+import { backupTypeUse } from "../../../shared/services/backup-use"
 import type { RouteModule } from "../../api/host"
 import { allows } from "../../../shared/plans"
 import { typeForFolder } from "../../../shared/intune/registry"
@@ -388,8 +389,9 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
           const seen = new Set<string>()
           for (const group of contents.content?.groups ?? []) {
             // Inventory such as Autopilot devices names devices, not policies.
-            if (typeForFolder(group.folder ?? "")?.inventory) continue
-            const service = /conditionalaccess|namedlocation|authenticationstrength/i.test(group.folder ?? "") ? "conditionalAccess" : "intune"
+            const type = typeForFolder(group.folder === "DeviceCompliancePolicies" ? "CompliancePolicies" : group.folder ?? "")
+            const service = type && backupTypeUse(type).auditService
+            if (!service) continue
             for (const policy of group.policies ?? []) {
               const name = (policy.displayName ?? "").trim()
               const key = `${service}|${name.toLowerCase()}`

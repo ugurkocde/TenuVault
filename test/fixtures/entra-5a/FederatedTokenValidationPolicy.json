@@ -1,0 +1,22 @@
+{
+  "folder": "FederatedTokenValidationPolicy",
+  "path": "policies/federatedTokenValidationPolicy",
+  "apiVersion": "v1.0",
+  "shape": "singleton",
+  "signIn": "both",
+  "objectCount": 0,
+  "verified": "2026-11-15",
+  "source": "Live app-only read through GraphSession and readObject",
+  "outcome": "notConfigured",
+  "responses": {
+    "/v1.0/policies/federatedTokenValidationPolicy": {
+      "status": 404,
+      "body": {
+        "error": {
+          "code": "Request_ResourceNotFound",
+          "message": "Resource '' does not exist or one of its queried reference-property objects are not present."
+        }
+      }
+    }
+  }
+}

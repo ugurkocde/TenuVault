@@ -6,13 +6,13 @@ import { BackupEngine, type BackupEngineDeps, type BackupJob, type BackupRequest
 import { handleLocalBlobRequest, localAccountFromUrl } from "../../src/main/storage/blob-emulator"
 import { LocalBlobStore } from "../../src/main/storage/local-blob-store"
 import { localStorageAccountName } from "../../src/shared/constants"
+import { moduleForFolder } from "../../src/shared/services/modules"
 import { INTUNE_TYPES, TYPE_BY_FOLDER, type IntuneType } from "../../src/shared/intune/registry"
 
 /**
  * A backup engine over a local store and a scripted Microsoft Graph, and test-only types.
  *
- * No Entra ID or Defender type is in the registry yet, so tests that prove what the engine can read
- * add their own. A test-only type takes the folder name of a type the permission manifest already
+ * Tests that prove what the engine can read isolate the registry and add their own type shapes. A test-only type takes the folder name of a type the permission manifest already
  * knows (shared/services/entra and defender), which gives it that folder's service and permissions.
  */
 
@@ -29,16 +29,22 @@ export function testType(folder: string, path: string, extra: Partial<IntuneType
 
 /** Adds types to the registry for the tests of one file. Returns the function that removes them again. */
 export function registerTestTypes(types: IntuneType[]): () => void {
+  // Machinery tests use an isolated registry: the original services plus their test-only shapes.
+  // Real Entra types have their own fixture and integration tests.
+  const originals = [...INTUNE_TYPES]
+  for (const type of originals) if (moduleForFolder(type.folder)?.module.id === "entra") {
+    INTUNE_TYPES.splice(INTUNE_TYPES.indexOf(type), 1)
+    TYPE_BY_FOLDER.delete(type.folder.toLowerCase())
+  }
   for (const type of types) {
     if (TYPE_BY_FOLDER.has(type.folder.toLowerCase())) throw new Error(`${type.folder} is already a registry type`)
     INTUNE_TYPES.push(type)
     TYPE_BY_FOLDER.set(type.folder.toLowerCase(), type)
   }
   return () => {
-    for (const type of types) {
-      INTUNE_TYPES.splice(INTUNE_TYPES.indexOf(type), 1)
-      TYPE_BY_FOLDER.delete(type.folder.toLowerCase())
-    }
+    INTUNE_TYPES.splice(0, INTUNE_TYPES.length, ...originals)
+    TYPE_BY_FOLDER.clear()
+    for (const type of originals) TYPE_BY_FOLDER.set(type.folder.toLowerCase(), type)
   }
 }
 

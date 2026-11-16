@@ -1,3 +1,4 @@
+import { backupTypeUse } from "../../../../shared/services/backup-use"
 import { BlobListError, decodeXml, listBlobPages } from "~/lib/storage/list"
 import { typeForFolder } from "../../../../shared/intune/registry"
 import { describeScope } from "../../../../shared/intune/scope"
@@ -152,7 +153,7 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
   const count = (...folders: string[]) => folders.reduce((sum, folder) => sum + (counts[folder] ?? 0), 0)
   const totalPolicies = Object.values(counts).reduce((sum, value) => sum + value, 0)
   // Inventory such as Autopilot devices is an item of the backup but not a policy.
-  const policyCount = Object.entries(counts).reduce((sum, [folder, value]) => (typeForFolder(folder)?.inventory ? sum : sum + value), 0)
+  const policyCount = Object.entries(counts).reduce((sum, [folder, value]) => (typeForFolder(folder) && !backupTypeUse(typeForFolder(folder)!).policyCount ? sum : sum + value), 0)
   const excluded: string[] = Array.isArray(metadata?.Scope?.Excluded) ? metadata.Scope.Excluded : []
 
   return {

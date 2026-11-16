@@ -1,3 +1,4 @@
+import { backupTypeUse } from "../../shared/services/backup-use"
 export { assertStorageAccountName } from "../../shared/storage-account"
 export { ProtectedBlobError, isImmutabilityRefusal } from "./request"
 import { createHash, randomUUID } from "node:crypto"
@@ -10,7 +11,7 @@ import { RetryDelayError } from "../graph-retry"
 import { isLocalAccount } from "../storage/blob-emulator"
 import { FetchApplicationError } from "../api/network-error"
 import { INTUNE_TYPES, itemName, typeForFolder, type GraphVersion, type IntuneType, type Item } from "../../shared/intune/registry"
-import { detailPath, graphVersion, listPath, listSnapshot, readObject, withMaskedSecrets, type GraphReader } from "../../shared/intune/read"
+import { detailPath, organizationReader, graphVersion, listPath, listSnapshot, readObject, withMaskedSecrets, type GraphReader } from "../../shared/intune/read"
 import { comparableSnapshot } from "../../shared/intune/compare"
 import type { BackupItems } from "../../shared/intune/backup-changes"
 import { EVERYTHING, includedTypes, normalizeScope, restorableFolders, type BackupScope } from "../../shared/intune/scope"
@@ -133,19 +134,16 @@ export interface BackupEngineDeps {
   onToken?: (runId: string, granted: ReturnType<typeof grantedPermissions>) => void
 }
 
-/** A Graph path of the given version, or an absolute nextLink that must be on the Graph origin and of that version. */
-function graphUrl(version: GraphVersion, path: string): string {
+/** A Graph path in the primary version or an explicitly declared sub-resource version. Paging is validated by GraphSession.list. */
+function graphUrl(version: GraphVersion, path: string, additional: readonly GraphVersion[] = []): string {
   if (!URL.canParse(path)) return `${GRAPH}/${version}/${path}`
   const link = new URL(path)
-  if (link.origin !== GRAPH || !link.pathname.startsWith(`/${version}/`)) throw new Error("Invalid Graph continuation link")
+  if (link.origin !== GRAPH || ![version, ...additional].some(allowed => link.pathname.startsWith(`/${allowed}/`))) throw new Error("Invalid Graph continuation link")
   return path
 }
 
 /** Types covered by the original DeviceManagementConfiguration permission. */
 const ORIGINAL_FOLDERS = new Set(["DeviceConfigurations", "CompliancePolicies", "ConfigurationPolicies", "GroupPolicyConfigurations"])
-
-/** What a type's first read asks for: its list, or the tenant-wide object itself. */
-const listUrl = (type: IntuneType) => `${GRAPH}/${graphVersion(type)}/${type.singleton ? detailPath(type, type.singleton.id) : listPath(type)}`
 
 const MAX_JOBS = 25
 const CONCURRENCY = 8
@@ -610,10 +608,10 @@ export class BackupEngine {
     const readerOf = (type: IntuneType): GraphReader => {
       const { session } = serviceOf(type)
       const version = graphVersion(type)
-      return {
-        get: (path: string) => session.get<Item>(`${GRAPH}/${version}/${path}`, type.headers),
-        list: (path: string) => session.list(graphUrl(version, path), { headers: type.headers }) as Promise<Item[]>,
-      }
+      return organizationReader({
+        get: (path: string) => session.get<Item>(graphUrl(version, path, type.additionalReadVersions), type.headers),
+        list: (path: string) => session.list(graphUrl(version, path, type.additionalReadVersions), { headers: type.headers, ...(path === listPath(type) ? { filter: type.filter } : {}) }) as Promise<Item[]>,
+      })
     }
 
     // List everything first so progress reflects the real amount of work.
@@ -673,7 +671,8 @@ export class BackupEngine {
       const service = serviceOf(type)
       try {
         // A tenant-wide object has no list; reading it here skips the type on a denied read, like a denied list.
-        const all = type.singleton ? [{ ...(await service.session.get(listUrl(type), type.headers)), id: type.singleton.id }] : await service.session.list(listUrl(type), { headers: type.headers, filter: type.filter })
+        const reader = readerOf(type)
+        const all = (type.singleton ? [{ ...(await reader.get(detailPath(type, type.singleton.id))), id: type.singleton.id }] : await reader.list(listPath(type))) as GraphItem[]
         const filtered = all.filter((item) => !type.skip?.(item as never))
         // A list that repeats an ID (an item seen on two pages) keeps only its first copy:
         // saving both would inflate the counts past the per-ID manifest inventory.
@@ -817,7 +816,19 @@ export class BackupEngine {
       try {
         let masked = false
         // A list-only type's list entry already holds everything its snapshot keeps.
-        const detail = type.listOnly ? listSnapshot(type, item as Item) : await readObject(type, item.id, readerOf(type), keepMasked ? { keepMasked: (error) => (masked = keepMasked(error)) } : {})
+        const detail = type.listOnly ? listSnapshot(type, item as Item) : await readObject(type, item.id, readerOf(type), {
+          ...(keepMasked ? { keepMasked: (error: unknown) => (masked = keepMasked(error)) } : {}),
+          onUnreadExtra: (property, error) => {
+            const reason = `${type.label}: ${property} could not be read; the parent configuration was kept.`
+            const verdict = error instanceof GraphError ? classifyAnswer({ status: error.status, ...error.answer }, { mode: tokens.mode }) : { outcome: "failed" as const }
+            if (verdict.outcome === "skipped") {
+              if (!skippedTypes.includes(type.folder)) skippedTypes.push(type.folder)
+              settle(type.folder, { outcome: "skipped", cause: verdict.cause, reason })
+              Object.assign(result(type.folder), { state: "skipped", reason })
+            } else throw error
+            this.write(job, reason, "warning")
+          },
+        })
         const body = JSON.stringify(detail, null, 2)
         await storage.put(`${backupFolder}/${type.folder}/${fileName}.json`, body)
         const maskedView = withMaskedSecrets(type, detail)
@@ -861,7 +872,7 @@ export class BackupEngine {
       job.progress = Math.round(10 + (done / Math.max(work.length, 1)) * 85)
       const left = remaining.get(type.folder)! - 1
       remaining.set(type.folder, left)
-      if (left === 0 && !endedTypes.has(type.folder)) {
+      if (left === 0 && !endedTypes.has(type.folder) && !settled.has(type.folder)) {
         result(type.folder).state = "saved"
         this.write(job, `Backed up ${counts[type.folder]} ${type.label}.`)
       }
@@ -1247,5 +1258,5 @@ async function moduleGrants(tokens: RunTokens, needed: boolean) {
 
 /** Saved objects that are configuration, leaving out tenant inventory such as Autopilot devices. */
 function policyCount(counts: Record<string, number>): number {
-  return Object.entries(counts).reduce((sum, [folder, count]) => (typeForFolder(folder)?.inventory ? sum : sum + count), 0)
+  return Object.entries(counts).reduce((sum, [folder, count]) => (typeForFolder(folder) && !backupTypeUse(typeForFolder(folder)!).policyCount ? sum : sum + count), 0)
 }

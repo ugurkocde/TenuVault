@@ -1,0 +1,44 @@
+{
+  "folder": "DeviceRegistrationPolicy",
+  "path": "policies/deviceRegistrationPolicy",
+  "apiVersion": "v1.0",
+  "shape": "singleton",
+  "signIn": "both",
+  "objectCount": 1,
+  "verified": "2026-11-15",
+  "source": "Live app-only read through GraphSession and readObject",
+  "outcome": "saved",
+  "responses": {
+    "/v1.0/policies/deviceRegistrationPolicy": {
+      "status": 200,
+      "body": {
+        "id": "deviceRegistrationPolicy",
+        "displayName": "Example displayName",
+        "description": "Example description",
+        "userDeviceQuota": 100,
+        "multiFactorAuthConfiguration": "notRequired",
+        "localAdminPassword": {
+          "isEnabled": false
+        },
+        "azureADRegistration": {
+          "isAdminConfigurable": false,
+          "allowedToRegister": {
+            "@odata.type": "#microsoft.graph.allDeviceRegistrationMembership"
+          }
+        },
+        "azureADJoin": {
+          "isAdminConfigurable": true,
+          "allowedToJoin": {
+            "@odata.type": "#microsoft.graph.allDeviceRegistrationMembership"
+          },
+          "localAdmins": {
+            "enableGlobalAdmins": true,
+            "registeringUsers": {
+              "@odata.type": "#microsoft.graph.allDeviceRegistrationMembership"
+            }
+          }
+        }
+      }
+    }
+  }
+}

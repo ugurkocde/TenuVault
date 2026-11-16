@@ -87,7 +87,7 @@ describe("Service modules", () => {
 /** Folder names that are taken: a second owner would mix two services' files in one backup folder. */
 function folderCollisions(modules: readonly ServiceModule[]): string[] {
   // Backups made before 0.6 hold these folders; DeviceCompliancePolicies is the name older backups used for compliance policies.
-  const taken = new Set([...INTUNE_TYPES.map((type) => type.folder), ...LEGACY_FOLDERS, "DeviceCompliancePolicies"].map((folder) => folder.toLowerCase()))
+  const taken = new Set([...INTUNE_TYPES.filter(type => ["intune", "conditionalAccess"].includes(moduleForFolder(type.folder)!.module.id)).map((type) => type.folder), ...LEGACY_FOLDERS, "DeviceCompliancePolicies"].map((folder) => folder.toLowerCase()))
   const seen = new Set<string>()
   const collisions: string[] = []
   for (const module of modules) {

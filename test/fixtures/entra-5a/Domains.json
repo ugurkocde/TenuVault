@@ -1,0 +1,822 @@
+{
+  "folder": "Domains",
+  "path": "domains",
+  "apiVersion": "v1.0",
+  "shape": "list",
+  "signIn": "both",
+  "objectCount": 4,
+  "verified": "2026-11-15",
+  "source": "Live app-only read through GraphSession and readObject",
+  "outcome": "saved",
+  "responses": {
+    "/v1.0/domains": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "authenticationType": "Managed",
+            "availabilityStatus": null,
+            "id": "tenant-9c2b3f4c43a1.example.test",
+            "isAdminManaged": true,
+            "isDefault": true,
+            "isInitial": true,
+            "isRoot": true,
+            "isVerified": true,
+            "supportedServices": [
+              "Email",
+              "OfficeCommunicationsOnline"
+            ],
+            "passwordValidityPeriodInDays": 2147483647,
+            "passwordNotificationWindowInDays": 14,
+            "state": null
+          },
+          {
+            "authenticationType": "Managed",
+            "availabilityStatus": null,
+            "id": "tenant-bd7d1d8561c8.example.test",
+            "isAdminManaged": true,
+            "isDefault": false,
+            "isInitial": false,
+            "isRoot": true,
+            "isVerified": true,
+            "supportedServices": [
+              "Email"
+            ],
+            "passwordValidityPeriodInDays": 2147483647,
+            "passwordNotificationWindowInDays": 14,
+            "state": null
+          },
+          {
+            "authenticationType": "Managed",
+            "availabilityStatus": null,
+            "id": "tenant-7ac3c88b819a.example.test",
+            "isAdminManaged": true,
+            "isDefault": false,
+            "isInitial": false,
+            "isRoot": true,
+            "isVerified": true,
+            "supportedServices": [
+              "Email"
+            ],
+            "passwordValidityPeriodInDays": 2147483647,
+            "passwordNotificationWindowInDays": 14,
+            "state": null
+          },
+          {
+            "authenticationType": "Managed",
+            "availabilityStatus": null,
+            "id": "tenant-5b59df1ff80b.example.test",
+            "isAdminManaged": true,
+            "isDefault": false,
+            "isInitial": false,
+            "isRoot": true,
+            "isVerified": true,
+            "supportedServices": [
+              "Email"
+            ],
+            "passwordValidityPeriodInDays": 2147483647,
+            "passwordNotificationWindowInDays": 14,
+            "state": null
+          }
+        ]
+      }
+    },
+    "/v1.0/domains/tenant-9c2b3f4c43a1.example.test": {
+      "status": 200,
+      "body": {
+        "authenticationType": "Managed",
+        "availabilityStatus": null,
+        "id": "tenant-9c2b3f4c43a1.example.test",
+        "isAdminManaged": true,
+        "isDefault": true,
+        "isInitial": true,
+        "isRoot": true,
+        "isVerified": true,
+        "supportedServices": [
+          "Email",
+          "OfficeCommunicationsOnline"
+        ],
+        "passwordValidityPeriodInDays": 2147483647,
+        "passwordNotificationWindowInDays": 14,
+        "state": null
+      }
+    },
+    "/v1.0/domains/tenant-9c2b3f4c43a1.example.test/federationConfiguration": {
+      "status": 404,
+      "body": {
+        "error": {
+          "code": "Request_ResourceNotFound",
+          "message": "Resource 'federationConfiguration' does not exist or one of its queried reference-property objects are not present."
+        }
+      }
+    },
+    "/v1.0/domains/tenant-9c2b3f4c43a1.example.test/verificationDnsRecords": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "@odata.type": "#microsoft.graph.domainDnsTxtRecord",
+            "id": "00000000-0000-4000-8000-af7d2cfacf18",
+            "isOptional": false,
+            "label": "tenant-9c2b3f4c43a1.example.test",
+            "recordType": "Txt",
+            "supportedService": "Email",
+            "ttl": 3600,
+            "text": "MS="
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsMxRecord",
+            "id": "00000000-0000-4000-8000-722f262543c4",
+            "isOptional": false,
+            "label": "tenant-9c2b3f4c43a1.example.test",
+            "recordType": "Mx",
+            "supportedService": "Email",
+            "ttl": 3600,
+            "mailExchange": ".msv1.invalid",
+            "preference": 32767
+          }
+        ]
+      }
+    },
+    "/v1.0/domains/tenant-9c2b3f4c43a1.example.test/serviceConfigurationRecords": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "@odata.type": "#microsoft.graph.domainDnsMxRecord",
+            "id": "00000000-0000-4000-8000-dddf02a5fe27",
+            "isOptional": false,
+            "label": "tenant-9c2b3f4c43a1.example.test",
+            "recordType": "Mx",
+            "supportedService": "Email",
+            "ttl": 3600,
+            "mailExchange": "tenant-1387d9503020.example.test",
+            "preference": 0
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsTxtRecord",
+            "id": "00000000-0000-4000-8000-f9c05d4b23ae",
+            "isOptional": false,
+            "label": "tenant-9c2b3f4c43a1.example.test",
+            "recordType": "Txt",
+            "supportedService": "Email",
+            "ttl": 3600,
+            "text": "v=spf1 include:tenant-1668bd4ff3f5.example.test -all"
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsCnameRecord",
+            "id": "00000000-0000-4000-8000-e56a58ca0640",
+            "isOptional": false,
+            "label": "tenant-7de17c08dec1.example.test",
+            "recordType": "CName",
+            "supportedService": "Email",
+            "ttl": 3600,
+            "canonicalName": "tenant-0e1ad6dda67f.example.test"
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsSrvRecord",
+            "id": "00000000-0000-4000-8000-6f4fc2fc49ac",
+            "isOptional": false,
+            "label": "_sip._tenant-cb17565cfabe.example.test",
+            "recordType": "Srv",
+            "supportedService": "OfficeCommunicationsOnline",
+            "ttl": 3600,
+            "nameTarget": "tenant-b35455bf85b1.example.test",
+            "port": 443,
+            "priority": 100,
+            "protocol": "_tls",
+            "service": "_sip",
+            "weight": 1
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsCnameRecord",
+            "id": "00000000-0000-4000-8000-2c03640b83d4",
+            "isOptional": false,
+            "label": "tenant-5779f6d738d6.example.test",
+            "recordType": "CName",
+            "supportedService": "OfficeCommunicationsOnline",
+            "ttl": 3600,
+            "canonicalName": "tenant-b35455bf85b1.example.test"
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsCnameRecord",
+            "id": "00000000-0000-4000-8000-f462002ee4a4",
+            "isOptional": false,
+            "label": "tenant-ead9deb97005.example.test",
+            "recordType": "CName",
+            "supportedService": "OfficeCommunicationsOnline",
+            "ttl": 3600,
+            "canonicalName": "tenant-ab5f682e1cd8.example.test"
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsSrvRecord",
+            "id": "00000000-0000-4000-8000-58b4398d4666",
+            "isOptional": false,
+            "label": "_sipfederationtls._tenant-d1b3dddf5c91.example.test",
+            "recordType": "Srv",
+            "supportedService": "OfficeCommunicationsOnline",
+            "ttl": 3600,
+            "nameTarget": "tenant-2cf7e5bfae80.example.test",
+            "port": 5061,
+            "priority": 100,
+            "protocol": "_tcp",
+            "service": "_sipfederationtls",
+            "weight": 1
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsUnavailableRecord",
+            "id": "00000000-0000-4000-8000-f278109ec015",
+            "isOptional": false,
+            "label": "tenant-9c2b3f4c43a1.example.test",
+            "recordType": "Unavailable",
+            "supportedService": "SharepointDefaultDomain",
+            "ttl": 3600,
+            "description": "Example description"
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsCnameRecord",
+            "id": "00000000-0000-4000-8000-f5ffb0d9580d",
+            "isOptional": false,
+            "label": "tenant-e9ce797dd419.example.test",
+            "recordType": "CName",
+            "supportedService": "OrgIdAuthentication",
+            "ttl": 3600,
+            "canonicalName": "tenant-88bb9dc84cd2.example.test"
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsCnameRecord",
+            "id": "00000000-0000-4000-8000-6d066dd680ba",
+            "isOptional": false,
+            "label": "tenant-d742f597c621.example.test",
+            "recordType": "CName",
+            "supportedService": "Intune",
+            "ttl": 3600,
+            "canonicalName": "tenant-4fd669fa0454.example.test"
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsCnameRecord",
+            "id": "00000000-0000-4000-8000-904f979c53ff",
+            "isOptional": false,
+            "label": "tenant-a1e60e6f77fd.example.test",
+            "recordType": "CName",
+            "supportedService": "Intune",
+            "ttl": 3600,
+            "canonicalName": "tenant-0b5c4cff7a73.example.test"
+          }
+        ]
+      }
+    },
+    "/v1.0/domains/tenant-bd7d1d8561c8.example.test": {
+      "status": 200,
+      "body": {
+        "authenticationType": "Managed",
+        "availabilityStatus": null,
+        "id": "tenant-bd7d1d8561c8.example.test",
+        "isAdminManaged": true,
+        "isDefault": false,
+        "isInitial": false,
+        "isRoot": true,
+        "isVerified": true,
+        "supportedServices": [
+          "Email"
+        ],
+        "passwordValidityPeriodInDays": 2147483647,
+        "passwordNotificationWindowInDays": 14,
+        "state": null
+      }
+    },
+    "/v1.0/domains/tenant-bd7d1d8561c8.example.test/federationConfiguration": {
+      "status": 404,
+      "body": {
+        "error": {
+          "code": "Request_ResourceNotFound",
+          "message": "Resource 'federationConfiguration' does not exist or one of its queried reference-property objects are not present."
+        }
+      }
+    },
+    "/v1.0/domains/tenant-bd7d1d8561c8.example.test/verificationDnsRecords": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "@odata.type": "#microsoft.graph.domainDnsTxtRecord",
+            "id": "00000000-0000-4000-8000-af7d2cfacf18",
+            "isOptional": false,
+            "label": "tenant-bd7d1d8561c8.example.test",
+            "recordType": "Txt",
+            "supportedService": "Email",
+            "ttl": 3600,
+            "text": "MS="
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsMxRecord",
+            "id": "00000000-0000-4000-8000-722f262543c4",
+            "isOptional": false,
+            "label": "tenant-bd7d1d8561c8.example.test",
+            "recordType": "Mx",
+            "supportedService": "Email",
+            "ttl": 3600,
+            "mailExchange": ".msv1.invalid",
+            "preference": 32767
+          }
+        ]
+      }
+    },
+    "/v1.0/domains/tenant-bd7d1d8561c8.example.test/serviceConfigurationRecords": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "@odata.type": "#microsoft.graph.domainDnsMxRecord",
+            "id": "00000000-0000-4000-8000-dddf02a5fe27",
+            "isOptional": false,
+            "label": "tenant-bd7d1d8561c8.example.test",
+            "recordType": "Mx",
+            "supportedService": "Email",
+            "ttl": 3600,
+            "mailExchange": "tenant-d1b558e1b5e9.example.test",
+            "preference": 0
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsTxtRecord",
+            "id": "00000000-0000-4000-8000-f9c05d4b23ae",
+            "isOptional": false,
+            "label": "tenant-bd7d1d8561c8.example.test",
+            "recordType": "Txt",
+            "supportedService": "Email",
+            "ttl": 3600,
+            "text": "v=spf1 include:tenant-1668bd4ff3f5.example.test -all"
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsCnameRecord",
+            "id": "00000000-0000-4000-8000-e56a58ca0640",
+            "isOptional": false,
+            "label": "tenant-2741ca7dc3db.example.test",
+            "recordType": "CName",
+            "supportedService": "Email",
+            "ttl": 3600,
+            "canonicalName": "tenant-0e1ad6dda67f.example.test"
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsSrvRecord",
+            "id": "00000000-0000-4000-8000-6f4fc2fc49ac",
+            "isOptional": false,
+            "label": "_sip._tenant-61de3063d126.example.test",
+            "recordType": "Srv",
+            "supportedService": "OfficeCommunicationsOnline",
+            "ttl": 3600,
+            "nameTarget": "tenant-b35455bf85b1.example.test",
+            "port": 443,
+            "priority": 100,
+            "protocol": "_tls",
+            "service": "_sip",
+            "weight": 1
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsCnameRecord",
+            "id": "00000000-0000-4000-8000-2c03640b83d4",
+            "isOptional": false,
+            "label": "tenant-a390a2d228a7.example.test",
+            "recordType": "CName",
+            "supportedService": "OfficeCommunicationsOnline",
+            "ttl": 3600,
+            "canonicalName": "tenant-b35455bf85b1.example.test"
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsCnameRecord",
+            "id": "00000000-0000-4000-8000-f462002ee4a4",
+            "isOptional": false,
+            "label": "tenant-5ede83bafc4e.example.test",
+            "recordType": "CName",
+            "supportedService": "OfficeCommunicationsOnline",
+            "ttl": 3600,
+            "canonicalName": "tenant-ab5f682e1cd8.example.test"
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsSrvRecord",
+            "id": "00000000-0000-4000-8000-58b4398d4666",
+            "isOptional": false,
+            "label": "_sipfederationtls._tenant-a5c05f7fa9dc.example.test",
+            "recordType": "Srv",
+            "supportedService": "OfficeCommunicationsOnline",
+            "ttl": 3600,
+            "nameTarget": "tenant-2cf7e5bfae80.example.test",
+            "port": 5061,
+            "priority": 100,
+            "protocol": "_tcp",
+            "service": "_sipfederationtls",
+            "weight": 1
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsCnameRecord",
+            "id": "00000000-0000-4000-8000-f278109ec015",
+            "isOptional": false,
+            "label": "tenant-bd7d1d8561c8.example.test",
+            "recordType": "CName",
+            "supportedService": "SharepointDefaultDomain",
+            "ttl": 3600,
+            "canonicalName": "tenant-794c5e1bf509.example.test"
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsCnameRecord",
+            "id": "00000000-0000-4000-8000-f5ffb0d9580d",
+            "isOptional": false,
+            "label": "tenant-6414d944f4b2.example.test",
+            "recordType": "CName",
+            "supportedService": "OrgIdAuthentication",
+            "ttl": 3600,
+            "canonicalName": "tenant-88bb9dc84cd2.example.test"
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsCnameRecord",
+            "id": "00000000-0000-4000-8000-6d066dd680ba",
+            "isOptional": false,
+            "label": "tenant-9428ff12da6a.example.test",
+            "recordType": "CName",
+            "supportedService": "Intune",
+            "ttl": 3600,
+            "canonicalName": "tenant-4fd669fa0454.example.test"
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsCnameRecord",
+            "id": "00000000-0000-4000-8000-904f979c53ff",
+            "isOptional": false,
+            "label": "tenant-2d86f8c361ff.example.test",
+            "recordType": "CName",
+            "supportedService": "Intune",
+            "ttl": 3600,
+            "canonicalName": "tenant-0b5c4cff7a73.example.test"
+          }
+        ]
+      }
+    },
+    "/v1.0/domains/tenant-7ac3c88b819a.example.test": {
+      "status": 200,
+      "body": {
+        "authenticationType": "Managed",
+        "availabilityStatus": null,
+        "id": "tenant-7ac3c88b819a.example.test",
+        "isAdminManaged": true,
+        "isDefault": false,
+        "isInitial": false,
+        "isRoot": true,
+        "isVerified": true,
+        "supportedServices": [
+          "Email"
+        ],
+        "passwordValidityPeriodInDays": 2147483647,
+        "passwordNotificationWindowInDays": 14,
+        "state": null
+      }
+    },
+    "/v1.0/domains/tenant-7ac3c88b819a.example.test/federationConfiguration": {
+      "status": 404,
+      "body": {
+        "error": {
+          "code": "Request_ResourceNotFound",
+          "message": "Resource 'federationConfiguration' does not exist or one of its queried reference-property objects are not present."
+        }
+      }
+    },
+    "/v1.0/domains/tenant-7ac3c88b819a.example.test/verificationDnsRecords": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "@odata.type": "#microsoft.graph.domainDnsTxtRecord",
+            "id": "00000000-0000-4000-8000-af7d2cfacf18",
+            "isOptional": false,
+            "label": "tenant-7ac3c88b819a.example.test",
+            "recordType": "Txt",
+            "supportedService": "Email",
+            "ttl": 3600,
+            "text": "MS="
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsMxRecord",
+            "id": "00000000-0000-4000-8000-722f262543c4",
+            "isOptional": false,
+            "label": "tenant-7ac3c88b819a.example.test",
+            "recordType": "Mx",
+            "supportedService": "Email",
+            "ttl": 3600,
+            "mailExchange": ".msv1.invalid",
+            "preference": 32767
+          }
+        ]
+      }
+    },
+    "/v1.0/domains/tenant-7ac3c88b819a.example.test/serviceConfigurationRecords": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "@odata.type": "#microsoft.graph.domainDnsMxRecord",
+            "id": "00000000-0000-4000-8000-dddf02a5fe27",
+            "isOptional": false,
+            "label": "tenant-7ac3c88b819a.example.test",
+            "recordType": "Mx",
+            "supportedService": "Email",
+            "ttl": 3600,
+            "mailExchange": "tenant-b0e1998da6f9.example.test",
+            "preference": 0
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsTxtRecord",
+            "id": "00000000-0000-4000-8000-f9c05d4b23ae",
+            "isOptional": false,
+            "label": "tenant-7ac3c88b819a.example.test",
+            "recordType": "Txt",
+            "supportedService": "Email",
+            "ttl": 3600,
+            "text": "v=spf1 include:tenant-1668bd4ff3f5.example.test -all"
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsCnameRecord",
+            "id": "00000000-0000-4000-8000-e56a58ca0640",
+            "isOptional": false,
+            "label": "tenant-2d342a7b9b24.example.test",
+            "recordType": "CName",
+            "supportedService": "Email",
+            "ttl": 3600,
+            "canonicalName": "tenant-0e1ad6dda67f.example.test"
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsSrvRecord",
+            "id": "00000000-0000-4000-8000-6f4fc2fc49ac",
+            "isOptional": false,
+            "label": "_sip._tenant-e3a5307cd1dc.example.test",
+            "recordType": "Srv",
+            "supportedService": "OfficeCommunicationsOnline",
+            "ttl": 3600,
+            "nameTarget": "tenant-b35455bf85b1.example.test",
+            "port": 443,
+            "priority": 100,
+            "protocol": "_tls",
+            "service": "_sip",
+            "weight": 1
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsCnameRecord",
+            "id": "00000000-0000-4000-8000-2c03640b83d4",
+            "isOptional": false,
+            "label": "tenant-67699b337bac.example.test",
+            "recordType": "CName",
+            "supportedService": "OfficeCommunicationsOnline",
+            "ttl": 3600,
+            "canonicalName": "tenant-b35455bf85b1.example.test"
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsCnameRecord",
+            "id": "00000000-0000-4000-8000-f462002ee4a4",
+            "isOptional": false,
+            "label": "tenant-039601ae0266.example.test",
+            "recordType": "CName",
+            "supportedService": "OfficeCommunicationsOnline",
+            "ttl": 3600,
+            "canonicalName": "tenant-ab5f682e1cd8.example.test"
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsSrvRecord",
+            "id": "00000000-0000-4000-8000-58b4398d4666",
+            "isOptional": false,
+            "label": "_sipfederationtls._tenant-db6e1ae16cd5.example.test",
+            "recordType": "Srv",
+            "supportedService": "OfficeCommunicationsOnline",
+            "ttl": 3600,
+            "nameTarget": "tenant-2cf7e5bfae80.example.test",
+            "port": 5061,
+            "priority": 100,
+            "protocol": "_tcp",
+            "service": "_sipfederationtls",
+            "weight": 1
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsCnameRecord",
+            "id": "00000000-0000-4000-8000-f278109ec015",
+            "isOptional": false,
+            "label": "tenant-7ac3c88b819a.example.test",
+            "recordType": "CName",
+            "supportedService": "SharepointDefaultDomain",
+            "ttl": 3600,
+            "canonicalName": "tenant-794c5e1bf509.example.test"
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsCnameRecord",
+            "id": "00000000-0000-4000-8000-f5ffb0d9580d",
+            "isOptional": false,
+            "label": "tenant-0cb372a38a9d.example.test",
+            "recordType": "CName",
+            "supportedService": "OrgIdAuthentication",
+            "ttl": 3600,
+            "canonicalName": "tenant-88bb9dc84cd2.example.test"
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsCnameRecord",
+            "id": "00000000-0000-4000-8000-6d066dd680ba",
+            "isOptional": false,
+            "label": "tenant-355d0836515c.example.test",
+            "recordType": "CName",
+            "supportedService": "Intune",
+            "ttl": 3600,
+            "canonicalName": "tenant-4fd669fa0454.example.test"
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsCnameRecord",
+            "id": "00000000-0000-4000-8000-904f979c53ff",
+            "isOptional": false,
+            "label": "tenant-96c685167c91.example.test",
+            "recordType": "CName",
+            "supportedService": "Intune",
+            "ttl": 3600,
+            "canonicalName": "tenant-0b5c4cff7a73.example.test"
+          }
+        ]
+      }
+    },
+    "/v1.0/domains/tenant-5b59df1ff80b.example.test": {
+      "status": 200,
+      "body": {
+        "authenticationType": "Managed",
+        "availabilityStatus": null,
+        "id": "tenant-5b59df1ff80b.example.test",
+        "isAdminManaged": true,
+        "isDefault": false,
+        "isInitial": false,
+        "isRoot": true,
+        "isVerified": true,
+        "supportedServices": [
+          "Email"
+        ],
+        "passwordValidityPeriodInDays": 2147483647,
+        "passwordNotificationWindowInDays": 14,
+        "state": null
+      }
+    },
+    "/v1.0/domains/tenant-5b59df1ff80b.example.test/federationConfiguration": {
+      "status": 404,
+      "body": {
+        "error": {
+          "code": "Request_ResourceNotFound",
+          "message": "Resource 'federationConfiguration' does not exist or one of its queried reference-property objects are not present."
+        }
+      }
+    },
+    "/v1.0/domains/tenant-5b59df1ff80b.example.test/verificationDnsRecords": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "@odata.type": "#microsoft.graph.domainDnsTxtRecord",
+            "id": "00000000-0000-4000-8000-af7d2cfacf18",
+            "isOptional": false,
+            "label": "tenant-5b59df1ff80b.example.test",
+            "recordType": "Txt",
+            "supportedService": "Email",
+            "ttl": 3600,
+            "text": "MS="
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsMxRecord",
+            "id": "00000000-0000-4000-8000-722f262543c4",
+            "isOptional": false,
+            "label": "tenant-5b59df1ff80b.example.test",
+            "recordType": "Mx",
+            "supportedService": "Email",
+            "ttl": 3600,
+            "mailExchange": ".msv1.invalid",
+            "preference": 32767
+          }
+        ]
+      }
+    },
+    "/v1.0/domains/tenant-5b59df1ff80b.example.test/serviceConfigurationRecords": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "@odata.type": "#microsoft.graph.domainDnsMxRecord",
+            "id": "00000000-0000-4000-8000-dddf02a5fe27",
+            "isOptional": false,
+            "label": "tenant-5b59df1ff80b.example.test",
+            "recordType": "Mx",
+            "supportedService": "Email",
+            "ttl": 3600,
+            "mailExchange": "tenant-8ca60652ac07.example.test",
+            "preference": 0
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsTxtRecord",
+            "id": "00000000-0000-4000-8000-f9c05d4b23ae",
+            "isOptional": false,
+            "label": "tenant-5b59df1ff80b.example.test",
+            "recordType": "Txt",
+            "supportedService": "Email",
+            "ttl": 3600,
+            "text": "v=spf1 include:tenant-1668bd4ff3f5.example.test -all"
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsCnameRecord",
+            "id": "00000000-0000-4000-8000-e56a58ca0640",
+            "isOptional": false,
+            "label": "tenant-b7730b9b003c.example.test",
+            "recordType": "CName",
+            "supportedService": "Email",
+            "ttl": 3600,
+            "canonicalName": "tenant-0e1ad6dda67f.example.test"
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsSrvRecord",
+            "id": "00000000-0000-4000-8000-6f4fc2fc49ac",
+            "isOptional": false,
+            "label": "_sip._tenant-8cf8aaa9751b.example.test",
+            "recordType": "Srv",
+            "supportedService": "OfficeCommunicationsOnline",
+            "ttl": 3600,
+            "nameTarget": "tenant-b35455bf85b1.example.test",
+            "port": 443,
+            "priority": 100,
+            "protocol": "_tls",
+            "service": "_sip",
+            "weight": 1
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsCnameRecord",
+            "id": "00000000-0000-4000-8000-2c03640b83d4",
+            "isOptional": false,
+            "label": "tenant-5ba84812c3f1.example.test",
+            "recordType": "CName",
+            "supportedService": "OfficeCommunicationsOnline",
+            "ttl": 3600,
+            "canonicalName": "tenant-b35455bf85b1.example.test"
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsCnameRecord",
+            "id": "00000000-0000-4000-8000-f462002ee4a4",
+            "isOptional": false,
+            "label": "tenant-e84947332163.example.test",
+            "recordType": "CName",
+            "supportedService": "OfficeCommunicationsOnline",
+            "ttl": 3600,
+            "canonicalName": "tenant-ab5f682e1cd8.example.test"
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsSrvRecord",
+            "id": "00000000-0000-4000-8000-58b4398d4666",
+            "isOptional": false,
+            "label": "_sipfederationtls._tenant-fb2f38b703ee.example.test",
+            "recordType": "Srv",
+            "supportedService": "OfficeCommunicationsOnline",
+            "ttl": 3600,
+            "nameTarget": "tenant-2cf7e5bfae80.example.test",
+            "port": 5061,
+            "priority": 100,
+            "protocol": "_tcp",
+            "service": "_sipfederationtls",
+            "weight": 1
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsCnameRecord",
+            "id": "00000000-0000-4000-8000-f278109ec015",
+            "isOptional": false,
+            "label": "tenant-5b59df1ff80b.example.test",
+            "recordType": "CName",
+            "supportedService": "SharepointDefaultDomain",
+            "ttl": 3600,
+            "canonicalName": "tenant-794c5e1bf509.example.test"
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsCnameRecord",
+            "id": "00000000-0000-4000-8000-f5ffb0d9580d",
+            "isOptional": false,
+            "label": "tenant-443ca151f006.example.test",
+            "recordType": "CName",
+            "supportedService": "OrgIdAuthentication",
+            "ttl": 3600,
+            "canonicalName": "tenant-88bb9dc84cd2.example.test"
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsCnameRecord",
+            "id": "00000000-0000-4000-8000-6d066dd680ba",
+            "isOptional": false,
+            "label": "tenant-689f2ce48eea.example.test",
+            "recordType": "CName",
+            "supportedService": "Intune",
+            "ttl": 3600,
+            "canonicalName": "tenant-4fd669fa0454.example.test"
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainDnsCnameRecord",
+            "id": "00000000-0000-4000-8000-904f979c53ff",
+            "isOptional": false,
+            "label": "tenant-bcd24672f28d.example.test",
+            "recordType": "CName",
+            "supportedService": "Intune",
+            "ttl": 3600,
+            "canonicalName": "tenant-0b5c4cff7a73.example.test"
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "folder": "MdmEnrollmentPolicies",
+  "source": "Documented resource shape, synthetic values, no delegated lab read",
+  "documentation": "https://learn.microsoft.com/graph/api/resources/mobiledevicemanagementpolicy?view=graph-rest-beta",
+  "outcome": "saved",
+  "responses": {
+    "/beta/policies/mobileDeviceManagementPolicies": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "example-mdm",
+            "displayName": "Example MDM",
+            "appliesTo": "selected",
+            "isMdmEnrollmentDuringRegistrationDisabled": false,
+            "complianceUrl": "https://example.test/compliance",
+            "discoveryUrl": "https://example.test/discovery",
+            "termsOfUseUrl": "https://example.test/terms",
+            "isValid": true
+          }
+        ]
+      }
+    },
+    "/beta/policies/mobileDeviceManagementPolicies/example-mdm": {
+      "status": 200,
+      "body": {
+        "id": "example-mdm",
+        "displayName": "Example MDM",
+        "appliesTo": "selected",
+        "isMdmEnrollmentDuringRegistrationDisabled": false,
+        "complianceUrl": "https://example.test/compliance",
+        "discoveryUrl": "https://example.test/discovery",
+        "termsOfUseUrl": "https://example.test/terms",
+        "isValid": true
+      }
+    },
+    "/beta/policies/mobileDeviceManagementPolicies/example-mdm/includedGroups?$select=id": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "z"
+          },
+          {
+            "id": "a"
+          }
+        ]
+      }
+    }
+  }
+}

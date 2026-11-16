@@ -1,0 +1,23 @@
+{
+  "folder": "OnPremisesSynchronization",
+  "path": "directory/onPremisesSynchronization",
+  "apiVersion": "v1.0",
+  "shape": "list",
+  "signIn": "admin",
+  "objectCount": 0,
+  "verified": "2026-11-15",
+  "source": "Live app-only read through GraphSession and readObject",
+  "outcome": "skipped",
+  "cause": "permission",
+  "responses": {
+    "/v1.0/directory/onPremisesSynchronization": {
+      "status": 403,
+      "body": {
+        "error": {
+          "code": "Authorization_RequestDenied",
+          "message": "Insufficient privileges to complete the operation."
+        }
+      }
+    }
+  }
+}

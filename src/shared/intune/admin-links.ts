@@ -2,9 +2,10 @@ import type { Item } from "./registry"
 
 /**
  * Where an admin opens a restored object: the Intune admin center, or the Entra admin center for
- * Conditional Access. Each address below was checked against a live tenant (November 2026). Types
- * whose page needs parameters that could not be confirmed open their list page instead, so a link
- * never lands on an error or on another object.
+ * Conditional Access and directory configuration. Original Intune and Conditional Access addresses
+ * were checked against a live tenant in November 2026. Directory configuration opens its setting
+ * area; policies with no dedicated portal editor open the applications or Conditional Access list.
+ * A link never invents the parameters of an individual object page.
  */
 
 const INTUNE = "https://intune.microsoft.com"
@@ -60,6 +61,36 @@ export function adminCenterLink(folder: string, id: string, item: Item = {}): Ad
   if (!id) return undefined
   const name = str(item.displayName) || str(item.name)
   switch (folder) {
+    case "AuthorizationPolicy": return entra("Microsoft_AAD_IAM/UsersManagementMenuBlade/~/UserSettings", false)
+    case "SecurityDefaults": return entra("Microsoft_AAD_IAM/ActiveDirectoryMenuBlade/~/Properties", false)
+    case "AdminConsentRequestPolicy": return entra("Microsoft_AAD_IAM/ConsentPoliciesMenuBlade/~/AdminConsentSettings", false)
+    case "PermissionGrantPolicies":
+    case "PermissionGrantPreApprovalPolicies": return entra("Microsoft_AAD_IAM/ConsentPoliciesMenuBlade/~/UserSettings", false)
+    case "DefaultAppManagementPolicy":
+    case "AppManagementPolicies":
+    case "TokenLifetimePolicies":
+    case "TokenIssuancePolicies":
+    case "ClaimsMappingPolicies":
+    case "HomeRealmDiscoveryPolicies":
+    case "ActivityBasedTimeoutPolicies": return entra("Microsoft_AAD_IAM/StartboardApplicationsMenuBlade/~/AppAppsPreview", false)
+    case "DeviceRegistrationPolicy": return entra("Microsoft_AAD_Devices/DevicesMenuBlade/~/DeviceSettings", false)
+    case "MdmEnrollmentPolicies":
+    case "MamEnrollmentPolicies": return entra("Microsoft_AAD_IAM/ActiveDirectoryMenuBlade/~/Mobility", false)
+    case "DirectorySettings": return entra("Microsoft_AAD_IAM/GroupsManagementMenuBlade/~/General", false)
+    case "Organization": return entra("Microsoft_AAD_IAM/ActiveDirectoryMenuBlade/~/Properties", false)
+    case "EntraCompanyBranding": return entra("Microsoft_AAD_IAM/ActiveDirectoryMenuBlade/~/LoginPageConfiguration", false)
+    case "Domains": return entra("Microsoft_AAD_IAM/DomainNamesBlade", false)
+    case "OnPremisesSynchronization": return entra("Microsoft_AAD_Connect_Provisioning/AADConnectMenuBlade/~/Overview", false)
+    case "AuthenticationMethodsPolicy":
+    case "AuthenticationFlowsPolicy":
+    case "HardwareOathDevices": return entra("Microsoft_AAD_IAM/AuthenticationMethodsMenuBlade/~/AdminAuthMethods", false)
+    case "AuthenticationContexts": return CONDITIONAL_ACCESS("AuthenticationContext")
+    case "CertificateBasedAuthConfigurations":
+    case "CertificateBasedAuthPki": return entra("Microsoft_AAD_IAM/AuthenticationMethodsMenuBlade/~/CertificateBasedAuthentication", false)
+    case "FederatedTokenValidationPolicy":
+    case "ContinuousAccessEvaluationPolicy": return CONDITIONAL_ACCESS("Policies")
+    case "GroupLifecyclePolicies": return entra("Microsoft_AAD_IAM/GroupsManagementMenuBlade/~/Lifecycle", false)
+    case "OwnerlessGroupPolicy": return entra("Microsoft_AAD_IAM/GroupsManagementMenuBlade/~/General", false)
     case "DeviceConfigurations": return configurationPage(id, 0)
     case "CompliancePolicies":
     case "DeviceCompliancePolicies": return configurationPage(id, 1)

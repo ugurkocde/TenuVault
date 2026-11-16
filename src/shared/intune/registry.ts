@@ -7,6 +7,7 @@
  * Paths are relative to https://graph.microsoft.com/beta/, or to the version a type names.
  */
 
+import { ENTRA_TYPES } from "./entra"
 import { COMPLIANCE_SETTING_KEYS, COMPLIANCE_SETTINGS_ID, complianceSettingChanges, complianceSettingsUpdate } from "./compliance-settings"
 import { createState, isMicrosoftManaged, MICROSOFT_MANAGED, policyBody, policyChanges, policyWarnings, replaceState, strengthBody, strengthUpdate } from "./conditional-access"
 import { AUTOPILOT_DEVICE_DELAY, AUTOPILOT_DEVICE_PROPERTIES, AUTOPILOT_DEVICE_REIMPORT, autopilotDeviceChanges, autopilotDeviceUpdate } from "./autopilot-devices"
@@ -25,6 +26,9 @@ export type Area =
   | "Enrollment"
   | "Tenant administration"
   | "Conditional Access"
+  | "Tenant settings"
+  | "Authentication"
+  | "Groups"
 
 /** An extra collection read after the detail GET and stored on the snapshot under `property`. */
 export interface Extra {
@@ -40,6 +44,10 @@ export interface Extra {
    * object, so a list of IDs is never shorter than the collection.
    */
   ids?: true
+  /** A refused sub-read may keep the parent, only when the caller records incomplete coverage. */
+  optional?: readonly AnswerPattern[]
+  /** A sub-collection that does not exist before customization is stored as an empty list. */
+  notConfigured?: readonly AnswerPattern[]
   /**
    * Read for every entry of this extra, when Graph cannot expand it (max $expand depth is 1) or returns it
    * incomplete. With `property` the collection is stored on the entry; without, the object is merged into it.
@@ -77,6 +85,8 @@ export interface IntuneType {
   path: string
   /** The Microsoft Graph version every path of the type is relative to. Beta when left out. */
   apiVersion?: GraphVersion
+  /** Versions used only by sub-resources that have no endpoint in the primary version. */
+  additionalReadVersions?: readonly GraphVersion[]
   /** Headers every read of the type sends, such as ConsistencyLevel for a query that needs it. */
   headers?: Readonly<Record<string, string>>
   /**
@@ -135,6 +145,10 @@ export interface IntuneType {
    * an object, and into every entry of a list on the way. The ID is always kept.
    */
   neverStored?: readonly string[]
+  /** Property names removed at every depth, including future nested credential fields. */
+  neverStoredKeys?: readonly string[]
+  /** Maximum UTF-8 bytes of the stored JSON, for text configuration with separate binary streams. */
+  maxSnapshotBytes?: number
   extras?: Extra[]
   /**
    * Assignments are read from {id}/assignments, and earlier versions read them with $expand, which Graph
@@ -1193,6 +1207,7 @@ export const INTUNE_TYPES: IntuneType[] = [
     review: policyChanges,
     warnings: policyWarnings,
   },
+  ...ENTRA_TYPES,
 ]
 
 export const TYPE_BY_FOLDER = new Map(INTUNE_TYPES.map((type) => [type.folder.toLowerCase(), type]))

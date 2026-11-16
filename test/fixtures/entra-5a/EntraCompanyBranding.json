@@ -1,0 +1,125 @@
+{
+  "folder": "EntraCompanyBranding",
+  "path": "organization/{organizationId}/branding",
+  "apiVersion": "v1.0",
+  "shape": "singleton",
+  "signIn": "both",
+  "objectCount": 1,
+  "verified": "2026-11-15",
+  "source": "Live app-only read through GraphSession and readObject",
+  "outcome": "saved",
+  "responses": {
+    "/v1.0/organization?$select=id": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-836b20d0164d"
+          }
+        ]
+      }
+    },
+    "/v1.0/organization/00000000-0000-4000-8000-836b20d0164d/branding": {
+      "status": 200,
+      "body": {
+        "id": "0",
+        "backgroundColor": "",
+        "backgroundImageRelativeUrl": null,
+        "bannerLogoRelativeUrl": null,
+        "cdnList": [
+          "tenant-c3426a8f07ba.example.test",
+          "tenant-19fd214dc4ba.example.test"
+        ],
+        "customAccountResetCredentialsUrl": null,
+        "customCannotAccessYourAccountText": null,
+        "customCannotAccessYourAccountUrl": null,
+        "customForgotMyPasswordText": null,
+        "customPrivacyAndCookiesText": null,
+        "customPrivacyAndCookiesUrl": null,
+        "customResetItNowText": null,
+        "customTermsOfUseText": null,
+        "customTermsOfUseUrl": null,
+        "faviconRelativeUrl": null,
+        "customCSSRelativeUrl": null,
+        "headerBackgroundColor": null,
+        "signInPageText": "Example signInPageText",
+        "squareLogoRelativeUrl": null,
+        "squareLogoDarkRelativeUrl": null,
+        "usernameHintText": "Example usernameHintText",
+        "headerLogoRelativeUrl": null,
+        "loginPageTextVisibilitySettings": {
+          "hideCannotAccessYourAccount": null,
+          "hideAccountResetCredentials": false,
+          "hideTermsOfUse": true,
+          "hidePrivacyAndCookies": true,
+          "hideForgotMyPassword": null,
+          "hideResetItNow": null
+        },
+        "contentCustomization": {
+          "attributeCollectionRelativeUrl": null,
+          "registrationCampaignRelativeUrl": null,
+          "attributeCollection": [],
+          "registrationCampaign": []
+        },
+        "loginPageLayoutConfiguration": {
+          "layoutTemplateType": "default",
+          "isHeaderShown": false,
+          "isFooterShown": true
+        }
+      }
+    },
+    "/v1.0/organization/00000000-0000-4000-8000-836b20d0164d/branding/localizations": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "0",
+            "backgroundColor": "",
+            "backgroundImageRelativeUrl": null,
+            "bannerLogoRelativeUrl": null,
+            "cdnList": [
+              "tenant-c3426a8f07ba.example.test",
+              "tenant-19fd214dc4ba.example.test"
+            ],
+            "customAccountResetCredentialsUrl": null,
+            "customCannotAccessYourAccountText": null,
+            "customCannotAccessYourAccountUrl": null,
+            "customForgotMyPasswordText": null,
+            "customPrivacyAndCookiesText": null,
+            "customPrivacyAndCookiesUrl": null,
+            "customResetItNowText": null,
+            "customTermsOfUseText": null,
+            "customTermsOfUseUrl": null,
+            "faviconRelativeUrl": null,
+            "customCSSRelativeUrl": null,
+            "headerBackgroundColor": null,
+            "signInPageText": "Example signInPageText",
+            "squareLogoRelativeUrl": null,
+            "squareLogoDarkRelativeUrl": null,
+            "usernameHintText": "Example usernameHintText",
+            "headerLogoRelativeUrl": null,
+            "loginPageTextVisibilitySettings": {
+              "hideCannotAccessYourAccount": null,
+              "hideAccountResetCredentials": false,
+              "hideTermsOfUse": true,
+              "hidePrivacyAndCookies": true,
+              "hideForgotMyPassword": null,
+              "hideResetItNow": null
+            },
+            "contentCustomization": {
+              "attributeCollectionRelativeUrl": null,
+              "registrationCampaignRelativeUrl": null,
+              "attributeCollection": [],
+              "registrationCampaign": []
+            },
+            "loginPageLayoutConfiguration": {
+              "layoutTemplateType": "default",
+              "isHeaderShown": false,
+              "isFooterShown": true
+            }
+          }
+        ]
+      }
+    }
+  }
+}

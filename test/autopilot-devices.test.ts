@@ -72,7 +72,7 @@ describe("Windows Autopilot devices backup", () => {
     expect(type.expand).toBeUndefined()
     expect(moduleForFolder("AutopilotDevices")?.area.label).toBe("Enrollment and branding")
     expect(PROMOTION_FOLDERS).not.toContain("AutopilotDevices")
-    expect(INTUNE_TYPES.filter((entry) => entry.inventory).map((entry) => entry.folder)).toEqual(["AutopilotDevices"])
+    expect(INTUNE_TYPES.filter((entry) => entry.inventory).map((entry) => entry.folder)).toEqual(["AutopilotDevices", "HardwareOathDevices"])
   })
 
   it("keeps the registration details and leaves out status, contact times, the product key and secrets", () => {

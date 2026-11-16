@@ -36,6 +36,8 @@ export interface ReadOptions {
    * restorable (see the registry's restorable checks), so it can only record that the value exists.
    */
   keepMasked?: (error: unknown) => boolean
+  /** Records a refused optional sub-read. Without this callback it fails the object. */
+  onUnreadExtra?: (property: string, error: unknown) => void
 }
 
 export function detailPath(type: IntuneType, id: string): string {
@@ -67,26 +69,36 @@ export async function readObject(type: IntuneType, id: string, graph: GraphReade
   // A tenant-wide object is stored under its type's ID; its sub-reads use the ID Graph gave it, when it has one.
   const encodedId = encodeURIComponent(type.singleton && typeof detail.id === "string" && detail.id ? detail.id : id)
   for (const extra of type.extras ?? []) {
-    if (extra.single) {
-      detail[extra.property] = (await graph.get(extra.path(encodedId)))[extra.property] ?? null
-      continue
-    }
-    const entries = await graph.list(extra.path(encodedId))
-    if (extra.ids) {
-      detail[extra.property] = sortedIds(entries, extra.property)
-      continue
-    }
-    if (extra.each) {
-      for (const entry of entries) {
-        const path = extra.each.path(encodedId, encodeURIComponent(String(entry.id)))
-        if (extra.each.property) entry[extra.each.property] = await graph.list(path)
-        else {
-          Object.assign(entry, await graph.get(path))
-          delete entry["@odata.context"]
+    try {
+      if (extra.single) {
+        detail[extra.property] = (await graph.get(extra.path(encodedId)))[extra.property] ?? null
+        continue
+      }
+      const entries = await graph.list(extra.path(encodedId))
+      if (extra.ids) {
+        detail[extra.property] = sortedIds(entries, extra.property)
+        continue
+      }
+      if (extra.each) {
+        for (const entry of entries) {
+          const path = extra.each.path(encodedId, encodeURIComponent(String(entry.id)))
+          if (extra.each.property) entry[extra.each.property] = await graph.list(path)
+          else {
+            Object.assign(entry, await graph.get(path))
+            delete entry["@odata.context"]
+          }
         }
       }
+      detail[extra.property] = entries
+    } catch (error) {
+      const answer = error as { status?: number; answer?: { code?: string; message?: string } }
+      const matches = (pattern: NonNullable<IntuneType["notConfigured"]>[number]) => pattern.status === answer.status && (!pattern.code || pattern.code.toLowerCase() === answer.answer?.code?.toLowerCase()) && (!pattern.message || answer.answer?.message?.toLowerCase().includes(pattern.message.toLowerCase()))
+      if (extra.notConfigured?.some(matches)) { detail[extra.property] = []; continue }
+      if (!options.onUnreadExtra || !extra.optional?.some(matches)) throw error
+      // An absent property means unread, never an empty collection that could mean not configured.
+      delete detail[extra.property]
+      options.onUnreadExtra(extra.property, error)
     }
-    detail[extra.property] = entries
   }
   for (const secret of type.secrets?.(detail) ?? []) {
     let plain: Item
@@ -101,7 +113,9 @@ export async function readObject(type: IntuneType, id: string, graph: GraphReade
     secret.apply(plain.value)
   }
   delete detail["@odata.context"]
-  return withoutNeverStored(type, type.singleton ? singletonSnapshot(type, detail) : detail)
+  const snapshot = withoutNeverStored(type, type.singleton ? singletonSnapshot(type, detail) : detail)
+  if (type.maxSnapshotBytes && new TextEncoder().encode(JSON.stringify(snapshot, null, 2)).byteLength > type.maxSnapshotBytes) throw new Error(`The ${type.label} JSON exceeds the ${type.maxSnapshotBytes} byte limit`)
+  return snapshot
 }
 
 /**
@@ -110,7 +124,7 @@ export async function readObject(type: IntuneType, id: string, graph: GraphReade
  */
 export function listSnapshot(type: IntuneType, item: Item): Item {
   // Removing nested properties must not change the list entry itself.
-  const copy = type.neverStored?.length ? structuredClone(item) : { ...item }
+  const copy = type.neverStored?.length || type.neverStoredKeys?.length ? structuredClone(item) : { ...item }
   delete copy["@odata.context"]
   return withoutNeverStored(type, type.keep ? keptSnapshot(type.keep, copy) : copy)
 }
@@ -136,6 +150,16 @@ function withoutNeverStored(type: IntuneType, snapshot: Item): Item {
     if (rest.length) remove(value[key!], rest)
     else delete value[key!]
   }
+  const keys = new Set(type.neverStoredKeys)
+  const scrub = (value: Json): void => {
+    if (!value || typeof value !== "object") return
+    if (Array.isArray(value)) { value.forEach(scrub); return }
+    for (const key of Object.keys(value)) {
+      if (key !== "id" && keys.has(key)) delete value[key]
+      else scrub(value[key]!)
+    }
+  }
+  if (keys.size) scrub(snapshot)
   // Backups, comparison and restore identify an object by its ID, so no type can leave it out.
   for (const path of type.neverStored ?? []) if (path !== "id") remove(snapshot, path.split("."))
   return snapshot
@@ -235,4 +259,18 @@ export function withoutUnreadAssignments<T extends Item>(type: IntuneType | unde
   const { assignments: _older, ...before } = older
   const { assignments: _newer, ...after } = newer
   return [before as T, after as T]
+}
+
+/** Resolves the organization-scoped paths without embedding a tenant ID in the registry. */
+export function organizationReader(graph: GraphReader): GraphReader {
+  let organization: Promise<string> | undefined
+  const resolve = async (path: string): Promise<string> => {
+    if (!path.includes("{organizationId}")) return path
+    organization ??= graph.list("organization?$select=id").then(entries => {
+      if (entries.length !== 1 || typeof entries[0]?.id !== "string" || !entries[0].id) throw new Error("Microsoft Graph did not return exactly one organization ID")
+      return encodeURIComponent(entries[0].id)
+    })
+    return path.replaceAll("{organizationId}", await organization)
+  }
+  return { get: async path => graph.get(await resolve(path)), list: async path => graph.list(await resolve(path)) }
 }
