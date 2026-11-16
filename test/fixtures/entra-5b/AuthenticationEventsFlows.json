@@ -1,0 +1,23 @@
+{
+  "folder": "AuthenticationEventsFlows",
+  "path": "identity/authenticationEventsFlows",
+  "apiVersion": "v1.0",
+  "shape": "list",
+  "signIn": "both",
+  "objectCount": 0,
+  "verified": "2026-11-16",
+  "source": "Live app-only read through GraphSession and readObject",
+  "outcome": "skipped",
+  "cause": "license",
+  "responses": {
+    "/v1.0/identity/authenticationEventsFlows": {
+      "status": 403,
+      "body": {
+        "error": {
+          "code": "AADB2C",
+          "message": "Unauthorized. Access to this Api requires feature: 'EnableMsGraphAuthenticationEventListener' for the tenant: '00000000-0000-4000-8000-836b20d0164d'."
+        }
+      }
+    }
+  }
+}

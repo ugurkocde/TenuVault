@@ -133,7 +133,7 @@ const matches = (pattern: AnswerPattern, answer: RefusedAnswer) =>
 /** Microsoft names the permissions a request lacks in several wordings. */
 const NAMES_PERMISSION = /required (application )?(roles|permissions|scopes)|missing application roles|missing permission scope|PermissionScopeNotGranted/i
 /** A product the tenant has no license for, or never set up. */
-const NOT_AVAILABLE = /licen[cs]e|not onboarded|is not active|requires feature|not provisioned/i
+const NOT_AVAILABLE = /licen[cs]e|not onboarded|is not active|requires feature|not provisioned|feature .+ is not enabled/i
 /** The sign-in itself was refused, which no permission fixes. */
 const TOKEN_REFUSED = /InvalidAuthenticationToken|token (has |is )?expired|token validation/i
 

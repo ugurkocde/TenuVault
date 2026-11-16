@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { ENTRA_TYPES } from "../src/shared/intune/entra"
+import { ENTRA_5A_TYPES as ENTRA_TYPES } from "../src/shared/intune/entra"
 import { INTUNE_TYPES, restoreCapability, type Item } from "../src/shared/intune/registry"
 import { detailPath, graphVersion, organizationReader, readObject, type GraphReader } from "../src/shared/intune/read"
 import { sameSnapshot } from "../src/shared/intune/compare"
@@ -142,7 +142,7 @@ describe("Entra backup integration", () => {
     const folders = (areas: string[]) => includedTypes({ excluded: [] }, { services: ["entra"], areas: { entra: areas } }).map(type => type.folder)
     expect(folders([])).not.toContain("GroupLifecyclePolicies")
     expect(folders([])).not.toContain("OwnerlessGroupPolicy")
-    expect(folders(["groups"])).toEqual(ENTRA_TYPES.map(type => type.folder))
+    expect(folders(["groups"])).toEqual(INTUNE_TYPES.filter(type => moduleForFolder(type.folder)?.module.id === "entra").map(type => type.folder))
   })
 
   it("ignores Retry-After on a successful security defaults read and keeps the singleton's full JSON", async () => {

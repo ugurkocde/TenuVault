@@ -94,10 +94,11 @@ describe("What a choice of services, areas and access levels asks for", () => {
       "CustomDetection.ReadWrite.All", "CaseManagement.Read.All", "ThreatSubmissionPolicy.ReadWrite.All", "AttackSimulation.Read.All",
       "SecurityIdentitiesSensors.ReadWrite.All", "SecurityIdentitiesAutoConfig.ReadWrite.All", "SecurityEvents.ReadWrite.All", "RoleManagement.ReadWrite.Defender",
     ])
-    // Entra ID without its opt-in areas reads no users, groups or applications.
+    // Entra ID discovers group IDs for PIM, without enabling group object backups.
     const entra = graph({ entra: { access: "backup" } })
     expect(entra).toContain("Policy.Read.All")
-    for (const directory of ["Directory.Read.All", "User.Read.All", "Group.Read.All", "Device.Read.All", "Application.Read.All", "GroupMember.Read.All"]) expect(entra, directory).not.toContain(directory)
+    expect(entra).toContain("GroupMember.Read.All")
+    for (const directory of ["Directory.Read.All", "User.Read.All", "Group.Read.All", "Device.Read.All", "Application.Read.All"]) expect(entra, directory).not.toContain(directory)
     expect(graph({ entra: { access: "backup", areas: ["groups"] } }).filter((permission) => !entra.includes(permission))).toEqual(["Group.Read.All", "Directory.Read.All"])
     expect(graph({ entra: { access: "backup", areas: ["usersAndDevices"] } }).filter((permission) => !entra.includes(permission))).toEqual(["User.Read.All", "Device.Read.All", "OrgContact.Read.All"])
     expect(graph({ entra: { access: "backup", areas: ["applications"] } }).filter((permission) => !entra.includes(permission))).toEqual(["Application.Read.All", "Synchronization.Read.All", "Directory.Read.All"])

@@ -91,6 +91,32 @@ export function adminCenterLink(folder: string, id: string, item: Item = {}): Ad
     case "ContinuousAccessEvaluationPolicy": return CONDITIONAL_ACCESS("Policies")
     case "GroupLifecyclePolicies": return entra("Microsoft_AAD_IAM/GroupsManagementMenuBlade/~/Lifecycle", false)
     case "OwnerlessGroupPolicy": return entra("Microsoft_AAD_IAM/GroupsManagementMenuBlade/~/General", false)
+    case "CrossTenantAccessPolicy":
+    case "CrossTenantAccessDefault":
+    case "CrossTenantAccessPartners":
+    case "CrossTenantAccessMtoTemplates": return entra("Microsoft_AAD_IAM/CompanyRelationshipsMenuBlade/~/Settings", false)
+    case "ExternalIdentitiesPolicy":
+    case "B2bManagementPolicies": return entra("Microsoft_AAD_IAM/CompanyRelationshipsMenuBlade/~/Settings", false)
+    case "IdentityProviders": return entra("Microsoft_AAD_IAM/IdentityProvidersMenuBlade/~/AllIdentityProviders", false)
+    case "UserFlows":
+    case "UserFlowAttributes":
+    case "AuthenticationEventsFlows":
+    case "ApiConnectors": return entra("Microsoft_AAD_IAM/CompanyRelationshipsMenuBlade/~/UserFlows", false)
+    case "AuthenticationEventListeners":
+    case "CustomAuthenticationExtensions": return entra("Microsoft_AAD_IAM/StartboardApplicationsMenuBlade/~/CustomAuthenticationExtensions", false)
+    case "MultiTenantOrganization": return entra("Microsoft_AAD_IAM/CompanyRelationshipsMenuBlade/~/MultitenantOrganization", false)
+    case "EntraRoleDefinitions":
+    case "EntraRoleAssignments": return entra("Microsoft_AAD_IAM/RolesManagementMenuBlade/~/AllRoles", false)
+    case "RoleEligibilitySchedules":
+    case "RoleAssignmentSchedules":
+    case "RoleManagementPolicies":
+    case "RoleManagementPolicyAssignments":
+    case "PimAlertConfigurations": return entra("Microsoft_Azure_PIMCommon/CommonMenuBlade/~/aadroles", false)
+    case "PimGroupEligibilitySchedules":
+    case "PimGroupAssignmentSchedules": return entra("Microsoft_Azure_PIMCommon/CommonMenuBlade/~/aadgroup", false)
+    case "AdministrativeUnits": return entra("Microsoft_AAD_IAM/AdministrativeUnitsMenuBlade/~/AllAdministrativeUnits", false)
+    case "AttributeSets":
+    case "CustomSecurityAttributeDefinitions": return entra("Microsoft_AAD_IAM/CustomSecurityAttributesMenuBlade/~/AttributeSets", false)
     case "DeviceConfigurations": return configurationPage(id, 0)
     case "CompliancePolicies":
     case "DeviceCompliancePolicies": return configurationPage(id, 1)

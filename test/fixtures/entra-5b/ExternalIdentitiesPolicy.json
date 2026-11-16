@@ -1,0 +1,23 @@
+{
+  "folder": "ExternalIdentitiesPolicy",
+  "path": "policies/externalIdentitiesPolicy",
+  "apiVersion": "beta",
+  "shape": "singleton",
+  "signIn": "both",
+  "objectCount": 1,
+  "verified": "2026-11-16",
+  "source": "Live app-only read through GraphSession and readObject",
+  "outcome": "saved",
+  "responses": {
+    "/beta/policies/externalIdentitiesPolicy": {
+      "status": 200,
+      "body": {
+        "id": "externalIdentityPolicy",
+        "deletedDateTime": null,
+        "allowExternalIdentitiesToLeave": true,
+        "allowDeletedIdentitiesDataRemoval": false,
+        "displayName": "Example displayName"
+      }
+    }
+  }
+}

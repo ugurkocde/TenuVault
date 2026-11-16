@@ -54,7 +54,7 @@ For a tenant that backs up Entra ID or Defender, name the services with `-Servic
 | Tenant settings | `Policy.Read.All`, `Policy.Read.PermissionGrant`, `Policy.Read.DeviceConfiguration`, `GroupSettings.Read.All`, `Organization.Read.All`, `Domain.Read.All` |
 | Authentication | `Policy.Read.All`, `AuthenticationContext.Read.All`, `Organization.Read.All`, `PublicKeyInfrastructure.Read.All` |
 | External identities | `Policy.Read.All`, `Policy.Read.B2BManagementPolicy`, `IdentityProvider.Read.All`, `IdentityUserFlow.Read.All`, `EventListener.Read.All`, `CustomAuthenticationExtension.Read.All`, `APIConnectors.Read.All`, `MultiTenantOrganization.Read.All` |
-| Roles and PIM | `RoleManagement.Read.Directory`, `PrivilegedEligibilitySchedule.Read.AzureADGroup`, `PrivilegedAssignmentSchedule.Read.AzureADGroup`, `RoleManagementAlert.Read.Directory`, `AdministrativeUnit.Read.All`, `CustomSecAttributeDefinition.Read.All` |
+| Roles and PIM | `RoleManagement.Read.Directory`, `PrivilegedEligibilitySchedule.Read.AzureADGroup`, `GroupMember.Read.All`, `PrivilegedAssignmentSchedule.Read.AzureADGroup`, `RoleManagementAlert.Read.Directory`, `AdministrativeUnit.Read.All`, `CustomSecAttributeDefinition.Read.All` |
 | Governance | `EntitlementManagement.Read.All`, `AccessReview.Read.All`, `Policy.Read.All`, `LifecycleWorkflows.Read.All`, `Agreement.Read.All` |
 | Groups (only with `-Areas`) | `Group.Read.All`, `Directory.Read.All` |
 | Users and devices (only with `-Areas`) | `User.Read.All`, `Device.Read.All`, `OrgContact.Read.All` |

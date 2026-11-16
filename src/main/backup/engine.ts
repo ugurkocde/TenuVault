@@ -11,7 +11,7 @@ import { RetryDelayError } from "../graph-retry"
 import { isLocalAccount } from "../storage/blob-emulator"
 import { FetchApplicationError } from "../api/network-error"
 import { INTUNE_TYPES, itemName, typeForFolder, type GraphVersion, type IntuneType, type Item } from "../../shared/intune/registry"
-import { detailPath, OrganizationResolutionError, organizationReader, graphVersion, listPath, listSnapshot, readObject, withMaskedSecrets, type GraphReader } from "../../shared/intune/read"
+import { readEntries, ScopeDiscoveryError, OrganizationResolutionError, organizationReader, graphVersion, listPath, listSnapshot, readObject, withMaskedSecrets, type GraphReader } from "../../shared/intune/read"
 import { comparableSnapshot } from "../../shared/intune/compare"
 import type { BackupItems } from "../../shared/intune/backup-changes"
 import { EVERYTHING, includedTypes, normalizeScope, restorableFolders, type BackupScope } from "../../shared/intune/scope"
@@ -521,7 +521,8 @@ export class BackupEngine {
     const signIn: SignInMode = tokens.mode === "app-only" ? "application" : "delegated"
     // A type only a signed-in admin can read is left out of a Backup Reader run whatever its token says: no permission changes that.
     const adminOnly = (type: IntuneType) => tokens.mode === "app-only" && signedInOnly(type.folder)
-    const unpermitted = includedTypes(scope).filter((type) => !moduleOff.has(type.folder) && !readerExcluded.has(type.folder) && (adminOnly(type) || (moduleForFolder(type.folder)?.module.precheck && granted && !canBackUp(type.folder, granted))))
+    const applicationOnly = (type: IntuneType) => signIn === "delegated" && type.backupMode === "application"
+    const unpermitted = includedTypes(scope).filter((type) => !moduleOff.has(type.folder) && !readerExcluded.has(type.folder) && (adminOnly(type) || applicationOnly(type) || (moduleForFolder(type.folder)?.module.precheck && granted && !canBackUp(type.folder, granted))))
     const types = includedTypes(scope).filter((type) => !readerExcluded.has(type.folder) && !moduleOff.has(type.folder) && !unpermitted.includes(type))
     // Results list every type this run covers or leaves out for a permission, in registry order.
     const results: BackupResults = {
@@ -569,7 +570,7 @@ export class BackupEngine {
     for (const type of unpermitted) {
       const entry = moduleForFolder(type.folder)!
       const needed = entry.part.backup[granted?.kind ?? signIn]
-      const reason = needed === "unsupported"
+      const reason = applicationOnly(type) ? "This type is available only to the Backup Reader. Its delegated read permission has not been verified." : needed === "unsupported"
         // No permission lets this sign-in read the type, so there is nothing to add.
         ? skipReason("signedIn", { service: entry.module.label, mode: tokens.mode, settingsPage: SERVICES_PAGE })
         : `The ${tokens.mode === "app-only" ? "Backup Reader" : "TenuVault app registration"} has no ${describeRequirement(needed, granted?.permissions)} permission for ${entry.module.label}. ${SERVICES_PAGE} in Settings shows how to add it.`
@@ -673,7 +674,7 @@ export class BackupEngine {
       try {
         // A tenant-wide object has no list; reading it here skips the type on a denied read, like a denied list.
         const reader = readerOf(type)
-        const all = (type.singleton ? [{ ...(await reader.get(detailPath(type, type.singleton.id))), id: type.singleton.id }] : await reader.list(listPath(type))) as GraphItem[]
+        const all = (await readEntries(type, reader)) as GraphItem[]
         const filtered = all.filter((item) => !type.skip?.(item as never))
         // A list that repeats an ID (an item seen on two pages) keeps only its first copy:
         // saving both would inflate the counts past the per-ID manifest inventory.
@@ -691,8 +692,8 @@ export class BackupEngine {
         Object.assign(result(type.folder), { found: items.length, ...(skipped ? { builtInSkipped: skipped } : {}), ...(items.length === 0 ? { state: "empty" } : {}) })
         lists[index] = { type, items }
       } catch (caught) {
-        const resolverFailed = caught instanceof OrganizationResolutionError
-        const error = caught instanceof OrganizationResolutionError ? caught.cause : caught
+        const resolverFailed = caught instanceof OrganizationResolutionError || caught instanceof ScopeDiscoveryError
+        const error = caught instanceof OrganizationResolutionError || caught instanceof ScopeDiscoveryError ? caught.cause : caught
         // The answer the type declares for a tenant that never set it up: nothing to save, and nothing missing.
         // A sign-in Microsoft no longer accepts is never that answer, whatever status the type declares.
         if (!network.signal.aborted && !signInEnded(error) && !resolverFailed && notSetUp(type, error)) {
@@ -860,7 +861,7 @@ export class BackupEngine {
           this.write(job, reason, "warning")
         }
       } catch (caught) {
-        const error = caught instanceof OrganizationResolutionError ? caught.cause : caught
+        const error = caught instanceof OrganizationResolutionError || caught instanceof ScopeDiscoveryError ? caught.cause : caught
         if (service.isolated && !signInEnded(error) && !network.signal.aborted) {
           // A refusal, a pause longer than the bound or a request without an answer holds for every object of the type: the type ends, the backup goes on.
           const refused = error instanceof GraphError && classifyAnswer({ status: error.status, ...error.answer }, { mode: tokens.mode }).outcome === "skipped"

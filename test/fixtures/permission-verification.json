@@ -208,7 +208,7 @@
     },
     "GroupMember.Read.All": {
       "delegated": "bc024368-1153-4739-b217-4326f2e966d0",
-      "application": null
+      "application": "98830695-27a2-44f7-8c18-0c3ebc9698f6"
     },
     "GroupSettings.Read.All": {
       "delegated": "2eb2bc92-94ef-4c6b-b4ab-2a09bc975e0e",
@@ -361,6 +361,10 @@
     "Policy.ReadWrite.SecurityDefaults": {
       "delegated": "0b2a744c-2abf-4f1e-ad7e-17a087e2be99",
       "application": null
+    },
+    "PrivilegedAccess.Read.AzureADGroup": {
+      "delegated": null,
+      "application": "01e37dc9-c035-40bd-b438-b2879c4870a6"
     },
     "PrivilegedAssignmentSchedule.Read.AzureADGroup": {
       "delegated": "02a32cc4-7ab5-4b58-879a-0586e0f7c495",
@@ -1353,16 +1357,22 @@
       "service": "entra",
       "area": "roles",
       "folders": ["PimGroupEligibilitySchedules"],
-      "read": ["GET /identityGovernance/privilegedAccess/group/eligibilitySchedules"],
+      "read": ["GET /identityGovernance/privilegedAccess/group/eligibilitySchedules", "GET /groups?$select=id&$top=999"],
       "write": ["POST /identityGovernance/privilegedAccess/group/eligibilityScheduleRequests"],
-      "live": "403 names PrivilegedEligibilitySchedule.Read.AzureADGroup",
+      "note": "2026-11-16: PIM resource discovery returned zero but a directory group had two assignment schedules. Enumerate every group ID with GroupMember.Read.All, then filter schedules per group. The broad application schedule role was accepted by separate live probes.",
+      "live": "2026-11-16: 200 across 63 supported groups, zero schedules; broad application role accepted",
       "backup": {
         "delegated": [
           {"permission": "PrivilegedEligibilitySchedule.Read.AzureADGroup", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
-          {"permission": "PrivilegedEligibilitySchedule.ReadWrite.AzureADGroup", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+          {"permission": "PrivilegedEligibilitySchedule.ReadWrite.AzureADGroup", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "GroupMember.Read.All", "asked": true, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "Group.Read.All", "asked": false, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Directory.Read.All", "asked": false, "model": "listed", "index": "listed", "status": "confirmed"}
         ],
         "application": [
-          {"permission": "PrivilegedEligibilitySchedule.Read.AzureADGroup", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+          {"permission": "PrivilegedEligibilitySchedule.Read.AzureADGroup", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "PrivilegedAccess.Read.AzureADGroup", "asked": false, "model": "not listed", "index": "not listed", "status": "confirmed live"},
+          {"permission": "GroupMember.Read.All", "asked": true, "model": "listed", "index": "not listed", "status": "confirmed"}
         ]
       },
       "restore": {
@@ -1376,16 +1386,22 @@
       "service": "entra",
       "area": "roles",
       "folders": ["PimGroupAssignmentSchedules"],
-      "read": ["GET /identityGovernance/privilegedAccess/group/assignmentSchedules"],
+      "read": ["GET /identityGovernance/privilegedAccess/group/assignmentSchedules", "GET /groups?$select=id&$top=999"],
       "write": ["POST /identityGovernance/privilegedAccess/group/assignmentScheduleRequests"],
-      "live": "not tested",
+      "note": "2026-11-16: PIM resource discovery returned zero but a directory group had two assignment schedules. Enumerate every group ID with GroupMember.Read.All, then filter schedules per group. The broad application schedule role was accepted by separate live probes.",
+      "live": "2026-11-16: 200 across 63 supported groups, 62 schedules; broad application role accepted",
       "backup": {
         "delegated": [
           {"permission": "PrivilegedAssignmentSchedule.Read.AzureADGroup", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
-          {"permission": "PrivilegedAssignmentSchedule.ReadWrite.AzureADGroup", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+          {"permission": "PrivilegedAssignmentSchedule.ReadWrite.AzureADGroup", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "GroupMember.Read.All", "asked": true, "model": "listed", "index": "not listed", "status": "confirmed"},
+          {"permission": "Group.Read.All", "asked": false, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Directory.Read.All", "asked": false, "model": "listed", "index": "listed", "status": "confirmed"}
         ],
         "application": [
-          {"permission": "PrivilegedAssignmentSchedule.Read.AzureADGroup", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+          {"permission": "PrivilegedAssignmentSchedule.Read.AzureADGroup", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "PrivilegedAccess.Read.AzureADGroup", "asked": false, "model": "not listed", "index": "not listed", "status": "confirmed live"},
+          {"permission": "GroupMember.Read.All", "asked": true, "model": "listed", "index": "not listed", "status": "confirmed"}
         ]
       },
       "restore": {

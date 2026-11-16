@@ -1,5 +1,18 @@
-import { ENTRA_TYPES } from "../src/shared/intune/entra"
+import { ENTRA_TYPES, ENTRA_5B_TYPES } from "../src/shared/intune/entra"
 import { entraFixtureResponses } from "./helpers/entra-5a"
+import { detailPath, listPath, graphVersion } from "../src/shared/intune/read"
+
+/** Small documented responses keep this selection test independent of the lab's PIM policy volume. */
+function responsesFor(folder: string): ReturnType<typeof entraFixtureResponses> {
+  const type = ENTRA_5B_TYPES.find(type => type.folder === folder)
+  if (!type) return entraFixtureResponses(folder)
+  if (type.backupMode === "application") return {}
+  const root = `/${graphVersion(type)}/`
+  if (type.staticIds) return Object.fromEntries(type.staticIds.map(id => [root + detailPath(type, id), { status: 200, body: { id } }]))
+  if (type.listSource) return { [root + type.listSource.path]: { status: 200, body: { value: [] } } }
+  if (!type.singleton) return { [root + listPath(type)]: { status: 200, body: { value: [] } } }
+  return { [root + type.path]: { status: 200, body: {} }, ...Object.fromEntries((type.extras ?? []).map(extra => [root + extra.path(type.singleton!.id), { status: 200, body: { value: [] } }])) }
+}
 import { mkdtempSync } from "node:fs"
 import { randomBytes } from "node:crypto"
 import { tmpdir } from "node:os"
@@ -54,7 +67,7 @@ const storeWith = (value: string | null) => {
 async function backup(settings: ModuleSettings, scope: BackupScope, tenantId = TENANT) {
   const store = new LocalBlobStore(mkdtempSync(join(tmpdir(), "tv-services-")), [randomBytes(32)])
   const graphPaths: string[] = []
-  const entraResponses = Object.assign({}, ...ENTRA_TYPES.map(type => entraFixtureResponses(type.folder))) as ReturnType<typeof entraFixtureResponses>
+  const entraResponses = Object.assign({}, ...ENTRA_TYPES.map(type => responsesFor(type.folder))) as ReturnType<typeof entraFixtureResponses>
   const engine = new BackupEngine({
     fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(input, init)
@@ -303,18 +316,19 @@ describe("Any combination of services for a tenant", () => {
       expect(job.status).toBe("Completed")
       expect(job.exception).toBeUndefined()
       expect(status).toBe("Success")
-      expect(included).toEqual([...(combination.includes("intune") ? INTUNE_FOLDERS : []), ...(combination.includes("conditionalAccess") ? CONDITIONAL_ACCESS_FOLDERS : []), ...(combination.includes("entra") ? ENTRA_TYPES.filter(type => type.area !== "Groups").map(type => type.folder) : [])])
+      expect(included).toEqual([...(combination.includes("intune") ? INTUNE_FOLDERS : []), ...(combination.includes("conditionalAccess") ? CONDITIONAL_ACCESS_FOLDERS : []), ...(combination.includes("entra") ? ENTRA_TYPES.filter(type => type.area !== "Groups" && type.backupMode !== "application").map(type => type.folder) : [])])
       if (!combination.includes("intune")) expect(intuneRead(graphPaths)).toEqual([])
       if (!combination.includes("conditionalAccess")) expect(graphPaths.filter((path) => path.includes("conditionalAccess") && !path.endsWith("authenticationContextClassReferences"))).toEqual([])
       // Every read is from a selected type or one of its recorded sub-resources.
       const expectedPaths = included.flatMap(folder => {
         const type = INTUNE_TYPES.find(type => type.folder === folder)!
-        if (moduleForFolder(folder)?.module.id === "entra") return Object.keys(entraFixtureResponses(folder)).map(key => new URL(key, "https://graph.microsoft.com").pathname)
+        if (moduleForFolder(folder)?.module.id === "entra") return Object.keys(responsesFor(folder)).map(key => new URL(key, "https://graph.microsoft.com").pathname)
         return [`/beta/${type.path}`]
       })
       expect(new Set(graphPaths)).toEqual(new Set(expectedPaths))
       // The results list holds the selected types only, and a turned-off Intune is named.
-      expect(job.results?.types.map((type) => type.folder)).toEqual(included)
+      expect(job.results?.types.filter(type => type.folder !== "ApiConnectors").map((type) => type.folder)).toEqual(included)
+      if (combination.includes("entra")) expect(job.results?.types.find(type => type.folder === "ApiConnectors")?.state).toBe("skipped")
       // A warning, so a backup without Intune stands out in the result instead of reading like any other success.
       const warnings = job.results?.notices.filter((notice) => notice.level === "warning").map((notice) => notice.message) ?? []
       expect(warnings.includes("Intune is turned off for this tenant, so its types are not backed up. Services and permissions in Settings turns it on again.")).toBe(!combination.includes("intune"))

@@ -17,7 +17,7 @@ const credentialRestrictions = neverStored.filter(key => key !== "keyCredentials
 const organization = "organization/{organizationId}"
 const brandingStreams = ["backgroundImage", "bannerLogo", "customCSS", "favicon", "headerLogo", "squareLogo", "squareLogoDark"]
 
-export const ENTRA_TYPES: IntuneType[] = [
+export const ENTRA_5A_TYPES: IntuneType[] = [
   {
     ...singleton("AuthorizationPolicy", "Authorization policy", "policies/authorizationPolicy"),
     additionalReadVersions: ["beta"],
@@ -86,3 +86,75 @@ export const ENTRA_TYPES: IntuneType[] = [
   base("GroupLifecyclePolicies", "Group lifecycle policies", "groupLifecyclePolicies", "Groups"),
   singleton("OwnerlessGroupPolicy", "Ownerless group policy", "policies/ownerlessGroupPolicy", "Groups"),
 ]
+
+const external = (folder: string, label: string, path: string) => base(folder, label, path, "External identities")
+const roles = (folder: string, label: string, path: string) => ({ ...base(folder, label, path, "Roles and PIM"), headers: { "Accept-Language": "en-US" } })
+const directoryScope = "scopeId eq '/' and scopeType eq 'DirectoryRole'"
+const groupSchedules = (folder: string, label: string, collection: string): IntuneType => ({
+  ...roles(folder, label, `identityGovernance/privilegedAccess/group/${collection}`),
+  listOnly: true,
+  headers: { "Accept-Language": "en-US", "ConsistencyLevel": "eventual" },
+  listSource: { path: "groups?$select=id&$top=999&$count=true&$filter=" + encodeURIComponent("(securityEnabled eq true or groupTypes/any(c:c eq 'Unified')) and onPremisesSyncEnabled ne true and not groupTypes/any(c:c eq 'DynamicMembership')"), filter: id => `groupId eq '${id.replaceAll("'", "''")}'` },
+})
+
+export const ENTRA_5B_TYPES: IntuneType[] = [
+  singleton("CrossTenantAccessPolicy", "Cross-tenant access policy", "policies/crossTenantAccessPolicy", "External identities"),
+  singleton("CrossTenantAccessDefault", "Cross-tenant access defaults", "policies/crossTenantAccessPolicy/default", "External identities"),
+  {
+    ...external("CrossTenantAccessPartners", "Cross-tenant access partners", "policies/crossTenantAccessPolicy/partners"), idKey: "tenantId",
+    extras: [{ property: "identitySynchronization", path: id => `policies/crossTenantAccessPolicy/partners/${id}/identitySynchronization`, object: true }],
+    neverStored: ["displayName", "identitySynchronization.displayName"],
+  },
+  {
+    ...external("CrossTenantAccessMtoTemplates", "Multitenant organization templates", "policies/crossTenantAccessPolicy/templates"),
+    staticIds: ["multiTenantOrganizationIdentitySynchronization", "multiTenantOrganizationPartnerConfiguration"],
+  },
+  { ...singleton("ExternalIdentitiesPolicy", "External identities policy", "policies/externalIdentitiesPolicy", "External identities"), apiVersion: "beta" },
+  { ...external("B2bManagementPolicies", "B2B management policies", "policies/b2bManagementPolicies"), apiVersion: "beta" },
+  { ...external("IdentityProviders", "Identity providers", "identity/identityProviders"), listOnly: true },
+  {
+    ...external("UserFlows", "User flows", "identity/b2xUserFlows"),
+    extras: [
+      { property: "identityProviders", path: id => `identity/b2xUserFlows/${id}/identityProviders?$select=id`, ids: true },
+      ...["userAttributeAssignments", "languages"].map(property => ({ property, path: (id: string) => `identity/b2xUserFlows/${id}/${property}` })),
+    ],
+  },
+  external("UserFlowAttributes", "User flow attributes", "identity/userFlowAttributes"),
+  external("AuthenticationEventsFlows", "Authentication events flows", "identity/authenticationEventsFlows"),
+  external("AuthenticationEventListeners", "Authentication event listeners", "identity/authenticationEventListeners"),
+  external("CustomAuthenticationExtensions", "Custom authentication extensions", "identity/customAuthenticationExtensions"),
+  // No delegated call has established APIConnectors.Read.All. Keep this type app-only.
+  { ...external("ApiConnectors", "API connectors", "identity/apiConnectors"), backupMode: "application", neverStoredKeys: [...neverStored, "authenticationConfiguration", "certificate", "certificateData"] },
+  {
+    ...singleton("MultiTenantOrganization", "Multitenant organization", "tenantRelationships/multiTenantOrganization", "External identities"),
+    extras: [{ property: "tenants", path: () => "tenantRelationships/multiTenantOrganization/tenants" }],
+    neverStored: ["tenants.displayName"],
+  },
+  { ...roles("EntraRoleDefinitions", "Custom Entra role definitions", "roleManagement/directory/roleDefinitions"), filter: "isBuiltIn eq false", skip: item => item.isBuiltIn === true ? "Built-in role" : undefined },
+  roles("EntraRoleAssignments", "Entra role assignments", "roleManagement/directory/roleAssignments"),
+  roles("RoleEligibilitySchedules", "Role eligibility schedules", "roleManagement/directory/roleEligibilitySchedules"),
+  roles("RoleAssignmentSchedules", "Role assignment schedules", "roleManagement/directory/roleAssignmentSchedules"),
+  {
+    ...roles("RoleManagementPolicies", "Role management policies", "policies/roleManagementPolicies"), filter: directoryScope,
+    expand: "rules",
+  },
+  { ...roles("RoleManagementPolicyAssignments", "Role management policy assignments", "policies/roleManagementPolicyAssignments"), filter: directoryScope, listOnly: true },
+  groupSchedules("PimGroupEligibilitySchedules", "PIM group eligibility schedules", "eligibilitySchedules"),
+  groupSchedules("PimGroupAssignmentSchedules", "PIM group assignment schedules", "assignmentSchedules"),
+  { ...roles("PimAlertConfigurations", "PIM alert configurations", "identityGovernance/roleManagementAlerts/alertConfigurations"), apiVersion: "beta", filter: directoryScope },
+  {
+    ...roles("AdministrativeUnits", "Administrative units", "directory/administrativeUnits"),
+    select: "id,displayName,description,visibility,membershipType,membershipRule,membershipRuleProcessingState,isMemberManagementRestricted",
+    extras: [
+      { property: "members", path: id => `directory/administrativeUnits/${id}/members?$select=id&$top=999`, ids: true },
+      { property: "scopedRoleMembers", path: id => `directory/administrativeUnits/${id}/scopedRoleMembers?$select=id`, ids: true },
+    ],
+  },
+  roles("AttributeSets", "Attribute sets", "directory/attributeSets"),
+  {
+    ...roles("CustomSecurityAttributeDefinitions", "Custom security attribute definitions", "directory/customSecurityAttributeDefinitions"),
+    extras: [{ property: "allowedValues", path: id => `directory/customSecurityAttributeDefinitions/${id}/allowedValues` }],
+  },
+]
+
+export const ENTRA_TYPES = [...ENTRA_5A_TYPES, ...ENTRA_5B_TYPES]

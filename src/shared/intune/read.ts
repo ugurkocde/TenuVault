@@ -27,6 +27,37 @@ export function listPath(type: IntuneType): string {
   return `${type.path}${query ? `?${query}` : ""}`
 }
 
+/** A discovery answer never describes whether the requested configuration type is set up. */
+export class ScopeDiscoveryError extends Error {
+  constructor(override readonly cause: unknown) {
+    super(`Could not discover configuration scopes: ${cause instanceof Error ? cause.message : String(cause)}`, { cause })
+  }
+}
+
+/** Lists the actual scopes before reading filtered collections; no unread scope becomes empty coverage. */
+export async function readEntries(type: IntuneType, graph: GraphReader): Promise<Item[]> {
+  if (type.singleton) return [{ ...await graph.get(detailPath(type, type.singleton.id)), id: type.singleton.id }]
+  if (type.staticIds) return type.staticIds.map(id => ({ id }))
+  let entries: Item[]
+  if (type.listSource) {
+    const scopes = await graph.list(type.listSource.path).catch(error => { throw new ScopeDiscoveryError(error) })
+    entries = []
+    for (const scope of scopes) {
+      if (typeof scope.id !== "string" || !scope.id) throw new Error("Microsoft Graph returned a scope without an ID")
+      const filter = type.listSource.filter(scope.id)
+      entries.push(...await graph.list(`${type.path}?$filter=${encodeURIComponent(filter)}`))
+    }
+  } else entries = await graph.list(listPath(type))
+  return entries.map(entry => withIdentity(type, entry))
+}
+
+function withIdentity(type: IntuneType, entry: Item): Item {
+  if (!type.idKey) return entry
+  const id = entry[type.idKey]
+  if (typeof id !== "string" || !id) throw new Error(`Microsoft Graph returned an object without ${type.idKey}`)
+  return { ...entry, id }
+}
+
 export interface ReadOptions {
   /**
    * Backup only, never restore: whether a refused plain-text read of a masked value keeps it masked
@@ -54,6 +85,8 @@ export function detailPath(type: IntuneType, id: string): string {
 export async function readObject(type: IntuneType, id: string, graph: GraphReader, options: ReadOptions = {}): Promise<Item> {
   const read = await graph.get(detailPath(type, id))
   let detail = type.singleton ? singletonObject(type.singleton, read) : read
+  if (type.staticIds) detail = { ...detail, id }
+  detail = withIdentity(type, detail)
   // Large expanded collections (such as Settings Catalog settings) page like lists.
   for (const [key, value] of Object.entries(detail)) {
     if (key.endsWith("@odata.nextLink") && typeof value === "string") {
@@ -70,6 +103,10 @@ export async function readObject(type: IntuneType, id: string, graph: GraphReade
   const encodedId = encodeURIComponent(type.singleton && typeof detail.id === "string" && detail.id ? detail.id : id)
   for (const extra of type.extras ?? []) {
     try {
+      if (extra.object) {
+        detail[extra.property] = await graph.get(extra.path(encodedId))
+        continue
+      }
       if (extra.single) {
         detail[extra.property] = (await graph.get(extra.path(encodedId)))[extra.property] ?? null
         continue

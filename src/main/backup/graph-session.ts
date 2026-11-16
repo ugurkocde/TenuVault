@@ -63,6 +63,7 @@ export class GraphSession {
     // The filters a page of this list may carry: the type's own, or the ones the request itself named. A list
     // without a filter has none, so a link that brings one would end the list early and leave objects out.
     const allowed = options.filter !== undefined ? [options.filter] : filtersOf(started)
+    const required = options.filter ?? (allowed.length === 1 ? allowed[0] : undefined)
     while (next) {
       if (seen.size >= MAX_LIST_PAGES) throw new Error(`Graph listing did not finish after ${MAX_LIST_PAGES} pages`)
       const parsed = new URL(next)
@@ -78,7 +79,7 @@ export class GraphSession {
       if (filters.some((filter) => !allowed.includes(filter))) throw refuse("it names another filter")
       seen.add(next)
       // Appended as text: rewriting the query would re-encode the paging token Graph issued.
-      const request: string = options.filter !== undefined && !filters.length ? `${next}${parsed.search ? "&" : "?"}$filter=${encodeURIComponent(options.filter)}` : next
+      const request: string = required !== undefined && !filters.length ? `${next}${parsed.search ? "&" : "?"}$filter=${encodeURIComponent(required!)}` : next
       const page: { value?: GraphItem[]; "@odata.nextLink"?: string } = await this.get(request, options.headers)
       if (!Array.isArray(page.value)) throw new Error("Graph returned an invalid policy collection")
       items.push(...page.value)

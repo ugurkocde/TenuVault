@@ -29,6 +29,8 @@ export type Area =
   | "Tenant settings"
   | "Authentication"
   | "Groups"
+  | "External identities"
+  | "Roles and PIM"
 
 /** An extra collection read after the detail GET and stored on the snapshot under `property`. */
 export interface Extra {
@@ -37,6 +39,8 @@ export interface Extra {
   path: (id: string) => string
   /** The path returns one object; its `property` is stored instead of a collection. */
   single?: boolean
+  /** Stores the complete singleton response of a sub-resource. */
+  object?: true
   /**
    * Stores the collection as the sorted IDs of its entries instead of the entries, for relationships
    * such as members or owners: the order Graph returns them in is not stable, and the objects have
@@ -131,6 +135,14 @@ export interface IntuneType {
   secrets?: (item: Item) => Array<{ path: string; apply: (value: string) => void }>
   /** Extra query for the list GET, for example a $top. */
   listQuery?: string
+  /** Fixed child entities of a container without a list endpoint. Each is read before saving. */
+  staticIds?: readonly string[]
+  /** Discover scope IDs, then list this collection once per scope. A refused discovery fails the type. */
+  listSource?: { path: string; filter: (id: string) => string }
+  /** Graph uses this key instead of id for partners. The stored identity is still id. */
+  idKey?: "tenantId"
+  /** A mode not supported by the type, even when the service offers that mode. */
+  backupMode?: "application"
   /**
    * A $filter Microsoft Graph requires on the list: without it Graph refuses the request, or returns
    * objects that are not the tenant's own. It is sent with the list and kept on every following page.

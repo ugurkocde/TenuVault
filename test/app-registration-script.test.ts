@@ -237,7 +237,8 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
     expect(result.code, result.text).toBe(0)
     const fromServices = graphPermissions({ entra: { access: "backup", areas: ["usersAndDevices"] } }, "delegated")
     expect(fromServices).toContain("User.Read.All")
-    expect(requested(result).declared).toEqual([...fromServices, "Policy.ReadWrite.ConditionalAccess", "Mail.Send", "GroupMember.Read.All"])
+    expect(fromServices).toContain("GroupMember.Read.All")
+    expect(requested(result).declared).toEqual([...new Set([...fromServices, "Policy.ReadWrite.ConditionalAccess", "Mail.Send", "GroupMember.Read.All"])])
   }, 45000)
 
   it.each([
