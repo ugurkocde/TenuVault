@@ -289,3 +289,24 @@ During setup, choose services before Connect. The permission list in the app and
 ```
 
 Use the permission list shown in TenuVault when following the manual guide. The handoff message also contains this list and the generated command. Do not use the Intune default list for an Entra-only registration. Existing registrations are left unchanged by quick setup; missing chosen permissions are reported after sign-in.
+
+
+## Add a service, an area or restore access
+
+Open **Settings > Services and permissions** for the tenant. Turn on the service or opt-in area, or choose **Backup and restore** under **Areas and access** where restore is available. These choices describe the permissions to request; they grant no access by themselves.
+
+Expand **Add the missing permissions**. You can use **Add in the app**, **Azure CLI commands**, **Registration in Entra**, or **Text for your administrator**. All routes name the exact missing permissions. The Entra portal's Grant admin consent action can also approve other pending permissions, so review them first.
+
+For **Add in the app**:
+
+1. Use the account connected to this tenant, with an active **Application Administrator**, **Cloud Application Administrator**, **Privileged Role Administrator** or **Global Administrator** role. Your tenant's consent policy may require a higher role. Read the setup-only access explanation, then select **Sign in to preview**. Microsoft Graph Command Line Tools requests `Application.ReadWrite.All` and `DelegatedPermissionGrant.ReadWrite.All`, as in quick setup. That privileged access is kept only for this flow.
+2. Review the registration name, tenant and client ID, **Permissions to declare**, and **Scopes to add to tenant-wide consent**. The flow uses only the exact registration your tenant is connected with. Select **Add approved permissions** to approve that difference. The preview expires after ten minutes.
+3. The app reads the registration and consent again before writing. **Changed since the preview** means nothing was written by that attempt. Review the current state and close the dialog, then start a new preview.
+4. Read the result. It lists the verified declaration and consent additions separately. **Permissions partly added** also lists missing or unverified permissions. Existing consent is kept, and no rollback is attempted. An unanswered write may already have been applied; the app reads back before reporting and does not resend it automatically. Start a fresh preview to reconcile before retrying.
+5. The app refreshes the tenant token and checks connection health. Close the dialog and select **Check again**, then run a backup to verify access. If the token needs an interactive sign-in, use **Settings > Sign in**. The Backup Reader needs its own permissions for scheduled backups and is not changed here.
+
+![Review the exact permission additions before approving them](/images/add-permissions/preview-light.png)
+
+![A partial result names what was verified and what remains missing](/images/add-permissions/partial-result-light.png)
+
+The in-app route refuses a registration that is not a single-tenant public client with only localhost redirects, has credentials (including federated credentials or credentials on its enterprise application), lacks tenant-wide consent for the connected scopes, or has individual Graph consent. A missing administrator role is shown as a refusal from Microsoft. Close the dialog to use the other routes or ask your administrator to review the registration. Quick setup still never changes a registration it did not create.

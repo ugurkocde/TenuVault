@@ -75,6 +75,8 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 ## Compatibility notes for the next release
 
+- Settings can add delegated service, area and supported restore permissions to the exact connected registration after an administrator sign-in and preview. This separate action requires existing tenant-wide consent and a credential-free, single-tenant localhost public client. Individual consent requires separate administrator review. Existing grants are updated in place; partial or unanswered writes require a fresh preview before retrying. Quick setup reuse and the Backup Reader are unchanged.
+
 * Setup now keeps a service choice per tenant. Intune keeps its previous default permissions, including read access to Conditional Access while its backups stay off. Entra ID and Defender can be chosen to prepare backup permissions; their backup types arrive in later updates. Intune-only workflows direct tenants without Intune to Services and permissions. Links for tenants that are not connected show a notice and a link to Tenants before opening any workflow. After sign-in, setup waits up to 20 seconds for the permission result before offering storage; a failed or stalled check shows an advisory notice and allows setup to continue.
 
 Put these in the next stable release's notes, then remove them here.

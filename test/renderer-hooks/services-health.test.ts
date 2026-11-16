@@ -115,7 +115,7 @@ it("saves the requested access without granting permissions", async () => {
   await act(async () => { select.value = "backup"; select.dispatchEvent(new Event("change", { bubbles: true })) })
   expect(mocks.setAccess).toHaveBeenCalledWith(HEALTH_TENANT, "intune", "backup")
 })
-it("shows exactly the missing permissions in all three routes and leaves the in-app route unimplemented", async () => {
+it("shows exactly the missing permissions alongside the in-app route", async () => {
   mocks.check.mockResolvedValue(healthScene("missing-permission"))
   await render()
   const routes = container.querySelector("[data-permission-routes]")!
@@ -126,7 +126,7 @@ it("shows exactly the missing permissions in all three routes and leaves the in-
   expect(registration).toContain(`/appId/${HEALTH_CLIENT}/`)
   expect(routes.textContent).toContain("DeviceManagementConfiguration.ReadWrite.All")
   expect(routes.textContent).not.toContain("Policy.ReadWrite.ConditionalAccess")
-  expect(routes.textContent).toContain("Add in the app: not available yet")
+  expect(routes.textContent).toContain("Add in the app")
 })
 it("names a replaced registration and its missing permissions", async () => {
   mocks.check.mockResolvedValue(healthScene("registration-replaced"))

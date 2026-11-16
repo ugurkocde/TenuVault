@@ -1,3 +1,4 @@
+import type { PermissionAdditionPreview, PermissionAdditionResult } from "./registration-additions"
 import type { AppSourcesBridge } from "./app-sources/types"
 import type { OptionalPermissionStatus } from "./services/optional-permissions"
 import type { PlanIpcError } from "./plan-errors"
@@ -540,6 +541,9 @@ export interface TenuVaultBridge {
     liveRuns: (tenantId: string) => Promise<string[]>
   }
   services: {
+    previewAddition: (tenantId: string, missing: readonly string[]) => Promise<PermissionAdditionPreview>
+    confirmAddition: (tenantId: string, previewId: string) => Promise<PermissionAdditionResult>
+    cancelAddition: (tenantId: string) => Promise<void>
     /** The tenant's service modules that have types to back up, and what its app registration may do with each. `refresh` gets a new token, so recent consent changes show. */
     status: (tenantId: string, clientId: string, refresh?: boolean) => Promise<ServicesStatus>
     /** Turns a service module on or off for the tenant's backups. */

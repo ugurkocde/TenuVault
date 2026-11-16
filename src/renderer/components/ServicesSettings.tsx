@@ -1,3 +1,4 @@
+import { AddPermissions } from "./AddPermissions"
 import { useEffect, useId, useRef, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { AlertCircle, CheckCircle2, ExternalLink, Loader2, MinusCircle, RefreshCw } from "lucide-react"
@@ -35,7 +36,7 @@ function PermissionState({ state }: { state: ServiceHealth["permissions"] }) {
 }
 
 /** These routes change only the exact gaps reported for the selected service or area. */
-export function PermissionRoutes({ report, missing }: { report: Pick<ConnectionHealthReport, "tenantId" | "clientId">; missing: readonly string[] }) {
+export function PermissionRoutes({ report, missing, inApp = false }: { inApp?: boolean; report: Pick<ConnectionHealthReport, "tenantId" | "clientId">; missing: readonly string[] }) {
   const fix = permissionRemediation(report, missing)
   if (!fix.names.length) return null
   return <details data-permission-routes data-no-select className="rounded-xl bg-blue-50 p-3 text-sm text-gray-700">
@@ -56,7 +57,7 @@ export function PermissionRoutes({ report, missing }: { report: Pick<ConnectionH
         <p className="my-2 break-words text-xs">{fix.request}</p>
         <Button variant="outline" size="sm" onClick={() => void copy(fix.request, "the request for your administrator")}>Copy text for administrator</Button>
       </details>
-      <p className="border-t border-blue-200 pt-2 text-xs">Add in the app: not available yet.</p>
+      {inApp && <AddPermissions tenantId={report.tenantId} clientId={report.clientId} missing={fix.names} />}
       <p className="text-xs">Then select Check again and run a backup to verify access.</p>
     </div>
   </details>
@@ -83,7 +84,7 @@ function Area({ area, service, report, busy, run }: { area: AreaHealth; service:
     {area.losses.map(loss => <p key={`${loss.mode}/${loss.folder}`} className="break-words text-xs text-amber-800">
       {loss.mode === "app-only" ? "Scheduled backups with the Backup Reader cannot read" : "Backups with your sign-in cannot read"} {loss.folder}, since {healthDate(loss.since)}. {HEALTH_CAUSE_TEXT[loss.cause]}
     </p>)}
-    {area.enabled && area.missing.length > 0 && <PermissionRoutes report={report} missing={area.missing} />}
+    {area.enabled && area.missing.length > 0 && <PermissionRoutes inApp report={report} missing={area.missing} />}
   </div>
 }
 
@@ -105,7 +106,7 @@ function Service({ service, conditionalAccess, report, busy, toggle, run }: { se
       {losses.length > 0 && <p className="text-sm text-amber-800">{losses.some(loss => loss.mode === "app-only") ? "The Backup Reader lost access, even if your sign-in verified a backup." : "Your sign-in lost access."} See the affected areas below.</p>}
       {conditionalAccess && <p className="text-xs text-gray-600">Conditional Access: {conditionalAccess.enabled ? "On" : "Off"}, controlled separately below.</p>}
     </div>
-    {service.enabled && service.missing.length > 0 && <div className="mt-3"><PermissionRoutes report={report} missing={service.missing} /></div>}
+    {service.enabled && service.missing.length > 0 && <div className="mt-3"><PermissionRoutes inApp report={report} missing={service.missing} /></div>}
     <details className="mt-3" data-service-details>
       <summary className="cursor-pointer text-sm font-medium text-gray-700">Areas and access ({service.areas.length}{conditionalAccess ? " + Conditional Access" : ""})</summary>
       <div data-no-select className="my-3 space-y-1 text-xs text-gray-600">
@@ -206,7 +207,7 @@ function TenantServices({ tenantId, clientId, name, active }: { tenantId: string
     </div>
     {busy && <p role="status" className="flex items-center gap-2 text-sm text-gray-600"><Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />Checking connection health...</p>}
     {error && <p role="alert" className="text-sm text-red-700">Connection health could not be checked: {error} Select Check again.</p>}
-    {report && <>
+    {report && active && <>
       <div className="grid gap-2 sm:grid-cols-3">
         <SignInState label="Microsoft Graph sign-in" state={report.graph} />
         <div className="min-w-0 rounded-xl bg-muted p-3"><h3 className="text-sm font-medium text-gray-900">Backup Reader</h3>

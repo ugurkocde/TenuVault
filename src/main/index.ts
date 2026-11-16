@@ -1,3 +1,5 @@
+import { AddPermissionsFlow, signInForPermissionAddition } from "./auth/add-permissions-flow"
+import { additionPermissions } from "./services/addition-permissions"
 import { checkOnboardingPermissions, saveOnboardingServices } from "./services/onboarding"
 import { requestWindowsContent } from "./app-backup/windows-helper"
 import { requireCaptureEnabled } from "./app-backup/capture-policy"
@@ -1475,6 +1477,28 @@ async function bootstrap(): Promise<void> {
     if (typeof tenantId !== "string" || !tenantProfile(tenantId)) throw new Error("Connect this tenant first.")
     return tenantId
   }
+  const permissionAdditions = new AddPermissionsFlow({
+    fetch: chromiumFetch,
+    connection: async tenantId => {
+      connectedTenant(tenantId)
+      const account = accounts.get(tenantId.toLowerCase())
+      const profile = tenantProfile(tenantId)
+      if (!account || !profile || account.clientId.toLowerCase() !== profile.clientId.toLowerCase()) throw new Error("Sign in to the connected registration first.")
+      const settings = moduleSettings.get(tenantId)
+      const token = await auth.getAccessToken(tenantId, account.clientId, RESOURCE_SCOPES.graph)
+      return { tenantId, clientId: account.clientId, username: account.username, homeAccountId: account.homeAccountId, scopes: token.scopes, allowed: additionPermissions(settings) }
+    },
+    signIn: (connection, signal) => signInForPermissionAddition(connection, chromiumFetch, url => shell.openExternal(url), signal),
+    refresh: async (connection, approved) => {
+      const token = await auth.getAccessToken(connection.tenantId, connection.clientId, RESOURCE_SCOPES.graph, true)
+      await health.check(connection.tenantId, "again")
+      const missing = approved.filter(name => !token.scopes.includes(name))
+      if (missing.length) throw new Error(`The refreshed token still lacks ${missing.join(", ")}.`)
+    },
+  })
+  handleTrusted("services:previewAddition", (_event, tenantId: unknown, missing: unknown) => permissionAdditions.preview(tenantId, missing))
+  handleTrusted("services:confirmAddition", (_event, tenantId: unknown, id: unknown) => permissionAdditions.confirm(tenantId, id))
+  handleTrusted("services:cancelAddition", (_event, tenantId: unknown) => { if (typeof tenantId === "string") permissionAdditions.cancel(tenantId) })
   handleTrusted("services:setAccess", (_event, tenantId: unknown, id: unknown, access: unknown) => {
     const tenant = connectedTenant(tenantId)
     moduleSettings.setAccess(tenant, id, access)

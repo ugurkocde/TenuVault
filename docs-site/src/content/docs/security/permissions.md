@@ -124,8 +124,9 @@ Some settings stay out because Microsoft publishes no read permission TenuVault 
 
 The connection check requests a fresh token without opening a sign-in window. **Permissions present** describes the token, not the admin's role, license or whether the service is onboarded. **Verified by the last backup** names the date and sign-in that read the selected types. After granting permissions, select **Check again**, then run a backup to verify access.
 
-For missing permissions, expand **Add the missing permissions**. The three routes name exactly the missing manifest permissions for the selected access level:
+For missing permissions, expand **Add the missing permissions**. The four routes name exactly the missing manifest permissions for the selected access level:
 
+* **Add in the app** opens a Microsoft sign-in and an exact preview before you approve additions. It requires the same tenant and account you are connected with. See [adding access to an existing registration](/getting-started/app-registration/#add-a-service-an-area-or-restore-access).
 * **Azure CLI commands**, for Bash or zsh, resolve delegated permission IDs from Microsoft's Graph service principal, read the connected registration's declared Graph scopes and add only missing scope declarations. They stop after a failed or cancelled login, a tenant mismatch, or any failed lookup or add. They never create another registration.
 * **Registration in Entra** opens API permissions for that client ID and lists the exact names to add.
 * **Text for your administrator** includes the tenant ID, client ID, permission names and next steps.
@@ -140,7 +141,15 @@ Backup and restore permission status are shown separately. If backup permissions
 
 ![Backup permissions present with a restore-only gap](/images/services/restore-only-gap-light.png)
 
-Adding permissions in TenuVault itself is not available yet. The **Access to request** choice grants nothing and never blocks a restore the current token permits.
+The **Access to request** choice grants nothing and never blocks a restore the current token permits. Restore permissions are available in the in-app flow only for services with a restore capability. Choosing Backup does not request new write permissions for the tenant registration.
+
+The in-app route signs in through Microsoft Graph Command Line Tools with setup-only `Application.ReadWrite.All` and `DelegatedPermissionGrant.ReadWrite.All` access. This access is held in memory for the flow, expires after ten minutes at the preview, and is separate from the tenant connection. Use an Application Administrator, Cloud Application Administrator, Privileged Role Administrator or Global Administrator; tenant consent policies can require a higher role.
+
+It reads the exact connected client ID and refuses registrations that are not single-tenant public clients with only localhost redirects, have secrets, certificates or federated credentials, have credentials on their enterprise application, lack tenant-wide consent for the connected Graph scopes, or have individual Graph consent. These cases can be reviewed using the other routes.
+
+Before confirmation it shows the registration name and client ID, the delegated permissions to declare, and the scopes to add to tenant-wide Graph consent. On confirmation it rereads the registration and consent. If either changed, it writes nothing, shows the current declarations and consent, and requires a fresh preview. It keeps unknown declarations and scopes, compares declaration IDs without regard to case, and never consents other pending permissions. Existing consent is patched in place, never deleted or replaced.
+
+Declaration and consent are read back with at most four attempts per verification step. A failed or unanswered write is not automatically retried; it may have been applied, so the result explains the uncertainty and what the read-back verified. A partial result lists verified additions and permissions still missing or unverified, without promising rollback. Start a new preview to reconcile and retry. Finally the tenant token is refreshed and connection health is checked. If either fails, the result stays partial and offers Check again or another sign-in. The Backup Reader is not changed.
 
 ![A missing permission with the commands, registration link and administrator request](/images/services/missing-permission-light.png)
 

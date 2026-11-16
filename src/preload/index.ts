@@ -87,6 +87,9 @@ const bridge: TenuVaultPreloadBridge = {
     liveRuns: (tenantId) => invoke("backups:liveRuns", tenantId),
   },
   services: {
+    previewAddition: (tenantId, missing) => invoke("services:previewAddition", tenantId, missing),
+    confirmAddition: (tenantId, previewId) => invoke("services:confirmAddition", tenantId, previewId),
+    cancelAddition: (tenantId) => invoke("services:cancelAddition", tenantId),
     status: (tenantId, clientId, refresh) => invoke("services:status", tenantId, clientId, refresh === true),
     setEnabled: (tenantId, clientId, id, enabled, confirmation) => invoke("services:setEnabled", tenantId, clientId, id, enabled, confirmation),
     setAccess: (tenantId, id, access) => invoke("services:setAccess", tenantId, id, access),
