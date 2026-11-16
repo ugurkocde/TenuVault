@@ -15,7 +15,7 @@ import { join } from "node:path"
 
 const DOMAIN = "com.tenuvault.desktop"
 const NAME = "DisableAutoUpdate"
-const run = (command, args) => spawnSync(command, args, { encoding: "utf8" })
+const run = (command, args) => spawnSync(command, args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })
 const failed = (result) => (result.error?.message || result.stderr || result.stdout || `exit ${result.status}`).trim()
 
 function macos() {
@@ -45,8 +45,17 @@ function windows() {
   const enabled = (hive) => /DisableAutoUpdate\s+REG_DWORD\s+0x0*1\b/i.test(run(reg, ["query", `${hive}\\SOFTWARE\\Policies\\TenuVault`, "/v", NAME]).stdout ?? "")
   if (enabled("HKLM") || enabled("HKCU")) return { restore() {} }
   const key = "HKCU\\SOFTWARE\\Policies\\TenuVault"
-  const keyExisted = run(reg, ["query", key]).status === 0
-  const valueExisted = keyExisted && run(reg, ["query", key, "/v", NAME]).status === 0
+  // Only reg's "unable to find" answer means absent; any other failure leaves the earlier state
+  // unknown, and then nothing is changed. /ve and /v keep the output to one value.
+  const exists = (args) => {
+    const result = run(reg, ["query", key, ...args])
+    if (result.status === 0) return true
+    if (result.status === 1 && /unable to find the specified registry key or value/i.test(result.stderr ?? "")) return false
+    return null
+  }
+  const keyExisted = exists(["/ve"])
+  const valueExisted = keyExisted ? exists(["/v", NAME]) : false
+  if (keyExisted === null || valueExisted === null) return { error: `could not read the ${NAME} policy under ${key}` }
   // reg export keeps the value's exact type and data, spaces and empty data included. Only the
   // DisableAutoUpdate entry is kept for the restore, so other values of the key are never touched.
   const folder = mkdtempSync(join(tmpdir(), "tenuvault-smoke-policy-"))
