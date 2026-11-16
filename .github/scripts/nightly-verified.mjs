@@ -32,11 +32,24 @@ export function runIdOf(status, repository) {
   return match ? Number(match[1]) : null
 }
 
+/**
+ * The workflow file of a run's `path`, or null when the path names another ref. GitHub may add
+ * the ref the workflow file was read from (`<file>@<ref>`); only main counts, as `@main` or
+ * `@refs/heads/main`, and a path without a ref is taken as it is.
+ */
+export function workflowFileOf(path) {
+  if (typeof path !== "string") return null
+  const at = path.indexOf("@")
+  if (at === -1) return path
+  const ref = path.slice(at + 1)
+  return ref === "main" || ref === "refs/heads/main" ? path.slice(0, at) : null
+}
+
 /** Why a run does not count as a verification from main, or null when it does. */
 export function runProblem(run, repository) {
   if (!run) return "the run could not be found"
   if (run.repository?.full_name !== repository) return `the run belongs to ${run.repository?.full_name ?? "another repository"}`
-  if (run.path !== WORKFLOW_PATH) return `the run is of ${run.path ?? "another workflow"}, not ${WORKFLOW_PATH}`
+  if (workflowFileOf(run.path) !== WORKFLOW_PATH) return `the run is of ${run.path ?? "another workflow"}, not ${WORKFLOW_PATH}`
   if (run.head_branch !== "main") return `the run is from ${run.head_branch ?? "an unknown branch"}, not main`
   if (!RUN_EVENTS.includes(run.event)) return `the run was started by ${run.event}, not by a Release run or by hand`
   return null

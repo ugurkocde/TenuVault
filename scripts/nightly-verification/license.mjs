@@ -23,6 +23,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { assert, checker, launch } from "./app.mjs"
+import { releaseLeftover as settleLeftover } from "./leftover.mjs"
 
 /** The verification tenant, not the canary tenant of scripts/license-canary.ts (c0a1...3f40). */
 export const VERIFY_TENANT = "c0a1b2c3-d4e5-4f60-8a71-9b0c1d2e3f50"
@@ -157,22 +158,20 @@ async function main() {
   }
 }
 
-/** Releases what an earlier, interrupted step may have left in the profile, then removes it. */
+/** Releases what an earlier, interrupted step may have left in the profile (leftover.mjs has the rules). */
 async function releaseLeftover() {
-  if (!existsSync(profile) || readdirSync(profile).length === 0) {
-    console.log("Nothing to release: the profile is empty.")
-    return
-  }
-  try {
-    await release(null)
-  } finally {
-    await app?.close().catch(() => {})
-    try {
-      rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 })
-    } catch (error) {
-      console.warn(`Could not remove the profile: ${error.message}`)
-    }
-  }
+  await settleLeftover({
+    empty: () => !existsSync(profile) || readdirSync(profile).length === 0,
+    release: () => release(null),
+    close: () => app?.close().catch(() => {}),
+    remove: () => {
+      try {
+        rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 })
+      } catch (error) {
+        console.warn(`Could not remove the profile: ${error.message}`)
+      }
+    },
+  })
 }
 
 /** Releases the activation, restarting the app with the same profile when it is gone. */

@@ -121,7 +121,8 @@ random installation ID per profile and keeps it in its encrypted store).
 - An activation is released by the check itself; if that step fails, times out or is
   cancelled, by the step "Release a leftover activation", which runs regardless and starts the
   app again with the kept profile (the app also releases the never connected tenant by itself
-  on that start).
+  on that start). When that release does not succeed either, the step keeps the profile and
+  fails, so the leftover shows in the run.
 - What none of these can release (a runner lost mid run, a profile the app can no longer read)
   stays on the verification tenant, never on the canary tenant. At most five such activations
   can exist; with five recent ones the next verification is refused with `install_limit`, fails
