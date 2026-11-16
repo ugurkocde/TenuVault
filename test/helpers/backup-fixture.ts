@@ -32,7 +32,7 @@ export function registerTestTypes(types: IntuneType[]): () => void {
   // Machinery tests use an isolated registry: the original services plus their test-only shapes.
   // Real Entra types have their own fixture and integration tests.
   const originals = [...INTUNE_TYPES]
-  for (const type of originals) if (moduleForFolder(type.folder)?.module.id === "entra") {
+  for (const type of originals) if (["entra", "defender"].includes(moduleForFolder(type.folder)!.module.id)) {
     INTUNE_TYPES.splice(INTUNE_TYPES.indexOf(type), 1)
     TYPE_BY_FOLDER.delete(type.folder.toLowerCase())
   }

@@ -1,0 +1,23 @@
+{
+  "folder": "DefenderIdentitySensorActivation",
+  "path": "security/identities/sensorCandidateActivationConfiguration",
+  "apiVersion": "v1.0",
+  "shape": "singleton",
+  "signIn": "both",
+  "objectCount": 0,
+  "verified": "2026-11-16",
+  "source": "Live app-only read through GraphSession and readObject",
+  "outcome": "skipped",
+  "cause": "license",
+  "responses": {
+    "/v1.0/security/identities/sensorCandidateActivationConfiguration": {
+      "status": 403,
+      "body": {
+        "error": {
+          "code": "Forbidden",
+          "message": "Tenant is not onboarded to Microsoft Defender for Identity. After license is purchased, first login to portal and sensor are required. For more info: https://tenant-4a6d1ad53d22.example.test/en-us/defender-for-identity/deploy/deploy-defender-identity"
+        }
+      }
+    }
+  }
+}

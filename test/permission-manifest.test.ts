@@ -86,12 +86,12 @@ describe("What a choice of services, areas and access levels asks for", () => {
     // Conditional Access writes also need Policy.Read.All, so restore asks for both.
     expect(graph({ conditionalAccess: { access: "restore" } })).toEqual(["Policy.Read.All", "Policy.ReadWrite.ConditionalAccess"])
     expect(graph({ defender: { access: "backup" } })).toEqual([
-      "CustomDetection.Read.All", "CaseManagement.Read.All", "AttackSimulation.Read.All", "ThreatSubmission.Read.All",
+      "CustomDetection.Read.All", "Workbooks.Read.All", "CaseManagement.Read.All", "AttackSimulation.Read.All", "ThreatSubmission.Read.All",
       "SecurityIdentitiesSensors.Read.All", "SecurityIdentitiesAutoConfig.Read.All", "SecurityEvents.Read.All", "RoleManagement.Read.Defender",
     ])
     // The write permission of the user reported settings also reads them, so its read permission is not asked for as well.
     expect(graph({ defender: { access: "restore" } })).toEqual([
-      "CustomDetection.ReadWrite.All", "CaseManagement.Read.All", "ThreatSubmissionPolicy.ReadWrite.All", "AttackSimulation.Read.All",
+      "CustomDetection.ReadWrite.All", "Workbooks.Read.All", "CaseManagement.Read.All", "ThreatSubmissionPolicy.ReadWrite.All", "AttackSimulation.Read.All",
       "SecurityIdentitiesSensors.ReadWrite.All", "SecurityIdentitiesAutoConfig.ReadWrite.All", "SecurityEvents.ReadWrite.All", "RoleManagement.ReadWrite.Defender",
     ])
     // Entra ID discovers group IDs for PIM, without enabling group object backups.

@@ -169,7 +169,7 @@ afterEach(() => vi.unstubAllGlobals())
 
 describe("the restore capability of every registry type", () => {
   it("follows the restore kind each type had: nothing gained or lost a capability", () => {
-    const capabilities = Object.fromEntries(INTUNE_TYPES.filter(type => moduleForFolder(type.folder)?.module.id !== "entra").map((type) => [type.folder, restoreCapability(type)]))
+    const capabilities = Object.fromEntries(INTUNE_TYPES.filter(type => ["intune", "conditionalAccess"].includes(moduleForFolder(type.folder)!.module.id)).map((type) => [type.folder, restoreCapability(type)]))
     expect(Object.keys(capabilities)).toEqual(RELEASE_FOLDERS)
     for (const [folder, capability] of Object.entries(capabilities)) {
       expect(capability, folder).toBe(folder === "CompliancePolicySettings" ? "singleton" : folder === "AppleAutomatedEnrollment" ? "metadata" : "create")

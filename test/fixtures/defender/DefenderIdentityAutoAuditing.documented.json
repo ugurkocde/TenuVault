@@ -1,0 +1,15 @@
+{
+  "folder": "DefenderIdentityAutoAuditing",
+  "source": "Synthetic documented shape; not a nonempty live read",
+  "outcome": "saved",
+  "objectCount": 1,
+  "responses": {
+    "/v1.0/security/identities/settings/autoAuditingConfiguration": {
+      "status": 200,
+      "body": {
+        "id": "example",
+        "isAutomatic": true
+      }
+    }
+  }
+}

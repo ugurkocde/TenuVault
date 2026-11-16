@@ -1,0 +1,55 @@
+{
+  "folder": "DefenderEmailSubmissionPolicies",
+  "path": "security/threatSubmission/emailThreatSubmissionPolicies",
+  "apiVersion": "beta",
+  "shape": "list",
+  "signIn": "both",
+  "objectCount": 1,
+  "verified": "2026-11-16",
+  "source": "Live app-only read through GraphSession and readObject",
+  "outcome": "saved",
+  "responses": {
+    "/beta/security/threatSubmission/emailThreatSubmissionPolicies": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "DefaultReportSubmissionPolicy",
+            "isReportToMicrosoftEnabled": true,
+            "isReportToCustomizedEmailAddressEnabled": true,
+            "isAskMeEnabledForUsers": false,
+            "isAlwaysReportEnabledForUsers": false,
+            "isNeverReportEnabledForUsers": false,
+            "isCustomizedMessageEnabledForPhishing": false,
+            "isCustomizedMessageEnabled": false,
+            "customizedReportRecipientEmailAddress": "user-e06b523be964@example.test",
+            "isReviewEmailNotificationEnabled": false,
+            "isCustomizedNotificationSenderEnabled": false,
+            "isOrganizationBrandingEnabled": false,
+            "customizedNotificationSenderEmailAddress": "",
+            "isReportFromQuarantineEnabled": true
+          }
+        ]
+      }
+    },
+    "/beta/security/threatSubmission/emailThreatSubmissionPolicies/DefaultReportSubmissionPolicy": {
+      "status": 200,
+      "body": {
+        "id": "DefaultReportSubmissionPolicy",
+        "isReportToMicrosoftEnabled": true,
+        "isReportToCustomizedEmailAddressEnabled": true,
+        "isAskMeEnabledForUsers": false,
+        "isAlwaysReportEnabledForUsers": false,
+        "isNeverReportEnabledForUsers": false,
+        "isCustomizedMessageEnabledForPhishing": false,
+        "isCustomizedMessageEnabled": false,
+        "customizedReportRecipientEmailAddress": "user-e06b523be964@example.test",
+        "isReviewEmailNotificationEnabled": false,
+        "isCustomizedNotificationSenderEnabled": false,
+        "isOrganizationBrandingEnabled": false,
+        "customizedNotificationSenderEmailAddress": "",
+        "isReportFromQuarantineEnabled": true
+      }
+    }
+  }
+}

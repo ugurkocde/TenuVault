@@ -106,20 +106,20 @@ describe("The services status reports switchable", () => {
   const status = () => servicesStatus(TENANT, new ModuleSettings(memoryStore()), async () => ({ accessToken: jwt("Policy.Read.All") }))
 
   it("tells the Settings card which services the admin can switch", async () => {
-    expect((await status()).modules.map((module) => [module.id, module.switchable])).toEqual([["intune", true], ["conditionalAccess", true], ["entra", true]])
+    expect((await status()).modules.map((module) => [module.id, module.switchable])).toEqual([["intune", true], ["conditionalAccess", true], ["entra", true], ["defender", true]])
     withFacts("intune", { switchable: false })
-    expect((await status()).modules.map((module) => [module.id, module.switchable])).toEqual([["intune", false], ["conditionalAccess", true], ["entra", true]])
+    expect((await status()).modules.map((module) => [module.id, module.switchable])).toEqual([["intune", false], ["conditionalAccess", true], ["entra", true], ["defender", true]])
   })
 
   it("does not follow the other two facts", async () => {
     withFacts("intune", { defaultOn: false, precheck: true })
     withFacts("conditionalAccess", { defaultOn: true, precheck: false })
-    expect((await status()).modules.map((module) => module.switchable)).toEqual([true, true, true])
+    expect((await status()).modules.map((module) => module.switchable)).toEqual([true, true, true, true])
   })
 
-  it("leaves out a service that has no types to back up yet, so it is never shown as ready", async () => {
+  it("reports all four services now that Defender has backup types", async () => {
     const answer = await status()
-    expect(answer.modules.map((module) => module.id)).toEqual(["intune", "conditionalAccess", "entra"])
+    expect(answer.modules.map((module) => module.id)).toEqual(["intune", "conditionalAccess", "entra", "defender"])
     expect(answer.modules.every((module) => module.check !== null)).toBe(true)
   })
 })

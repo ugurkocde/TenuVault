@@ -1,0 +1,48 @@
+{
+  "folder": "DefenderEmailSubmissionPolicies",
+  "source": "Synthetic documented shape; not a nonempty live read",
+  "outcome": "saved",
+  "objectCount": 1,
+  "responses": {
+    "/beta/security/threatSubmission/emailThreatSubmissionPolicies": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "example",
+            "isReportToCustomizedEmailAddressEnabled": true,
+            "customizedReportRecipientEmailAddress": "reporting@example.test",
+            "customizedNotificationSenderEmailAddress": "notifications@example.test",
+            "policyReviewers": [
+              {
+                "id": "00000000-0000-4000-8000-000000000001",
+                "displayName": "Example person",
+                "email": "person@example.test",
+                "userPrincipalName": "person@example.test",
+                "mail": "person@example.test"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "/beta/security/threatSubmission/emailThreatSubmissionPolicies/example": {
+      "status": 200,
+      "body": {
+        "id": "example",
+        "isReportToCustomizedEmailAddressEnabled": true,
+        "customizedReportRecipientEmailAddress": "reporting@example.test",
+        "customizedNotificationSenderEmailAddress": "notifications@example.test",
+        "policyReviewers": [
+          {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "displayName": "Example person",
+            "email": "person@example.test",
+            "userPrincipalName": "person@example.test",
+            "mail": "person@example.test"
+          }
+        ]
+      }
+    }
+  }
+}

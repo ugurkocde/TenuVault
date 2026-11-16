@@ -1,0 +1,15 @@
+{
+  "folder": "DefenderCloudScopes",
+  "source": "Diagnostic only; no permission proven; not covered",
+  "responses": {
+    "/beta/security/zones": {
+      "status": 403,
+      "body": {
+        "error": {
+          "code": "UnknownError",
+          "message": ""
+        }
+      }
+    }
+  }
+}

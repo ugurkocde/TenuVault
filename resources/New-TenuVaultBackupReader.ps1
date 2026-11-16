@@ -145,7 +145,7 @@ $permissionTable = @(
     @{ Service = 'Entra'; Area = 'Groups'; OptIn = $true; Roles = @('Group.Read.All', 'Directory.Read.All') }
     @{ Service = 'Entra'; Area = 'UsersAndDevices'; OptIn = $true; Roles = @('User.Read.All', 'Device.Read.All', 'OrgContact.Read.All') }
     @{ Service = 'Entra'; Area = 'Applications'; OptIn = $true; Roles = @('Application.Read.All', 'Synchronization.Read.All', 'Directory.Read.All') }
-    @{ Service = 'Defender'; Area = 'Detection'; OptIn = $false; Roles = @('CustomDetection.Read.All', 'CaseManagement.Read.All') }
+    @{ Service = 'Defender'; Area = 'Detection'; OptIn = $false; Roles = @('CustomDetection.Read.All', 'Workbooks.Read.All', 'CaseManagement.Read.All') }
     @{ Service = 'Defender'; Area = 'Email'; OptIn = $false; Roles = @('AttackSimulation.Read.All', 'ThreatSubmission.Read.All') }
     @{ Service = 'Defender'; Area = 'Identity'; OptIn = $false; Roles = @('SecurityIdentitiesSensors.Read.All', 'SecurityIdentitiesAutoConfig.Read.All') }
     @{ Service = 'Defender'; Area = 'Posture'; OptIn = $false; Roles = @('SecurityEvents.Read.All', 'RoleManagement.Read.Defender') }

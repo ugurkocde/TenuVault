@@ -1,0 +1,19 @@
+{
+  "folder": "DefenderRoleDefinitions",
+  "path": "roleManagement/defender/roleDefinitions",
+  "apiVersion": "beta",
+  "shape": "list",
+  "signIn": "both",
+  "objectCount": 0,
+  "verified": "2026-11-16",
+  "source": "Live app-only read through GraphSession and readObject",
+  "outcome": "saved",
+  "responses": {
+    "/beta/roleManagement/defender/roleDefinitions": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    }
+  }
+}

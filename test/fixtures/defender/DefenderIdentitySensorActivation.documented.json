@@ -1,0 +1,15 @@
+{
+  "folder": "DefenderIdentitySensorActivation",
+  "source": "Synthetic documented shape; not a nonempty live read",
+  "outcome": "saved",
+  "objectCount": 1,
+  "responses": {
+    "/v1.0/security/identities/sensorCandidateActivationConfiguration": {
+      "status": 200,
+      "body": {
+        "id": "example",
+        "activationMode": "automatic"
+      }
+    }
+  }
+}

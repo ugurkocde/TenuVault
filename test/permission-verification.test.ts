@@ -81,7 +81,7 @@ describe("The record of checked permissions", () => {
   })
 
   it("names the types of the research that stay out, and none of them has a folder", () => {
-    expect(record.leftOut.map((entry) => entry.folder)).toEqual(["ServicePrincipalCreationPolicies", "EntraUxSetting", "DirectoryRoleAccessReviewPolicy", "FeatureRolloutPolicies", "OnPremAuthenticationPolicies", "AppProxyConnectorGroups", "DefenderCloudScopes", "DefenderWorkbooks", "DefenderContentRepositories"])
+    expect(record.leftOut.map((entry) => entry.folder)).toEqual(["ServicePrincipalCreationPolicies", "EntraUxSetting", "DirectoryRoleAccessReviewPolicy", "FeatureRolloutPolicies", "OnPremAuthenticationPolicies", "AppProxyConnectorGroups", "DefenderCloudScopes", "DefenderContentRepositories"])
     const folders = new Set(MODULES.flatMap((module) => module.areas.flatMap((area) => area.folders)))
     for (const entry of record.leftOut) expect(folders.has(entry.folder), entry.folder).toBe(false)
   })

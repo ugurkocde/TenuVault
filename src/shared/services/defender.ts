@@ -4,12 +4,13 @@ import { area, part, type PermissionArea } from "./areas"
  * The areas of Defender with the Microsoft Graph permissions each folder needs, checked and recorded
  * like the Entra ID ones (see ./entra).
  *
- * Left out, because their read permissions are not in Microsoft's permissions reference: cloud
- * scopes, workbooks and content repositories.
+ * Cloud scopes and content repositories remain excluded until their read access is verified.
+ * Workbooks have a published read contract and a successful application read in the lab.
  */
 export const DEFENDER_AREAS: readonly PermissionArea[] = [
   area({ id: "detection", label: "Detection and response" }, [
     part(["DefenderCustomDetectionRules"], [["CustomDetection.Read.All", "CustomDetection.ReadWrite.All"]], [["CustomDetection.Read.All"]], [["CustomDetection.ReadWrite.All"]]),
+    part(["DefenderWorkbooks"], [["Workbooks.Read.All"]], [["Workbooks.Read.All"]], "unsupported"),
     // Not restored: Microsoft documents no write for case type configurations.
     part(["DefenderCaseTypeConfigurations"], [["CaseManagement.Read.All", "CaseManagement.ReadWrite.All"]], [["CaseManagement.Read.All"]], "unsupported"),
   ]),

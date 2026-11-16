@@ -1,0 +1,40 @@
+{
+  "folder": "DefenderIdentitySensors",
+  "source": "Synthetic documented shape; not a nonempty live read",
+  "outcome": "saved",
+  "objectCount": 1,
+  "responses": {
+    "/v1.0/security/identities/sensors": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "example",
+            "displayName": "Example sensor",
+            "settings": {
+              "isDelayedDeploymentEnabled": true
+            },
+            "healthStatus": "healthy",
+            "serviceStatus": "running",
+            "deploymentStatus": "updated",
+            "openHealthIssuesCount": 0
+          }
+        ]
+      }
+    },
+    "/v1.0/security/identities/sensors/example": {
+      "status": 200,
+      "body": {
+        "id": "example",
+        "displayName": "Example sensor",
+        "settings": {
+          "isDelayedDeploymentEnabled": true
+        },
+        "healthStatus": "healthy",
+        "serviceStatus": "running",
+        "deploymentStatus": "updated",
+        "openHealthIssuesCount": 0
+      }
+    }
+  }
+}

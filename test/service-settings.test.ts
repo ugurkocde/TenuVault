@@ -1,3 +1,5 @@
+import { DEFENDER_TYPES } from "../src/shared/intune/defender"
+import { recorded as defenderRecorded } from "./helpers/defender"
 import { ENTRA_TYPES, ENTRA_5B_TYPES, ENTRA_5C_TYPES } from "../src/shared/intune/entra"
 import { entraFixtureResponses } from "./helpers/entra-5a"
 import { detailPath, listPath, graphVersion } from "../src/shared/intune/read"
@@ -74,7 +76,9 @@ async function backup(settings: ModuleSettings, scope: BackupScope, tenantId = T
       const url = new URL(request.url)
       if (localAccountFromUrl(url)) return handleLocalBlobRequest(store, request)
       graphPaths.push(decodeURIComponent(url.pathname))
-      const answer = entraResponses[url.pathname + url.search]
+      const defenderType = DEFENDER_TYPES.find(type => url.pathname.startsWith(`/${type.apiVersion}/${type.path}`))
+      const defenderResponses = defenderType ? defenderRecorded(defenderType.folder, true).responses : {}
+      const answer = entraResponses[url.pathname + url.search] ?? Object.entries(defenderResponses).find(([path]) => decodeURIComponent(path) === decodeURIComponent(url.pathname + url.search))?.[1]
       return answer ? Response.json(answer.body, { status: answer.status, headers: answer.headers }) : Response.json({ value: [] })
     }) as typeof fetch,
     getToken: async () => jwt(MODULES.flatMap(module => module.areas.flatMap(area => area.parts.flatMap(part => part.backup.delegated === "unsupported" ? [] : part.backup.delegated.flat()))).join(" ")),
@@ -90,7 +94,7 @@ const intuneRead = (paths: string[]) => paths.filter((path) => path.startsWith("
 
 describe("The folders this test calls the 0.5 release", () => {
   it("are the registry's folders at the layer base, and the legacy list has not grown", () => {
-    expect([...INTUNE_FOLDERS, ...CONDITIONAL_ACCESS_FOLDERS]).toEqual(INTUNE_TYPES.filter(type => moduleForFolder(type.folder)?.module.id !== "entra").map((type) => type.folder))
+    expect([...INTUNE_FOLDERS, ...CONDITIONAL_ACCESS_FOLDERS]).toEqual(INTUNE_TYPES.filter(type => ["intune", "conditionalAccess"].includes(moduleForFolder(type.folder)!.module.id)).map((type) => type.folder))
     // Backups without a recorded type list covered exactly these 39 folders. A folder added here would count as covered by them.
     expect(LEGACY_FOLDERS).toEqual([
       "DeviceConfigurations", "ConfigurationPolicies", "GroupPolicyConfigurations", "ReusablePolicySettings", "HardwareConfigurations",
@@ -316,13 +320,14 @@ describe("Any combination of services for a tenant", () => {
       expect(job.status).toBe("Completed")
       expect(job.exception).toBeUndefined()
       expect(status).toBe("Success")
-      expect(included).toEqual([...(combination.includes("intune") ? INTUNE_FOLDERS : []), ...(combination.includes("conditionalAccess") ? CONDITIONAL_ACCESS_FOLDERS : []), ...(combination.includes("entra") ? ENTRA_TYPES.filter(type => type.area !== "Groups" && type.backupMode !== "application").map(type => type.folder) : [])])
+      expect(included).toEqual([...(combination.includes("intune") ? INTUNE_FOLDERS : []), ...(combination.includes("conditionalAccess") ? CONDITIONAL_ACCESS_FOLDERS : []), ...(combination.includes("entra") ? ENTRA_TYPES.filter(type => type.area !== "Groups" && type.backupMode !== "application").map(type => type.folder) : []), ...(combination.includes("defender") ? DEFENDER_TYPES.map(type => type.folder) : [])])
       if (!combination.includes("intune")) expect(intuneRead(graphPaths)).toEqual([])
       if (!combination.includes("conditionalAccess")) expect(graphPaths.filter((path) => path.includes("conditionalAccess") && !path.endsWith("authenticationContextClassReferences"))).toEqual([])
       // Every read is from a selected type or one of its recorded sub-resources.
       const expectedPaths = included.flatMap(folder => {
         const type = INTUNE_TYPES.find(type => type.folder === folder)!
         if (moduleForFolder(folder)?.module.id === "entra") return Object.keys(responsesFor(folder)).map(key => new URL(key, "https://graph.microsoft.com").pathname)
+        if (moduleForFolder(folder)?.module.id === "defender") return Object.keys(defenderRecorded(folder, true).responses).map(key => new URL(key, "https://graph.microsoft.com").pathname)
         return [`/beta/${type.path}`]
       })
       expect(new Set(graphPaths)).toEqual(new Set(expectedPaths))
@@ -340,12 +345,12 @@ describe("Any combination of services for a tenant", () => {
       for (const module of MODULES) settings.set(TENANT, module.id, combination.includes(module.id))
       const status = await servicesStatus(TENANT, settings, async () => ({ accessToken: jwt("Policy.Read.All") }))
       expect(status.error).toBeUndefined()
-      expect(status.modules.map((module) => [module.id, module.enabled])).toEqual([["intune", combination.includes("intune")], ["conditionalAccess", combination.includes("conditionalAccess")], ["entra", combination.includes("entra")]])
+      expect(status.modules.map((module) => [module.id, module.enabled])).toEqual([["intune", combination.includes("intune")], ["conditionalAccess", combination.includes("conditionalAccess")], ["entra", combination.includes("entra")], ["defender", combination.includes("defender")]])
       const off = disabledFolders(settings.selection(TENANT))
       // Every folder of a service that is off, and of an opt-in area nobody turned on.
       expect(off).toEqual(MODULES.flatMap((module) => module.areas.filter((area) => !combination.includes(module.id) || area.optIn).flatMap((area) => area.folders)))
       // Of the types this version backs up, that leaves out what it left out before Entra ID and Defender had folders.
-      const backedUp = new Set(INTUNE_TYPES.filter(type => moduleForFolder(type.folder)?.module.id !== "entra").map((type) => type.folder))
+      const backedUp = new Set(INTUNE_TYPES.filter(type => ["intune", "conditionalAccess"].includes(moduleForFolder(type.folder)!.module.id)).map((type) => type.folder))
       expect(off.filter((folder) => backedUp.has(folder))).toEqual([...(combination.includes("intune") ? [] : MODULES[0]!.areas.flatMap((area) => area.folders)), ...(combination.includes("conditionalAccess") ? [] : CONDITIONAL_ACCESS_FOLDERS)])
     })
   }

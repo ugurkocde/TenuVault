@@ -14,6 +14,10 @@
     "unconfirmed": "Neither listed nor shown live for this sign-in mode."
   },
   "permissions": {
+    "Workbooks.Read.All": {
+      "delegated": "e37141d2-4e2c-459d-8e5b-5214ae4af482",
+      "application": "d6559210-2a3e-46f8-90b3-e69ef5507772"
+    },
     "APIConnectors.Read.All": {
       "delegated": "1b6ff35f-31df-4332-8571-d31ea5a4893f",
       "application": "b86848a7-d5b1-41eb-a9b4-54a4e6306e97"
@@ -1855,6 +1859,43 @@
     {
       "service": "defender",
       "area": "detection",
+      "folders": [
+        "DefenderWorkbooks"
+      ],
+      "read": [
+        "GET /security/workbooks",
+        "GET /security/workbooks/{id}?$select=id,name,content"
+      ],
+      "write": [],
+      "live": "200 on 2026-11-16 with Workbooks.Read.All held; identifiers checked against Microsoft Graph service principal. No isolated least-privilege claim. Microsoft Learn security-workbook-get lists both modes.",
+      "backup": {
+        "delegated": [
+          {
+            "permission": "Workbooks.Read.All",
+            "asked": true,
+            "model": "listed on Microsoft Learn",
+            "index": "no entry",
+            "status": "confirmed"
+          }
+        ],
+        "application": [
+          {
+            "permission": "Workbooks.Read.All",
+            "asked": true,
+            "model": "listed on Microsoft Learn",
+            "index": "no entry",
+            "status": "confirmed"
+          }
+        ]
+      },
+      "restore": {
+        "delegated": "unsupported",
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "defender",
+      "area": "detection",
       "folders": ["DefenderCaseTypeConfigurations"],
       "read": ["GET /security/caseManagement/caseTypeConfigurations"],
       "write": [],
@@ -2053,13 +2094,7 @@
       "service": "defender",
       "folder": "DefenderCloudScopes",
       "path": "/security/zones",
-      "reason": "Its read permission Zone.Read.All is not in Microsoft's permissions reference."
-    },
-    {
-      "service": "defender",
-      "folder": "DefenderWorkbooks",
-      "path": "/security/workbooks",
-      "reason": "Its read permission Workbooks.Read.All is hidden and not in Microsoft's permissions reference."
+      "reason": "The lab lacks Zone.Read.All and returns empty-message 403. No successful permission verification was possible."
     },
     {
       "service": "defender",
