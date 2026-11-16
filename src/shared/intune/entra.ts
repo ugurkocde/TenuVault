@@ -90,11 +90,15 @@ export const ENTRA_5A_TYPES: IntuneType[] = [
 const external = (folder: string, label: string, path: string) => base(folder, label, path, "External identities")
 const roles = (folder: string, label: string, path: string) => ({ ...base(folder, label, path, "Roles and PIM"), headers: { "Accept-Language": "en-US" } })
 const directoryScope = "scopeId eq '/' and scopeType eq 'DirectoryRole'"
+// Bound group fan-out so large or throttled tenants leave time to save other services.
+export const PIM_GROUP_READ_BUDGET_MS = 120_000
+export const PIM_GROUP_SCHEDULE_REQUEST_LIMIT = 500
+const selfServiceUnavailable = [{ status: 400, code: "AADB2C99039", message: "The feature self service sign up is not enabled for the tenant" }]
 const groupSchedules = (folder: string, label: string, collection: string): IntuneType => ({
   ...roles(folder, label, `identityGovernance/privilegedAccess/group/${collection}`),
   listOnly: true,
   headers: { "Accept-Language": "en-US", "ConsistencyLevel": "eventual" },
-  listSource: { path: "groups?$select=id&$top=999&$count=true&$filter=" + encodeURIComponent("(securityEnabled eq true or groupTypes/any(c:c eq 'Unified')) and onPremisesSyncEnabled ne true and not groupTypes/any(c:c eq 'DynamicMembership')"), filter: id => `groupId eq '${id.replaceAll("'", "''")}'` },
+  listSource: { budget: { durationMs: PIM_GROUP_READ_BUDGET_MS, maxRequests: PIM_GROUP_SCHEDULE_REQUEST_LIMIT }, path: "groups?$select=id&$top=999&$count=true&$filter=" + encodeURIComponent("(securityEnabled eq true or groupTypes/any(c:c eq 'Unified')) and onPremisesSyncEnabled ne true and not groupTypes/any(c:c eq 'DynamicMembership')"), filter: id => `groupId eq '${id.replaceAll("'", "''")}'` },
 })
 
 export const ENTRA_5B_TYPES: IntuneType[] = [
@@ -113,20 +117,21 @@ export const ENTRA_5B_TYPES: IntuneType[] = [
   { ...external("B2bManagementPolicies", "B2B management policies", "policies/b2bManagementPolicies"), apiVersion: "beta" },
   { ...external("IdentityProviders", "Identity providers", "identity/identityProviders"), listOnly: true },
   {
-    ...external("UserFlows", "User flows", "identity/b2xUserFlows"),
+    ...external("UserFlows", "User flows", "identity/b2xUserFlows"), unorderedCollections: { userAttributeAssignments: "id", languages: "id" },
     extras: [
       { property: "identityProviders", path: id => `identity/b2xUserFlows/${id}/identityProviders?$select=id`, ids: true },
       ...["userAttributeAssignments", "languages"].map(property => ({ property, path: (id: string) => `identity/b2xUserFlows/${id}/${property}` })),
     ],
   },
-  external("UserFlowAttributes", "User flow attributes", "identity/userFlowAttributes"),
-  external("AuthenticationEventsFlows", "Authentication events flows", "identity/authenticationEventsFlows"),
+  { ...external("UserFlowAttributes", "User flow attributes", "identity/userFlowAttributes"), unavailable: selfServiceUnavailable },
+  { ...external("AuthenticationEventsFlows", "Authentication events flows", "identity/authenticationEventsFlows"), unavailable: [{ status: 403, code: "AADB2C", message: "requires feature: 'EnableMsGraphAuthenticationEventListener'" }] },
   external("AuthenticationEventListeners", "Authentication event listeners", "identity/authenticationEventListeners"),
   external("CustomAuthenticationExtensions", "Custom authentication extensions", "identity/customAuthenticationExtensions"),
   // No delegated call has established APIConnectors.Read.All. Keep this type app-only.
-  { ...external("ApiConnectors", "API connectors", "identity/apiConnectors"), backupMode: "application", neverStoredKeys: [...neverStored, "authenticationConfiguration", "certificate", "certificateData"] },
+  { ...external("ApiConnectors", "API connectors", "identity/apiConnectors"), backupMode: "application", unavailable: selfServiceUnavailable, neverStoredKeys: [...neverStored, "authenticationConfiguration", "certificate", "certificateData"] },
   {
     ...singleton("MultiTenantOrganization", "Multitenant organization", "tenantRelationships/multiTenantOrganization", "External identities"),
+    unorderedCollections: { tenants: "tenantId" },
     extras: [{ property: "tenants", path: () => "tenantRelationships/multiTenantOrganization/tenants" }],
     neverStored: ["tenants.displayName"],
   },
@@ -136,7 +141,7 @@ export const ENTRA_5B_TYPES: IntuneType[] = [
   roles("RoleAssignmentSchedules", "Role assignment schedules", "roleManagement/directory/roleAssignmentSchedules"),
   {
     ...roles("RoleManagementPolicies", "Role management policies", "policies/roleManagementPolicies"), filter: directoryScope,
-    expand: "rules",
+    expand: "rules", unorderedCollections: { rules: "id" },
   },
   { ...roles("RoleManagementPolicyAssignments", "Role management policy assignments", "policies/roleManagementPolicyAssignments"), filter: directoryScope, listOnly: true },
   groupSchedules("PimGroupEligibilitySchedules", "PIM group eligibility schedules", "eligibilitySchedules"),
@@ -152,7 +157,7 @@ export const ENTRA_5B_TYPES: IntuneType[] = [
   },
   roles("AttributeSets", "Attribute sets", "directory/attributeSets"),
   {
-    ...roles("CustomSecurityAttributeDefinitions", "Custom security attribute definitions", "directory/customSecurityAttributeDefinitions"),
+    ...roles("CustomSecurityAttributeDefinitions", "Custom security attribute definitions", "directory/customSecurityAttributeDefinitions"), unorderedCollections: { allowedValues: "id" },
     extras: [{ property: "allowedValues", path: id => `directory/customSecurityAttributeDefinitions/${id}/allowedValues` }],
   },
 ]

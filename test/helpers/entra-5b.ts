@@ -10,10 +10,12 @@ import { classifyAnswer } from "../../src/shared/backup-outcomes"
 export type { ReadFixture } from "./entra-5a"
 
 /** Uses the production list and object readers, at the engine's normal concurrency. */
-export async function readEntraType(type: IntuneType, graph: GraphReader) {
+export async function readEntraType(type: IntuneType, graph: GraphReader, discover?: (path: string) => Promise<Item[]>) {
   const objects: Item[] = []
+  let listing = true
   try {
-    const entries = await readEntries(type, graph)
+    const entries = await readEntries(type, graph, discover)
+    listing = false
     for (let offset = 0; offset < entries.length; offset += 8) {
       const answers = await Promise.allSettled(entries.slice(offset, offset + 8).map(async item => {
         const object = type.listOnly ? listSnapshot(type, item) : await readObject(type, String(item.id), graph)
@@ -26,7 +28,7 @@ export async function readEntraType(type: IntuneType, graph: GraphReader) {
   } catch (caught) {
     const error = caught instanceof ScopeDiscoveryError ? caught.cause : caught
     if (!(error instanceof GraphError)) throw error
-    return { ...classifyAnswer({ status: error.status, ...error.answer }, { mode: "app-only" }), objects }
+    return { ...classifyAnswer({ status: error.status, ...error.answer }, { mode: "app-only", ...(listing && !(caught instanceof ScopeDiscoveryError) ? { unavailable: type.unavailable } : {}) }), objects }
   }
 }
 

@@ -20,7 +20,14 @@ export interface GraphSessionOptions {
   isolated?: boolean
 }
 
-export interface ListOptions {
+export interface ReadControl {
+  /** A type budget can stop its requests without stopping the service or the run. */
+  signal?: AbortSignal
+  /** Counts actual GET attempts, including retries and continuation pages. */
+  beforeRequest?: () => void
+}
+
+export interface ListOptions extends ReadControl {
   /** Headers of the type the list belongs to, sent with every page. */
   headers?: Readonly<Record<string, string>>
   /** The type's mandatory $filter. A continuation link that left it out gets it back; one with another filter is refused. */
@@ -80,7 +87,7 @@ export class GraphSession {
       seen.add(next)
       // Appended as text: rewriting the query would re-encode the paging token Graph issued.
       const request: string = required !== undefined && !filters.length ? `${next}${parsed.search ? "&" : "?"}$filter=${encodeURIComponent(required!)}` : next
-      const page: { value?: GraphItem[]; "@odata.nextLink"?: string } = await this.get(request, options.headers)
+      const page: { value?: GraphItem[]; "@odata.nextLink"?: string } = await this.get(request, options.headers, options)
       if (!Array.isArray(page.value)) throw new Error("Graph returned an invalid policy collection")
       items.push(...page.value)
       next = page["@odata.nextLink"]
@@ -89,14 +96,15 @@ export class GraphSession {
   }
 
   /** GET with bounded retries for throttling, transient status codes and network failures. */
-  async get<T = Record<string, unknown>>(url: string, headers?: Readonly<Record<string, string>>): Promise<T> {
+  async get<T = Record<string, unknown>>(url: string, headers?: Readonly<Record<string, string>>, control: ReadControl = {}): Promise<T> {
+    const signal = control.signal ? AbortSignal.any([this.network.signal, control.signal]) : this.network.signal
     // Set when the request is asked once more with a new token (see the 401 below).
     let confirming = false
     let fresh: string | undefined
     for (let attempt = 0; ; attempt++) {
-      this.network.signal.throwIfAborted()
+      signal.throwIfAborted()
       if (this.stopped) throw this.stopped
-      while (this.resumeAt > Date.now() && !this.throttleError) await sleep(this.resumeAt - Date.now(), this.network.signal)
+      while (this.resumeAt > Date.now() && !this.throttleError) await sleep(this.resumeAt - Date.now(), signal)
       if (this.throttleError) throw this.throttleError
       let response: Response | undefined
       let attempted = false
@@ -106,6 +114,7 @@ export class GraphSession {
           signal.throwIfAborted()
           if (this.throttleError) throw this.throttleError
           if (this.resumeAt > Date.now()) throw new GraphPauseError()
+          control.beforeRequest?.()
           attempted = true
           // The sign-in comes last, so no type can replace it.
           response = await this.fetchImpl(url, { signal, headers: { ...headers, Authorization: `Bearer ${token}` } })
@@ -116,9 +125,9 @@ export class GraphSession {
             return result
           }
           throw await graphFailure(response)
-        }, this.network.signal)
+        }, signal)
       } catch (error) {
-        this.network.signal.throwIfAborted()
+        signal.throwIfAborted()
         const unanswered = (attempted || error instanceof RequestTimeoutError) && requestFailure(error) === "network"
         if (unanswered) this.notAnswered(error)
         // A refusal is an answer too: the endpoint was reached, so the service's streak of unanswered requests is over.
@@ -154,7 +163,7 @@ export class GraphSession {
           if (this.options.isolated && unanswered) throw new GraphUnansweredError(error instanceof Error ? error.message : String(error), { cause: error })
           throw error
         }
-        await sleep(delay, this.network.signal)
+        await sleep(delay, signal)
       }
     }
   }

@@ -35,12 +35,12 @@ export class ScopeDiscoveryError extends Error {
 }
 
 /** Lists the actual scopes before reading filtered collections; no unread scope becomes empty coverage. */
-export async function readEntries(type: IntuneType, graph: GraphReader): Promise<Item[]> {
+export async function readEntries(type: IntuneType, graph: GraphReader, discover: (path: string) => Promise<Item[]> = graph.list): Promise<Item[]> {
   if (type.singleton) return [{ ...await graph.get(detailPath(type, type.singleton.id)), id: type.singleton.id }]
   if (type.staticIds) return type.staticIds.map(id => ({ id }))
   let entries: Item[]
   if (type.listSource) {
-    const scopes = await graph.list(type.listSource.path).catch(error => { throw new ScopeDiscoveryError(error) })
+    const scopes = await discover(type.listSource.path).catch(error => { throw new ScopeDiscoveryError(error) })
     entries = []
     for (const scope of scopes) {
       if (typeof scope.id !== "string" || !scope.id) throw new Error("Microsoft Graph returned a scope without an ID")
@@ -150,7 +150,7 @@ export async function readObject(type: IntuneType, id: string, graph: GraphReade
     secret.apply(plain.value)
   }
   delete detail["@odata.context"]
-  const snapshot = withoutNeverStored(type, type.singleton ? singletonSnapshot(type, detail) : detail)
+  const snapshot = orderedSnapshot(type, withoutNeverStored(type, type.singleton ? singletonSnapshot(type, detail) : detail))
   if (type.maxSnapshotBytes && new TextEncoder().encode(JSON.stringify(snapshot, null, 2)).byteLength > type.maxSnapshotBytes) throw new Error(`The ${type.label} JSON exceeds the ${type.maxSnapshotBytes} byte limit`)
   return snapshot
 }
@@ -163,7 +163,22 @@ export function listSnapshot(type: IntuneType, item: Item): Item {
   // Removing nested properties must not change the list entry itself.
   const copy = type.neverStored?.length || type.neverStoredKeys?.length ? structuredClone(item) : { ...item }
   delete copy["@odata.context"]
-  return withoutNeverStored(type, type.keep ? keptSnapshot(type.keep, copy) : copy)
+  return orderedSnapshot(type, withoutNeverStored(type, type.keep ? keptSnapshot(type.keep, copy) : copy))
+}
+
+/** Sort only collections the type declares unordered; ordered settings keep their response order. */
+function orderedSnapshot(type: IntuneType, snapshot: Item): Item {
+  for (const [property, key] of Object.entries(type.unorderedCollections ?? {})) {
+    const entries = snapshot[property]
+    if (entries === undefined || entries === null) continue
+    if (!Array.isArray(entries) || entries.some(entry => !entry || typeof entry !== "object" || Array.isArray(entry) || typeof entry[key] !== "string" || !entry[key])) throw new Error(`Microsoft Graph returned an entry without ${key} in ${property}`)
+    snapshot[property] = [...entries].sort((a, b) => {
+      const left = (a as Item)[key] as string
+      const right = (b as Item)[key] as string
+      return left < right ? -1 : left > right ? 1 : 0
+    })
+  }
+  return snapshot
 }
 
 /** The IDs of a collection's entries, each once and in a fixed order, so two reads of the same set compare equal. */

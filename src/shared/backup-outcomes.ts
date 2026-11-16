@@ -16,9 +16,10 @@ import type { ModuleId } from "./services/modules"
  * - permission: the app registration or the Backup Reader lacks the permission or its admin consent.
  * - role: the permission is granted, but the signed-in account has no role that may read the type.
  * - license: the tenant has no license for the product, or never set it up (not onboarded).
+ * - appOnly: the type needs the Backup Reader and cannot be read by a signed-in admin.
  * - signedIn: Microsoft Graph lets only a signed-in admin read the type, and the run had none.
  */
-export type SkipCause = "permission" | "role" | "license" | "signedIn"
+export type SkipCause = "permission" | "role" | "license" | "signedIn" | "appOnly"
 
 interface OutcomeOf<Kind extends string> {
   folder: string
@@ -120,6 +121,8 @@ export type Verdict = { outcome: "notConfigured" } | { outcome: "skipped"; cause
 export interface AnswerContext {
   /** The type's own answers that mean it was never set up. */
   notConfigured?: readonly AnswerPattern[]
+  /** Availability answers declared for the type's own list request only. */
+  unavailable?: readonly AnswerPattern[]
   /** Whether the sign-in's token holds the permission the type needs; undefined when the token could not be read. */
   held?: boolean
   mode: "delegated" | "app-only"
@@ -133,7 +136,7 @@ const matches = (pattern: AnswerPattern, answer: RefusedAnswer) =>
 /** Microsoft names the permissions a request lacks in several wordings. */
 const NAMES_PERMISSION = /required (application )?(roles|permissions|scopes)|missing application roles|missing permission scope|PermissionScopeNotGranted/i
 /** A product the tenant has no license for, or never set up. */
-const NOT_AVAILABLE = /licen[cs]e|not onboarded|is not active|requires feature|not provisioned|feature .+ is not enabled/i
+const NOT_AVAILABLE = /licen[cs]e|not onboarded|is not active|not provisioned/i
 /** The sign-in itself was refused, which no permission fixes. */
 const TOKEN_REFUSED = /InvalidAuthenticationToken|token (has |is )?expired|token validation/i
 
@@ -154,6 +157,7 @@ export function signInRefused(answer: RefusedAnswer): boolean {
  */
 export function classifyAnswer(answer: RefusedAnswer, context: AnswerContext): Verdict {
   if (context.notConfigured?.some((pattern) => matches(pattern, answer))) return { outcome: "notConfigured" }
+  if (context.unavailable?.some((pattern) => matches(pattern, answer))) return { outcome: "skipped", cause: "license" }
   const said = `${answer.code ?? ""} ${answer.message ?? ""}`
   if (answer.status === 401) {
     if (/app-only/i.test(said)) return { outcome: "skipped", cause: "signedIn" }
@@ -187,7 +191,7 @@ export interface ReasonContext {
 }
 
 /** In the order a tie is settled: the cause an admin can fix first. */
-const CAUSES: readonly SkipCause[] = ["permission", "role", "license", "signedIn"]
+const CAUSES: readonly SkipCause[] = ["permission", "role", "license", "signedIn", "appOnly"]
 
 /**
  * What a run says when every selected type was left out, so it read nothing: that, and the cause
@@ -202,6 +206,7 @@ export function nothingReadReason(types: readonly TypeOutcome[], context: Pick<R
     role: "your account may have no role that can read it",
     license: "the tenant has no license for the product or never set it up",
     signedIn: "only a signed-in admin can read it",
+    appOnly: "it needs the Backup Reader; a signed-in admin cannot read it",
   }[main]
   const leftOut = types.length === 1 ? "The selected type was left out" : `Every selected type was left out${count(main) === types.length ? "" : ", most of them"}`
   return `Nothing could be read. ${leftOut} because ${because}.${main === "permission" ? ` ${context.settingsPage} in Settings shows what is missing.` : ""}`
@@ -211,6 +216,8 @@ export function nothingReadReason(types: readonly TypeOutcome[], context: Pick<R
 export function skipReason(cause: SkipCause, context: ReasonContext, message?: string): string {
   const who = context.mode === "app-only" ? "Backup Reader" : "TenuVault app registration"
   switch (cause) {
+    case "appOnly":
+      return "This type needs the Backup Reader; a signed-in admin cannot read it."
     case "signedIn":
       return "Microsoft Graph lets only a signed-in admin read this type, so the Backup Reader leaves it out. Manual backups include it."
     case "license":

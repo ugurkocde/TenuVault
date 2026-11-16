@@ -138,7 +138,7 @@ export interface IntuneType {
   /** Fixed child entities of a container without a list endpoint. Each is read before saving. */
   staticIds?: readonly string[]
   /** Discover scope IDs, then list this collection once per scope. A refused discovery fails the type. */
-  listSource?: { path: string; filter: (id: string) => string }
+  listSource?: { path: string; filter: (id: string) => string; budget?: { durationMs: number; maxRequests: number } }
   /** Graph uses this key instead of id for partners. The stored identity is still id. */
   idKey?: "tenantId"
   /** A mode not supported by the type, even when the service offers that mode. */
@@ -153,6 +153,10 @@ export interface IntuneType {
    * tenant-wide policy nobody configured. The backup records the type as not configured, not as a failure.
    */
   notConfigured?: readonly AnswerPattern[]
+  /** Recorded availability refusals of this type's own list, never discovery or detail reads. */
+  unavailable?: readonly AnswerPattern[]
+  /** Unordered configuration collections, sorted by stable ID after all pages and sub-reads. */
+  unorderedCollections?: Readonly<Record<string, "id" | "tenantId">>
   /**
    * Properties that are never stored: values that change on their own, or that must not leave the
    * tenant. They are removed before a snapshot is written or fingerprinted. A dotted path reaches into

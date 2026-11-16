@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { graphAnswer, graphFailure } from "../src/main/backup/request"
 import { classifyAnswer, coverageOf, manifestCoverage, manifestOutcomes, nothingRead, nothingReadReason, signInRefused, skipReason, type SkipCause, type TypeOutcome } from "../src/shared/backup-outcomes"
+import { ENTRA_5B_TYPES } from "../src/shared/intune/entra"
 import { GRAPH_ANSWERS, NOT_CONFIGURED_ANSWERS } from "./fixtures/graph-answers"
 
 const verdict = (expected: string) => (expected === "failed" ? { outcome: "failed" } : { outcome: "skipped", cause: expected })
@@ -9,11 +10,12 @@ describe("what a refused Microsoft Graph read means for its type", () => {
   it.each(GRAPH_ANSWERS)("$name ($status, $source)", (fixture) => {
     const answer = { status: fixture.status, ...graphAnswer(fixture.body) }
     expect(graphAnswer(fixture.body)).toEqual(fixture.answer)
-    expect(classifyAnswer(answer, { held: true, mode: "delegated" })).toEqual(verdict(fixture.expect.delegatedHeld))
+    const unavailable = fixture.endpoint === "v1.0/identity/authenticationEventsFlows" ? ENTRA_5B_TYPES.find(type => type.folder === "AuthenticationEventsFlows")!.unavailable : undefined
+    expect(classifyAnswer(answer, { unavailable, held: true, mode: "delegated" })).toEqual(verdict(fixture.expect.delegatedHeld))
     // The Backup Reader has no role to lack, and a token that could not be read proves no permission.
-    expect(classifyAnswer(answer, { held: true, mode: "app-only" })).toEqual(verdict(fixture.expect.otherwise))
-    expect(classifyAnswer(answer, { held: false, mode: "delegated" })).toEqual(verdict(fixture.expect.otherwise))
-    expect(classifyAnswer(answer, { mode: "delegated" })).toEqual(verdict(fixture.expect.otherwise))
+    expect(classifyAnswer(answer, { unavailable, held: true, mode: "app-only" })).toEqual(verdict(fixture.expect.otherwise))
+    expect(classifyAnswer(answer, { unavailable, held: false, mode: "delegated" })).toEqual(verdict(fixture.expect.otherwise))
+    expect(classifyAnswer(answer, { unavailable, mode: "delegated" })).toEqual(verdict(fixture.expect.otherwise))
   })
 
   it.each(NOT_CONFIGURED_ANSWERS)("$name is not configured only for the type that declares it", (fixture) => {
@@ -121,6 +123,7 @@ describe("a backup that read nothing", () => {
     ["permission", "Nothing could be read. Every selected type was left out because the TenuVault app registration may lack the permission or its admin consent. Services and permissions in Settings shows what is missing."],
     ["role", "Nothing could be read. Every selected type was left out because your account may have no role that can read it."],
     ["license", "Nothing could be read. Every selected type was left out because the tenant has no license for the product or never set it up."],
+    ["appOnly", "Nothing could be read. Every selected type was left out because it needs the Backup Reader; a signed-in admin cannot read it."],
     ["signedIn", "Nothing could be read. Every selected type was left out because only a signed-in admin can read it."],
   ])("says so and names the cause %s when every type shares it", (cause, expected) => {
     expect(nothingReadReason([leftOut(cause), leftOut(cause)], context)).toBe(expected)

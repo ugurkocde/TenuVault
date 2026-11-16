@@ -5,7 +5,8 @@ import { createHash, randomUUID } from "node:crypto"
 import { BACKUP_CANCELLED_MESSAGE, BACKUP_OWNER_FILE } from "../../shared/constants"
 import { resolveBackupOwnership, type OwnershipFile } from "../../shared/backup-ownership"
 import { BlobWriter } from "./blob-writer"
-import { GraphSession, type GraphItem } from "./graph-session"
+import { GraphSession, type GraphItem, type ReadControl } from "./graph-session"
+import { withReadBudget } from "./read-budget"
 import { GRAPH, BlobClaimError, GraphError, GraphUnansweredError, InventoryDamagedError, ProtectedBlobError, RequestTimeoutError, StorageError, TokenError, isUnreachable } from "./request"
 import { RetryDelayError } from "../graph-retry"
 import { isLocalAccount } from "../storage/blob-emulator"
@@ -570,12 +571,12 @@ export class BackupEngine {
     for (const type of unpermitted) {
       const entry = moduleForFolder(type.folder)!
       const needed = entry.part.backup[granted?.kind ?? signIn]
-      const reason = applicationOnly(type) ? "This type is available only to the Backup Reader. Its delegated read permission has not been verified." : needed === "unsupported"
+      const reason = applicationOnly(type) ? skipReason("appOnly", { service: entry.module.label, mode: tokens.mode, settingsPage: SERVICES_PAGE }) : needed === "unsupported"
         // No permission lets this sign-in read the type, so there is nothing to add.
         ? skipReason("signedIn", { service: entry.module.label, mode: tokens.mode, settingsPage: SERVICES_PAGE })
         : `The ${tokens.mode === "app-only" ? "Backup Reader" : "TenuVault app registration"} has no ${describeRequirement(needed, granted?.permissions)} permission for ${entry.module.label}. ${SERVICES_PAGE} in Settings shows how to add it.`
       Object.assign(result(type.folder), { state: "skipped", reason })
-      settle(type.folder, { outcome: "skipped", cause: needed === "unsupported" ? "signedIn" : "permission", reason })
+      settle(type.folder, { outcome: "skipped", cause: applicationOnly(type) ? "appOnly" : needed === "unsupported" ? "signedIn" : "permission", reason })
       this.write(job, `Leaving out ${type.label}: ${reason.charAt(0).toLowerCase()}${reason.slice(1)}`)
     }
     // A service that is normally on but was turned off for the tenant is named, so a smaller or empty backup explains itself.
@@ -607,12 +608,12 @@ export class BackupEngine {
       if (!session) sessions.set(id, (session = new GraphSession(fetchImpl, graphToken, network, { service: id, isolated: module?.isolated })))
       return { id, module, isolated: module?.isolated === true, session }
     }
-    const readerOf = (type: IntuneType): GraphReader => {
+    const readerOf = (type: IntuneType, control: ReadControl = {}): GraphReader => {
       const { session } = serviceOf(type)
       const version = graphVersion(type)
       return organizationReader({
-        get: (path: string) => session.get<Item>(graphUrl(version, path, type.additionalReadVersions), type.headers),
-        list: (path: string) => session.list(graphUrl(version, path, type.additionalReadVersions), { headers: type.headers, ...(path === listPath(type) ? { filter: type.filter } : {}) }) as Promise<Item[]>,
+        get: (path: string) => session.get<Item>(graphUrl(version, path, type.additionalReadVersions), type.headers, control),
+        list: (path: string) => session.list(graphUrl(version, path, type.additionalReadVersions), { ...control, headers: type.headers, ...(path === listPath(type) ? { filter: type.filter } : {}) }) as Promise<Item[]>,
       })
     }
 
@@ -645,12 +646,12 @@ export class BackupEngine {
      * may not read it, or it could not be read. The backup goes on with the other types. A read that
      * fails after an earlier one ended the type changes nothing.
      */
-    const endType = (type: IntuneType, error: unknown): void => {
+    const endType = (type: IntuneType, error: unknown, ownList = false): void => {
       if (endedTypes.has(type.folder)) return
       endedTypes.add(type.folder)
       const { module } = serviceOf(type)
       const answer = error instanceof GraphError ? { status: error.status, ...error.answer } : null
-      const verdict = answer ? classifyAnswer(answer, { held: granted ? canBackUp(type.folder, granted) : undefined, mode: tokens.mode }) : { outcome: "failed" as const }
+      const verdict = answer ? classifyAnswer(answer, { held: granted ? canBackUp(type.folder, granted) : undefined, mode: tokens.mode, ...(ownList ? { unavailable: type.unavailable } : {}) }) : { outcome: "failed" as const }
       const evidence = answer ? { status: answer.status, ...(answer.code ? { code: answer.code } : {}) } : {}
       const entry = result(type.folder)
       if (verdict.outcome === "skipped") {
@@ -669,12 +670,27 @@ export class BackupEngine {
       settle(type.folder, { outcome: "failed", error: reason, ...evidence })
       this.write(job, `Could not read ${type.label}: ${reason}`)
     }
+    const discoveries = new Map<string, Promise<Item[]>>()
     await pool(types.map((type, index) => ({ type, index })), concurrency, async ({ type, index }) => {
       const service = serviceOf(type)
       try {
         // A tenant-wide object has no list; reading it here skips the type on a denied read, like a denied list.
         const reader = readerOf(type)
-        const all = (await readEntries(type, reader)) as GraphItem[]
+        const source = type.listSource
+        const budget = source?.budget
+        const discover = source ? (path: string) => {
+          // One discovery per run, with its own lifetime so ending one type cannot cancel another.
+          const key = `${graphVersion(type)}/${path}`
+          let scopes = discoveries.get(key)
+          if (!scopes) {
+            scopes = budget ? withReadBudget(network.signal, budget.durationMs, Infinity, control => readerOf(type, control).list(path)) : reader.list(path)
+            discoveries.set(key, scopes)
+          }
+          return scopes
+        } : undefined
+        const all = (budget
+          ? await withReadBudget(network.signal, budget.durationMs, budget.maxRequests, control => readEntries(type, readerOf(type, control), discover))
+          : await readEntries(type, reader, discover)) as GraphItem[]
         const filtered = all.filter((item) => !type.skip?.(item as never))
         // A list that repeats an ID (an item seen on two pages) keeps only its first copy:
         // saving both would inflate the counts past the per-ID manifest inventory.
@@ -704,7 +720,7 @@ export class BackupEngine {
         }
         // A sign-in that failed fails every read of the run, and a run that was stopped is over: both still end the backup.
         if (service.isolated && !signInEnded(error) && !network.signal.aborted) {
-          endType(type, error)
+          endType(type, error, !resolverFailed)
           return
         }
         if (service.isolated) {
