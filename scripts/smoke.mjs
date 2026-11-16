@@ -48,7 +48,10 @@ delete env.ELECTRON_RUN_AS_NODE
 // A packaged build would check for updates like an installed app; the suite switches the update
 // channel, so a release could download and, on macOS, replace the app under test when it quits.
 const updatePolicy = packagedApp ? disableAutoUpdate() : null
-if (updatePolicy?.error) console.warn(`Could not turn automatic updates off for this run: ${updatePolicy.error}`)
+if (updatePolicy?.error) {
+  console.error(`Could not turn automatic updates off for this run, so the packaged app is not started: ${updatePolicy.error}`)
+  process.exit(1)
+}
 process.on("exit", () => updatePolicy?.restore())
 const app = spawn(packagedApp ?? electronPath, args, { stdio: ["ignore", "pipe", "pipe"], env })
 // An interrupted run still puts the update policy back (the exit handler above).
