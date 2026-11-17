@@ -1,3 +1,4 @@
+import { graphContinuation } from "../../../shared/graph-continuation"
 import { approvalSignal, approvalMessage, type ApprovalSignal } from "../../../shared/intune/approval"
 import { restoreApprovals, saveRestoreApproval, removeRestoreApproval, type RestoreApproval, type ApprovalStep } from "../../../main/storage/restore-approvals"
 import { parseDependencyMappings } from "../../../shared/intune/recovery"
@@ -793,11 +794,9 @@ function liveReader(graph: GraphCall, type: IntuneType): GraphReader {
       let next: string | undefined = start
       const seen = new Set<string>()
       while (next) {
-        if (seen.has(next)) throw new Error("Microsoft Graph returned a repeated continuation link")
         if (seen.size >= MAX_LIST_PAGES) throw new Error(`Microsoft Graph listing did not finish after ${MAX_LIST_PAGES} pages`)
-        seen.add(next)
-        if (/^https?:/i.test(next) && !next.startsWith(root)) throw new Error("Invalid Graph continuation link")
-        const page = await reader.get(next.startsWith(root) ? next.slice(root.length) : next)
+        const request = graphContinuation(new URL(start, root).href, new URL(next, root).href, seen, type.filter)
+        const page = await reader.get(request.slice(root.length))
         if (!Array.isArray(page.value)) throw new Error("Microsoft Graph returned an invalid collection")
         items.push(...(page.value as Item[]))
         next = typeof page["@odata.nextLink"] === "string" ? page["@odata.nextLink"] : undefined

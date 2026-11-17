@@ -1,8 +1,9 @@
+import { graphContinuation } from "../../shared/graph-continuation"
 import { retryDelay, retryableStatus, sleep } from "../graph-retry"
 import { FetchApplicationError } from "../api/network-error"
 import { signInRefused } from "../../shared/backup-outcomes"
 import type { NetworkCircuit } from "./engine"
-import { GRAPH, MAX_LIST_PAGES, REQUEST_ATTEMPTS, GraphError, GraphPauseError, GraphUnansweredError, RequestTimeoutError, TokenError, graphFailure, requestFailure, withRequestTimeout } from "./request"
+import { MAX_LIST_PAGES, REQUEST_ATTEMPTS, GraphError, GraphPauseError, GraphUnansweredError, RequestTimeoutError, TokenError, graphFailure, requestFailure, withRequestTimeout } from "./request"
 
 export type GraphItem = Record<string, unknown> & { id: string }
 
@@ -34,12 +35,6 @@ export interface ListOptions extends ReadControl {
   filter?: string
 }
 
-/** The Graph versions a list may be read from. */
-const VERSION = /^\/(beta|v1\.0)\//
-
-/** The filters a link carries. Microsoft Graph also reads the option without its $ and in any case. */
-const filtersOf = (link: URL) => [...link.searchParams].filter(([name]) => /^\$?filter$/i.test(name)).map(([, value]) => value)
-
 /**
  * Graph reads of one service for one backup. A throttled request (429) pauses every reader of the
  * service until Graph allows requests again; other services have their own session and read on.
@@ -63,30 +58,9 @@ export class GraphSession {
     const items: GraphItem[] = []
     let next: string | undefined = url
     const seen = new Set<string>()
-    // Microsoft Graph repeats the path of the request in its continuation links, so a link stays on the collection
-    // (and with it the version) the list started on. Anything else would merge another collection's objects into this one.
-    const started = new URL(url)
-    const collection = started.pathname.toLowerCase()
-    // The filters a page of this list may carry: the type's own, or the ones the request itself named. A list
-    // without a filter has none, so a link that brings one would end the list early and leave objects out.
-    const allowed = options.filter !== undefined ? [options.filter] : filtersOf(started)
-    const required = options.filter ?? (allowed.length === 1 ? allowed[0] : undefined)
     while (next) {
       if (seen.size >= MAX_LIST_PAGES) throw new Error(`Graph listing did not finish after ${MAX_LIST_PAGES} pages`)
-      const parsed = new URL(next)
-      // The refusal names what was wrong and the link's path, never its query: that holds the paging token.
-      const refuse = (reason: string) => new Error(`Invalid Graph continuation link (${reason}): ${parsed.origin === GRAPH ? parsed.pathname : "an address outside Microsoft Graph"}`)
-      if (parsed.origin !== GRAPH || parsed.username || parsed.password) throw refuse("it leaves Microsoft Graph")
-      // What follows a # is never sent, so a filter added to such a link would not reach Graph.
-      if (parsed.hash) throw refuse("it carries a fragment")
-      if (!VERSION.test(collection) || parsed.pathname.toLowerCase() !== collection) throw refuse("it moves to another collection")
-      if (seen.has(next)) throw refuse("it repeats a page")
-      const filters = filtersOf(parsed)
-      // A link with another filter would list what the type's filter leaves out, such as objects that are not the tenant's own.
-      if (filters.some((filter) => !allowed.includes(filter))) throw refuse("it names another filter")
-      seen.add(next)
-      // Appended as text: rewriting the query would re-encode the paging token Graph issued.
-      const request: string = required !== undefined && !filters.length ? `${next}${parsed.search ? "&" : "?"}$filter=${encodeURIComponent(required!)}` : next
+      const request = graphContinuation(url, next, seen, options.filter)
       const page: { value?: GraphItem[]; "@odata.nextLink"?: string } = await this.get(request, options.headers, options)
       if (!Array.isArray(page.value)) throw new Error("Graph returned an invalid policy collection")
       items.push(...page.value)
@@ -99,30 +73,9 @@ export class GraphSession {
   async *pages(url: string, options: ListOptions = {}): AsyncGenerator<GraphItem[]> {
     let next: string | undefined = url
     const seen = new Set<string>()
-    // Microsoft Graph repeats the path of the request in its continuation links, so a link stays on the collection
-    // (and with it the version) the list started on. Anything else would merge another collection's objects into this one.
-    const started = new URL(url)
-    const collection = started.pathname.toLowerCase()
-    // The filters a page of this list may carry: the type's own, or the ones the request itself named. A list
-    // without a filter has none, so a link that brings one would end the list early and leave objects out.
-    const allowed = options.filter !== undefined ? [options.filter] : filtersOf(started)
-    const required = options.filter ?? (allowed.length === 1 ? allowed[0] : undefined)
     while (next) {
       if (seen.size >= MAX_LIST_PAGES) throw new Error(`Graph listing did not finish after ${MAX_LIST_PAGES} pages`)
-      const parsed = new URL(next)
-      // The refusal names what was wrong and the link's path, never its query: that holds the paging token.
-      const refuse = (reason: string) => new Error(`Invalid Graph continuation link (${reason}): ${parsed.origin === GRAPH ? parsed.pathname : "an address outside Microsoft Graph"}`)
-      if (parsed.origin !== GRAPH || parsed.username || parsed.password) throw refuse("it leaves Microsoft Graph")
-      // What follows a # is never sent, so a filter added to such a link would not reach Graph.
-      if (parsed.hash) throw refuse("it carries a fragment")
-      if (!VERSION.test(collection) || parsed.pathname.toLowerCase() !== collection) throw refuse("it moves to another collection")
-      if (seen.has(next)) throw refuse("it repeats a page")
-      const filters = filtersOf(parsed)
-      // A link with another filter would list what the type's filter leaves out, such as objects that are not the tenant's own.
-      if (filters.some((filter) => !allowed.includes(filter))) throw refuse("it names another filter")
-      seen.add(next)
-      // Appended as text: rewriting the query would re-encode the paging token Graph issued.
-      const request: string = required !== undefined && !filters.length ? `${next}${parsed.search ? "&" : "?"}$filter=${encodeURIComponent(required!)}` : next
+      const request = graphContinuation(url, next, seen, options.filter)
       const page: { value?: GraphItem[]; "@odata.nextLink"?: string } = await this.get(request, options.headers, options)
       if (!Array.isArray(page.value)) throw new Error("Graph returned an invalid policy collection")
       yield page.value
