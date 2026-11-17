@@ -61,6 +61,9 @@
     role, and restored policies start in report-only mode. Off by default, so the default
     permission set cannot change Conditional Access.
 
+.PARAMETER NoOpen
+    Prints and copies the connection link without opening TenuVault.
+
 .PARAMETER UseDeviceCode
     Signs in with a device code instead of opening a browser on this computer: the script
     prints an address and a code that you enter in a browser on any device. For remote
@@ -88,7 +91,8 @@ param(
     [switch]$IncludeNotifications,
     [switch]$IncludeAuditLog,
     [switch]$IncludeConditionalAccessRestore,
-    [switch]$UseDeviceCode
+    [switch]$UseDeviceCode,
+    [switch]$NoOpen
 )
 
 $ErrorActionPreference = "Stop"
@@ -436,16 +440,39 @@ try {
 }
 
 Write-Host ""
-Write-Host "Done. Copy the two lines below and paste them into the Sign in step of Set up TenuVault:" -ForegroundColor Green
+Write-Host "Done. Open the connection link below, or paste the two IDs into the Sign in step of Set up TenuVault:" -ForegroundColor Green
 Write-Host "  Tenant id:                $($context.TenantId)"
 Write-Host "  Application (client) id:  $($app.AppId)"
+# No tenant label is available from the existing requests. The registration name is not a tenant name.
+$connectLink = "tenuvault://connect?v=1&tenant=$([uri]::EscapeDataString($context.TenantId))&client=$([uri]::EscapeDataString($app.AppId))"
+Write-Host "  Connect link:             $connectLink"
 try {
     if (Get-Command Set-Clipboard -ErrorAction SilentlyContinue) {
-        Set-Clipboard -Value ("  Tenant id:                $($context.TenantId)", "  Application (client) id:  $($app.AppId)" -join [Environment]::NewLine)
-        Write-Host "Both lines are on your clipboard. TenuVault fills them in when you return to the Sign in step."
+        Set-Clipboard -Value ("  Tenant id:                $($context.TenantId)", "  Application (client) id:  $($app.AppId)", "  Connect link:             $connectLink" -join [Environment]::NewLine)
+        Write-Host "The IDs and connection link are on your clipboard. TenuVault fills them in when you return to the Sign in step."
     }
 } catch { }
 Write-Host ""
+$opened = $false
+if (-not $NoOpen) {
+    try {
+        if ($env:OS -eq 'Windows_NT') {
+            if (Test-Path 'HKCU:\Software\Classes\tenuvault') {
+                Start-Process -FilePath $connectLink -ErrorAction Stop | Out-Null
+                $opened = $true
+            }
+        } elseif ($IsMacOS) {
+            # Launch Services answers without opening an app. Do not run open for an unhandled scheme.
+            $handler = & /usr/bin/osascript -l JavaScript -e 'ObjC.import("AppKit"); var app = $.NSWorkspace.sharedWorkspace.URLForApplicationToOpenURL($.NSURL.URLWithString("tenuvault://connect")); app ? ObjC.unwrap(app.path) : "";' 2>$null
+            if ($LASTEXITCODE -eq 0 -and $handler) {
+                & /usr/bin/open $connectLink 2>$null
+                $opened = $LASTEXITCODE -eq 0
+            }
+        }
+    } catch { }
+}
+if ($opened) { Write-Host "Opened TenuVault to connect this tenant" }
+else { Write-Host "Send this link to the admin who uses TenuVault" }
 Write-Host "The admins who use TenuVault also need an Intune role (for example Intune Administrator)."
 Write-Host "For backups, schedules and the audit log in an Azure storage account they also need 'Storage"
 Write-Host "Blob Data Contributor' and read access on that account (see New-TenuVaultStorage.ps1)."

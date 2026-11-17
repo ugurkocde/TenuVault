@@ -12,6 +12,11 @@ function global:Invoke-RestMethod {
 }
 function global:Start-Process {
     param([string]$FilePath)
+    if ($FilePath -like 'tenuvault:*') {
+        if ($env:TENUVAULT_TEST_OPEN_FAIL -eq '1') { throw 'Test launch failure.' }
+        Write-Host "Opened test link: $FilePath"
+        return
+    }
     $address = [uri]$FilePath
     $browserUrl = "$Server/$($address.Host)$($address.PathAndQuery)"
     # A separate job follows the redirect while the script services its loopback listener.
@@ -24,6 +29,22 @@ function global:Start-Process {
 function global:Set-Clipboard {
     param([string]$Value)
     [IO.File]::WriteAllText($ClipboardFile, $Value)
+}
+function global:Test-Path {
+    param([string]$Path)
+    if ($Path -eq 'HKCU:\Software\Classes\tenuvault') { return $env:TENUVAULT_TEST_INSTALLED -eq '1' }
+    Microsoft.PowerShell.Management\Test-Path $Path
+}
+# Native commands are shadowed so installed detection and opening are deterministic on every runner.
+function global:/usr/bin/osascript {
+    if ($env:TENUVAULT_TEST_INSTALLED -eq '1') { Write-Output '/Applications/TenuVault.app' }
+    $global:LASTEXITCODE = 0
+}
+function global:/usr/bin/open {
+    param([string]$Link)
+    if ($env:TENUVAULT_TEST_OPEN_FAIL -eq '1') { $global:LASTEXITCODE = 1; return }
+    Write-Host "Opened test link: $Link"
+    $global:LASTEXITCODE = 0
 }
 $arguments = Get-Content -Raw -Encoding UTF8 $ArgumentsFile | ConvertFrom-Json
 $parameters = @{}

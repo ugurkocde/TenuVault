@@ -7,6 +7,8 @@ on:
     paths:
       - resources/New-TenuVaultDesktopApp.ps1
       - test/fixtures/app-registration/**
+      - src/shared/app-registration.ts
+      - src/shared/deep-link.ts
       - test/app-registration-script.test.ts
       - .github/workflows/setup-script.yml
   push:
@@ -14,6 +16,8 @@ on:
     paths:
       - resources/New-TenuVaultDesktopApp.ps1
       - test/fixtures/app-registration/**
+      - src/shared/app-registration.ts
+      - src/shared/deep-link.ts
       - test/app-registration-script.test.ts
       - .github/workflows/setup-script.yml
   workflow_dispatch:
@@ -55,7 +59,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run the setup script against the stand-in
+      - name: Verify connection link output and NoOpen against the stand-in
         run: npx vitest run test/app-registration-script.test.ts
         env:
           TENUVAULT_TEST_POWERSHELL: ${{ matrix.powershell }}

@@ -96,7 +96,7 @@ describe("New-TenuVaultDesktopApp.ps1", () => {
   })
 
   it("points at the Sign in step of the guided setup the app shows", () => {
-    expect(desktopScript).toContain("paste them into the Sign in step of Set up TenuVault")
+    expect(desktopScript).toContain("paste the two IDs into the Sign in step of Set up TenuVault")
     expect(desktopScript).not.toContain("Add tenant")
     expect(desktopScript).not.toContain("Tenants > Connect tenant")
   })

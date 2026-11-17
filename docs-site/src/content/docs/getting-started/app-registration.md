@@ -117,7 +117,17 @@ The table above is the default permission set. It does not change unless you opt
 
 ## Use the setup script instead
 
-The script creates the same app registration from PowerShell and prints the two values you paste into TenuVault: the tenant ID and the client ID. Use it when another administrator grants the consent, when you want to read what runs first, or when you need one of its options, such as limiting sign-in to a group.
+The script creates the same app registration from PowerShell and prints a `tenuvault://connect` link, plus the tenant ID and client ID. It copies all three lines to the clipboard. Use it when another administrator grants the consent, when you want to read what runs first, or when you need one of its options, such as limiting sign-in to a group.
+
+After a successful run, open the printed link to fill in the connection details. TenuVault shows both IDs and asks you to confirm before opening the **Sign in** step. If another administrator runs the script, ask them to send you the link. The two IDs remain an alternative for pasting into the form.
+
+The script opens the link by default when TenuVault is installed on that computer. Add `-NoOpen` to print and copy it without opening TenuVault:
+
+```powershell
+./New-TenuVaultDesktopApp.ps1 -NoOpen
+```
+
+On Windows, launch the installed app once to register the link handler for your user account. On macOS, the installed app declares the scheme to Launch Services. If no handler is available or opening fails, setup still succeeds and says **Send this link to the admin who uses TenuVault**.
 
 Before you run it:
 
@@ -132,7 +142,7 @@ On the **Connect** step, under **Other ways to connect**, select **Use the setup
 1. **Save the setup script.** Select **Save setup script** and choose a folder in the save dialog. By default it is saved to your Documents folder as `New-TenuVaultDesktopApp.ps1`. TenuVault saves the copy of the script it ships with. **Copy script** copies it instead; paste it into a text editor and save it as `New-TenuVaultDesktopApp.ps1`.
 2. **Run it in PowerShell.** The card shows the exact command, with a copy button. After you saved the script, the command first changes to the folder you chose (`cd`) and then runs the script. If PowerShell refuses to run it, the card suggests `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` first; see [Execution policy](#execution-policy).
 3. **Sign in in your browser.** The script opens your browser. Choose your admin account. Microsoft may first ask you to consent to Microsoft Graph Command Line Tools, which the script signs in through to create the app registration.
-4. **Return to TenuVault.** The script prints the Tenant id and the Application (client) id and copies them to your clipboard. TenuVault fills them in on the next step.
+4. **Return to TenuVault.** The script prints the connection link, Tenant id and Application (client) id and copies them to your clipboard. TenuVault fills them in on the next step.
 
 The card names the roles that can run the script: Global Administrator, Cloud Application Administrator or Application Administrator. Expand **Permissions the app registration gets** to see the delegated permissions per API before anyone consents, and the tip to add `-AllowedGroupId` with a group's object ID to limit sign-in to a group of admins.
 
@@ -140,7 +150,7 @@ The buttons under the checklist:
 
 | Button | What it does |
 | --- | --- |
-| **Someone else is the admin? Copy instructions** | Copies a ready-to-send message for your Entra administrator: what TenuVault is, who can run the script, the script download link, the command, the `-AllowedGroupId` option, the permissions it grants and the two values to send back. TenuVault keeps your place, so you can close it and continue when they reply. |
+| **Someone else is the admin? Copy instructions** | Copies a ready-to-send message for your Entra administrator: what TenuVault is, who can run the script, the script download link, the command, the `-AllowedGroupId` option, the permissions it grants and the connection link or two IDs to send back. TenuVault keeps your place, so you can close it and continue when they reply. |
 | **Create it by hand instead** | Opens [Create the app registration manually](#create-the-app-registration-manually) on this page. |
 | **Setup guide** | Opens this page. |
 
@@ -186,12 +196,13 @@ Select **Next: sign in** under the card when you have the two values. If the app
 4. Wait for the script to finish. While it grants admin consent, it lists the delegated permissions per API. At the end it prints:
 
    ```
-   Done. Copy the two lines below and paste them into the Sign in step of Set up TenuVault:
+   Done. Open the connection link below, or paste the two IDs into the Sign in step of Set up TenuVault:
      Tenant id:                <tenant id>
      Application (client) id:  <client id>
+     Connect link:             tenuvault://connect?v=1&tenant=<tenant id>&client=<client id>
    ```
 
-5. The script also copies both lines to your clipboard, when the computer it runs on offers one. Return to TenuVault: on the **Sign in** step it fills in the tenant ID and the client ID from the clipboard when both fields are empty. Otherwise paste both lines into **Paste the script output**. See [Sign in to your tenant](/getting-started/connect-tenant/). The tenant ID is always printed as a GUID, even if you passed a domain.
+5. The script also copies the IDs and connection link to your clipboard, when the computer it runs on offers one. Open the link, or return to TenuVault: on the **Sign in** step it fills in the tenant ID and the client ID from the clipboard when both fields are empty. Otherwise paste both lines into **Paste the script output**. See [Sign in to your tenant](/getting-started/connect-tenant/). The tenant ID is always printed as a GUID, even if you passed a domain.
 
 :::note
 The script also ends with a reminder about admin roles. The roles TenuVault Desktop needs are listed in [Requirements](/getting-started/requirements/#admins-who-use-tenuvault).
