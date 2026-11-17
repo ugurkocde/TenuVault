@@ -74,3 +74,5 @@ Backup History and the policy drift totals exclude this separately paged invento
 
 * [Change reports](/reports/): the same changes as a document with who made them, saved as PDF or Markdown or sent by email
 * [Intune drift detection](https://www.tenuvault.com/intune-drift-detection): compare and revert changes, on the product site
+
+Policy comparisons continue to include compliance policies stored by older versions under `DeviceCompliancePolicies`, including when either backup also contains a large inventory.

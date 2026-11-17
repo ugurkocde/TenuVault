@@ -309,12 +309,13 @@ async function fetchPolicyFiles(
   prefixFolder?: string
 ): Promise<PolicyFile[]> {
   // The compared types, plus the folder older backups used for compliance policies.
-  const policyTypes = folders.includes('CompliancePolicies') ? [...folders, 'DeviceCompliancePolicies'] : folders
+  const aliases = (folder: string) => folder === 'CompliancePolicies' ? [folder, 'DeviceCompliancePolicies'] : [folder]
+  const policyTypes = folders.flatMap(aliases)
   const byFolder = new Map<string, PolicyFile[]>(policyTypes.map(folder => [folder, []]))
 
   signal?.throwIfAborted()
-  const listUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(`${backupFolder}/${prefixFolder ? `${prefixFolder}/` : ""}`)}`
-  const text = await listBlobPages(listUrl, accessToken, signal)
+  const prefixes = prefixFolder ? aliases(prefixFolder).map(folder => `${backupFolder}/${folder}/`) : [`${backupFolder}/`]
+  const text = (await Promise.all(prefixes.map(prefix => listBlobPages(`https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(prefix)}`, accessToken, signal)))).join("")
   for (const blob of text.match(/<Blob>[\s\S]*?<\/Blob>/g) || []) {
     const nameMatch = blob.match(/<Name>([^<]+)<\/Name>/)
     const lastModifiedMatch = blob.match(/<Last-Modified>([^<]+)<\/Last-Modified>/)

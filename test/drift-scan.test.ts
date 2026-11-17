@@ -175,6 +175,23 @@ const request = (body: Record<string, unknown> = {}) => new NextRequest('http://
 const comparable = (drifts: any[]) => drifts.map(({ id: _id, detectedAt: _at, ...rest }) => rest).sort((a, b) => a.backupFile.localeCompare(b.backupFile))
 
 describe('Drift scan', () => {
+  it.each([OLD, NEW])('keeps legacy compliance deletions when %s carries large inventory', async largeBackup => {
+    const backups: Record<string, FakeBackup> = {
+      [OLD]: { metadata: { TenantId: TENANT_A, Status: 'Success', Scope: { Included: ['CompliancePolicies', 'DeviceConfigurations'] } }, files: {
+        'DeviceCompliancePolicies/Legacy.json': { id: 'legacy', displayName: 'Legacy compliance', '@odata.type': '#microsoft.graph.windows10CompliancePolicy', passwordRequired: true },
+      } },
+      [NEW]: { metadata: { TenantId: TENANT_A, Status: 'Success', Scope: { Included: ['CompliancePolicies', 'DeviceConfigurations'] } }, files: {} },
+    }
+    backups[largeBackup]!.metadata!.LargeItems = { DeviceConfigurations: { version: 1, count: 150000, shards: 150, complete: true } }
+    const { stub } = fakeStorage(backups)
+    const response = await drift(request({ baseline: OLD, comparison: NEW }))
+    expect(response.status).toBe(200)
+    const result = await response.json()
+    expect(result.drifts).toMatchObject([{ changeType: 'deleted', configId: 'legacy', configName: 'Legacy compliance' }])
+    const prefixes = stub.mock.calls.map(([input]) => new URL(String(input)).searchParams.get('prefix')).filter(Boolean)
+    expect(prefixes.sort()).toEqual([`${OLD}/CompliancePolicies/`, `${OLD}/DeviceCompliancePolicies/`, `${NEW}/CompliancePolicies/`, `${NEW}/DeviceCompliancePolicies/`].sort())
+  })
+
   it('skips items whose stored fingerprints match and finds the same drift as a full compare', async () => {
     const full = fakeStorage(twoBackups(false))
     const fullResponse = await drift(request())
