@@ -1,4 +1,6 @@
-import { backupBlobName, LARGE_BACKUP_CONTAINER } from "../../shared/backup-storage"
+import { completeHalf, largeRunProblems, matchingCompanions } from "../../shared/backup-companion"
+import { BACKUP_CONTAINER } from "../../shared/constants"
+import { backupBlobName, backupContainer } from "../../shared/backup-storage"
 import { createHash, randomUUID } from "node:crypto"
 import { open, rename, rm } from "node:fs/promises"
 import type { FileHandle } from "node:fs/promises"
@@ -47,7 +49,7 @@ async function* record(name: string, value: unknown) {
   yield body
   if (body.length % BLOCK) yield Buffer.alloc(BLOCK - body.length % BLOCK)
 }
-function allowance(metadata: Record<string, any>) {
+function allowance(metadata: Record<string, any>, requireLarge = true) {
   const indexes = largeIndexes(metadata)
   if (!metadata.Items || typeof metadata.Items !== "object" || Array.isArray(metadata.Items) || !metadata.ItemCounts || typeof metadata.ItemCounts !== "object") throw new Error("Invalid backup inventory")
   const legacy = Object.keys(metadata.Items).length
@@ -60,7 +62,7 @@ function allowance(metadata: Record<string, any>) {
   for (const [folder, index] of Object.entries(indexes)) counts[folder] = index.count
   const policies = Object.entries(counts).reduce((sum, [folder, count]) => sum + (typeForFolder(folder)?.inventory ? 0 : count), 0)
   if (metadata.ItemCounts.TotalPolicies !== policies || Object.entries(metadata.ItemCounts).some(([folder, count]) => folder !== "TotalPolicies" && count !== (counts[folder] ?? 0)) || Object.entries(counts).some(([folder, count]) => metadata.ItemCounts[folder] !== count)) throw new Error("Invalid backup counts")
-  if (!Object.keys(indexes).length || legacy > 60_000 || metadata.Status !== "Success" || metadata.Failures !== 0 || metadata.Coverage !== "Complete") throw new Error("Only complete large backups can be exported or imported")
+  if ((requireLarge && !Object.keys(indexes).length) || legacy > 60_000 || metadata.Status !== "Success" || metadata.Failures !== 0 || metadata.Coverage !== "Complete") throw new Error("Only complete large backups can be exported or imported")
   for (const [folder, index] of Object.entries(indexes)) if (!index.complete || !typeForFolder(folder) || metadata.ItemCounts?.[folder] !== index.count) throw new Error("Invalid large backup counts")
   const count = legacy + Object.values(indexes).reduce((sum, index) => sum + index.count, 0)
   const limits = { count, files: 2 + count + Object.values(indexes).reduce((sum, index) => sum + index.shards, 0), bytes: Math.min(LARGE_ARCHIVE_MAX, 128 * 1024 * 1024 + count * 65536) }
@@ -92,6 +94,26 @@ export async function* exportLargeArchive(tenantId: string, backupId: string, me
     }
   }
   if (bytes + 2 * BLOCK > limits.bytes) throw new Error("Archive exceeds the inventory size allowance")
+  yield Buffer.alloc(2 * BLOCK)
+}
+
+/** Version 3 keeps each half under its real folder, including both reciprocal manifests. */
+export async function* exportMixedArchive(tenantId: string, ordinaryId: string, ordinary: Record<string, any>, largeId: string, large: Record<string, any>, read: JsonFileReader): AsyncGenerator<Buffer> {
+  if (!identity.test(tenantId) || ordinary.TenantId?.toLowerCase() !== tenantId.toLowerCase() || !matchingCompanions(ordinaryId, ordinary, largeId, large) || !completeHalf(ordinary) || !completeHalf(large) || largeRunProblems(ordinary).length || Object.keys(largeIndexes(ordinary)).length) throw new Error("Only a verified complete mixed run can be exported")
+  const halves = [{ id: ordinaryId, metadata: ordinary, budget: allowance(ordinary, false) }, { id: largeId, metadata: large, budget: allowance(large) }]
+  yield* record("tenuvault-manifest.json", { version: 3, sourceTenantId: tenantId, backupId: ordinaryId, companionId: largeId })
+  let total = 0, totalFiles = 1
+  for (const half of halves) {
+    let bytes = 0, files = 1
+    for await (const file of largeFiles(half.metadata, name => read(`${half.id}/${name}`), half.budget.relationship)) {
+      if (++totalFiles > FILES_MAX || ++files > half.budget.limits.files) throw new Error("Archive file count exceeds the inventory allowance")
+      for await (const chunk of record(`${half.id}/${file.name}`, file.value)) {
+        bytes += chunk.length; total += chunk.length
+        if (bytes > half.budget.limits.bytes || total > LARGE_ARCHIVE_MAX - 4096) throw new Error("Archive exceeds the inventory size allowance")
+        yield chunk
+      }
+    }
+  }
   yield Buffer.alloc(2 * BLOCK)
 }
 
@@ -155,7 +177,7 @@ class TarReader {
     return this.hash.digest("hex")
   }
 }
-export interface ReviewedLargeArchive { tenantId: string; backupId: string; digest: string; count: number; path: string }
+export interface ReviewedLargeArchive { tenantId: string; backupId: string; digest: string; count: number; path: string; companionId?: string }
 async function visitArchive(path: string, visit?: (name: string, value: unknown) => Promise<void>): Promise<ReviewedLargeArchive> {
   const file = await open(path, "r")
   try {
@@ -163,51 +185,85 @@ async function visitArchive(path: string, visit?: (name: string, value: unknown)
     if (size > LARGE_ARCHIVE_MAX) throw new Error("Archive exceeds 32 GiB")
     const tar = new TarReader(file, size)
     const manifest = await tar.next("tenuvault-manifest.json")
-    if (manifest?.version !== 2 || !identity.test(manifest.sourceTenantId) || !/^backup-large-\d{4}-\d{2}-\d{2}-\d{6}$/.test(manifest.backupId)) throw new Error("Invalid archive identity")
-    const metadata = await tar.next("metadata.json")
-    if (metadata?.BackupFolder !== manifest.backupId || (metadata.TenantId && metadata.TenantId.toLowerCase() !== manifest.sourceTenantId.toLowerCase())) throw new Error("Archive source identity mismatch")
-    const { limits, relationship } = allowance(metadata)
-    const read: JsonFileReader = async name => {
-      if (tar.files >= limits.files) throw new Error("Archive file count exceeds the inventory allowance")
-      const value = await tar.next(name)
-      if (tar.offset > limits.bytes) throw new Error("Archive exceeds the inventory size allowance")
-      return value
+    const mixed = manifest?.version === 3
+    if ((!mixed && manifest?.version !== 2) || !identity.test(manifest.sourceTenantId) || !(mixed ? /^backup-\d{4}-\d{2}-\d{2}-\d{6}$/ : /^backup-large-\d{4}-\d{2}-\d{2}-\d{6}$/).test(manifest.backupId) || (mixed && !/^backup-large-\d{4}-\d{2}-\d{2}-\d{6}$/.test(manifest.companionId))) throw new Error("Invalid archive identity")
+    const ids: string[] = mixed ? [manifest.backupId, manifest.companionId] : [manifest.backupId]
+    const manifests: Record<string, any>[] = []
+    let count = 0, allowedBytes = 0
+    for (const [index, id] of ids.entries()) {
+      const prefix = mixed ? `${id}/` : ""
+      const start = tar.offset
+      const metadata = await tar.next(prefix + "metadata.json")
+      if (metadata?.BackupFolder !== id || (metadata.TenantId && metadata.TenantId.toLowerCase() !== manifest.sourceTenantId.toLowerCase())) throw new Error("Archive source identity mismatch")
+      const { limits, relationship } = allowance(metadata, !mixed || index === 1)
+      const startFiles = tar.files
+      const read: JsonFileReader = async name => {
+        if (tar.files - startFiles + 2 >= limits.files) throw new Error("Archive file count exceeds the inventory allowance")
+        const value = await tar.next(prefix + name)
+        if (tar.offset - start > limits.bytes) throw new Error("Archive exceeds the inventory size allowance")
+        return value
+      }
+      for await (const entry of largeFiles(metadata, read, relationship)) if (entry.name !== "metadata.json") await visit?.(`${id}/${entry.name}`, entry.value)
+      if (tar.offset - start > limits.bytes) throw new Error("Archive exceeds the inventory size allowance")
+      count += limits.count
+      allowedBytes += limits.bytes
+      manifests.push(metadata)
     }
-    for await (const entry of largeFiles(metadata, read, relationship)) if (entry.name !== "metadata.json") await visit?.(entry.name, entry.value)
+    if (mixed && (!matchingCompanions(ids[0]!, manifests[0]!, ids[1], manifests[1]) || !completeHalf(manifests[0]) || !completeHalf(manifests[1]) || largeRunProblems(manifests[0]!).length || Object.keys(largeIndexes(manifests[0]!)).length)) throw new Error("Archive companion does not match")
     const digest = await tar.end()
-    if (size > limits.bytes) throw new Error("Archive exceeds the inventory size allowance")
-    await visit?.("metadata.json", metadata)
-    // Completion is the very last write, after the source digest and every reference were checked.
-    return { tenantId: manifest.sourceTenantId.toLowerCase(), backupId: manifest.backupId, digest, count: limits.count, path }
+    if (size > Math.min(LARGE_ARCHIVE_MAX, allowedBytes)) throw new Error("Archive exceeds the inventory size allowance")
+    // Both completion markers follow the digest and all referenced contents.
+    for (const [index, id] of ids.entries()) await visit?.(`${id}/metadata.json`, manifests[index])
+    return { tenantId: manifest.sourceTenantId.toLowerCase(), backupId: manifest.backupId, ...(mixed ? { companionId: manifest.companionId } : {}), digest, count, path }
   } finally { await file.close() }
 }
 export const reviewLargeArchive = (path: string) => visitArchive(path)
 export async function importLargeArchive(store: LocalBlobStore, archive: ReviewedLargeArchive): Promise<void> {
-  const account = `tvlocal-${archive.tenantId}`, container = LARGE_BACKUP_CONTAINER, prefix = `${archive.backupId}/`
-  await store.createContainer(account, container)
-  if ((await store.list(account, container, prefix)).length || (await store.list(account, container, backupBlobName(prefix))).length) throw new Error("This backup already exists on this device")
-  const marker = `${prefix}.tenuvault-owner.json`
-  await store.put(account, container, marker, Buffer.from(JSON.stringify({ TenantId: archive.tenantId, RunId: randomUUID(), LargeInventory: { version: 1 } })), "application/json", true)
+  const account = `tvlocal-${archive.tenantId}`
+  const ids = [archive.backupId, ...(archive.companionId ? [archive.companionId] : [])]
+  // Check every destination before claiming any of them.
+  for (const id of ids) {
+    const container = backupContainer(id), prefix = `${id}/`
+    await store.createContainer(account, container)
+    if ((await store.list(account, container, prefix)).length || (container !== BACKUP_CONTAINER && (await store.list(account, container, backupBlobName(prefix))).length)) throw new Error("This backup already exists on this device")
+  }
+  const claimed: string[] = []
   const pending = new Set<Promise<void>>()
   let failure: unknown
   try {
-    let metadata: any
+    for (const id of ids) {
+      await store.put(account, backupContainer(id), `${id}/.tenuvault-owner.json`, Buffer.from(JSON.stringify({ TenantId: archive.tenantId, RunId: randomUUID() })), "application/json", true)
+      claimed.push(id)
+    }
+    const manifests = new Map<string, any>()
     const checked = await visitArchive(archive.path, async (name, value) => {
-      if (name === "metadata.json") { metadata = value; return }
-      const task = store.put(account, container, backupBlobName(prefix + name), Buffer.from(JSON.stringify(value)), "application/json", true).then(() => undefined, error => { failure ??= error }).finally(() => pending.delete(task))
+      const id = name.split("/")[0]!
+      if (!ids.includes(id)) throw new Error("The archive changed since review")
+      if (name === `${id}/metadata.json`) { manifests.set(id, value); return }
+      const task = store.put(account, backupContainer(id), backupBlobName(name), Buffer.from(JSON.stringify(value)), "application/json", true).then(() => undefined, error => { failure ??= error }).finally(() => pending.delete(task))
       pending.add(task)
       if (pending.size >= 16) await Promise.race(pending)
       if (failure) throw failure
     })
     await Promise.all(pending)
     if (failure) throw failure
-    if (checked.digest !== archive.digest || checked.tenantId !== archive.tenantId || checked.backupId !== archive.backupId) throw new Error("The archive changed since review")
-    await store.put(account, container, prefix + "metadata.json", Buffer.from(JSON.stringify({ ...metadata, SourceTenantId: archive.tenantId, Import: { sha256: archive.digest, provenance: "User-reviewed tar; source identity is not cryptographically verified" } })), "application/json", true)
+    if (checked.digest !== archive.digest || checked.tenantId !== archive.tenantId || checked.backupId !== archive.backupId || checked.companionId !== archive.companionId) throw new Error("The archive changed since review")
+    for (const id of ids) {
+      const metadata = manifests.get(id)
+      await store.put(account, backupContainer(id), `${id}/.tenuvault-owner.json`, Buffer.from(JSON.stringify({ TenantId: archive.tenantId, RunId: metadata.RunId ?? randomUUID(), ...(metadata.CompanionBackup ? { CompanionBackup: metadata.CompanionBackup } : {}), ...(backupContainer(id) !== BACKUP_CONTAINER ? { LargeInventory: { version: 1 } } : {}) })), "application/json")
+    }
+    for (const id of ids) {
+      const metadata = manifests.get(id)
+      await store.put(account, backupContainer(id), `${id}/metadata.json`, Buffer.from(JSON.stringify({ ...metadata, SourceTenantId: archive.tenantId, Import: { sha256: archive.digest, provenance: "User-reviewed tar; source identity is not cryptographically verified" } })), "application/json", true)
+    }
   } catch (error) {
     await Promise.all(pending)
-    // Retire a possibly published completion marker before rolling back any content.
-    await store.delete(account, container, prefix + "metadata.json", { despiteDamage: true }).catch(() => undefined)
-    for (const blob of [...await store.list(account, container, prefix), ...await store.list(account, container, backupBlobName(prefix))]) await store.delete(account, container, blob.name, { despiteDamage: true }).catch(() => undefined)
+    // Retire both completion markers before rolling back any payload.
+    for (const id of claimed) await store.delete(account, backupContainer(id), `${id}/metadata.json`, { despiteDamage: true }).catch(() => undefined)
+    for (const id of claimed) {
+      const container = backupContainer(id), prefix = `${id}/`
+      for (const blob of [...await store.list(account, container, prefix), ...(container === BACKUP_CONTAINER ? [] : await store.list(account, container, backupBlobName(prefix)))]) await store.delete(account, container, blob.name, { despiteDamage: true }).catch(() => undefined)
+    }
     throw error
   }
 }

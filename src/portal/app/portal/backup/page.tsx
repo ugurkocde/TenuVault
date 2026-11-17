@@ -190,15 +190,19 @@ export default function BackupRestorePage() {
       const response = await fetch("/api/download-backup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...tenant.credentials, storageAccountName: tenant.storageAccountName, backupId: backup.id, largeInventory: backup.largeInventory === true }),
+        body: JSON.stringify({ ...tenant.credentials, storageAccountName: tenant.storageAccountName, backupId: backup.id, largeInventory: backup.largeInventory === true || Boolean(backup.companionId) || backup.ordinaryOnlyExport === true, ordinaryOnly: backup.ordinaryOnlyExport === true }),
       })
-      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || "Failed to download backup")
+      if (!response.ok) {
+        const problem = await response.json().catch(() => ({}))
+        if (problem.ordinaryOnlyAvailable) void fetchBackups()
+        throw new Error(problem.error || "Failed to download backup")
+      }
       if (response.headers.get("content-type")?.includes("application/json")) return
       if (response.headers.get("content-type")?.includes("application/json")) { await response.json(); return }
       const url = URL.createObjectURL(await response.blob())
       const link = document.createElement("a")
       link.href = url
-      link.download = `${backup.id}.${response.headers.get("content-type") === "application/x-tar" ? "tar" : "zip"}`
+      link.download = `${backup.id}${backup.ordinaryOnlyExport ? "-ordinary-only" : ""}.${response.headers.get("content-type") === "application/x-tar" ? "tar" : "zip"}`
       document.body.appendChild(link)
       link.click()
       link.remove()
@@ -611,7 +615,7 @@ function BackupDetails({ credentials, service, backup, first, storageAccountName
           </Button>
           <Button variant="outline" size="sm" onClick={onDownload} disabled={downloading || unavailable}>
             {downloading ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Download className="mr-1 h-4 w-4" />}
-            Download
+            {backup.ordinaryOnlyExport ? "Download ordinary only" : "Download"}
           </Button>
           <Button size="sm" className="bg-coral-600 text-white hover:bg-coral-700" onClick={onRestore} disabled={kind === "running" || backup.totalPolicies === 0 || unavailable}>
             <RefreshCw className="mr-1 h-4 w-4" />
@@ -620,10 +624,11 @@ function BackupDetails({ credentials, service, backup, first, storageAccountName
         </div>
       </div>
 
-      {(kind === "warning" || kind === "failed" || kind === "cancelled" || (backup.skippedTypes?.length ?? 0) > 0 || backup.coverage === "incomplete") && (
+      {(backup.warning || kind === "warning" || kind === "failed" || kind === "cancelled" || (backup.skippedTypes?.length ?? 0) > 0 || backup.coverage === "incomplete") && (
         <div className={cn("mb-6 flex gap-3 rounded-2xl px-4 py-3 text-sm", kind === "failed" ? "bg-red-50 text-red-800" : kind === "cancelled" ? "bg-gray-100 text-gray-800" : "bg-amber-50 text-amber-900")}>
           <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
           <div className="space-y-1">
+            {backup.warning && <p><LinkedMessage text={backup.warning} /></p>}
             {unavailable && <p>{backup.error ?? "Files of this backup could not be read."} Until then it cannot be downloaded, compared or restored, and older backups are kept.</p>}
             {backup.status === "incomplete" && <p>This backup stopped before it finished, for example because TenuVault was closed. It holds only part of the tenant.</p>}
             {backup.status !== "incomplete" && !unavailable && kind === "failed" && backup.totalPolicies > 0 && <p>This backup failed before it finished. It holds only the policies it saved and is never used as a complete backup.</p>}
@@ -656,7 +661,7 @@ function BackupDetails({ credentials, service, backup, first, storageAccountName
         </div>
       </div>
 
-      {backup.largeInventory && <LargeContents key={`${String(credentials.tenantId)}/${String(credentials.storageAccountName)}/${backup.id}`} credentials={credentials} backupId={backup.id} service={service} />}
+      {(backup.largeInventory || backup.companionId) && <LargeContents key={`${String(credentials.tenantId)}/${String(credentials.storageAccountName)}/${backup.companionId ?? backup.id}`} credentials={credentials} backupId={backup.companionId ?? backup.id} service={service} />}
       <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
         <div>
           <h3 className="mb-3 text-xs font-medium text-gray-500">Contents</h3>

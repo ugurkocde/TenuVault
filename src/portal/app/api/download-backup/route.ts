@@ -1,6 +1,7 @@
-import { backupStoragePath, isLargeBackup } from "../../../../shared/backup-storage"
+import { completeHalf, largeRunProblems, matchingCompanions, ordinaryOnlyManifest } from "../../../../shared/backup-companion"
 import { INTUNE_TYPES } from "../../../../shared/intune/registry"
-import { exportLargeArchive } from "../../../../main/backup/large-archive"
+import { backupStoragePath, isLargeBackup } from "../../../../shared/backup-storage"
+import { exportLargeArchive, exportMixedArchive } from "../../../../main/backup/large-archive"
 import { Readable } from "node:stream"
 import { readJsonCapped } from "../../../../shared/capped-body"
 import { decodeXml } from "~/lib/storage/list"
@@ -9,7 +10,7 @@ import { isBackupName } from "../../../../shared/intune/backup-names"
 import { BACKUP_OWNER_FILE, MAX_BACKUP_ARCHIVE_BYTES, MAX_BACKUP_ARCHIVE_FILES, MAX_BACKUP_ARCHIVE_TOTAL_BYTES } from "../../../../shared/constants"
 import { readBytesCapped } from "../../../../shared/capped-body"
 import { type NextRequest, NextResponse } from "next/server"
-import { readOwnedBackup } from "~/lib/policies/backup-owner"
+import { readOwnedBackup, type BackupOwnerRead } from "~/lib/policies/backup-owner"
 
 interface ListedFile {
   path: string
@@ -68,28 +69,58 @@ export async function POST(request: NextRequest) {
     // Get access token for Azure Storage
     const accessToken = await getAccessToken(tenantId, appId, clientSecret)
 
-    const readLarge = async (name: string) => {
-      const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(`${backupId}/${name}`)}`, {
-        headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${accessToken}` },
-      })
-      if (!response.ok) throw new Error("A backup file could not be read")
+    const readFile = (name: string) => fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(name)}`, {
+      headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${accessToken}` },
+    })
+    const readJson = async (name: string) => {
+      const response = await readFile(name)
+      if (!response.ok) throw new Error(`A backup file could not be read (${response.status})`)
       const content = await readJsonCapped(response, 8 * 1024 * 1024)
       if (content.kind !== "json") throw new Error("A backup file is invalid or oversized")
       return content.value as Record<string, any>
     }
-    // Ownership is checked before the streaming path requests any indexed content.
-    const largeOwner = isLargeBackup(backupId) || body.largeInventory === true || INTUNE_TYPES.some(type => type.volume === "large") ? await readOwnedBackup(name => fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(name)}`, {
-      headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${accessToken}` },
-    }), backupId, tenantId, storageAccountName) : null
-    if (largeOwner && !largeOwner.ok) return NextResponse.json({ error: largeOwner.error }, { status: largeOwner.status })
-    if (largeOwner?.ok && largeOwner.metadata?.LargeItems) {
-      const stream = Readable.from(exportLargeArchive(tenantId, backupId, largeOwner.metadata, readLarge))
-      return new NextResponse(Readable.toWeb(stream) as ReadableStream<Uint8Array>, {
-        headers: { "content-type": "application/x-tar", "content-disposition": `attachment; filename="${backupId}.tar"` },
-      })
-    }
+    const readLarge = (name: string) => readJson(`${backupId}/${name}`)
+    // Ownership is checked before either archive path reads snapshots.
+    let ordinaryExport: Record<string, any> | null = null
+    const archiveResponse = async (largeOwner: BackupOwnerRead): Promise<NextResponse | null> => {
+      if (!largeOwner.ok) return NextResponse.json({ error: largeOwner.error }, { status: largeOwner.status })
+      const metadata = largeOwner.metadata
+      if (metadata && (metadata.CompanionBackup !== undefined || metadata.LargeBackupOutcomes !== undefined)) {
+        const otherId = metadata.CompanionBackup
+        let other: Record<string, any> | null = null
+        if (typeof otherId === "string" && isBackupName(otherId)) {
+          try { other = await readJson(`${otherId}/metadata.json`) } catch { /* The ordinary subset remains exportable. */ }
+        }
+        const matches = matchingCompanions(backupId, metadata, otherId, other) && metadata.TenantId?.toLowerCase() === String(tenantId).toLowerCase()
+        if (matches && completeHalf(metadata) && completeHalf(other) && !largeRunProblems(isLargeBackup(backupId) ? other! : metadata).length && body.ordinaryOnly !== true) {
+          const ordinaryId = isLargeBackup(backupId) ? otherId : backupId, largeId = isLargeBackup(backupId) ? backupId : otherId
+          const ordinary = isLargeBackup(backupId) ? other! : metadata, large = isLargeBackup(backupId) ? metadata : other!
+          const stream = Readable.from(exportMixedArchive(tenantId, ordinaryId, ordinary, largeId, large, readJson))
+          return new NextResponse(Readable.toWeb(stream) as ReadableStream<Uint8Array>, {
+            headers: { "content-type": "application/x-tar", "content-disposition": `attachment; filename="${ordinaryId}.tar"` },
+          })
+        }
+        if (isLargeBackup(backupId) || body.ordinaryOnly !== true) return NextResponse.json({ error: "The mixed run is incomplete or its companion does not match. Choose Download ordinary only to export the ordinary snapshots.", ordinaryOnlyAvailable: !isLargeBackup(backupId) }, { status: 409 })
+        ordinaryExport = ordinaryOnlyManifest(metadata, matches ? "Large companion is incomplete, or an ordinary-only copy was requested." : "Large companion is missing, unreadable or does not match.")
+      }
+      if (largeOwner?.ok && largeOwner.metadata?.LargeItems) {
+        const stream = Readable.from(exportLargeArchive(tenantId, backupId, largeOwner.metadata, readLarge))
+        return new NextResponse(Readable.toWeb(stream) as ReadableStream<Uint8Array>, {
+          headers: { "content-type": "application/x-tar", "content-disposition": `attachment; filename="${backupId}.tar"` },
+        })
+      }
 
-    if (isLargeBackup(backupId)) return NextResponse.json({ error: "Only complete large backups can be downloaded" }, { status: 409 })
+      if (isLargeBackup(backupId)) return NextResponse.json({ error: "Only complete large backups can be downloaded" }, { status: 409 })
+      return null
+    }
+    // Preserve legacy listing, path and size refusals before any file GET. Large declarations
+    // or a history hint select streaming before those ordinary ZIP limits are applied.
+    const earlyOwner = isLargeBackup(backupId) || body.largeInventory === true || INTUNE_TYPES.some(type => type.volume === "large")
+      ? await readOwnedBackup(readFile, backupId, tenantId, storageAccountName) : null
+    if (earlyOwner) {
+      const response = await archiveResponse(earlyOwner)
+      if (response) return response
+    }
 
     // Function to fetch all files with pagination support
     const fetchAllFiles = async (): Promise<ListedFile[]> => {
@@ -205,6 +236,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Download failed: the backup contains a file name that is not a safe archive path." }, { status: 502 })
     }
 
+    if (!earlyOwner) {
+      const response = await archiveResponse(await readOwnedBackup(readFile, backupId, tenantId, storageAccountName))
+      if (response) return response
+    }
+
     // Import JSZip dynamically
     const JSZip = (await import('jszip')).default
     const zip = new JSZip()
@@ -217,10 +253,6 @@ export async function POST(request: NextRequest) {
     // Ownership is settled by the shared resolver before any file is read: a shared container can
     // hold other tenants' backups, and those are refused, as are backups whose metadata or
     // ownership marker cannot be read.
-    const owned = largeOwner ?? await readOwnedBackup((name) => fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(name)}`, {
-      headers: { 'x-ms-version': '2021-12-02', 'Authorization': `Bearer ${accessToken}` },
-    }), backupId, tenantId, storageAccountName)
-    if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
     const batches: string[][] = []
     for (let i = 0; i < filePaths.length; i += batchSize) batches.push(filePaths.slice(i, i + batchSize))
     // Actual fetched bytes, rechecked against the cap: listed lengths can be
@@ -252,7 +284,7 @@ export async function POST(request: NextRequest) {
             const zipPath = filePath.replace(`${backupId}/`, '')
 
             // Add file to zip with folder structure
-            zip.file(zipPath, content)
+            zip.file(zipPath, zipPath === "metadata.json" && ordinaryExport ? JSON.stringify(ordinaryExport) : content)
 
             processedFiles++
             if (processedFiles % 10 === 0 || processedFiles === filePaths.length) {
@@ -311,7 +343,7 @@ export async function POST(request: NextRequest) {
     return new NextResponse(new Uint8Array(zipBuffer), {
       headers: {
         'Content-Type': 'application/zip',
-        'Content-Disposition': `attachment; filename="${backupId}.zip"`,
+        'Content-Disposition': `attachment; filename="${backupId}${ordinaryExport ? "-ordinary-only" : ""}.zip"`,
         'Content-Length': zipBuffer.length.toString(),
       },
     })
