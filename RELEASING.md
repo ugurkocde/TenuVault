@@ -75,6 +75,8 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 ## Compatibility notes for the next release
 
+- Large backups use `intune-backups-large`, with claims and manifests under `backup-large-<UTC start time>/` and snapshots and shards under `payload/backup-large-<UTC start time>/`. Ordinary and older backups keep their existing paths in `intune-backups`. Before a Backup Reader captures large types, rerun `New-TenuVaultStorage.ps1 -BackupReaderAppId <application ID>` with the usual storage arguments to provision both containers and the writer role on each. History adds one bounded discovery listing and, locally, one container-properties read; it never enumerates large payloads. No large backups using the earlier unreleased layout are migrated.
+
 - Large inventory infrastructure is opt-in through a type's volume declaration; this layer adds no directory types. Existing type snapshots and inline Items manifests remain unchanged. Large backups add bounded LargeItems indexes and sorted relationship shards, require this release to browse, and export as uncompressed POSIX tar. Backups without large types retain ZIP and remain readable by the current release. The archive importer accepts both formats, enforces proportional finite limits and commits metadata last. Large runs yield to queued tenants at page boundaries and leave other tenants' schedules eligible while running.
 
 - Defender is opt-in and now backs up 17 Microsoft Graph configuration types. It does not cover Office 365 threat policies or Defender for Endpoint settings. Restore remains unavailable. Workbooks add Workbooks.Read.All to Detection and response. Existing Intune selections stay unchanged.

@@ -20,7 +20,7 @@ Before you add it, check whether a policy change is simpler: see [Conditional Ac
 | --- | --- |
 | Read Intune configuration | Yes, all of it in the tenant, including script contents. Intune role scope tags do not limit it. |
 | Change Intune | No. TenuVault refuses a reader with any permission beyond the read lists below. It uses only the permissions you verified: when they change, scheduled backups keep running with the verified permissions the reader still has, and the card names the change, lists the policies that are left out and asks you to verify again. |
-| Write backups to Azure Storage | Yes, into the backup container only. |
+| Write backups to Azure Storage | Yes, into the backup containers only. |
 | Delete backups | No, provided it has only the **TenuVault Backup Writer** role (see [Permissions](#permissions)). That role has no delete permission, and if the reader overwrites a blob, blob versioning keeps the previous version for 30 days (`-VersionRetentionDays`), long enough to notice and recover it. A broader storage role assigned to the reader by hand would override this; the storage script warns about such roles and step 3 below includes the IAM check. |
 | Read encrypted OMA-URI values in plain text | Yes. Microsoft documents `DeviceManagementConfiguration.Read.All` as enough to read them, so the certificate gives access to those secret values too. If Microsoft refuses the read, the scheduled backup stores the value masked (`****`) and marks the profile as not restorable from that backup. A manual backup with your sign-in captures it when Microsoft returns the value; if Microsoft refuses that read too, the manual backup fails for that profile. |
 | Read device categories and device clean-up rules | Only with the optional device inventory permission (see below). Otherwise scheduled backups leave them out and manual backups include them. |
@@ -79,7 +79,7 @@ For a tenant that backs up Entra ID or Defender, name the services with `-Servic
 * Mobile device management and mobile application management enrollment policies, the on-premises synchronization settings and the ownerless group policy are left out of every scheduled backup: Microsoft Graph lets only a signed-in admin read them.
 * A reader with permissions for Entra ID or Defender is refused by TenuVault versions before 0.6, which know only the permissions for Intune and Conditional Access. Update TenuVault on every computer that uses the reader before you add a service to it.
 
-For Azure Storage, the custom role **TenuVault Backup Writer** allows reading and writing blobs, assigned on the `intune-backups` container only. It has no delete permission and cannot create containers.
+For Azure Storage, the custom role **TenuVault Backup Writer** allows reading and writing blobs, assigned on the `intune-backups` and `intune-backups-large` containers only. It has no delete permission and cannot create containers.
 
 ## Connection health in Settings
 
@@ -114,7 +114,7 @@ You do not need to know Entra ID app registrations to follow the setup. These ar
 | Application permission | The app may act on its own, with no person signed in. The Backup Reader has only this kind, and only read permissions. |
 | Admin consent | An Entra administrator approves the permissions for the whole tenant. Without it, the permissions exist on paper but Microsoft issues no token. The setup script grants it, which is why it needs a highly privileged role. |
 | Certificate credential | A key pair instead of a password. The private half proves identity and never leaves the TenuVault computer. The public half (the `.cer` file) is uploaded to the app registration and is safe to send to your Entra administrator. There is no client secret. |
-| Azure role assignment | A separate Azure decision: "this identity may read and write blobs in this one container". Graph permissions do not cover storage, and storage roles do not cover Intune. Azure backups need both halves. |
+| Azure role assignment | A separate Azure decision: "this identity may read and write blobs in these backup containers". Graph permissions do not cover storage, and storage roles do not cover Intune. Azure backups need both halves. |
 | Application (client) ID | The public ID of the Backup Reader app registration. The scripts print it, you type it into TenuVault once, and your Azure administrator needs it. It is not a secret. |
 
 ## Who has to do what
@@ -125,7 +125,7 @@ Setup involves up to four people. One person can hold several of these roles, bu
 | --- | --- | --- |
 | **You**, the Intune administrator who uses TenuVault | Start setup in TenuVault, save the public certificate, hand it to the Entra administrator, enter the application ID they send back, select **Verify**, and confirm the first scheduled backup. | Your normal TenuVault and Intune roles. No Entra or Azure admin role. |
 | **Entra administrator** | Review and run `New-TenuVaultBackupReader.ps1`. It creates the app registration and its enterprise application, sets exactly the read permissions, uploads your certificate and grants admin consent. They send you the printed tenant ID, application (client) ID and certificate thumbprint. | **Global Administrator** or **Privileged Role Administrator**. A Cloud Application Administrator can maintain app registrations, but granting these application permissions needs one of the two privileged roles, so have one of them run the script. |
-| **Azure administrator** (only for backups in Azure Storage) | Run `New-TenuVaultStorage.ps1` with `-BackupReaderAppId`. It creates the backup container, the custom **TenuVault Backup Writer** role, its assignment to the Backup Reader on that container only, blob versioning, and the lifecycle rule for previous versions. | **Owner**, or **Contributor** plus **User Access Administrator**, on the storage account's resource group. User Access Administrator alone is not enough: creating the custom role and assigning it needs the role write access, and creating the container, versioning and lifecycle rule needs Contributor's storage management access. |
+| **Azure administrator** (only for backups in Azure Storage) | Run `New-TenuVaultStorage.ps1` with `-BackupReaderAppId`. It creates both backup containers, the custom **TenuVault Backup Writer** role, its assignment to the Backup Reader on each backup container only, blob versioning, and the lifecycle rule for previous versions. | **Owner**, or **Contributor** plus **User Access Administrator**, on the storage account's resource group. User Access Administrator alone is not enough: creating the custom role and assigning it needs the role write access, and creating the container, versioning and lifecycle rule needs Contributor's storage management access. |
 | **Conditional Access or security administrator** (recommended, not required) | Approve the exception in the first place, review the permission list below, and optionally restrict the Backup Reader with a Conditional Access policy for workload identities (needs Microsoft Entra Workload ID Premium). They also own the "something looks wrong" review of its sign-ins. | Whoever owns Conditional Access and app reviews in your company. |
 
 Agree before you start:
@@ -176,12 +176,12 @@ Running the script again with the same values changes nothing that already match
 
 Skip this step when backups stay on the TenuVault computer. Otherwise send your Azure administrator the application (client) ID from step 2, the storage values you collected, and this request:
 
-> Please let the TenuVault Backup Reader (application ID `<id>`) write backups to our backup storage, without delete access. Run: `./New-TenuVaultStorage.ps1 -AdminGroupId <Intune admin group object ID> -SubscriptionId <subscription> -ResourceGroupName <resource group> -StorageAccountName <storage account> -BackupReaderAppId <id>`. It creates the `intune-backups` container, a custom "TenuVault Backup Writer" role (read and write blobs, no delete) assigned to the reader on that container only, turns on blob versioning, and adds a lifecycle rule that removes only previous blob versions. Details: https://docs.tenuvault.com/backups/backup-reader/
+> Please let the TenuVault Backup Reader (application ID `<id>`) write backups to our backup storage, without delete access. Run: `./New-TenuVaultStorage.ps1 -AdminGroupId <Intune admin group object ID> -SubscriptionId <subscription> -ResourceGroupName <resource group> -StorageAccountName <storage account> -BackupReaderAppId <id>`. It creates the `intune-backups` and `intune-backups-large` containers, a custom "TenuVault Backup Writer" role (read and write blobs, no delete) assigned to the reader on each backup container only, turns on blob versioning, and adds a lifecycle rule that removes only previous blob versions. Details: https://docs.tenuvault.com/backups/backup-reader/
 
 They run the command from the request. The role assignment to the Backup Reader is direct and permanent; a PIM eligible assignment would never be active at night. What they can check afterwards in the Azure portal:
 
-* The `intune-backups` container exists.
-* On that container's **Access Control (IAM)**, the Backup Reader has only **TenuVault Backup Writer**. Broader roles for it on the storage account defeat the no-delete design; the script warns about them but does not remove them.
+* The `intune-backups` and `intune-backups-large` containers exist.
+* On each backup container's **Access Control (IAM)**, the Backup Reader has only **TenuVault Backup Writer**. Broader roles for it on the storage account defeat the no-delete design; the script warns about them but does not remove them.
 * **Data protection:** blob versioning is on. **Lifecycle management:** one rule that removes previous versions after 30 days (`-VersionRetentionDays`); it never removes current backups.
 * **Networking:** if the storage firewall restricts access, the network the TenuVault computer uses must be allowed. The reader connects from that same computer, so an allowed admin computer is also an allowed reader.
 

@@ -58,6 +58,7 @@ Used only when you store backups in your own Azure storage account. TenuVault us
 
 | Container | Contents | Encrypted by TenuVault |
 | --- | --- | --- |
+| `intune-backups-large` | Large backup claims and manifests under `backup-large-.../`; snapshots, indexes and relationships under `payload/backup-large-.../` | No. Plain JSON with Azure encryption at rest and your role assignments, like ordinary backups. |
 | `intune-backups` | Your backups | No. Stored as plain JSON, protected by Azure encryption at rest and your role assignments. Backups made by earlier TenuVault versions stay encrypted with the device key that made them. |
 | `audit-logs` | The TenuVault audit log for the tenant, including which admin started each action | No. Protected by your storage account's own encryption and access control. |
 | `tenant-metadata` | Tenant profile information TenuVault keeps for the tenant | No. Protected by your storage account's own encryption and access control. |
@@ -66,7 +67,7 @@ See [Encryption and recovery key](/security/encryption/) for how backups are pro
 
 When backups are stored on **This device, encrypted**, TenuVault makes no storage connection at all. Backups, the audit log and tenant metadata are all written encrypted to the folder you choose.
 
-Large-inventory preparation uses encrypted temporary merge files for sorted object indexes and sub-collections. Each sort has a random AES-256-GCM key held only in memory. The files are removed when the sort ends; after a process crash, any remaining ciphertext cannot be reopened because its key was not stored. This adds no outbound destination and enables no directory backup type by itself. A large backup export is an unencrypted tar archive in the destination you choose, written under a temporary `.partial` name until verification finishes. Protect exported archives like the configuration itself. See [Large tenants](/backups/storage/#large-tenants).
+Large-inventory preparation uses encrypted temporary merge files for sorted object indexes and sub-collections. Each sort has a random AES-256-GCM key held only in memory. The files are removed when the sort ends; after a process crash, any remaining ciphertext cannot be reopened because its key was not stored. Large captures use the separate `intune-backups-large` container on the same chosen storage account, or the same encrypted local store. History lists only its claim and manifest prefix, so opening history never enumerates large snapshots. This adds no outbound destination and enables no directory backup type by itself. A large backup export is an unencrypted tar archive in the destination you choose, written under a temporary `.partial` name until verification finishes. Protect exported archives like the configuration itself. See [Large tenants](/backups/storage/#large-tenants).
 
 ## tenuvault.com: license checks and CIS Benchmarks content
 

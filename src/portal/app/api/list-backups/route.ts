@@ -1,9 +1,9 @@
+import { backupStoragePath, isLargeBackup, LARGE_BACKUP_CONTAINER } from "../../../../shared/backup-storage"
 import { backupTypeUse } from "../../../../shared/services/backup-use"
 import { BlobListError, decodeXml, listBlobPages } from "~/lib/storage/list"
 import { typeForFolder } from "../../../../shared/intune/registry"
 import { describeScope } from "../../../../shared/intune/scope"
 import { comparable, compareBackups, summarize, type BackupFingerprint, type ChangeSummary } from "../../../../shared/intune/backup-changes"
-import { blobPath } from "../../../../shared/security"
 import { BACKUP_OWNER_FILE, LOCAL_STORAGE_PREFIX, MAX_BACKUP_ARCHIVE_BYTES } from "../../../../shared/constants"
 import { mapLimit } from "../../../../shared/map-limit"
 import { MetadataCache } from "~/lib/storage/metadata-cache"
@@ -13,7 +13,7 @@ import { backupFoldersIn, parseBackupName } from "../../../../shared/intune/back
 import { isLegacyOtherTenantError, isLegacySealedError } from "../../../../shared/legacy-sealed"
 import { oversizedOwnershipFile, resolveBackupOwnership, type OwnershipFile } from "../../../../shared/backup-ownership"
 import { readJsonCapped } from "../../../../shared/capped-body"
-import { DAMAGE_KINDS_HEADER, damagedFileKindsFrom, type DamagedFileKinds } from "../../../../shared/damaged-files"
+import { DAMAGE_KINDS, DAMAGE_KINDS_HEADER, damagedFileKindsFrom, type DamagedFileKinds } from "../../../../shared/damaged-files"
 import { type NextRequest, NextResponse } from "next/server"
 
 // Helper function to format bytes to human readable format
@@ -45,14 +45,14 @@ const metadataCache = new MetadataCache<MetadataRead>(result => !!result.metadat
  */
 const ownerCache = new MetadataCache<OwnershipFile>(result => result.kind === 'found')
 
-/** Read only root records first, before deciding whether snapshots can be listed. */
-async function describeBackup(storageAccountName: string, name: string, accessToken: string, tenantId: string, appId: string, summary: boolean) {
+/** One backup folder, described from metadata and either a folder listing or the summary inventory. */
+async function describeBackup(storageAccountName: string, name: string, accessToken: string, tenantId: string, inventory?: { text: string; cacheKey: string; version: string; owner: string }) {
   const parsed = parseBackupName(name)!
   const legacy = parsed.precision === "day"
   const date = parsed.timestamp.slice(0, 10)
   const readMetadata = async (): Promise<MetadataRead> => {
     try {
-      const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(name)}/metadata.json`, { headers: storageHeaders(accessToken) })
+      const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(`${name}/metadata.json`)}`, { headers: storageHeaders(accessToken) })
       if (response.ok) {
         const body = await readJsonCapped(response, MAX_BACKUP_ARCHIVE_BYTES)
         if (body.kind === 'oversized') return { metadata: null, metadataError: oversizedOwnershipFile('metadata.json') }
@@ -79,26 +79,29 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
   // On this device a backup can become unavailable while its metadata.json stays unchanged (another
   // of its files is damaged), so its metadata is read each time: the store checks it then.
   const local = storageAccountName.startsWith(LOCAL_STORAGE_PREFIX)
-  const list = (delimiter = "") => listBlobPages(`https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(`${name}/`)}${delimiter ? "&delimiter=/" : ""}`, accessToken).catch((error) => {
+  const metadataRead: Promise<MetadataRead> = inventory?.version
+    ? (local ? readMetadata() : metadataCache.read(inventory.cacheKey, inventory.version, readMetadata))
+    // On this device a listing leaves out a metadata.json it cannot read, so a folder listed without
+    // one is asked for it: the store answers 409 when damaged files made the backup unavailable.
+    : inventory ? (local ? readMetadata().then((read) => read.unavailable ? read : { metadata: null }) : Promise.resolve({ metadata: null })) : readMetadata()
+  // A backup made unavailable by damaged files is still listed, with the reason, so the others stay usable.
+  const filesRead: Promise<string | { unavailable: string }> = inventory ? Promise.resolve(inventory.text) : listBlobPages(`https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(`${name}/`)}`, accessToken).catch((error) => {
     const unavailable = error instanceof BlobListError ? unavailableReason(error.status, error.body) : null
     if (unavailable) return { unavailable }
     throw new Error(`Backup ${name} inventory is unavailable. Check storage access and retry.`)
   })
-  const root = await list("/")
-  const records = typeof root === "string" ? root : ""
-  const record = (file: string) => [...records.matchAll(/<Blob>[\s\S]*?<\/Blob>/g)].find(match => match[0].includes(`<Name>${name}/${file}</Name>`))?.[0] ?? ""
-  const version = record("metadata.json")
-  const cacheKey = JSON.stringify([tenantId.toLowerCase(), storageAccountName, appId, name])
-  const metadataResult = summary && !local && version ? await metadataCache.read(cacheKey, version, readMetadata) : await readMetadata()
-  const listedMetadata = typeof root === "string" && !metadataResult.unavailable ? metadataResult.metadata : null
-  const readError = typeof root !== "string" ? root.unavailable : metadataResult.metadataError
-  // Resolve ownership before listing content. The atomic claim also describes a large run,
-  // including the interval before its first page and after a crash without a manifest.
-  let large = Boolean(metadataResult.metadata?.LargeItems)
+  const [metadataResult, listing] = await Promise.all([metadataRead, filesRead])
+  const unavailable = typeof listing === 'string' ? (metadataResult.unavailable ? metadataResult.metadataError! : null) : listing.unavailable
+  const filesText = typeof listing === 'string' && !unavailable ? listing : ''
+  const listedMetadata = unavailable ? null : metadataResult.metadata
+  const readError = unavailable ?? metadataResult.metadataError
+  // Ownership comes from the shared resolver (shared/backup-ownership.ts): the manifest's tenant,
+  // else the ownership marker, read just for those folders and only when the listing holds one.
+  // For a folder without a manifest the marker's run id lets the Dashboard count a failed run once.
   const readMarker = async (): Promise<OwnershipFile> => {
     try {
-      const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(name)}/${BACKUP_OWNER_FILE}`, { headers: storageHeaders(accessToken) })
-      if (response.status === 404 || (local && response.status === 409 && (metadataResult.unavailable || (!record(BACKUP_OWNER_FILE) && response.headers.get('x-ms-error-code') === 'InventoryIncomplete')))) return { kind: 'missing' }
+      const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(`${name}/${BACKUP_OWNER_FILE}`)}`, { headers: storageHeaders(accessToken) })
+      if (response.status === 404) return { kind: 'missing' }
       if (!response.ok) return { kind: 'unreadable', error: new Error(`The ownership record is unavailable (${response.status}).`) }
       const body = await readJsonCapped(response, MAX_BACKUP_ARCHIVE_BYTES)
       if (body.kind === 'oversized') return { kind: 'unreadable', error: new Error(oversizedOwnershipFile(BACKUP_OWNER_FILE)) }
@@ -110,22 +113,16 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
   }
   const { manifest, owner } = await resolveBackupOwnership(async (file) => {
     if (file === 'metadata.json') return listedMetadata ? { kind: 'found', value: listedMetadata } : readError ? { kind: 'unreadable', error: new Error(readError) } : { kind: 'missing' }
-    const ownerVersion = record(BACKUP_OWNER_FILE)
-    const marker = await (summary && !local && ownerVersion ? ownerCache.read(cacheKey, ownerVersion, readMarker) : readMarker())
-    // An unreadable claim may describe a large run too. Leave it unresolved without a deep scan.
-    if (marker.kind === 'unreadable' || (marker.kind === 'found' && (marker.value as any)?.LargeInventory)) large = true
-    return marker
+    if (!filesText.includes(`<Name>${name}/${BACKUP_OWNER_FILE}</Name>`)) return { kind: 'missing' }
+    return inventory?.owner ? ownerCache.read(inventory.cacheKey, inventory.owner, readMarker) : readMarker()
   }, tenantId)
-  const listing = typeof root !== "string" ? root : large ? "" : await list()
-  const unavailable = typeof listing === 'string' ? (metadataResult.unavailable ? metadataResult.metadataError! : null) : listing.unavailable
-  const filesText = typeof listing === 'string' && !unavailable ? listing : ''
   // A marker sealed by an earlier version that cannot be opened for this tenant is foreign (another
   // tenant's, or a key this device lacks). One that could not be read otherwise (any status but 404,
   // a network error, a body that cannot be parsed or names no tenant) leaves the folder unresolved
   // until it can be. A missing sign-in on this device leaves the marker unreadable until it is fixed.
   // Metadata the resolver could not use (it records an invalid tenant) is shown as unreadable, as it is for every other caller.
-  const metadata = !unavailable && listedMetadata && manifest.kind === 'found' ? listedMetadata : null
-  const metadataError = unavailable ?? readError ?? (listedMetadata && manifest.kind === 'unreadable' && manifest.error instanceof Error ? manifest.error.message : undefined)
+  const metadata = listedMetadata && manifest.kind === 'found' ? listedMetadata : null
+  const metadataError = readError ?? (listedMetadata && manifest.kind === 'unreadable' && manifest.error instanceof Error ? manifest.error.message : undefined)
   const markerFailure = owner.kind === 'unreadable' ? owner.error : null
   const foreignMarker = markerFailure instanceof Error && markerFailure.name === 'FetchApplicationError'
   // A folder whose manifest could not be read is not matched to its run: its status is unknown, so the run counts once, through its attempt record.
@@ -140,7 +137,7 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
   let files = 0
   const counts: Record<string, number> = {}
   const sizes: Record<string, number> = {}
-  for (const match of filesText.matchAll(/<Blob>[\s\S]*?<Name>(.*?)<\/Name>[\s\S]*?<Content-Length>(\d+)<\/Content-Length>[\s\S]*?<\/Blob>/g)) {
+  for (const match of (isLargeBackup(name) ? "" : filesText).matchAll(/<Blob>[\s\S]*?<Name>(.*?)<\/Name>[\s\S]*?<Content-Length>(\d+)<\/Content-Length>[\s\S]*?<\/Blob>/g)) {
     const parts = decodeXml(match[1] ?? '').split('/')
     const bytes = parseInt(match[2]!)
     size += bytes
@@ -180,7 +177,7 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
     totalPolicies,
     counts,
     sizes,
-    ...(large ? { largeInventory: true } : {}),
+    ...(isLargeBackup(name) ? { largeInventory: true } : {}),
     // Kept for the dashboard's breakdown.
     policies: {
       deviceConfigurations: count('DeviceConfigurations'),
@@ -268,7 +265,7 @@ export async function POST(request: NextRequest) {
 
     // List blobs in the intune-backups container
     const summary = body.summary === true
-    const blobsUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&delimiter=/`
+    const blobsUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${summary ? "" : "&delimiter=/"}`
 
     let blobsText: string
     try {
@@ -277,35 +274,59 @@ export async function POST(request: NextRequest) {
       if (!(error instanceof BlobListError)) throw error
       console.error("Failed to list blobs:", error.body)
 
-      // If container doesn't exist, return empty
+      // A local import may hold only the large container.
       if (error.status === 404) {
-        return NextResponse.json({ backups: [] })
-      }
+        blobsText = ""
+      } else {
+        // AuthorizationFailure is the storage firewall rejecting this network, not a missing role
+        if (error.body.includes("<Code>AuthorizationFailure</Code>")) {
+          return NextResponse.json({
+            error: "Storage network access denied",
+            details: `Storage account ${storageAccountName} rejected the request from this network. Allow this computer's public IP address in the storage account's networking settings, or connect through a network it allows.`,
+            backups: []
+          }, { status: 403 })
+        }
 
-      // AuthorizationFailure is the storage firewall rejecting this network, not a missing role
-      if (error.body.includes("<Code>AuthorizationFailure</Code>")) {
-        return NextResponse.json({
-          error: "Storage network access denied",
-          details: `Storage account ${storageAccountName} rejected the request from this network. Allow this computer's public IP address in the storage account's networking settings, or connect through a network it allows.`,
-          backups: []
-        }, { status: 403 })
-      }
+        // If authorization error, provide helpful message
+        if (error.body.includes("AuthorizationPermissionMismatch")) {
+          return NextResponse.json({
+            error: "Missing storage permissions",
+            details: `Your account cannot read backups in storage account ${storageAccountName}. Ask an Azure administrator for the "Storage Blob Data Contributor" role on it. New role assignments can take a few minutes to apply.`,
+            backups: []
+          }, { status: 403 })
+        }
 
-      // If authorization error, provide helpful message
-      if (error.body.includes("AuthorizationPermissionMismatch")) {
-        return NextResponse.json({ 
-          error: "Missing storage permissions",
-          details: `Your account cannot read backups in storage account ${storageAccountName}. Ask an Azure administrator for the "Storage Blob Data Contributor" role on it. New role assignments can take a few minutes to apply.`,
-          backups: []
-        }, { status: 403 })
+        return NextResponse.json({ error: "Backup storage is unavailable. Check storage access and retry." }, { status: error.status })
       }
-
-      return NextResponse.json({ error: "Backup storage is unavailable. Check storage access and retry." }, { status: error.status })
     }
-    
-    // Always discover folders hierarchically: even an unregistered large type can leave
-    // an abandoned folder, so a flat summary scan cannot safely be used here.
-    const backupFolders = backupFoldersIn(blobsText).map((folder) => folder.name)
+
+    // Large discovery contains only claims and manifests. Payloads live under a disjoint prefix
+    // in their own container, so no history path can enumerate snapshots, even after a crash.
+    const discoveryUrl = `https://${storageAccountName}.blob.core.windows.net/${LARGE_BACKUP_CONTAINER}?restype=container&comp=list&prefix=backup-large-`
+    const largeText = await listBlobPages(discoveryUrl, accessToken).catch(error => {
+      if (error instanceof BlobListError && error.status === 404) return ''
+      throw new Error("Large backup inventory is unavailable. Check storage access and retry.", { cause: error })
+    })
+
+    // Parse XML response to extract backup folders
+    // Summary mode groups one flat inventory in process, including older backups without manifests.
+    const inventories = new Map<string, { text: string; cacheKey: string; version: string; owner: string }>()
+    {
+      for (const match of (summary ? blobsText + largeText : largeText).matchAll(/<Blob>[\s\S]*?<\/Blob>/g)) {
+        const name = decodeXml(match[0].match(/<Name>(.*?)<\/Name>/)?.[1] ?? '')
+        const folder = name.split('/')[0]!
+        if (!parseBackupName(folder)) continue
+        let inventory = inventories.get(folder)
+        if (!inventory) {
+          inventory = { text: '', cacheKey: JSON.stringify([String(tenantId).toLowerCase(), storageAccountName, appId, folder]), version: '', owner: '' }
+          inventories.set(folder, inventory)
+        }
+        inventory.text += match[0]
+        if (name === `${folder}/metadata.json`) inventory.version = match[0]
+        if (name === `${folder}/${BACKUP_OWNER_FILE}`) inventory.owner = match[0]
+      }
+    }
+    const backupFolders = summary ? [...inventories.keys()] : [...backupFoldersIn(blobsText).map((folder) => folder.name), ...inventories.keys()]
     // Backups on this device: the store says how many files in the folder could not be read, so
     // the list can say that some backups may be missing from it or unavailable.
     let damagedFiles = 0
@@ -313,11 +334,29 @@ export async function POST(request: NextRequest) {
     // Why they cannot be used, by kind, so the list can say what to do about them.
     let damagedKinds: DamagedFileKinds | null = null
     if (storageAccountName.startsWith(LOCAL_STORAGE_PREFIX)) {
-      const properties = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container`, { headers: storageHeaders(accessToken) }).catch(() => null)
-      damagedFiles = Number(properties?.headers.get('x-tenuvault-unreadable-files') ?? 0) || 0
-      damagedFileNames = (properties?.headers.get('x-tenuvault-unreadable-file-names') ?? '').split(',').filter((name) => /^[0-9a-f]{1,64}\.tvb$/i.test(name))
-      // Kinds that do not count exactly the unreadable files are left out; the page then says the reasons are not known.
-      try { damagedKinds = damagedFileKindsFrom(JSON.parse(properties?.headers.get(DAMAGE_KINDS_HEADER) ?? 'null'), damagedFiles) } catch { damagedKinds = null }
+      const containers = ['intune-backups', LARGE_BACKUP_CONTAINER]
+      const kinds: DamagedFileKinds[] = []
+      let knownKinds = true
+      for (const container of containers) {
+        const properties = await fetch(`https://${storageAccountName}.blob.core.windows.net/${container}?restype=container`, { headers: storageHeaders(accessToken) }).catch(() => null)
+        const count = Number(properties?.headers.get('x-tenuvault-unreadable-files') ?? 0) || 0
+        damagedFiles += count
+        damagedFileNames.push(...(properties?.headers.get('x-tenuvault-unreadable-file-names') ?? '').split(',').filter((name) => /^[0-9a-f]{1,64}\.tvb$/i.test(name)))
+        if (count) {
+          try {
+            const value = damagedFileKindsFrom(JSON.parse(properties?.headers.get(DAMAGE_KINDS_HEADER) ?? 'null'), count)
+            if (value) kinds.push(value)
+            else knownKinds = false
+          } catch { knownKinds = false }
+        }
+      }
+      if (knownKinds && kinds.length) {
+        damagedKinds = kinds[0]!
+        for (const next of kinds.slice(1)) {
+          for (const kind of DAMAGE_KINDS) { damagedKinds.counts[kind] += next.counts[kind]; damagedKinds.names[kind].push(...next.names[kind]) }
+          damagedKinds.codes = [...new Set([...damagedKinds.codes, ...next.codes])]
+        }
+      }
     }
     
     // Get details for each backup folder
@@ -328,7 +367,7 @@ export async function POST(request: NextRequest) {
     // whose marker cannot be opened for this tenant. Older backups that do not record a tenant are still listed.
     // A folder whose marker could not be read may be another tenant's, so it is left out too and
     // counted as unresolved; its run, if it failed, counts once through its attempt record.
-    const described = await mapLimit(backupFolders, 6, (name) => describeBackup(storageAccountName, name, accessToken, String(tenantId), String(appId), summary))
+    const described = await mapLimit(backupFolders, 6, (name) => describeBackup(storageAccountName, name, accessToken, String(tenantId), inventories.get(name)))
     const unresolved = described.filter((backup) => backup.unresolved).length
     // Folders sealed by an earlier version that this device cannot open, for the backups page's offer
     // to import a recovery key. Without the key nobody can tell whose such a folder is, so it counts

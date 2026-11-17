@@ -1,3 +1,4 @@
+import { backupBlobName, LARGE_BACKUP_CONTAINER } from "../src/shared/backup-storage"
 import { createHash } from "node:crypto"
 import { afterEach, expect, it } from "vitest"
 import { mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises"
@@ -9,7 +10,7 @@ import { snapshotHash } from "../src/portal/lib/policies/backup-manifest"
 import { LocalBlobStore } from "../src/main/storage/local-blob-store"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
 import { LARGE_SHARD_ITEMS } from "../src/shared/large-backup"
-const tenant = "11111111-1111-1111-1111-111111111111", backup = "backup-2026-11-16-120000"
+const tenant = "11111111-1111-1111-1111-111111111111", backup = "backup-large-2026-11-16-120000"
 const roots: string[] = []
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })
 async function synthetic(count = 11, bytes = 100) {
@@ -40,7 +41,7 @@ it("exports and reviews more than 60000 files and 128 MiB with bounded tar recor
   if (process.env.TV_TEST_LARGE_IMPORT === "1") {
     const store = new LocalBlobStore(join(f.root, "encrypted"), [Buffer.alloc(32, 3)])
     await importLargeArchive(store, reviewed)
-    const metadata = JSON.parse((await store.get(`tvlocal-${tenant}`, "intune-backups", `${backup}/metadata.json`)).data.toString())
+    const metadata = JSON.parse((await store.get(`tvlocal-${tenant}`, LARGE_BACKUP_CONTAINER, backupBlobName(`${backup}/metadata.json`))).data.toString())
     expect(metadata.LargeItems.DeviceConfigurations.count).toBe(60_001)
   }
   const handle = await open(f.path, "r")
@@ -52,7 +53,7 @@ it("imports reviewed shards and snapshots and refuses an occupied destination", 
   const store = new LocalBlobStore(join(f.root, "encrypted"), [Buffer.alloc(32, 3)])
   const reviewed = await reviewLargeArchive(f.path)
   await importLargeArchive(store, reviewed)
-  const result = JSON.parse((await store.get(`tvlocal-${tenant}`, "intune-backups", `${backup}/metadata.json`)).data.toString())
+  const result = JSON.parse((await store.get(`tvlocal-${tenant}`, LARGE_BACKUP_CONTAINER, backupBlobName(`${backup}/metadata.json`))).data.toString())
   expect(result.Import.sha256).toBe(reviewed.digest)
   expect(result.LargeItems).toEqual(f.metadata.LargeItems)
   await expect(importLargeArchive(store, reviewed)).rejects.toThrow("already exists")
@@ -87,7 +88,7 @@ it("rolls back a changed reviewed source and never publishes its metadata", asyn
   const reviewed = await reviewLargeArchive(f.path)
   reviewed.digest = "changed"
   await expect(importLargeArchive(store, reviewed)).rejects.toThrow("changed since review")
-  expect(await store.list(`tvlocal-${tenant}`, "intune-backups")).toEqual([])
+  expect(await store.list(`tvlocal-${tenant}`, LARGE_BACKUP_CONTAINER)).toEqual([])
 })
 it("removes a failed streaming download and preserves the destination", async () => {
   const f = await synthetic()
@@ -136,14 +137,14 @@ it("round trips three objects with 500000 members each beyond the parent file al
   await importLargeArchive(store, reviewed)
   const account = `tvlocal-${tenant}`
   // 1500 relationship shards, three snapshots, one index, metadata and ownership.
-  expect(await store.list(account, "intune-backups", `${backup}/`)).toHaveLength(1506)
+  expect(await store.list(account, LARGE_BACKUP_CONTAINER)).toHaveLength(1506)
   for (let at = 0; at < 3; at++) {
     const name = `${backup}/_relations/DeviceConfigurations/${f.snapshot(at).id}/members/000499.json`
-    const ids = JSON.parse((await store.get(account, "intune-backups", name)).data.toString())
+    const ids = JSON.parse((await store.get(account, LARGE_BACKUP_CONTAINER, backupBlobName(name))).data.toString())
     expect(ids).toHaveLength(1000)
     expect(ids.at(-1)).toBe("member-00499999")
   }
-  const metadata = JSON.parse((await store.get(account, "intune-backups", `${backup}/metadata.json`)).data.toString())
+  const metadata = JSON.parse((await store.get(account, LARGE_BACKUP_CONTAINER, backupBlobName(`${backup}/metadata.json`))).data.toString())
   expect(metadata.Import.sha256).toBe(reviewed.digest)
 }, 120_000)
 

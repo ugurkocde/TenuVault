@@ -1,3 +1,4 @@
+import { isLargeBackup, LARGE_BACKUP_CONTAINER } from "../../shared/backup-storage"
 import { captureLarge } from "./large"
 import { LARGE_JOB_MS, LARGE_TYPE_MS, LARGE_TYPE_REQUESTS, type LargeIndexes } from "../../shared/large-backup"
 import { backupTypeUse } from "../../shared/services/backup-use"
@@ -498,10 +499,11 @@ export class BackupEngine {
     const started = this.now()
     const local = isLocalAccount(request.storageAccountName)
     const fetchImpl = answeredFetch(this.deps.fetch, outcome, local ? `${request.storageAccountName.toLowerCase()}.blob.core.windows.net` : null)
-    const backupFolder = `backup-${folderTimestamp(started)}`
+    const streaming = this.hasLargeTypes(request.tenantId, request.scope ?? EVERYTHING)
+    let backupFolder = `backup-${folderTimestamp(started)}`
     job.backupFolder = backupFolder
     this.write(job, `Backing up tenant ${request.tenantId} to ${local ? "this device (encrypted)" : `storage account ${request.storageAccountName}`}.`)
-    this.write(job, `Backup folder: ${backupFolder}`)
+    if (!streaming) this.write(job, `Backup folder: ${backupFolder}`)
     if (tokens.mode === "app-only") this.write(job, "Reading as the tenant's Backup Reader (app-only, read-only).")
 
     const observeToken = (granted: ReturnType<typeof grantedPermissions>) => {
@@ -544,6 +546,12 @@ export class BackupEngine {
     const applicationOnly = (type: IntuneType) => signIn === "delegated" && type.backupMode === "application"
     const unpermitted = includedTypes(scope).filter((type) => !moduleOff.has(type.folder) && !readerExcluded.has(type.folder) && (adminOnly(type) || applicationOnly(type) || (moduleForFolder(type.folder)?.module.precheck && granted && !canBackUp(type.folder, granted))))
     const types = includedTypes(scope).filter((type) => !readerExcluded.has(type.folder) && !moduleOff.has(type.folder) && !unpermitted.includes(type))
+    if (types.some(type => type.volume === "large")) {
+      backupFolder = `backup-large-${folderTimestamp(started)}`
+      job.backupFolder = backupFolder
+      if (local || tokens.mode === "delegated") await storage.ensureContainer(LARGE_BACKUP_CONTAINER)
+    }
+    if (streaming) this.write(job, `Backup folder: ${backupFolder}`)
     // Results list every type this run covers or leaves out for a permission, in registry order.
     const results: BackupResults = {
       types: includedTypes(scope)
@@ -1128,10 +1136,13 @@ export class BackupEngine {
     const days = this.deps.retentionDays?.(job.tenantId) ?? 0
     if (days <= 0) return 0
     const cutoff = this.now().getTime() - days * 24 * 60 * 60 * 1000
-    const { prefixes } = await storage.list("backup-", "/")
+    const ordinary = await storage.list("backup-", "/")
+    const large = await storage.list("backup-large-", "", LARGE_BACKUP_CONTAINER, true)
+    const largePrefixes = [...new Set(large.blobs.map(name => `${name.split("/")[0]}/`))].filter(isLargeBackup)
+    const prefixes = [...ordinary.prefixes, ...largePrefixes]
     const backups = prefixes
       .map((prefix) => {
-        const match = /^backup-(\d{4})-(\d{2})-(\d{2})-(\d{2})(\d{2})(\d{2})\/$/.exec(prefix)
+        const match = /^backup-(?:large-)?(\d{4})-(\d{2})-(\d{2})-(\d{2})(\d{2})(\d{2})\/$/.exec(prefix)
         if (!match || prefix === `${current}/`) return null
         const [, y, mo, d, h, mi, se] = match.map(Number) as number[]
         return { prefix, time: Date.UTC(y!, mo! - 1, d!, h!, mi!, se!) }
@@ -1206,7 +1217,7 @@ export class BackupEngine {
         kept++
         continue
       }
-      const { blobs } = await storage.list(backup.prefix)
+      const { blobs } = await storage.listFolder(backup.prefix)
       // The manifest goes first: a delete that stops at a protected file must not leave a
       // metadata.json that still reports the backup as complete. A protected manifest stops
       // before any policy file is touched.

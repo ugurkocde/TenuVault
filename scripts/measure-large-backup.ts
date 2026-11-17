@@ -35,7 +35,7 @@ try {
   clearInterval(sampler)
   const uptimeAfter = execFileSync("uptime", { encoding: "utf8" }).trim()
   let storedBytes = 0, files = 0
-  for (const name of await readdir(join(root, account, "intune-backups"))) { const info = await stat(join(root, account, "intune-backups", name)); if (info.isFile()) { storedBytes += info.size; files++ } }
+  for (const name of await readdir(join(root, account, "intune-backups-large"))) { const info = await stat(join(root, account, "intune-backups-large", name)); if (info.isFile()) { storedBytes += info.size; files++ } }
   const report = { machine: { hostname: hostname(), platform: platform(), release: release(), cpu: cpus()[0]?.model, cores: cpus().length, ramGiB: totalmem() / 1024 ** 3, node: process.version }, scale, collections, uptimeBefore, uptimeAfter, wallSeconds: seconds, peakRssBytes: Math.max(peakRss, process.memoryUsage().rss), ...graph.stats(), storedBytes, files, status: job.status, coverage: job.coverage, results: job.results, exception: job.exception }
   const output = process.env.TV_MEASURE_OUTPUT ?? join(tmpdir(), "tenuvault-large-measurement.json")
   await writeFile(output, JSON.stringify(report, null, 2) + "\n")

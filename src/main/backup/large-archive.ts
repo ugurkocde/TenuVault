@@ -1,3 +1,4 @@
+import { backupBlobName, LARGE_BACKUP_CONTAINER } from "../../shared/backup-storage"
 import { createHash, randomUUID } from "node:crypto"
 import { open, rename, rm } from "node:fs/promises"
 import type { FileHandle } from "node:fs/promises"
@@ -79,7 +80,7 @@ function allowance(metadata: Record<string, any>) {
 /** Uncompressed POSIX ustar avoids ZIP's entry ceiling and compression bombs and streams to disk. */
 export async function* exportLargeArchive(tenantId: string, backupId: string, metadata: Record<string, any>, read: JsonFileReader): AsyncGenerator<Buffer> {
   const { limits, relationship } = allowance(metadata)
-  if (!identity.test(tenantId) || !/^backup-\d{4}-\d{2}-\d{2}-\d{6}$/.test(backupId) || metadata.BackupFolder !== backupId) throw new Error("Invalid archive identity")
+  if (!identity.test(tenantId) || !/^backup-large-\d{4}-\d{2}-\d{2}-\d{6}$/.test(backupId) || metadata.BackupFolder !== backupId) throw new Error("Invalid archive identity")
   let bytes = 0, files = 1
   for await (const chunk of record("tenuvault-manifest.json", { version: 2, sourceTenantId: tenantId, backupId })) { bytes += chunk.length; yield chunk }
   for await (const file of largeFiles(metadata, read, relationship)) {
@@ -162,7 +163,7 @@ async function visitArchive(path: string, visit?: (name: string, value: unknown)
     if (size > LARGE_ARCHIVE_MAX) throw new Error("Archive exceeds 32 GiB")
     const tar = new TarReader(file, size)
     const manifest = await tar.next("tenuvault-manifest.json")
-    if (manifest?.version !== 2 || !identity.test(manifest.sourceTenantId) || !/^backup-\d{4}-\d{2}-\d{2}-\d{6}$/.test(manifest.backupId)) throw new Error("Invalid archive identity")
+    if (manifest?.version !== 2 || !identity.test(manifest.sourceTenantId) || !/^backup-large-\d{4}-\d{2}-\d{2}-\d{6}$/.test(manifest.backupId)) throw new Error("Invalid archive identity")
     const metadata = await tar.next("metadata.json")
     if (metadata?.BackupFolder !== manifest.backupId || (metadata.TenantId && metadata.TenantId.toLowerCase() !== manifest.sourceTenantId.toLowerCase())) throw new Error("Archive source identity mismatch")
     const { limits, relationship } = allowance(metadata)
@@ -182,9 +183,9 @@ async function visitArchive(path: string, visit?: (name: string, value: unknown)
 }
 export const reviewLargeArchive = (path: string) => visitArchive(path)
 export async function importLargeArchive(store: LocalBlobStore, archive: ReviewedLargeArchive): Promise<void> {
-  const account = `tvlocal-${archive.tenantId}`, container = "intune-backups", prefix = `${archive.backupId}/`
+  const account = `tvlocal-${archive.tenantId}`, container = LARGE_BACKUP_CONTAINER, prefix = `${archive.backupId}/`
   await store.createContainer(account, container)
-  if ((await store.list(account, container, prefix)).length) throw new Error("This backup already exists on this device")
+  if ((await store.list(account, container, prefix)).length || (await store.list(account, container, backupBlobName(prefix))).length) throw new Error("This backup already exists on this device")
   const marker = `${prefix}.tenuvault-owner.json`
   await store.put(account, container, marker, Buffer.from(JSON.stringify({ TenantId: archive.tenantId, RunId: randomUUID(), LargeInventory: { version: 1 } })), "application/json", true)
   const pending = new Set<Promise<void>>()
@@ -193,7 +194,7 @@ export async function importLargeArchive(store: LocalBlobStore, archive: Reviewe
     let metadata: any
     const checked = await visitArchive(archive.path, async (name, value) => {
       if (name === "metadata.json") { metadata = value; return }
-      const task = store.put(account, container, prefix + name, Buffer.from(JSON.stringify(value)), "application/json", true).then(() => undefined, error => { failure ??= error }).finally(() => pending.delete(task))
+      const task = store.put(account, container, backupBlobName(prefix + name), Buffer.from(JSON.stringify(value)), "application/json", true).then(() => undefined, error => { failure ??= error }).finally(() => pending.delete(task))
       pending.add(task)
       if (pending.size >= 16) await Promise.race(pending)
       if (failure) throw failure
@@ -206,7 +207,7 @@ export async function importLargeArchive(store: LocalBlobStore, archive: Reviewe
     await Promise.all(pending)
     // Retire a possibly published completion marker before rolling back any content.
     await store.delete(account, container, prefix + "metadata.json", { despiteDamage: true }).catch(() => undefined)
-    for (const blob of await store.list(account, container, prefix)) await store.delete(account, container, blob.name, { despiteDamage: true }).catch(() => undefined)
+    for (const blob of [...await store.list(account, container, prefix), ...await store.list(account, container, backupBlobName(prefix))]) await store.delete(account, container, blob.name, { despiteDamage: true }).catch(() => undefined)
     throw error
   }
 }

@@ -306,10 +306,10 @@ describe('Drift scan', () => {
     expect(response.status).toBe(200)
     expect((await response.json()).summary.total).toBe(3)
 
-    // The container once for its backups, then each backup once. Listing every type folder of
+    // Both discovery namespaces, then each backup once. Listing every type folder of
     // both backups took 1 + 2 x 40 requests.
     const lists = storage.stub.mock.calls.map(([input]) => new URL(String(input))).filter(url => url.searchParams.get('comp') === 'list')
-    expect(lists.map(url => url.searchParams.get('prefix'))).toEqual([null, `${NEW}/`, `${OLD}/`])
+    expect(lists.map(url => url.searchParams.get('prefix'))).toEqual([null, 'backup-large-', `${NEW}/`, `${OLD}/`])
 
     // Found the backups, read both metadata files, listed both backups, then compared.
     expect(progress.slice(0, 7).map(step => `${step.phase} ${step.done}/${step.total}`)).toEqual([

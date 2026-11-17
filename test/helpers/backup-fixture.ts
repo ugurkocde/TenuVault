@@ -1,3 +1,4 @@
+import { backupBlobName, backupContainer, logicalBackupName } from "../../src/shared/backup-storage"
 import { mkdtempSync } from "node:fs"
 import { randomBytes } from "node:crypto"
 import { tmpdir } from "node:os"
@@ -102,15 +103,15 @@ export function fixture(graph: ReturnType<typeof scriptedGraph>, deps: Partial<B
     return graph(request)
   }) as typeof fetch
   const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", services: () => ({ services: ["intune", "conditionalAccess", "entra", "defender"] }), ...deps })
-  const files = async (job: BackupJob) => (await store.list(account, "intune-backups")).filter((blob) => blob.name.startsWith(`${job.backupFolder}/`)).map((blob) => blob.name.slice(job.backupFolder!.length + 1))
+  const files = async (job: BackupJob) => (await store.list(account, backupContainer(job.backupFolder!))).map(blob => ({ ...blob, name: logicalBackupName(blob.name) })).filter((blob) => blob.name.startsWith(`${job.backupFolder}/`)).map((blob) => blob.name.slice(job.backupFolder!.length + 1))
   return {
     engine,
     store,
     account,
     requests,
     run: async (request = {}) => engine.waitForJob(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account, ...request })),
-    manifest: async (job) => JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/metadata.json`)).data.toString()),
-    file: async (job, name) => ((await files(job)).includes(name) ? JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/${name}`)).data.toString()) : undefined),
+    manifest: async (job) => JSON.parse((await store.get(account, backupContainer(job.backupFolder!), `${job.backupFolder}/metadata.json`)).data.toString()),
+    file: async (job, name) => ((await files(job)).includes(name) ? JSON.parse((await store.get(account, backupContainer(job.backupFolder!), backupBlobName(`${job.backupFolder}/${name}`))).data.toString()) : undefined),
     files,
   }
 }

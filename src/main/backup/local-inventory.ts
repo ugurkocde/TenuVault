@@ -1,3 +1,4 @@
+import { LARGE_BACKUP_CONTAINER } from "../../shared/backup-storage"
 import { stat } from "node:fs/promises"
 import { isAbsolute, join, relative } from "node:path"
 import { BACKUP_CONTAINER, localStorageAccountName } from "../../shared/constants"
@@ -21,17 +22,20 @@ const ATTEMPTS = 3
  */
 export async function localInventoryProblem(store: Pick<LocalBlobStore, "damage">, root: string, tenantId: string): Promise<string | null> {
   const account = localStorageAccountName(tenantId)
-  const folder = join(root, account, BACKUP_CONTAINER)
-  for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
-    const before = await folderStamp(folder)
-    let problem: string | null
-    try {
-      problem = damageSummary(await store.damage(account, BACKUP_CONTAINER))
-    } catch (error) {
-      problem = error instanceof Error ? error.message : String(error)
+  for (const container of [BACKUP_CONTAINER, LARGE_BACKUP_CONTAINER]) {
+    const folder = join(root, account, container)
+    for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+      const before = await folderStamp(folder)
+      if (container === LARGE_BACKUP_CONTAINER && before === "missing") break
+      let problem: string | null
+      try {
+        problem = damageSummary(await store.damage(account, container))
+      } catch (error) {
+        problem = error instanceof Error ? error.message : String(error)
+      }
+      if (problem === null) break
+      if (await folderStamp(folder) === before) return problem
     }
-    if (problem === null) return null
-    if (await folderStamp(folder) === before) return problem
   }
   return null
 }
@@ -50,6 +54,7 @@ export async function folderToOpen(root: string, tenantId: unknown): Promise<str
   const inside = relative(root, folder)
   if (!inside || inside.startsWith("..") || isAbsolute(inside)) throw new Error("Unknown tenant.")
   try {
+    if ((await stat(join(root, localStorageAccountName(tenantId), LARGE_BACKUP_CONTAINER)).catch(() => null))?.isDirectory()) return join(root, localStorageAccountName(tenantId))
     return (await stat(folder)).isDirectory() ? folder : root
   } catch {
     return root

@@ -1,3 +1,4 @@
+import { backupBlobName, LARGE_BACKUP_CONTAINER, logicalBackupName } from "../../shared/backup-storage"
 import { indexPath, largeIndexes } from "../../shared/large-backup"
 import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } from "node:crypto"
 import type { BigIntStats } from "node:fs"
@@ -63,14 +64,16 @@ export async function localBackupsExist(
     let incomplete = false
     for (const account of accounts) {
       if (!account.isDirectory()) continue
-      const folder = join(root, account.name, "intune-backups")
-      try {
-        const files = await readDirectory(folder)
-        if (files.some((file) => file.isFile() && file.name.endsWith(EXT))) return true
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
-          incomplete = true
-          console.warn(`[backups] Could not scan local backup folder ${folder}:`, error)
+      for (const container of [BACKUP_CONTAINER, LARGE_BACKUP_CONTAINER]) {
+        const folder = join(root, account.name, container)
+        try {
+          const files = await readDirectory(folder)
+          if (files.some((file) => file.isFile() && file.name.endsWith(EXT))) return true
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+            incomplete = true
+            console.warn(`[backups] Could not scan local backup folder ${folder}:`, error)
+          }
         }
       }
     }
@@ -232,7 +235,7 @@ const DELETE_RECHECK_MS = 5_000
 /** Damaged files named in a message at most. */
 export const MAX_NAMED_FILES = 10
 
-const backupFolderOf = (name: string) => /^(backup-[^/]+)\//.exec(name)?.[1] ?? null
+const backupFolderOf = (name: string) => /^(backup-[^/]+)\//.exec(logicalBackupName(name))?.[1] ?? null
 
 /** One sentence on the damage in a container, for messages. */
 function describeDamage(damage: InventoryDamage): string {
@@ -454,7 +457,7 @@ export class LocalBlobStore {
       const why = unreadable(error)
       const { reason } = why
       const damage = this.damageOf.get(entries)
-      if (damage && container === BACKUP_CONTAINER && !damage.files.some((file) => file.file === entry!.file)) {
+      if (damage && [BACKUP_CONTAINER, LARGE_BACKUP_CONTAINER].includes(container) && !damage.files.some((file) => file.file === entry!.file)) {
         damage.files.push(damagedFile(entry.file, why, folder))
         if (folder && !damage.unavailable.has(folder)) damage.unavailable.set(folder, `one of its files could not be read: ${reason}.`)
         this.damagedStamps.get(entries)?.set(entry.file, entry.stamp)
@@ -862,7 +865,7 @@ export class LocalBlobStore {
       entries.set(entry.name, entry)
     }
     // Other containers fail closed, as the backup container did before damage could be traced.
-    if (container !== BACKUP_CONTAINER) {
+    if (![BACKUP_CONTAINER, LARGE_BACKUP_CONTAINER].includes(container)) {
       const count = unreadableFiles.length + [...claims.values()].reduce((sum, list) => sum + list.length, 0)
       if (count) throw new IncompleteInventoryError(count)
       return entries
@@ -907,7 +910,7 @@ export class LocalBlobStore {
         unavailable(folder, "its manifest (metadata.json) is not valid.")
         continue
       }
-      const prefix = `${folder}/`
+      const prefix = backupBlobName(`${folder}/`)
       let missing = 0
       let valid = true
       for (const [key, item] of Object.entries(metadata.Items)) {

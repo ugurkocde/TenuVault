@@ -1,3 +1,4 @@
+import { backupStoragePath } from "../../../../shared/backup-storage"
 import { recoveryReadiness, type RecoveryReadiness } from "../../../../shared/intune/recovery"
 import { type NextRequest, NextResponse } from "next/server"
 import { validPolicyPath } from "~/lib/policies/restore"
@@ -73,7 +74,7 @@ export async function POST(request: NextRequest) {
           : Promise.resolve(""),
     ])
     const granted = grantedPermissions(graphToken)
-    const owned = await readOwnedBackup((name) => fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${name.split("/").map(encodeURIComponent).join("/")}`, {
+    const owned = await readOwnedBackup((name) => fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(name)}`, {
       headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${storageToken}` },
     }), backupId, tenantId, storageAccountName)
     if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
@@ -87,7 +88,7 @@ export async function POST(request: NextRequest) {
       const fallbackName = (path.split("/")[2] ?? "").replace(/\.json$/, "")
       if (!type) return { path, folder, name: fallbackName, blocker: "This backup file is not an Intune type TenuVault can restore.", replaceBlocker: "This type cannot be replaced." }
       if (type.volume === "large") return { path, folder: type.folder, name: fallbackName, blocker: type.limitation ?? "This inventory cannot be restored.", replaceBlocker: type.limitation ?? "This inventory cannot be restored." }
-      const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${path.split("/").map(encodeURIComponent).join("/")}`, {
+      const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(path)}`, {
         headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${storageToken}` },
       })
       if (!response.ok) return { path, folder: type.folder, name: fallbackName, live: "error", error: "The backup file could not be read.", blocker: "The backup file could not be read.", replaceBlocker: "The backup file could not be read." }

@@ -1,3 +1,4 @@
+import { backupBlobName, backupContainer, logicalBackupName } from "../../../shared/backup-storage"
 export function decodeXml(value: string): string {
   return value.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&')
 }
@@ -14,6 +15,12 @@ export class BlobListError extends Error {
  */
 export async function listBlobPages(url: string, token: string, signal?: AbortSignal): Promise<string> {
   const target = new URL(url)
+  const prefix = target.searchParams.get('prefix') ?? ''
+  const largePayload = prefix.startsWith('backup-large-') && prefix.includes('/')
+  if (largePayload) {
+    target.pathname = `/${backupContainer(prefix)}`
+    target.searchParams.set('prefix', backupBlobName(prefix))
+  }
   const pages: string[] = []
   const seen = new Set<string>()
   let marker = ''
@@ -28,5 +35,9 @@ export async function listBlobPages(url: string, token: string, signal?: AbortSi
     if (marker && seen.has(marker)) throw new Error('Storage returned a repeated continuation marker')
     seen.add(marker)
   } while (marker)
-  return pages.join('\n')
+  return largePayload ? logicalBackupListing(pages.join('\n')) : pages.join('\n')
+}
+
+export function logicalBackupListing(xml: string): string {
+  return xml.replace(/<Name>([^<]+)<\/Name>/g, (_, name: string) => `<Name>${logicalBackupName(name)}</Name>`)
 }

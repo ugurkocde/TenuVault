@@ -22,7 +22,7 @@ afterEach(() => vi.unstubAllGlobals())
 beforeEach(() => { state.plans = ['community', 'pro'] })
 
 describe('dashboard summary inventory', () => {
-  it('preserves every descriptor and caches metadata while discovering folders hierarchically', async () => {
+  it('preserves every descriptor and caches metadata from one flat inventory', async () => {
     const folders = ['backup-2026-10-01-020000', '2026-09-20', 'backup-2026-09-15-020000', 'backup-2026-10-02-020000']
     const blobs: Record<string, object> = {
       [`${folders[0]}/metadata.json`]: { Status: 'Success', TenantId: args.tenantId, DurationSeconds: 12, Scope: { Excluded: [] } },
@@ -51,12 +51,12 @@ describe('dashboard summary inventory', () => {
     fetcher.mockClear()
     expect(await (await POST(request(true))).json()).toEqual(full)
     const listingCalls = () => fetcher.mock.calls.filter(([input]) => new URL(String(input)).searchParams.get('comp') === 'list')
-    expect(listingCalls()).toHaveLength(9)
-    expect(fetcher.mock.calls.filter(([input]) => String(input).endsWith('metadata.json'))).toHaveLength(4)
+    expect(listingCalls()).toHaveLength(2)
+    expect(fetcher.mock.calls.filter(([input]) => String(input).endsWith('metadata.json'))).toHaveLength(3)
     fetcher.mockClear()
     expect(await (await POST(request(true))).json()).toEqual(full)
-    expect(listingCalls()).toHaveLength(9)
-    expect(fetcher.mock.calls.filter(([input]) => String(input).endsWith('metadata.json'))).toHaveLength(1)
+    expect(listingCalls()).toHaveLength(2)
+    expect(fetcher.mock.calls).toHaveLength(3)
     version++
     blobs[`${folders[0]}/metadata.json`] = { Status: 'CompletedWithWarnings', TenantId: args.tenantId }
     const changed = await (await POST(request(true))).json()

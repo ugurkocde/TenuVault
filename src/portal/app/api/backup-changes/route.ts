@@ -1,5 +1,7 @@
+import { backupStoragePath, LARGE_BACKUP_CONTAINER } from "../../../../shared/backup-storage"
+import { backupFoldersIn, parseBackupName } from "../../../../shared/intune/backup-names"
 import { type NextRequest, NextResponse } from "next/server"
-import { decodeXml, listBlobPages } from "~/lib/storage/list"
+import { BlobListError, listBlobPages } from "~/lib/storage/list"
 import { typeForFolder } from "../../../../shared/intune/registry"
 import { comparable, compareBackups, type BackupFingerprint } from "../../../../shared/intune/backup-changes"
 import { compareObjects } from "../detect-drifts/route"
@@ -8,7 +10,7 @@ import { readOwnedBackup } from "~/lib/policies/backup-owner"
 
 /** Changed items that also get a field by field comparison; the rest are listed without one. */
 const MAX_DETAILED = 100
-const BACKUP_ID = /^backup-\d{4}-\d{2}-\d{2}-\d{6}$/
+const BACKUP_ID = /^backup-(?:large-)?\d{4}-\d{2}-\d{2}-\d{6}$/
 
 /**
  * What changed in the tenant between a backup and the newest older backup it can be compared with:
@@ -32,7 +34,7 @@ export async function POST(request: NextRequest) {
 
   const container = `https://${storageAccountName}.blob.core.windows.net/intune-backups`
   const read = async (path: string) => {
-    const response = await fetch(`${container}/${path.split("/").map(encodeURIComponent).join("/")}`, {
+    const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(path)}`, {
       headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${accessToken}` },
     })
     if (response.status === 404) return null
@@ -41,7 +43,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const readBlob = (name: string) => fetch(`${container}/${name.split("/").map(encodeURIComponent).join("/")}`, {
+    const readBlob = (name: string) => fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(name)}`, {
       headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${accessToken}` },
     })
     const owned = await readOwnedBackup(readBlob, backupId, tenantId)
@@ -52,11 +54,14 @@ export async function POST(request: NextRequest) {
     }
 
     const listing = await listBlobPages(`${container}?restype=container&comp=list&prefix=backup-&delimiter=/`, accessToken)
-    const older = [...listing.matchAll(/<BlobPrefix><Name>(backup-\d{4}-\d{2}-\d{2}-\d{6})\/<\/Name><\/BlobPrefix>/g)]
-      .map((match) => decodeXml(match[1]!))
-      .filter((name) => name < backupId)
-      .sort()
-      .reverse()
+    const largeListing = await listBlobPages(`https://${storageAccountName}.blob.core.windows.net/${LARGE_BACKUP_CONTAINER}?restype=container&comp=list&prefix=backup-large-&delimiter=/`, accessToken).catch(error => {
+      if (error instanceof BlobListError && error.status === 404) return ""
+      throw error
+    })
+    const older = backupFoldersIn(listing + largeListing)
+      .filter(candidate => candidate.timestamp < parseBackupName(backupId)!.timestamp)
+      .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+      .map(candidate => candidate.name)
 
     let previous: { id: string; metadata: BackupFingerprint } | null = null
     for (const id of older) {

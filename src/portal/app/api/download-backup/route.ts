@@ -1,9 +1,10 @@
+import { backupStoragePath, isLargeBackup } from "../../../../shared/backup-storage"
 import { INTUNE_TYPES } from "../../../../shared/intune/registry"
 import { exportLargeArchive } from "../../../../main/backup/large-archive"
 import { Readable } from "node:stream"
 import { readJsonCapped } from "../../../../shared/capped-body"
 import { decodeXml } from "~/lib/storage/list"
-import { blobPath, isSafeArchivePath } from "../../../../shared/security"
+import { isSafeArchivePath } from "../../../../shared/security"
 import { isBackupName } from "../../../../shared/intune/backup-names"
 import { BACKUP_OWNER_FILE, MAX_BACKUP_ARCHIVE_BYTES, MAX_BACKUP_ARCHIVE_FILES, MAX_BACKUP_ARCHIVE_TOTAL_BYTES } from "../../../../shared/constants"
 import { readBytesCapped } from "../../../../shared/capped-body"
@@ -68,7 +69,7 @@ export async function POST(request: NextRequest) {
     const accessToken = await getAccessToken(tenantId, appId, clientSecret)
 
     const readLarge = async (name: string) => {
-      const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(`${backupId}/${name}`)}`, {
+      const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(`${backupId}/${name}`)}`, {
         headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${accessToken}` },
       })
       if (!response.ok) throw new Error("A backup file could not be read")
@@ -77,7 +78,7 @@ export async function POST(request: NextRequest) {
       return content.value as Record<string, any>
     }
     // Ownership is checked before the streaming path requests any indexed content.
-    const largeOwner = body.largeInventory === true || INTUNE_TYPES.some(type => type.volume === "large") ? await readOwnedBackup(name => fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(name)}`, {
+    const largeOwner = isLargeBackup(backupId) || body.largeInventory === true || INTUNE_TYPES.some(type => type.volume === "large") ? await readOwnedBackup(name => fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(name)}`, {
       headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${accessToken}` },
     }), backupId, tenantId, storageAccountName) : null
     if (largeOwner && !largeOwner.ok) return NextResponse.json({ error: largeOwner.error }, { status: largeOwner.status })
@@ -87,6 +88,8 @@ export async function POST(request: NextRequest) {
         headers: { "content-type": "application/x-tar", "content-disposition": `attachment; filename="${backupId}.tar"` },
       })
     }
+
+    if (isLargeBackup(backupId)) return NextResponse.json({ error: "Only complete large backups can be downloaded" }, { status: 409 })
 
     // Function to fetch all files with pagination support
     const fetchAllFiles = async (): Promise<ListedFile[]> => {
@@ -214,7 +217,7 @@ export async function POST(request: NextRequest) {
     // Ownership is settled by the shared resolver before any file is read: a shared container can
     // hold other tenants' backups, and those are refused, as are backups whose metadata or
     // ownership marker cannot be read.
-    const owned = largeOwner ?? await readOwnedBackup((name) => fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(name)}`, {
+    const owned = largeOwner ?? await readOwnedBackup((name) => fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(name)}`, {
       headers: { 'x-ms-version': '2021-12-02', 'Authorization': `Bearer ${accessToken}` },
     }), backupId, tenantId, storageAccountName)
     if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
@@ -228,7 +231,7 @@ export async function POST(request: NextRequest) {
     for (const batch of batches) {
       const batchPromises = batch.map(async (filePath) => {
         try {
-          const fileUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(filePath)}`
+          const fileUrl = `https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(filePath)}`
 
           const fileResponse = await fetch(fileUrl, {
             headers: {

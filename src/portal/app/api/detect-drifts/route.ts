@@ -1,5 +1,6 @@
+import { backupStoragePath, isLargeBackup, LARGE_BACKUP_CONTAINER } from "../../../../shared/backup-storage"
 import { largeIndexes } from "../../../../shared/large-backup"
-import { decodeXml, listBlobPages } from "~/lib/storage/list"
+import { BlobListError, decodeXml, listBlobPages } from "~/lib/storage/list"
 import { typeForFolder, type Item } from "../../../../shared/intune/registry"
 import { restoreCapabilities } from "../../../../shared/intune/restore-plan"
 import { complianceSettingLabel, complianceSettingValue } from "../../../../shared/intune/compliance-settings"
@@ -94,7 +95,12 @@ export async function POST(request: NextRequest) {
 
     // Using delimiter=/ to get folder prefixes instead of all blobs
     const listUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&delimiter=/`
-    const listText = await listBlobPages(listUrl, accessToken, signal)
+    const ordinaryText = await listBlobPages(listUrl, accessToken, signal)
+    const largeText = baseline && comparison && !isLargeBackup(baseline) && !isLargeBackup(comparison) ? "" : await listBlobPages(`https://${storageAccountName}.blob.core.windows.net/${LARGE_BACKUP_CONTAINER}?restype=container&comp=list&prefix=backup-large-&delimiter=/`, accessToken, signal).catch(error => {
+      if (error instanceof BlobListError && error.status === 404) return ""
+      throw error
+    })
+    const listText = ordinaryText + largeText
     const backupFolders = parseBackupFolders(listText)
       .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
     // done counts the steps taken: the backups listed, then each metadata.json read.
@@ -106,7 +112,7 @@ export async function POST(request: NextRequest) {
     const readFile = async (name: string, file: string): Promise<OwnershipFile> => {
       let response: Response
       try {
-        response = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${encodeURIComponent(name)}/${file}`, { headers: { 'x-ms-version': '2021-12-02', Authorization: `Bearer ${accessToken}` }, signal })
+        response = await fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(`${name}/${file}`)}`, { headers: { 'x-ms-version': '2021-12-02', Authorization: `Bearer ${accessToken}` }, signal })
       } catch (error) {
         // An older encrypted backup without its key, or another tenant's, cannot be opened here.
         if (error instanceof Error && error.name === 'FetchApplicationError') return { kind: 'unreadable', error }
@@ -327,7 +333,7 @@ async function fetchPolicyFiles(
     const files = rest.includes('/') ? byFolder.get(rest.slice(0, rest.indexOf('/'))) : undefined
     files?.push({
       name,
-      url: `https://${storageAccountName}.blob.core.windows.net/intune-backups/${name.split("/").map(encodeURIComponent).join("/")}`,
+      url: `https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(name)}`,
       lastModified: lastModifiedMatch?.[1] || '',
       size: parseInt(sizeMatch?.[1] || '0')
     })

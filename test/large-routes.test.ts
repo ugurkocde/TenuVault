@@ -1,12 +1,12 @@
+import { POST as history } from "../src/portal/app/api/list-backups/route"
 import { afterEach, expect, it, vi } from "vitest"
 import { NextRequest } from "../src/main/api/next-server-shim"
 import { ApiHost } from "../src/main/api/host"
-import { POST as history } from "../src/portal/app/api/list-backups/route"
 import { POST as contents } from "../src/portal/app/api/list-backup-contents/route"
 import { POST as compare } from "../src/portal/app/api/large-backup-page/route"
 import { POST as download } from "../src/portal/app/api/download-backup/route"
 import { snapshotHash } from "../src/portal/lib/policies/backup-manifest"
-const tenant = "11111111-1111-1111-1111-111111111111", backup = "backup-2026-11-16-000000", before = "backup-2026-11-15-000000"
+const tenant = "11111111-1111-1111-1111-111111111111", backup = "backup-large-2026-11-16-000000", before = "backup-large-2026-11-15-000000"
 const snapshot = { id: "one" }, entry = { id: "one", file: "one.json", hash: snapshotHash(snapshot) }
 const metadata = { TenantId: tenant, BackupFolder: backup, Status: "Success", Failures: 0, Coverage: "Complete", Items: {}, LargeItems: { DeviceConfigurations: { version: 1, count: 1, shards: 1, complete: true } }, Scope: { Included: ["DeviceConfigurations"] }, ItemCounts: { DeviceConfigurations: 1, TotalPolicies: 1 } }
 const body = { tenantId: tenant, appId: "client", clientSecret: "placeholder", subscriptionId: "local", resourceGroupName: "local", storageAccountName: "contoso", backupId: backup, largeInventory: true }
@@ -30,6 +30,10 @@ it("serves one contents page without requesting a blob listing or snapshots", as
   expect(response.status).toBe(200)
   expect((await response.json()).content.groups[0].policies).toHaveLength(1)
   expect(reads.some(path => path.includes("comp=list") || path.endsWith("one.json"))).toBe(false)
+  expect(reads.filter(path => !path.includes("/oauth2/"))).toEqual([
+    `/intune-backups-large/${backup}/metadata.json`,
+    `/intune-backups-large/payload/${backup}/_index/DeviceConfigurations/000000.json`,
+  ])
 })
 it("compares a bounded inventory page after verifying ownership of both backups", async () => {
   const reads = install()
@@ -64,19 +68,19 @@ it("validates the paging request before sending anything to Microsoft", async ()
 })
 
 it.each([false, true])("describes 150000 unfinished snapshots without enumerating them (summary: %s)", async summary => {
-  const running = "backup-" + new Date().toISOString().slice(0, 19).replace("T", "-").replace(/:/g, "")
+  const running = "backup-large-" + new Date().toISOString().slice(0, 19).replace("T", "-").replace(/:/g, "")
   const listings: string[] = []
   vi.stubGlobal("fetch", vi.fn(async input => {
     const url = new URL(String(input))
     if (url.hostname === "login.microsoftonline.com") return Response.json({ access_token: "storage" })
     if (url.searchParams.get("comp") === "list") {
-      expect(url.searchParams.get("delimiter")).toBe("/")
-      const prefix = url.searchParams.get("prefix") ?? ""
-      listings.push(prefix)
-      if (!prefix) return new Response([running, before].map(name => `<BlobPrefix><Name>${name}/</Name></BlobPrefix>`).join(""))
-      return new Response(`<Blob><Name>${prefix}.tenuvault-owner.json</Name><Properties><Content-Length>150</Content-Length></Properties></Blob><BlobPrefix><Name>${prefix}DeviceConfigurations/</Name></BlobPrefix>`)
+      listings.push(url.pathname + url.searchParams.get("prefix"))
+      if (url.pathname === "/intune-backups") return new Response("")
+      expect(url.searchParams.get("prefix")).toBe("backup-large-")
+      // The virtual payload prefix can hold 150000 objects. It must never be listed.
+      return new Response([running, before].map(name => `<Blob><Name>${name}/.tenuvault-owner.json</Name><Properties><Content-Length>150</Content-Length></Properties></Blob>`).join(""))
     }
-    if (url.pathname.endsWith(".tenuvault-owner.json")) return Response.json({ TenantId: tenant, RunId: "unfinished", LargeInventory: { version: 1 } })
+    if (url.pathname.endsWith(".tenuvault-owner.json")) return Response.json({ TenantId: tenant, RunId: "unfinished", Status: "Success", LargeInventory: { version: 1 } })
     return new Response(null, { status: 404 })
   }))
   const response = await history(request({ summary }))
@@ -85,6 +89,5 @@ it.each([false, true])("describes 150000 unfinished snapshots without enumeratin
     { id: running, status: "running", runId: "unfinished", largeInventory: true, configs: 0 },
     { id: before, status: "incomplete", runId: "unfinished", largeInventory: true, configs: 0 },
   ])
-  // The virtual snapshot folder can hold 150000 objects. Only three hierarchical listings occur.
-  expect(listings.sort()).toEqual(["", `${before}/`, `${running}/`].sort())
+  expect(listings).toEqual(["/intune-backups", "/intune-backups-largebackup-large-"])
 })

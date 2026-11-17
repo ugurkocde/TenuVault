@@ -1,3 +1,4 @@
+import { backupBlobName, LARGE_BACKUP_CONTAINER } from "../src/shared/backup-storage"
 import { expect, it } from "vitest"
 import { mkdtemp, rm } from "node:fs/promises"
 import { join } from "node:path"
@@ -31,13 +32,13 @@ it("exports, reviews and imports complete object sub-collections", async () => {
   const root = await mkdtemp(join(tmpdir(), "tv-object-shards-"))
   try {
     const { files, index } = await capture([{ id: "a", subject: "synthetic" }])
-    const id = "backup-2026-11-16-000000", path = join(root, "archive.tar")
+    const id = "backup-large-2026-11-16-000000", path = join(root, "archive.tar")
     const metadata = { TenantId: TENANT, BackupFolder: id, Status: "Success", Failures: 0, Coverage: "Complete", Items: {}, ItemCounts: { DeviceConfigurations: 1, TotalPolicies: 1 }, LargeItems: { DeviceConfigurations: index } }
     await saveLargeDownload(Readable.toWeb(Readable.from(exportLargeArchive(TENANT, id, metadata, async name => files.get(name)))) as ReadableStream<Uint8Array>, path)
     const archive = await reviewLargeArchive(path)
     const store = new LocalBlobStore(join(root, "encrypted"), [Buffer.alloc(32, 8)])
     await importLargeArchive(store, archive)
-    const stored = await store.get(`tvlocal-${TENANT}`, "intune-backups", `${id}/_relations/DeviceConfigurations/parent/definitions/000000.json`)
+    const stored = await store.get(`tvlocal-${TENANT}`, LARGE_BACKUP_CONTAINER, backupBlobName(`${id}/_relations/DeviceConfigurations/parent/definitions/000000.json`))
     expect(JSON.parse(stored.data.toString())).toEqual([{ id: "a", subject: "synthetic" }])
     files.set("_relations/DeviceConfigurations/parent/definitions/000000.json", [{ id: "a", subject: "changed" }])
     await expect(saveLargeDownload(Readable.toWeb(Readable.from(exportLargeArchive(TENANT, id, metadata, async name => files.get(name)))) as ReadableStream<Uint8Array>, join(root, "changed.tar"))).rejects.toThrow("fingerprint")

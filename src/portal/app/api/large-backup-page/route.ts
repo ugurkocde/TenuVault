@@ -1,8 +1,8 @@
+import { backupStoragePath } from "../../../../shared/backup-storage"
 import { NextRequest, NextResponse } from "next/server"
 import { readOwnedBackup } from "~/lib/policies/backup-owner"
 import { compareLargePage } from "../../../../main/backup/large-page"
 import { largeIndexes } from "../../../../shared/large-backup"
-import { blobPath } from "../../../../shared/security"
 import { isBackupName } from "../../../../shared/intune/backup-names"
 import { readJsonCapped } from "../../../../shared/capped-body"
 import { coveredFolders } from "../../../../shared/intune/scope"
@@ -15,7 +15,7 @@ export async function POST(request: NextRequest) {
     const tokenResponse = await fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`, { method: "POST", body: new URLSearchParams({ client_id: appId, client_secret: clientSecret, scope: "https://storage.azure.com/.default", grant_type: "client_credentials" }) })
     if (!tokenResponse.ok) throw new Error("Storage sign-in failed")
     const token = (await tokenResponse.json()).access_token
-    const readResponse = (name: string) => fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(name)}`, { headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${token}` } })
+    const readResponse = (name: string) => fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(name)}`, { headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${token}` } })
     const [older, newer] = await Promise.all([readOwnedBackup(readResponse, baseline, tenantId, storageAccountName), readOwnedBackup(readResponse, backupId, tenantId, storageAccountName)])
     if (!older.ok) return NextResponse.json({ error: older.error }, { status: older.status })
     if (!newer.ok) return NextResponse.json({ error: newer.error }, { status: newer.status })

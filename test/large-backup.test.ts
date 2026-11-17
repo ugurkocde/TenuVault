@@ -1,3 +1,4 @@
+import { backupBlobName, LARGE_BACKUP_CONTAINER } from "../src/shared/backup-storage"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -41,7 +42,7 @@ for (const azure of [false, true]) describe(azure ? "Azure blob protocol" : "enc
       retentionDays: () => 1,
     })
     const start = (tenantId = TENANT) => engine.start({ tenantId, clientId: CLIENT, storageAccountName: account, scope: { excluded: [] } })
-    const metadata = async (folder: string) => JSON.parse((await store.get(local, "intune-backups", `${folder}/metadata.json`)).data.toString())
+    const metadata = async (folder: string) => JSON.parse((await store.get(local, LARGE_BACKUP_CONTAINER, backupBlobName(`${folder}/metadata.json`))).data.toString())
     return { graph, engine, store, local, start, metadata, requests }
   }
   it("streams selected pages and publishes a bounded sorted index after all reads", async () => {
@@ -52,9 +53,9 @@ for (const azure of [false, true]) describe(azure ? "Azure blob protocol" : "enc
       const metadata = await f.metadata(job.backupFolder!)
       expect(metadata.Items).toEqual({})
       expect(largeIndexes(metadata).AuthorizationPolicy).toEqual({ version: 1, count: 23, shards: 1, complete: true })
-      const entries = JSON.parse((await f.store.get(f.local, "intune-backups", `${job.backupFolder}/${indexPath(type.folder, 0)}`)).data.toString())
+      const entries = JSON.parse((await f.store.get(f.local, LARGE_BACKUP_CONTAINER, backupBlobName(`${job.backupFolder}/${indexPath(type.folder, 0)}`))).data.toString())
       expect(entries).toHaveLength(23)
-      const snapshot = JSON.parse((await f.store.get(f.local, "intune-backups", `${job.backupFolder}/${type.folder}/${f.graph.id(0)}.json`)).data.toString())
+      const snapshot = JSON.parse((await f.store.get(f.local, LARGE_BACKUP_CONTAINER, backupBlobName(`${job.backupFolder}/${type.folder}/${f.graph.id(0)}.json`))).data.toString())
       expect(snapshot.members).toMatchObject({ count: 53, shards: 1, complete: true })
       expect(f.graph.stats().requests).toBe(34)
     } finally { await f.graph.close() }
@@ -62,16 +63,16 @@ for (const azure of [false, true]) describe(azure ? "Azure blob protocol" : "enc
   it("never publishes a saved prefix when a paging token expires", async () => {
     const f = await setup({ expireAt: 2 })
     try {
-      await f.store.createContainer(f.local, "intune-backups")
-      const old = "backup-2020-01-01-000000"
-      await f.store.put(f.local, "intune-backups", `${old}/metadata.json`, Buffer.from(JSON.stringify({ TenantId: TENANT, Status: "Success", Failures: 0, Scope: { Included: [type.folder] }, Items: {} })), "application/json")
+      await f.store.createContainer(f.local, LARGE_BACKUP_CONTAINER)
+      const old = "backup-large-2020-01-01-000000"
+      await f.store.put(f.local, LARGE_BACKUP_CONTAINER, backupBlobName(`${old}/metadata.json`), Buffer.from(JSON.stringify({ TenantId: TENANT, Status: "Success", Failures: 0, Scope: { Included: [type.folder] }, Items: {} })), "application/json")
       const job = await f.engine.waitForJob(f.start())
       const metadata = await f.metadata(job.backupFolder!)
       expect(metadata.LargeItems.AuthorizationPolicy.complete).toBe(false)
       expect(metadata.Coverage).toBe("Incomplete")
       expect(metadata.FailedTypes).toContain(type.folder)
       expect(metadata.ItemCounts.AuthorizationPolicy).toBe(7)
-      expect((await f.store.list(f.local, "intune-backups", `${old}/`)).length).toBe(1)
+      expect((await f.store.list(f.local, LARGE_BACKUP_CONTAINER, `${old}/`)).length).toBe(1)
       expect(f.requests.some(request => request.startsWith("DELETE "))).toBe(false)
     } finally { await f.graph.close() }
   })
@@ -97,12 +98,12 @@ for (const azure of [false, true]) describe(azure ? "Azure blob protocol" : "enc
       f.engine.cancel(job.id)
       expect((await f.engine.waitForJob(job)).status).toBe("Cancelled")
       // A crash before metadata leaves only ownership and snapshots. Restart reads no completion record.
-      await f.store.createContainer(f.local, "intune-backups")
-      const folder = "backup-2020-01-01-000000"
-      await f.store.put(f.local, "intune-backups", `${folder}/.tenuvault-owner.json`, Buffer.from(JSON.stringify({ TenantId: TENANT, RunId: "crashed" })), "application/json")
-      await f.store.put(f.local, "intune-backups", `${folder}/${type.folder}/partial.json`, Buffer.from('{"id":"partial"}'), "application/json")
+      await f.store.createContainer(f.local, LARGE_BACKUP_CONTAINER)
+      const folder = "backup-large-2020-01-01-000000"
+      await f.store.put(f.local, LARGE_BACKUP_CONTAINER, backupBlobName(`${folder}/.tenuvault-owner.json`), Buffer.from(JSON.stringify({ TenantId: TENANT, RunId: "crashed" })), "application/json")
+      await f.store.put(f.local, LARGE_BACKUP_CONTAINER, backupBlobName(`${folder}/${type.folder}/partial.json`), Buffer.from('{"id":"partial"}'), "application/json")
       const restarted = new LocalBlobStore(roots.at(-1)!, [Buffer.alloc(32, 7)])
-      expect((await restarted.list(f.local, "intune-backups", `${folder}/`)).some(file => file.name.endsWith("metadata.json"))).toBe(false)
+      expect((await restarted.list(f.local, LARGE_BACKUP_CONTAINER, `${folder}/`)).some(file => file.name.endsWith("metadata.json"))).toBe(false)
     } finally { await f.graph.close() }
   })
   it("retries dropped connections and honors repeated service throttles through the last page", async () => {
@@ -116,10 +117,10 @@ for (const azure of [false, true]) describe(azure ? "Azure blob protocol" : "enc
   }, 15_000)
   it("deletes all index and relationship shards after a complete replacement", async () => {
     const f = await setup()
-    const old = "backup-2020-01-01-000000"
+    const old = "backup-large-2020-01-01-000000"
     try {
-      await f.store.createContainer(f.local, "intune-backups")
-      const write = (name: string, value: unknown) => f.store.put(f.local, "intune-backups", `${old}/${name}`, Buffer.from(JSON.stringify(value)), "application/json")
+      await f.store.createContainer(f.local, LARGE_BACKUP_CONTAINER)
+      const write = (name: string, value: unknown) => f.store.put(f.local, LARGE_BACKUP_CONTAINER, backupBlobName(`${old}/${name}`), Buffer.from(JSON.stringify(value)), "application/json")
       await write(".tenuvault-owner.json", { TenantId: TENANT, RunId: "old" })
       await write(`${type.folder}/old.json`, { id: "old" })
       await write(indexPath(type.folder, 0), [{ id: "old", file: "old.json", hash: "A".repeat(22) }])
@@ -127,7 +128,8 @@ for (const azure of [false, true]) describe(azure ? "Azure blob protocol" : "enc
       await write("metadata.json", { TenantId: TENANT, Status: "Success", Failures: 0, Scope: { Included: [type.folder] }, Items: {}, LargeItems: { [type.folder]: { version: 1, count: 1, shards: 1, complete: true } } })
       const job = await f.engine.waitForJob(f.start())
       expect(job.coverage).toBe("complete")
-      expect(await f.store.list(f.local, "intune-backups", `${old}/`)).toEqual([])
+      expect(await f.store.list(f.local, LARGE_BACKUP_CONTAINER, `${old}/`)).toEqual([])
+      expect(await f.store.list(f.local, LARGE_BACKUP_CONTAINER, backupBlobName(`${old}/`))).toEqual([])
       const deleted = f.requests.filter(request => request.startsWith("DELETE "))
       expect(deleted[0]).toContain("metadata.json")
       expect(deleted.at(-1)).toContain(".tenuvault-owner.json")
@@ -209,7 +211,7 @@ it.each([false, true])("lists history during a streaming capture without listing
     vi.stubGlobal("fetch", vi.fn(async (input, init) => {
       const url = new URL(String(input))
       if (url.hostname === "login.microsoftonline.com") return Response.json({ access_token: "storage" })
-      if (url.searchParams.get("comp") === "list") { expect(url.searchParams.get("delimiter")).toBe("/"); listings.push(url.search) }
+      if (url.searchParams.get("comp") === "list") { expect(url.searchParams.get("prefix") ?? "").not.toContain("payload"); listings.push(url.search) }
       url.hostname = `${f.account}.blob.core.windows.net`
       return handleLocalBlobRequest(f.store, new Request(url, init))
     }))

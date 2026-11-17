@@ -1,3 +1,4 @@
+import { LARGE_BACKUP_CONTAINER, logicalBackupName } from "../src/shared/backup-storage"
 import { expect, it, vi } from "vitest"
 import { POST as history } from "../src/portal/app/api/list-backups/route"
 import { NextRequest } from "../src/main/api/next-server-shim"
@@ -37,20 +38,20 @@ it.each([false, true])("survives process death and starts a fresh folder (Azure 
     const deadline = Date.now() + 10_000
     let count = 0
     while (count < 5 && Date.now() < deadline) {
-      count = await readdir(join(data, account, "intune-backups")).then(files => files.filter(file => file.endsWith(".tvb")).length, () => 0)
+      count = await readdir(join(data, account, LARGE_BACKUP_CONTAINER)).then(files => files.filter(file => file.endsWith(".tvb")).length, () => 0)
       if (count < 5) await new Promise(resolve => setTimeout(resolve, 20))
     }
     expect(count).toBeGreaterThanOrEqual(5)
     child.kill("SIGKILL"); await exited
     const store = new LocalBlobStore(data, [Buffer.alloc(32, 9)])
-    const before = await store.list(account, "intune-backups")
+    const before = await store.list(account, LARGE_BACKUP_CONTAINER)
     expect(before.some(blob => blob.name.endsWith("metadata.json"))).toBe(false)
-    const abandoned = before[0]!.name.split("/")[0]!
+    const abandoned = logicalBackupName(before[0]!.name).split("/")[0]!
     const listings: string[] = []
     vi.stubGlobal("fetch", vi.fn(async (input, init) => {
       const url = new URL(String(input))
       if (url.hostname === "login.microsoftonline.com") return Response.json({ access_token: "storage" })
-      if (url.searchParams.get("comp") === "list") { expect(url.searchParams.get("delimiter")).toBe("/"); listings.push(url.search) }
+      if (url.searchParams.get("comp") === "list") { expect(url.searchParams.get("prefix") ?? "").not.toContain("payload"); listings.push(url.search) }
       url.hostname = `${account}.blob.core.windows.net`
       return handleLocalBlobRequest(store, new Request(url, init))
     }))
@@ -68,6 +69,6 @@ it.each([false, true])("survives process death and starts a fresh folder (Azure 
     expect(job.status).toBe("Completed")
     expect(job.coverage).toBe("complete")
     expect(job.backupFolder).not.toBe(abandoned)
-    expect((await store.list(account, "intune-backups", `${abandoned}/`)).some(blob => blob.name.endsWith("metadata.json"))).toBe(false)
+    expect((await store.list(account, LARGE_BACKUP_CONTAINER, `${abandoned}/`)).some(blob => blob.name.endsWith("metadata.json"))).toBe(false)
   } finally { vi.unstubAllGlobals(); undo?.(); child.kill("SIGKILL"); await exited; await rm(root, { recursive: true, force: true }) }
 }, 20_000)

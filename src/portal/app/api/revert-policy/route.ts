@@ -1,3 +1,4 @@
+import { backupStoragePath } from "../../../../shared/backup-storage"
 import { readOwnedBackup, UNTAGGED_BACKUP } from "~/lib/policies/backup-owner"
 import { checkRestoreManifest, verifySnapshot } from "~/lib/policies/backup-manifest"
 import { grantedPermissions } from "../../../../shared/services/token"
@@ -97,7 +98,7 @@ export async function POST(request: NextRequest) {
     // A shared container can hold other tenants' backups; never restore from one of those. Revert
     // and recreate change the live policy, so they need a backup that names this tenant.
     const backupId = backupPath.split('/')[0] ?? ''
-    const owned = await readOwnedBackup((name) => fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${name.split("/").map(encodeURIComponent).join("/")}`, {
+    const owned = await readOwnedBackup((name) => fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(name)}`, {
       headers: { 'x-ms-version': '2021-12-02', 'Authorization': `Bearer ${storageToken}` },
     }), backupId, tenantId, storageAccountName)
     if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
@@ -107,7 +108,7 @@ export async function POST(request: NextRequest) {
     if (!checked.ok) return NextResponse.json({ error: checked.error }, { status: 400 })
 
     // Fetch the policy content from the backup
-    const policyUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups/${backupPath.split("/").map(encodeURIComponent).join("/")}`
+    const policyUrl = `https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(backupPath)}`
     console.log("Attempting to fetch policy from:", policyUrl)
     
     const backupResponse = await fetch(policyUrl, {
@@ -264,7 +265,7 @@ async function writeRevertMetadata(
     console.error("Invalid tenant ID; not recording revert history")
     return
   }
-  const blobUrl = (name: string) => `https://${storageAccountName}.blob.core.windows.net/intune-backups/${name.split("/").map(encodeURIComponent).join("/")}`
+  const blobUrl = (name: string) => `https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(name)}`
   const metadataUrl = blobUrl(metadataPath)
 
   try {
