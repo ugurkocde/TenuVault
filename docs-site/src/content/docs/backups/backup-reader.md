@@ -174,6 +174,9 @@ Running the script again with the same values changes nothing that already match
 
 ### Step 3, your Azure administrator: storage write access (Azure backups only)
 
+A reader set up by 0.5.x may have access only to `intune-backups`. Ordinary backups continue to work unchanged with that access. When large types are selected, TenuVault saves ordinary snapshots first in their usual folder, then attempts a separate large companion folder. A 403, 404 or other large-storage failure reports only the large types as not read, with **Storage not provisioned for large backups** and the step below. History keeps all ordinary backups and warns when large history is omitted. Ask your Azure administrator to rerun `New-TenuVaultStorage.ps1 -BackupReaderAppId <application ID>` with the usual storage arguments to create the large container and its container-scoped **TenuVault Backup Writer** assignment. Do not grant the Backup Reader a broader Contributor role to resolve this. If the container exists, check access for the identity used by the failing operation.
+
+
 Skip this step when backups stay on the TenuVault computer. Otherwise send your Azure administrator the application (client) ID from step 2, the storage values you collected, and this request:
 
 > Please let the TenuVault Backup Reader (application ID `<id>`) write backups to our backup storage, without delete access. Run: `./New-TenuVaultStorage.ps1 -AdminGroupId <Intune admin group object ID> -SubscriptionId <subscription> -ResourceGroupName <resource group> -StorageAccountName <storage account> -BackupReaderAppId <id>`. It creates the `intune-backups` and `intune-backups-large` containers, a custom "TenuVault Backup Writer" role (read and write blobs, no delete) assigned to the reader on each backup container only, turns on blob versioning, and adds a lifecycle rule that removes only previous blob versions. Details: https://docs.tenuvault.com/backups/backup-reader/

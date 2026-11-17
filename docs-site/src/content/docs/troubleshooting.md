@@ -305,3 +305,9 @@ Feedback and its screenshot are stored up to 12 months; the email copy to suppor
 ## Still stuck?
 
 Check **Settings** > **About** for your TenuVault version and sign-in method, then contact support through **Website and support** on the same page, or tell us what got in your way with [Share feedback](#share-feedback).
+
+## Large backup storage is not provisioned
+
+**Storage not provisioned for large backups** means the large container could not be used. The message includes the storage response when available, commonly 403 (the identity has no access) or 404 (the container is absent). Ordinary types still save to `intune-backups` and remain available for history, comparison, retention and restore. Large history is omitted with a warning if its container cannot be read. A mixed run has two independent entries with the same start time, an ordinary backup and a large companion. Each can be downloaded or imported separately.
+
+For a Backup Reader created by 0.5.x, ask an Azure administrator to rerun `New-TenuVaultStorage.ps1 -BackupReaderAppId <application ID>` with the usual storage arguments. This provisions `intune-backups-large` and its container-scoped **TenuVault Backup Writer** assignment, without delete access. Do not broaden the reader to Contributor. If provisioning has already run, check access for the identity in use, the storage firewall and the connection, then retry. On local storage, check the folder's permissions and availability. See [Backup Reader storage setup](/backups/backup-reader/#step-3-your-azure-administrator-storage-write-access-azure-backups-only).
