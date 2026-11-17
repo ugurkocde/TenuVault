@@ -50,7 +50,7 @@ const capitalize = (text: string) => text.charAt(0).toUpperCase() + text.slice(1
 
 /** Changes since the previous backup; `first` when no older backup exists. */
 function ChangesText({ backup, first }: { backup: BackupSummary; first: boolean }) {
-  if (backup.largeInventory) return <span className="text-sm text-gray-600">Policy changes: {backup.changes ? `+${backup.changes.added}, ~${backup.changes.modified}, -${backup.changes.removed}` : "not compared"}. Inventory is compared on demand in Drift Detection.</span>
+  if (backup.largeInventory) return <span className="block text-sm leading-5 text-gray-600" title="Compare large inventory on the Drift Detection page.">{backup.changes ? `Policies: +${backup.changes.added}, ~${backup.changes.modified}, -${backup.changes.removed}` : "Policies not compared"}<br />Inventory: on demand</span>
   if (!backup.changes) return <span className="text-gray-500" title={first ? undefined : "Made by an older version, or the backup before it did not finish"}>{first ? "First backup" : "Not compared"}</span>
   const { added, modified, removed } = backup.changes
   if (added + modified + removed === 0) return <span>None</span>
@@ -625,7 +625,7 @@ function BackupDetails({ credentials, backup, first, storageAccountName, downloa
         </div>
       </div>
 
-      {backup.largeInventory && <LargeContents credentials={credentials} backupId={backup.id} />}
+      {backup.largeInventory && <LargeContents key={`${String(credentials.tenantId)}/${String(credentials.storageAccountName)}/${backup.id}`} credentials={credentials} backupId={backup.id} />}
       <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
         <div>
           <h3 className="mb-3 text-xs font-medium text-gray-500">Contents</h3>

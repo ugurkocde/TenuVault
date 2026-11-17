@@ -1722,8 +1722,9 @@ await check("large inventory pages stay bounded in dark mode at 1024 pixels", as
     };
   })()`)
   try {
+    // Remount the page so the fixture replaces a cached sign-in failure before controls appear.
+    await go("#/portal/tenants", "Tenant Management")
     await go("#/portal/backup?tab=backup", "Backup & Restore")
-    await evaluate(`[...document.querySelectorAll('button')].find(button => button.innerText.trim() === 'Backup History')?.click()`)
     assert(await waitForText('Backup Timeline'), 'backup history did not open')
     await evaluate(`[...document.querySelectorAll('button')].find(button => button.innerText.trim() === 'Refresh').click()`)
     assert(await waitForText('Large inventory, page 1'), 'large contents did not load')
@@ -1732,6 +1733,7 @@ await check("large inventory pages stay bounded in dark mode at 1024 pixels", as
     await evaluate(`[...document.querySelectorAll('summary')].find(summary => summary.textContent.includes('Synthetic inventory'))?.click()`)
     assert((await evaluate(`document.querySelectorAll('li').length`)) < 1500, 'the screen rendered the full inventory')
     assert(await evaluate(`document.documentElement.scrollWidth <= window.innerWidth`), 'large contents overflow at 1024 pixels')
+    await evaluate(`[...document.querySelectorAll('p')].find(item => item.textContent.startsWith('Large inventory, page'))?.scrollIntoView({ block: 'center' })`)
     await screenshot('layer7a-large-contents-dark-1024')
     await evaluate(`[...document.querySelectorAll('button')].find(button => button.innerText.trim() === 'Next page').click()`)
     assert(await waitForText('Large inventory, page 2'), 'next contents page did not replace the first')
@@ -1739,6 +1741,7 @@ await check("large inventory pages stay bounded in dark mode at 1024 pixels", as
     await evaluate(`[...document.querySelectorAll('button')].find(button => button.innerText.includes('Restore from this backup')).click()`)
     assert(await waitForText('Inventory page 1.'), 'the restore picker did not load a bounded page')
     assert(await evaluate(`document.documentElement.scrollWidth <= window.innerWidth`), 'the inventory picker overflowed at 1024 pixels')
+    await evaluate(`[...document.querySelectorAll('span')].find(item => item.textContent.startsWith('Inventory page 1.'))?.scrollIntoView({ block: 'center' })`)
     await screenshot('layer7a-large-picker-dark-1024')
   } finally {
     await evaluate(`window.fetch = window.__largeOriginalFetch; delete window.__largeOriginalFetch; document.documentElement.classList.remove('dark')`)

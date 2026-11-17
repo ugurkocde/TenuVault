@@ -762,7 +762,7 @@ export default function DriftDetectionPage() {
             </p>
           )}
 
-          {!!result.largeFolders?.length && selectedTenant && <LargeComparison credentials={{ ...selectedTenant.credentials, storageAccountName }} baseline={result.baseline.id} backupId={result.comparison.id} folders={result.largeFolders} />}
+          {!!result.largeFolders?.length && selectedTenant && <LargeComparison key={`${tenantId}/${storageAccountName}/${result.baseline.id}/${result.comparison.id}`} credentials={{ ...selectedTenant.credentials, storageAccountName }} baseline={result.baseline.id} backupId={result.comparison.id} folders={result.largeFolders} />}
           {result.warnings.length > 0 && (
             <Alert className="rounded-3xl border-transparent bg-amber-50 p-5 [&>svg]:left-5 [&>svg]:top-5">
               <AlertTriangle className="h-4 w-4 text-amber-700" />

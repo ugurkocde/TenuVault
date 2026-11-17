@@ -59,6 +59,12 @@ Click a changed item to expand it. TenuVault lists each changed setting with its
 To compare the tenant as it is right now with your last backup, run a new backup first, then view its changes.
 :::
 
+## Large inventory comparisons
+
+Large directory inventories use a separate paged comparison in **Drift Detection**. Choose the inventory and use **Next page** to inspect the next window. Each window compares at most 1,000 identities, returns at most 200 changes and replaces the rows already shown. Matching fingerprints avoid reading the snapshots. Both backups must completely cover the selected type. An unread index is an error, never an empty collection interpreted as deletions.
+
+Backup History and the policy drift totals exclude this separately paged inventory and say that it is compared on demand. Backup Details browses its object IDs in pages. These controls prepare for directory types; the infrastructure layer adds no such types itself. See [Large tenants](/backups/storage/#large-tenants) for limits and the reproducible synthetic check.
+
 ## Act on a change
 
 * To put an item back as it was, open **Restore from this backup** on the older backup. See [Restore Intune policies](/restore/).

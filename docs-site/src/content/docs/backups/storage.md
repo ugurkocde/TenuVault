@@ -1,9 +1,9 @@
 ---
 title: "Backup storage and retention"
-description: Where backups are kept, how to change the location, how long backups are kept, and how to export and import a backup as a ZIP file.
+description: Where backups are kept, how to change the location, how long backups are kept, and how to export and import backup archives.
 ---
 
-Each tenant keeps its backups in one location: encrypted on this device, or in your own Azure storage account, where Azure encrypts them at rest. This page covers both locations, how to change a tenant's location, how long backups are kept, and how to move a backup as a ZIP file.
+Each tenant keeps its backups in one location: encrypted on this device, or in your own Azure storage account, where Azure encrypts them at rest. This page covers both locations, how to change a tenant's location, how long backups are kept, and how to move a backup archive.
 
 ## Storage locations
 
@@ -150,7 +150,7 @@ On Community, when the oldest listed backup is at least 23 days old, a line abov
 
 TenuVault saves `backup-...zip` with the backup's files, its `metadata.json` and a `tenuvault-manifest.json` that names the source tenant. If any file cannot be read, the download fails instead of producing a partial archive. The download is recorded in the [audit log](/audit-log/).
 
-A download is refused before it starts when the backup's files total more than 32 MiB or the backup has more than 5000 files, the same limits that apply to [importing a backup ZIP](#import-a-backup-from-a-zip-file). Restore such a backup from **Backup Details** instead of downloading it, or choose a smaller backup.
+A ZIP download is refused before it starts when the backup's files total more than 128 MiB, one file exceeds 32 MiB, or the backup has more than 60,000 files, the total-size and file-count bounds that also apply to [importing a backup ZIP](#import-a-backup-from-a-zip-file). ZIP imports additionally cap expanded JSON at 8 MiB per file. Restore such a backup from **Backup Details** instead of downloading it, or choose a smaller backup.
 
 :::danger
 The ZIP file is not encrypted. It holds your Intune configuration in plain JSON, including encrypted OMA-URI values in plain text. Protect it like the configuration itself.
@@ -160,7 +160,7 @@ The ZIP file is not encrypted. It holds your Intune configuration in plain JSON,
 
 You can import a ZIP file exported by TenuVault, for example to restore a backup on another computer. The import stores the backup on this device. It never changes Intune.
 
-1. Open **Settings**, go to **Storage and recovery**, and in **Backups on this device** click **Import backup ZIP**.
+1. Open **Settings**, go to **Storage and recovery**, and in **Backups on this device** click **Import backup archive**.
 2. Choose the ZIP file.
 3. TenuVault checks the archive and shows **Review backup archive** with the number of policy snapshots, the source tenant ID, the backup ID and the file's SHA-256 hash.
 4. Click **Import locally**.
@@ -169,7 +169,7 @@ TenuVault confirms the import and tells you which tenant it belongs to. To see a
 
 The archive must meet these conditions:
 
-* It is smaller than 32 MiB.
+* A ZIP archive is at most 128 MiB, with at most 60,000 entries and at most 8 MiB of expanded JSON per file.
 * It was exported by TenuVault and contains `tenuvault-manifest.json` with the source tenant.
 * It is a complete backup: it finished without warnings, and every file matches the backup's inventory. Archives with missing, changed or extra files are refused.
 * Your license covers the source tenant.
@@ -178,6 +178,45 @@ The archive must meet these conditions:
 :::caution
 The archive declares its source tenant, but it is not signed. Import only files from a source you trust.
 :::
+
+## Large tenants
+
+The next release prepares streaming storage for directory inventories. This infrastructure adds no directory backup types by itself. Existing Intune, Entra configuration and Defender types retain their current snapshots and capture path. Directory areas will be added separately and remain opt-in.
+
+Large inventories write each Graph page as it arrives, with at most 1,000 objects per page and 16 snapshot uploads in flight. Their fingerprints are sorted into index shards of at most 1,000 objects. The summary contains only the count, shard count and completeness per type. Listing a backup and deciding retention do not read an ever-growing item manifest. Membership relationships use separate sorted ID shards, with a count, fingerprint and completeness marker on the parent. Definition sub-collections use sorted object shards with the same markers and an 8 KiB bound per definition; they are never collected into one resident array. Encrypted temporary files hold the merge runs while sorting, using a random key held only in memory; successful, failed and cancelled runs remove them. A process crash can leave unreadable ciphertext for operating-system cleanup.
+
+The current bounds are 500,000 objects per large type, 500,000 IDs per relationship, 250,000 Graph GET attempts or two hours per large type (including uploads and sorting), and eight hours per large backup. The existing capture phase keeps its 30-minute bound. Throttles pause the requesting service only, and a requested pause longer than five minutes ends the type. A budget or expired continuation token ends that type with incomplete coverage, while other types continue. There is no automatic continuation after a crash: the abandoned folder has no completion manifest and a new run starts from the beginning. Incomplete large backups never remove older coverage.
+
+**Backup Details** and the restore picker browse one index shard per large type at a time. Search and selection apply to the visible page; the preview does not expand membership lists. Large inventories have no restore capability in this infrastructure layer. **Drift Detection** compares inventory fingerprints on demand, checking at most 1,000 identities and returning at most 200 changes per window. Policy change totals do not include the separately paged inventory.
+
+### Large archives
+
+**Download** saves a large backup as an uncompressed POSIX `.tar` archive (ustar with bounded extended path records for long Unicode policy names) through a native save dialog. It streams directly to disk and publishes the chosen file only after every indexed file has been read and verified. Tar supports more than 60,000 files and avoids compression expansion bombs. Other backups continue to export as ZIP; older TenuVault ZIP exports still import.
+
+Use **Settings**, **Storage and recovery**, **Import backup archive** to choose either format. Large archives must contain the exact canonical inventory order. Review checks every snapshot fingerprint and relationship fingerprint before confirmation; import validates the source again, checks its digest, encrypts the files locally and writes the completion manifest last. A failed import removes its own files. Source identity is declared, not signed.
+
+Large import limits scale with the validated object count: at most 1,002 plus 32 files per object (never more than five million files), at most 128 MiB plus 64 KiB per object (never more than 32 GiB), and 8 MiB per file. Traversal, duplicate paths, links, special entries, extra files, missing files, invalid counts and truncated content are refused. Archive limits remain finite even for a hostile manifest. Tar downloads are plain JSON, just like ZIP exports; protect them with the same access controls as the backup.
+
+### Reproduce the scale check
+
+Run `node scripts/measure-large-backup.mjs` from the repository. It generates 100,000 synthetic users, 20,000 synthetic groups including one with 50,000 members, and 30,000 synthetic enterprise apps through a local HTTP Graph fixture. Each object carries a 1 KiB payload; every thousandth request is throttled for one second. No Microsoft tenant is contacted. The script exercises the desktop engine and encrypted local storage, records process RSS every 20 ms, checks `uptime` before and after capture, and writes a JSON report in the operating system temporary folder. `TV_MEASURE_OUTPUT` chooses another report path; `TV_MEASURE_KEEP=1` preserves the encrypted backup. The script is separate from `npm test`.
+
+Measured on 16 November 2026 using an Apple M5 MacBook Air, 10 CPU cores, 24 GiB RAM, Darwin 27.2.0, Node v26.7.0 (`MacBook-Air-UK.local`), against encrypted local storage:
+
+| Measurement | Result |
+| --- | --- |
+| Synthetic objects | 100,000 users, 20,000 groups, 30,000 enterprise apps |
+| Largest membership | 50,000 IDs |
+| Wall time | 1,103.432 seconds (18 minutes 23.4 seconds) |
+| Peak capture-process RSS | 415,989,760 bytes (396.72 MiB), below 1 GiB |
+| Graph requests | 20,223, including 20 throttles |
+| Stored encrypted bytes | 232,653,471 bytes (221.88 MiB) |
+| Stored files | 150,202 |
+| Result | Completed, complete coverage |
+| Load average before, 1/5/15 minutes | 3.49 / 7.40 / 7.40 |
+| Load average after, 1/5/15 minutes | 5.35 / 7.31 / 8.63 |
+
+The machine was shared with other sessions and test/build work, with higher load during parts of the run. RSS includes the HTTP fixture and capture engine in the same Node process; this is not an Electron window or a live Azure throughput measurement. The synthetic capture uses test-only type descriptors, not directory backup types. An optional disk probe, `TV_TEST_LARGE_IMPORT=1 npx vitest run test/large-archive.test.ts -t "more than 60000"`, also verified export, review and encrypted local import of 60,001 snapshots in an archive larger than 128 MiB. This disk probe is not enabled by `npm test`. The first sequential-upload prototype ended at its per-type budgets and recorded incomplete coverage; the successful run uses 16 bounded uploads. Real Graph latency, policy sizes, relationship counts, storage latency and computer sleep can change completion time. Large inventories with unattributed encrypted-file damage are conservatively unavailable until that damage is resolved.
 
 ## Related pages
 

@@ -66,6 +66,8 @@ See [Encryption and recovery key](/security/encryption/) for how backups are pro
 
 When backups are stored on **This device, encrypted**, TenuVault makes no storage connection at all. Backups, the audit log and tenant metadata are all written encrypted to the folder you choose.
 
+Large-inventory preparation uses encrypted temporary merge files for sorted object indexes and sub-collections. Each sort has a random AES-256-GCM key held only in memory. The files are removed when the sort ends; after a process crash, any remaining ciphertext cannot be reopened because its key was not stored. This adds no outbound destination and enables no directory backup type by itself. A large backup export is an unencrypted tar archive in the destination you choose, written under a temporary `.partial` name until verification finishes. Protect exported archives like the configuration itself. See [Large tenants](/backups/storage/#large-tenants).
+
 ## tenuvault.com: license checks and CIS Benchmarks content
 
 The app talks to TenuVault services on `www.tenuvault.com`: the licensing service at `https://www.tenuvault.com/api/desktop-license/`, used to activate, refresh and release licenses, the trial service at `https://www.tenuvault.com/api/desktop-trial`, used only when you start the free trial, and on Pro and MSP the CIS Benchmarks content service at `https://www.tenuvault.com/cis/v1/` (see [CIS Benchmarks content](#cis-benchmarks-content) below). The app never contacts the payment provider directly.
