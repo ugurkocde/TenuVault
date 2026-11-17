@@ -447,6 +447,7 @@ export async function POST(request: NextRequest) {
     }
     for (const backup of backups) {
       if (isLargeBackup(backup.id) && (backup.fingerprint?.CompanionBackup || mismatched.has(backup.id)) && !hidden.has(backup.id)) {
+        backup.runId = null
         backup.status = "incomplete"
         backup.coverage = "incomplete"
         backup.warning = "Ordinary companion does not match or is missing. This orphaned large companion is kept by retention."

@@ -224,7 +224,7 @@ function DashboardContent() {
   const tenantJobs = activeJobs.filter((job) => job.tenantId?.toLowerCase() === tenantGuid && !job.isComplete)
   // Every backup count on the tiles comes from this one summary, so the tiles cannot disagree.
   const backupStats = stats
-    ? backupSummary(stats.backupHistory, stats.failedAttempts, { since: stats.periodStart, live: [...stats.liveRuns, ...tenantJobs.map((job) => job.jobId)] })
+    ? backupSummary(stats.backupHistory, stats.failedAttempts, { since: stats.periodStart, live: [...stats.liveRuns, ...tenantJobs.map((job) => ({ tenantId: tenant?.id, runId: job.jobId }))] })
     : null
   const nowDate = new Date(relativeNow)
   // Null when no backup finished in the period, or the backups could not be read, which the tile shows as "No data".

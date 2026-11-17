@@ -1,4 +1,4 @@
-import { normalizeBackupStatus, backupHealth, backupSummary, latestComplete } from "~/lib/backup-health"
+import { normalizeBackupStatus, backupHealth, backupSummary, latestComplete, type LiveBackupRun } from "~/lib/backup-health"
 import { useLicense, tenantLicense, tenantPlan } from "@desktop/lib/license"
 import { allows } from "../../../shared/plans"
 import { bridge } from "@desktop/lib/bridge"
@@ -55,7 +55,7 @@ export interface TenantDashboardStats extends DashboardStats {
   /** Failed attempts, newest first. One whose run left a backup in storage counts once, from the backup. */
   failedAttempts: FailedAttemptItem[]
   /** Run ids of backups the app is running for the tenant, from any trigger. */
-  liveRuns: string[]
+  liveRuns: LiveBackupRun[]
   /** Start of the selected reporting period. Pass these to backupSummary for the tile counts. */
   periodStart: Date
   /** Set when the backup list could not be loaded, so an empty list is not shown as "no backups". */
@@ -259,7 +259,7 @@ export function useDashboardStats(selectedPeriod: string = "7d", tenantId?: numb
       // Filter backups within period
       const backupsInPeriod = backupHistory.filter(b => b.timestamp >= periodStart)
       const failedAttempts = allFailedAttempts.flat()
-      const liveRuns = allLiveRuns.flat()
+      const liveRuns = allLiveRuns.flatMap((runs, index) => runs.map(runId => ({ tenantId: tenants[index]!.id, runId })))
       const tenantHealth = tenants.map((tenant, index) => backupHealth(
         backupHistory.filter((backup) => backup.tenantId === tenant.id), now, !!allBackups[index]?.error,
       ))

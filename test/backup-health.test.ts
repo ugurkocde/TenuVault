@@ -99,10 +99,13 @@ it('keeps a known failed run failed after its folder without a manifest turns in
 })
 
 
-it("counts companion folders once per run while keeping both stored entries", () => {
-  const now = new Date("2026-11-16T12:00:00Z"), since = new Date("2026-11-15T00:00:00Z")
-  const ordinary = { status: "success" as const, timestamp: now, runId: "mixed" }
-  expect(backupSummary([ordinary, { ...ordinary }], [], { since })).toMatchObject({ stored: 2, successful: 1, failed: 0, finished: 1 })
-  expect(backupSummary([ordinary, { ...ordinary, status: "partial" }], [], { since })).toMatchObject({ stored: 2, successful: 0, failed: 1, finished: 1 })
-  expect(backupSummary([ordinary, { ...ordinary, status: "running" }], [], { since, live: ["mixed"] })).toMatchObject({ stored: 2, successful: 0, failed: 0, inProgress: 1, latestStatus: "running" })
+it("counts resolved history rows independently of copied run IDs", () => {
+  const ordinary = { status: "success" as const, timestamp: now, runId: "mixed", tenantId: 1 }
+  expect(backupSummary([ordinary, { ...ordinary, status: "incomplete" }], [], { since: now }))
+    .toMatchObject({ stored: 2, successful: 1, failed: 1, finished: 2, successRate: 50 })
+})
+it("scopes failed attempts and live runs by tenant", () => {
+  const folders = [{ status: "success" as const, timestamp: now, runId: "same", tenantId: 1 }, { status: "running" as const, timestamp: now, runId: "same", tenantId: 2 }]
+  expect(backupSummary(folders, [{ timestamp: now, runId: "same", tenantId: 3 }], { since: now, live: [{ tenantId: 2, runId: "same" }] }))
+    .toMatchObject({ successful: 1, failed: 1, inProgress: 1 })
 })

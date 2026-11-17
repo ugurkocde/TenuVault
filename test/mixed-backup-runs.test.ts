@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { backupSummary, normalizeBackupStatus } from "../src/portal/lib/backup-health"
 import { BackupEngine } from "../src/main/backup/engine"
 import { LocalBlobStore } from "../src/main/storage/local-blob-store"
 import { handleLocalBlobRequest } from "../src/main/storage/blob-emulator"
@@ -82,6 +83,17 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
       // Cold summary: 2 lists + 2 manifests, locally 2 property reads. Full adds one ordinary folder list.
       expect(f.requests.length).toBe((azure ? 4 : 6) + (summary ? 0 : 1))
     }
+  })
+  it("keeps the valid history run successful on Dashboard beside a rejected claimant", async () => {
+    const f = await pair()
+    const claimant = "backup-large-2020-01-02-000000"
+    await f.seed(claimant, true)
+    await f.write(claimant, "metadata.json", { ...f.second, BackupFolder: claimant })
+    const result = await (await history(f.request({ summary: true }))).json()
+    expect(result.backups).toHaveLength(2)
+    expect(result.backups.find((row: any) => row.id === ordinary)).toMatchObject({ status: "Success", companionId: large })
+    const rows = result.backups.map((row: any) => ({ ...row, tenantId: TENANT, status: normalizeBackupStatus(row), timestamp: new Date(row.timestamp) }))
+    expect(backupSummary(rows, [], { since: new Date(0) })).toMatchObject({ stored: 2, successful: 1, failed: 1, successRate: 50 })
   })
   it("does not let a cached successful companion hide a later metadata 403", async () => {
     const f = await pair()
