@@ -29,14 +29,16 @@ export async function captureLarge({ type, reader, pages, put, signal, saved, un
       const entries: LargeEntry[] = []
       const pending = new Set<Promise<void>>()
       let failed: unknown
-      const save = (path: string, body: string, entry: LargeEntry) => {
+      const save = async (path: string, body: string, entry: LargeEntry) => {
+        while (pending.size >= 16) await Promise.race(pending)
+        if (failed) throw failed
         const task = put(path, body).then(() => { entries.push(entry); saved() }, error => { failed ??= error }).finally(() => pending.delete(task))
         pending.add(task)
       }
       try {
-      for (const item of page) {
+      const readItem = async (item: Item) => {
         signal.throwIfAborted()
-        if (type.skip?.(item)) continue
+        if (type.skip?.(item)) return
         if (!safeLargeId(item.id) || (type.folder in DIRECTORY_SCHEMAS && !directoryObjectId(type.folder, item.id))) throw new Error("The large collection returned an unsafe object ID")
         if (++count > LARGE_MAX_ITEMS) throw new Error("The large inventory object limit was reached")
         const objectId = item.id
@@ -105,9 +107,17 @@ export async function captureLarge({ type, reader, pages, put, signal, saved, un
 
         const body = JSON.stringify(snapshot, null, 2)
         if (Buffer.byteLength(body) > (type.maxSnapshotBytes ?? 8 * 1024 * 1024)) throw new Error("The large snapshot exceeds its size limit")
-        save(`${type.folder}/${objectId}.json`, body, { id: objectId, file: `${objectId}.json`, hash: snapshotHash(snapshot) })
+        await save(`${type.folder}/${objectId}.json`, body, { id: objectId, file: `${objectId}.json`, hash: snapshotHash(snapshot) })
         if (pending.size >= 16) await Promise.race(pending)
         if (failed) { await Promise.all(pending); throw failed }
+      }
+      // Four directory objects bound network fan-out to 32 reads, while snapshot uploads keep
+      // the existing 16-slot limit. Existing large declarations retain serial object reads.
+      const width = type.folder in DIRECTORY_SCHEMAS ? 4 : 1
+      for (let at = 0; at < page.length; at += width) {
+        const reads = await Promise.allSettled(page.slice(at, at + width).map(readItem))
+        const failedRead = reads.find((read): read is PromiseRejectedResult => read.status === "rejected")
+        if (failedRead) throw failedRead.reason
       }
       } finally { await Promise.all(pending) }
       if (failed) throw failed

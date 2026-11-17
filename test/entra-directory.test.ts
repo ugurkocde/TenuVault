@@ -1,6 +1,9 @@
+import JSZip from "jszip"
+import { reviewArchive } from "../src/main/backup/archive"
+import { snapshotHash } from "../src/portal/lib/policies/backup-manifest"
 import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
-import { ENTRA_DIRECTORY_TYPES as TYPES, DIRECTORY_SCHEMAS, DIRECTORY_EXTRA_SCHEMAS, directoryExtraSnapshot } from "../src/shared/intune/entra-directory"
+import { ENTRA_DIRECTORY_TYPES as TYPES, DIRECTORY_SCHEMAS, DIRECTORY_EXTRA_SCHEMAS, directoryExtraSnapshot, assertDirectoryDefinition } from "../src/shared/intune/entra-directory"
 import { INTUNE_TYPES, restoreCapability, type Item } from "../src/shared/intune/registry"
 import { listPath, listSnapshot } from "../src/shared/intune/read"
 import { captureLarge } from "../src/main/backup/large"
@@ -79,6 +82,36 @@ describe("Directory inventory", () => {
       scan(saved)
       expect(JSON.stringify([...files.values()])).not.toContain("Excluded relationship name")
       for (const [name, value] of files) { expect(name).not.toContain("Example"); scan(value) }
+      const exported: string[] = []
+      for await (const file of largeFiles({ Items: {}, LargeItems: { [type.folder]: index } }, async name => files.get(name))) exported.push(file.name)
+      expect(exported).toContain(`${type.folder}/${object.id}.json`)
+    })
+    it(`${type.folder}: refuses directory objects in a legacy archive with named files`, async () => {
+      const zip = new JSZip(), backup = "backup-2026-11-17-120000", snapshot = { id, displayName: "Synthetic profile" }
+      const file = "Synthetic profile.json"
+      zip.file(`${type.folder}/${file}`, JSON.stringify(snapshot))
+      zip.file("metadata.json", JSON.stringify({ BackupFolder: backup, Status: "Success", Failures: 0, Items: { [`${type.folder}/${id}`]: { file, hash: snapshotHash(snapshot) } }, ItemCounts: { [type.folder]: 1, TotalPolicies: 0 } }))
+      zip.file("tenuvault-manifest.json", JSON.stringify({ version: 1, sourceTenantId: id, backupId: backup }))
+      await expect(reviewArchive(await zip.generateAsync({ type: "nodebuffer" }))).rejects.toThrow("sharded archives")
+    })
+    it(`${type.folder}: refuses a personal-looking ID in a sharded archive`, async () => {
+      const snapshot = { id: "SyntheticProfile", displayName: "Synthetic profile" }
+      const metadata = { Items: {}, LargeItems: { [type.folder]: { version: 1, count: 1, shards: 1, complete: true } } }
+      const read = async (name: string) => name.startsWith("_index/") ? [{ id: snapshot.id, file: `${snapshot.id}.json`, hash: snapshotHash(snapshot) }] : snapshot
+      const walk = async () => { for await (const _file of largeFiles(metadata, read)) { /* Validate before import writes any snapshot. */ } }
+      await expect(walk()).rejects.toThrow("Invalid directory object ID")
+    })
+    it(`${type.folder}: refuses imported profile fields outside the allowlist`, async () => {
+      const objectId = type.folder === "OAuth2PermissionGrants" ? "A".repeat(44) : id
+      const snapshot = { id: objectId, authenticationMethods: [{ secretText: "Refused" }] }
+      const metadata = { Items: {}, LargeItems: { [type.folder]: { version: 1, count: 1, shards: 1, complete: true } } }
+      const walk = async () => { for await (const _file of largeFiles(metadata, async name => name.startsWith("_index/") ? [{ id: objectId, file: `${objectId}.json`, hash: snapshotHash(snapshot) }] : snapshot)) { /* Validate untrusted content before import. */ } }
+      await expect(walk()).rejects.toThrow("outside its allowlist")
+    })
+    it(`${type.folder}: refuses case aliases that bypass directory archive validation`, async () => {
+      const metadata = { Items: {}, LargeItems: { [type.folder.toLowerCase()]: { version: 1, count: 0, shards: 0, complete: true } } }
+      const walk = async () => { for await (const _file of largeFiles(metadata, async () => ({}))) { /* Directory folder spelling is canonical. */ } }
+      await expect(walk()).rejects.toThrow("Invalid directory inventory folder")
     })
     it(`${type.folder}: refuses a personal value as an object ID before any file is saved`, async () => {
       await expect(capture(type, { object: { id: "person@example.test", displayName: "Example" } })).rejects.toThrow("unsafe object ID")
@@ -165,6 +198,33 @@ describe("Directory inventory", () => {
     } })).rejects.toThrow("Expired paging token")
     expect(finished).toBe(7)
   })
+  it("bounds directory object reads and snapshot uploads", async () => {
+    const type = TYPES[0]!
+    let active = 0, peak = 0
+    const objects = Array.from({ length: 40 }, (_, index) => ({ id: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}` }))
+    const index = await captureLarge({ type, signal: new AbortController().signal, saved: () => {}, reader: { get: async () => ({}), list: async () => [] }, pages: async function* () { yield objects }, put: async () => {
+      active++; peak = Math.max(peak, active)
+      await new Promise(resolve => setTimeout(resolve, 5))
+      active--
+    } })
+    expect(index).toMatchObject({ complete: true, count: 40 })
+    expect(peak).toBeLessThanOrEqual(16)
+    expect(peak).toBeGreaterThan(1)
+  })
+  it("starts no more than four enterprise app objects together", async () => {
+    const type = TYPES.find(type => type.folder === "ServicePrincipals")!
+    const objects = Array.from({ length: 9 }, (_, index) => ({ id: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}` }))
+    const started = new Set<string>()
+    let firstCompletion = 0
+    await captureLarge({ type, signal: new AbortController().signal, saved: () => {}, put: async () => {}, reader: { get: async () => ({}), list: async () => [] }, pages: async function* (path) {
+      if (path === listPath(type)) { yield objects; return }
+      started.add(path.split("/")[1]!)
+      await Promise.resolve()
+      firstCompletion ||= started.size
+      yield []
+    } })
+    expect(firstCompletion).toBe(4)
+  })
   it("shares the actual GET budget across concurrent enterprise app relationships", async () => {
     const type = TYPES.find(type => type.folder === "ServicePrincipals")!
     const originalBudget = type.readBudget
@@ -178,6 +238,11 @@ describe("Directory inventory", () => {
       expect(setup.requests).toHaveLength(4)
       expect(job.results?.types[0]?.saved).toBe(0)
     } finally { type.readBudget = originalBudget }
+  })
+  it("refuses non-allowlisted personal fields in imported relationship definitions", () => {
+    expect(() => assertDirectoryDefinition("appRoleAssignedTo", { id, principalId: id2, principalDisplayName: "Synthetic profile" })).toThrow("outside its allowlist")
+    expect(() => assertDirectoryDefinition("federatedIdentityCredentials", { id, subject: "-----BEGIN PRIVATE KEY-----" })).toThrow("refused credential")
+    expect(() => assertDirectoryDefinition("unknown", { id })).toThrow("Unknown directory definition")
   })
   it("records incomplete relationship coverage through the engine without ending the next group", async () => {
     const type = TYPES[1]!

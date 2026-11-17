@@ -1,8 +1,9 @@
+import { DIRECTORY_SCHEMAS, directoryObjectId, assertDirectorySnapshot, assertDirectoryDefinition } from "../../shared/intune/entra-directory"
 import { comparableSnapshot } from "../../shared/intune/compare"
 import { createHash } from "node:crypto"
 import { LARGE_SHARD_ITEMS, indexPath, largeIndexes, readIndexShard, relationPath, safeLargeId, type LargeEntry, type LargeIndex } from "../../shared/large-backup"
 import { snapshotHash } from "../../portal/lib/policies/backup-manifest"
-import type { Item } from "../../shared/intune/registry"
+import { typeForFolder, type Item } from "../../shared/intune/registry"
 
 export type JsonFileReader = (name: string) => Promise<any>
 export async function* indexedEntries(folder: string, index: LargeIndex, read: JsonFileReader): AsyncGenerator<LargeEntry> {
@@ -21,6 +22,7 @@ export async function* largeFiles(metadata: Record<string, any>, read: JsonFileR
   for (const [identity, item] of Object.entries(metadata.Items ?? {}) as Array<[string, { file: string; hash: string }]>) {
     const [folder, id, ...rest] = identity.split("/")
     if (!folder || !id || rest.length || !/^[A-Za-z0-9]+$/.test(folder) || !/^[^/\\]+\.json$/.test(item.file)) throw new Error("Invalid backup inventory")
+    if (typeForFolder(folder)?.folder && Object.hasOwn(DIRECTORY_SCHEMAS, typeForFolder(folder)!.folder)) throw new Error("Large directory inventories require sharded archives")
     const name = `${folder}/${item.file}`, value = await read(name)
     if (legacyPaths.has(name.toLowerCase())) throw new Error("Duplicate archive path")
     legacyPaths.add(name.toLowerCase())
@@ -28,6 +30,8 @@ export async function* largeFiles(metadata: Record<string, any>, read: JsonFileR
     yield { name, value }
   }
   for (const [folder, index] of Object.entries(largeIndexes(metadata)).sort(([a], [b]) => a < b ? -1 : 1)) {
+    const canonical = typeForFolder(folder)?.folder
+    if (canonical && Object.hasOwn(DIRECTORY_SCHEMAS, canonical) && canonical !== folder) throw new Error("Invalid directory inventory folder")
     if (!index.complete) throw new Error("The large backup is incomplete")
     let previous = ""
     for (let shard = 0; shard < index.shards; shard++) {
@@ -35,9 +39,11 @@ export async function* largeFiles(metadata: Record<string, any>, read: JsonFileR
       const entries = readIndexShard(await read(name), Math.min(LARGE_SHARD_ITEMS, index.count - shard * LARGE_SHARD_ITEMS), previous)
       yield { name, value: entries }
       for (const entry of entries) {
+        if (folder in DIRECTORY_SCHEMAS && !directoryObjectId(folder, entry.id)) throw new Error("Invalid directory object ID")
         previous = entry.id
         const name = `${folder}/${entry.file}`, value = await read(name)
         if (value.id !== entry.id || snapshotHash(value as Item) !== entry.hash) throw new Error("Backup fingerprint mismatch")
+        assertDirectorySnapshot(folder, value as Item)
         yield { name, value }
         for (const [property, reference] of Object.entries(value) as Array<[string, any]>) {
           if (!reference || typeof reference !== "object" || Array.isArray(reference) || !["sorted-id-shards-v1", "sorted-object-shards-v1"].includes(reference.format) || !("shards" in reference)) continue
@@ -51,6 +57,7 @@ export async function* largeFiles(metadata: Record<string, any>, read: JsonFileR
             for (const value of ids) {
               const id = reference.format === "sorted-id-shards-v1" ? value : value?.id
               if (reference.format === "sorted-object-shards-v1" && (!value || typeof value !== "object" || Array.isArray(value) || Buffer.byteLength(JSON.stringify(value)) > 8192)) throw new Error("Invalid sub-collection definition")
+              if (folder in DIRECTORY_SCHEMAS && reference.format === "sorted-object-shards-v1") assertDirectoryDefinition(property, value as Item)
               if (!safeLargeId(id) || id.toLowerCase() <= last.toLowerCase()) throw new Error("Invalid relationship ID")
               hash.update(JSON.stringify(reference.format === "sorted-id-shards-v1" ? value : comparableSnapshot(value)) + "\n"); last = id
             }

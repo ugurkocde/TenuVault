@@ -67,6 +67,7 @@ export async function reviewArchive(raw: Buffer): Promise<ReviewedArchive> {
   for (const [identity, item] of Object.entries(metadata.Items)) {
     const [folder, id, ...rest] = identity.split('/')
     if (!folder || !id || rest.length || !typeForFolder(folder) || !object(item) || typeof item.file !== 'string' || !/^[^/\\]+\.json$/.test(item.file)) throw new Error('Unsupported backup item')
+    if (typeForFolder(folder)?.volume === 'large') throw new Error('Large directory inventories require sharded archives')
     const path = `${folder}/${item.file}`, snapshot = parse(path)
     if (expected.has(path) || !object(snapshot) || snapshot.id !== id || snapshotHash(snapshot) !== item.hash) throw new Error('Backup contents do not match the export inventory')
     expected.add(path); counts[folder] = (counts[folder] ?? 0) + 1

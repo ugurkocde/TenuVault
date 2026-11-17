@@ -70,3 +70,36 @@ export const ENTRA_DIRECTORY_TYPES: IntuneType[] = [
   directory("EntraDevices", "Entra devices", "devices", "Users and devices"),
   directory("OrgContacts", "Organization contacts", "contacts", "Users and devices"),
 ]
+
+function assertAllowed(value: Json, schema: Schema): void {
+  if (value === null) return
+  if (Array.isArray(value)) { for (const entry of value) assertAllowed(entry, schema); return }
+  if (schema === true) { project(value, schema); return }
+  if (typeof value !== "object" || Object.keys(value).some(key => !Object.hasOwn(schema, key))) throw new Error("A directory snapshot contains properties outside its allowlist")
+  for (const [key, child] of Object.entries(value)) assertAllowed(child, schema[key]!)
+}
+
+/** Untrusted imports must satisfy the same privacy boundary as captured Graph responses. */
+export function assertDirectorySnapshot(folder: string, snapshot: Item): void {
+  const type = ENTRA_DIRECTORY_TYPES.find(type => type.folder === folder)
+  if (!type) {
+    if (ENTRA_DIRECTORY_TYPES.some(type => type.folder.toLowerCase() === folder.toLowerCase())) throw new Error("Invalid directory inventory folder")
+    return
+  }
+  const reference = fields("format,count,shards,complete,hash")
+  const schema: Schema = { ...DIRECTORY_SCHEMAS[folder as keyof typeof DIRECTORY_SCHEMAS], ...Object.fromEntries((type.extras ?? []).map(extra => [extra.property, reference])), ...(folder === "Users" ? { manager: fields("id,complete") } : {}) }
+  assertAllowed(snapshot, schema)
+  if (folder === "Users") {
+    const manager = snapshot.manager as Item | undefined
+    if (!manager || manager.complete !== true || (manager.id !== null && !directoryObjectId("Users", manager.id))) throw new Error("Invalid directory manager reference")
+  }
+  for (const extra of type.extras ?? []) {
+    const ref = snapshot[extra.property] as Item | undefined
+    if (!ref || ref.complete !== true || ref.format !== (extra.ids ? "sorted-id-shards-v1" : "sorted-object-shards-v1")) throw new Error("Invalid directory relationship reference")
+  }
+}
+export function assertDirectoryDefinition(property: string, snapshot: Item): void {
+  const schema = DIRECTORY_EXTRA_SCHEMAS[property]
+  if (!schema) throw new Error("Unknown directory definition")
+  assertAllowed(snapshot, schema)
+}

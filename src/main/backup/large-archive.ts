@@ -56,7 +56,7 @@ function allowance(metadata: Record<string, any>, requireLarge = true) {
   const counts: Record<string, number> = {}
   for (const key of Object.keys(metadata.Items)) {
     const folder = key.split("/")[0]!
-    if (!typeForFolder(folder) || indexes[folder]) throw new Error("Invalid legacy inventory folder")
+    if (!typeForFolder(folder) || typeForFolder(folder)?.volume === "large" || indexes[folder]) throw new Error("Invalid legacy inventory folder")
     counts[folder] = (counts[folder] ?? 0) + 1
   }
   for (const [folder, index] of Object.entries(indexes)) counts[folder] = index.count
