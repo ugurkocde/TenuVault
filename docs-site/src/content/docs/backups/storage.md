@@ -241,6 +241,27 @@ Measured on 16 November 2026 using an Apple M5 MacBook Air, 10 CPU cores, 24 GiB
 
 The machine was shared with other sessions and test/build work, with higher load during parts of the run. RSS includes the HTTP fixture and capture engine in the same Node process; this is not an Electron window or a live Azure throughput measurement. The synthetic capture uses test-only type descriptors, not directory backup types. An optional disk probe, `TV_TEST_LARGE_IMPORT=1 npx vitest run test/large-archive.test.ts -t "more than 60000"`, also verified export, review and encrypted local import of 60,001 snapshots in an archive larger than 128 MiB. This disk probe is not enabled by `npm test`. The first sequential-upload prototype ended at its per-type budgets and recorded incomplete coverage; the successful run uses 16 bounded uploads. Real Graph latency, policy sizes, relationship counts, storage latency and computer sleep can change completion time. Large inventories with unattributed encrypted-file damage are conservatively unavailable until that damage is resolved.
 
+### Directory types at scale
+
+Run `TV_MEASURE_DIRECTORY=1 TV_MEASURE_OUTPUT=docs/directory-tenant-measurement.json node scripts/measure-large-backup.mjs` to repeat the check with all seven registered directory types, their real property projections and relationship paths. `TV_MEASURE_SCALE=0.001` selects a smaller workload for a quick check. The full measurement completed on 17 November 2026 on the same Apple M5 machine described above:
+
+| Measurement | Result |
+| --- | --- |
+| Directory objects | 100,000 users, 20,000 groups, 30,000 enterprise apps, 1,000 app registrations, 500 grants, 500 devices, 100 contacts |
+| Largest membership | 50,000 IDs |
+| Capture wall time | 2,729.102 seconds (45 minutes 29.1 seconds) |
+| Peak process RSS across capture and archive round trip | 659,079,168 bytes (628.55 MiB), below 1 GiB |
+| Graph requests | 303,511, including 303 one-second throttles |
+| Stored encrypted bytes in the large container | 407,349,080 bytes (388.48 MiB), 152,306 files |
+| Verified tar download | 440,135,680 bytes, 28.123 seconds |
+| Archive review and encrypted local import | 1,026.835 seconds (17 minutes 6.8 seconds) |
+| Paged comparison after import | 152,100 unchanged objects, 154 windows, 0.303 seconds |
+| Result | Completed, complete coverage, no comparison changes |
+| Load average before, 1/5/15 minutes | 5.26 / 5.69 / 6.12 |
+| Load average after, 1/5/15 minutes | 3.39 / 3.37 / 3.69 |
+
+Users, groups, app registrations and enterprise apps carry 1 KiB of synthetic allowlisted text. The fixture supplies manager IDs and the large group membership; other relationship lists are empty, but every declared relationship endpoint is requested. This measures full object volume and request fan-out, not a worst case for every relationship or definition size. The same Node process hosts the HTTP fixture, capture engine, verified tar download, review, import and paged comparison. The large container size excludes the small ordinary companion summary. These are encrypted local disk measurements, not live Graph or Azure throughput guarantees. A tenant with more relationships can reach the per-type GET or time allowance and will report incomplete coverage.
+
 ## Related pages
 
 * [Intune backup](https://www.tenuvault.com/intune-backup): storage options and plans, on the product site

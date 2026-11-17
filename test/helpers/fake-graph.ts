@@ -1,7 +1,7 @@
 import { createServer } from "node:http"
 import type { AddressInfo } from "node:net"
 
-export interface FakeCollection { count: number; members?: { object: number; count: number }; bytes?: number }
+export interface FakeCollection { count: number; members?: { object: number; count: number }; bytes?: number; object?: (index: number, relation?: string) => Record<string, unknown> }
 export interface FakeGraphOptions {
   seed?: number
   pageSize?: number
@@ -41,12 +41,12 @@ export async function fakeGraph(options: FakeGraphOptions) {
       response.statusCode = 410
       response.end(JSON.stringify({ error: { code: "DirectoryPageTokenNotFoundException", message: "Paging token expired" } })); return
     }
-    const total = relation ? (objectId === id(shape.members?.object ?? -1) ? shape.members?.count ?? 0 : 0) : shape.count
+    const total = relation ? ((!shape.object || relation === "members") && objectId === id(shape.members?.object ?? -1) ? shape.members?.count ?? 0 : 0) : shape.count
     const top = Math.min(Number(url.searchParams.get("$top")) || options.pageSize || 999, options.pageSize || 999)
     const select = url.searchParams.get("$select")?.split(",")
     const object = (index: number) => {
-      const value: Record<string, unknown> = { id: id(index), displayName: `Synthetic ${index}`, accountEnabled: true, payload: "x".repeat(shape.bytes ?? 256) }
-      return select ? Object.fromEntries(select.map(key => [key, value[key]])) : value
+      const value: Record<string, unknown> = shape.object ? { ...shape.object(index, relation), id: collection === "oauth2PermissionGrants" ? Buffer.from(`${id(index)}:grant`).toString("base64url") : id(index) } : { id: id(index), displayName: `Synthetic ${index}`, accountEnabled: true, payload: "x".repeat(shape.bytes ?? 256) }
+      return select ? { ...Object.fromEntries(select.map(key => [key, value[key]])), ...(shape.object && url.searchParams.get("$expand") === "manager($select=id)" ? { manager: { id: id((index + 1) % shape.count) } } : {}) } : value
     }
     if (objectId && !relation) { response.end(JSON.stringify(object(Number.parseInt(objectId.slice(-12), 16)))); return }
     const value = Array.from({ length: Math.max(0, Math.min(top, total - offset)) }, (_, i) => object(offset + i))

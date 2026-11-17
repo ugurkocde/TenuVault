@@ -1,0 +1,141 @@
+{
+  "machine": {
+    "hostname": "MacBook-Air-UK.local",
+    "platform": "darwin",
+    "release": "27.2.0",
+    "cpu": "Apple M5",
+    "cores": 10,
+    "ramGiB": 24,
+    "node": "v26.7.0"
+  },
+  "scale": 1,
+  "directory": true,
+  "roundTrip": {
+    "exportSeconds": 28.123298958000262,
+    "archiveBytes": 440135680,
+    "importSeconds": 1026.8346158339996,
+    "compared": 152100,
+    "comparePages": 154,
+    "compareSeconds": 0.30334541699988765
+  },
+  "collections": {
+    "users": {
+      "count": 100000
+    },
+    "groups": {
+      "count": 20000,
+      "members": {
+        "object": 0,
+        "count": 50000
+      }
+    },
+    "applications": {
+      "count": 1000
+    },
+    "servicePrincipals": {
+      "count": 30000
+    },
+    "oauth2PermissionGrants": {
+      "count": 500
+    },
+    "devices": {
+      "count": 500
+    },
+    "contacts": {
+      "count": 100
+    }
+  },
+  "uptimeBefore": "8:06  up  3:47, 1 user, load averages: 5.26 5.69 6.12",
+  "uptimeAfter": "9:09  up  4:50, 1 user, load averages: 3.39 3.37 3.69",
+  "wallSeconds": 2729.1015288340004,
+  "peakRssBytes": 659079168,
+  "requests": 303511,
+  "throttles": 303,
+  "storedBytes": 407349080,
+  "files": 152306,
+  "status": "Completed",
+  "coverage": "complete",
+  "results": {
+    "types": [
+      {
+        "folder": "Users",
+        "label": "Users",
+        "area": "Users and devices",
+        "inventory": true,
+        "state": "saved",
+        "saved": 100000,
+        "failed": 0,
+        "found": 100000
+      },
+      {
+        "folder": "Groups",
+        "label": "Groups",
+        "area": "Groups",
+        "inventory": true,
+        "state": "saved",
+        "saved": 20000,
+        "failed": 0,
+        "found": 20000
+      },
+      {
+        "folder": "Applications",
+        "label": "App registrations",
+        "area": "Applications",
+        "inventory": true,
+        "state": "saved",
+        "saved": 1000,
+        "failed": 0,
+        "found": 1000
+      },
+      {
+        "folder": "ServicePrincipals",
+        "label": "Enterprise apps",
+        "area": "Applications",
+        "inventory": true,
+        "state": "saved",
+        "saved": 30000,
+        "failed": 0,
+        "found": 30000
+      },
+      {
+        "folder": "OAuth2PermissionGrants",
+        "label": "OAuth2 permission grants",
+        "area": "Applications",
+        "inventory": true,
+        "state": "saved",
+        "saved": 500,
+        "failed": 0,
+        "found": 500
+      },
+      {
+        "folder": "EntraDevices",
+        "label": "Entra devices",
+        "area": "Users and devices",
+        "inventory": true,
+        "state": "saved",
+        "saved": 500,
+        "failed": 0,
+        "found": 500
+      },
+      {
+        "folder": "OrgContacts",
+        "label": "Organization contacts",
+        "area": "Users and devices",
+        "inventory": true,
+        "state": "saved",
+        "saved": 100,
+        "failed": 0,
+        "found": 100
+      }
+    ],
+    "notices": [
+      {
+        "level": "info",
+        "message": "Left out by the backup scope: device configuration profiles, settings catalog and endpoint security policies, administrative templates, reusable settings, BIOS configurations, compliance policies, settings catalog compliance policies, compliance scripts, compliance policy settings, security baselines and template profiles, Windows PowerShell scripts, macOS shell scripts, macOS custom attributes, remediations, feature update profiles, expedited quality update profiles, hotpatch quality update policies, driver update profiles, app categories, apps, app configuration policies for managed devices, app configuration policies for managed apps, iOS app protection policies, Android app protection policies, Windows app protection policies, policy sets, enrollment configurations, Windows Autopilot deployment profiles, Windows Autopilot devices, Apple user enrollment profiles, Apple automated device enrollment tokens and profiles, Android Enterprise enrollment profiles, device categories, terms and conditions, assignment filters, scope tags, Intune roles, compliance notification templates, Company Portal branding, device clean-up rules, multi admin approval policies, named locations, authentication strengths, Conditional Access policies, Authorization policy, Security defaults, Admin consent request policy, Permission grant policies, Permission grant pre-approval policies, Default app management policy, App management policies, Token lifetime policies, Token issuance policies, Claims mapping policies, Home realm discovery policies, Activity-based timeout policies, Device registration policy, MDM enrollment policies, MAM enrollment policies, Directory settings, Organization, Company branding, Domains, On-premises synchronization, Authentication methods policy, Authentication flows policy, Authentication contexts, Certificate-based authentication configurations, Certificate-based authentication PKI, Federated token validation policy, Continuous access evaluation policy, Hardware OATH devices, Group lifecycle policies, Ownerless group policy, Cross-tenant access policy, Cross-tenant access defaults, Cross-tenant access partners, Multitenant organization templates, External identities policy, B2B management policies, Identity providers, User flows, User flow attributes, Authentication events flows, Authentication event listeners, Custom authentication extensions, API connectors, Multitenant organization, Custom Entra role definitions, Entra role assignments, Role eligibility schedules, Role assignment schedules, Role management policies, Role management policy assignments, PIM group eligibility schedules, PIM group assignment schedules, PIM alert configurations, Administrative units, Attribute sets, Custom security attribute definitions, Access package catalogs, Access packages, Access package assignment policies, Connected organizations, Entitlement management settings, Access review definitions, Access review policy, Lifecycle workflows, Lifecycle workflow custom task extensions, Lifecycle workflow settings, Terms of use agreements, Custom detection rules, Case type configurations, Security workbooks, Attack simulations, Simulation automations, Training campaigns, Tenant simulation payloads, Tenant simulation landing pages, Tenant simulation login pages, Tenant simulation notifications, User reported settings policies, Identity sensor settings, Identity automatic auditing, Identity sensor activation, Secure Score control states, Defender role definitions, Defender role assignments."
+      }
+    ],
+    "coverage": "complete",
+    "totalPolicies": 0,
+    "warnings": 0
+  }
+}
