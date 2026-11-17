@@ -1,5 +1,4 @@
 import { completeHalf, largeRunProblems, matchingCompanions, ordinaryOnlyManifest } from "../../../../shared/backup-companion"
-import { INTUNE_TYPES } from "../../../../shared/intune/registry"
 import { backupStoragePath, isLargeBackup } from "../../../../shared/backup-storage"
 import { exportLargeArchive, exportMixedArchive } from "../../../../main/backup/large-archive"
 import { Readable } from "node:stream"
@@ -115,7 +114,7 @@ export async function POST(request: NextRequest) {
     }
     // Preserve legacy listing, path and size refusals before any file GET. Large declarations
     // or a history hint select streaming before those ordinary ZIP limits are applied.
-    const earlyOwner = isLargeBackup(backupId) || body.largeInventory === true || INTUNE_TYPES.some(type => type.volume === "large")
+    const earlyOwner = isLargeBackup(backupId) || body.largeInventory === true
       ? await readOwnedBackup(readFile, backupId, tenantId, storageAccountName) : null
     if (earlyOwner) {
       const response = await archiveResponse(earlyOwner)
