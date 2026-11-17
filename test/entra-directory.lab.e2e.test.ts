@@ -78,7 +78,9 @@ describe.skipIf(!configured)("Directory lab through the application streaming re
     console.log(JSON.stringify({ folder: type.folder, outcome: index.complete ? "saved" : "incomplete", count: index.count, shapes }))
     if (process.env.TENUVAULT_RECORD_DIRECTORY_FIXTURES === "1") {
       const root = new URL("./fixtures/entra-directory/", import.meta.url); mkdirSync(root, { recursive: true })
-      writeFileSync(new URL(`${type.folder}.json`, root), JSON.stringify({ verified: "2026-11-17", liveCount: index.count, samples, shapes }, null, 2) + "\n")
+      // Concurrent relationships can finish in any order. Keep recorded fixtures stable.
+      const ordered = <T,>(values: Record<string, T>) => Object.fromEntries(["object", ...type.extras?.map(extra => extra.property) ?? []].filter(key => key in values).map(key => [key, values[key]]))
+      writeFileSync(new URL(`${type.folder}.json`, root), JSON.stringify({ verified: "2026-11-17", liveCount: index.count, samples: ordered(samples), shapes: ordered(shapes) }, null, 2) + "\n")
     }
     expect(index.complete).toBe(true)
   }, 600_000)
