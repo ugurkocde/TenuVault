@@ -57,7 +57,10 @@ describe.skipIf(!configured)("Directory lab through the application streaming re
       }
     }
     const files: string[] = []
-    const index = await captureLarge({ type, signal, reader: { get: path => budget(control => session.get<Item>(url(path), type.headers, control)), list: async () => { throw new Error("Must stream") } }, pages, saved: () => {}, put: async path => { files.push(path); if (path.startsWith(type.folder + "/")) expect(path).toMatch(new RegExp(`^${type.folder}/[A-Za-z0-9_-]+\\.json$`)) } })
+    const index = await captureLarge({ type, signal, reader: { get: path => budget(control => session.get<Item>(url(path), type.headers, control)), list: async () => { throw new Error("Must stream") } }, pages, saved: () => {}, put: async path => { files.push(path); if (path.startsWith(type.folder + "/")) expect(path).toMatch(new RegExp(`^${type.folder}/[A-Za-z0-9_-]+\\.json$`)) } }).catch(error => {
+      const status = (error as { status?: number }).status
+      throw new Error(`${type.folder}: directory lab read failed${Number.isInteger(status) ? ` (HTTP ${status})` : ""}`)
+    })
     console.log(JSON.stringify({ folder: type.folder, outcome: index.complete ? "saved" : "incomplete", count: index.count, shapes }))
     if (process.env.TENUVAULT_RECORD_DIRECTORY_FIXTURES === "1") {
       const root = new URL("./fixtures/entra-directory/", import.meta.url); mkdirSync(root, { recursive: true })
