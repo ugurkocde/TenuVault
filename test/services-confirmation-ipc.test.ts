@@ -11,19 +11,23 @@ it("refuses direct services:setEnabled IPC without confirmation before persistin
   let handler!: (...args: unknown[]) => unknown
   const moduleSettings = new ModuleSettings(memoryStore())
   const servicesFor = vi.fn(() => ({}))
-  new Function("handleTrusted", "moduleSettings", "servicesFor", "MODULES", transformSync(source, { loader: "ts" }).code)(
-    (_channel: string, fn: typeof handler) => { handler = fn }, moduleSettings, servicesFor, MODULES,
+  const send = vi.fn()
+  new Function("handleTrusted", "moduleSettings", "servicesFor", "MODULES", "mainWindow", transformSync(source, { loader: "ts" }).code)(
+    (_channel: string, fn: typeof handler) => { handler = fn }, moduleSettings, servicesFor, MODULES, { webContents: { send } },
   )
   for (const confirmation of [undefined, false, {}, { confirmed: false }, { confirmed: "true" }]) {
     expect(() => handler({}, "tenant", "client", "intune", false, confirmation)).toThrow("Confirm turning off Intune")
     expect(moduleSettings.get("tenant").intune.enabled).toBe(true)
     expect(servicesFor).not.toHaveBeenCalled()
+    expect(send).not.toHaveBeenCalled()
   }
   handler({}, "tenant", "client", "intune", false, { confirmed: true })
   expect(moduleSettings.get("tenant").intune.enabled).toBe(false)
   expect(servicesFor).toHaveBeenCalledOnce()
+  expect(send).toHaveBeenCalledExactlyOnceWith("health:changed", "tenant")
   handler({}, "tenant", "client", "intune", true)
   expect(moduleSettings.get("tenant").intune.enabled).toBe(true)
+  expect(send).toHaveBeenCalledTimes(2)
   expect(() => handler({}, "tenant", "client", "conditionalAccess", false)).not.toThrow()
 })
 

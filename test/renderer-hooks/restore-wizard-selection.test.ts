@@ -133,3 +133,31 @@ it("reloads the open approval list after consecutive restores with the same resu
     if (run === 1) await act(async () => buttonNamed(container, "Restore more items")!.click())
   }
 })
+
+it("limits restore lists and preview reads to the selected service", async () => {
+  const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).endsWith("/api/list-backup-contents")) return Response.json({ content: { groups: [
+      ...contents.content.groups,
+      { folder: "Organization", label: "Organization", area: "Tenant settings", policies: [{ path: "Organization/o.json", displayName: "Tenant organization" }] },
+    ] } })
+    if (String(input).endsWith("/api/restore-preview")) {
+      expect(JSON.parse(String(init?.body)).paths).toEqual(["Organization/o.json"])
+      return Response.json({ items: [{ path: "Organization/o.json", name: "Tenant organization" }] })
+    }
+    return Response.json({})
+  })
+  vi.stubGlobal("fetch", fetcher)
+  const container = document.body.appendChild(document.createElement("div"))
+  const root = createRoot(container); roots.push(root)
+  await act(async () => root.render(createElement(MemoryRouter, null, createElement(RestoreWizard, {
+    service: "entra", tenant: { name: "Contoso", credentials: { tenantId: "tenant", appId: "app", clientSecret: "" }, storageAccountName: "tvlocal-tenant" },
+    backups: [{ id: "backup-1", timestamp: "2026-11-15T02:00:00Z", type: "manual", status: "Completed", totalPolicies: 3, scope: null, size: 1, duration: 4, changes: null, comparedWith: null }],
+    initialBackupId: "backup-1", community: false, canCopyToTenants: false, copyCandidates: [],
+  }))))
+  expect(container.textContent).toContain("Organization")
+  expect(container.textContent).not.toContain("Configuration profile")
+  const group = container.querySelector<HTMLButtonElement>('button[aria-expanded]')!
+  await act(async () => group.click())
+  expect(container.textContent).toContain("Tenant organization")
+  expect(container.textContent).not.toContain("Profile A")
+})

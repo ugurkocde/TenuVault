@@ -34,6 +34,8 @@ import { changeTenantStorage, type StorageChoice } from "@desktop/lib/storage"
 import { LinkedMessage } from "~/components/linked-message"
 import { SERVICES_PAGE } from "../../../../shared/services/modules"
 
+import { BACKUP_SERVICES, matchesBackupService, parseBackupService, type BackupServiceFilter } from "@desktop/lib/backup-service"
+
 type Tab = "backup" | "restore" | "schedule"
 
 const NO_BACKUPS: BackupSummary[] = []
@@ -67,7 +69,14 @@ export default function BackupRestorePage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const requested = searchParams.get("tab")
   const activeTab: Tab = requested === "restore" || requested === "schedule" ? requested : "backup"
-  const setActiveTab = (tab: Tab) => setSearchParams({ tab })
+  const service = parseBackupService(searchParams.get("service"))
+  const setActiveTab = (tab: Tab) => setSearchParams(current => { const next = new URLSearchParams(current); next.set("tab", tab); return next })
+  const setService = (value: string) => setSearchParams(current => {
+    const next = new URLSearchParams(current)
+    if (value === "all") next.delete("service")
+    else next.set("service", value)
+    return next
+  })
 
   const tenants = useTenants()
   const { selectedTenantId, selectedTenant, setSelectedTenantId } = useSelectedTenant()
@@ -124,7 +133,7 @@ export default function BackupRestorePage() {
   const copyCandidates = tenants
     .filter((entry) => entry.id !== selectedTenantId && entry.credentials?.tenantId && entry.credentials.appId)
     .map((entry) => ({ tenantId: entry.credentials!.tenantId, appId: entry.credentials!.appId, name: entry.name, domain: entry.domain }))
-  const trends = useMemo(() => backupTypeTrends(backups), [backups])
+  const trends = useMemo(() => backupTypeTrends(backups).filter(type => matchesBackupService(type.folder, service)), [backups, service])
   const selected = backups.find((backup) => backup.id === selectedId) ?? null
   const latest = backups.find((backup) => backup.counts && statusKind(backup.status) === "success")
 
@@ -242,7 +251,7 @@ export default function BackupRestorePage() {
       <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <h1 className="text-4xl font-medium tracking-tight text-gray-900">Backup & Restore</h1>
-          <p className="mt-2 text-base text-gray-500">Back up Intune, see what changed, and restore items from any backup</p>
+          <p className="mt-2 text-base text-gray-500">Back up your services, see what changed, and restore items from any backup</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           {tenants.length > 0 && (
@@ -291,6 +300,15 @@ export default function BackupRestorePage() {
           </button>
         ))}
       </nav>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <label htmlFor="backup-service" className="text-sm font-medium text-gray-700">Service</label>
+        <select id="backup-service" value={service} onChange={event => setService(event.target.value)} className="h-10 rounded-full border border-border bg-card px-4 text-sm text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
+          <option value="all">All</option>
+          {BACKUP_SERVICES.map(entry => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
+        </select>
+        <p className="text-sm text-gray-500">Filters contents and type lists. Backup runs, totals and downloads cover the whole backup.</p>
+      </div>
 
       {activeTab !== "schedule" && selectedTenant?.credentials && <ServiceBackupNotice tenantId={selectedTenant.credentials.tenantId} />}
 
@@ -427,6 +445,7 @@ export default function BackupRestorePage() {
             <BackupDetails
               ref={detailRef}
               backup={selected}
+              service={service}
               credentials={{ ...tenant.credentials, storageAccountName: tenant.storageAccountName }}
               first={selected.id === backups[backups.length - 1]?.id}
               storageAccountName={tenant.storageAccountName}
@@ -443,7 +462,8 @@ export default function BackupRestorePage() {
 
       {activeTab === "restore" && tenant && !isLoading && !blockingError && (
         <RestoreWizard
-          key={`${selectedTenant?.id}:${restoreFrom ?? ""}`}
+          key={`${selectedTenant?.id}:${restoreFrom ?? ""}:${service}`}
+          service={service}
           tenant={tenant}
           backups={backups}
           initialBackupId={restoreFrom}
@@ -539,6 +559,7 @@ function BackupTrends({ trends, backupCount }: { trends: ReturnType<typeof backu
 
 interface BackupDetailsProps {
   credentials: Record<string, unknown>
+  service: BackupServiceFilter
   backup: BackupSummary
   first: boolean
   storageAccountName: string
@@ -552,13 +573,13 @@ interface BackupDetailsProps {
 }
 
 /** Everything known about one backup, from its metadata and file listing. */
-function BackupDetails({ credentials, backup, first, storageAccountName, downloading, exportingDevices, onChanges, onDownload, onExportDevices, onRestore, ref }: BackupDetailsProps) {
+function BackupDetails({ credentials, service, backup, first, storageAccountName, downloading, exportingDevices, onChanges, onDownload, onExportDevices, onRestore, ref }: BackupDetailsProps) {
   const kind = statusKind(backup.status)
   // Damaged or unreadable files of this backup on this device: nothing can be read from it.
   const unavailable = backup.status === "unavailable"
   const counts = backup.counts ?? {}
   const excluded = new Set(backup.scope?.excluded ?? [])
-  const areas = AREAS.map(({ area, types }) => ({
+  const areas = AREAS.map(({ area, types }) => ({ area, types: types.filter(type => matchesBackupService(type.folder, service)) })).filter(entry => entry.types.length > 0).map(({ area, types }) => ({
     area,
     count: types.reduce((sum, type) => sum + (counts[type.folder] ?? 0), 0),
     types: types.filter((type) => !excluded.has(type.folder) && (counts[type.folder] ?? 0) > 0),
@@ -626,7 +647,7 @@ function BackupDetails({ credentials, backup, first, storageAccountName, downloa
         </div>
       </div>
 
-      {backup.largeInventory && <LargeContents key={`${String(credentials.tenantId)}/${String(credentials.storageAccountName)}/${backup.id}`} credentials={credentials} backupId={backup.id} />}
+      {backup.largeInventory && <LargeContents key={`${String(credentials.tenantId)}/${String(credentials.storageAccountName)}/${backup.id}`} credentials={credentials} backupId={backup.id} service={service} />}
       <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
         <div>
           <h3 className="mb-3 text-xs font-medium text-gray-500">Contents</h3>

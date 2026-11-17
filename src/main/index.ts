@@ -1483,6 +1483,7 @@ async function bootstrap(): Promise<void> {
       throw new Error(`Confirm turning off ${module.label}: new manual and scheduled backups will leave out this service.`)
     }
     moduleSettings.set(tenantId, id, enabled)
+    mainWindow?.webContents.send("health:changed", tenantId)
     return servicesFor(tenantId, clientId, false)
   })
   // What TenuVault asks for at setup, and the opt-in areas, per service. Both answer with the

@@ -1,3 +1,4 @@
+import { matchesBackupService, type BackupServiceFilter } from "@desktop/lib/backup-service"
 import { useEffect, useState } from "react"
 import { Button } from "~/components/ui/button"
 import { typeForFolder } from "../../../shared/intune/registry"
@@ -35,7 +36,7 @@ export function LargeComparison({ credentials, backupId, baseline, folders }: { 
   </div>
 }
 
-export function LargeContents({ credentials, backupId }: { credentials: Record<string, unknown>; backupId: string }) {
+export function LargeContents({ credentials, backupId, service = "all" }: { credentials: Record<string, unknown>; backupId: string; service?: BackupServiceFilter }) {
   const [page, setPage] = useState(0)
   const [data, setData] = useState<{ hasMore: boolean; groups: Array<{ folder: string; label: string; count: number; policies: Array<{ path: string; displayName: string }> }> } | null>(null)
   const [error, setError] = useState("")
@@ -52,5 +53,5 @@ export function LargeContents({ credentials, backupId }: { credentials: Record<s
     }).catch(error => { if (!controller.signal.aborted) setError(error.message) })
     return () => controller.abort()
   }, [connection, tenant, storage, backupId, page])
-  return <div className="space-y-3 rounded-2xl bg-blue-50 p-5 text-sm text-blue-900"><p className="font-medium">Large inventory, page {page + 1}</p>{error && <p role="alert">{error}</p>}{data?.groups.map(group => <details key={group.folder}><summary>{group.label}: {group.count.toLocaleString()} objects</summary><ul className="max-h-64 overflow-auto">{group.policies.map(item => <li className="break-all py-1 font-mono" key={item.path}>{item.displayName}</li>)}</ul></details>)}<div className="flex flex-wrap gap-2"><Button variant="outline" size="sm" disabled={page === 0 || !data} onClick={() => setPage(value => value - 1)}>Previous page</Button><Button variant="outline" size="sm" disabled={!data?.hasMore} onClick={() => setPage(value => value + 1)}>Next page</Button></div></div>
+  return <div className="space-y-3 rounded-2xl bg-blue-50 p-5 text-sm text-blue-900"><p className="font-medium">Large inventory, page {page + 1}</p>{error && <p role="alert">{error}</p>}{data?.groups.filter(group => matchesBackupService(group.folder, service)).map(group => <details key={group.folder}><summary>{group.label}: {group.count.toLocaleString()} objects</summary><ul className="max-h-64 overflow-auto">{group.policies.map(item => <li className="break-all py-1 font-mono" key={item.path}>{item.displayName}</li>)}</ul></details>)}<div className="flex flex-wrap gap-2"><Button variant="outline" size="sm" disabled={page === 0 || !data} onClick={() => setPage(value => value - 1)}>Previous page</Button><Button variant="outline" size="sm" disabled={!data?.hasMore} onClick={() => setPage(value => value + 1)}>Next page</Button></div></div>
 }

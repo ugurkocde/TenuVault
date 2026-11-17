@@ -47,3 +47,14 @@ it("pages backup contents without accumulating prior rows", async () => {
   expect(container.textContent).toContain("object1")
   expect(container.textContent).not.toContain("object0")
 })
+
+it("filters large inventory groups by service without changing the paging request", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ hasMore: false, content: { metadata: { LargeItems: { Groups: {}, DeviceConfigurations: {} } }, groups: [
+    { folder: "Groups", label: "Groups", count: 1, policies: [{ path: "g", displayName: "Directory group" }] },
+    { folder: "DeviceConfigurations", label: "Profiles", count: 1, policies: [{ path: "p", displayName: "Intune profile" }] },
+  ] } })))
+  await render(createElement(LargeContents, { credentials, backupId: "backup", service: "entra" }))
+  expect(container.textContent).toContain("Directory group")
+  expect(container.textContent).not.toContain("Intune profile")
+  expect(JSON.parse(String(vi.mocked(fetch).mock.calls[0]![1]?.body))).not.toHaveProperty("service")
+})

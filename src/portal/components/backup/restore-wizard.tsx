@@ -1,5 +1,6 @@
 "use client"
 
+import { matchesBackupService, type BackupServiceFilter } from "@desktop/lib/backup-service"
 import { RestoreApprovals } from "./restore-approvals"
 import { reviewedDependencyMappings, type RecoveryReadiness } from "../../../shared/intune/recovery"
 import { settingDefinitionIds, type DeprecatedSettingHit } from "../../../shared/intune/settings-catalog"
@@ -61,6 +62,7 @@ interface CopyTarget {
 }
 
 interface RestoreWizardProps {
+  service?: BackupServiceFilter
   tenant: BackupTenant
   backups: BackupSummary[]
   /** Preselected backup, for example from "Restore" in the backup history. */
@@ -233,7 +235,7 @@ async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promi
  * Restores items from a backup in five steps: choose the backup, the items and how to restore them,
  * review what will happen to each item in the tenant as it is now, then watch the restore run.
  */
-export function RestoreWizard({ tenant, backups, initialBackupId, community, canCopyToTenants, copyCandidates }: RestoreWizardProps) {
+export function RestoreWizard({ tenant, backups, initialBackupId, community, canCopyToTenants, copyCandidates, service = "all" }: RestoreWizardProps) {
   const showPlanError = (error: unknown) => showFeaturePlanError(error, community
     ? ["fullRestore", "replaceRestore", "restoreAssignments", "bulkActions"]
     : !canCopyToTenants ? ["bulkActions"] : [])
@@ -343,7 +345,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
       )
       if (controller.signal.aborted) return
       setLargePaging(contents.largePage === undefined ? null : { hasMore: contents.hasMore === true, total: contents.content.groups.reduce((sum, group) => sum + (group.count ?? group.policies.length), 0) })
-      const listed: BackupItem[] = contents.content.groups.flatMap((group) =>
+      const listed: BackupItem[] = contents.content.groups.filter(group => matchesBackupService(group.folder, service)).flatMap((group) =>
         group.policies.map((policy) => ({ path: policy.path, folder: group.folder, label: group.label, area: group.area, name: policy.displayName ?? policy.path, blocker: group.limitation })),
       )
       const details: Record<string, { name: string; blocker?: string; replaceBlocker?: string; snapshot?: unknown; readiness?: RecoveryReadiness }> = {}
@@ -364,7 +366,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
       setItemsError(error instanceof Error ? error.message : String(error))
     })
     return () => controller.abort()
-  }, [backupId, tenant, largePage])
+  }, [backupId, tenant, largePage, service])
 
   const selectionBlocker = (item: BackupItem) => mode === "replace" && !community && !copying ? item.replaceBlocker : item.blocker
 
