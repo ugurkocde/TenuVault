@@ -97,10 +97,10 @@ export function SourceWorkspace({ tenant }: { tenant: string }) {
     if (operation.current) return false
     setCapturing(capture); setProgress(null)
     const id = crypto.randomUUID(); operation.current = id
-    const releaseConnectHold = holdConnectLinks()
-    setBusy(true); setFeedbackSource(sourceId); setCancelling(false); setError(""); setNotice(""); setCompletedBackup(null)
     const cancelled = capture ? "Backup cancelled. No installer backup was stored." : "Export cancelled. No destination file was published."
+    const releaseConnectHold = holdConnectLinks()
     try {
+      setBusy(true); setFeedbackSource(sourceId); setCancelling(false); setError(""); setNotice(""); setCompletedBackup(null)
       const done = await action(id)
       if (alive.current) {
         if (done) {

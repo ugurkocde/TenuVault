@@ -26,7 +26,9 @@ The [setup script](/getting-started/app-registration/#use-the-setup-script-inste
 
 The link only supplies identifiers and an optional default label. It cannot sign you in, grant consent, carry a token or license key, or choose storage. Your Microsoft sign-in, license choice and storage steps still apply. Nothing is saved until you continue with setup. An unfinished sign-in from an earlier setup is given up when you accept a new connection.
 
-If that tenant is already connected with the same client ID, TenuVault says so and Continue opens its dashboard. With a different client ID, it explains the difference and lets you cancel or sign in with the new registration. It never replaces the saved connection silently. Links wait while another dialog is open or setup, sign-in, backup or restore work is running. When several arrive, only the newest valid link is kept.
+If that tenant is already connected, select **Open tenant** to open its dashboard, or **Cancel**. With a different client ID, TenuVault shows both client IDs and explains that the tenant uses another app registration. To switch registrations, remove the tenant in TenuVault first, then open the link again. The link cannot start a sign-in for a connected tenant. Clipboard pickup is paused until you choose what to do with the link. After **Cancel**, the same clipboard IDs are not filled in on the next window focus. You can still paste them yourself. Links wait while another dialog is open or setup, sign-in, backup or restore work is running. When several arrive, only the newest valid link is kept.
+
+On Windows, connection links work after TenuVault has been started once for your user account, including a start hidden in the tray. Registration is per user even with a per-machine MSI installation. A silent MSI deployment needs that first start before links can open the app.
 
 ## Step 1: Connect
 

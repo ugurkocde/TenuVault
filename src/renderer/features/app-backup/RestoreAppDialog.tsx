@@ -116,8 +116,8 @@ export function RestoreAppDialog({ tenant: sourceTenantId, source, onClose, onBu
     const id = crypto.randomUUID(); operation.current = id
     stopped.current = false
     const releaseConnectHold = holdConnectLinks()
-    setRunning(true); onBusy(true); setError(""); setProgress(null)
     try {
+      setRunning(true); onBusy(true); setError(""); setProgress(null)
       let value = await bridge.appSources.restore(tenant, id, source.id, target, name, review.settingsHash)
       if (isAcknowledgementRequired(value)) {
         if (!await requestAcknowledgement(value.acknowledgement.tenantIds)) throw new Error("Restore cancelled. No changes were made.")

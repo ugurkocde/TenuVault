@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs"
 import { describe, expect, it, vi } from "vitest"
 import { parseConnectLink } from "../src/shared/deep-link"
 import { ConnectLinkIntake, connectLinksFromArgv, shouldRegisterProtocol } from "../src/main/deep-link"
@@ -89,4 +90,52 @@ describe("ConnectLinkIntake", () => {
     expect(shouldRegisterProtocol(false, "0")).toBe(false)
     expect(shouldRegisterProtocol(false, "1")).toBe(true)
   })
+})
+
+describe("connection link clipboard pickup", () => {
+  const output = `Tenant id: ${tenantId}\nApplication (client) id: ${clientId}`
+  it("returns nothing while a link is pending, before focusing the window", async () => {
+    const read = vi.fn(async () => output)
+    const pickups: Promise<unknown>[] = []
+    const intake = new ConnectLinkIntake(vi.fn(), () => { pickups.push(intake.clipboardIds(read)) })
+    expect(await intake.clipboardIds(read)).toEqual({ tenantId, clientId })
+    read.mockClear()
+    intake.argv(["app.exe", link])
+    intake.accept(link)
+    expect(await Promise.all(pickups)).toEqual([null, null])
+    expect(read).not.toHaveBeenCalled()
+  })
+  it("Cancel prevents the same clipboard pair from being returned on later focus", async () => {
+    const intake = new ConnectLinkIntake(vi.fn(), vi.fn())
+    intake.accept(link)
+    intake.dismiss(intake.take().pending!.id)
+    expect(await intake.clipboardIds(async () => output.toUpperCase())).toBeNull()
+    expect(await intake.clipboardIds(async () => output)).toBeNull()
+    const other = output.replace(clientId, tenantId)
+    expect(await intake.clipboardIds(async () => other)).toEqual({ tenantId, clientId: tenantId })
+  })
+  it("suppresses an in-flight clipboard read when a link arrives and is cancelled", async () => {
+    const intake = new ConnectLinkIntake(vi.fn(), vi.fn())
+    let finish!: (value: string) => void
+    const pickup = intake.clipboardIds(() => new Promise(resolve => { finish = resolve }))
+    intake.accept(link)
+    intake.dismiss(intake.take().pending!.id)
+    finish(output)
+    expect(await pickup).toBeNull()
+  })
+  it("does not clear the clipboard guard when an old dialog dismisses a newer link", async () => {
+    const intake = new ConnectLinkIntake(vi.fn(), vi.fn())
+    intake.accept(link)
+    intake.accept(`${link}&name=Newest`)
+    intake.dismiss(1)
+    expect(await intake.clipboardIds(async () => output)).toBeNull()
+  })
+})
+
+it("registers the packaged executable before window or store setup, without hidden-launch arguments", () => {
+  const main = readFileSync(new URL("../src/main/index.ts", import.meta.url), "utf8")
+  const bootstrap = main.slice(main.indexOf("async function bootstrap()"))
+  expect(bootstrap).toContain('app.setAsDefaultProtocolClient("tenuvault", process.execPath, [])')
+  expect(bootstrap.indexOf('app.setAsDefaultProtocolClient("tenuvault", process.execPath, [])')).toBeLessThan(bootstrap.indexOf("const cipher = osCipher()"))
+  expect(bootstrap.slice(0, bootstrap.indexOf("const cipher = osCipher()"))).not.toContain("startedHidden")
 })

@@ -349,14 +349,14 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
     if (next.tenant || next.clientId) { document.getElementById(next.tenant ? "tenant" : "clientId")?.focus(); return }
 
     const releaseConnectHold = holdConnectLinks()
-    signingIn.current = true
-    setBusy(true)
-    setAutomatic(Boolean(loginHint))
-    setCancelling(false)
-    setAfterBrowser(null)
-    setAttempt((value) => value + 1)
     let again = false
     try {
+      signingIn.current = true
+      setBusy(true)
+      setAutomatic(Boolean(loginHint))
+      setCancelling(false)
+      setAfterBrowser(null)
+      setAttempt((value) => value + 1)
       const account = await (loginHint ? bridge.auth.signIn(tenant.trim(), clientId.trim(), { loginHint }) : bridge.auth.signIn(tenant.trim(), clientId.trim()))
       if (active.current) onSignedIn(account, displayName.trim())
     } catch (error) {

@@ -17,7 +17,7 @@ const state = vi.hoisted(() => ({
   cancelSignIn: vi.fn(async () => undefined),
   accounts: vi.fn(async (): Promise<SignedInAccount[]> => []),
   releaseTenant: vi.fn(async () => undefined),
-  tenants: [] as { credentials?: { tenantId?: string } }[],
+  tenants: [] as { id?: number; credentials?: { tenantId?: string } }[],
   storageChoice: null as unknown,
   checkNewTenant: vi.fn(async (): Promise<unknown> => undefined),
   addTenant: vi.fn(),
@@ -615,13 +615,15 @@ describe("in-app tenant setup", () => {
   })
 
   it("says while it waits which refusal in the browser needs which route", async () => {
-    state.createRegistration.mockImplementationOnce(() => new Promise(() => {}))
+    let fail!: (error: Error) => void
+    state.createRegistration.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject }))
     const container = await render(createElement(OnboardingPage))
     await act(async () => button(container, "Set up with Microsoft sign-in")!.click())
     expect(container.textContent).toContain('If Microsoft says that you need admin approval, this account cannot approve the setup. Select Cancel and use "Someone else is the admin?" below.')
     expect(container.textContent).toContain("the setup script is blocked too")
     await act(async () => button(container, "create the app registration by hand")!.click())
     expect(state.openExternal).toHaveBeenCalledWith(MANUAL)
+    await act(async () => fail(new Error("Sign-in cancelled.")))
   })
 
   it("does not report a cancelled last sign-in as an error", async () => {
@@ -698,7 +700,8 @@ describe("in-app tenant setup", () => {
   it("says how long Microsoft may take while it waits, and what to do if the browser reports a missing application", async () => {
     let finish!: (value: typeof result) => void
     state.createRegistration.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
-    state.signIn.mockImplementationOnce(() => new Promise(() => {}))
+    let failSignIn!: (error: Error) => void
+    state.signIn.mockImplementationOnce(() => new Promise((_resolve, reject) => { failSignIn = reject }))
     const container = await render(createElement(OnboardingPage))
     await act(async () => button(container, "Set up with Microsoft sign-in")!.click())
     await act(async () => state.progress?.({ phase: "consent" }))
@@ -712,6 +715,7 @@ describe("in-app tenant setup", () => {
     expect(container.textContent).toContain("There is nothing to enter this time.")
     expect(container.textContent).toContain("If Microsoft says it cannot find the application")
     expect(button(container, "Cancel sign-in")).toBeDefined()
+    await act(async () => failSignIn(new Error("Sign-in cancelled.")))
   })
 })
 
@@ -935,4 +939,57 @@ it("gives up an unsaved earlier sign-in before applying a confirmed link", async
   expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(TENANT)
   expect(loadOnboardingDraft()?.account).toBeNull()
   expect(state.signIn).not.toHaveBeenCalled()
+})
+
+it("does not send a confirmed link for a connected tenant into sign-in", async () => {
+  const { requestOnboardingConnect } = await import("../../src/renderer/lib/connect-link-onboarding")
+  state.tenants = [{ id: 7, credentials: { tenantId: TENANT.toUpperCase() } }]
+  const container = await render(createElement(OnboardingPage))
+  await act(async () => requestOnboardingConnect({ tenantId: TENANT, clientId: CLIENT }))
+  expect(container.querySelector("#tenant")).toBeNull()
+  expect(loadOnboardingDraft()?.tenant).not.toBe(TENANT)
+  expect(state.signIn).not.toHaveBeenCalled()
+})
+
+it("keeps an empty sign-in form unchanged while a link is pending and after Cancel and focus", async () => {
+  const { ConnectLinkIntake } = await import("../../src/main/deep-link")
+  const intake = new ConnectLinkIntake(vi.fn(), () => window.dispatchEvent(new Event("focus")))
+  state.clipboardIds.mockImplementation(() => intake.clipboardIds(async () => OUTPUT))
+  intake.accept(`tenuvault://connect?v=1&tenant=${TENANT}&client=${CLIENT}`)
+  const container = await render(createElement(OnboardingPage))
+  await act(async () => button(container, "I already have an app registration")!.click())
+  const expectEmpty = () => {
+    expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe("")
+    expect(container.querySelector<HTMLInputElement>("#clientId")!.value).toBe("")
+    expect(loadOnboardingDraft()).toMatchObject({ tenant: "", clientId: "" })
+  }
+  expectEmpty()
+  intake.dismiss(intake.take().pending!.id)
+  await act(async () => window.dispatchEvent(new Event("focus")))
+  expectEmpty()
+})
+
+it.each(["Setup failed.", "Sign-in cancelled."])("releases the setup hold after %s", async message => {
+  state.createRegistration.mockRejectedValueOnce(new Error(message))
+  const container = await render(createElement("div", null, createElement(OnboardingPage), createElement(ConnectHoldProbe)))
+  await act(async () => button(container, "Set up with Microsoft sign-in")!.click())
+  expect(container.querySelector("#connect-held")?.textContent).toBe("ready")
+})
+
+it.each(["Sign-in failed.", "Sign-in cancelled."])("releases the sign-in hold after %s", async message => {
+  state.signIn.mockRejectedValueOnce(new Error(message))
+  const container = await render(createElement("div", null, createElement(TenantSignInForm, { onSignedIn: vi.fn(), initial: { tenant: TENANT, clientId: CLIENT } }), createElement(ConnectHoldProbe)))
+  await act(async () => button(container, "Sign in with Microsoft")!.click())
+  expect(container.querySelector("#connect-held")?.textContent).toBe("ready")
+})
+
+it("releases the sign-in hold when a failed sign-in returns early after unmount", async () => {
+  let fail!: (error: Error) => void
+  state.signIn.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject }))
+  const container = await render(createElement("div", null, createElement(TenantSignInForm, { onSignedIn: vi.fn(), initial: { tenant: TENANT, clientId: CLIENT } }), createElement(ConnectHoldProbe)))
+  await act(async () => button(container, "Sign in with Microsoft")!.click())
+  await act(async () => roots[0]!.render(createElement(ConnectHoldProbe)))
+  expect(container.querySelector("#connect-held")?.textContent).toBe("held")
+  await act(async () => fail(new Error("Sign-in cancelled.")))
+  expect(container.querySelector("#connect-held")?.textContent).toBe("ready")
 })

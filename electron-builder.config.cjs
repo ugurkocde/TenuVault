@@ -36,6 +36,7 @@ module.exports = {
   },
   appId: "com.tenuvault.desktop",
   productName: "TenuVault",
+  // macOS Info.plist URL types. Windows registers per user at app startup.
   protocols: [{ name: "TenuVault connection", schemes: ["tenuvault"] }],
   copyright: "Copyright (c) Ugurlabs UG (haftungsbeschränkt)",
   directories: {

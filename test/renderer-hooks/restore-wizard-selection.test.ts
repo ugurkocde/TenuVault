@@ -1,3 +1,4 @@
+import { useConnectLinksHeld } from "../../src/renderer/lib/connect-link-holds"
 import { act, createElement } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { MemoryRouter } from "react-router-dom"
@@ -132,4 +133,29 @@ it("reloads the open approval list after consecutive restores with the same resu
     expect(JSON.parse(String(lists[0]![1]?.body)).refresh).toBe(false)
     if (run === 1) await act(async () => buttonNamed(container, "Restore more items")!.click())
   }
+})
+
+function ConnectHoldProbe() {
+  return createElement("p", { id: "connect-held" }, useConnectLinksHeld() ? "held" : "ready")
+}
+it("releases the policy restore hold after a failed restore request", async () => {
+  const container = await renderItems(false)
+  const probe = document.body.appendChild(document.createElement("div"))
+  const probeRoot = createRoot(probe); roots.push(probeRoot)
+  await act(async () => probeRoot.render(createElement(ConnectHoldProbe)))
+  expect(probe.textContent).toBe("ready")
+  let fail!: (error: Error) => void
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body ?? "{}"))
+    if (String(input).endsWith("/api/restore-backup") && !body.approvalAction) return new Promise<Response>((_resolve, reject) => { fail = reject })
+    return Response.json({})
+  }))
+  await act(async () => buttonNamed(container, "Select all")!.click())
+  await act(async () => buttonNamed(container, "Next")!.click())
+  await act(async () => buttonNamed(container, "Review")!.click())
+  await act(async () => buttonNamed(container, " Restore 2 items")!.click())
+  expect(probe.textContent).toBe("held")
+  await act(async () => fail(new Error("Restore request failed.")))
+  expect(probe.textContent).toBe("ready")
+  expect(container.textContent).toContain("Restore interrupted")
 })

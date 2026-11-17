@@ -9,7 +9,7 @@ const state = vi.hoisted(() => ({
   pending: null as PendingConnectLink | null, rejected: false,
   notify: null as (() => void) | null,
   tenants: [] as { id: number; credentials: { tenantId: string; appId: string } }[],
-  jobs: [] as { isComplete: boolean }[], select: vi.fn(), dismiss: vi.fn(),
+  jobs: [] as { isComplete: boolean; pollError?: string }[], select: vi.fn(), dismiss: vi.fn(),
 }))
 vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { connectLink: {
   takePending: async () => { return { pending: state.pending, rejected: state.rejected } },
@@ -61,19 +61,29 @@ it("opens an already connected tenant with the same registration", async () => {
   state.tenants = [{ id: 7, credentials: { tenantId: tenantId.toUpperCase(), appId: clientId.toUpperCase() } }]
   await draw()
   expect(document.body.textContent).toContain("already connected with this app registration")
-  await click("Continue to sign in")
+  await click("Open tenant")
   expect(state.select).toHaveBeenCalledWith(7)
   expect(document.querySelector("#route")?.textContent).toBe("/portal/dashboard")
   expect(takeOnboardingConnect()).toBeNull()
 })
-it("explains a different registration and offers sign-in without replacing the saved tenant", async () => {
+it("explains a different registration and opens the saved tenant without sign-in", async () => {
   state.tenants = [{ id: 7, credentials: { tenantId, appId: tenantId } }]
   await draw()
-  expect(document.body.textContent).toContain("already connected with a different app registration")
-  await click("Continue to sign in")
-  expect(state.select).not.toHaveBeenCalled()
+  for (const text of ["already connected with another app registration", `Saved application (client) ID: ${tenantId}`, `Application (client) ID: ${clientId}`, "remove the tenant in TenuVault first, then open this link again"]) expect(document.body.textContent).toContain(text)
+  await click("Open tenant")
+  expect(state.select).toHaveBeenCalledWith(7)
+  expect(document.querySelector("#route")?.textContent).toBe("/portal/dashboard")
   expect(state.tenants[0]!.credentials.appId).toBe(tenantId)
-  expect(takeOnboardingConnect()?.clientId).toBe(clientId)
+  expect(takeOnboardingConnect()).toBeNull()
+})
+it("does not offer Continue to onboarding for a connected tenant with another client ID", async () => {
+  state.tenants = [{ id: 7, credentials: { tenantId, appId: tenantId } }]
+  await draw()
+  expect([...document.querySelectorAll("button")].map(button => button.textContent)).toContain("Open tenant")
+  expect(document.body.textContent).not.toContain("Continue to sign in")
+  await click("Cancel")
+  expect(takeOnboardingConnect()).toBeNull()
+  expect(state.select).not.toHaveBeenCalled()
 })
 it("waits for every explicit setup, sign-in or restore hold to end", async () => {
   const releaseSetup = holdConnectLinks(), releaseRestore = holdConnectLinks()

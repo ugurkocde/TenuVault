@@ -67,19 +67,19 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
   const start = async (again = false) => {
     if (busy.current) return
     const releaseConnectHold = holdConnectLinks()
-    busy.current = true
-    // A restart from the recovery panel is the same route, not a new choice.
-    if (!again) recordSetup({ name: "setup_route", props: { route: "auto" } })
-    setAttempt((value) => value + 1)
-    setRunning(true)
-    setCancelling(false)
-    setError("")
-    setAttemptFailed(false)
-    setReused(false)
-    setPhase("signingIn")
-    setCompleting(false)
     let restartNow = false
     try {
+      busy.current = true
+      // A restart from the recovery panel is the same route, not a new choice.
+      if (!again) recordSetup({ name: "setup_route", props: { route: "auto" } })
+      setAttempt((value) => value + 1)
+      setRunning(true)
+      setCancelling(false)
+      setError("")
+      setAttemptFailed(false)
+      setReused(false)
+      setPhase("signingIn")
+      setCompleting(false)
       onRegistered(await bridge.setup.createRegistration(tenant.trim() ? { tenant: tenant.trim() } : undefined))
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : String(caught)

@@ -68,7 +68,7 @@ import { BackupReaderService } from "./auth/backup-reader"
 // The same setup script the docs site downloads and the card copies, bundled so Save writes it exactly.
 import readerSetupScript from "../../resources/New-TenuVaultBackupReader.ps1?raw"
 import desktopSetupScript from "../../resources/New-TenuVaultDesktopApp.ps1?raw"
-import { SETUP_SCRIPT_FILE_NAME, setupIdsFromClipboard } from "../shared/app-registration"
+import { SETUP_SCRIPT_FILE_NAME } from "../shared/app-registration"
 import { licenseKeyFromClipboard } from "./license/clipboard-key"
 import { assertStorageAccountName } from "../shared/storage-account"
 import { hostname } from "node:os"
@@ -228,9 +228,12 @@ function answerProxyLogin(id: string, authInfo: ProxyChallenge, callback: (usern
 const chromiumFetch: typeof fetch = rejectProxyAuthResponses(createChromiumFetch((options) => net.request(options), () => proxyAuth?.attempt() ?? NO_PROXY_AUTH))
 
 async function bootstrap(): Promise<void> {
+  // Register before stores or windows are opened, including hidden tray launches.
   // Development copies opt in with TENUVAULT_REGISTER_PROTOCOL=1 to avoid taking over installed links.
   if (shouldRegisterProtocol(app.isPackaged, process.env.TENUVAULT_REGISTER_PROTOCOL)) {
-    if (app.isPackaged) app.setAsDefaultProtocolClient("tenuvault")
+    // Electron quotes the executable path, including MSI installs under Program Files.
+    // Packaged launches need no app-path argument or inherited switches such as --hidden.
+    if (app.isPackaged) app.setAsDefaultProtocolClient("tenuvault", process.execPath, [])
     else app.setAsDefaultProtocolClient("tenuvault", process.execPath, [resolve(process.argv[1]!)])
   }
   handleTrusted("connectLink:take", () => connectLinks.take())
@@ -1249,7 +1252,7 @@ async function bootstrap(): Promise<void> {
   handleTrusted("auth:copySignInLink", (_event, kind: unknown) => copySignInLink(kind, { signin: () => auth.signInLink(), setup: () => registrationSetup.signInLink() }, (text) => clipboard.writeText(text)))
   // The setup script leaves its two closing lines on the clipboard; only those two IDs are passed on.
   // Electron reads the clipboard asynchronously, so the text has to be awaited before it is parsed.
-  handleTrusted("setup:clipboardIds", async () => setupIdsFromClipboard(await clipboard.readText()))
+  handleTrusted("setup:clipboardIds", () => connectLinks.clipboardIds(() => clipboard.readText()))
   // The guided setup saves the app registration script it ships with; nothing else is written.
   handleTrusted("setup:saveScript", async () => {
     const result = await dialog.showSaveDialog(mainWindow!, {

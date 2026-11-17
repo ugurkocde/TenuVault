@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { INVALID_CONNECT_LINK, type PendingConnectLink } from "../../shared/deep-link"
 import { bridge } from "../lib/bridge"
 import { useConnectLinksHeld } from "../lib/connect-link-holds"
+import { isBackupJobPollable } from "~/lib/backup-job-display"
 import { requestOnboardingConnect } from "../lib/connect-link-onboarding"
 
 export function ConnectLinkHost() {
@@ -19,7 +20,7 @@ export function ConnectLinkHost() {
   const tenants = useTenants()
   const { setSelectedTenantId } = useSelectedTenant()
   const navigate = useNavigate()
-  const busy = held || activeJobs.some(job => !job.isComplete)
+  const busy = held || activeJobs.some(isBackupJobPollable)
 
   useEffect(() => {
     let active = true
@@ -51,7 +52,7 @@ export function ConnectLinkHost() {
     continuing.current = true
     try {
       await dismiss()
-      if (connected && sameClient) {
+      if (connected) {
         setSelectedTenantId(connected.id)
         void navigate("/portal/dashboard")
       } else {
@@ -75,17 +76,20 @@ export function ConnectLinkHost() {
     </Dialog>
     <Dialog open={Boolean(pending) && !rejected && !busy} onOpenChange={open => { if (!open) void dismiss().catch(() => setError("Could not dismiss this connection. Try again.")) }}>
       <DialogContent holdConnectLinks={false}>
-        <DialogHeader><DialogTitle>Connect a tenant?</DialogTitle><DialogDescription>You sign in with Microsoft next. Nothing is saved until you do.</DialogDescription></DialogHeader>
+        <DialogHeader><DialogTitle>Connect a tenant?</DialogTitle><DialogDescription>{connected ? "Open this tenant to use its saved connection." : "You sign in with Microsoft next. Nothing is saved until you do."}</DialogDescription></DialogHeader>
         {pending && <div className="space-y-3 break-words text-sm">
           {pending.details.displayName && <p className="font-medium">{pending.details.displayName}</p>}
           <p>Tenant ID: {pending.details.tenantId}</p>
           <p>Application (client) ID: {pending.details.clientId}</p>
-          {connected && <p>{sameClient ? "This tenant is already connected with this app registration. Continue to open its dashboard." : "This tenant is already connected with a different app registration. Continue to sign in with the new registration. The saved connection will not be replaced."}</p>}
+          {connected && <>
+            {!sameClient && <p>Saved application (client) ID: {connected.credentials?.appId}</p>}
+            <p>{sameClient ? "This tenant is already connected with this app registration." : "This tenant is already connected with another app registration. To switch registrations, remove the tenant in TenuVault first, then open this link again."}</p>
+          </>}
         </div>}
         {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
         <DialogFooter>
           <Button variant="outline" onClick={() => void dismiss().catch(() => setError("Could not dismiss this connection. Try again."))}>Cancel</Button>
-          <Button onClick={() => void proceed()}>Continue to sign in</Button>
+          <Button onClick={() => void proceed()}>{connected ? "Open tenant" : "Continue to sign in"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

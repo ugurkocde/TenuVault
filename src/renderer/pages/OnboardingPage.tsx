@@ -197,7 +197,7 @@ export default function OnboardingPage() {
       setReleasing(true)
       // A release the licensing service could not take is repeated at the next start.
       try { if (!connected(account.tenantId)) await bridge.license.releaseTenant(account.tenantId) } catch { /* see above */ }
-      setReleasing(false)
+      finally { setReleasing(false) }
       setAccount(null)
       setChoice(null)
     }
@@ -211,6 +211,12 @@ export default function OnboardingPage() {
   useEffect(() => {
     if (!linkConnection) return
     const details = takeOnboardingConnect()
+    const existing = details && tenants.find(tenant => tenant.credentials?.tenantId?.toLowerCase() === details.tenantId)
+    if (existing) {
+      setSelectedTenantId(existing.id)
+      void navigate("/portal/dashboard")
+      return
+    }
     if (details) void prepareSignIn({ tenant: details.tenantId, clientId: details.clientId, displayName: details.displayName ?? "" })
   }, [linkConnection])
 
@@ -257,48 +263,48 @@ export default function OnboardingPage() {
       return
     }
     setCreating(true)
-    setAddError(null)
-    // The trial as the Storage step showed it. A trial that only starts during the check below
-    // was never shown here, so it keeps its welcome card in the app.
-    const shown = tenantLicense(status, account.tenantId)
-    let community = false
     try {
-      const status = await bridge.license.checkNewTenant(account.tenantId)
-      community = tenantPlan(tenantLicense(status, account.tenantId)) === "community"
-    } catch (error) {
-      if (!showCommunityLimitError(error)) {
-        const message = error instanceof Error ? error.message : String(error)
-        setAddError({ message: `${message} TenuVault signed you out of this tenant. Sign in again once the license covers it.`, license: true })
+      setAddError(null)
+      // The trial as the Storage step showed it. A trial that only starts during the check below
+      // was never shown here, so it keeps its welcome card in the app.
+      const shown = tenantLicense(status, account.tenantId)
+      let community = false
+      try {
+        const status = await bridge.license.checkNewTenant(account.tenantId)
+        community = tenantPlan(tenantLicense(status, account.tenantId)) === "community"
+      } catch (error) {
+        if (!showCommunityLimitError(error)) {
+          const message = error instanceof Error ? error.message : String(error)
+          setAddError({ message: `${message} TenuVault signed you out of this tenant. Sign in again once the license covers it.`, license: true })
+        }
+        setAccount(null)
+        setChoice(null)
+        setStep(1)
+        return
       }
-      setAccount(null)
-      setChoice(null)
-      setCreating(false)
-      setStep(1)
-      return
-    }
-    // The plan can change between the storage choice and this check, such as a trial that ended.
-    if (community && choice.kind === "azure") {
-      setAddError({ message: "This tenant is on Community now, which keeps backups on this device. Choose This device to continue.", license: false })
-      setChoice(null)
-      setCreating(false)
-      return
-    }
-    try {
-      const creds = desktopTenantCredentials(account, fields.displayName, choice)
-      const tenant = await buildTenantProfile(creds)
-      recordSetup({ name: "storage", props: { kind: choice.kind } })
-      addTenant(tenant)
-      setSelectedTenantId(tenant.id)
-      setCredentials(creds)
-      setTenantProfileId(tenant.id)
-      setTenantName(tenant.name)
-      setResumed(false)
-      setStep(3)
-      // The Storage step showed the trial, so it does not follow the admin into the app as a
-      // welcome card to dismiss. Showing it again costs nothing, so a failure is ignored.
-      if (shown?.source === "trial" && shown.trial && !shown.trialAcknowledged) void bridge.license.tenantTrialAction(account.tenantId, "acknowledge").catch(() => undefined)
-    } catch (error) {
-      if (!showCommunityLimitError(error)) setAddError({ message: error instanceof Error ? error.message : String(error), license: false })
+      // The plan can change between the storage choice and this check, such as a trial that ended.
+      if (community && choice.kind === "azure") {
+        setAddError({ message: "This tenant is on Community now, which keeps backups on this device. Choose This device to continue.", license: false })
+        setChoice(null)
+        return
+      }
+      try {
+        const creds = desktopTenantCredentials(account, fields.displayName, choice)
+        const tenant = await buildTenantProfile(creds)
+        recordSetup({ name: "storage", props: { kind: choice.kind } })
+        addTenant(tenant)
+        setSelectedTenantId(tenant.id)
+        setCredentials(creds)
+        setTenantProfileId(tenant.id)
+        setTenantName(tenant.name)
+        setResumed(false)
+        setStep(3)
+        // The Storage step showed the trial, so it does not follow the admin into the app as a
+        // welcome card to dismiss. Showing it again costs nothing, so a failure is ignored.
+        if (shown?.source === "trial" && shown.trial && !shown.trialAcknowledged) void bridge.license.tenantTrialAction(account.tenantId, "acknowledge").catch(() => undefined)
+      } catch (error) {
+        if (!showCommunityLimitError(error)) setAddError({ message: error instanceof Error ? error.message : String(error), license: false })
+      }
     } finally {
       setCreating(false)
     }

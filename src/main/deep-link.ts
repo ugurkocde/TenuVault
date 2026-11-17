@@ -1,3 +1,4 @@
+import { setupIdsFromClipboard } from "../shared/app-registration"
 import { parseConnectLink, type ConnectLinkState, type PendingConnectLink } from "../shared/deep-link"
 
 /** Windows supplies the protocol URL as a separate argument, sometimes with literal quotes. */
@@ -9,6 +10,7 @@ export function connectLinksFromArgv(argv: readonly string[]): string[] {
 /** Memory only. A reload may read the same link until the admin dismisses or accepts it. */
 export class ConnectLinkIntake {
   private pending: PendingConnectLink | null = null
+  private dismissedClipboardPair = ""
   private rejected = false
   private sequence = 0
 
@@ -37,7 +39,19 @@ export class ConnectLinkIntake {
   }
 
   dismiss(id: unknown): void {
-    if (id === this.pending?.id) this.pending = null
+    if (!this.pending || id !== this.pending.id) return
+    // Acknowledging a link also handles the script's clipboard fallback, even after Cancel.
+    const { tenantId, clientId } = this.pending.details
+    this.dismissedClipboardPair = `${tenantId} ${clientId}`
+    this.pending = null
+  }
+
+  async clipboardIds(readText: () => Promise<string>): Promise<{ tenantId: string; clientId: string } | null> {
+    if (this.pending) return null
+    const ids = setupIdsFromClipboard(await readText())
+    // Intake can run while the asynchronous clipboard read is in flight.
+    if (this.pending || !ids || `${ids.tenantId} ${ids.clientId}`.toLowerCase() === this.dismissedClipboardPair) return null
+    return ids
   }
 }
 

@@ -202,7 +202,7 @@ Select **Next: sign in** under the card when you have the two values. If the app
      Connect link:             tenuvault://connect?v=1&tenant=<tenant id>&client=<client id>
    ```
 
-5. The script also copies the IDs and connection link to your clipboard, when the computer it runs on offers one. Open the link, or return to TenuVault: on the **Sign in** step it fills in the tenant ID and the client ID from the clipboard when both fields are empty. Otherwise paste both lines into **Paste the script output**. See [Sign in to your tenant](/getting-started/connect-tenant/). The tenant ID is always printed as a GUID, even if you passed a domain.
+5. The script also copies the IDs and connection link to your clipboard, when the computer it runs on offers one. Open the link and confirm the IDs. While the link awaits your choice, clipboard pickup is paused; **Cancel** also prevents the same pair from filling in on the next window focus. Without an open link, returning to the **Sign in** step fills both IDs from the clipboard when both fields are empty. You can always paste both lines into **Paste the script output**. See [Sign in to your tenant](/getting-started/connect-tenant/). The tenant ID is always printed as a GUID, even if you passed a domain.
 
 :::note
 The script also ends with a reminder about admin roles. The roles TenuVault Desktop needs are listed in [Requirements](/getting-started/requirements/#admins-who-use-tenuvault).

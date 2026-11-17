@@ -9,6 +9,7 @@ const api = vi.hoisted(() => ({ info: vi.fn(async () => ({platform:"win32"})), a
 vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { app:{info:api.info}, auth:{accounts:api.accounts}, appSources: api } }))
 vi.mock("~/contexts/TenantContext", () => ({ useSelectedTenant: () => ({ selectedTenant: { id: state.selected, name: state.selected ? "Fabrikam" : "Contoso", credentials: { tenantId: ids[state.selected] } } }) }))
 vi.mock("react-router-dom", () => ({ useNavigate: () => vi.fn(), useSearchParams: () => [new URLSearchParams(), vi.fn()], useParams: () => ({ tabId: state.tab }), Link: (props: { to: string; children: React.ReactNode }) => createElement("a", { href: props.to }, props.children) }))
+import { useConnectLinksHeld } from "../../src/renderer/lib/connect-link-holds"
 import AppBackupPage from "../../src/renderer/pages/AppBackupPage"
 HTMLElement.prototype.scrollIntoView = vi.fn()
 let root: Root | undefined
@@ -162,4 +163,19 @@ it("stops offering cancellation when the job finishes while its catalog refresh 
  expect(node.textContent).toContain("Installer exported")
  await act(async()=>finish({storeName:"Sources",warnings:[],sources:[]}));await flush()
  expect(api.cancel).not.toHaveBeenCalled()
+})
+
+function ConnectHoldProbe() {
+  return createElement("p", { id: "connect-held" }, useConnectLinksHeld() ? "held" : "ready")
+}
+it.each(["Export failed.", "Source operation cancelled.", "cancelled destination"])("releases the export hold after %s", async message => {
+  let finish!: (value: boolean) => void
+  let fail!: (error: Error) => void
+  state.wait = () => new Promise((resolve, reject) => { finish = resolve; fail = reject })
+  const node = await mount()
+  await click(node, "Export archive")
+  await act(async () => root!.render(createElement(ConnectHoldProbe)))
+  expect(node.querySelector("#connect-held")?.textContent).toBe("held")
+  await act(async () => { if (message === "cancelled destination") finish(false); else fail(new Error(message)) })
+  expect(node.querySelector("#connect-held")?.textContent).toBe("ready")
 })

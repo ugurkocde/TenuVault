@@ -201,3 +201,27 @@ describe("restore into another tenant on the destination's plan", () => {
     expect(document.body.textContent).not.toContain("No assignments were added")
   })
 })
+
+it.each(["Restore failed.", "Source operation cancelled."])("releases the installer restore hold after %s", async message => {
+  let fail!: (error: Error) => void
+  api.restore.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject }))
+  await mount(); await selectTarget(); await confirm()
+  await act(async () => button("Restore unassigned app").click())
+  await act(async () => root!.render(createElement(ConnectHoldProbe)))
+  expect(document.querySelector("#connect-held")?.textContent).toBe("held")
+  await act(async () => fail(new Error(message)))
+  expect(document.querySelector("#connect-held")?.textContent).toBe("ready")
+})
+
+it("releases the installer restore hold on an early return after acknowledgement and unmount", async () => {
+  api.restore.mockResolvedValueOnce({ acknowledgement: { tenantIds: [target] }, error: "Acknowledgement required" })
+  let finish!: (accepted: boolean) => void
+  api.acknowledge.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+  await mount(); await selectTarget(); await confirm()
+  await act(async () => button("Restore unassigned app").click())
+  expect(api.acknowledge).toHaveBeenCalled()
+  await act(async () => root!.render(createElement(ConnectHoldProbe)))
+  await act(async () => finish(true))
+  expect(api.restore).toHaveBeenCalledTimes(1)
+  expect(document.querySelector("#connect-held")?.textContent).toBe("ready")
+})

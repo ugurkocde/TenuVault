@@ -527,20 +527,21 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     const attempted: typeof batches = []
     setStep("run")
     const releaseConnectHold = holdConnectLinks()
-    setRunning(true)
-    setResult(null)
-    setRunPaths(paths)
-    const total = batches.reduce((count, batch) => count + batch.paths.length * (batch.targetTenantId ? 1 : Math.max(copyTargets.length, 1)), 0)
-    setProgress({ total, done: 0, current: null, results: previous })
     let id = ""
-    const poll = setInterval(() => {
-      const polledId = id
-      if (!polledId) return
-      void post<{ total: number; done: number; current: string | null; results: Outcome[] }>("/api/restore-backup/progress", { progressId: polledId })
-        .then((state) => progressId.current === polledId && setProgress({ ...state, total, done: completed.length + state.done, results: mergeOutcomes(previous, [...completed, ...state.results]) }))
-        .catch(() => undefined)
-    }, 700)
+    let poll: ReturnType<typeof setInterval> | undefined
     try {
+      setRunning(true)
+      setResult(null)
+      setRunPaths(paths)
+      const total = batches.reduce((count, batch) => count + batch.paths.length * (batch.targetTenantId ? 1 : Math.max(copyTargets.length, 1)), 0)
+      setProgress({ total, done: 0, current: null, results: previous })
+      poll = setInterval(() => {
+        const polledId = id
+        if (!polledId) return
+        void post<{ total: number; done: number; current: string | null; results: Outcome[] }>("/api/restore-backup/progress", { progressId: polledId })
+          .then((state) => progressId.current === polledId && setProgress({ ...state, total, done: completed.length + state.done, results: mergeOutcomes(previous, [...completed, ...state.results]) }))
+          .catch(() => undefined)
+      }, 700)
       for (const batch of batches) {
         id = crypto.randomUUID()
         progressId.current = id
