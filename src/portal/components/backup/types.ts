@@ -9,6 +9,10 @@ export interface BackupSummary {
   /** Items per registry folder. */
   counts?: Record<string, number>
   largeInventory?: boolean
+  companionId?: string
+  ordinaryOnlyExport?: boolean
+  warning?: string
+  largeProblems?: Array<{ folder: string; reason: string }>
   /** Stored bytes per registry folder, from the same listing as `counts`. */
   sizes?: Record<string, number>
   scope: { excluded: string[]; description: string } | null

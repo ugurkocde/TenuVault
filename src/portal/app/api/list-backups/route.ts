@@ -1,3 +1,4 @@
+import { completeHalf, largeRunProblems, matchingCompanions } from "../../../../shared/backup-companion"
 import { backupStoragePath, isLargeBackup, LARGE_BACKUP_CONTAINER, LARGE_STORAGE_UNAVAILABLE } from "../../../../shared/backup-storage"
 import { backupTypeUse } from "../../../../shared/services/backup-use"
 import { BlobListError, decodeXml, listBlobPages, listLargeBackupPages } from "~/lib/storage/list"
@@ -38,7 +39,7 @@ function unavailableReason(status: number, body: string): string | null {
   if (status !== 409 || !body.includes('<Code>BackupUnavailable</Code>')) return null
   return decodeXml(/<Message>([^<]*)<\/Message>/.exec(body)?.[1] ?? 'Files of this backup could not be read.')
 }
-const metadataCache = new MetadataCache<MetadataRead>(result => !!result.metadata && !result.metadataError)
+const metadataCache = new MetadataCache<MetadataRead>(result => !!result.metadata && !result.metadataError && !result.metadata.CompanionBackup && !result.metadata.LargeBackupOutcomes)
 /**
  * A folder's ownership marker as read. Only a marker that was read is cached: importing the
  * recovery key, or storage answering again, brings the folder back.
@@ -111,10 +112,13 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
       return { kind: 'unreadable', error }
     }
   }
+  let claim: Record<string, any> | null = null
   const { manifest, owner } = await resolveBackupOwnership(async (file) => {
     if (file === 'metadata.json') return listedMetadata ? { kind: 'found', value: listedMetadata } : readError ? { kind: 'unreadable', error: new Error(readError) } : { kind: 'missing' }
     if (!filesText.includes(`<Name>${name}/${BACKUP_OWNER_FILE}</Name>`)) return { kind: 'missing' }
-    return inventory?.owner ? ownerCache.read(inventory.cacheKey, inventory.owner, readMarker) : readMarker()
+    const marker = await (inventory?.owner ? ownerCache.read(inventory.cacheKey, inventory.owner, readMarker) : readMarker())
+    if (marker.kind === 'found' && marker.value && typeof marker.value === 'object' && !Array.isArray(marker.value)) claim = { ...marker.value, BackupFolder: name }
+    return marker
   }, tenantId)
   // A marker sealed by an earlier version that cannot be opened for this tenant is foreign (another
   // tenant's, or a key this device lacks). One that could not be read otherwise (any status but 404,
@@ -198,6 +202,7 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
     changes: null as ChangeSummary | null,
     comparedWith: null as string | null,
     fingerprint: metadata as BackupFingerprint | null | undefined,
+    claim,
     error: metadataError,
     warning: undefined,
     runbookVersion: metadata?.RunbookVersion ?? metadata?.runbookVersion ?? null,
@@ -378,6 +383,81 @@ export async function POST(request: NextRequest) {
     const sealed = described.filter((backup) => backup.sealed && (backup.ownerKind === 'owned' || (backup.ownerKind !== 'other' && !otherTenantSeen))).length
     backups.push(...described.filter((backup) => !omittedLarge.includes(backup) && !backup.foreign && !backup.unresolved && backup.ownerKind !== 'other'))
 
+    // Resolve only linked manifests. Existing descriptions are reused, including their cached reads.
+    // An absent discovery entry costs one GET per distinct companion, never a payload listing.
+    const byId = new Map(described.map(backup => [backup.id, backup]))
+    const linkedReads = new Map<string, Promise<MetadataRead>>()
+    const hidden = new Set<string>()
+    const mismatched = new Set<string>()
+    for (const backup of backups.filter(backup => !isLargeBackup(backup.id))) {
+      const metadata = backup.fingerprint
+      if (!metadata || (metadata.CompanionBackup === undefined && metadata.LargeBackupOutcomes === undefined)) continue
+      const companionId = metadata.CompanionBackup
+      const describedCompanion = byId.get(companionId)
+      let other: any = describedCompanion?.fingerprint
+      let cause: string | undefined
+      if (!other) {
+        if (describedCompanion) {
+          cause = describedCompanion.error ? `Large companion is unreadable. ${describedCompanion.error}` : describedCompanion.status === "running" ? "Large companion is still running." : "Large companion stopped before completion (crashed or interrupted)."
+        } else if (typeof companionId === "string" && parseBackupName(companionId) && isLargeBackup(companionId)) {
+          let reading = linkedReads.get(companionId)
+          if (!reading) {
+            reading = (async (): Promise<MetadataRead> => {
+              try {
+                const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(`${companionId}/metadata.json`)}`, { headers: storageHeaders(accessToken) })
+                if (!response.ok) return { metadata: null, metadataError: response.status === 404 ? "Large companion is missing (removed or never committed)." : `Large companion is unreadable (${response.status}).` }
+                const read = await readJsonCapped(response, MAX_BACKUP_ARCHIVE_BYTES)
+                return read.kind === "json" ? { metadata: read.value } : { metadata: null, metadataError: "Large companion is unreadable." }
+              } catch { return { metadata: null, metadataError: "Large companion is unreadable." } }
+            })()
+            linkedReads.set(companionId, reading)
+          }
+          const read = await reading
+          other = read.metadata
+          cause = read.metadataError
+        } else cause = "Large companion does not match: invalid or missing companion ID."
+      }
+      // A reciprocal claim identifies an unfinished half, but can never certify completion.
+      const evidence = other ?? describedCompanion?.claim
+      const matches = matchingCompanions(backup.id, metadata, companionId, evidence) && evidence?.TenantId?.toLowerCase() === String(tenantId).toLowerCase()
+      if (other && !matches) { cause = "Large companion does not match this run."; mismatched.add(companionId) }
+      if (matches) {
+        hidden.add(companionId)
+        backup.companionId = companionId
+        if (other && !completeHalf(other)) cause = `Large companion is ${String(other.Status ?? "incomplete").toLowerCase()}; large capture is incomplete.`
+        if (describedCompanion) {
+          backup.counts = { ...backup.counts, ...describedCompanion.counts }
+          backup.sizes = { ...backup.sizes, ...describedCompanion.sizes }
+          backup.totalPolicies += describedCompanion.totalPolicies
+          backup.policyCount += describedCompanion.policyCount
+          backup.size += describedCompanion.size
+          backup.sizeFormatted = formatBytes(backup.size)
+          backup.failures += describedCompanion.failures
+        }
+      }
+      backup.largeProblems = largeRunProblems(metadata, cause, matches ? other : null)
+      backup.ordinaryOnlyExport = backup.largeProblems.length > 0 || !matches || !completeHalf(metadata) || !completeHalf(other)
+      if (backup.largeProblems.length || backup.ordinaryOnlyExport) {
+        backup.coverage = "incomplete"
+        backup.status = "incomplete"
+        backup.notRead = [...new Set([...backup.notRead, ...backup.largeProblems.map((problem: { folder: string }) => problem.folder)])]
+        backup.warning = backup.largeProblems.map((problem: { folder: string; reason: string }) => `${problem.folder}: ${problem.reason}`).join(" ")
+      }
+      if (metadata.Export?.kind === "ordinary-only") backup.ordinaryOnlyExport = true
+    }
+    for (const backup of backups) {
+      if (isLargeBackup(backup.id) && (backup.fingerprint?.CompanionBackup || mismatched.has(backup.id)) && !hidden.has(backup.id)) {
+        backup.status = "incomplete"
+        backup.coverage = "incomplete"
+        backup.warning = "Ordinary companion does not match or is missing. This orphaned large companion is kept by retention."
+      }
+      if (backup.fingerprint?.Export?.kind === "ordinary-only") {
+        backup.ordinaryOnlyExport = true
+        backup.warning = "Ordinary-only export. Large types were omitted from this copy."
+      }
+    }
+    for (let index = backups.length - 1; index >= 0; index--) if (hidden.has(backups[index].id)) backups.splice(index, 1)
+
     // Sort by timestamp descending
     backups.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
     
@@ -391,6 +471,7 @@ export async function POST(request: NextRequest) {
       current.comparedWith = previous.id
     }
     for (const backup of backups) {
+      delete backup.claim
       delete backup.fingerprint
       delete backup.ownerTenantId
       delete (backup as { ownerKind?: unknown }).ownerKind

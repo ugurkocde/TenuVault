@@ -128,7 +128,7 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator isolation" :
     expect(await f.store.list(local, BACKUP_CONTAINER, `${old}/`)).toEqual([])
     expect(f.requests.some(request => request.includes(LARGE_BACKUP_CONTAINER))).toBe(mixed)
   })
-  it("keeps published ordinary coverage when the large companion is cancelled", async () => {
+  it("keeps ordinary snapshots restorable while history marks a cancelled mixed run incomplete", async () => {
     undo = registerTestTypes([largeType])
     const f = await setup()
     const original = f.fetcher.getMockImplementation()!
@@ -150,6 +150,10 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator isolation" :
     expect(job.status).toBe("Cancelled")
     expect(await f.read(job.backupFolder!)).toMatchObject({ Status: "Success", Coverage: "Complete" })
     expect(await f.read("backup-large-2026-11-16-120000")).toMatchObject({ Status: "Cancelled", Coverage: "Incomplete" })
+    const rows = (await (await history(f.request())).json()).backups
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ id: job.backupFolder, status: "incomplete", coverage: "incomplete", warning: expect.stringContaining("cancelled") })
+    expect((await validate(f.request({ backupId: job.backupFolder }))).status).toBe(200)
   })
   it("keeps companion folders independent through history, comparison, restore and archive import", async () => {
     undo = registerTestTypes([largeType])
@@ -165,7 +169,7 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator isolation" :
     expect(metadata).toMatchObject({ CompanionBackup: ordinary, RunId: job.id, Scope: { Included: ["AuthorizationPolicy"] }, Items: {}, LargeItems: { AuthorizationPolicy: { count: 1, complete: true } } })
     const listed = await history(f.request({ summary: true }))
     const rows = (await listed.json()).backups
-    expect(rows).toHaveLength(4)
+    expect(rows).toHaveLength(3)
     expect(rows.find((row: any) => row.id === ordinary).comparedWith).toBe("backup-2026-11-15-120000")
     const compared = await drift(f.request({ comparison: ordinary }))
     expect(compared.status).toBe(200)

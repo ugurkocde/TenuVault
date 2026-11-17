@@ -1,3 +1,4 @@
+import { completeHalf, matchingCompanions } from "../../shared/backup-companion"
 import { isLargeBackup, LARGE_BACKUP_CONTAINER } from "../../shared/backup-storage"
 import { captureLarge } from "./large"
 import { LARGE_JOB_MS, LARGE_TYPE_MS, LARGE_TYPE_REQUESTS, type LargeIndexes } from "../../shared/large-backup"
@@ -1099,7 +1100,9 @@ export class BackupEngine {
       const retentionNetwork = new NetworkCircuit(3 * concurrency, signal, deadline)
       const retentionStorage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, retentionNetwork)
       try {
-        const unreadableOlder = await this.applyRetention(job, retentionStorage, backupFolder, restorableFolders(metadata), retentionNetwork.signal)
+        const covered = restorableFolders(metadata)
+        if (mixed && largeClaimed && coverageOf(outcomes.types.filter(type => typeForFolder(type.folder)?.volume === "large")) === "complete") for (const type of largeTypes) covered.add(type.folder)
+        const unreadableOlder = await this.applyRetention(job, retentionStorage, backupFolder, covered, retentionNetwork.signal)
         if (unreadableOlder > 0) retentionWarnings++
         if (mixed && largeClaimed && coverageOf(outcomes.types.filter(type => typeForFolder(type.folder)?.volume === "large")) === "complete") {
           const largeMetadata = { ...metadata, Scope: { Included: largeTypes.map(type => type.folder) } }
@@ -1260,6 +1263,20 @@ export class BackupEngine {
         continue
       }
       const metadata = entry.metadata
+      let companion: Record<string, unknown> | null = null
+      const companionId = metadata.CompanionBackup
+      if (metadata.LargeBackupOutcomes !== undefined && companionId === undefined) continue
+      // Only the ordinary half coordinates a paired deletion. Large-only retention leaves
+      // pairs and orphaned companions alone, even when their ordinary manifest is gone.
+      if (companionId !== undefined) {
+        if (isLargeBackup(backup.prefix)) continue
+        if (typeof companionId !== "string" || !/^backup-large-\d{4}-\d{2}-\d{2}-\d{6}$/.test(companionId)) continue
+        try { companion = await storage.readJson(`${companionId}/metadata.json`) }
+        catch { this.write(job, `Kept mixed backup ${backup.prefix}: its large companion is unreadable.`, "warning"); continue }
+        if (!matchingCompanions(backup.prefix.slice(0, -1), metadata, companionId, companion) || !completeHalf(metadata) || !completeHalf(companion)) continue
+        // The current run must cover both halves before it can replace a mixed run.
+        if ([...restorableFolders(companion)].some(folder => !covered.has(folder))) continue
+      }
       let holdsUncovered = false
       // Only a backup that read everything may satisfy coverage: one that finished with
       // warnings may miss items in any folder it appears to hold. Backups recorded before
@@ -1275,16 +1292,19 @@ export class BackupEngine {
         kept++
         continue
       }
-      const { blobs } = await storage.listFolder(backup.prefix)
+      const unitPrefixes = [backup.prefix, ...(companion ? [`${companionId}/`] : [])]
+      // Settle both inventories before the first delete, including large storage access.
+      const unitListings = await Promise.all(unitPrefixes.map(prefix => storage.listFolder(prefix)))
+      const blobs = unitListings.flatMap(listing => listing.blobs)
       // The manifest goes first: a delete that stops at a protected file must not leave a
       // metadata.json that still reports the backup as complete. A protected manifest stops
       // before any policy file is touched.
-      const manifest = `${backup.prefix}metadata.json`
-      const marker = `${backup.prefix}${BACKUP_OWNER_FILE}`
+      const manifests = new Set(unitPrefixes.map(prefix => `${prefix}metadata.json`))
+      const markers = new Set(unitPrefixes.map(prefix => `${prefix}${BACKUP_OWNER_FILE}`))
       let deleted = 0
       try {
         // Keep ownership until every policy is gone, including when a protected policy stops deletion.
-        for (const blob of [...blobs.filter((name) => name === manifest), ...blobs.filter((name) => name !== manifest && name !== marker), ...blobs.filter((name) => name === marker)]) {
+        for (const blob of [...blobs.filter((name) => manifests.has(name)), ...blobs.filter((name) => !manifests.has(name) && !markers.has(name)), ...blobs.filter((name) => markers.has(name))]) {
           await storage.delete(blob)
           deleted++
         }
