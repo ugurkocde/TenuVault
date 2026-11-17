@@ -101,7 +101,7 @@ Anyone with the recovery key and your backup files on this device can read your 
 
 When you select **Continue**, the button shows **Checking the license...** while TenuVault checks the license for the tenant once more. It then saves the tenant and setup moves to **First backup**.
 
-If the license no longer covers the tenant, the tenant is not saved and TenuVault signs you out of it. Setup returns to **Sign in** with the tenant ID and client ID kept, explains why, and offers **I have a license key** and, while the tenant can still start its trial, **Try Pro free**. Sign in again once the license covers the tenant. See [License check at sign-in](/getting-started/connect-tenant/#license-check-at-sign-in).
+If the license no longer covers the tenant, the tenant is not saved and TenuVault signs you out of it. Setup returns to **Sign in** with the tenant ID and client ID kept, explains why, and offers **I have a license key**. When the tenant has already used its trial, it offers **Buy Pro** and **Enter a Pro license key** instead. Sign in again once the license covers the tenant. See [License check at sign-in](/getting-started/connect-tenant/#license-check-at-sign-in).
 
 ## Next step
 
