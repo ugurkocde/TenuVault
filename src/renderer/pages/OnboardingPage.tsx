@@ -58,6 +58,11 @@ function StepHeading({ id, children }: { id: string; children: React.ReactNode }
  * continue after a restart, for example once another administrator created the app registration.
  */
 export default function OnboardingPage() {
+  const [connectionVersion, setConnectionVersion] = useState(0)
+  return <OnboardingWizard key={connectionVersion} onConnect={() => setConnectionVersion(value => value + 1)} />
+}
+
+function OnboardingWizard({ onConnect }: { onConnect: () => void }) {
   const navigate = useNavigate()
   const { status } = useLicense()
   const tenants = useTenants()
@@ -188,19 +193,24 @@ export default function OnboardingPage() {
     }
   }
 
-  const prepareSignIn = async (next: SignInFields) => {
+  const releaseUnsavedSignIn = async () => {
     resumeCheck.current = false
-    setFields(next)
-    saveOnboardingDraft({ step: 1, ...next, account: null })
-    setAddError(null)
     if (account) {
       setReleasing(true)
       // A release the licensing service could not take is repeated at the next start.
       try { if (!connected(account.tenantId)) await bridge.license.releaseTenant(account.tenantId) } catch { /* see above */ }
-      finally { setReleasing(false) }
-      setAccount(null)
-      setChoice(null)
+      finally { if (mounted.current) setReleasing(false) }
     }
+  }
+
+  const prepareSignIn = async (next: SignInFields) => {
+    setFields(next)
+    saveOnboardingDraft({ step: 1, ...next, account: null })
+    setAddError(null)
+    await releaseUnsavedSignIn()
+    if (!mounted.current) return
+    setAccount(null)
+    setChoice(null)
     setAutoSignIn(null)
     setSetupNotice("")
     setResumed(false)
@@ -217,7 +227,13 @@ export default function OnboardingPage() {
       void navigate("/portal/dashboard")
       return
     }
-    if (details) void prepareSignIn({ tenant: details.tenantId, clientId: details.clientId, displayName: details.displayName ?? "" })
+    if (details) void (async () => {
+      await releaseUnsavedSignIn()
+      if (!mounted.current) return
+      await saveOnboardingDraft({ step: 1, tenant: details.tenantId, clientId: details.clientId, displayName: details.displayName ?? "", account: null })
+      // Remount to leave the old backup with the floating panel and start with fresh wizard state.
+      if (mounted.current) onConnect()
+    })()
   }, [linkConnection])
 
   /**
@@ -337,8 +353,9 @@ export default function OnboardingPage() {
       const started = await post<{ jobId?: string }>("/api/backup/start", credentials)
       if (!started.jobId) throw new Error("The backup could not start.")
       jobId = started.jobId
-      setRunningJobId(jobId)
+      if (mounted.current) setRunningJobId(jobId)
     } catch (error) {
+      if (!mounted.current) return
       setJob(null)
       setJobError(error instanceof Error ? error.message : String(error))
       return

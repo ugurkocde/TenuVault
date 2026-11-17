@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client"
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { SignedInAccount } from "../../src/shared/ipc"
+import type { BackupJob } from "../../src/portal/contexts/BackupProgressContext"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -25,7 +26,7 @@ const state = vi.hoisted(() => ({
   license: null as unknown,
   updateJob: vi.fn(),
   addJob: vi.fn(),
-  activeJobs: [] as { jobId: string; isComplete: boolean; isSuccessful: boolean; status: string; progress: number }[],
+  activeJobs: [] as (Pick<BackupJob, "jobId" | "isComplete" | "isSuccessful" | "status" | "progress"> & Partial<BackupJob>)[],
   openExternal: vi.fn(async (_url: string) => undefined),
   record: vi.fn(async (_event: unknown) => undefined),
   diagnostics: { state: "ineligible", policy: false, reminder: { setup: false, signin: false } } as import("../../src/shared/ipc").SetupDiagnosticsStatus,
@@ -71,6 +72,8 @@ vi.mock("../../src/renderer/components/StorageChooser", () => ({
 }))
 
 import OnboardingPage from "../../src/renderer/pages/OnboardingPage"
+import { FloatingProgress } from "../../src/portal/components/backup/floating-progress"
+import { requestOnboardingConnect } from "../../src/renderer/lib/connect-link-onboarding"
 import { setupCommand, TenantSignInForm } from "../../src/renderer/components/TenantSignInForm"
 import { loadOnboardingDraft, pendingSignInTenant, PENDING_SIGN_IN_MAX_AGE_MS, saveOnboardingDraft } from "../../src/renderer/lib/onboarding-draft"
 import { AddTenantModal } from "../../src/renderer/overrides/add-tenant-modal"
@@ -939,6 +942,89 @@ it("gives up an unsaved earlier sign-in before applying a confirmed link", async
   expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(TENANT)
   expect(loadOnboardingDraft()?.account).toBeNull()
   expect(state.signIn).not.toHaveBeenCalled()
+})
+
+describe("a confirmed link after the first tenant's backup", () => {
+  const otherTenant = "2f9d4a7c-1b6e-4c3d-8a5f-9e0b7c2d4a61"
+
+  function WizardAndProgress() {
+    return createElement("div", null,
+      createElement("div", { id: "wizard" }, createElement(OnboardingPage)),
+      createElement("div", { id: "floating" }, createElement(FloatingProgress)))
+  }
+
+  const refresh = () => act(async () => roots[0]!.render(createElement(MemoryRouter, { initialEntries: ["/portal/onboarding"] }, createElement(WizardAndProgress))))
+
+  async function firstTenant(start: () => Promise<Response>) {
+    const account = { tenantId: TENANT, clientId: CLIENT, username: "admin@contoso.test" }
+    saveOnboardingDraft({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "Contoso", account })
+    state.accounts.mockResolvedValueOnce([account])
+    state.storageChoice = { kind: "local" }
+    state.checkNewTenant.mockResolvedValue({ tenants: [{ plan: "community" }] })
+    state.addJob.mockImplementation((job: BackupJob) => { state.activeJobs = [...state.activeJobs, job] })
+    state.updateJob.mockImplementation((id: string, updates: Partial<BackupJob>) => {
+      state.activeJobs = state.activeJobs.map(job => job.jobId === id ? { ...job, ...updates } : job)
+    })
+    vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} })
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => url === "/api/backup/start" ? start() : Response.json({})))
+    await flush()
+    const container = await render(createElement(WizardAndProgress))
+    await act(async () => button(container, "Continue")!.click())
+    // A saved tenant's sign-in must survive the handoff.
+    state.tenants = [{ id: 1, credentials: { tenantId: TENANT } }]
+    await act(async () => button(container, "Run first backup")!.click())
+    return container
+  }
+
+  async function connectOtherTenant(container: HTMLElement) {
+    await act(async () => requestOnboardingConnect({ tenantId: otherTenant, clientId: CLIENT, displayName: "Fabrikam" }))
+    expect(loadOnboardingDraft()).toMatchObject({ step: 1, tenant: otherTenant, clientId: CLIENT, account: null })
+    expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(otherTenant)
+    state.signIn.mockResolvedValueOnce({ tenantId: otherTenant, clientId: CLIENT, username: "admin@fabrikam.test" })
+    await act(async () => button(container, "Sign in with Microsoft")!.click())
+    await act(async () => button(container, "Continue")!.click())
+    expect(state.releaseTenant).not.toHaveBeenCalled()
+  }
+
+  it.each([true, false])("starts the linked tenant with clean backup state and reveals only unfinished earlier work, complete: %s", async complete => {
+    const container = await firstTenant(async () => Response.json({ jobId: "first" }))
+    const message = complete ? "Contoso backup completed" : "Reading Contoso policies"
+    state.activeJobs = state.activeJobs.map(job => ({ ...job, isComplete: complete, isSuccessful: complete, status: complete ? "Completed" : "Running", progress: complete ? 100 : 25, progressMessage: message }))
+    await refresh()
+    if (complete) expect(container.querySelector("#wizard")?.textContent).toContain("Your first backup is done")
+    expect(container.querySelector("#floating")?.textContent).toBe("")
+    await connectOtherTenant(container)
+    await refresh()
+    expect(container.querySelector("#wizard")?.textContent).toContain("Take a first backup")
+    expect(container.querySelector("#wizard")?.textContent).not.toContain("Your first backup is done")
+    expect(container.querySelector("#wizard")?.textContent).not.toContain(message)
+    expect(button(container, "Run first backup")!.disabled).toBe(false)
+    if (complete) {
+      expect(state.updateJob).not.toHaveBeenCalled()
+      expect(container.querySelector("#floating")?.textContent).toBe("")
+    } else {
+      expect(state.updateJob).toHaveBeenCalledWith("first", { isHidden: false })
+      expect(container.querySelector("#floating")?.textContent).toContain(message)
+    }
+  })
+
+  it("shows a backup start resolving after the link handoff in the floating panel without leaking into the new wizard", async () => {
+    let started!: (response: Response) => void
+    const container = await firstTenant(() => new Promise<Response>(resolve => { started = resolve }))
+    await connectOtherTenant(container)
+    await act(async () => started(Response.json({ jobId: "late" })))
+    await refresh()
+    expect(state.addJob).toHaveBeenCalledWith(expect.objectContaining({ jobId: "late", tenantId: TENANT, credentials: expect.objectContaining({ tenantId: TENANT }), isHidden: false, quiet: true }))
+    expect(container.querySelector("#floating")?.textContent).toContain("Starting backup...")
+    expect(container.querySelector("#wizard")?.textContent).not.toContain("Starting backup...")
+    expect(container.querySelector("#wizard")?.textContent).toContain("Take a first backup")
+    expect(button(container, "Run first backup")!.disabled).toBe(false)
+  })
+
+  afterEach(() => {
+    state.addJob.mockReset()
+    state.updateJob.mockReset()
+  })
 })
 
 it("does not send a confirmed link for a connected tenant into sign-in", async () => {

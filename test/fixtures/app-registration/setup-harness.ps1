@@ -41,6 +41,10 @@ function global:Get-Item {
     Microsoft.PowerShell.Management\Get-Item $Path
 }
 if ($env:TENUVAULT_TEST_WINDOWS_HANDLER -eq '1') { $env:OS = 'Windows_NT' }
+elseif ($env:OS -ne 'Windows_NT') {
+    # Exercise the mocked macOS handler lookup on non-Windows runners, including Linux CI.
+    Set-Variable -Name IsMacOS -Scope Script -Value $true -Force
+}
 
 # Native commands are shadowed so installed detection and opening are deterministic on every runner.
 function global:/usr/bin/osascript {

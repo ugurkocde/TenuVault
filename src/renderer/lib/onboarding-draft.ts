@@ -104,11 +104,12 @@ function signedInAt(tenantId: string): number {
 }
 
 /** Saves the draft, or removes it when it is empty. Writes run in order; a failure only logs. */
-export function saveOnboardingDraft(draft: OnboardingDraft): void {
+export function saveOnboardingDraft(draft: OnboardingDraft): Promise<void> {
   const write = () => (isEmptyDraft(draft)
     ? bridge.storage.removeItem(KEY)
     : bridge.storage.setItem(KEY, JSON.stringify(draft.account ? { ...draft, signedInAt: signedInAt(draft.account.tenantId) } : draft)))
   pending = pending.then(write).catch((error: unknown) => console.error("Could not save the setup progress:", error))
+  return pending
 }
 
 export function clearOnboardingDraft(): void {

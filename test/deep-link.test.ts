@@ -18,8 +18,13 @@ describe("parseConnectLink", () => {
   it.each(["", "+++", "%20%20%20"])("treats an empty or whitespace-only name as absent: %s", name => {
     expect(parseConnectLink(`${link}&name=${name}`)).toEqual({ tenantId, clientId })
   })
-  it("trims the optional name", () => {
-    expect(parseConnectLink(`${link}&name=++Contoso+%26+Co++`)).toEqual({ tenantId, clientId, displayName: "Contoso & Co" })
+  it.each(["++Contoso+%26+Co++", "%20Contoso%20%26%20Co", "Contoso%20%26%20Co%20"])("trims plain spaces around the optional name: %s", name => {
+    expect(parseConnectLink(`${link}&name=${name}`)).toEqual({ tenantId, clientId, displayName: "Contoso & Co" })
+  })
+  it.each(["%0A", "%09", "%0D"])("rejects decoded controls before trimming the optional name: %s", control => {
+    for (const name of [control, `${control}Contoso`, `Contoso${control}`, `${control}Contoso${control}`]) {
+      expect(parseConnectLink(`${link}&name=${name}`)).toBeNull()
+    }
   })
   it.each([
     ["another scheme", link.replace("tenuvault:", "https:")],

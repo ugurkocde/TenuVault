@@ -27,9 +27,11 @@ export function parseConnectLink(raw: string): ConnectLink | null {
   const tenantId = values.get("tenant") ?? ""
   const clientId = values.get("client") ?? ""
   if (values.get("v") !== "1" || !GUID.test(tenantId) || !GUID.test(clientId)) return null
-  const displayName = values.get("name")?.trim() || undefined
+  const name = values.get("name")
+  if (name !== undefined && /[\p{C}]/u.test(name)) return null
+  const displayName = name?.trim() || undefined
   // Labels are plain text. Reject markup and script payloads rather than trying to sanitize them.
-  if (displayName !== undefined && ([...displayName].length > 64 || /[\p{C}<>]|(?:javascript|vbscript|data):/iu.test(displayName))) return null
+  if (displayName !== undefined && ([...displayName].length > 64 || /[<>]|(?:javascript|vbscript|data):/iu.test(displayName))) return null
   return { tenantId: tenantId.toLowerCase(), clientId: clientId.toLowerCase(), ...(displayName === undefined ? {} : { displayName }) }
 }
 
