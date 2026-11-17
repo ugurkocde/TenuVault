@@ -210,6 +210,11 @@ describe("durable touched-object journal", () => {
     expect(next.run.mappings).toEqual([{ kind: "objectId", folder: "Fixture", source: "old0", target: "new1" }])
     expect(next.run.entries[0]!.reason).toContain("changed after this preview")
     expect(s.writes()).toBe(1)
+    s.objects.delete("new1")
+    s.input.id = "another-run"
+    const deleted = await executeGuardedRun(s.journal, s.input, s.io)
+    expect(deleted.run.entries[0]!.reason).toContain("Review its mapping")
+    expect(s.writes()).toBe(1)
   })
   it("refuses overlapping execution and a journal that cannot save", async () => {
     const s = setup(1)

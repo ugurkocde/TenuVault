@@ -152,6 +152,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
         const mapped = mappedReference(run.mappings, "objectId", step.folder, step.sourceId)
         const current = await io.read(step, entry.targetId ?? step.targetId ?? mapped)
         if (restoreFingerprint(current) !== step.preview) throw new RestoreSafetyError("The tenant changed after this preview. Preview this item again.")
+        if (step.operation === "create" && mapped && current === null) throw new RestoreSafetyError("The previously mapped object is missing. Review its mapping before recreating it again.")
         if (step.operation === "create" && current !== null) throw new RestoreSafetyError("The object already exists. Preview it as an update.")
         if (step.operation === "update" && current === null) throw new RestoreSafetyError("The object no longer exists. Preview it again.")
         const desired = addsOnlyPayload(current, writableSnapshot(step.desired, step.properties), step.allowRemoval)
