@@ -8,13 +8,14 @@ import { createInterface } from "node:readline"
 export class SortedSpool<T extends { id: string }> {
   private root = mkdtemp(join(tmpdir(), "tv-sort-"))
   private runs: string[] = []
-  constructor(private readonly limit = 500_000) {}
+  constructor(private readonly limit = 500_000, private readonly signal?: AbortSignal) {}
   private count = 0
   async add(entries: T[]): Promise<void> {
+    this.signal?.throwIfAborted()
     if ((this.count += entries.length) > this.limit) throw new Error("The large inventory object limit was reached")
     if (!entries.length) return
     const file = join(await this.root, `${this.runs.length}.jsonl`)
-    await writeFile(file, entries.sort((a, b) => a.id.toLowerCase() < b.id.toLowerCase() ? -1 : a.id.toLowerCase() > b.id.toLowerCase() ? 1 : 0).map(entry => JSON.stringify(entry)).join("\n") + "\n", { mode: 0o600 })
+    await writeFile(file, entries.sort((a, b) => a.id.toLowerCase() < b.id.toLowerCase() ? -1 : a.id.toLowerCase() > b.id.toLowerCase() ? 1 : 0).map(entry => JSON.stringify(entry)).join("\n") + "\n", { mode: 0o600, signal: this.signal })
     this.runs.push(file)
     // Bound open descriptors and merge buffers even when Graph returns tiny pages.
     if (this.runs.length === 64) {
@@ -36,6 +37,7 @@ export class SortedSpool<T extends { id: string }> {
       const heads: (T | null)[] = await Promise.all(iterators.map(async iterator => { const next = await iterator.next(); return next.done ? null : JSON.parse(next.value) as T }))
       let previous = ""
       for (;;) {
+        this.signal?.throwIfAborted()
         let best = -1
         for (let i = 0; i < heads.length; i++) if (heads[i] && (best < 0 || heads[i]!.id.toLowerCase() < heads[best]!.id.toLowerCase())) best = i
         if (best < 0) break

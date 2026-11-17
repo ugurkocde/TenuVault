@@ -118,6 +118,7 @@ class TarReader {
     }
     let extended: string | undefined
     if (block[156] === 120) {
+      if (nameOf() !== "PaxHeader") throw new Error("Unsafe tar path record")
       const length = checkedSize(120)
       if (length > 2048) throw new Error("Oversized tar path record")
       const bytes = await this.bytes(length), path = bytes.toString("utf8")
@@ -127,6 +128,7 @@ class TarReader {
       if (length % BLOCK && (await this.bytes(BLOCK - length % BLOCK)).some(byte => byte !== 0)) throw new Error("Invalid tar padding")
       block = await this.bytes(BLOCK)
     }
+    if (extended && nameOf() !== "snapshot.json") throw new Error("Unsafe extended archive entry")
     const name = extended ?? nameOf()
     const size = checkedSize(48)
     if (name !== expected || !safeName(name)) throw new Error("Unsafe or unexpected archive entry")

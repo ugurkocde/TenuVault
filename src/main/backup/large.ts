@@ -17,7 +17,7 @@ export interface LargeCapture {
 /** No large list or relationship array survives its page. The caller publishes completion last. */
 export async function captureLarge({ type, reader, pages, put, signal, saved }: LargeCapture): Promise<LargeIndex> {
   if (type.singleton || type.staticIds || type.listSource || type.expand || type.extras?.some(extra => !extra.ids || extra.each)) throw new Error("Large types require a plain collection and ID-only relationship reads")
-  const spool = new SortedSpool<LargeEntry>()
+  const spool = new SortedSpool<LargeEntry>(LARGE_MAX_ITEMS, signal)
   let count = 0
   try {
     for await (const page of pages(listPath(type))) {
@@ -40,7 +40,7 @@ export async function captureLarge({ type, reader, pages, put, signal, saved }: 
         const snapshot = type.listOnly ? listSnapshot(parentType, item) : await readObject(parentType, item.id, reader)
         for (const extra of type.extras ?? []) {
           if (!safeLargeId(extra.property)) throw new Error("Invalid relationship property")
-          const ids = new SortedSpool<{ id: string }>()
+          const ids = new SortedSpool<{ id: string }>(LARGE_MAX_ITEMS, signal)
           try {
             for await (const members of pages(extra.path(encodeURIComponent(item.id)))) {
               if (members.length > LARGE_SHARD_ITEMS || members.some(member => !safeLargeId(member.id))) throw new Error("Invalid relationship page")

@@ -30,7 +30,7 @@ export class BlobWriter {
    * A create-only body must be unique to its writer (the engine includes the run id), so a retry
    * that finds identical bytes knows its own earlier attempt created the blob.
    */
-  async put(name: string, body: string, beforeCommit?: NetworkCircuit, createOnly = false, onDispatch?: () => void): Promise<void> {
+  async put(name: string, body: string, beforeCommit?: NetworkCircuit, createOnly = false, onDispatch?: () => void, signal?: AbortSignal): Promise<void> {
     const path = `${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`
     // The earlier PUT may have landed. Read it back and compare it with what this writer sent.
     const landed = async (response: Response, signal: AbortSignal) => {
@@ -46,6 +46,7 @@ export class BlobWriter {
       method: "PUT",
       headers: { "x-ms-blob-type": "BlockBlob", "content-type": "application/json", ...(createOnly ? { "if-none-match": "*" } : {}) },
       body,
+      ...(signal ? { signal } : {}),
     }, async (response, signal, ambiguous) => {
       if (response.ok) return
       if (createOnly && (response.status === 412 || response.headers.get("x-ms-error-code") === "BlobAlreadyExists")) {
@@ -172,7 +173,7 @@ export class BlobWriter {
         const retrySignal = beforeCommit
           ? AbortSignal.any([beforeCommit.signal, ...(this.network ? [this.network.signal] : [])])
           : this.network?.signal
-        await sleep(retryDelay(response, attempt), retrySignal)
+        await sleep(retryDelay(response, attempt), init.signal ? AbortSignal.any([init.signal, ...(retrySignal ? [retrySignal] : [])]) : retrySignal)
       }
     }
   }

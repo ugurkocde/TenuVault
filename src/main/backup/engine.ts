@@ -949,7 +949,13 @@ export class BackupEngine {
     for (const type of types.filter(type => type.volume === "large")) {
       const entry = result(type.folder)
       largeItems[type.folder] = { version: 1, count: 0, shards: 0, complete: false }
-      const budget = typeReadBudget(network.signal, type.readBudget ?? { durationMs: LARGE_TYPE_MS, maxRequests: LARGE_TYPE_REQUESTS })
+      const limits = type.readBudget ?? { durationMs: LARGE_TYPE_MS, maxRequests: LARGE_TYPE_REQUESTS }
+      const typeController = new AbortController()
+      const typeSignal = AbortSignal.any([network.signal, typeController.signal])
+      // The type deadline covers uploads and external sorting as well as Graph reads.
+      const typeTimer = setTimeout(() => typeController.abort(new ReadBudgetError("The large type time budget was reached. This type was not fully read.")), limits.durationMs)
+      typeTimer.unref?.()
+      const budget = typeReadBudget(typeSignal, limits)
       const { session } = serviceOf(type)
       const pageControl: { current: ReadControl } = { current: {} }
       // The session reads these accessors at dispatch, including retries and throttle sleeps.
@@ -976,8 +982,8 @@ export class BackupEngine {
             list: async () => { throw new Error("Large types must stream sub-collections") },
           },
           pages: boundedPages,
-          put: async (path, body) => { await storage.put(`${backupFolder}/${path}`, body); largeSizes[type.folder] = (largeSizes[type.folder] ?? 0) + Buffer.byteLength(body) },
-          signal: network.signal,
+          put: async (path, body) => { await storage.put(`${backupFolder}/${path}`, body, undefined, false, undefined, typeSignal); largeSizes[type.folder] = (largeSizes[type.folder] ?? 0) + Buffer.byteLength(body) },
+          signal: typeSignal,
           saved: () => { counts[type.folder]!++; entry.saved++; outcome.saved++ },
         })
         Object.assign(entry, { found: entry.saved, state: entry.saved ? "saved" : "empty" })
@@ -987,7 +993,7 @@ export class BackupEngine {
         if (signInEnded(error)) throw error
         // Even a refused continuation is incomplete, never a saved prefix of the collection.
         endType(type, error)
-      }
+      } finally { clearTimeout(typeTimer) }
     }
 
     const ended = this.now()
