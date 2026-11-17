@@ -1,3 +1,4 @@
+import { LARGE_MAX_ITEMS, LARGE_SHARD_ITEMS } from "../large-backup"
 import type { Extra, IntuneType, Item, Json } from "./registry"
 
 // Closed schemas keep future Graph properties out of personal-data backups, including nested values.
@@ -99,7 +100,7 @@ export function assertDirectorySnapshot(folder: string, snapshot: Item): void {
   }
   for (const extra of type.extras ?? []) {
     const ref = snapshot[extra.property] as Item | undefined
-    if (!ref || ref.complete !== true || ref.format !== (extra.ids ? "sorted-id-shards-v1" : "sorted-object-shards-v1")) throw new Error("Invalid directory relationship reference")
+    if (!ref || typeof ref !== "object" || Array.isArray(ref) || ref.complete !== true || ref.format !== (extra.ids ? "sorted-id-shards-v1" : "sorted-object-shards-v1") || !Number.isSafeInteger(ref.count) || (ref.count as number) < 0 || (ref.count as number) > LARGE_MAX_ITEMS || !Number.isSafeInteger(ref.shards) || ref.shards !== Math.ceil((ref.count as number) / LARGE_SHARD_ITEMS) || typeof ref.hash !== "string" || !/^[a-f0-9]{64}$/.test(ref.hash)) throw new Error("Invalid directory relationship reference")
   }
 }
 export function assertDirectoryDefinition(property: string, snapshot: Item): void {

@@ -46,8 +46,8 @@ export async function* largeFiles(metadata: Record<string, any>, read: JsonFileR
         assertDirectorySnapshot(folder, value as Item)
         yield { name, value }
         for (const [property, reference] of Object.entries(value) as Array<[string, any]>) {
-          if (!reference || typeof reference !== "object" || Array.isArray(reference) || !["sorted-id-shards-v1", "sorted-object-shards-v1"].includes(reference.format) || !("shards" in reference)) continue
-          if (!safeLargeId(property) || !reference.complete || !Number.isSafeInteger(reference.count) || reference.count < 0 || reference.count > 500_000 || reference.shards !== Math.ceil(reference.count / LARGE_SHARD_ITEMS)) throw new Error("Invalid relationship inventory")
+          if (!reference || typeof reference !== "object" || Array.isArray(reference) || !["sorted-id-shards-v1", "sorted-object-shards-v1"].includes(reference.format)) continue
+          if (!safeLargeId(property) || reference.complete !== true || typeof reference.hash !== "string" || !/^[a-f0-9]{64}$/.test(reference.hash) || !Number.isSafeInteger(reference.count) || reference.count < 0 || reference.count > 500_000 || !Number.isSafeInteger(reference.shards) || reference.shards !== Math.ceil(reference.count / LARGE_SHARD_ITEMS)) throw new Error("Invalid relationship inventory")
           relationship?.(reference.shards)
           const hash = createHash("sha256")
           let last = ""
