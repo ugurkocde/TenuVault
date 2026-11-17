@@ -246,7 +246,7 @@ export default function BackupRestorePage() {
   }
 
   const restore = (backup: BackupSummary) => {
-    setRestoreFrom(backup.id)
+    if (!restoreRunning) setRestoreFrom(backup.id)
     setActiveTab("restore")
   }
 
@@ -291,7 +291,7 @@ export default function BackupRestorePage() {
           <button
             key={tab.id}
             onClick={() => {
-              if (tab.id === "restore") setRestoreFrom(null)
+              if (tab.id === "restore" && !restoreRunning) setRestoreFrom(null)
               setActiveTab(tab.id)
             }}
             className={cn(

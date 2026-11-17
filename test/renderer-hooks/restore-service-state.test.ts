@@ -78,7 +78,8 @@ it("keeps a deferred restore, progress and retry context through filter attempts
   // Sidebar links change both the filter and the tab without leaving this page.
   await act(async () => { await router.navigate("/portal/backup?service=entra") })
   expect(filter().disabled).toBe(true)
-  await act(async () => { await router.navigate("/portal/backup?service=entra&tab=restore"); await vi.advanceTimersByTimeAsync(700) })
+  await click("Restore")
+  await act(async () => { await vi.advanceTimersByTimeAsync(700) })
   expect(container.textContent).toContain("Restoring Profile 1")
   expect(container.textContent).toContain("1 / 2")
   expect(container.textContent).toContain("This restore keeps the service and items chosen when it started.")
@@ -113,4 +114,28 @@ it("clears selections with a visible note when the service changes before restor
   expect(container.textContent).toContain("0 of 1 selected")
   expect(button("Next").disabled).toBe(true)
   expect(container.textContent).not.toContain("Profile 0")
+})
+
+
+it("returns a new service selection to the first bounded inventory page", async () => {
+  const fetcher = mockReads(async () => Response.json({}))
+  const read = fetcher.getMockImplementation()!
+  fetcher.mockImplementation(async (input, init) => {
+    if (String(input) === "/api/list-backup-contents") {
+      const largePage = JSON.parse(String(init?.body)).largePage ?? 0
+      return Response.json({ largePage, hasMore: largePage === 0, content: { groups: [
+        { folder: "DeviceConfigurations", label: "configuration profile", area: "Devices", count: 100000, policies: [{ path: paths[0], displayName: `Intune page ${largePage}` }] },
+        { folder: "Organization", label: "organization", area: "Tenant", policies: [{ path: "Organization/o.json" }] },
+      ] } })
+    }
+    return read(input, init)
+  })
+  await render()
+  await click("Next page")
+  expect(container.textContent).toContain("Inventory page 2.")
+  await changeFilter("entra")
+  expect(container.textContent).toContain("Inventory page 1.")
+  const reads = fetcher.mock.calls.filter(([url]) => String(url) === "/api/list-backup-contents")
+  expect(JSON.parse(String(reads.at(-1)![1]?.body)).largePage).toBe(0)
+  expect(container.textContent).toContain("0 of 1 selected")
 })

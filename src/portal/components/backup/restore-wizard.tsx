@@ -253,7 +253,6 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   const [query, setQuery] = useState("")
   const [largePage, setLargePage] = useState(0)
   const [largePaging, setLargePaging] = useState<{ hasMore: boolean; total: number } | null>(null)
-  useEffect(() => { setLargePage(0); setLargePaging(null) }, [backupId, tenant])
   const [openTypes, setOpenTypes] = useState<Set<string>>(new Set())
   /** How many items each type's list and the readiness list show, beyond LIST_PAGE. */
   const [shown, setShown] = useState<Record<string, number>>({})
@@ -303,6 +302,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   // Keep the original items and retry context until the admin starts a new selection.
   const [runService, setRunService] = useState<BackupServiceFilter | null>(null)
   const contentsService = runService ?? service
+  useEffect(() => { setLargePage(0); setLargePaging(null) }, [backupId, tenant, contentsService])
   const previousService = useRef(contentsService)
   const [serviceNotice, setServiceNotice] = useState("")
   useEffect(() => {
