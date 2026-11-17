@@ -1,3 +1,4 @@
+import { holdConnectLinks } from "../lib/connect-link-holds"
 import { useEffect, useRef, useState } from "react"
 import { Link, useParams, useSearchParams } from "react-router-dom"
 import { ArrowDownToLine, CheckCircle2, FolderOpen, Package, RefreshCw, Shield } from "lucide-react"
@@ -96,6 +97,7 @@ export function SourceWorkspace({ tenant }: { tenant: string }) {
     if (operation.current) return false
     setCapturing(capture); setProgress(null)
     const id = crypto.randomUUID(); operation.current = id
+    const releaseConnectHold = holdConnectLinks()
     setBusy(true); setFeedbackSource(sourceId); setCancelling(false); setError(""); setNotice(""); setCompletedBackup(null)
     const cancelled = capture ? "Backup cancelled. No installer backup was stored." : "Export cancelled. No destination file was published."
     try {
@@ -119,7 +121,7 @@ export function SourceWorkspace({ tenant }: { tenant: string }) {
         else setError(message)
       }
       return false
-    } finally { operation.current = null; if (alive.current) { setBusy(false); setCancelling(false) } }
+    } finally { releaseConnectHold(); operation.current = null; if (alive.current) { setBusy(false); setCancelling(false) } }
   }
   async function cancel() {
     if (!operation.current || cancelling) return

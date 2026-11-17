@@ -20,6 +20,12 @@ function subscribe<T>(channel: string, listener: (payload: T) => void): () => vo
 }
 
 const bridge: TenuVaultPreloadBridge = {
+  connectLink: {
+    takePending: () => invoke("connectLink:take"),
+    dismiss: (id) => invoke("connectLink:dismiss", id),
+    dismissRejection: () => invoke("connectLink:dismissRejection"),
+    onAvailable: (listener) => subscribe<void>("connectLink:available", listener),
+  },
   appSources: {
     deviceSignIn: tenant => invoke("appSources:deviceSignIn", tenant),
     deviceSignInStatus: tenant => invoke("appSources:deviceSignInStatus", tenant),

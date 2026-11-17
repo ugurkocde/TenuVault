@@ -1,3 +1,4 @@
+import { ConnectLinkIntake, shouldRegisterProtocol } from "./deep-link"
 import { requestWindowsContent } from "./app-backup/windows-helper"
 import { requireCaptureEnabled } from "./app-backup/capture-policy"
 import { checkCaptureMetadata } from "./app-backup/capture-preflight"
@@ -36,7 +37,7 @@ import { prepareOibReportFile, printHtmlToPdf } from "./report-export"
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, net, Notification, powerMonitor, safeStorage, session, shell } from "electron"
 import { createChromiumFetch } from "./chromium-fetch"
 import { ProxyAuth, ProxyPrompts, type ProxyAuthAttempt, type ProxyChallenge } from "./proxy-auth"
-import { basename, dirname, join } from "node:path"
+import { basename, dirname, join, resolve } from "node:path"
 import type { ApiRequest, AppPreferences, ScheduleInput } from "../shared/ipc"
 import { DELEGATED_CLIENT_SECRET, INTERNAL_API_ORIGIN, RESOURCE_SCOPES } from "../shared/constants"
 import { createAuditRecorder } from "./api/audit"
@@ -137,6 +138,22 @@ let quitting = false
 /** Started by the operating system at login: stay in the tray until opened. */
 const startedHidden = process.argv.includes("--hidden") || app.getLoginItemSettings().wasOpenedAtLogin
 
+let linkRequestedFocus = false
+let bootstrapped = false
+const connectLinks = new ConnectLinkIntake(
+  () => { if (mainWindow && !mainWindow.webContents.isLoading()) mainWindow.webContents.send("connectLink:available") },
+  () => {
+    linkRequestedFocus = true
+    if (bootstrapped) returnToApp()
+  },
+)
+// Register before ready: macOS can deliver a cold start URL before bootstrap runs.
+app.on("open-url", (event, url) => {
+  event.preventDefault()
+  if (isPrimaryInstance) connectLinks.accept(url)
+})
+if (isPrimaryInstance) connectLinks.argv(process.argv)
+
 function canEncrypt(): boolean {
   return safeStorage.isEncryptionAvailable() && (process.platform !== "linux" || safeStorage.getSelectedStorageBackend() !== "basic_text")
 }
@@ -211,6 +228,14 @@ function answerProxyLogin(id: string, authInfo: ProxyChallenge, callback: (usern
 const chromiumFetch: typeof fetch = rejectProxyAuthResponses(createChromiumFetch((options) => net.request(options), () => proxyAuth?.attempt() ?? NO_PROXY_AUTH))
 
 async function bootstrap(): Promise<void> {
+  // Development copies opt in with TENUVAULT_REGISTER_PROTOCOL=1 to avoid taking over installed links.
+  if (shouldRegisterProtocol(app.isPackaged, process.env.TENUVAULT_REGISTER_PROTOCOL)) {
+    if (app.isPackaged) app.setAsDefaultProtocolClient("tenuvault")
+    else app.setAsDefaultProtocolClient("tenuvault", process.execPath, [resolve(process.argv[1]!)])
+  }
+  handleTrusted("connectLink:take", () => connectLinks.take())
+  handleTrusted("connectLink:dismiss", (_event, id: unknown) => connectLinks.dismiss(id))
+  handleTrusted("connectLink:dismissRejection", () => connectLinks.dismissRejection())
   const cipher = osCipher()
   const userData = app.getPath("userData")
   // Starting over empties the app store, but the install is not new: it is never asked about setup diagnostics.
@@ -1611,7 +1636,8 @@ async function bootstrap(): Promise<void> {
     saveFileWithDialog(await prepareOibReportFile(report, fileName, (html, options) => printHtmlToPdf(html, options, (window) => new BrowserWindow(window))), "Save PDF report"))
   handleTrusted("reports:saveFile", (_event, data: unknown, fileName: unknown, encoding: unknown) => saveExportFile(data, fileName, encoding))
 
-  createWindow()
+  bootstrapped = true
+  if (!mainWindow) createWindow()
 }
 
 /** Whether closing the window keeps TenuVault running in the tray (set once preferences load). */
@@ -1703,8 +1729,11 @@ function createWindow(): void {
   })
 
   mainWindow.once("ready-to-show", () => {
-    if (!startedHidden) mainWindow?.show()
+    if (linkRequestedFocus) returnToApp()
+    else if (!startedHidden) mainWindow?.show()
   })
+
+  mainWindow.webContents.on("did-finish-load", () => mainWindow?.webContents.send("connectLink:available"))
 
   // Closing the window keeps TenuVault in the tray so scheduled backups keep running.
   let toldAboutTray = false
@@ -1753,7 +1782,7 @@ function createWindow(): void {
 }
 
 // Starting TenuVault again (or clicking the dock icon) shows the window hidden in the tray.
-app.on("second-instance", (_event, argv) => { if (!argv.includes("--hidden")) showWindow() })
+app.on("second-instance", (_event, argv) => { if (!connectLinks.argv(argv) && !argv.includes("--hidden")) showWindow() })
 
 app.on("before-quit", () => {
   quitting = true

@@ -1,3 +1,5 @@
+import { useConnectLinkHold } from "../lib/connect-link-holds"
+import { takeOnboardingConnect, useOnboardingConnect } from "../lib/connect-link-onboarding"
 import { trialKeyRefusalText } from "../../shared/trial-notices"
 import { showCommunityLimitError } from "../lib/plan-dialog"
 import { useEffect, useRef, useState } from "react"
@@ -61,6 +63,8 @@ export default function OnboardingPage() {
   const tenants = useTenants()
   const { addTenant, updateTenant } = useTenantOperations()
   const { setSelectedTenantId } = useSelectedTenant()
+  const linkConnection = useOnboardingConnect()
+  const [formVersion, setFormVersion] = useState(0)
   const [initial] = useState(loadOnboardingDraft)
   const [step, setStep] = useState<Step>(initial?.step ?? 0)
   const [fields, setFields] = useState<SignInFields>({ tenant: initial?.tenant ?? "", clientId: initial?.clientId ?? "", displayName: initial?.displayName ?? "" })
@@ -79,6 +83,7 @@ export default function OnboardingPage() {
   const [jobError, setJobError] = useState("")
   const [runningJobId, setRunningJobId] = useState<string | null>(null)
   const [cancelling, setCancelling] = useState(false)
+  useConnectLinkHold(checkingResume || creating || releasing)
   const [addError, setAddError] = useState<{ message: string; license: boolean; alreadyConnected?: boolean } | null>(null)
   // After the in-app setup: what it did, and the account the Sign in step signs in as by itself.
   const [setupNotice, setSetupNotice] = useState("")
@@ -183,15 +188,8 @@ export default function OnboardingPage() {
     }
   }
 
-  /**
-   * The in-app setup made (or found) the app registration: keep its IDs and sign in on the next
-   * step, where a failed sign-in can simply be repeated. An earlier sign-in that was never saved
-   * belongs to another attempt and is given up first, as "Use a different tenant or account" does,
-   * so the wizard cannot carry on with the tenant it showed before.
-   */
-  const registered = async (result: RegistrationResult) => {
+  const prepareSignIn = async (next: SignInFields) => {
     resumeCheck.current = false
-    const next = { ...fields, tenant: result.tenantId, clientId: result.clientId }
     setFields(next)
     saveOnboardingDraft({ step: 1, ...next, account: null })
     setAddError(null)
@@ -203,6 +201,27 @@ export default function OnboardingPage() {
       setAccount(null)
       setChoice(null)
     }
+    setAutoSignIn(null)
+    setSetupNotice("")
+    setResumed(false)
+    setStep(1)
+    setFormVersion(value => value + 1)
+  }
+
+  useEffect(() => {
+    if (!linkConnection) return
+    const details = takeOnboardingConnect()
+    if (details) void prepareSignIn({ tenant: details.tenantId, clientId: details.clientId, displayName: details.displayName ?? "" })
+  }, [linkConnection])
+
+  /**
+   * The in-app setup made (or found) the app registration: keep its IDs and sign in on the next
+   * step, where a failed sign-in can simply be repeated. An earlier sign-in that was never saved
+   * belongs to another attempt and is given up first, as "Use a different tenant or account" does,
+   * so the wizard cannot carry on with the tenant it showed before.
+   */
+  const registered = async (result: RegistrationResult) => {
+    await prepareSignIn({ ...fields, tenant: result.tenantId, clientId: result.clientId })
     // With several registrations the admin may want another one than the one TenuVault picked. A
     // sign-in that starts by itself could finish, and move on, while they are going back for it.
     const several = result.reused && result.candidateCount > 1
@@ -458,6 +477,7 @@ export default function OnboardingPage() {
               // The error above already offers the setup call, so an error of the form does not repeat it.
               <SetupCallHintShown.Provider value={signInStuck}>
                 <TenantSignInForm
+                  key={formVersion}
                   initial={fields}
                   autoSignIn={autoSignIn}
                   hidePaste={Boolean(setupNotice)}

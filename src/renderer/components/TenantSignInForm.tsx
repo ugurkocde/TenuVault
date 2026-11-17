@@ -1,3 +1,4 @@
+import { holdConnectLinks } from "@desktop/lib/connect-link-holds"
 import { trialKeyRefusalText } from "../../shared/trial-notices"
 import { showCommunityLimitError } from "../lib/plan-dialog"
 import { TrialKeyRefusalActions } from "./TenantTrial"
@@ -347,6 +348,7 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
     setErrors(next)
     if (next.tenant || next.clientId) { document.getElementById(next.tenant ? "tenant" : "clientId")?.focus(); return }
 
+    const releaseConnectHold = holdConnectLinks()
     signingIn.current = true
     setBusy(true)
     setAutomatic(Boolean(loginHint))
@@ -365,6 +367,7 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
       // failed does not.
       if (message !== CANCELLED && !showCommunityLimitError(error)) setErrors({ form: message, attempt: true })
     } finally {
+      releaseConnectHold()
       signingIn.current = false
       restart.current = false
       if (active.current) {

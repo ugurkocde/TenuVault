@@ -265,3 +265,9 @@ Feedback and its screenshot are stored up to 12 months; the email copy to suppor
 Check **Settings** > **About** for your TenuVault version and sign-in method, then contact support through **Website and support** on the same page, or tell us what got in your way with [Share feedback](#share-feedback).
 
 If setup is what you are stuck on, select **Support** and then **Book a free setup call**. It opens the [free setup call](/getting-started/#free-setup-call) page in your browser: 30 minutes, free on every plan, in which you share your screen and we sort it out together.
+
+## This TenuVault link is not valid.
+
+Ask the administrator for the complete `tenuvault://connect?v=1&tenant=...&client=...` link printed by the setup script. Both IDs must be GUIDs. A missing or different version, extra or repeated parameters, a link longer than 512 characters, or a name longer than 64 characters, containing controls or markup, is rejected. TenuVault does not save or apply a rejected link. You can instead paste the two ID lines into the **Sign in** step.
+
+If Windows does not open TenuVault for a link, launch the installed app once under your account to register its handler, then open the link again. A development build registers only when explicitly started with `TENUVAULT_REGISTER_PROTOCOL=1`.

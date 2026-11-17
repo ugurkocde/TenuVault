@@ -1,5 +1,7 @@
 "use client"
 
+import { holdConnectLinks } from "@desktop/lib/connect-link-holds"
+
 import { RestoreApprovals } from "./restore-approvals"
 import { reviewedDependencyMappings, type RecoveryReadiness } from "../../../shared/intune/recovery"
 import { settingDefinitionIds, type DeprecatedSettingHit } from "../../../shared/intune/settings-catalog"
@@ -524,6 +526,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     const completed: Outcome[] = []
     const attempted: typeof batches = []
     setStep("run")
+    const releaseConnectHold = holdConnectLinks()
     setRunning(true)
     setResult(null)
     setRunPaths(paths)
@@ -592,6 +595,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     } finally {
       clearInterval(poll)
       progressId.current = ""
+      releaseConnectHold()
       setRunning(false)
       setApprovalRevision(value => value + 1)
     }

@@ -1,3 +1,4 @@
+import { useConnectLinksHeld } from "../../src/renderer/lib/connect-link-holds"
 import { act, createElement, useEffect, type ReactElement } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom"
@@ -130,6 +131,31 @@ function type(element: HTMLInputElement | HTMLTextAreaElement, value: string) {
     element.dispatchEvent(new Event("input", { bubbles: true }))
   })
 }
+
+function ConnectHoldProbe() {
+  const held = useConnectLinksHeld()
+  return createElement("p", { id: "connect-held" }, held ? "held" : "ready")
+}
+
+it("holds connection links until a running setup finishes", async () => {
+  let finish!: (result: unknown) => void
+  state.createRegistration.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+  const container = await render(createElement("div", null, createElement(OnboardingPage), createElement(ConnectHoldProbe)))
+  await act(async () => button(container, "Set up with Microsoft sign-in")!.click())
+  expect(container.querySelector("#connect-held")?.textContent).toBe("held")
+  await act(async () => finish({ tenantId: TENANT, clientId: CLIENT, displayName: "TenuVault Desktop", username: "admin@test.example", ready: false, reused: false, candidateCount: 0, missingConsent: [] }))
+  expect(container.querySelector("#connect-held")?.textContent).toBe("ready")
+})
+
+it("holds connection links until a running sign-in finishes", async () => {
+  let finish!: (account: SignedInAccount) => void
+  state.signIn.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+  const container = await render(createElement("div", null, createElement(TenantSignInForm, { onSignedIn: vi.fn(), initial: { tenant: TENANT, clientId: CLIENT } }), createElement(ConnectHoldProbe)))
+  await act(async () => button(container, "Sign in with Microsoft")!.click())
+  expect(container.querySelector("#connect-held")?.textContent).toBe("held")
+  await act(async () => finish({ tenantId: TENANT, clientId: CLIENT, username: "admin@test.example" }))
+  expect(container.querySelector("#connect-held")?.textContent).toBe("ready")
+})
 
 describe("TenantSignInForm", () => {
   it("fills both IDs from the pasted script output", async () => {
@@ -883,4 +909,30 @@ describe("setup diagnostics hooks", () => {
     state.record.mockImplementation(async () => undefined)
     state.addTenant.mockImplementation(() => undefined)
   })
+})
+
+
+it("accepts a confirmed link in an already mounted wizard without automatic sign-in", async () => {
+  const { requestOnboardingConnect } = await import("../../src/renderer/lib/connect-link-onboarding")
+  const container = await render(createElement(OnboardingPage))
+  await act(async () => requestOnboardingConnect({ tenantId: TENANT, clientId: CLIENT, displayName: "Contoso" }))
+  expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(TENANT)
+  expect(container.querySelector<HTMLInputElement>("#clientId")!.value).toBe(CLIENT)
+  expect(container.querySelector<HTMLInputElement>("#displayName")!.value).toBe("Contoso")
+  expect(state.signIn).not.toHaveBeenCalled()
+  expect(loadOnboardingDraft()).toMatchObject({ step: 1, tenant: TENANT, clientId: CLIENT, displayName: "Contoso", account: null })
+})
+
+it("gives up an unsaved earlier sign-in before applying a confirmed link", async () => {
+  const { requestOnboardingConnect } = await import("../../src/renderer/lib/connect-link-onboarding")
+  const earlier = "2f9d4a7c-1b6e-4c3d-8a5f-9e0b7c2d4a61"
+  const account = { tenantId: earlier, clientId: CLIENT, username: "alex@fabrikam.test" }
+  state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: earlier, clientId: CLIENT, displayName: "Earlier", account, signedInAt: Date.now() }))
+  state.accounts.mockResolvedValueOnce([account])
+  const container = await render(createElement(OnboardingPage))
+  await act(async () => requestOnboardingConnect({ tenantId: TENANT, clientId: CLIENT }))
+  expect(state.releaseTenant).toHaveBeenCalledWith(earlier)
+  expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(TENANT)
+  expect(loadOnboardingDraft()?.account).toBeNull()
+  expect(state.signIn).not.toHaveBeenCalled()
 })

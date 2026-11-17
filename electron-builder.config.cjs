@@ -36,6 +36,7 @@ module.exports = {
   },
   appId: "com.tenuvault.desktop",
   productName: "TenuVault",
+  protocols: [{ name: "TenuVault connection", schemes: ["tenuvault"] }],
   copyright: "Copyright (c) Ugurlabs UG (haftungsbeschränkt)",
   directories: {
     output: "dist",

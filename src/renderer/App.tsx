@@ -1,6 +1,8 @@
+import { ConnectLinkHost } from "./components/ConnectLinkHost"
+import { useOnboardingConnect } from "./lib/connect-link-onboarding"
 import { CommunityTenantPicker } from "./components/CommunityTenantPicker"
 import "./lib/appearance"
-import { lazy, Suspense, useState, type ReactNode } from "react"
+import { lazy, Suspense, useEffect, useState, type ReactNode } from "react"
 import { QueryClientProvider } from "@tanstack/react-query"
 import { HashRouter, Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom"
 import { BackupProgressProvider } from "~/contexts/BackupProgressContext"
@@ -63,7 +65,9 @@ function LicenseGate({ children }: { children: ReactNode }) {
   const { pathname } = useLocation()
   const { status, error, refresh } = useLicense()
   const tenants = useTenants()
+  const linkConnection = useOnboardingConnect()
   const [signingIn, setSigningIn] = useState(hasOnboardingDraft)
+  useEffect(() => { if (linkConnection) setSigningIn(true) }, [linkConnection])
   if (isAppBackupPath(pathname)) return children
   if (!status) {
     if (error !== null) {
@@ -75,7 +79,7 @@ function LicenseGate({ children }: { children: ReactNode }) {
     }
     return <Spinner />
   }
-  if (isUnlicensed(status) && tenants.length === 0 && !signingIn) {
+  if (isUnlicensed(status) && tenants.length === 0 && !signingIn && !linkConnection) {
     return (
       <ActivationScreen
         onSignIn={() => {
@@ -104,6 +108,7 @@ export function App() {
             <DisclaimerHost />
             <ErrorBoundary>
             <HashRouter>
+            <ConnectLinkHost />
             <LicenseGate>
               <Suspense fallback={<Spinner />}>
                 <Routes>
