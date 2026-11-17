@@ -6,12 +6,17 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener: () => undefined, removeEventListener: () => undefined, addListener: () => undefined, removeListener: () => undefined, dispatchEvent: () => false })) as typeof window.matchMedia
 
-// Every bridge call resolves to nothing and every subscription returns an unsubscribe, so the
-// sections render their empty states. This test is only about the About panel's dialog.
+const state = vi.hoisted(() => ({ tenants: [] as { id: number; name: string; credentials: { tenantId: string; appId: string } }[], reauthenticate: vi.fn() }))
+
+// Other sections render their empty states while the selected section is exercised.
 vi.mock("../../src/renderer/lib/bridge", () => {
   const call = (name: string) => (name.startsWith("on") ? () => () => undefined : async () => undefined)
-  const namespace = () => new Proxy({}, { get: (_target, name) => (name === "getItemSync" ? () => null : call(String(name))) })
-  return { bridge: new Proxy({}, { get: () => namespace() }) }
+  const namespace = (section: string) => new Proxy({}, { get: (_target, name) => {
+    if (section === "auth" && name === "reauthenticate") return state.reauthenticate
+    if (section === "auth" && name === "accounts") return async () => []
+    return name === "getItemSync" ? () => null : call(String(name))
+  } })
+  return { bridge: new Proxy({}, { get: (_target, name) => namespace(String(name)) }) }
 })
 vi.mock("../../src/renderer/lib/license", async (original) => ({
   ...(await original<typeof import("../../src/renderer/lib/license")>()),
@@ -22,7 +27,7 @@ vi.mock("../../src/renderer/lib/local-inventory", async (original) => ({
   useBackupSettings: () => [null, () => undefined],
 }))
 vi.mock("../../src/renderer/lib/appearance", () => ({ getAppearance: () => "light", setAppearance: () => undefined }))
-vi.mock("~/contexts/TenantContext", () => ({ useTenants: () => [], useTenantOperations: () => ({}) }))
+vi.mock("~/contexts/TenantContext", () => ({ useTenants: () => state.tenants, useTenantOperations: () => ({}) }))
 vi.mock("~/components/ConfirmDialog", () => ({ useConfirm: () => ({ confirm: async () => true, confirmDialog: null }) }))
 vi.mock("../../src/renderer/lib/whats-new", () => ({ useWhatsNew: () => ({ state: null, refresh: async () => undefined, markSeen: async () => undefined }) }))
 vi.mock("../../src/renderer/components/PdfBrandingSettings", () => ({ PdfBrandingSettings: () => null }))
@@ -46,11 +51,15 @@ window.getComputedStyle = ((element: Element, pseudo?: string | null) => {
 }) as typeof window.getComputedStyle
 
 import SettingsPage from "../../src/renderer/pages/SettingsPage"
+import { useConnectLinksHeld } from "../../src/renderer/lib/connect-link-holds"
+
+function HoldStatus() { return createElement("output", { "data-held": useConnectLinksHeld() }) }
 
 const roots: Root[] = []
 afterEach(() => {
   for (const root of roots.splice(0)) act(() => root.unmount())
   document.body.innerHTML = ""
+  state.tenants = []; state.reauthenticate.mockReset()
 })
 
 const settle = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
@@ -78,4 +87,21 @@ describe("Settings page dialogs when their section hides", () => {
     expect(container.querySelector("#settings-about")?.hasAttribute("hidden")).toBe(true)
     expect(document.querySelector('[role="dialog"]')).toBeNull()
   })
+})
+
+it.each(["success", "failure"])("holds connection links during Settings re-authentication and releases on %s", async result => {
+  state.tenants = [{ id: 1, name: "Contoso", credentials: { tenantId: "tenant", appId: "app" } }]
+  let finish!: (account: { username: string }) => void
+  let fail!: (error: Error) => void
+  state.reauthenticate.mockReturnValueOnce(new Promise((resolve, reject) => { finish = resolve; fail = reject }))
+  const container = document.body.appendChild(document.createElement("div"))
+  const root = createRoot(container); roots.push(root)
+  act(() => root.render(createElement(MemoryRouter, { initialEntries: ["/settings?section=signin"] }, createElement("div", null, createElement(SettingsPage), createElement(HoldStatus)))))
+  await settle()
+  expect(container.querySelector("output")?.getAttribute("data-held")).toBe("false")
+  await act(async () => { [...container.querySelectorAll("#settings-signin button")].find(button => button.textContent?.trim() === "Sign in")!.dispatchEvent(new MouseEvent("click", { bubbles: true })) })
+  expect(state.reauthenticate).toHaveBeenCalledWith("tenant", "app")
+  expect(container.querySelector("output")?.getAttribute("data-held")).toBe("true")
+  await act(async () => { if (result === "success") finish({ username: "admin@contoso.com" }); else fail(new Error("Sign-in failed")) })
+  expect(container.querySelector("output")?.getAttribute("data-held")).toBe("false")
 })

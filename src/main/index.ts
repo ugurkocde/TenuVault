@@ -1658,6 +1658,7 @@ function showWindow(): void {
  * the front, and where the system does not allow that (Windows), flash its taskbar button.
  */
 function returnToApp(): void {
+  linkRequestedFocus = false
   showWindow()
   if (process.platform === "darwin") app.focus({ steal: true })
   const window = mainWindow

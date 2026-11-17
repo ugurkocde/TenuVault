@@ -14,7 +14,12 @@ describe("parseConnectLink", () => {
   it("accepts an optional launcher slash and a 64 character name", () => {
     expect(parseConnectLink(link.replace("connect?", "connect/?"))).toEqual({ tenantId, clientId })
     expect(parseConnectLink(`${link}&name=${"a".repeat(64)}`)?.displayName).toHaveLength(64)
-    expect(parseConnectLink(`${link}&name=+++`)?.displayName).toBe("   ")
+  })
+  it.each(["", "+++", "%20%20%20"])("treats an empty or whitespace-only name as absent: %s", name => {
+    expect(parseConnectLink(`${link}&name=${name}`)).toEqual({ tenantId, clientId })
+  })
+  it("trims the optional name", () => {
+    expect(parseConnectLink(`${link}&name=++Contoso+%26+Co++`)).toEqual({ tenantId, clientId, displayName: "Contoso & Co" })
   })
   it.each([
     ["another scheme", link.replace("tenuvault:", "https:")],
@@ -35,7 +40,6 @@ describe("parseConnectLink", () => {
     ["an encoded duplicate", `${link}&%76=1`],
     ["a raw link over 512 characters", `${link}&name=${"a".repeat(512)}`],
     ["a name over 64 characters", `${link}&name=${"a".repeat(65)}`],
-    ["an empty name", `${link}&name=`],
     ["an encoded control", `${link}&name=abc%00def`],
     ["a raw newline", `${link}&name=abc\ndef`],
     ["an invisible format character", `${link}&name=%E2%80%AEabc`],
@@ -138,4 +142,11 @@ it("registers the packaged executable before window or store setup, without hidd
   expect(bootstrap).toContain('app.setAsDefaultProtocolClient("tenuvault", process.execPath, [])')
   expect(bootstrap.indexOf('app.setAsDefaultProtocolClient("tenuvault", process.execPath, [])')).toBeLessThan(bootstrap.indexOf("const cipher = osCipher()"))
   expect(bootstrap.slice(0, bootstrap.indexOf("const cipher = osCipher()"))).not.toContain("startedHidden")
+})
+
+it("clears the pending connection link focus when returning to the app", () => {
+  const main = readFileSync(new URL("../src/main/index.ts", import.meta.url), "utf8")
+  const body = main.slice(main.indexOf("function returnToApp(): void {"), main.indexOf("function rendererUrl()"))
+  expect(body.indexOf("linkRequestedFocus = false")).toBeGreaterThan(0)
+  expect(body.indexOf("linkRequestedFocus = false")).toBeLessThan(body.indexOf("showWindow()"))
 })

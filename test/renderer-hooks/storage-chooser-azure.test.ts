@@ -18,6 +18,9 @@ vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { backups, app: { open
 vi.mock("../../src/renderer/lib/license", () => ({ useTenantPlan: () => license.plan }))
 
 import { azureStorageBlocker, StorageChooser, type StorageChooserDraft } from "../../src/renderer/components/StorageChooser"
+import { useConnectLinksHeld } from "../../src/renderer/lib/connect-link-holds"
+
+function HoldStatus() { return createElement("output", { "data-held": useConnectLinksHeld() }) }
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
 const ACCOUNT = { name: "tvbkpabc123", subscriptionId: "sub-1", resourceGroup: "rg-tenuvault-backups", location: "westeurope" }
@@ -55,7 +58,7 @@ async function renderChooser(initialDraft?: StorageChooserDraft) {
   containers.push(container)
   const root = createRoot(container)
   roots.push(root)
-  act(() => root.render(createElement(StorageChooser, { tenantId: TENANT, clientId: "client", onChange, onDraftChange, initialDraft })))
+  act(() => root.render(createElement("div", null, createElement(StorageChooser, { tenantId: TENANT, clientId: "client", onChange, onDraftChange, initialDraft }), createElement(HoldStatus))))
   await flush()
   const unmount = () => {
     const index = roots.indexOf(root)
@@ -92,6 +95,25 @@ async function selectAccount(container: HTMLElement, name: string) {
 }
 
 describe("storage chooser Azure path", () => {
+  it.each(["success", "failure"])("holds connection links during storage verification and releases on %s", async result => {
+    backups.settings.mockResolvedValue(saved)
+    backups.inventoryProblem.mockResolvedValue(null)
+    fetchMock.mockResolvedValue(accountResponse([ACCOUNT]))
+    let finish!: () => void
+    let fail!: (error: Error) => void
+    backups.verifyAzureStorage.mockReturnValueOnce(new Promise<void>((resolve, reject) => { finish = resolve; fail = reject }))
+    const { container, last } = await renderChooser()
+    await chooseAzure(container)
+    await selectAccount(container, ACCOUNT.name)
+    expect(container.querySelector("output")?.getAttribute("data-held")).toBe("false")
+    await clickText(container, "Check access")
+    expect(container.querySelector("output")?.getAttribute("data-held")).toBe("true")
+    await act(async () => { if (result === "success") finish(); else fail(new Error("Storage unavailable")) })
+    expect(container.querySelector("output")?.getAttribute("data-held")).toBe("false")
+    if (result === "success") expect(last()).toMatchObject({ storageAccountName: ACCOUNT.name })
+    else { expect(last()).toBeNull(); expect(container.textContent).toContain("Storage unavailable") }
+  })
+
   it("completes the Azure choice once access is confirmed, without a recovery key", async () => {
     backups.settings.mockResolvedValue(unsaved)
     backups.inventoryProblem.mockResolvedValue(null)

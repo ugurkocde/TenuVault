@@ -30,6 +30,9 @@ vi.mock("~/contexts/TenantContext", () => ({
 }))
 
 import { SignInBanner } from "../../src/renderer/components/SignInBanner"
+import { useConnectLinksHeld } from "../../src/renderer/lib/connect-link-holds"
+
+function HoldStatus() { return createElement("output", { "data-held": useConnectLinksHeld() }) }
 
 const event = (tenantId: string): SignInRequiredEvent => ({ tenantId, clientId: "app", message: "Sign in again to continue.", scope: "graph" })
 
@@ -41,16 +44,29 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-function mount(): HTMLDivElement {
+function mount(withHold = false): HTMLDivElement {
   const container = document.createElement("div")
   document.body.appendChild(container)
   const root = createRoot(container)
   roots.push(root)
-  act(() => root.render(createElement(SignInBanner)))
+  act(() => root.render(withHold ? createElement("div", null, createElement(SignInBanner), createElement(HoldStatus)) : createElement(SignInBanner)))
   return container
 }
 
 describe("Sign-in banner", () => {
+  it.each(["success", "failure"])("holds connection links during re-authentication and releases on %s", async result => {
+    let finish!: (account: { username: string }) => void
+    let fail!: (error: Error) => void
+    state.reauthenticate.mockReturnValueOnce(new Promise((resolve, reject) => { finish = resolve; fail = reject }))
+    const container = mount(true)
+    act(() => { state.listener!(event("tenant-a")); state.listener!(event("tenant-b")) })
+    expect(container.querySelector("output")?.getAttribute("data-held")).toBe("false")
+    await act(async () => { [...container.querySelectorAll("button")].find(button => button.textContent?.includes("Sign in"))!.click() })
+    expect(container.querySelector("output")?.getAttribute("data-held")).toBe("true")
+    await act(async () => { if (result === "success") finish({ username: "admin@contoso.com" }); else fail(new Error("Sign-in failed")) })
+    expect(container.querySelector("output")?.getAttribute("data-held")).toBe("false")
+  })
+
   it("retains queued prompts and receives new requests while its content is hidden", () => {
     const container = mount(), root = roots.at(-1)!, listener = state.listener
     act(() => state.listener!(event("tenant-a")))

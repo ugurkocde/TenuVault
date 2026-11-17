@@ -9,7 +9,7 @@ const state = vi.hoisted(() => ({
   pending: null as PendingConnectLink | null, rejected: false,
   notify: null as (() => void) | null,
   tenants: [] as { id: number; credentials: { tenantId: string; appId: string } }[],
-  jobs: [] as { isComplete: boolean; pollError?: string }[], select: vi.fn(), dismiss: vi.fn(),
+  select: vi.fn(), dismiss: vi.fn(),
 }))
 vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { connectLink: {
   takePending: async () => { return { pending: state.pending, rejected: state.rejected } },
@@ -18,7 +18,6 @@ vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { connectLink: {
   onAvailable: (fn: () => void) => { state.notify = fn; return () => { state.notify = null } },
 } } }))
 vi.mock("~/contexts/TenantContext", () => ({ useTenants: () => state.tenants, useSelectedTenant: () => ({ setSelectedTenantId: state.select }) }))
-vi.mock("~/contexts/BackupProgressContext", () => ({ useBackupProgress: () => ({ activeJobs: state.jobs }) }))
 
 import { ConnectLinkHost } from "../../src/renderer/components/ConnectLinkHost"
 import { holdConnectLinks } from "../../src/renderer/lib/connect-link-holds"
@@ -37,7 +36,7 @@ function View() {
 const draw = () => act(async () => { root!.render(createElement(StrictMode, null, createElement(MemoryRouter, null, createElement(View)))) })
 const click = async (label: string) => act(async () => { [...document.querySelectorAll("button")].find(button => button.textContent === label)!.click() })
 beforeEach(() => {
-  state.pending = { id: 1, details: { tenantId, clientId, displayName: "Contoso & Co" } }; state.rejected = false; state.jobs = []; state.tenants = []; otherModal = false
+  state.pending = { id: 1, details: { tenantId, clientId, displayName: "Contoso & Co" } }; state.rejected = false; state.tenants = []; otherModal = false
   state.dismiss.mockClear(); state.select.mockClear(); takeOnboardingConnect()
   const container = document.createElement("div"); document.body.append(container); root = createRoot(container)
 })
@@ -45,7 +44,7 @@ afterEach(async () => { await act(async () => root?.unmount()); root = null; tak
 
 it("shows both IDs and a plain text name, and Cancel leaves no onboarding request", async () => {
   await draw()
-  for (const text of ["Connect a tenant?", tenantId, clientId, "Contoso & Co", "You sign in with Microsoft next. Nothing is saved until you do."]) expect(document.body.textContent).toContain(text)
+  for (const text of ["Connect a tenant?", tenantId, clientId, "Name: Contoso & Co", "You sign in with Microsoft next. Nothing is saved until you continue."]) expect(document.body.textContent).toContain(text)
   expect(takeOnboardingConnect()).toBeNull()
   await click("Cancel")
   expect(state.dismiss).toHaveBeenCalledWith(1)
@@ -93,14 +92,17 @@ it("waits for every explicit setup, sign-in or restore hold to end", async () =>
     await act(async () => releaseRestore()); expect(document.body.textContent).toContain("Connect a tenant?")
   } finally { releaseSetup(); releaseRestore() }
 })
-it("waits for a backup and shows the newest pending link afterwards", async () => {
-  state.jobs = [{ isComplete: false }]; await draw()
-  state.pending = { id: 2, details: { tenantId, clientId, displayName: "Newest" } }
-  await act(async () => state.notify?.())
-  expect(document.body.textContent).not.toContain("Connect a tenant?")
-  state.jobs = [{ isComplete: true }]; await draw()
-  expect(document.body.textContent).toContain("Newest")
-  expect(document.body.textContent).not.toContain("Contoso & Co")
+it("shows the newest pending link when an explicit hold ends", async () => {
+  const release = holdConnectLinks()
+  try {
+    await draw()
+    state.pending = { id: 2, details: { tenantId, clientId, displayName: "Newest" } }
+    await act(async () => state.notify?.())
+    expect(document.body.textContent).not.toContain("Connect a tenant?")
+    await act(async () => release())
+    expect(document.body.textContent).toContain("Name: Newest")
+    expect(document.body.textContent).not.toContain("Contoso & Co")
+  } finally { release() }
 })
 it("waits for another modal to close without DOM polling", async () => {
   otherModal = true; await draw()

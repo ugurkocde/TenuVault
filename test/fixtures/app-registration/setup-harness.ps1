@@ -30,11 +30,18 @@ function global:Set-Clipboard {
     param([string]$Value)
     [IO.File]::WriteAllText($ClipboardFile, $Value)
 }
-function global:Test-Path {
+function global:Get-Item {
     param([string]$Path)
-    if ($Path -eq 'HKCU:\Software\Classes\tenuvault') { return $env:TENUVAULT_TEST_INSTALLED -eq '1' }
-    Microsoft.PowerShell.Management\Test-Path $Path
+    if ($Path -eq 'HKCU:\Software\Classes\tenuvault\shell\open\command') {
+        if ($env:TENUVAULT_TEST_INSTALLED -ne '1') { throw 'Test handler is not installed.' }
+        $key = New-Object PSObject
+        $key | Add-Member -MemberType ScriptMethod -Name GetValue -Value { param($Name) $env:TENUVAULT_TEST_HANDLER_COMMAND }
+        return $key
+    }
+    Microsoft.PowerShell.Management\Get-Item $Path
 }
+if ($env:TENUVAULT_TEST_WINDOWS_HANDLER -eq '1') { $env:OS = 'Windows_NT' }
+
 # Native commands are shadowed so installed detection and opening are deterministic on every runner.
 function global:/usr/bin/osascript {
     if ($env:TENUVAULT_TEST_INSTALLED -eq '1') { Write-Output '/Applications/TenuVault.app' }

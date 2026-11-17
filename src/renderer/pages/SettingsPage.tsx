@@ -19,6 +19,7 @@ import { UnreadableBackupsNotice } from "../components/UnreadableBackupsNotice"
 import { RecoveryKeyImport } from "../components/RecoveryKeyImport"
 import { RecoveryKeyNotice } from "../components/RecoveryKeyNotice"
 import { bridge } from "../lib/bridge"
+import { holdConnectLinks } from "../lib/connect-link-holds"
 import { localTenantIds, useBackupSettings, useLocalInventoryProblems } from "../lib/local-inventory"
 import { changeTenantStorage, savedAzureStorage, LOCAL_SWITCH_CONFIRMATION, type StorageChoice } from "../lib/storage"
 import { toast } from "../lib/toast"
@@ -421,6 +422,7 @@ function TenantSettings({ active }: { active: boolean }) {
   const signIn = async (tenant: Tenant) => {
     const { tenantId, appId } = tenant.credentials!
     setBusy(tenantId)
+    const releaseConnectHold = holdConnectLinks()
     try {
       const account = await bridge.auth.reauthenticate(tenantId, appId)
       toast(`Signed in as ${account.username}.`, "success")
@@ -428,6 +430,7 @@ function TenantSettings({ active }: { active: boolean }) {
     } catch (error) {
       toast(error instanceof Error ? error.message : "Sign-in failed.", "error")
     } finally {
+      releaseConnectHold()
       setBusy(null)
     }
   }

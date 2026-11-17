@@ -1,13 +1,11 @@
 import { useEffect, useRef, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { useSelectedTenant, useTenants } from "~/contexts/TenantContext"
-import { useBackupProgress } from "~/contexts/BackupProgressContext"
 import { Button } from "~/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "~/components/ui/dialog"
 import { INVALID_CONNECT_LINK, type PendingConnectLink } from "../../shared/deep-link"
 import { bridge } from "../lib/bridge"
 import { useConnectLinksHeld } from "../lib/connect-link-holds"
-import { isBackupJobPollable } from "~/lib/backup-job-display"
 import { requestOnboardingConnect } from "../lib/connect-link-onboarding"
 
 export function ConnectLinkHost() {
@@ -15,12 +13,10 @@ export function ConnectLinkHost() {
   const [rejected, setRejected] = useState(false)
   const [error, setError] = useState("")
   const continuing = useRef(false)
-  const held = useConnectLinksHeld()
-  const { activeJobs } = useBackupProgress()
+  const busy = useConnectLinksHeld()
   const tenants = useTenants()
   const { setSelectedTenantId } = useSelectedTenant()
   const navigate = useNavigate()
-  const busy = held || activeJobs.some(isBackupJobPollable)
 
   useEffect(() => {
     let active = true
@@ -76,9 +72,9 @@ export function ConnectLinkHost() {
     </Dialog>
     <Dialog open={Boolean(pending) && !rejected && !busy} onOpenChange={open => { if (!open) void dismiss().catch(() => setError("Could not dismiss this connection. Try again.")) }}>
       <DialogContent holdConnectLinks={false}>
-        <DialogHeader><DialogTitle>Connect a tenant?</DialogTitle><DialogDescription>{connected ? "Open this tenant to use its saved connection." : "You sign in with Microsoft next. Nothing is saved until you do."}</DialogDescription></DialogHeader>
+        <DialogHeader><DialogTitle>Connect a tenant?</DialogTitle><DialogDescription>{connected ? "Open this tenant to use its saved connection." : "You sign in with Microsoft next. Nothing is saved until you continue."}</DialogDescription></DialogHeader>
         {pending && <div className="space-y-3 break-words text-sm">
-          {pending.details.displayName && <p className="font-medium">{pending.details.displayName}</p>}
+          {pending.details.displayName && <p className="font-medium">Name: {pending.details.displayName}</p>}
           <p>Tenant ID: {pending.details.tenantId}</p>
           <p>Application (client) ID: {pending.details.clientId}</p>
           {connected && <>

@@ -41,7 +41,7 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
     expect(result.status, result.stdout + result.stderr).toBe(0)
   })
 
-  async function run(scenario = "default", args: Record<string, unknown> = {}, installed = false, openFails = false) {
+  async function run(scenario = "default", args: Record<string, unknown> = {}, installed = false, openFails = false, windowsHandler?: "quoted" | "unquoted" | "missing" | "missing-unquoted" | "empty") {
     const requests: { method: string; path: string; body: Record<string, unknown>; query: URLSearchParams; headers: Record<string, unknown>; status: number }[] = []
     let challenge = ""
     let redirect = ""
@@ -118,9 +118,12 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
     const clipboard = join(dir, "clipboard.txt")
     const argumentFile = join(dir, "arguments.json")
     writeFileSync(argumentFile, JSON.stringify(args))
+    const executable = join(dir, windowsHandler === "quoted" || windowsHandler === "missing" ? "TenuVault Desktop.exe" : "TenuVault.exe")
+    if (installed && windowsHandler !== "missing" && windowsHandler !== "missing-unquoted") writeFileSync(executable, "test executable")
+    const handlerCommand = windowsHandler === "empty" ? "" : windowsHandler === "unquoted" || windowsHandler === "missing-unquoted" ? `${executable} "%1"` : `"${executable}" "%1"`
     try {
       const output = await new Promise<{ code: number | null; text: string }>((resolveRun, reject) => {
-        const child = spawn(powershell!, ["-NoProfile", "-NonInteractive", "-File", resolve("test/fixtures/app-registration/setup-harness.ps1"), "-Server", `http://127.0.0.1:${(server.address() as { port: number }).port}`, "-Script", script, "-ClipboardFile", clipboard, "-ArgumentsFile", argumentFile], { env: { ...process.env, TENUVAULT_TEST_INSTALLED: installed ? "1" : "0", TENUVAULT_TEST_OPEN_FAIL: openFails ? "1" : "0" } })
+        const child = spawn(powershell!, ["-NoProfile", "-NonInteractive", "-File", resolve("test/fixtures/app-registration/setup-harness.ps1"), "-Server", `http://127.0.0.1:${(server.address() as { port: number }).port}`, "-Script", script, "-ClipboardFile", clipboard, "-ArgumentsFile", argumentFile], { env: { ...process.env, TENUVAULT_TEST_INSTALLED: installed ? "1" : "0", TENUVAULT_TEST_OPEN_FAIL: openFails ? "1" : "0", TENUVAULT_TEST_WINDOWS_HANDLER: windowsHandler === undefined ? "0" : "1", TENUVAULT_TEST_HANDLER_COMMAND: handlerCommand } })
         let text = ""
         child.stdout.on("data", chunk => { text += chunk })
         child.stderr.on("data", chunk => { text += chunk })
@@ -201,6 +204,19 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
     ["survives an opening failure", true, false, true, false],
   ] as const)("%s", async (_name, installed, noOpen, failure, opened) => {
     const result = await run("default", { NoOpen: noOpen }, installed, failure)
+    expect(result.code, result.text).toBe(0)
+    expect(result.text).toContain(opened ? "Opened TenuVault to connect this tenant" : "Send this link to the admin who uses TenuVault")
+    expect(result.text.includes("Opened test link:")).toBe(opened)
+  }, 45000)
+
+  it.each([
+    ["opens a Windows handler with a quoted executable path", "quoted", true],
+    ["opens a Windows handler with an unquoted executable path", "unquoted", true],
+    ["skips a stale Windows key whose quoted executable is missing", "missing", false],
+    ["skips a stale Windows key whose unquoted executable is missing", "missing-unquoted", false],
+    ["skips a Windows handler with an empty default value", "empty", false],
+  ] as const)("%s", async (_name, handler, opened) => {
+    const result = await run("default", {}, true, false, handler)
     expect(result.code, result.text).toBe(0)
     expect(result.text).toContain(opened ? "Opened TenuVault to connect this tenant" : "Send this link to the admin who uses TenuVault")
     expect(result.text.includes("Opened test link:")).toBe(opened)

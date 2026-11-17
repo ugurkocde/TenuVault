@@ -457,9 +457,13 @@ $opened = $false
 if (-not $NoOpen) {
     try {
         if ($env:OS -eq 'Windows_NT') {
-            if (Test-Path 'HKCU:\Software\Classes\tenuvault') {
-                Start-Process -FilePath $connectLink -ErrorAction Stop | Out-Null
-                $opened = $true
+            $command = (Get-Item 'HKCU:\Software\Classes\tenuvault\shell\open\command' -ErrorAction Stop).GetValue('')
+            if ($command -match '^\s*(?:"([^"]+)"|(\S+))') {
+                $executable = if ($Matches[1]) { $Matches[1] } else { $Matches[2] }
+                if (Test-Path -LiteralPath $executable -PathType Leaf) {
+                    Start-Process -FilePath $connectLink -ErrorAction Stop | Out-Null
+                    $opened = $true
+                }
             }
         } elseif ($IsMacOS) {
             # Launch Services answers without opening an app. Do not run open for an unhandled scheme.
