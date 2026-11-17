@@ -1,6 +1,6 @@
-import { backupStoragePath, isLargeBackup, LARGE_BACKUP_CONTAINER } from "../../../../shared/backup-storage"
+import { backupStoragePath, isLargeBackup, LARGE_BACKUP_CONTAINER, LARGE_STORAGE_UNAVAILABLE } from "../../../../shared/backup-storage"
 import { largeIndexes } from "../../../../shared/large-backup"
-import { BlobListError, decodeXml, listBlobPages } from "~/lib/storage/list"
+import { decodeXml, listBlobPages, listLargeBackupPages, listOrdinaryBackupPages } from "~/lib/storage/list"
 import { typeForFolder, type Item } from "../../../../shared/intune/registry"
 import { restoreCapabilities } from "../../../../shared/intune/restore-plan"
 import { complianceSettingLabel, complianceSettingValue } from "../../../../shared/intune/compliance-settings"
@@ -95,11 +95,9 @@ export async function POST(request: NextRequest) {
 
     // Using delimiter=/ to get folder prefixes instead of all blobs
     const listUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&delimiter=/`
-    const ordinaryText = await listBlobPages(listUrl, accessToken, signal)
-    const largeText = baseline && comparison && !isLargeBackup(baseline) && !isLargeBackup(comparison) ? "" : await listBlobPages(`https://${storageAccountName}.blob.core.windows.net/${LARGE_BACKUP_CONTAINER}?restype=container&comp=list&prefix=backup-large-&delimiter=/`, accessToken, signal).catch(error => {
-      if (error instanceof BlobListError && error.status === 404) return ""
-      throw error
-    })
+    const discoveryWarnings: string[] = []
+    const ordinaryText = await listOrdinaryBackupPages(listUrl, accessToken, signal)
+    const largeText = baseline && comparison && !isLargeBackup(baseline) && !isLargeBackup(comparison) ? "" : await listLargeBackupPages(`https://${storageAccountName}.blob.core.windows.net/${LARGE_BACKUP_CONTAINER}?restype=container&comp=list&prefix=backup-large-&delimiter=/`, accessToken, discoveryWarnings, signal)
     const listText = ordinaryText + largeText
     const backupFolders = parseBackupFolders(listText)
       .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
@@ -121,7 +119,14 @@ export async function POST(request: NextRequest) {
       if (response.status === 404) return { kind: 'missing' }
       // A backup on this device that damaged files made unavailable is skipped like one without a manifest.
       if (file === 'metadata.json' && response.status === 409 && ['BackupUnavailable', 'InventoryIncomplete'].includes(response.headers.get('x-ms-error-code') ?? '')) return { kind: 'missing' }
-      if (!response.ok) throw new Error(`Cannot verify that the backups are complete (${response.status}). Check storage access and retry.`)
+      if (!response.ok) {
+        if (isLargeBackup(name)) {
+          const message = `${LARGE_STORAGE_UNAVAILABLE} Storage returned ${response.status}.`
+          if (!discoveryWarnings.includes(message)) discoveryWarnings.push(message)
+          return { kind: 'unreadable', error: new Error(message) }
+        }
+        throw new Error(`Cannot verify that the backups are complete (${response.status}). Check storage access and retry.`)
+      }
       const body = await readJsonCapped(response, MAX_BACKUP_ARCHIVE_BYTES)
       if (body.kind === 'oversized') return { kind: 'unreadable', error: new Error(oversizedOwnershipFile(file)) }
       return body.kind === 'json' ? { kind: 'found', value: body.value } : { kind: 'unreadable', error: new Error(`${file} is not valid JSON`) }
@@ -171,6 +176,7 @@ export async function POST(request: NextRequest) {
     const [newerPolicies, olderPolicies] = await Promise.all([list(newerBackup.name), list(olderBackup.name)])
     
     const { drifts, warnings, stats } = await detectDrifts(newerPolicies, olderPolicies, newerBackup, olderBackup, accessToken, { signal, report, folders: new Set(shared), documentItems })
+    warnings.push(...discoveryWarnings.map(message => ({ file: "", backup: "", message })))
     signal?.throwIfAborted()
     
     // Fetch revert metadata for all drift policy IDs

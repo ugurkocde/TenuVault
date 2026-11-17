@@ -97,3 +97,12 @@ it('keeps a known failed run failed after its folder without a manifest turns in
     .toMatchObject({ failed: 1, inProgress: 1, latestStatus: 'running' })
   expect(backupSummary(folders.slice(0, 1), [{ timestamp: now, runId: 'run-failed' }], { since })).toMatchObject({ failed: 1, latestStatus: 'failed' })
 })
+
+
+it("counts companion folders once per run while keeping both stored entries", () => {
+  const now = new Date("2026-11-16T12:00:00Z"), since = new Date("2026-11-15T00:00:00Z")
+  const ordinary = { status: "success" as const, timestamp: now, runId: "mixed" }
+  expect(backupSummary([ordinary, { ...ordinary }], [], { since })).toMatchObject({ stored: 2, successful: 1, failed: 0, finished: 1 })
+  expect(backupSummary([ordinary, { ...ordinary, status: "partial" }], [], { since })).toMatchObject({ stored: 2, successful: 0, failed: 1, finished: 1 })
+  expect(backupSummary([ordinary, { ...ordinary, status: "running" }], [], { since, live: ["mixed"] })).toMatchObject({ stored: 2, successful: 0, failed: 0, inProgress: 1, latestStatus: "running" })
+})

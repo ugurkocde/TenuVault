@@ -1,4 +1,4 @@
-import { backupBlobName, backupContainer, logicalBackupName } from "../../../shared/backup-storage"
+import { backupBlobName, backupContainer, logicalBackupName, LARGE_STORAGE_UNAVAILABLE } from "../../../shared/backup-storage"
 export function decodeXml(value: string): string {
   return value.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&')
 }
@@ -40,4 +40,23 @@ export async function listBlobPages(url: string, token: string, signal?: AbortSi
 
 export function logicalBackupListing(xml: string): string {
   return xml.replace(/<Name>([^<]+)<\/Name>/g, (_, name: string) => `<Name>${logicalBackupName(name)}</Name>`)
+}
+
+/** Optional large discovery never makes ordinary inventory unavailable. */
+export async function listLargeBackupPages(url: string, token: string, warnings: string[], signal?: AbortSignal): Promise<string> {
+  try { return await listBlobPages(url, token, signal) }
+  catch (error) {
+    signal?.throwIfAborted()
+    warnings.push(`${LARGE_STORAGE_UNAVAILABLE}${error instanceof BlobListError ? ` Storage returned ${error.status}.` : ""}`)
+    return ""
+  }
+}
+
+/** An imported large archive may be the only container on this device. */
+export async function listOrdinaryBackupPages(url: string, token: string, signal?: AbortSignal): Promise<string> {
+  try { return await listBlobPages(url, token, signal) }
+  catch (error) {
+    if (error instanceof BlobListError && error.status === 404) return ""
+    throw error
+  }
 }

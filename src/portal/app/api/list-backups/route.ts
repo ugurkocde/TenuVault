@@ -1,6 +1,6 @@
-import { backupStoragePath, isLargeBackup, LARGE_BACKUP_CONTAINER } from "../../../../shared/backup-storage"
+import { backupStoragePath, isLargeBackup, LARGE_BACKUP_CONTAINER, LARGE_STORAGE_UNAVAILABLE } from "../../../../shared/backup-storage"
 import { backupTypeUse } from "../../../../shared/services/backup-use"
-import { BlobListError, decodeXml, listBlobPages } from "~/lib/storage/list"
+import { BlobListError, decodeXml, listBlobPages, listLargeBackupPages } from "~/lib/storage/list"
 import { typeForFolder } from "../../../../shared/intune/registry"
 import { describeScope } from "../../../../shared/intune/scope"
 import { comparable, compareBackups, summarize, type BackupFingerprint, type ChangeSummary } from "../../../../shared/intune/backup-changes"
@@ -303,10 +303,8 @@ export async function POST(request: NextRequest) {
     // Large discovery contains only claims and manifests. Payloads live under a disjoint prefix
     // in their own container, so no history path can enumerate snapshots, even after a crash.
     const discoveryUrl = `https://${storageAccountName}.blob.core.windows.net/${LARGE_BACKUP_CONTAINER}?restype=container&comp=list&prefix=backup-large-`
-    const largeText = await listBlobPages(discoveryUrl, accessToken).catch(error => {
-      if (error instanceof BlobListError && error.status === 404) return ''
-      throw new Error("Large backup inventory is unavailable. Check storage access and retry.", { cause: error })
-    })
+    const warnings: string[] = []
+    const largeText = await listLargeBackupPages(discoveryUrl, accessToken, warnings)
 
     // Parse XML response to extract backup folders
     // Summary mode groups one flat inventory in process, including older backups without manifests.
@@ -368,6 +366,8 @@ export async function POST(request: NextRequest) {
     // A folder whose marker could not be read may be another tenant's, so it is left out too and
     // counted as unresolved; its run, if it failed, counts once through its attempt record.
     const described = await mapLimit(backupFolders, 6, (name) => describeBackup(storageAccountName, name, accessToken, String(tenantId), inventories.get(name)))
+    const omittedLarge = described.filter(backup => isLargeBackup(backup.id) && (backup.unresolved || backup.error) && !backup.foreign && backup.status !== "unavailable")
+    if (omittedLarge.length) warnings.push(LARGE_STORAGE_UNAVAILABLE)
     const unresolved = described.filter((backup) => backup.unresolved).length
     // Folders sealed by an earlier version that this device cannot open, for the backups page's offer
     // to import a recovery key. Without the key nobody can tell whose such a folder is, so it counts
@@ -376,7 +376,7 @@ export async function POST(request: NextRequest) {
     // Filtering and attribution use only the shared resolver's outcome, never a raw manifest field.
     const otherTenantSeen = described.some((backup) => backup.ownerKind === 'other' || (backup.foreign && !backup.sealed))
     const sealed = described.filter((backup) => backup.sealed && (backup.ownerKind === 'owned' || (backup.ownerKind !== 'other' && !otherTenantSeen))).length
-    backups.push(...described.filter((backup) => !backup.foreign && !backup.unresolved && backup.ownerKind !== 'other'))
+    backups.push(...described.filter((backup) => !omittedLarge.includes(backup) && !backup.foreign && !backup.unresolved && backup.ownerKind !== 'other'))
 
     // Sort by timestamp descending
     backups.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
@@ -385,7 +385,7 @@ export async function POST(request: NextRequest) {
     for (let i = 0; i < backups.length; i++) {
       const current = backups[i]!
       if (!current.fingerprint || !comparable(current.fingerprint)) continue
-      const previous = backups.slice(i + 1).find((backup) => backup.fingerprint && comparable(backup.fingerprint))
+      const previous = backups.slice(i + 1).find((backup) => isLargeBackup(backup.id) === isLargeBackup(current.id) && backup.fingerprint && comparable(backup.fingerprint))
       if (!previous) continue
       current.changes = summarize(compareBackups(previous.fingerprint, current.fingerprint))
       current.comparedWith = previous.id
@@ -399,7 +399,7 @@ export async function POST(request: NextRequest) {
       delete backup.sealed
     }
 
-    return NextResponse.json({ backups, unresolved, sealed, ...(damagedFiles ? { damagedFiles, damagedFileNames, ...(damagedKinds ? { damagedKinds } : {}) } : {}) })
+    return NextResponse.json({ backups, unresolved, sealed, ...(warnings.length ? { warnings } : {}), ...(damagedFiles ? { damagedFiles, damagedFileNames, ...(damagedKinds ? { damagedKinds } : {}) } : {}) })
   } catch (error) {
     console.error("List backups error:", error)
     return NextResponse.json(

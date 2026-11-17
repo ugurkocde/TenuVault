@@ -348,6 +348,7 @@ export default function BackupRestorePage() {
                 {unresolvedNotice(backupList.unresolved)}
               </p>
             )}
+            {backupList.warnings?.map(warning => <p key={warning} role="status" className="rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-gray-900">{warning}</p>)}
             <LegacySealedBackupsNotice key={`sealed:${listIdentity}`} count={backupList.sealed} onImported={async () => { await backupList.refresh({ force: true }) }} />
             {retentionMessage && (
               <p className="mb-4 text-sm text-gray-500">

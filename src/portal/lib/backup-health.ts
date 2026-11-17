@@ -43,25 +43,35 @@ export function backupHealth(backups: Backup[], now: Date, unavailable = false):
  * running whenever that count is above zero, so the two always agree.
  */
 export function backupSummary(backups: Array<Backup & { runId?: string | null }>, failedAttempts: Array<{ timestamp: Date; runId?: string }>, period: { since: Date; until?: Date; live?: string[] }) {
+  // Companion folders are separate stored backups but one run in the success rate and job counts.
+  const runs = new Map<string | object, (typeof backups)[number]>()
+  const priority: BackupState[] = ['success', 'unknown', 'cancelled', 'partial', 'incomplete', 'failed', 'running']
+  for (const backup of backups) {
+    const key = backup.runId || backup
+    const previous = runs.get(key)
+    if (!previous) runs.set(key, backup)
+    else runs.set(key, { ...previous, status: priority.indexOf(backup.status) > priority.indexOf(previous.status) ? backup.status : previous.status, timestamp: backup.timestamp > previous.timestamp ? backup.timestamp : previous.timestamp })
+  }
+  const runBackups = [...runs.values()]
   const inPeriod = <T extends { timestamp: Date }>(item: T) => item.timestamp >= period.since && (!period.until || item.timestamp < period.until)
   const stored = new Set(backups.map((item) => item.runId).filter((id) => !!id))
   const failedRuns = new Set(failedAttempts.map((attempt) => attempt.runId).filter((id) => !!id))
   // A run that already wrote its manifest or its failure record has finished, even while the engine still reports it.
-  const finishedRuns = new Set([...backups.filter((item) => item.runId && ['success', 'failed', 'cancelled', 'partial'].includes(item.status)).map((item) => item.runId), ...failedRuns])
+  const finishedRuns = new Set([...runBackups.filter((item) => item.runId && ['success', 'failed', 'cancelled', 'partial'].includes(item.status)).map((item) => item.runId), ...failedRuns])
   const live = new Set((period.live ?? []).filter((id) => !finishedRuns.has(id)))
   // The list says running for a folder without a manifest that started less than six hours ago, and incomplete after that.
   const statusOf = (item: Backup & { runId?: string | null }): BackupState => {
     if ((item.status !== 'running' && item.status !== 'incomplete') || !item.runId) return item.status
     return failedRuns.has(item.runId) ? 'failed' : live.has(item.runId) ? 'running' : item.status
   }
-  const recent = backups.filter(inPeriod).map(statusOf)
+  const recent = runBackups.filter(inPeriod).map(statusOf)
   const unsaved = failedAttempts.filter((attempt) => !attempt.runId || !stored.has(attempt.runId))
   const successful = recent.filter((status) => status === 'success').length
   const failed = recent.filter((status) => ['failed', 'partial', 'incomplete'].includes(status)).length + unsaved.filter(inPeriod).length
   const finished = successful + failed
-  const elsewhere = backups.filter((item) => statusOf(item) === 'running' && !(item.runId && live.has(item.runId))).length
+  const elsewhere = runBackups.filter((item) => statusOf(item) === 'running' && !(item.runId && live.has(item.runId))).length
   const inProgress = live.size + elsewhere
-  const newest = backups.reduce<(typeof backups)[number] | null>((best, item) => !best || item.timestamp > best.timestamp ? item : best, null)
+  const newest = runBackups.reduce<(typeof backups)[number] | null>((best, item) => !best || item.timestamp > best.timestamp ? item : best, null)
   return { stored: backups.length, successful, failed, finished, inProgress,
     successRate: finished ? successful / finished * 100 : null,
     latestStatus: inProgress > 0 ? 'running' as const : newest ? statusOf(newest) : null }

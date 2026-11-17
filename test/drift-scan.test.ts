@@ -630,3 +630,17 @@ describe('Drift scan jobs', () => {
     expect(new DriftJobError('x').status).toBe(400)
   })
 })
+
+
+it("selects an ordinary pair past a lone newer large backup and refuses cross-class pairs", async () => {
+  const folders = [
+    { name: "backup-large-2026-11-17-120000", timestamp: "2026-11-17T12:00:00Z" },
+    { name: "backup-2026-11-16-120000", timestamp: "2026-11-16T12:00:00Z" },
+    { name: "backup-2026-11-15-120000", timestamp: "2026-11-15T12:00:00Z" },
+  ]
+  const options = { folders, tenantId: TENANT_A, load: async () => ({ Status: "Success" }) }
+  const pair = await selectBackupPair(options)
+  expect(pair.comparison.name).toBe(folders[1]!.name)
+  expect(pair.baseline.name).toBe(folders[2]!.name)
+  await expect(selectBackupPair({ ...options, baseline: folders[2]!.name, comparison: folders[0]!.name })).rejects.toMatchObject({ code: "INVALID_PAIR" })
+})

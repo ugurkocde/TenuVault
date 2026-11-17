@@ -1,7 +1,7 @@
-import { backupStoragePath, LARGE_BACKUP_CONTAINER } from "../../../../shared/backup-storage"
+import { backupStoragePath, isLargeBackup, LARGE_BACKUP_CONTAINER, LARGE_STORAGE_UNAVAILABLE } from "../../../../shared/backup-storage"
 import { backupFoldersIn, parseBackupName } from "../../../../shared/intune/backup-names"
 import { type NextRequest, NextResponse } from "next/server"
-import { BlobListError, listBlobPages } from "~/lib/storage/list"
+import { listLargeBackupPages, listOrdinaryBackupPages } from "~/lib/storage/list"
 import { typeForFolder } from "../../../../shared/intune/registry"
 import { comparable, compareBackups, type BackupFingerprint } from "../../../../shared/intune/backup-changes"
 import { compareObjects } from "../detect-drifts/route"
@@ -47,19 +47,17 @@ export async function POST(request: NextRequest) {
       headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${accessToken}` },
     })
     const owned = await readOwnedBackup(readBlob, backupId, tenantId)
-    if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
+    if (!owned.ok) return NextResponse.json({ error: isLargeBackup(backupId) ? `${LARGE_STORAGE_UNAVAILABLE} ${owned.error}` : owned.error }, { status: owned.status })
     const current = owned.metadata as BackupFingerprint | null
     if (!current || !comparable(current)) {
       return NextResponse.json({ error: "This backup was made by an older version of TenuVault or did not finish, so its changes cannot be listed.", code: "NOT_COMPARABLE" }, { status: 409 })
     }
 
-    const listing = await listBlobPages(`${container}?restype=container&comp=list&prefix=backup-&delimiter=/`, accessToken)
-    const largeListing = await listBlobPages(`https://${storageAccountName}.blob.core.windows.net/${LARGE_BACKUP_CONTAINER}?restype=container&comp=list&prefix=backup-large-&delimiter=/`, accessToken).catch(error => {
-      if (error instanceof BlobListError && error.status === 404) return ""
-      throw error
-    })
+    const warnings: string[] = []
+    const listing = await listOrdinaryBackupPages(`${container}?restype=container&comp=list&prefix=backup-&delimiter=/`, accessToken)
+    const largeListing = await listLargeBackupPages(`https://${storageAccountName}.blob.core.windows.net/${LARGE_BACKUP_CONTAINER}?restype=container&comp=list&prefix=backup-large-&delimiter=/`, accessToken, warnings)
     const older = backupFoldersIn(listing + largeListing)
-      .filter(candidate => candidate.timestamp < parseBackupName(backupId)!.timestamp)
+      .filter(candidate => isLargeBackup(candidate.name) === isLargeBackup(backupId) && candidate.timestamp < parseBackupName(backupId)!.timestamp)
       .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
       .map(candidate => candidate.name)
 
@@ -75,7 +73,7 @@ export async function POST(request: NextRequest) {
       }
     }
     if (!previous) {
-      return NextResponse.json({ backupId, comparedWith: null, changes: [] })
+      return NextResponse.json({ backupId, comparedWith: null, changes: [], warnings })
     }
 
     const changes = compareBackups(previous.metadata, current)
@@ -98,7 +96,7 @@ export async function POST(request: NextRequest) {
     )
     const order = { removed: 0, modified: 1, added: 2 }
     items.sort((a, b) => order[a.change] - order[b.change] || a.typeLabel.localeCompare(b.typeLabel) || a.name.localeCompare(b.name))
-    return NextResponse.json({ backupId, comparedWith: previous.id, changes: items })
+    return NextResponse.json({ backupId, comparedWith: previous.id, changes: items, warnings })
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Changes could not be listed." }, { status: 500 })
   }
