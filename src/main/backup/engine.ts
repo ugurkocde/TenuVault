@@ -1016,10 +1016,11 @@ export class BackupEngine {
       typeTimer.unref?.()
       const budget = typeReadBudget(typeSignal, limits)
       const { session } = serviceOf(type)
-      const pageControl: { current: ReadControl } = { current: {} }
-      // The session reads these accessors at dispatch, including retries and throttle sleeps.
-      const controls = { get signal() { return pageControl.current.signal }, beforeRequest: () => pageControl.current.beforeRequest?.() }
       const boundedPages = async function* (path: string) {
+        // Every concurrent relationship iterator owns its request controls. The allowance and
+        // type signal remain shared across all pages, retries and relationships.
+        const pageControl: { current: ReadControl } = { current: {} }
+        const controls = { get signal() { return pageControl.current.signal }, beforeRequest: () => pageControl.current.beforeRequest?.() }
         const iterator = session.pages(graphUrl(graphVersion(type), path, type.additionalReadVersions), { get signal() { return controls.signal }, beforeRequest: controls.beforeRequest, headers: type.headers, ...(path === listPath(type) ? { filter: type.filter } : {}) })
         try {
           for (;;) {

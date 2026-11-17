@@ -140,6 +140,45 @@ describe("Directory inventory", () => {
     expect(job.coverage).toBe("incomplete")
     expect(JSON.stringify(job)).not.toMatch(/SyntheticProfileName|profile@example.test/)
   })
+  it("reads eight independent enterprise app relationships concurrently", async () => {
+    const type = TYPES.find(type => type.folder === "ServicePrincipals")!
+    const started = new Set<string>()
+    let firstCompletion = 0
+    await captureLarge({ type, signal: new AbortController().signal, saved: () => {}, put: async () => {}, reader: { get: async () => ({}), list: async () => [] }, pages: async function* (path) {
+      if (path === listPath(type)) { yield [{ id }]; return }
+      started.add(path)
+      await Promise.resolve()
+      firstCompletion ||= started.size
+      yield []
+    } })
+    expect(firstCompletion).toBe(8)
+  })
+  it("drains independent reads before ending an enterprise app after a page failure", async () => {
+    const type = TYPES.find(type => type.folder === "ServicePrincipals")!
+    let finished = 0
+    await expect(captureLarge({ type, signal: new AbortController().signal, saved: () => {}, put: async () => {}, reader: { get: async () => ({}), list: async () => [] }, pages: async function* (path) {
+      if (path === listPath(type)) { yield [{ id }]; return }
+      if (path.includes("/owners?")) throw Object.assign(new Error("Expired paging token"), { status: 410 })
+      await new Promise(resolve => setTimeout(resolve, 5))
+      finished++
+      yield []
+    } })).rejects.toThrow("Expired paging token")
+    expect(finished).toBe(7)
+  })
+  it("shares the actual GET budget across concurrent enterprise app relationships", async () => {
+    const type = TYPES.find(type => type.folder === "ServicePrincipals")!
+    const originalBudget = type.readBudget
+    type.readBudget = { durationMs: 10_000, maxRequests: 4 }
+    try {
+      const routes: Record<string, unknown> = { [`/v1.0/${decodeURIComponent(listPath(type))}`]: { value: [{ id }] } }
+      for (const extra of type.extras!) routes[`/v1.0/${extra.path(id)}`] = { value: [] }
+      const setup = fixture(scriptedGraph(routes), { services: () => ({ services: ["entra"], areas: { entra: ["applications"] } }) })
+      const job = await setup.run({ scope: only(type.folder) })
+      expect(job.coverage).toBe("incomplete")
+      expect(setup.requests).toHaveLength(4)
+      expect(job.results?.types[0]?.saved).toBe(0)
+    } finally { type.readBudget = originalBudget }
+  })
   it("records incomplete relationship coverage through the engine without ending the next group", async () => {
     const type = TYPES[1]!
     const routes: Record<string, unknown> = { [`/v1.0/${decodeURIComponent(listPath(type))}`]: { value: [{ id, displayName: "Synthetic private profile" }, { id: id2, displayName: "Synthetic private profile" }] } }

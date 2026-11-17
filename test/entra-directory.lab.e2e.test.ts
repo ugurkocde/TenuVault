@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { mkdirSync, writeFileSync } from "node:fs"
+import { listPath, listSnapshot } from "../src/shared/intune/read"
 import { ENTRA_DIRECTORY_TYPES } from "../src/shared/intune/entra-directory"
 import { captureLarge } from "../src/main/backup/large"
 import { GraphSession, type ReadControl } from "../src/main/backup/graph-session"
@@ -35,6 +36,19 @@ describe.skipIf(!configured)("Directory lab through the application streaming re
   afterAll(() => { token = ""; globalThis.fetch = originalFetch })
   it("blocks all non-GET Graph methods before sending", async () => {
     for (const method of ["POST", "PATCH", "PUT", "DELETE", "HEAD", "OPTIONS"]) await expect(guarded("https://graph.microsoft.com/v1.0/users", { method })).rejects.toThrow("GET only")
+  })
+  it("follows live user continuation pages with manager IDs only", async () => {
+    const type = ENTRA_DIRECTORY_TYPES[0]!
+    let pages = 0, count = 0
+    try {
+      for await (const page of session.pages(`https://graph.microsoft.com/v1.0/${listPath(type).replace("$top=999", "$top=1")}`)) {
+        pages++
+        for (const item of page) { listSnapshot(type, item as Item); count++ }
+      }
+    } catch { throw new Error("The live directory continuation read failed") }
+    console.log(JSON.stringify({ folder: type.folder, probe: "continuation", pages, count }))
+    expect(pages).toBeGreaterThan(1)
+    expect(count).toBeGreaterThan(1)
   })
   for (const type of ENTRA_DIRECTORY_TYPES) it(type.folder, async () => {
     const signal = new AbortController().signal

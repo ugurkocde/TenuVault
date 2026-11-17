@@ -39,10 +39,11 @@ export async function captureLarge({ type, reader, pages, put, signal, saved, un
         if (type.skip?.(item)) continue
         if (!safeLargeId(item.id) || (type.folder in DIRECTORY_SCHEMAS && !directoryObjectId(type.folder, item.id))) throw new Error("The large collection returned an unsafe object ID")
         if (++count > LARGE_MAX_ITEMS) throw new Error("The large inventory object limit was reached")
+        const objectId = item.id
         const parentType = { ...type, extras: undefined }
-        const snapshot = type.listOnly ? listSnapshot(parentType, item) : await readObject(parentType, item.id, reader)
+        const snapshot = type.listOnly ? listSnapshot(parentType, item) : await readObject(parentType, objectId, reader)
         let objectIncomplete = false
-        for (const extra of type.extras ?? []) {
+        const readExtra = async (extra: NonNullable<IntuneType["extras"]>[number]) => {
           if (!safeLargeId(extra.property) || extra.property === "__proto__") throw new Error("Invalid relationship property")
           const matches = (patterns: typeof extra.optional, error: unknown) => {
             const answer = error as { status?: number; answer?: { code?: string } }
@@ -56,7 +57,7 @@ export async function captureLarge({ type, reader, pages, put, signal, saved, un
           }
           const ids = new SortedSpool<Item & { id: string }>(LARGE_MAX_ITEMS, signal)
           try {
-            for await (const members of pages(extra.path(encodeURIComponent(item.id)))) {
+            for await (const members of pages(extra.path(encodeURIComponent(objectId)))) {
               if (members.length > LARGE_SHARD_ITEMS || members.some(member => !safeLargeId(member.id))) throw new Error("Invalid relationship page")
               const shaped = members.map(member => {
                 if (extra.ids) return { id: member.id as string }
@@ -71,7 +72,7 @@ export async function captureLarge({ type, reader, pages, put, signal, saved, un
             const hash = createHash("sha256")
             const flush = async () => {
               if (!chunk.length) return
-              await put(relationPath(type.folder, item.id as string, extra.property, shards++), JSON.stringify(chunk))
+              await put(relationPath(type.folder, objectId, extra.property, shards++), JSON.stringify(chunk))
               chunk = []
             }
             for await (const member of ids.entries()) {
@@ -91,9 +92,20 @@ export async function captureLarge({ type, reader, pages, put, signal, saved, un
             incomplete()
           } finally { await ids.close() }
         }
+        const extras = type.extras ?? []
+        if (type.folder in DIRECTORY_SCHEMAS) {
+          // Directory fan-out waits on independent endpoints concurrently, without collecting a
+          // tenant's relationships. Drain siblings before ending an object after a failed read.
+          for (let at = 0; at < extras.length; at += 8) {
+            const reads = await Promise.allSettled(extras.slice(at, at + 8).map(readExtra))
+            const failed = reads.find((read): read is PromiseRejectedResult => read.status === "rejected")
+            if (failed) throw failed.reason
+          }
+        } else for (const extra of extras) await readExtra(extra)
+
         const body = JSON.stringify(snapshot, null, 2)
         if (Buffer.byteLength(body) > (type.maxSnapshotBytes ?? 8 * 1024 * 1024)) throw new Error("The large snapshot exceeds its size limit")
-        save(`${type.folder}/${item.id}.json`, body, { id: item.id, file: `${item.id}.json`, hash: snapshotHash(snapshot) })
+        save(`${type.folder}/${objectId}.json`, body, { id: objectId, file: `${objectId}.json`, hash: snapshotHash(snapshot) })
         if (pending.size >= 16) await Promise.race(pending)
         if (failed) { await Promise.all(pending); throw failed }
       }
