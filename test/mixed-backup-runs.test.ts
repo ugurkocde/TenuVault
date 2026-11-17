@@ -109,6 +109,14 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
     expect((await validate(f.request({ backupId: ordinary }))).status).toBe(200)
     expect((await download(f.request({ backupId: ordinary }))).status).toBe(409)
   })
+  it("rejects a forged unfinished claim instead of joining its run", async () => {
+    const f = await pair()
+    await f.store.delete(local, LARGE_BACKUP_CONTAINER, `${large}/metadata.json`)
+    await f.write(large, ".tenuvault-owner.json", { TenantId: TENANT, RunId: "forged-run", CompanionBackup: ordinary })
+    const result = await (await history(f.request({ summary: true }))).json()
+    expect(result.backups).toHaveLength(2)
+    expect(result.backups.find((row: any) => row.id === ordinary)).toMatchObject({ status: "incomplete", warning: expect.stringContaining("companion does not match") })
+  })
   it.each(["running", "cancelled", "crashed", "missing", "403", "failed capture"])("shows incomplete coverage and its per-type cause for a %s companion", async state => {
     const f = await pair()
     if (["running", "crashed", "missing"].includes(state)) {
@@ -209,7 +217,7 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
     if (state !== "orphan") expect((await f.store.list(local, BACKUP_CONTAINER, `${ordinary}/`)).length > 0).toBe(state !== "complete")
     if (state === "orphan") {
       const result = await (await history(f.request())).json()
-      expect(result.backups.find((entry: any) => entry.id === large)).toMatchObject({ status: "incomplete", warning: expect.stringContaining("orphaned") })
+      expect(result.backups.find((entry: any) => entry.id === large)).toMatchObject({ status: "incomplete", notRead: ["AuthorizationPolicy"], largeProblems: [{ folder: "AuthorizationPolicy", reason: expect.stringContaining("orphaned") }], warning: expect.stringContaining("orphaned") })
     }
   })
 })

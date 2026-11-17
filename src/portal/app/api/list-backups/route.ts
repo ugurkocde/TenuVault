@@ -420,7 +420,7 @@ export async function POST(request: NextRequest) {
       // A reciprocal claim identifies an unfinished half, but can never certify completion.
       const evidence = other ?? describedCompanion?.claim
       const matches = matchingCompanions(backup.id, metadata, companionId, evidence) && evidence?.TenantId?.toLowerCase() === String(tenantId).toLowerCase()
-      if (other && !matches) { cause = "Large companion does not match this run."; mismatched.add(companionId) }
+      if (evidence && !matches) { cause = "Large companion does not match this run."; mismatched.add(companionId) }
       if (matches) {
         hidden.add(companionId)
         backup.companionId = companionId
@@ -450,6 +450,8 @@ export async function POST(request: NextRequest) {
         backup.status = "incomplete"
         backup.coverage = "incomplete"
         backup.warning = "Ordinary companion does not match or is missing. This orphaned large companion is kept by retention."
+        backup.largeProblems = largeRunProblems({}, backup.warning, backup.fingerprint)
+        backup.notRead = [...new Set([...backup.notRead, ...backup.largeProblems.map((problem: { folder: string }) => problem.folder)])]
       }
       if (backup.fingerprint?.Export?.kind === "ordinary-only") {
         backup.ordinaryOnlyExport = true
