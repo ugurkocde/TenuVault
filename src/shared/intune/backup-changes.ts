@@ -19,6 +19,7 @@ export type BackupItems = Record<string, {
 export interface BackupFingerprint extends ScopeMetadata {
   Status?: unknown
   Items?: unknown
+  LargeItems?: unknown
 }
 
 export interface ItemChange {

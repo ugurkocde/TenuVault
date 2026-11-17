@@ -1,3 +1,4 @@
+import { INTUNE_TYPES } from "../../../../shared/intune/registry"
 import { backupTypeUse } from "../../../../shared/services/backup-use"
 import { BlobListError, decodeXml, listBlobPages } from "~/lib/storage/list"
 import { typeForFolder } from "../../../../shared/intune/registry"
@@ -85,12 +86,12 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
     // one is asked for it: the store answers 409 when damaged files made the backup unavailable.
     : inventory ? (local ? readMetadata().then((read) => read.unavailable ? read : { metadata: null }) : Promise.resolve({ metadata: null })) : readMetadata()
   // A backup made unavailable by damaged files is still listed, with the reason, so the others stay usable.
-  const filesRead: Promise<string | { unavailable: string }> = inventory ? Promise.resolve(inventory.text) : listBlobPages(`https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(`${name}/`)}`, accessToken).catch((error) => {
+  const metadataResult = await metadataRead
+  const listing: string | { unavailable: string } = metadataResult.metadata?.LargeItems ? "" : inventory ? inventory.text : await listBlobPages(`https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(`${name}/`)}`, accessToken).catch((error) => {
     const unavailable = error instanceof BlobListError ? unavailableReason(error.status, error.body) : null
     if (unavailable) return { unavailable }
     throw new Error(`Backup ${name} inventory is unavailable. Check storage access and retry.`)
   })
-  const [metadataResult, listing] = await Promise.all([metadataRead, filesRead])
   const unavailable = typeof listing === 'string' ? (metadataResult.unavailable ? metadataResult.metadataError! : null) : listing.unavailable
   const filesText = typeof listing === 'string' && !unavailable ? listing : ''
   const listedMetadata = unavailable ? null : metadataResult.metadata
@@ -150,6 +151,10 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
       sizes[folder] = (sizes[folder] ?? 0) + bytes
     }
   }
+  if (metadata?.LargeItems) {
+    for (const [folder, value] of Object.entries(metadata.ItemCounts ?? {})) if (folder !== "TotalPolicies" && typeof value === "number") counts[folder] = value
+    for (const [folder, value] of Object.entries(metadata.LargeSizes ?? {})) if (typeof value === "number") { sizes[folder] = value; size += value }
+  }
   const count = (...folders: string[]) => folders.reduce((sum, folder) => sum + (counts[folder] ?? 0), 0)
   const totalPolicies = Object.values(counts).reduce((sum, value) => sum + value, 0)
   // Inventory such as Autopilot devices is an item of the backup but not a policy.
@@ -173,6 +178,7 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
     totalPolicies,
     counts,
     sizes,
+    ...(metadata?.LargeItems ? { largeInventory: true } : {}),
     // Kept for the dashboard's breakdown.
     policies: {
       deviceConfigurations: count('DeviceConfigurations'),
@@ -259,7 +265,7 @@ export async function POST(request: NextRequest) {
     // This avoids needing account-level permissions
 
     // List blobs in the intune-backups container
-    const summary = body.summary === true
+    const summary = body.summary === true && !INTUNE_TYPES.some(type => type.volume === "large")
     const blobsUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${summary ? "" : "&delimiter=/"}`
 
     let blobsText: string

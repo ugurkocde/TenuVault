@@ -1,3 +1,4 @@
+import { indexPath, largeIndexes } from "../../shared/large-backup"
 import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } from "node:crypto"
 import type { BigIntStats } from "node:fs"
 import { link, mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
@@ -889,7 +890,7 @@ export class LocalBlobStore {
     for (const entry of entries.values()) {
       if (!/^backup-[^/]+\/metadata\.json$/.test(entry.name)) continue
       const folder = backupFolderOf(entry.name)!
-      let metadata: { Items?: unknown }
+      let metadata: { Items?: unknown; LargeItems?: unknown }
       try {
         const raw = await readFile(join(dir, entry.file))
         const body = raw.subarray(MAGIC_LENGTH + 2 + raw.readUInt16BE(MAGIC_LENGTH))
@@ -916,6 +917,20 @@ export class LocalBlobStore {
         const name = `${prefix}${type}/${file}`
         traced.set(name, folder)
         if (!entries.has(name)) missing++
+      }
+      if (metadata.LargeItems) {
+        try {
+          for (const [type, index] of Object.entries(largeIndexes(metadata))) {
+            for (let shard = 0; shard < index.shards; shard++) {
+              const name = `${prefix}${indexPath(type, shard)}`
+              traced.set(name, folder)
+              if (!entries.has(name)) missing++
+            }
+          }
+          // Unknown damaged headers may belong to a large snapshot outside the inline inventory.
+          // Its index will be checked lazily, so do not exempt it from unattributed damage.
+          legacy.add(folder)
+        } catch { valid = false }
       }
       if (!valid) unavailable(folder, "its manifest (metadata.json) is not valid.")
       else if (missing) unavailable(folder, `${missing} file${missing === 1 ? "" : "s"} listed in its manifest ${missing === 1 ? "is" : "are"} missing or damaged.`)

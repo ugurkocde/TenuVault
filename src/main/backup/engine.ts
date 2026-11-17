@@ -404,7 +404,7 @@ export class BackupEngine {
       const large = includedTypes(normalizeScope(request.scope ?? EVERYTHING)).some(type => type.volume === "large" && !off.has(type.folder))
       const duration = large ? LARGE_JOB_MS : JOB_DEADLINE_MS
       const deadline = Date.now() + duration
-      timer = setTimeout(() => controller.abort(jobDeadlineError()), duration)
+      timer = setTimeout(() => controller.abort(jobDeadlineError(duration)), duration)
       timer.unref?.()
       // The existing phase keeps its original deadline even in a mixed backup.
       if (large) { legacyTimer = setTimeout(() => controller.abort(jobDeadlineError()), JOB_DEADLINE_MS); legacyTimer.unref?.() }
@@ -875,6 +875,7 @@ export class BackupEngine {
         })
         const body = JSON.stringify(detail, null, 2)
         await storage.put(`${backupFolder}/${type.folder}/${fileName}.json`, body)
+        if (types.some(type => type.volume === "large")) largeSizes[type.folder] = (largeSizes[type.folder] ?? 0) + Buffer.byteLength(body)
         const maskedView = withMaskedSecrets(type, detail)
         items[`${type.folder}/${item.id}`] = {
           file: `${fileName}.json`,
@@ -1309,8 +1310,8 @@ export async function verifyStorageAccess(
   })
 }
 
-function jobDeadlineError(): Error {
-  return new Error("Backup timed out after the 30 minute job deadline. Retry the backup.")
+function jobDeadlineError(duration = JOB_DEADLINE_MS): Error {
+  return new Error(`Backup timed out after the ${duration === LARGE_JOB_MS ? "8 hour" : "30 minute"} job deadline. Retry the backup.`)
 }
 
 /** backup-yyyy-MM-dd-HHmmss in UTC, the runbook's folder format. */

@@ -86,6 +86,7 @@ export async function POST(request: NextRequest) {
       const type = typeForFolder(folder === "DeviceCompliancePolicies" ? "CompliancePolicies" : folder)
       const fallbackName = (path.split("/")[2] ?? "").replace(/\.json$/, "")
       if (!type) return { path, folder, name: fallbackName, blocker: "This backup file is not an Intune type TenuVault can restore.", replaceBlocker: "This type cannot be replaced." }
+      if (type.volume === "large") return { path, folder: type.folder, name: fallbackName, blocker: type.limitation ?? "This inventory cannot be restored.", replaceBlocker: type.limitation ?? "This inventory cannot be restored." }
       const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${path.split("/").map(encodeURIComponent).join("/")}`, {
         headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${storageToken}` },
       })

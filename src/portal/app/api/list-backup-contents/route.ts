@@ -1,3 +1,5 @@
+import { largeContents } from "../../../../main/backup/large-page"
+import { readJsonCapped } from "../../../../shared/capped-body"
 import { decodeXml, listBlobPages } from "~/lib/storage/list"
 import { INTUNE_TYPES, restoreCapability, typeForFolder } from "../../../../shared/intune/registry"
 import { writeBlocker } from "../../../../shared/intune/restore-plan"
@@ -76,6 +78,21 @@ export async function POST(request: NextRequest) {
 
     const tokenData = await tokenResponse.json()
     const accessToken = tokenData.access_token
+
+    const owner = await readOwnedBackup(name => fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(name)}`, {
+      headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${accessToken}` },
+    }), backupId, tenantId, storageAccountName)
+    if (!owner.ok) return NextResponse.json({ error: owner.error }, { status: owner.status })
+    if (owner.metadata?.LargeItems) {
+      const read = async (name: string) => {
+        const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(`${backupId}/${name}`)}`, { headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${accessToken}` } })
+        if (!response.ok) throw new Error("Inventory page could not be read")
+        const json = await readJsonCapped(response, 1024 * 1024)
+        if (json.kind !== "json") throw new Error("Invalid inventory page")
+        return json.value
+      }
+      return NextResponse.json(await largeContents(owner.metadata, backupId, body.largePage ?? 0, read))
+    }
 
     // List all files in the backup folder
     const listUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(`${backupId}/`)}`

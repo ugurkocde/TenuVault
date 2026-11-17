@@ -1705,6 +1705,48 @@ await check("unsaved schedule drafts stay with their tenant", async () => {
   assert(await waitForCondition(`document.getElementById('schedule-time')?.value === '07:45'`), 'navigation discarded the draft')
 })
 
+await check("large inventory pages stay bounded in dark mode at 1024 pixels", async () => {
+  await evaluate(`(() => {
+    window.__largeOriginalFetch = window.fetch;
+    const backupId = 'backup-2026-11-16-000000';
+    window.fetch = (input, init) => {
+      const route = String(input);
+      if (route === '/api/list-backups') return Promise.resolve(Response.json({ backups: [{ id: backupId, timestamp: '2026-11-16T00:00:00Z', type: 'manual', status: 'Success', totalPolicies: 100000, counts: { DeviceConfigurations: 100000 }, scope: null, size: 200000000, duration: 1200, changes: null, comparedWith: null, largeInventory: true }] }));
+      if (route === '/api/list-backup-contents') {
+        const page = JSON.parse(init.body).largePage || 0;
+        const policies = Array.from({ length: 1000 }, (_, index) => ({ path: backupId + '/DeviceConfigurations/object-' + (page * 1000 + index) + '.json', displayName: 'object-' + (page * 1000 + index) }));
+        return Promise.resolve(Response.json({ largePage: page, hasMore: page < 99, content: { metadata: { LargeItems: { DeviceConfigurations: { count: 100000 } } }, groups: [{ folder: 'DeviceConfigurations', label: 'Synthetic inventory', area: 'Tenant administration', count: 100000, limitation: 'This inventory cannot be restored.', policies }] } }));
+      }
+      if (route === '/api/restore-preview') return Promise.resolve(Response.json({ items: JSON.parse(init.body).paths.map(path => ({ path, name: path.split('/').pop(), blocker: 'This inventory cannot be restored.', replaceBlocker: 'This inventory cannot be restored.' })) }));
+      return window.__largeOriginalFetch(input, init);
+    };
+  })()`)
+  try {
+    await go("#/portal/backup?tab=backup", "Backup & Restore")
+    await evaluate(`[...document.querySelectorAll('button')].find(button => button.innerText.trim() === 'Backup History')?.click()`)
+    assert(await waitForText('Backup Timeline'), 'backup history did not open')
+    await evaluate(`[...document.querySelectorAll('button')].find(button => button.innerText.trim() === 'Refresh').click()`)
+    assert(await waitForText('Large inventory, page 1'), 'large contents did not load')
+    await send('Emulation.setDeviceMetricsOverride', { width: 1024, height: 900, deviceScaleFactor: 1, mobile: false })
+    await evaluate(`document.documentElement.classList.add('dark')`)
+    await evaluate(`[...document.querySelectorAll('summary')].find(summary => summary.textContent.includes('Synthetic inventory'))?.click()`)
+    assert((await evaluate(`document.querySelectorAll('li').length`)) < 1500, 'the screen rendered the full inventory')
+    assert(await evaluate(`document.documentElement.scrollWidth <= window.innerWidth`), 'large contents overflow at 1024 pixels')
+    await screenshot('layer7a-large-contents-dark-1024')
+    await evaluate(`[...document.querySelectorAll('button')].find(button => button.innerText.trim() === 'Next page').click()`)
+    assert(await waitForText('Large inventory, page 2'), 'next contents page did not replace the first')
+    assert(!(await evaluate(`document.querySelector('main').innerText.includes('object-0')`)), 'prior contents rows accumulated')
+    await evaluate(`[...document.querySelectorAll('button')].find(button => button.innerText.includes('Restore from this backup')).click()`)
+    assert(await waitForText('Inventory page 1.'), 'the restore picker did not load a bounded page')
+    assert(await evaluate(`document.documentElement.scrollWidth <= window.innerWidth`), 'the inventory picker overflowed at 1024 pixels')
+    await screenshot('layer7a-large-picker-dark-1024')
+  } finally {
+    await evaluate(`window.fetch = window.__largeOriginalFetch; delete window.__largeOriginalFetch; document.documentElement.classList.remove('dark')`)
+    await send('Emulation.clearDeviceMetricsOverride')
+    await go("#/portal/backup?tab=schedule", "Automatic backups")
+  }
+})
+
 await check("switching tenants cannot show an older tenant's drift results", async () => {
   // Scans run as main-process jobs; this stands in for /api/drift-scan and holds the first tenant's scan open.
   await evaluate(`(() => {

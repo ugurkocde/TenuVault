@@ -111,6 +111,8 @@ export interface SettingNames {
 
 /** What /api/detect-drifts answers, and what the background scan saves per tenant. */
 export interface DriftResult {
+  /** Large inventories are compared only in bounded windows requested by the admin. */
+  largeFolders?: string[]
   drifts: Drift[]
   summary: DriftSummary
   /** When the comparison ran. */

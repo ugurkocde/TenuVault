@@ -1,3 +1,4 @@
+import { largeIndexes } from "../../../../shared/large-backup"
 import { decodeXml, listBlobPages } from "~/lib/storage/list"
 import { typeForFolder, type Item } from "../../../../shared/intune/registry"
 import { restoreCapabilities } from "../../../../shared/intune/restore-plan"
@@ -150,12 +151,13 @@ export async function POST(request: NextRequest) {
 
     // Only types both backups hold are compared: a backup that left apps out has not seen them deleted.
     const olderFolders = coveredFolders(olderBackup.metadata as ScopeMetadata)
-    const shared = [...coveredFolders(newerBackup.metadata as ScopeMetadata)].filter(folder => olderFolders.has(folder))
+    const largeFolders = [...new Set([...Object.keys(largeIndexes(olderBackup.metadata)), ...Object.keys(largeIndexes(newerBackup.metadata))])]
+    const shared = [...coveredFolders(newerBackup.metadata as ScopeMetadata)].filter(folder => olderFolders.has(folder) && !largeFolders.includes(folder))
     let listed = 0
     const listing = () => report({ phase: "listing", detail: `Listing the backed-up policies: ${listed} of 2 backups`, done: listed, total: 2 })
     listing()
     const list = async (backup: string) => {
-      const files = await fetchPolicyFiles(storageAccountName, backup, accessToken, shared, signal)
+      const files = largeFolders.length ? (await Promise.all(shared.map(folder => fetchPolicyFiles(storageAccountName, backup, accessToken, [folder], signal, folder)))).flat() : await fetchPolicyFiles(storageAccountName, backup, accessToken, shared, signal)
       listed++
       listing()
       return files
@@ -254,6 +256,7 @@ export async function POST(request: NextRequest) {
 
     const result: DriftResult = {
       drifts,
+      ...(largeFolders.length ? { largeFolders } : {}),
       summary: summarizeDrifts(drifts),
       lastScan: new Date().toISOString(),
       backupsAnalyzed: 2,
@@ -302,14 +305,15 @@ async function fetchPolicyFiles(
   backupFolder: string,
   accessToken: string,
   folders: string[],
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  prefixFolder?: string
 ): Promise<PolicyFile[]> {
   // The compared types, plus the folder older backups used for compliance policies.
   const policyTypes = folders.includes('CompliancePolicies') ? [...folders, 'DeviceCompliancePolicies'] : folders
   const byFolder = new Map<string, PolicyFile[]>(policyTypes.map(folder => [folder, []]))
 
   signal?.throwIfAborted()
-  const listUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(`${backupFolder}/`)}`
+  const listUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(`${backupFolder}/${prefixFolder ? `${prefixFolder}/` : ""}`)}`
   const text = await listBlobPages(listUrl, accessToken, signal)
   for (const blob of text.match(/<Blob>[\s\S]*?<\/Blob>/g) || []) {
     const nameMatch = blob.match(/<Name>([^<]+)<\/Name>/)

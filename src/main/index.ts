@@ -1,3 +1,4 @@
+import { importLargeArchive, reviewLargeArchive, saveLargeDownload } from "./backup/large-archive"
 import { AddPermissionsFlow, permissionAdditionScopes, signInForPermissionAddition, verifyPermissionAdditionToken } from "./auth/add-permissions-flow"
 import { additionPermissions } from "./services/addition-permissions"
 import { checkOnboardingPermissions, saveOnboardingServices } from "./services/onboarding"
@@ -693,6 +694,14 @@ async function bootstrap(): Promise<void> {
     },
   })
   const host: ApiHost = new ApiHost({
+    saveDownload: async response => {
+      const name = /filename="([A-Za-z0-9-]+\.tar)"/.exec(response.headers.get("content-disposition") ?? "")?.[1] ?? "backup.tar"
+      const chosen = await dialog.showSaveDialog(mainWindow!, { title: "Export backup", defaultPath: name, filters: [{ name: "Large backup archive", extensions: ["tar"] }] })
+      if (chosen.canceled || !chosen.filePath) { await response.body?.cancel(); return Response.json({ saved: false }) }
+      if (!response.body) throw new Error("The archive download has no content")
+      await saveLargeDownload(response.body, chosen.filePath)
+      return Response.json({ saved: true })
+    },
     routes: { ...routes, ...backupRoutes(engine, (tenantId) => scopes.get(tenantId).scope), ...featureRoutes(featureDeps), ...driftScanRoutes(driftJobs) },
     transform: surfaceTokenErrors,
     // Disabled CIS routes refuse before any licensing work. The plan comes next, so the
@@ -937,7 +946,7 @@ async function bootstrap(): Promise<void> {
   }, (tenantId, reason) => {
     if (reason === "choice") { pushLicense(); return }
     if (Notification.isSupported()) new Notification({ title: "Paused: Azure storage needs Pro", body: `${tenantProfile(tenantId)?.name ?? "This tenant"}: Open TenuVault to switch to local backups. Existing Azure backups are kept.` }).show()
-  })
+  }, tenantId => engine.hasLargeTypes(tenantId, scopes.get(tenantId).scope))
 
   const tray = new AppTray({
     open: showWindow,
@@ -1431,13 +1440,18 @@ async function bootstrap(): Promise<void> {
     if (importingArchive) throw new Error("An archive import is already open")
     importingArchive = true
     try {
-      const selected = await dialog.showOpenDialog(mainWindow!, { title: "Review backup archive", properties: ["openFile"], filters: [{ name: "TenuVault backup", extensions: ["zip"] }] })
+      const selected = await dialog.showOpenDialog(mainWindow!, { title: "Review backup archive", properties: ["openFile"], filters: [{ name: "TenuVault backup", extensions: ["zip", "tar"] }] })
       if (selected.canceled || !selected.filePaths[0]) return { imported: false }
-      assertArchiveFileSize((await stat(selected.filePaths[0])).size)
-      const archive = await reviewArchive(await readFile(selected.filePaths[0]))
+      const large = selected.filePaths[0].toLowerCase().endsWith(".tar")
+      if (!large) assertArchiveFileSize((await stat(selected.filePaths[0])).size)
+      const archive = large ? await reviewLargeArchive(selected.filePaths[0]) : await reviewArchive(await readFile(selected.filePaths[0]))
       const confirm = async () => (await dialog.showMessageBox(mainWindow!, { type: "warning", title: "Review backup archive", message: `Import ${archive.count} policy snapshots?`, detail: `Source tenant: ${archive.tenantId}\nBackup: ${archive.backupId}\nSHA-256: ${archive.digest}\n\nThe archive declares its source identity; it is not signed. Use files supplied by a source you trust. Snapshots will be encrypted on this device. Import does not change Intune. Use the tenant's local backup storage and the existing restore preview to restore later.`, buttons: ["Cancel", "Import locally"], defaultId: 0, cancelId: 0 })).response === 1
       // The license check can claim a slot for the archive's tenant, so it runs only once the import is confirmed.
-      if (!(await importConfirmedArchive(getLocalStore(), archive, confirm, (tenantId) => license.checkNewTenant(tenantId, { retry: false })))) return { imported: false }
+      if ("path" in archive) {
+        if (!(await confirm())) return { imported: false }
+        await license.checkNewTenant(archive.tenantId, { retry: false })
+        await importLargeArchive(getLocalStore(), archive)
+      } else if (!(await importConfirmedArchive(getLocalStore(), archive, confirm, (tenantId) => license.checkNewTenant(tenantId, { retry: false })))) return { imported: false }
       return { imported: true, tenantId: archive.tenantId, backupId: archive.backupId }
     } finally { importingArchive = false }
   })

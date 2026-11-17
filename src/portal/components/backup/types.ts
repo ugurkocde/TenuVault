@@ -8,6 +8,7 @@ export interface BackupSummary {
   totalPolicies: number
   /** Items per registry folder. */
   counts?: Record<string, number>
+  largeInventory?: boolean
   /** Stored bytes per registry folder, from the same listing as `counts`. */
   sizes?: Record<string, number>
   scope: { excluded: string[]; description: string } | null

@@ -1,5 +1,6 @@
 "use client"
 
+import { LargeContents } from "~/components/backup/large-inventory"
 import { ServiceBackupNotice } from "../../../../renderer/components/ServiceBackupNotice"
 
 import { useEffect, useMemo, useRef, useState } from "react"
@@ -49,6 +50,7 @@ const capitalize = (text: string) => text.charAt(0).toUpperCase() + text.slice(1
 
 /** Changes since the previous backup; `first` when no older backup exists. */
 function ChangesText({ backup, first }: { backup: BackupSummary; first: boolean }) {
+  if (backup.largeInventory) return <span className="text-sm text-gray-600">Policy changes: {backup.changes ? `+${backup.changes.added}, ~${backup.changes.modified}, -${backup.changes.removed}` : "not compared"}. Inventory is compared on demand in Drift Detection.</span>
   if (!backup.changes) return <span className="text-gray-500" title={first ? undefined : "Made by an older version, or the backup before it did not finish"}>{first ? "First backup" : "Not compared"}</span>
   const { added, modified, removed } = backup.changes
   if (added + modified + removed === 0) return <span>None</span>
@@ -175,13 +177,15 @@ export default function BackupRestorePage() {
       const response = await fetch("/api/download-backup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...tenant.credentials, storageAccountName: tenant.storageAccountName, backupId: backup.id }),
+        body: JSON.stringify({ ...tenant.credentials, storageAccountName: tenant.storageAccountName, backupId: backup.id, largeInventory: backup.largeInventory === true }),
       })
       if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || "Failed to download backup")
+      if (response.headers.get("content-type")?.includes("application/json")) return
+      if (response.headers.get("content-type")?.includes("application/json")) { await response.json(); return }
       const url = URL.createObjectURL(await response.blob())
       const link = document.createElement("a")
       link.href = url
-      link.download = `${backup.id}.zip`
+      link.download = `${backup.id}.${response.headers.get("content-type") === "application/x-tar" ? "tar" : "zip"}`
       document.body.appendChild(link)
       link.click()
       link.remove()
@@ -422,6 +426,7 @@ export default function BackupRestorePage() {
             <BackupDetails
               ref={detailRef}
               backup={selected}
+              credentials={{ ...tenant.credentials, storageAccountName: tenant.storageAccountName }}
               first={selected.id === backups[backups.length - 1]?.id}
               storageAccountName={tenant.storageAccountName}
               downloading={isDownloading}
@@ -532,6 +537,7 @@ function BackupTrends({ trends, backupCount }: { trends: ReturnType<typeof backu
 }
 
 interface BackupDetailsProps {
+  credentials: Record<string, unknown>
   backup: BackupSummary
   first: boolean
   storageAccountName: string
@@ -545,7 +551,7 @@ interface BackupDetailsProps {
 }
 
 /** Everything known about one backup, from its metadata and file listing. */
-function BackupDetails({ backup, first, storageAccountName, downloading, exportingDevices, onChanges, onDownload, onExportDevices, onRestore, ref }: BackupDetailsProps) {
+function BackupDetails({ credentials, backup, first, storageAccountName, downloading, exportingDevices, onChanges, onDownload, onExportDevices, onRestore, ref }: BackupDetailsProps) {
   const kind = statusKind(backup.status)
   // Damaged or unreadable files of this backup on this device: nothing can be read from it.
   const unavailable = backup.status === "unavailable"
@@ -619,6 +625,7 @@ function BackupDetails({ backup, first, storageAccountName, downloading, exporti
         </div>
       </div>
 
+      {backup.largeInventory && <LargeContents credentials={credentials} backupId={backup.id} />}
       <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
         <div>
           <h3 className="mb-3 text-xs font-medium text-gray-500">Contents</h3>

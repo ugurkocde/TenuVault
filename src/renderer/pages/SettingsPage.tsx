@@ -276,7 +276,7 @@ function BackupsOnDevice() {
             setSettings(await bridge.backups.settings())
             toast(`Imported ${result.backupId}. Select this device as storage for tenant ${result.tenantId} to preview and restore it.`, "success")
           }
-        })}><Upload className="mr-2 h-4 w-4" /> Import backup ZIP</Button>
+        })}><Upload className="mr-2 h-4 w-4" /> Import backup archive</Button>
         <UnreadableBackupsNotice settings={settings} affected={inventory.affected.length > 0} checking={inventory.checking} onChange={setSettings} />
         <div className="space-y-2">
           <p className="text-xs font-medium text-gray-500">Folder</p>

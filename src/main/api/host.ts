@@ -16,6 +16,8 @@ export interface ApiHostOptions {
   guard?: (request: Request) => Response | null | Promise<Response | null>
   /** Called after every handled request, for example to write audit log entries. */
   onHandled?: (request: Request, requestBody: string, response: Response) => void
+  /** Streams large downloads to a native save destination before IPC can buffer them. */
+  saveDownload?: (response: Response) => Promise<Response>
   /** Adjusts responses before they reach the caller. */
   transform?: (response: Response) => Promise<Response>
 }
@@ -101,7 +103,8 @@ export class ApiHost {
       headers: input.headers,
       body: input.body && input.body.byteLength > 0 ? new Uint8Array(input.body) : undefined,
     })
-    const response = await this.dispatch(request)
+    let response = await this.dispatch(request)
+    if (response.ok && response.headers.get("content-type") === "application/x-tar" && this.options.saveDownload) response = await this.options.saveDownload(response)
     return {
       status: response.status,
       statusText: response.statusText,

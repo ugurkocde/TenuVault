@@ -59,12 +59,32 @@ for (const azure of [false, true]) describe(azure ? "Azure blob protocol" : "enc
   it("never publishes a saved prefix when a paging token expires", async () => {
     const f = await setup({ expireAt: 2 })
     try {
+      await f.store.createContainer(f.local, "intune-backups")
+      const old = "backup-2020-01-01-000000"
+      await f.store.put(f.local, "intune-backups", `${old}/metadata.json`, Buffer.from(JSON.stringify({ TenantId: TENANT, Status: "Success", Failures: 0, Scope: { Included: [type.folder] }, Items: {} })), "application/json")
       const job = await f.engine.waitForJob(f.start())
       const metadata = await f.metadata(job.backupFolder!)
       expect(metadata.LargeItems.AuthorizationPolicy.complete).toBe(false)
       expect(metadata.Coverage).toBe("Incomplete")
       expect(metadata.FailedTypes).toContain(type.folder)
       expect(metadata.ItemCounts.AuthorizationPolicy).toBe(7)
+      expect((await f.store.list(f.local, "intune-backups", `${old}/`)).length).toBe(1)
+      expect(f.requests.some(request => request.startsWith("DELETE "))).toBe(false)
+    } finally { await f.graph.close() }
+  })
+  it("cancels after a stored page without publishing complete coverage", async () => {
+    let cancel = () => {}
+    const f = await setup({ onRequest: count => { if (count === 2) cancel() } })
+    try {
+      const job = f.start()
+      cancel = () => { f.engine.cancel(job.id) }
+      await f.engine.waitForJob(job)
+      expect(job.status).toBe("Cancelled")
+      const metadata = await f.metadata(job.backupFolder!)
+      expect(metadata.Status).toBe("Cancelled")
+      expect(metadata.Coverage).toBe("Incomplete")
+      expect(metadata.ItemCounts.AuthorizationPolicy).toBe(7)
+      expect(metadata.LargeItems.AuthorizationPolicy.complete).toBe(false)
     } finally { await f.graph.close() }
   })
   it("records cancellation and a fresh engine cannot mistake a crashed type for complete", async () => {
@@ -80,6 +100,35 @@ for (const azure of [false, true]) describe(azure ? "Azure blob protocol" : "enc
       await f.store.put(f.local, "intune-backups", `${folder}/${type.folder}/partial.json`, Buffer.from('{"id":"partial"}'), "application/json")
       const restarted = new LocalBlobStore(roots.at(-1)!, [Buffer.alloc(32, 7)])
       expect((await restarted.list(f.local, "intune-backups", `${folder}/`)).some(file => file.name.endsWith("metadata.json"))).toBe(false)
+    } finally { await f.graph.close() }
+  })
+  it("retries dropped connections and honors repeated service throttles through the last page", async () => {
+    const f = await setup({ throttleEvery: 2, retryAfter: 0.001, dropAt: 1 })
+    try {
+      const job = await f.engine.waitForJob(f.start())
+      expect(job.coverage).toBe("complete")
+      expect((await f.metadata(job.backupFolder!)).LargeItems.AuthorizationPolicy.count).toBe(23)
+      expect(f.graph.stats().throttles).toBeGreaterThan(0)
+    } finally { await f.graph.close() }
+  }, 15_000)
+  it("deletes all index and relationship shards after a complete replacement", async () => {
+    const f = await setup()
+    const old = "backup-2020-01-01-000000"
+    try {
+      await f.store.createContainer(f.local, "intune-backups")
+      const write = (name: string, value: unknown) => f.store.put(f.local, "intune-backups", `${old}/${name}`, Buffer.from(JSON.stringify(value)), "application/json")
+      await write(".tenuvault-owner.json", { TenantId: TENANT, RunId: "old" })
+      await write(`${type.folder}/old.json`, { id: "old" })
+      await write(indexPath(type.folder, 0), [{ id: "old", file: "old.json", hash: "A".repeat(22) }])
+      await write(`_relations/${type.folder}/old/members/000000.json`, ["member"])
+      await write("metadata.json", { TenantId: TENANT, Status: "Success", Failures: 0, Scope: { Included: [type.folder] }, Items: {}, LargeItems: { [type.folder]: { version: 1, count: 1, shards: 1, complete: true } } })
+      const job = await f.engine.waitForJob(f.start())
+      expect(job.coverage).toBe("complete")
+      expect(await f.store.list(f.local, "intune-backups", `${old}/`)).toEqual([])
+      const deleted = f.requests.filter(request => request.startsWith("DELETE "))
+      expect(deleted[0]).toContain("metadata.json")
+      expect(deleted.at(-1)).toContain(".tenuvault-owner.json")
+      expect(deleted.some(request => request.includes("_relations"))).toBe(true)
     } finally { await f.graph.close() }
   })
   it("ends only the type at its request budget and keeps older coverage", async () => {

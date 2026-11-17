@@ -10,6 +10,7 @@ export interface FakeGraphOptions {
   retryAfter?: number
   expireAt?: number
   dropAt?: number
+  onRequest?: (count: number, url: URL) => void
 }
 
 /** Local HTTP fixture only. Objects are generated per page, with no resident synthetic tenant. */
@@ -21,6 +22,7 @@ export async function fakeGraph(options: FakeGraphOptions) {
   const server = createServer((request, response) => {
     requests++
     const url = new URL(request.url!, "http://fixture")
+    options.onRequest?.(requests, url)
     const key = url.pathname + url.search
     const attempt = (counts.get(key) ?? 0) + 1
     counts.set(key, attempt)
