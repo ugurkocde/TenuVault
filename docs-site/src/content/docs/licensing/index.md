@@ -28,7 +28,7 @@ The app reminds you five days and one day before the end, with the changes that 
 
 You can optionally submit an email address on the trial card or License page for setup tips and a reminder. The address is sent only when you press the button. Change it in the app during the trial, or choose **Remove the saved email address for this trial** on the License page of any installation that joined it, or use the unsubscribe link in each email at any time. See the [privacy policy](https://www.tenuvault.com/privacy).
 
-Only when tenant trials are unavailable does TenuVault offer the older email form instead. It emails a thirty-day trial key. Existing email trial keys retain their original end dates and reminders.
+Trial keys that were emailed before tenant trials started keep their original end dates and reminders.
 
 ## Buy a plan
 

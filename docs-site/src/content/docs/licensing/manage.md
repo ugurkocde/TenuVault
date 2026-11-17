@@ -26,7 +26,7 @@ If you have not connected a tenant yet, TenuVault opens on **Welcome to TenuVaul
 2. Paste your key into **License key** and click **Save key**.
 3. TenuVault opens **Set up TenuVault**. Your key is activated for the tenant when you sign in to it. See [Start TenuVault for the first time](/getting-started/first-launch/).
 
-When tenant trials are on, the welcome screen explains that a new tenant starts with a Pro trial. When they are off, it offers **Try Pro free for 30 days, no card**. The **Storage** step of the setup offers both options for a tenant on Community.
+When tenant trials are on, the welcome screen explains that a new tenant starts with a Pro trial. The **Storage** step of the setup offers **Try Pro free** and **I have a license key** for a tenant on Community.
 
 ### On the License page
 
@@ -34,17 +34,7 @@ When tenant trials are on, the welcome screen explains that a new tenant starts 
 2. Paste your key into **License key**.
 3. Click **Activate**.
 
-### Start the email trial (when tenant trials are unavailable)
-
-On Community, the **License** page shows **Try Pro free for 30 days, no card needed.**
-
-1. Enter your work email address.
-2. Click **Start free trial**. TenuVault asks tenuvault.com to email you a Pro trial key and shows **Check your inbox** with the address, plus the hint "Copy the key from your email and return to TenuVault: it activates by itself. Or paste it here." under **License key**.
-3. Copy the key from the email and return to TenuVault. TenuVault finds the key on the clipboard and activates it. Or paste it into **License key** and click **Activate**.
-
-While it waits for the trial key, TenuVault checks the clipboard when its window gets focus. Only text shaped like a TenuVault key, starting with `TENU-`, is ever read back; other clipboard content is ignored.
-
-The key usually arrives within a minute, sometimes up to 15. Check your junk folder if it does not. **Buy now** opens the checkout in your browser instead, and **Compare plans** opens the plans page. Below it, **Need an invoice instead of a card?** explains that yearly Pro and MSP plans are available by quote, purchase order and invoice, payable by bank transfer, with a link to email [support@tenuvault.com](mailto:support@tenuvault.com). The same note appears on the trial panel and when a saved key is no longer active. A link also explains that eligible nonprofits can use Pro at no cost. **Start 30 day free trial** in other places, such as the second tenant dialog or the CIS Benchmarks preview, opens this form.
+When a saved key is no longer active, the **License** page shows **Need an invoice instead of a card?**: yearly Pro and MSP plans are available by quote, purchase order and invoice, payable by bank transfer, with a link to email [support@tenuvault.com](mailto:support@tenuvault.com).
 
 If you are already signed in to one or more tenants, TenuVault activates the key for them right away and shows **License activated.** If you are not signed in to a tenant yet, it shows **License key saved. It activates for a tenant when you sign in to it.**
 
@@ -125,7 +115,7 @@ Azure backups are readable on the new machine as soon as you choose the same sto
 
 ## After an email trial
 
-For an email trial key, the top card shows **Pro trial active** and **Your Pro trial ends on** with the date and the days left. On day 20 and on day 27 a reminder appears at the top of every page with **Buy Pro**, which opens the checkout, and **Details**, which opens the **License** page. Unless you have bought a plan, tenuvault.com also emails you 5 days and 1 day before the trial ends. **Dismiss** hides an in-app reminder on this machine; the day 27 reminder still appears after you dismissed the day 20 one. The trial end is not counted as **License valid until**, so the generic 30 day expiry warning is not shown for the trial key. It still appears for another license, such as one shared by your organization.
+This applies only to trial keys that were emailed before tenant trials started. For such a key, the top card shows **Pro trial active** and **Your Pro trial ends on** with the date and the days left. Ten days and three days before the end, a reminder appears at the top of every page with **Buy Pro**, which opens the checkout, and **Details**, which opens the **License** page. Unless you have bought a plan, tenuvault.com also emails you 5 days and 1 day before the trial ends. **Dismiss** hides an in-app reminder on this machine; the last reminder still appears after you dismissed the first one. The trial end is not counted as **License valid until**, so the generic 30 day expiry warning is not shown for the trial key. It still appears for another license, such as one shared by your organization.
 
 To keep Pro:
 
@@ -133,7 +123,7 @@ To keep Pro:
 2. Your new license key arrives by email.
 3. On the **License** page, click **Enter your new key**, paste the key and click **Use this key**. TenuVault activates the new key for every tenant the trial key covers on this machine, and for signed-in tenants that are not licensed yet, and only then releases the trial key. If the new key is refused for a tenant the trial key covers, nothing changes: the trial key stays active and the reason is shown. Tenants licensed through your organization keep that license.
 
-If you do nothing, the trial key expires at the end of day 30, also when TenuVault is offline. Nothing is charged. One tenant continues on Community, the free plan for one tenant; a second tenant is no longer covered. Pro features turn off, and your backups stay where they are. When several connected tenants lack coverage and no Community tenant is selected yet, TenuVault asks which one continues on Community. See [When paid coverage ends](#when-paid-coverage-ends) for schedules and paused features.
+If you do nothing, the trial key expires on its end date, also when TenuVault is offline. Nothing is charged. One tenant continues on Community, the free plan for one tenant; a second tenant is no longer covered. Pro features turn off, and your backups stay where they are. When several connected tenants lack coverage and no Community tenant is selected yet, TenuVault asks which one continues on Community. See [When paid coverage ends](#when-paid-coverage-ends) for schedules and paused features.
 
 To use a different key while one is active, click **Use a different key** next to the saved key on the **License** page and paste the new key. The new key is activated first, for every tenant the saved key covers on this machine; only then is the saved key released. If the new key does not cover one of those tenants, nothing changes and the reason is shown. Replacing a running trial key with **Enter your new key** works the same way, and so does **Enter a new key** for a saved key that is no longer active, for example after the trial ended. Licenses shared by your organization stay in place through every swap.
 
@@ -147,7 +137,7 @@ The optional email field sends nothing until you press **Email me setup tips and
 
 At the end, backups and settings are kept. Community keeps thirty days of history, daily schedules run weekly, and Azure backups, alerts, health review and change reports pause. One tenant continues on Community. With several trial tenants, choose which, or decide later. Buy Pro and enter the purchase key to restore paid features and the saved daily schedule. Once a tenant has used its trial, the License page offers **Buy Pro** instead of another trial.
 
-When tenant trials are off, the email trial form and existing email trial keys continue working as before.
+Trial keys that were emailed earlier keep working until their end date.
 
 ## Manage your subscription
 

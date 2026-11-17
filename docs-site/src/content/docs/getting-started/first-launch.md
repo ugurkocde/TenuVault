@@ -40,19 +40,6 @@ The first tenant you sign in to without a key starts its 14 day Pro trial, unles
 
 There is nothing to start: connecting a new tenant starts its 14 day Pro trial automatically, with no card and no email. The **Storage** step of the setup shows the trial with its end date. The trial ends without a charge, can be extended once, and afterwards one tenant continues on Community. See [Free trial, no card needed](/licensing/#free-trial-no-card-needed).
 
-### When tenant trials are unavailable
-
-Only then does the welcome screen show **Try Pro free for 30 days, no card**, which emails a trial key:
-
-1. Select **Try Pro free for 30 days, no card**.
-2. Enter your work email address and select **Start free trial**. No payment card is needed.
-3. TenuVault shows **Check your inbox** and a **Your trial key** field. The key usually arrives within a minute. Keys start with `TENU-`.
-4. Copy the key from the email and return to TenuVault. TenuVault finds the key on the clipboard and saves it by itself. You can also paste it into **Your trial key** and select **Save key**.
-
-TenuVault reads the clipboard only while it waits for a trial key, and only when its window gets focus. Only text shaped like a TenuVault key, starting with `TENU-`, is ever read back into the app; anything else on the clipboard is ignored.
-
-This email trial runs for 30 days and ends without a charge. See [Free trial, no card needed](/licensing/#free-trial-no-card-needed).
-
 ## Enter a license key
 
 1. Select **I have a license key**.
