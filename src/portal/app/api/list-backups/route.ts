@@ -1,4 +1,4 @@
-import { completeHalf, largeRunProblems, matchingCompanions } from "../../../../shared/backup-companion"
+import { ownedRemnant, REMNANT_RECOVERY_DAYS, completeHalf, largeRunProblems, matchingCompanions } from "../../../../shared/backup-companion"
 import { backupStoragePath, isLargeBackup, LARGE_BACKUP_CONTAINER, LARGE_STORAGE_UNAVAILABLE } from "../../../../shared/backup-storage"
 import { backupTypeUse } from "../../../../shared/services/backup-use"
 import { BlobListError, decodeXml, listBlobPages, listLargeBackupPages } from "~/lib/storage/list"
@@ -116,12 +116,16 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
     }
   }
   let claim: Record<string, any> | null = null
+  const loadClaim = async (): Promise<OwnershipFile> => {
+    if (!filesText.includes(`<Name>${name}/${BACKUP_OWNER_FILE}</Name>`)) return { kind: 'missing' }
+    const marker = await (inventory?.owner ? ownerCache.read(inventory.cacheKey, inventory.owner, readMarker) : readMarker())
+    if (marker.kind === 'found' && marker.value && typeof marker.value === 'object' && !Array.isArray(marker.value)) claim = { ...marker.value, BackupFolder: (marker.value as Record<string, unknown>).BackupFolder ?? name }
+    return marker
+  }
   const { manifest, owner } = await resolveBackupOwnership(async (file) => {
     if (file === 'metadata.json') return listedMetadata ? { kind: 'found', value: listedMetadata } : readError ? { kind: 'unreadable', error: new Error(readError) } : { kind: 'missing' }
     if (!filesText.includes(`<Name>${name}/${BACKUP_OWNER_FILE}</Name>`)) return { kind: 'missing' }
-    const marker = await (inventory?.owner ? ownerCache.read(inventory.cacheKey, inventory.owner, readMarker) : readMarker())
-    if (marker.kind === 'found' && marker.value && typeof marker.value === 'object' && !Array.isArray(marker.value)) claim = { ...marker.value, BackupFolder: name }
-    return marker
+    return loadClaim()
   }, tenantId)
   // A marker sealed by an earlier version that cannot be opened for this tenant is foreign (another
   // tenant's, or a key this device lacks). One that could not be read otherwise (any status but 404,
@@ -200,12 +204,15 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
     // Whether the backup holds every type it was asked to cover; null for backups made before this was recorded.
     ...manifestCoverage(metadata),
     size,
+    ownSize: size,
+    remnant: false,
     sizeFormatted: formatBytes(size),
     duration: typeof metadata?.DurationSeconds === 'number' ? metadata.DurationSeconds : metadata?.Duration ?? metadata?.duration ?? null,
     changes: null as ChangeSummary | null,
     comparedWith: null as string | null,
     fingerprint: metadata as BackupFingerprint | null | undefined,
     claim,
+    loadClaim,
     error: metadataError,
     warning: undefined,
     runbookVersion: metadata?.RunbookVersion ?? metadata?.runbookVersion ?? null,
@@ -453,14 +460,18 @@ export async function POST(request: NextRequest) {
         backup.notRead = [...new Set([...backup.notRead, ...backup.largeProblems.map((problem: { folder: string }) => problem.folder)])]
         backup.warning = backup.largeProblems.map((problem: { folder: string; reason: string }) => `${problem.folder}: ${problem.reason}`).join(" ")
       }
+      if (backup.ordinaryOnlyExport && metadata.Export?.kind !== "ordinary-only") {
+        backup.remnant = true
+        if (matches && describedCompanion) describedCompanion.remnant = true
+      }
       if (metadata.Export?.kind === "ordinary-only") backup.ordinaryOnlyExport = true
     }
     for (const backup of backups) {
-      if (isLargeBackup(backup.id) && (backup.fingerprint?.CompanionBackup || mismatched.has(backup.id)) && !hidden.has(backup.id)) {
+      if (isLargeBackup(backup.id) && (backup.fingerprint?.CompanionBackup || backup.claim?.CompanionBackup || mismatched.has(backup.id)) && !hidden.has(backup.id)) {
         backup.runId = null
         backup.status = "incomplete"
         backup.coverage = "incomplete"
-        backup.warning = "Ordinary companion does not match or is missing. This orphaned large companion is kept by retention."
+        backup.warning = "Ordinary companion does not match or is missing. This orphaned large companion needs recovery or remnant cleanup."
         backup.largeProblems = largeRunProblems({}, backup.warning, backup.fingerprint)
         backup.notRead = [...new Set([...backup.notRead, ...backup.largeProblems.map((problem: { folder: string }) => problem.folder)])]
       }
@@ -470,6 +481,20 @@ export async function POST(request: NextRequest) {
       }
     }
     for (let index = backups.length - 1; index >= 0; index--) if (hidden.has(backups[index].id)) backups.splice(index, 1)
+
+    // Reuse discovery and manifests for costs. Never enumerate large payloads just to show a notice.
+    let ownedRemnants = 0, unownedRemnants = 0, remnantBytes = 0, unknownCosts = 0
+    for (const backup of [...backups, ...described.filter(backup => hidden.has(backup.id))]) {
+      const metadata = backup.fingerprint
+      const remnant = backup.remnant || !metadata || isLargeBackup(backup.id) && backup.status === "incomplete"
+      if (!remnant || backup.error) continue
+      const marker = backup.claim ? { kind: "found", value: backup.claim } : await backup.loadClaim()
+      const owned = ownedRemnant(backup.id, String(tenantId), marker.kind === "found" ? marker.value : null, metadata)
+      if (owned) ownedRemnants++; else unownedRemnants++
+      remnantBytes += backup.ownSize
+      if (isLargeBackup(backup.id) && !metadata?.LargeSizes) unknownCosts++
+    }
+    if (ownedRemnants || unownedRemnants) warnings.push(`Backup remnants: ${ownedRemnants} owned and ${unownedRemnants} unverified halves, at least ${formatBytes(remnantBytes)}.${unknownCosts ? ` Payload size is unavailable for ${unknownCosts} unfinished large halves; inspect storage for their full cost.` : ""} Owned halves expire after retention plus ${REMNANT_RECOVERY_DAYS} recovery days; Forever deletes nothing. Recover needed files before cleanup. Check ownership and remove unverified remnants manually.`)
 
     // Sort by timestamp descending
     backups.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
@@ -484,6 +509,9 @@ export async function POST(request: NextRequest) {
       current.comparedWith = previous.id
     }
     for (const backup of backups) {
+      delete backup.ownSize
+      delete backup.remnant
+      delete backup.loadClaim
       delete backup.claim
       delete backup.fingerprint
       delete backup.ownerTenantId

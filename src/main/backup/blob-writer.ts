@@ -67,8 +67,9 @@ export class BlobWriter {
   }
 
   /** Lists blob names and, with a delimiter, virtual folders under a prefix. */
-  async list(prefix: string, delimiter = "", container = backupContainer(prefix), physicalPrefix = false): Promise<{ blobs: string[]; prefixes: string[] }> {
+  async list(prefix: string, delimiter = "", container = backupContainer(prefix), physicalPrefix = false): Promise<{ blobs: string[]; prefixes: string[]; sizes: Map<string, number> }> {
     const blobs: string[] = []
+    const sizes = new Map<string, number>()
     const prefixes: string[] = []
     let marker = ""
     const seen = new Set<string>()
@@ -84,20 +85,21 @@ export class BlobWriter {
       const decode = (value: string) => value.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&")
       for (const m of xml.matchAll(/<BlobPrefix><Name>([^<]*)<\/Name><\/BlobPrefix>/g)) prefixes.push(logicalBackupName(decode(m[1]!)))
       for (const m of xml.matchAll(/<Blob><Name>([^<]*)<\/Name>/g)) blobs.push(logicalBackupName(decode(m[1]!)))
+      for (const m of xml.matchAll(/<Blob>[\s\S]*?<Name>([^<]*)<\/Name>[\s\S]*?<Content-Length>(\d+)<\/Content-Length>[\s\S]*?<\/Blob>/g)) sizes.set(logicalBackupName(decode(m[1]!)), Number(m[2]))
       // The marker is XML-escaped like the names; send back the name it stands for.
       marker = decode(/<NextMarker>([^<]+)<\/NextMarker>/.exec(xml)?.[1] ?? "")
       if (marker && seen.has(marker)) throw new Error("Storage returned a repeated continuation marker")
       seen.add(marker)
     } while (marker)
-    return { blobs, prefixes }
+    return { blobs, prefixes, sizes }
   }
 
   /** Root records and payload together, for deletion after ownership has been checked. */
-  async listFolder(prefix: string): Promise<{ blobs: string[] }> {
+  async listFolder(prefix: string): Promise<{ blobs: string[]; sizes: Map<string, number> }> {
     const payload = await this.list(prefix)
     if (backupContainer(prefix) !== LARGE_BACKUP_CONTAINER) return payload
     const roots = await this.list(prefix, "", LARGE_BACKUP_CONTAINER, true)
-    return { blobs: [...roots.blobs, ...payload.blobs] }
+    return { blobs: [...roots.blobs, ...payload.blobs], sizes: new Map([...roots.sizes, ...payload.sizes]) }
   }
 
   /**

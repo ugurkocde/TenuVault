@@ -217,6 +217,67 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
     expect(metadata.CompanionBackup).toBeUndefined()
     expect(await imported.list(local, LARGE_BACKUP_CONTAINER)).toEqual([])
   })
+  it.each(["expired", "in grace", "unowned", "foreign claim", "off", "interrupted", "cancelled", "mismatched", "half-deleted pair", "forged run claim", "forged folder claim"])("cleans or reports owned remnants in both containers: %s", async state => {
+    undo = registerTestTypes([largeType])
+    const f = await setup()
+    const now = new Date("2026-11-17T12:00:00Z")
+    const date = state === "in grace" ? "2026-11-10" : "2026-11-01"
+    const halves = [`backup-${date}-000000`, `backup-large-${date}-000000`]
+    for (const id of halves) {
+      await f.seed(id, id.includes("large"))
+      const metadata = { ...await f.read(id), RunId: "same-run", CompanionBackup: id === halves[0] ? halves[1] : halves[0], ...(id === halves[0] ? { LargeBackupOutcomes: [] } : {}), ...(["cancelled", "forged run claim", "forged folder claim"].includes(state) ? { Status: "Cancelled", Coverage: "Incomplete" } : {}), ...(state === "mismatched" && id === halves[1] ? { RunId: "other-run" } : {}) }
+      await f.write(id, "metadata.json", metadata)
+      // Simulate a crash or a delete that already removed the manifest.
+      if (!["interrupted", "cancelled", "mismatched", "half-deleted pair", "forged run claim", "forged folder claim"].includes(state)) await f.store.delete(local, backupContainer(id), `${id}/metadata.json`)
+      await f.write(id, ".tenuvault-owner.json", { ...(state === "unowned" ? {} : { Source: "TenuVault Desktop" }), TenantId: state === "foreign claim" ? CLIENT : TENANT, RunId: ["interrupted", "cancelled", "mismatched", "half-deleted pair", "forged folder claim"].includes(state) ? metadata.RunId : id, ...(state === "forged folder claim" ? { BackupFolder: "backup-2000-01-01-000000" } : {}), ...(id.includes("large") ? { LargeInventory: { version: 1 }, CompanionBackup: halves[0] } : { CompanionBackup: halves[1] }) })
+    }
+    if (state === "half-deleted pair") for (const blob of await f.store.list(local, BACKUP_CONTAINER, `${halves[0]}/`)) await f.store.delete(local, BACKUP_CONTAINER, blob.name)
+    const rows = await (await history(f.request({ summary: true }))).json()
+    if (!["foreign claim", "interrupted"].includes(state)) expect(rows.warnings.join(" ")).toMatch(/Backup remnants: .*at least .*recovery days/)
+    if (state === "in grace") expect(rows.warnings.join(" ")).toContain("2 owned")
+    if (["unowned", "forged run claim", "forged folder claim"].includes(state)) expect(rows.warnings.join(" ")).toContain("2 unverified")
+    let interrupt = state === "interrupted"
+    const original = f.fetcher.getMockImplementation()!
+    f.fetcher.mockImplementation(async (input, init) => {
+      if (interrupt && init?.method === "DELETE" && String(input).includes("DeviceCategories/")) {
+        interrupt = false
+        return new Response("Delete interrupted", { status: 403 })
+      }
+      return original(input, init)
+    })
+    const run = async (at: Date) => {
+      const engine = new BackupEngine({ now: () => at, fetch: f.fetcher, getToken: async () => jwt({ scp: "Policy.Read.All" }), services: () => ({ services: ["intune", "entra"] }), retentionDays: () => state === "off" ? 0 : 1 })
+      return engine.waitForJob(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: f.account, scope: { excluded: INTUNE_TYPES.filter(type => !["DeviceCategories", "AuthorizationPolicy"].includes(type.folder)).map(type => type.folder) } }))
+    }
+    let job = await run(now)
+    if (state === "interrupted") {
+      expect((await f.store.list(local, BACKUP_CONTAINER, `${halves[0]}/`)).some(blob => blob.name.endsWith(".tenuvault-owner.json"))).toBe(true)
+      expect(job.log.join(" ")).toContain("Could not remove old backups")
+      const interruptedRows = await (await history(f.request({ summary: true }))).json()
+      expect(interruptedRows.warnings.join(" ")).toContain("2 owned")
+      job = await run(new Date(now.getTime() + 1000))
+    }
+    const deleted = ["expired", "interrupted", "cancelled", "mismatched", "half-deleted pair"].includes(state)
+    for (const id of halves) {
+      const remaining = await f.store.list(local, backupContainer(id), backupBlobName(`${id}/`))
+      expect(remaining.length > 0).toBe(!deleted)
+      if (deleted) expect(await f.store.list(local, backupContainer(id), `${id}/`)).toHaveLength(0)
+    }
+    if (["unowned", "foreign claim", "forged run claim", "forged folder claim"].includes(state)) expect(job.log.join(" ")).toMatch(/kept 1 unverified halves \([1-9]\d* bytes\)/)
+    if (state === "off") expect(f.requests.filter(value => value.startsWith("DELETE"))).toHaveLength(0)
+    else expect(job.log.join(" ")).toMatch(/Remnant cleanup: deleted \d+ halves \(\d+ bytes\); kept \d+ owned halves \(\d+ bytes\)/)
+    if (state === "in grace") {
+      job = await run(new Date("2026-11-19T12:00:00Z"))
+      for (const id of halves) expect(await f.store.list(local, backupContainer(id), `${id}/`)).toHaveLength(0)
+    }
+  })
+  it("protects a valid complete run inside retention", async () => {
+    const f = await pair()
+    const engine = new BackupEngine({ now: () => new Date("2020-01-01T12:00:00Z"), fetch: f.fetcher, getToken: async () => jwt({ scp: "Policy.Read.All" }), services: () => ({ services: ["intune", "entra"] }), retentionDays: () => 1 })
+    await engine.waitForJob(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: f.account, scope: { excluded: INTUNE_TYPES.filter(type => !["DeviceCategories", "AuthorizationPolicy"].includes(type.folder)).map(type => type.folder) } }))
+    for (const id of [ordinary, large]) expect(await f.read(id)).toMatchObject({ RunId: "same-run", Status: "Success" })
+    expect(f.requests.filter(value => value.startsWith("DELETE"))).toHaveLength(0)
+  })
   it.each(["complete", "unreadable", "mismatched", "orphan"])("retains a %s mixed run as one unit or preserves it for recovery", async state => {
     const f = await pair()
     if (state === "unreadable") f.refuse(403, "metadata.json")

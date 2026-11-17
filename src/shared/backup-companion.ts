@@ -37,3 +37,14 @@ export function ordinaryOnlyManifest(metadata: RunManifest, reason: string): Run
   const { CompanionBackup: _companion, LargeBackupOutcomes: _outcomes, ...ordinary } = metadata
   return { ...ordinary, Export: { kind: "ordinary-only", reason, omittedLargeTypes: largeRunProblems(metadata, reason) } }
 }
+
+export const REMNANT_RECOVERY_DAYS = 7
+
+/** A tenant label alone is not an app ownership claim. Conflicting records stay for manual review. */
+export function ownedRemnant(id: string, tenantId: string, claim: RunManifest | null | undefined, metadata?: RunManifest | null): boolean {
+  if (!claim || claim.Source !== "TenuVault Desktop" || typeof claim.TenantId !== "string" || claim.TenantId.toLowerCase() !== tenantId.toLowerCase()
+    || typeof claim.RunId !== "string" || !claim.RunId.trim() || (claim.BackupFolder !== undefined && claim.BackupFolder !== id)) return false
+  if (isLargeBackup(id) && claim.LargeInventory?.version !== 1) return false
+  return !metadata || (metadata.BackupFolder === id && metadata.RunId === claim.RunId && typeof metadata.TenantId === "string" && metadata.TenantId.toLowerCase() === tenantId.toLowerCase()
+    && (claim.CompanionBackup === undefined || claim.CompanionBackup === metadata.CompanionBackup))
+}

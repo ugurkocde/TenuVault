@@ -232,7 +232,7 @@ export async function importLargeArchive(store: LocalBlobStore, archive: Reviewe
   let failure: unknown
   try {
     for (const id of ids) {
-      await store.put(account, backupContainer(id), `${id}/.tenuvault-owner.json`, Buffer.from(JSON.stringify({ TenantId: archive.tenantId, RunId: randomUUID() })), "application/json", true)
+      await store.put(account, backupContainer(id), `${id}/.tenuvault-owner.json`, Buffer.from(JSON.stringify({ Source: "TenuVault Desktop", TenantId: archive.tenantId, RunId: randomUUID() })), "application/json", true)
       claimed.push(id)
     }
     const manifests = new Map<string, any>()
@@ -250,7 +250,7 @@ export async function importLargeArchive(store: LocalBlobStore, archive: Reviewe
     if (checked.digest !== archive.digest || checked.tenantId !== archive.tenantId || checked.backupId !== archive.backupId || checked.companionId !== archive.companionId) throw new Error("The archive changed since review")
     for (const id of ids) {
       const metadata = manifests.get(id)
-      await store.put(account, backupContainer(id), `${id}/.tenuvault-owner.json`, Buffer.from(JSON.stringify({ TenantId: archive.tenantId, RunId: metadata.RunId ?? randomUUID(), ...(metadata.CompanionBackup ? { CompanionBackup: metadata.CompanionBackup } : {}), ...(backupContainer(id) !== BACKUP_CONTAINER ? { LargeInventory: { version: 1 } } : {}) })), "application/json")
+      await store.put(account, backupContainer(id), `${id}/.tenuvault-owner.json`, Buffer.from(JSON.stringify({ Source: "TenuVault Desktop", TenantId: archive.tenantId, RunId: metadata.RunId ?? randomUUID(), ...(metadata.CompanionBackup ? { CompanionBackup: metadata.CompanionBackup } : {}), ...(backupContainer(id) !== BACKUP_CONTAINER ? { LargeInventory: { version: 1 } } : {}) })), "application/json")
     }
     for (const id of ids) {
       const metadata = manifests.get(id)
