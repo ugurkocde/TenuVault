@@ -1752,7 +1752,7 @@ function Get-TvReportTitle {
 }
 
 function Get-TvSummaryLine {
-    param([Parameter(Mandatory)][object]$Report, [switch]$Reason)
+    param([Parameter(Mandatory)][object]$Report, [switch]$Reason, [switch]$Export)
     $s = $Report.summary
     $total = $s.added + $s.modified + $s.deleted
     $notes = @()
@@ -1761,6 +1761,7 @@ function Get-TvSummaryLine {
     foreach ($entry in @($Report.comparison.inventory | Where-Object { $_ })) {
         if ($entry.status -ne "complete") { $notes += "$($entry.folder): inventory comparison was not performed." }
     }
+    if ($Export -and $Report.comparison -and -not @($Report.comparison.inventory).Count) { $notes = @() }
     $suffix = if ($notes.Count) { " " + ($notes -join " ") } else { "" }
     if ($total -eq 0) { if ($notes.Count) { return $notes -join " " }; return "No changes between the two backups." }
     $parts = @()
@@ -1946,7 +1947,7 @@ function ConvertTo-TvReportMarkdown {
     $lines.Add("- From backup: $($Report.from.id) ($(Get-TvReportTime $Report.from.timestamp))")
     $lines.Add("- To backup: $($Report.to.id) ($(Get-TvReportTime $Report.to.timestamp))")
     $lines.Add("- Generated: $(Get-TvReportTime $Report.generatedAt)$(if ($Report.trigger -eq 'scheduled') { ' after a scheduled backup' })")
-    $lines.Add("- Summary: $(& $md (Get-TvSummaryLine $Report))")
+    $lines.Add("- Summary: $(& $md (Get-TvSummaryLine $Report -Export))")
     $auditNote = Get-TvPublicAuditNote $Report.audit.note
     if ($auditNote) { $lines.Add("- Audit log: $(& $md $auditNote)") }
     if (-not $Report.values) { $lines.Add("- Setting values are left out of this report.") }
@@ -2172,7 +2173,7 @@ function ConvertTo-TvReportHtml {
     $margin = { param($box, $content, $extra) "@$box { content: $content; font-family: $($script:ReportFontStack); font-size: 6.5pt; color: var(--muted); $extra }" }
     $pageBoxes = "@page {`n  $(& $margin 'top-left' (Get-TvCssString $title 90) 'vertical-align: bottom; padding-bottom: 1.6mm; border-bottom: 0.2mm solid var(--rule); width: 130mm; font-weight: 700; color: var(--strong);')`n  $(& $margin 'top-right' (Get-TvCssString $Report.tenantName 40) 'vertical-align: bottom; padding-bottom: 1.6mm; border-bottom: 0.2mm solid var(--rule); width: 50mm; text-align: right;')`n  $(& $margin 'bottom-left' (Get-TvCssString $footer 76) 'vertical-align: top; padding-top: 2.4mm; border-top: 0.2mm solid var(--rule); width: 130mm;')`n  $(& $margin 'bottom-right' '"Page " counter(page) " of " counter(pages)' 'vertical-align: top; padding-top: 2.4mm; border-top: 0.2mm solid var(--rule); width: 50mm; text-align: right;')`n}"
     $head = "<!doctype html><html lang=`"en`"><head><meta charset=`"utf-8`"><meta http-equiv=`"Content-Security-Policy`" content=`"default-src 'none'; style-src 'unsafe-inline'; img-src data:`"><title>$(Get-TvHtmlText $title)</title><style>$($script:ReportRootVariables)$($script:ReportStyle)$pageBoxes</style></head><body>"
-    return "$head`n$header`n$tiles`n<p class=`"lead`">$(Get-TvHtmlText (Get-TvSummaryLine $Report))</p>`n$callouts$empty$sections$other$warnings$provenance`n</body></html>"
+    return "$head`n$header`n$tiles`n<p class=`"lead`">$(Get-TvHtmlText (Get-TvSummaryLine $Report -Export))</p>`n$callouts$empty$sections$other$warnings$provenance`n</body></html>"
 }
 
 # The email summary the watcher sends (mirror reportEmail in src/main/features/reports): the

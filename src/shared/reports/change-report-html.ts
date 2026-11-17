@@ -1,7 +1,7 @@
 import { redactText } from "../compliance/export"
 import { escapeHtml, type OibPrintOptions } from "../oib/report-html"
 import { luminance, resolveBrandTheme, themeCssVariables, type PdfBranding } from "../pdf/theme"
-import { activityLine, changeLabel, publicAuditNote, reportTime, reportTitle, summaryLine, inventoryLines, type ChangeReport, type ReportChange, type ReportItem } from "./change-report"
+import { activityLine, changeLabel, publicAuditNote, reportTime, reportTitle, exportSummaryLine, inventoryLines, type ChangeReport, type ReportChange, type ReportItem } from "./change-report"
 
 /**
  * A change report as a standalone HTML document that the main process prints to PDF with
@@ -151,7 +151,7 @@ export function buildChangeReportDocument(report: ChangeReport, options: { brand
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:"><title>${text(title)}</title><style>${rootVariables}${STYLE}${pageBoxes}</style></head><body>
 ${header}
 ${tiles}
-<p class="lead">${text(summaryLine(report))}</p>
+<p class="lead">${text(exportSummaryLine(report))}</p>
 ${callouts}${empty}${sections}${other}${warnings}${provenance}
 </body></html>`
 

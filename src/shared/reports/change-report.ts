@@ -335,6 +335,13 @@ export function summaryLine(report: Pick<ChangeReport, "summary" | "audit" | "it
   return `${parts}; ${attributed} of ${total} with matching audit events.${suffix}`
 }
 
+/** Ordinary exports retain their original wording; delivery still uses the recorded coverage. */
+export function exportSummaryLine(report: ChangeReport): string {
+  return summaryLine(report.comparison && !report.comparison.inventory.length
+    ? { ...report, comparison: { ordinary: "complete", inventory: [] } }
+    : report)
+}
+
 /** Only a completed comparison of both kinds can establish that nothing changed. */
 export function reportHasNoChanges(report: Pick<ChangeReport, "items" | "comparison">): boolean {
   return report.items.length === 0 && report.comparison?.ordinary === "complete"
@@ -374,7 +381,7 @@ export function changeReportMarkdown(report: ChangeReport): string {
   lines.push(`- From backup: ${report.from.id} (${reportTime(report.from.timestamp)})`)
   lines.push(`- To backup: ${report.to.id} (${reportTime(report.to.timestamp)})`)
   lines.push(`- Generated: ${reportTime(report.generatedAt)}${report.trigger === "scheduled" ? " after a scheduled backup" : ""}`)
-  lines.push(`- Summary: ${md(summaryLine(report))}`)
+  lines.push(`- Summary: ${md(exportSummaryLine(report))}`)
   const auditNote = publicAuditNote(report.audit.note, report.cloud)
   if (auditNote) lines.push(`- Audit log: ${md(auditNote)}`)
   if (!report.values) lines.push("- Setting values are left out of this report.")
