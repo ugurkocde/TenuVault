@@ -61,6 +61,12 @@ export class GraphSession {
 
   async list(url: string, options: ListOptions = {}): Promise<GraphItem[]> {
     const items: GraphItem[] = []
+    for await (const page of this.pages(url, options)) items.push(...page)
+    return items
+  }
+
+  /** Yields only a complete page; a refused continuation always throws. */
+  async *pages(url: string, options: ListOptions = {}): AsyncGenerator<GraphItem[]> {
     let next: string | undefined = url
     const seen = new Set<string>()
     // Microsoft Graph repeats the path of the request in its continuation links, so a link stays on the collection
@@ -89,10 +95,9 @@ export class GraphSession {
       const request: string = required !== undefined && !filters.length ? `${next}${parsed.search ? "&" : "?"}$filter=${encodeURIComponent(required!)}` : next
       const page: { value?: GraphItem[]; "@odata.nextLink"?: string } = await this.get(request, options.headers, options)
       if (!Array.isArray(page.value)) throw new Error("Graph returned an invalid policy collection")
-      items.push(...page.value)
+      yield page.value
       next = page["@odata.nextLink"]
     }
-    return items
   }
 
   /** GET with bounded retries for throttling, transient status codes and network failures. */

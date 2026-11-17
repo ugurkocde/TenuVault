@@ -1,3 +1,5 @@
+import { captureLarge } from "./large"
+import { LARGE_JOB_MS, LARGE_TYPE_MS, LARGE_TYPE_REQUESTS, type LargeIndexes } from "../../shared/large-backup"
 import { backupTypeUse } from "../../shared/services/backup-use"
 export { assertStorageAccountName } from "../../shared/storage-account"
 export { ProtectedBlobError, isImmutabilityRefusal } from "./request"
@@ -7,7 +9,7 @@ import { resolveBackupOwnership, type OwnershipFile } from "../../shared/backup-
 import { BlobWriter } from "./blob-writer"
 import { GraphSession, type GraphItem, type ReadControl } from "./graph-session"
 import { ReadBudgetError, typeReadBudget, withReadBudget } from "./read-budget"
-import { GRAPH, BlobClaimError, GraphError, GraphUnansweredError, InventoryDamagedError, ProtectedBlobError, RequestTimeoutError, StorageError, TokenError, isUnreachable } from "./request"
+import { GRAPH, BlobClaimError, GraphError, GraphUnansweredError, InventoryDamagedError, ProtectedBlobError, RequestTimeoutError, StorageError, TokenError, isUnreachable, withAbort } from "./request"
 import { RetryDelayError } from "../graph-retry"
 import { isLocalAccount } from "../storage/blob-emulator"
 import { FetchApplicationError } from "../api/network-error"
@@ -284,12 +286,18 @@ export class BackupEngine {
   private readonly jobs = new Map<string, BackupJob>()
   private readonly running = new Map<string, { job: BackupJob; key: string; mode: BackupAuthMode }>()
   private readonly executions = new Map<string, { controller: AbortController; done: Promise<BackupJob> }>()
-  /** Backups run one at a time, in start order, like the scheduler and the tray: each run reads with its own concurrency, so running tenants at once would multiply Graph requests and invite throttling. */
+  /** Existing capture runs FIFO, one tenant at a time. Streaming runs yield this turn before their large phase. */
   private queueTail: Promise<void> = Promise.resolve()
   /** Jobs started but not finished yet, the running one plus every queued one. */
   private pending = 0
 
   constructor(private readonly deps: BackupEngineDeps) {}
+
+  /** Whether the selected scope includes an enabled streaming type. */
+  hasLargeTypes(tenantId: string, scope: BackupScope = EVERYTHING): boolean {
+    const off = new Set(disabledFolders(this.deps.services?.(tenantId) ?? DEFAULT_SELECTION))
+    return includedTypes(normalizeScope(scope)).some(type => type.volume === "large" && !off.has(type.folder))
+  }
 
   get(jobId: string): BackupJob | undefined {
     return this.jobs.get(jobId)
@@ -378,9 +386,12 @@ export class BackupEngine {
       console.warn("[backup] Could not announce the start of a backup:", error)
     }
 
+    let releaseTurn: () => void = () => {}
+    const turnDone = new Promise<void>(resolve => { releaseTurn = resolve })
     const outcome: RunOutcome = { saved: 0, answered: false, otherFailures: 0 }
     const stopped: StoppedRun = { committing: false }
     let timer: ReturnType<typeof setTimeout> | undefined
+    let legacyTimer: ReturnType<typeof setTimeout> | undefined
     // The deadline and the start time count from when the run actually starts, not from when it was queued.
     const execute = async () => {
       if (controller.signal.aborted) throw controller.signal.reason
@@ -388,10 +399,16 @@ export class BackupEngine {
       job.progress = 5
       job.progressMessage = "Starting backup..."
       job.startTime = this.now().toISOString()
-      const deadline = Date.now() + JOB_DEADLINE_MS
-      timer = setTimeout(() => controller.abort(jobDeadlineError()), JOB_DEADLINE_MS)
+      const selection = this.deps.services?.(request.tenantId) ?? DEFAULT_SELECTION
+      const off = new Set(disabledFolders(selection))
+      const large = includedTypes(normalizeScope(request.scope ?? EVERYTHING)).some(type => type.volume === "large" && !off.has(type.folder))
+      const duration = large ? LARGE_JOB_MS : JOB_DEADLINE_MS
+      const deadline = Date.now() + duration
+      timer = setTimeout(() => controller.abort(jobDeadlineError()), duration)
       timer.unref?.()
-      await this.run(job, request, tokens, controller.signal, deadline, outcome, stopped)
+      // The existing phase keeps its original deadline even in a mixed backup.
+      if (large) { legacyTimer = setTimeout(() => controller.abort(jobDeadlineError()), JOB_DEADLINE_MS); legacyTimer.unref?.() }
+      await this.run(job, request, tokens, controller.signal, deadline, outcome, stopped, () => { if (legacyTimer) clearTimeout(legacyTimer); releaseTurn() })
     }
     // A queued backup cancelled before its turn settles at once instead of holding its tenant
     // until every backup ahead of it has finished. Its place in the chain still waits for those
@@ -426,6 +443,8 @@ export class BackupEngine {
         await this.recordStopped(job, request, tokens, stopped.manifest(job.status, job.exception, outcomes))
       })
       .finally(() => {
+        releaseTurn()
+        if (legacyTimer) clearTimeout(legacyTimer)
         if (timer) clearTimeout(timer)
         controller.abort(new Error("Backup finished"))
         job.progress = 100
@@ -436,9 +455,9 @@ export class BackupEngine {
         this.finished(job, request)
       })
       .then(() => job)
-    // The next queued backup starts only once this one has fully settled, failed manifest
-    // included, and never before the backups ahead of a queued cancellation have finished.
-    this.queueTail = Promise.all([previous, done.then(() => undefined, () => undefined)]).then(() => undefined)
+    // Existing runs release their turn only when fully settled. Streaming runs release before
+    // their large phase; each page then waits for the tenants that have queued a turn.
+    this.queueTail = Promise.all([previous, turnDone]).then(() => undefined)
     this.executions.set(job.id, { controller, done })
     return job
   }
@@ -475,7 +494,7 @@ export class BackupEngine {
     if (job.results) job.results.coverage = outcomes.coverage
   }
 
-  private async run(job: BackupJob, request: BackupRequest, tokens: RunTokens, signal: AbortSignal, deadline: number, outcome: RunOutcome, stopped: StoppedRun): Promise<void> {
+  private async run(job: BackupJob, request: BackupRequest, tokens: RunTokens, signal: AbortSignal, deadline: number, outcome: RunOutcome, stopped: StoppedRun, releaseTurn: () => void): Promise<void> {
     const started = this.now()
     const local = isLocalAccount(request.storageAccountName)
     const fetchImpl = answeredFetch(this.deps.fetch, outcome, local ? `${request.storageAccountName.toLowerCase()}.blob.core.windows.net` : null)
@@ -678,7 +697,7 @@ export class BackupEngine {
       this.write(job, `Could not read ${type.label}: ${reason}`)
     }
     const discoveries = new Map<string, Promise<Item[]>>()
-    await pool(types.map((type, index) => ({ type, index })), concurrency, async ({ type, index }) => {
+    await pool(types.map((type, index) => ({ type, index })).filter(({ type }) => type.volume !== "large"), concurrency, async ({ type, index }) => {
       const service = serviceOf(type)
       try {
         // A tenant-wide object has no list; reading it here skips the type on a denied read, like a denied list.
@@ -789,6 +808,8 @@ export class BackupEngine {
     }
     const remaining = new Map(lists.filter((list) => list !== null).map((list) => [list.type.folder, list.items.length]))
     const items: BackupItems = {}
+    const largeItems: LargeIndexes = {}
+    const largeSizes: Record<string, number> = {}
     let done = 0
     const itemTimeoutWarnings: string[] = []
     // Same shape as the runbook's metadata.json, describing what this run saved so far.
@@ -824,6 +845,7 @@ export class BackupEngine {
         Outcomes: manifestOutcomes(outcomes.types),
         // Per item fingerprints (by type folder and Intune ID), so backups can be compared without reading every file.
         Items: sortKeys(items),
+        ...(types.some(type => type.volume === "large") ? { LargeItems: largeItems, LargeSizes: largeSizes } : {}),
         ...(itemTimeoutWarnings.length ? { Warnings: itemTimeoutWarnings } : {}),
         ...extra,
       }
@@ -918,6 +940,55 @@ export class BackupEngine {
       }
     }, network.signal)
 
+    // Fairness: legacy work remains FIFO and serial. A large run releases its whole-job turn
+    // before streaming, then yields to queued tenants before each Graph page. A throttle in
+    // this run cannot hold the legacy queue for the large type's two-hour allowance.
+    if (types.some(type => type.volume === "large")) releaseTurn()
+    const waitForTenants = () => this.queueTail
+    for (const type of types.filter(type => type.volume === "large")) {
+      const entry = result(type.folder)
+      largeItems[type.folder] = { version: 1, count: 0, shards: 0, complete: false }
+      const budget = typeReadBudget(network.signal, type.readBudget ?? { durationMs: LARGE_TYPE_MS, maxRequests: LARGE_TYPE_REQUESTS })
+      const { session } = serviceOf(type)
+      const pageControl: { current: ReadControl } = { current: {} }
+      // The session reads these accessors at dispatch, including retries and throttle sleeps.
+      const controls = { get signal() { return pageControl.current.signal }, beforeRequest: () => pageControl.current.beforeRequest?.() }
+      const boundedPages = async function* (path: string) {
+        const iterator = session.pages(graphUrl(graphVersion(type), path), { get signal() { return controls.signal }, beforeRequest: controls.beforeRequest, headers: type.headers, ...(path === listPath(type) ? { filter: type.filter } : {}) })
+        try {
+          for (;;) {
+            const next = await budget(async control => {
+              await withAbort(waitForTenants, control.signal!)
+              control.signal?.throwIfAborted()
+              pageControl.current = control
+              return iterator.next()
+            })
+            if (next.done) break
+            yield next.value as Item[]
+          }
+        } finally { await iterator.return(undefined) }
+      }
+      try {
+        largeItems[type.folder] = await captureLarge({
+          type, reader: {
+            get: path => budget(control => session.get<Item>(graphUrl(graphVersion(type), path), type.headers, control)),
+            list: async () => { throw new Error("Large types must stream sub-collections") },
+          },
+          pages: boundedPages,
+          put: async (path, body) => { await storage.put(`${backupFolder}/${path}`, body); largeSizes[type.folder] = (largeSizes[type.folder] ?? 0) + Buffer.byteLength(body) },
+          signal: network.signal,
+          saved: () => { counts[type.folder]!++; entry.saved++; outcome.saved++ },
+        })
+        Object.assign(entry, { found: entry.saved, state: entry.saved ? "saved" : "empty" })
+        this.write(job, `Backed up ${entry.saved} ${type.label}.`)
+      } catch (error) {
+        network.signal.throwIfAborted()
+        if (signInEnded(error)) throw error
+        // Even a refused continuation is incomplete, never a saved prefix of the collection.
+        endType(type, error)
+      }
+    }
+
     const ended = this.now()
     const totalPolicies = policyCount(counts)
     const saved = Object.values(counts).reduce((sum, count) => sum + count, 0)
@@ -953,7 +1024,7 @@ export class BackupEngine {
     // The Backup Reader cannot delete from Azure Storage. The next backup with an admin's sign-in applies
     // retention to every backup of the tenant, Backup Reader backups included, with the same protections.
     const deletesAllowed = local || tokens.mode === "delegated"
-    const complete = failures === 0 && !unread
+    const complete = failures === 0 && !unread && Object.values(largeItems).every(index => index.complete)
     if (!deletesAllowed && complete && (this.deps.retentionDays?.(job.tenantId) ?? 0) > 0) {
       this.write(job, "Older backups were kept: the Backup Reader cannot delete from Azure Storage. The next backup made with an admin's sign-in removes expired ones.", "info")
     } else if (deletesAllowed && complete && (this.deps.retentionDays?.(job.tenantId) ?? 0) > 0) {

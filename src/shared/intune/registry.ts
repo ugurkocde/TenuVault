@@ -129,6 +129,8 @@ export interface IntuneType {
    * hygiene checks and alert suggestions, and never part of baselines or Sync.
    */
   inventory?: true
+  /** Opt-in streaming path with bounded item and relationship indexes; existing types omit it. */
+  volume?: "large"
   /** $expand for the detail GET. */
   expand?: string
   /** $select for the detail GET, for types that leave properties out by default. */
