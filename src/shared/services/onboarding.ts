@@ -32,6 +32,7 @@ export function choiceLabel(choice: PermissionChoice): string {
 }
 
 export const PERSONAL_DATA: Record<string, string> = {
+  applications: "Stores app registration and enterprise app definitions, credential metadata, owner IDs, consent grants and role assignment IDs. Federated credential subjects and notification addresses can identify people. No passwords or private keys are stored.",
   groups: "Stores group properties and the object IDs of members and owners. These identify people and their group memberships.",
-  usersAndDevices: "Stores user profiles, device properties and organizational contacts. These can include names, email addresses and device identifiers. Passwords and credentials are never stored.",
+  usersAndDevices: "Stores allowlisted user identity, job, organization, account state, licenses and manager ID, device inventory and organizational contacts. These can include names, email addresses and device identifiers. Passwords and credentials are never stored.",
 }

@@ -54,7 +54,7 @@ describe("The four services and their facts", () => {
   it("marks the Entra areas that are opt-in and the ones that hold personal data", () => {
     const entra = MODULE_BY_ID.get("entra")!
     expect(entra.areas.filter((area) => area.optIn).map((area) => area.id)).toEqual(["groups", "usersAndDevices", "applications"])
-    expect(entra.areas.filter((area) => area.personalData).map((area) => area.id)).toEqual(["groups", "usersAndDevices"])
+    expect(entra.areas.filter((area) => area.personalData).map((area) => area.id)).toEqual(["groups", "usersAndDevices", "applications"])
     // No area of Intune, Conditional Access or Defender is opt-in: turning the service on backs all of it up.
     for (const id of ["intune", "conditionalAccess", "defender"] as const) expect(MODULE_BY_ID.get(id)!.areas.some((area) => area.optIn)).toBe(false)
   })

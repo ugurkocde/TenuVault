@@ -195,7 +195,7 @@ describe("What a choice of services, areas and access levels asks for", () => {
     const optIn = MODULES.flatMap((module) => module.areas.filter((area) => area.optIn).map((area) => area.id))
     expect(new Set(optIn).size).toBe(optIn.length)
     expect(optIn).toEqual(["groups", "usersAndDevices", "applications"])
-    expect(MODULES.flatMap((module) => module.areas.filter((area) => area.personalData).map((area) => area.id))).toEqual(["groups", "usersAndDevices"])
+    expect(MODULES.flatMap((module) => module.areas.filter((area) => area.personalData).map((area) => area.id))).toEqual(["groups", "usersAndDevices", "applications"])
   })
 })
 

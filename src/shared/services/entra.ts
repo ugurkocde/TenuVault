@@ -99,7 +99,7 @@ export const ENTRA_AREAS: readonly PermissionArea[] = [
     // Never restored: contacts are managed through Exchange.
     part(["OrgContacts"], [["OrgContact.Read.All", "Directory.Read.All", "Directory.ReadWrite.All"]], [["OrgContact.Read.All"]], "unsupported"),
   ]),
-  area({ id: "applications", label: "Applications", optIn: true }, [
+  area({ id: "applications", label: "Applications", optIn: true, personalData: true }, [
     part(["Applications"], [["Application.Read.All", "Application.ReadWrite.All", "Directory.Read.All", "Directory.ReadWrite.All"]], [["Application.Read.All"]], [["Application.ReadWrite.All"]]),
     // Provisioning jobs are read with the synchronization permission. App role assignments are written with AppRoleAssignment.ReadWrite.All.
     part(["ServicePrincipals"], [["Application.Read.All", "Application.ReadWrite.All", "Directory.Read.All", "Directory.ReadWrite.All"], ["Synchronization.Read.All", "Synchronization.ReadWrite.All"]], [["Application.Read.All"], ["Synchronization.Read.All"]], [["Application.ReadWrite.All"], ["AppRoleAssignment.ReadWrite.All"]]),

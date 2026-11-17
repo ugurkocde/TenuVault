@@ -27,6 +27,8 @@ export type Area =
   | "Enrollment"
   | "Tenant administration"
   | "Conditional Access"
+  | "Users and devices"
+  | "Applications"
   | "Tenant settings"
   | "Authentication"
   | "Groups"

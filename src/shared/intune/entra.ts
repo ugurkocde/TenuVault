@@ -1,4 +1,5 @@
 import type { Extra, IntuneType } from "./registry"
+import { ENTRA_DIRECTORY_TYPES } from "./entra-directory"
 import { entraSnapshot } from "./entra-snapshot"
 
 /** Configuration only. Every type stays backup-only until its restore rules are implemented. */
@@ -219,4 +220,4 @@ export const ENTRA_5C_TYPES: IntuneType[] = [
   },
 ]
 
-export const ENTRA_TYPES = [...ENTRA_5A_TYPES, ...ENTRA_5B_TYPES, ...ENTRA_5C_TYPES]
+export const ENTRA_TYPES = [...ENTRA_5A_TYPES, ...ENTRA_5B_TYPES, ...ENTRA_5C_TYPES, ...ENTRA_DIRECTORY_TYPES]

@@ -1,0 +1,133 @@
+{
+  "verified": "2026-11-17",
+  "liveCount": 83,
+  "samples": {
+    "object": {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "appId": "Example",
+      "displayName": "Example",
+      "description": null,
+      "accountEnabled": true,
+      "servicePrincipalType": "Example",
+      "appOwnerOrganizationId": "Example",
+      "appRoleAssignmentRequired": false,
+      "servicePrincipalNames": [
+        "Example"
+      ],
+      "replyUrls": [
+        "Example"
+      ],
+      "homepage": null,
+      "loginUrl": null,
+      "logoutUrl": null,
+      "preferredSingleSignOnMode": null,
+      "tags": [
+        "Example"
+      ],
+      "notes": null,
+      "notificationEmailAddresses": [],
+      "samlSingleSignOnSettings": null,
+      "appRoles": [],
+      "oauth2PermissionScopes": [],
+      "passwordCredentials": [],
+      "keyCredentials": []
+    },
+    "appRoleAssignedTo": {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "appRoleId": "Example",
+      "principalId": "Example",
+      "resourceId": "Example"
+    },
+    "owners": {
+      "id": "00000000-0000-4000-8000-000000000001"
+    },
+    "appRoleAssignments": {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "appRoleId": "Example",
+      "principalId": "Example",
+      "resourceId": "Example"
+    }
+  },
+  "shapes": {
+    "object": {
+      "pages": 1,
+      "entries": 83,
+      "keys": [
+        "id",
+        "appId",
+        "displayName",
+        "description",
+        "accountEnabled",
+        "servicePrincipalType",
+        "appOwnerOrganizationId",
+        "appRoleAssignmentRequired",
+        "servicePrincipalNames",
+        "replyUrls",
+        "homepage",
+        "loginUrl",
+        "logoutUrl",
+        "preferredSingleSignOnMode",
+        "tags",
+        "notes",
+        "notificationEmailAddresses",
+        "samlSingleSignOnSettings",
+        "appRoles",
+        "oauth2PermissionScopes",
+        "passwordCredentials",
+        "keyCredentials"
+      ]
+    },
+    "owners": {
+      "pages": 83,
+      "entries": 4,
+      "keys": [
+        "id"
+      ]
+    },
+    "appRoleAssignments": {
+      "pages": 83,
+      "entries": 270,
+      "keys": [
+        "id",
+        "appRoleId",
+        "principalId",
+        "resourceId"
+      ]
+    },
+    "appRoleAssignedTo": {
+      "pages": 83,
+      "entries": 58,
+      "keys": [
+        "id",
+        "appRoleId",
+        "principalId",
+        "resourceId"
+      ]
+    },
+    "claimsMappingPolicies": {
+      "pages": 83,
+      "entries": 0,
+      "keys": []
+    },
+    "homeRealmDiscoveryPolicies": {
+      "pages": 83,
+      "entries": 0,
+      "keys": []
+    },
+    "tokenLifetimePolicies": {
+      "pages": 83,
+      "entries": 0,
+      "keys": []
+    },
+    "tokenIssuancePolicies": {
+      "pages": 83,
+      "entries": 0,
+      "keys": []
+    },
+    "appManagementPolicies": {
+      "pages": 83,
+      "entries": 0,
+      "keys": []
+    }
+  }
+}

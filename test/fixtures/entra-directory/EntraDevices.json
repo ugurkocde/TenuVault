@@ -1,0 +1,44 @@
+{
+  "verified": "2026-11-17",
+  "liveCount": 83,
+  "samples": {
+    "object": {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "deviceId": "Example",
+      "displayName": "Example",
+      "accountEnabled": true,
+      "operatingSystem": "Example",
+      "operatingSystemVersion": "Example",
+      "trustType": "Example",
+      "profileType": "Example",
+      "isManaged": false,
+      "isCompliant": false,
+      "deviceOwnership": "Example",
+      "enrollmentType": "Example",
+      "registrationDateTime": "Example",
+      "onPremisesSyncEnabled": null
+    }
+  },
+  "shapes": {
+    "object": {
+      "pages": 1,
+      "entries": 83,
+      "keys": [
+        "id",
+        "deviceId",
+        "displayName",
+        "accountEnabled",
+        "operatingSystem",
+        "operatingSystemVersion",
+        "trustType",
+        "profileType",
+        "isManaged",
+        "isCompliant",
+        "deviceOwnership",
+        "enrollmentType",
+        "registrationDateTime",
+        "onPremisesSyncEnabled"
+      ]
+    }
+  }
+}

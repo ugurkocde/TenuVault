@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
-import { ENTRA_TYPES } from "../src/shared/intune/entra"
+import { ENTRA_5A_TYPES, ENTRA_5B_TYPES, ENTRA_5C_TYPES } from "../src/shared/intune/entra"
 import { INTUNE_TYPES, type Item } from "../src/shared/intune/registry"
 import { listSnapshot, readObject } from "../src/shared/intune/read"
 import { sameSnapshot } from "../src/shared/intune/compare"
@@ -10,6 +10,7 @@ import { readEntraType } from "./helpers/entra-5a"
 import { replay, type ReadFixture } from "./helpers/entra-5c"
 import { fixture, scriptedGraph } from "./helpers/backup-fixture"
 
+const ENTRA_TYPES = [...ENTRA_5A_TYPES, ...ENTRA_5B_TYPES, ...ENTRA_5C_TYPES]
 const typeOf = (folder: string) => ENTRA_TYPES.find(type => type.folder === folder)!
 const documented = (folder: string): ReadFixture => JSON.parse(readFileSync(new URL(`./fixtures/entra-5c/${folder}.documented.json`, import.meta.url), "utf8"))
 const person = { id: "person-id", displayName: "Avery Morgan", userPrincipalName: "avery.morgan@example.test", mail: "avery.morgan@example.test" }

@@ -3,7 +3,7 @@ title: Entra ID configuration backups
 description: Back up Entra ID tenant settings, authentication, external identities, roles, PIM policies, administrative units and governance with TenuVault.
 ---
 
-Entra ID configuration backups cover **67 types**: 20 in **Tenant settings**, eight in **Authentication**, 14 in **External identities**, 12 in **Roles and PIM**, 11 in **Governance**, and two tenant-wide settings in the opt-in **Groups** area. Conditional Access adds its [three existing types](/backups/conditional-access/) through an independent switch. Intune still has 41 types. With every supported service and area enabled, the desktop registry has 111 types.
+Entra ID backups cover **74 types**, including seven opt-in directory inventories and **67 configuration types**: 20 in **Tenant settings**, eight in **Authentication**, 14 in **External identities**, 12 in **Roles and PIM**, 11 in **Governance**, and two tenant-wide settings in the opt-in **Groups** area. Conditional Access adds its [three existing types](/backups/conditional-access/) through an independent switch. Intune still has 41 types. With every supported service and area enabled, the desktop registry has 135 types.
 
 Turn on **Entra ID** in **Settings > Services and permissions**. Existing tenants keep Entra ID off after updating, even with an **Everything** backup scope. **Groups** must be enabled separately. The scope picker offers only types of services and opt-in areas that are on. Areas without types in this build say so in Settings and setup.
 
@@ -90,7 +90,6 @@ Paths are relative to Microsoft Graph. `{organizationId}` is resolved through th
 | OnPremisesAuthenticationPolicies | Not covered | /policies/onPremisesAuthenticationPolicy | n/a | n/a | Delegated permission unverified; app-only refused |
 | DirectoryRoleAccessReviewPolicy | Not covered | /policies/directoryRoleAccessReviewPolicy | n/a | n/a | Broad app token returns 200; index publishes no read permission; least privilege unproven |
 | ApplicationProxyConnectorGroups | Not covered | /onPremisesPublishingProfiles/applicationProxy/connectorGroups | n/a | n/a | Broad app token returns 200; index lists delegated Directory.ReadWrite.All only; no read permission confirmed |
-| Groups, Users, Applications, ServicePrincipals, OAuth2PermissionGrants, EntraDevices, OrgContacts | Not covered | Directory object endpoints | n/a | n/a | Deferred until the scale infrastructure in layers 7a and 7b |
 | SSPR configuration | Not covered | Not exposed by these Graph APIs | n/a | n/a | Only the admin SSPR flag in authorization policy is included |
 | Legacy MFA settings | Not covered | Not exposed by these Graph APIs | n/a | n/a | Trusted IPs, app passwords, remembered MFA and lockout excluded |
 | Legacy Identity Protection policies and notifications | Not covered | Not exposed by these Graph APIs | n/a | n/a | Current Conditional Access equivalents use the independent switch |
@@ -170,3 +169,27 @@ See the dark-mode variants in the [Services screenshot inventory](/images/servic
 - [Workflow runtime fields](https://learn.microsoft.com/en-us/graph/api/resources/identitygovernance-workflow?view=graph-rest-1.0)
 - [Hardware OATH assignees and last-use metadata](https://learn.microsoft.com/en-us/graph/api/resources/hardwareoathtokenauthenticationmethoddevice?view=graph-rest-beta)
 - [Federation certificate refresh status](https://learn.microsoft.com/en-us/graph/api/resources/signingcertificateupdatestatus?view=graph-rest-1.0)
+
+## Opt-in directory inventories
+
+All seven types use paged capture and indexes, are available to both sign-in modes, and have no restore capability. New and existing tenants leave Groups, Users and devices, and Applications off until an admin enables each area. Settings and onboarding explain the personal data each area stores. The Backup Reader gets these areas' application permissions only when requested. The existing 67 configuration types retain their read path.
+
+| Folder | What is stored | Graph path | Version | Sign-in | Excluded or limited |
+| --- | --- | --- | --- | --- | --- |
+| Users | Allowlisted identity, job, organization, account state, licenses and manager ID | `/users` | v1.0 | Both | No passwords, authentication methods or sign-in activity |
+| Groups | Group properties, dynamic rule, role-assignable flag, settings, sorted member and owner IDs | `/groups` | v1.0; members and owners beta | Both | No mailbox, Teams or SharePoint content |
+| Applications | App registration definitions, owner IDs, federated identity credentials and extension properties | `/applications` | v1.0 | Both | Password hints and credential metadata only; no secret values or certificate bytes |
+| ServicePrincipals | Enterprise app properties, owner IDs, role assignment definitions and assigned policy IDs | `/servicePrincipals` | v1.0 | Both | Microsoft-owned apps excluded by default; no provisioning jobs, secrets or signing key bytes |
+| OAuth2PermissionGrants | Client, resource and principal object IDs, consent type and scopes | `/oauth2PermissionGrants` | v1.0 | Both | No tokens or consent restore |
+| EntraDevices | Device registration inventory | `/devices` | v1.0 | Both | No device credentials, recovery keys or registration restore |
+| OrgContacts | Organization contact profiles, phones and addresses | `/contacts` | v1.0 | Both | Graph exposes these read-only; no personal mailbox contacts |
+
+The exact [property allowlists](/security/data-flows/#directory-property-allowlists) include every retained nested field. Graph cannot return application secret values or private keys. Certificate bytes are deliberately not requested. Assigned enterprise app policy references can need additional access that Graph enforces; a refusal keeps the app with incomplete coverage rather than requesting a write permission. The Microsoft-owned filter is `appOwnerOrganizationId ne f8cdef31-a31e-4b4a-93e4-5f571e91255a`, with `ConsistencyLevel: eventual` and `$count=true`. This excludes the owner tenant from the inventory, without excluding tenant-created applications based on display names or tags.
+
+### Relationships and incomplete coverage
+
+Collection and relationship GETs request `$top=999`; members, owners and policy references request `$select=id`. Graph can choose smaller pages. Every continuation is followed within the shared type budget, including retries. Group members and owners use beta because [v1.0 omits service principals](https://learn.microsoft.com/en-us/graph/known-issues). Definitions are bounded at 8 KiB each. Sorting uses the encrypted temporary runs described under [Large tenants](/backups/storage/#large-tenants).
+
+An object-specific HTTP 403 or 404 on a relationship retains its parent with `complete: false` on that relationship, discards any partial list and continues to the next object. No names or Graph error text are copied into directory failure logs. Users expand only the manager ID in the paged list; an absent manager is stored as a complete null reference. The type and run report incomplete coverage, so partial relationships cannot be used as a complete comparison or restore source. A refused collection page, expired paging token, transport failure or exhausted budget ends that type with incomplete coverage; other types continue. Hidden group membership needs separately granted `Member.Read.Hidden`; it is never requested automatically. Graph does not expose owners for some Exchange-created, distribution and synchronized groups, and these backups cannot recover information Graph omits.
+
+Directory objects are inventory in the dashboard and reports. Hygiene skips them. Backup comparison and drift read sorted index pages on demand. Live change watching and audit alert suggestions cover Intune and Conditional Access only. Backup completion notifications carry counts and type labels, without directory display names, UPNs or mail values. Azure Automation remains Intune and Conditional Access only.

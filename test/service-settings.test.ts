@@ -1,8 +1,10 @@
 import { DEFENDER_TYPES } from "../src/shared/intune/defender"
 import { recorded as defenderRecorded } from "./helpers/defender"
-import { ENTRA_TYPES, ENTRA_5B_TYPES, ENTRA_5C_TYPES } from "../src/shared/intune/entra"
+import { ENTRA_5A_TYPES, ENTRA_5B_TYPES, ENTRA_5C_TYPES } from "../src/shared/intune/entra"
 import { entraFixtureResponses } from "./helpers/entra-5a"
 import { detailPath, listPath, graphVersion } from "../src/shared/intune/read"
+
+const ENTRA_TYPES = [...ENTRA_5A_TYPES, ...ENTRA_5B_TYPES, ...ENTRA_5C_TYPES]
 
 /** Small documented responses keep this selection test independent of the lab's PIM policy volume. */
 function responsesFor(folder: string): ReturnType<typeof entraFixtureResponses> {

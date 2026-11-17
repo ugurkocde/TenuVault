@@ -13,7 +13,7 @@ function contradictions(type: IntuneType): string[] {
   const found: string[] = []
   if (type.listOnly) {
     // Stored as listed: no detail GET, so nothing a detail GET or a sub-read would add.
-    if (type.extras?.length) found.push("listOnly with extras: the sub-reads are never made")
+    if (type.extras?.length && type.volume !== "large") found.push("listOnly with extras: the sub-reads are never made")
     if (type.secrets) found.push("listOnly with secrets: the plain values are never read")
     if (type.expand || type.select) found.push("listOnly with expand or select: there is no detail GET to shape")
     if (type.singleton) found.push("listOnly with singleton: a tenant-wide object has no list")

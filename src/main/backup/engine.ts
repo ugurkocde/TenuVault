@@ -1020,7 +1020,7 @@ export class BackupEngine {
       // The session reads these accessors at dispatch, including retries and throttle sleeps.
       const controls = { get signal() { return pageControl.current.signal }, beforeRequest: () => pageControl.current.beforeRequest?.() }
       const boundedPages = async function* (path: string) {
-        const iterator = session.pages(graphUrl(graphVersion(type), path), { get signal() { return controls.signal }, beforeRequest: controls.beforeRequest, headers: type.headers, ...(path === listPath(type) ? { filter: type.filter } : {}) })
+        const iterator = session.pages(graphUrl(graphVersion(type), path, type.additionalReadVersions), { get signal() { return controls.signal }, beforeRequest: controls.beforeRequest, headers: type.headers, ...(path === listPath(type) ? { filter: type.filter } : {}) })
         try {
           for (;;) {
             const next = await budget(async control => {
@@ -1037,7 +1037,7 @@ export class BackupEngine {
       try {
         largeItems[type.folder] = await captureLarge({
           type, reader: {
-            get: path => budget(control => session.get<Item>(graphUrl(graphVersion(type), path), type.headers, control)),
+            get: path => budget(control => session.get<Item>(graphUrl(graphVersion(type), path, type.additionalReadVersions), type.headers, control)),
             list: async () => { throw new Error("Large types must stream sub-collections") },
           },
           pages: boundedPages,
@@ -1051,14 +1051,24 @@ export class BackupEngine {
           },
           signal: typeSignal,
           saved: () => { counts[type.folder]!++; entry.saved++; outcome.saved++ },
+          unread: () => { entry.failed++; failures++; entry.errors = ["Directory relationships were not read in full."] },
         })
-        Object.assign(entry, { found: entry.saved, state: entry.saved ? "saved" : "empty" })
+        if (!largeItems[type.folder]!.complete) {
+          failedTypes.push(type.folder)
+          settle(type.folder, { outcome: "failed", error: "Some directory relationships could not be read in full." })
+        }
+        Object.assign(entry, { found: entry.saved, state: entry.failed ? "unreadable" : entry.saved ? "saved" : "empty" })
         this.write(job, `Backed up ${entry.saved} ${type.label}.`)
       } catch (error) {
         network.signal.throwIfAborted()
-        if (signInEnded(error)) throw error
+        // Directory Graph errors can echo profile values. Keep status for classification, but never
+        // publish the response text or error code into job logs, outcomes or diagnostics.
+        if (signInEnded(error)) throw new TokenError("Microsoft Graph sign-in ended during the directory read.")
+        const safeError = error instanceof LargeStorageError || error instanceof ReadBudgetError ? error
+          : error instanceof GraphError ? new GraphError("The directory collection could not be read in full.", error.status)
+          : new Error("The directory collection could not be read in full.")
         // Even a refused continuation is incomplete, never a saved prefix of the collection.
-        endType(type, error)
+        endType(type, safeError)
       } finally { clearTimeout(typeTimer) }
     }
 

@@ -79,6 +79,13 @@ export function adminCenterLink(folder: string, id: string, item: Item = {}): Ad
     case "MdmEnrollmentPolicies":
     case "MamEnrollmentPolicies": return entra("Microsoft_AAD_IAM/ActiveDirectoryMenuBlade/~/Mobility", false)
     case "DirectorySettings": return entra("Microsoft_AAD_IAM/GroupsManagementMenuBlade/~/General", false)
+    case "Users": return entra("Microsoft_AAD_UsersAndTenants/UserManagementMenuBlade/~/AllUsers", false)
+    case "Groups": return entra("Microsoft_AAD_IAM/GroupsManagementMenuBlade/~/AllGroups", false)
+    case "Applications": return entra("Microsoft_AAD_RegisteredApps/ApplicationsListBlade", false)
+    case "ServicePrincipals":
+    case "OAuth2PermissionGrants": return entra("Microsoft_AAD_IAM/StartboardApplicationsMenuBlade/~/AppAppsPreview", false)
+    case "EntraDevices": return entra("Microsoft_AAD_Devices/DevicesMenuBlade/~/Devices", false)
+    case "OrgContacts": return entra("Microsoft_AAD_IAM/ContactsListBlade", false)
     case "Organization": return entra("Microsoft_AAD_IAM/ActiveDirectoryMenuBlade/~/Properties", false)
     case "EntraCompanyBranding": return entra("Microsoft_AAD_IAM/ActiveDirectoryMenuBlade/~/LoginPageConfiguration", false)
     case "Domains": return entra("Microsoft_AAD_IAM/DomainNamesBlade", false)

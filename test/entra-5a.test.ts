@@ -142,7 +142,7 @@ describe("Entra backup integration", () => {
     const folders = (areas: string[]) => includedTypes({ excluded: [] }, { services: ["entra"], areas: { entra: areas } }).map(type => type.folder)
     expect(folders([])).not.toContain("GroupLifecyclePolicies")
     expect(folders([])).not.toContain("OwnerlessGroupPolicy")
-    expect(folders(["groups"])).toEqual(INTUNE_TYPES.filter(type => moduleForFolder(type.folder)?.module.id === "entra").map(type => type.folder))
+    expect(folders(["groups"])).toEqual(INTUNE_TYPES.filter(type => moduleForFolder(type.folder)?.module.id === "entra" && (!type.volume || type.folder === "Groups")).map(type => type.folder))
   })
 
   it("ignores Retry-After on a successful security defaults read and keeps the singleton's full JSON", async () => {

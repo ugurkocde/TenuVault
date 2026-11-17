@@ -156,6 +156,12 @@ export function listSnapshot(type: IntuneType, item: Item): Item {
   // Removing nested properties must not change the list entry itself.
   const copy = type.neverStored?.length || type.neverStoredKeys?.length ? structuredClone(item) : { ...item }
   delete copy["@odata.context"]
+  if (type.keep && type.volume === "large") {
+    const keep = new Set(["id", ...type.keep])
+    // Preserve nulls and continuation evidence until the closed directory schema validates it.
+    const selected = Object.fromEntries(Object.entries(copy).filter(([key]) => keep.has(key) || (key.endsWith("@odata.nextLink") && keep.has(key.slice(0, -"@odata.nextLink".length)))))
+    return storedSnapshot(type, selected)
+  }
   return storedSnapshot(type, type.keep ? keptSnapshot(type.keep, copy) : copy)
 }
 

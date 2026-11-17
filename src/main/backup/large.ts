@@ -1,3 +1,4 @@
+import { DIRECTORY_SCHEMAS, directoryExtraSnapshot, directoryObjectId } from "../../shared/intune/entra-directory"
 import { comparableSnapshot } from "../../shared/intune/compare"
 import { createHash } from "node:crypto"
 import { LARGE_MAX_ITEMS, LARGE_SHARD_ITEMS, indexPath, relationPath, safeLargeId, type LargeEntry, type LargeIndex } from "../../shared/large-backup"
@@ -13,13 +14,14 @@ export interface LargeCapture {
   put: (path: string, body: string) => Promise<void>
   signal: AbortSignal
   saved: () => void
+  unread?: (property: string) => void
 }
 
 /** No large list or relationship array survives its page. The caller publishes completion last. */
-export async function captureLarge({ type, reader, pages, put, signal, saved }: LargeCapture): Promise<LargeIndex> {
+export async function captureLarge({ type, reader, pages, put, signal, saved, unread }: LargeCapture): Promise<LargeIndex> {
   if (type.singleton || type.staticIds || type.listSource || type.expand || type.extras?.some(extra => extra.each || extra.single || extra.object)) throw new Error("Large types require a plain collection and paged sub-collection reads")
   const spool = new SortedSpool<LargeEntry>(LARGE_MAX_ITEMS, signal)
-  let count = 0
+  let count = 0, complete = true
   try {
     for await (const page of pages(listPath(type))) {
       signal.throwIfAborted()
@@ -35,19 +37,30 @@ export async function captureLarge({ type, reader, pages, put, signal, saved }: 
       for (const item of page) {
         signal.throwIfAborted()
         if (type.skip?.(item)) continue
-        if (!safeLargeId(item.id)) throw new Error("The large collection returned an unsafe object ID")
+        if (!safeLargeId(item.id) || (type.folder in DIRECTORY_SCHEMAS && !directoryObjectId(type.folder, item.id))) throw new Error("The large collection returned an unsafe object ID")
         if (++count > LARGE_MAX_ITEMS) throw new Error("The large inventory object limit was reached")
         const parentType = { ...type, extras: undefined }
         const snapshot = type.listOnly ? listSnapshot(parentType, item) : await readObject(parentType, item.id, reader)
+        let objectIncomplete = false
         for (const extra of type.extras ?? []) {
           if (!safeLargeId(extra.property) || extra.property === "__proto__") throw new Error("Invalid relationship property")
+          const matches = (patterns: typeof extra.optional, error: unknown) => {
+            const answer = error as { status?: number; answer?: { code?: string } }
+            return patterns?.some(pattern => pattern.status === answer.status && (!pattern.code || pattern.code === answer.answer?.code))
+          }
+          const incomplete = () => {
+            snapshot[extra.property] = { complete: false }
+            complete = false
+            if (!objectIncomplete) unread?.(extra.property)
+            objectIncomplete = true
+          }
           const ids = new SortedSpool<Item & { id: string }>(LARGE_MAX_ITEMS, signal)
           try {
             for await (const members of pages(extra.path(encodeURIComponent(item.id)))) {
               if (members.length > LARGE_SHARD_ITEMS || members.some(member => !safeLargeId(member.id))) throw new Error("Invalid relationship page")
               const shaped = members.map(member => {
                 if (extra.ids) return { id: member.id as string }
-                const snapshot = listSnapshot({ ...type, keep: undefined, normalizeSnapshot: undefined, unorderedCollections: undefined, requiredCollections: undefined, neverStored: type.neverStored?.filter(path => path.startsWith(`${extra.property}.`)).map(path => path.slice(extra.property.length + 1)) }, member)
+                const snapshot = type.volume === "large" && type.inventory && type.folder in DIRECTORY_SCHEMAS ? directoryExtraSnapshot(extra.property, member) : listSnapshot({ ...type, keep: undefined, normalizeSnapshot: undefined, unorderedCollections: undefined, requiredCollections: undefined, neverStored: type.neverStored?.filter(path => path.startsWith(`${extra.property}.`)).map(path => path.slice(extra.property.length + 1)) }, member)
                 const unfinished = (value: unknown): boolean => !!value && typeof value === "object" && Object.entries(value).some(([key, child]) => key.endsWith("@odata.nextLink") || unfinished(child))
                 if (unfinished(snapshot) || Buffer.byteLength(JSON.stringify(snapshot)) > 8192) throw new Error("A sub-collection definition is incomplete or exceeds 8 KiB")
                 return { ...snapshot, id: member.id as string }
@@ -70,6 +83,12 @@ export async function captureLarge({ type, reader, pages, put, signal, saved }: 
             }
             await flush()
             snapshot[extra.property] = { format: extra.ids ? "sorted-id-shards-v1" : "sorted-object-shards-v1", count: total, shards, complete: true, hash: hash.digest("hex") }
+          } catch (error) {
+            signal.throwIfAborted()
+            // Only an object-specific refusal is recoverable. Budgets, expired tokens and transport
+            // errors still end the type, so a partial page sequence never becomes complete coverage.
+            if (!matches(extra.optional, error)) throw error
+            incomplete()
           } finally { await ids.close() }
         }
         const body = JSON.stringify(snapshot, null, 2)
@@ -94,6 +113,6 @@ export async function captureLarge({ type, reader, pages, put, signal, saved }: 
       if (chunk.length === LARGE_SHARD_ITEMS) await flush()
     }
     await flush()
-    return { version: 1, count, shards, complete: true }
+    return { version: 1, count, shards, complete }
   } finally { await spool.close() }
 }

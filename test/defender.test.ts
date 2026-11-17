@@ -26,8 +26,8 @@ function scan(value: unknown): void {
   for (const [key, entry] of Object.entries(value)) { expect(key).not.toMatch(secrets); scan(entry) }
 }
 
-it("requires every Entra and Defender manifest folder except the named pending directory types", () => {
-  const pending = ["Groups", "Users", "EntraDevices", "OrgContacts", "Applications", "ServicePrincipals", "OAuth2PermissionGrants"]
+it("requires every Entra and Defender manifest folder", () => {
+  const pending: string[] = []
   const missing = (["entra", "defender"] as const).flatMap(id => MODULE_BY_ID.get(id)!.areas.flatMap(area => area.folders)).filter(folder => !INTUNE_TYPES.some(type => type.folder === folder))
   expect(missing.sort()).toEqual(pending.sort())
   expect(TYPES.map(type => type.folder).sort()).toEqual(MODULE_BY_ID.get("defender")!.areas.flatMap(area => area.folders).sort())
