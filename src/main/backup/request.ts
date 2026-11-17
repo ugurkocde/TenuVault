@@ -1,3 +1,4 @@
+import { LARGE_STORAGE_UNAVAILABLE } from "../../shared/backup-storage"
 import { FetchApplicationError, NetworkUnreachableError } from "../api/network-error"
 
 export const GRAPH = "https://graph.microsoft.com"
@@ -55,6 +56,11 @@ export class GraphPauseError extends Error {}
 export class GraphUnansweredError extends Error {}
 
 export class StorageError extends Error {}
+export class LargeStorageError extends StorageError {
+  constructor(readonly status?: number, options?: ErrorOptions) {
+    super(`${LARGE_STORAGE_UNAVAILABLE}${status ? ` Storage returned ${status}.` : ""}`, options)
+  }
+}
 /**
  * Local storage refused because files in the backup folder are damaged: a backup that is
  * unavailable, or a delete while damage is present. The message says what and how to recover.

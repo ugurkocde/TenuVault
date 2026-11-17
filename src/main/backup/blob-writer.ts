@@ -6,7 +6,7 @@ import { oversizedOwnershipFile } from "../../shared/backup-ownership"
 import { retryDelay, retryableStatus, sleep } from "../graph-retry"
 import { FetchApplicationError } from "../api/network-error"
 import type { NetworkCircuit } from "./engine"
-import { MAX_LIST_PAGES, REQUEST_ATTEMPTS, BlobClaimError, ProtectedBlobError, RequestTimeoutError, RetryableStorageError, StorageError, TokenError, isImmutabilityRefusal, requestFailure, storageError, storageFailure, withAbort, withRequestTimeout } from "./request"
+import { MAX_LIST_PAGES, REQUEST_ATTEMPTS, BlobClaimError, ProtectedBlobError, RequestTimeoutError, RetryableStorageError, StorageError, LargeStorageError, TokenError, isImmutabilityRefusal, requestFailure, storageError, storageFailure, withAbort, withRequestTimeout } from "./request"
 
 /** Writes blobs to Azure or, for local accounts, to the encrypted store via the fetch bridge. */
 export class BlobWriter {
@@ -172,6 +172,9 @@ export class BlobWriter {
       } catch (error) {
         this.network?.signal.throwIfAborted()
         beforeCommit?.signal.throwIfAborted()
+        if (path.startsWith(`${LARGE_BACKUP_CONTAINER}/`) || path.startsWith(`${LARGE_BACKUP_CONTAINER}?`)) {
+          if (error instanceof StorageError && !(error instanceof BlobClaimError) && !(error instanceof ProtectedBlobError)) throw new LargeStorageError(response?.status, { cause: error })
+        }
         if (response && (response.status === 401 || response.status === 403) && !(error instanceof ProtectedBlobError)) {
           this.network?.authFailed("backup storage", response.status, error instanceof Error ? error.message : String(error))
         }

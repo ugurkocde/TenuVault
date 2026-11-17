@@ -12,3 +12,6 @@ export function backupBlobName(name: string): string {
 }
 export const logicalBackupName = (name: string) => name.startsWith("payload/backup-large-") ? name.slice("payload/".length) : name
 export const backupStoragePath = (name: string) => `${backupContainer(name)}/${blobPath(backupBlobName(name))}`
+
+export const LARGE_STORAGE_PROVISIONING = "Ask your Azure administrator to rerun New-TenuVaultStorage.ps1 -BackupReaderAppId <application ID> with the usual storage arguments to provision intune-backups-large and its container-scoped TenuVault Backup Writer assignment. Check this identity's access to that container. See https://docs.tenuvault.com/backups/backup-reader/#step-3-your-azure-administrator-storage-write-access-azure-backups-only."
+export const LARGE_STORAGE_UNAVAILABLE = `Storage not provisioned for large backups, or large storage is unavailable. ${LARGE_STORAGE_PROVISIONING}`

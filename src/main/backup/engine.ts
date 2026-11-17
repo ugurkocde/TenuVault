@@ -10,7 +10,7 @@ import { resolveBackupOwnership, type OwnershipFile } from "../../shared/backup-
 import { BlobWriter } from "./blob-writer"
 import { GraphSession, type GraphItem, type ReadControl } from "./graph-session"
 import { ReadBudgetError, typeReadBudget, withReadBudget } from "./read-budget"
-import { GRAPH, BlobClaimError, GraphError, GraphUnansweredError, InventoryDamagedError, ProtectedBlobError, RequestTimeoutError, StorageError, TokenError, isUnreachable, withAbort } from "./request"
+import { GRAPH, BlobClaimError, GraphError, GraphUnansweredError, InventoryDamagedError, ProtectedBlobError, RequestTimeoutError, StorageError, LargeStorageError, TokenError, isUnreachable, withAbort } from "./request"
 import { RetryDelayError } from "../graph-retry"
 import { isLocalAccount } from "../storage/blob-emulator"
 import { FetchApplicationError } from "../api/network-error"
@@ -546,11 +546,15 @@ export class BackupEngine {
     const applicationOnly = (type: IntuneType) => signIn === "delegated" && type.backupMode === "application"
     const unpermitted = includedTypes(scope).filter((type) => !moduleOff.has(type.folder) && !readerExcluded.has(type.folder) && (adminOnly(type) || applicationOnly(type) || (moduleForFolder(type.folder)?.module.precheck && granted && !canBackUp(type.folder, granted))))
     const types = includedTypes(scope).filter((type) => !readerExcluded.has(type.folder) && !moduleOff.has(type.folder) && !unpermitted.includes(type))
-    if (types.some(type => type.volume === "large")) {
-      backupFolder = `backup-large-${folderTimestamp(started)}`
-      job.backupFolder = backupFolder
-      if (local || tokens.mode === "delegated") await storage.ensureContainer(LARGE_BACKUP_CONTAINER)
-    }
+    const largeTypes = types.filter(type => type.volume === "large")
+    const mixed = largeTypes.length > 0 && types.some(type => type.volume !== "large")
+    const ordinaryFolder = backupFolder
+    const largeFolder = `backup-large-${folderTimestamp(started)}`
+    if (largeTypes.length && !mixed) backupFolder = largeFolder
+    job.backupFolder = backupFolder
+    // Large storage has its own circuit: a refusal there cannot poison ordinary writes.
+    const largeNetwork = new NetworkCircuit(3 * concurrency, signal, deadline)
+    const largeStorage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, largeNetwork)
     if (streaming) this.write(job, `Backup folder: ${backupFolder}`)
     // Results list every type this run covers or leaves out for a permission, in registry order.
     const results: BackupResults = {
@@ -688,6 +692,14 @@ export class BackupEngine {
       const verdict = answer ? classifyAnswer(answer, { held: granted ? canBackUp(type.folder, granted) : undefined, mode: tokens.mode, ...(type.unavailable !== undefined ? { unavailable: ownList ? type.unavailable : [] } : {}) }) : { outcome: "failed" as const }
       const evidence = answer ? { status: answer.status, ...(answer.code ? { code: answer.code } : {}) } : {}
       const entry = result(type.folder)
+      if (error instanceof LargeStorageError) {
+        const reason = error.message
+        skippedTypes.push(type.folder)
+        Object.assign(entry, { state: "skipped", reason })
+        settle(type.folder, { outcome: "skipped", cause: "storage", reason, ...(error.status ? { status: error.status } : {}) })
+        this.write(job, `Skipped ${type.label}: ${reason}`, "warning")
+        return
+      }
       if (verdict.outcome === "skipped") {
         const reason = skipReason(verdict.cause, { service: module?.label ?? "this service", roles: module?.roles, mode: tokens.mode, settingsPage: SERVICES_PAGE }, answer?.message)
         skippedTypes.push(type.folder)
@@ -796,10 +808,9 @@ export class BackupEngine {
     // Claim the folder before writing any policy, even when retention currently keeps everything.
     // The create-only write is atomic, so two writers that start in the same second cannot share
     // one folder: the loser fails here and writes nothing else.
-    // Large runs are described in the same atomic claim, before any snapshots can be streamed.
     // The marker names this run, so the Dashboard can match a failed run to whatever folder storage holds for it.
     try {
-      await storage.put(`${backupFolder}/${BACKUP_OWNER_FILE}`, JSON.stringify({ Source: "TenuVault Desktop", TenantId: request.tenantId.toLowerCase(), RunId: job.id, ...(types.some(type => type.volume === "large") ? { LargeInventory: { version: 1 } } : {}) }), undefined, true)
+      if (!isLargeBackup(backupFolder)) await storage.put(`${backupFolder}/${BACKUP_OWNER_FILE}`, JSON.stringify({ Source: "TenuVault Desktop", TenantId: request.tenantId.toLowerCase(), RunId: job.id }), undefined, true)
     } catch (error) {
       if (error instanceof BlobClaimError) throw new BackupFolderTakenError(backupFolder)
       throw error
@@ -822,18 +833,25 @@ export class BackupEngine {
     let done = 0
     const itemTimeoutWarnings: string[] = []
     // Same shape as the runbook's metadata.json, describing what this run saved so far.
-    const manifest = (status: string, ended: Date, outcomes: RunOutcomes, extra: Record<string, unknown> = {}) => {
+    const manifest = (status: string, ended: Date, outcomes: RunOutcomes, extra: Record<string, unknown> = {}, folder = backupFolder) => {
       const seconds = Math.round((ended.getTime() - started.getTime()) / 1000)
+      const large = isLargeBackup(folder)
+      const inFolder = (folder: string) => !mixed || (typeForFolder(folder)?.volume === "large") === large
+      const folderCounts = Object.fromEntries(Object.entries(counts).filter(([folder]) => inFolder(folder)))
+      const folderOutcomes = mixed ? outcomes.types.filter(type => inFolder(type.folder)) : outcomes.types
+      const folderFailures = mixed ? results.types.filter(type => inFolder(type.folder)).reduce((sum, type) => sum + type.failed + (failedTypes.includes(type.folder) ? 1 : 0), 0) : failures
+      const folderSaved = Object.values(folderCounts).reduce((sum, count) => sum + count, 0)
+      const folderStatus = mixed ? (folderFailures ? (folderSaved ? "CompletedWithWarnings" : "Failed") : nothingRead(folderOutcomes) ? "Failed" : "Success") : status
       return {
         BackupDate: folderTimestamp(started),
-        BackupFolder: backupFolder,
+        BackupFolder: folder,
         StartTime: displayTime(started),
         EndTime: displayTime(ended),
         Duration: seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`,
         DurationSeconds: seconds,
         // Inventory such as Autopilot devices is counted under its own folder, not as policies.
-        ItemCounts: { ...counts, TotalPolicies: policyCount(counts) },
-        Status: status,
+        ItemCounts: { ...folderCounts, TotalPolicies: policyCount(folderCounts) },
+        Status: folderStatus,
         RunbookVersion: "desktop",
         BackupFormat: "Individual policy files with Intune-compatible JSON",
         Source: "TenuVault Desktop",
@@ -842,25 +860,40 @@ export class BackupEngine {
         Trigger: request.trigger ?? "manual",
         RunId: job.id,
         // Included records the types this run attempted, so later app versions do not count types added since as covered.
-        Scope: { Excluded: scope.excluded, Included: types.map((type) => type.folder) },
-        Failures: failures,
-        SkippedTypes: skippedTypes,
-        FailedTypes: failedTypes,
+        Scope: { Excluded: scope.excluded, Included: types.filter(type => inFolder(type.folder)).map((type) => type.folder) },
+        Failures: folderFailures,
+        SkippedTypes: skippedTypes.filter(inFolder),
+        FailedTypes: failedTypes.filter(inFolder),
         AuthMode: tokens.mode,
         ...(notReadable.length ? { AppOnlyExcludedTypes: notReadable } : {}),
         ...(maskedItems.length ? { MaskedSecretItems: maskedItems } : {}),
         // Whether every selected type was read, and how each ended. Status, Failures and the type lists above keep their meaning.
-        Coverage: outcomes.coverage === "complete" ? "Complete" : "Incomplete",
-        Outcomes: manifestOutcomes(outcomes.types),
+        Coverage: coverageOf(folderOutcomes) === "complete" ? "Complete" : "Incomplete",
+        Outcomes: manifestOutcomes(folderOutcomes),
+        ...(mixed ? { CompanionBackup: large ? ordinaryFolder : largeFolder, ...(!large ? { LargeBackupOutcomes: manifestOutcomes(outcomes.types.filter(type => !inFolder(type.folder))) } : {}) } : {}),
         // Per item fingerprints (by type folder and Intune ID), so backups can be compared without reading every file.
-        Items: sortKeys(items),
-        ...(types.some(type => type.volume === "large") ? { LargeItems: largeItems, LargeSizes: largeSizes } : {}),
+        Items: large ? {} : sortKeys(items),
+        ...(large ? { LargeItems: largeItems, LargeSizes: largeSizes } : {}),
         ...(itemTimeoutWarnings.length ? { Warnings: itemTimeoutWarnings } : {}),
         ...extra,
       }
     }
+    const commitManifest = async (folder: string, metadata: Record<string, unknown>, trackCommit = true) => {
+      // The dispatched manifest may land despite cancellation. Give it the existing commit grace
+      // and never follow an ambiguous commit with a failed manifest for the same folder.
+      network.signal.throwIfAborted()
+      const commitDeadline = deadline + MANIFEST_COMMIT_GRACE_MS
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(jobDeadlineError()), Math.max(0, commitDeadline - Date.now()))
+      timer.unref?.()
+      const commitNetwork = new NetworkCircuit(3 * concurrency, controller.signal, commitDeadline)
+      const writer = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, commitNetwork)
+      try {
+        await writer.put(`${folder}/metadata.json`, JSON.stringify(metadata, null, 2), network, false, () => { if (trackCommit) stopped.committing = true })
+      } finally { clearTimeout(timer) }
+    }
     // From here the folder is this run's, so a run that stops early records it as failed, or as cancelled when the user cancelled it.
-    stopped.manifest = (status, error, outcomes) => manifest(status, this.now(), outcomes, { Error: error })
+    if (!isLargeBackup(backupFolder)) stopped.manifest = (status, error, outcomes) => manifest(status, this.now(), outcomes, { Status: status, Error: error })
     stopped.stoppedBy = () => network.stoppedBy
 
     await pool(work, concurrency, async ({ type, item, displayName, fileName }) => {
@@ -884,7 +917,6 @@ export class BackupEngine {
         })
         const body = JSON.stringify(detail, null, 2)
         await storage.put(`${backupFolder}/${type.folder}/${fileName}.json`, body)
-        if (types.some(type => type.volume === "large")) largeSizes[type.folder] = (largeSizes[type.folder] ?? 0) + Buffer.byteLength(body)
         const maskedView = withMaskedSecrets(type, detail)
         items[`${type.folder}/${item.id}`] = {
           file: `${fileName}.json`,
@@ -953,9 +985,25 @@ export class BackupEngine {
     // Fairness: legacy work remains FIFO and serial. A large run releases its whole-job turn
     // before streaming, then yields to queued tenants before each Graph page. A throttle in
     // this run cannot hold the legacy queue for the large type's two-hour allowance.
-    if (types.some(type => type.volume === "large")) releaseTurn()
+    if (mixed) {
+      // Publish ordinary coverage before the large phase, even if that phase crashes or is cancelled.
+      await commitManifest(ordinaryFolder, manifest(failures ? "CompletedWithWarnings" : "Success", this.now(), outcomesNow("Success", this.now(), true)), false)
+    }
+    let largeClaimed = false
+    if (largeTypes.length) {
+      releaseTurn()
+      try {
+        if (local || tokens.mode === "delegated") await largeStorage.ensureContainer(LARGE_BACKUP_CONTAINER)
+        await largeStorage.put(`${largeFolder}/${BACKUP_OWNER_FILE}`, JSON.stringify({ Source: "TenuVault Desktop", TenantId: request.tenantId.toLowerCase(), RunId: job.id, LargeInventory: { version: 1 }, ...(mixed ? { CompanionBackup: ordinaryFolder } : {}) }), undefined, true)
+        largeClaimed = true
+      } catch (error) {
+        network.signal.throwIfAborted()
+        for (const type of largeTypes) endType(type, error instanceof LargeStorageError ? error : new LargeStorageError(undefined, { cause: error }))
+      }
+    }
+    if (largeClaimed) stopped.manifest = (status, error, outcomes) => manifest(status, this.now(), outcomes, { Status: status, Error: error }, largeFolder)
     const waitForTenants = () => this.queueTail
-    for (const type of types.filter(type => type.volume === "large")) {
+    for (const type of largeTypes.filter(() => largeClaimed)) {
       const entry = result(type.folder)
       largeItems[type.folder] = { version: 1, count: 0, shards: 0, complete: false }
       const limits = type.readBudget ?? { durationMs: LARGE_TYPE_MS, maxRequests: LARGE_TYPE_REQUESTS }
@@ -991,7 +1039,14 @@ export class BackupEngine {
             list: async () => { throw new Error("Large types must stream sub-collections") },
           },
           pages: boundedPages,
-          put: async (path, body) => { await storage.put(`${backupFolder}/${path}`, body, undefined, false, undefined, typeSignal); largeSizes[type.folder] = (largeSizes[type.folder] ?? 0) + Buffer.byteLength(body) },
+          put: async (path, body) => {
+            try { await largeStorage.put(`${largeFolder}/${path}`, body, undefined, false, undefined, typeSignal) }
+            catch (error) {
+              typeSignal.throwIfAborted()
+              throw error instanceof LargeStorageError ? error : new LargeStorageError(undefined, { cause: error })
+            }
+            largeSizes[type.folder] = (largeSizes[type.folder] ?? 0) + Buffer.byteLength(body)
+          },
           signal: typeSignal,
           saved: () => { counts[type.folder]!++; entry.saved++; outcome.saved++ },
         })
@@ -1005,6 +1060,17 @@ export class BackupEngine {
       } finally { clearTimeout(typeTimer) }
     }
 
+    if (largeClaimed) {
+      try {
+        const ending = typesNow(false)
+        const saved = Object.values(counts).reduce((sum, count) => sum + count, 0)
+        const status = failures ? (saved ? "CompletedWithWarnings" : "Failed") : nothingRead(ending) ? "Failed" : "Success"
+        await commitManifest(largeFolder, manifest(status, this.now(), outcomesNow(status, this.now(), false), {}, largeFolder))
+      } catch (error) {
+        network.signal.throwIfAborted()
+        for (const type of largeTypes) endType(type, error instanceof LargeStorageError ? error : new LargeStorageError(undefined, { cause: error }))
+      }
+    }
     const ended = this.now()
     const totalPolicies = policyCount(counts)
     const saved = Object.values(counts).reduce((sum, count) => sum + count, 0)
@@ -1017,21 +1083,7 @@ export class BackupEngine {
     const outcomes = outcomesNow(status, ended, false)
     const metadata = manifest(status, ended, outcomes, unread ? { Error: unread } : {})
 
-    // Detach cancellation at the first manifest PUT, after cancellable token acquisition.
-    // Retention reads cannot delay the manifest, and a saved backup must not burn a retry slot.
-    network.signal.throwIfAborted()
-    const commitDeadline = deadline + MANIFEST_COMMIT_GRACE_MS
-    const commitController = new AbortController()
-    const commitTimer = setTimeout(() => commitController.abort(jobDeadlineError()), Math.max(0, commitDeadline - Date.now()))
-    commitTimer.unref?.()
-    const commitNetwork = new NetworkCircuit(3 * concurrency, commitController.signal, commitDeadline)
-    const commitStorage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, commitNetwork)
-    try {
-      // Once the PUT is sent it may land even when it reports a failure, so no failed manifest may follow it.
-      await commitStorage.put(`${backupFolder}/metadata.json`, JSON.stringify(metadata, null, 2), network, false, () => { stopped.committing = true })
-    } finally {
-      clearTimeout(commitTimer)
-    }
+    if (!isLargeBackup(backupFolder)) await commitManifest(backupFolder, metadata)
     this.conclude(job, outcomes)
 
     // Only a complete backup may replace older ones: if policies could not be read (for
@@ -1040,7 +1092,7 @@ export class BackupEngine {
     // The Backup Reader cannot delete from Azure Storage. The next backup with an admin's sign-in applies
     // retention to every backup of the tenant, Backup Reader backups included, with the same protections.
     const deletesAllowed = local || tokens.mode === "delegated"
-    const complete = failures === 0 && !unread && Object.values(largeItems).every(index => index.complete)
+    const complete = mixed ? coverageOf(outcomes.types.filter(type => typeForFolder(type.folder)?.volume !== "large")) === "complete" : failures === 0 && !unread && Object.values(largeItems).every(index => index.complete)
     if (!deletesAllowed && complete && (this.deps.retentionDays?.(job.tenantId) ?? 0) > 0) {
       this.write(job, "Older backups were kept: the Backup Reader cannot delete from Azure Storage. The next backup made with an admin's sign-in removes expired ones.", "info")
     } else if (deletesAllowed && complete && (this.deps.retentionDays?.(job.tenantId) ?? 0) > 0) {
@@ -1049,6 +1101,11 @@ export class BackupEngine {
       try {
         const unreadableOlder = await this.applyRetention(job, retentionStorage, backupFolder, restorableFolders(metadata), retentionNetwork.signal)
         if (unreadableOlder > 0) retentionWarnings++
+        if (mixed && largeClaimed && coverageOf(outcomes.types.filter(type => typeForFolder(type.folder)?.volume === "large")) === "complete") {
+          const largeMetadata = { ...metadata, Scope: { Included: largeTypes.map(type => type.folder) } }
+          try { await this.applyRetention(job, largeStorage, largeFolder, restorableFolders(largeMetadata), largeNetwork.signal) }
+          catch (error) { this.write(job, `Large backup retention was skipped. ${error instanceof Error ? error.message : String(error)}`, "warning"); retentionWarnings++ }
+        }
       } catch (error) {
         retentionWarnings++
         if (signal.aborted || Date.now() >= deadline) {
@@ -1109,7 +1166,7 @@ export class BackupEngine {
     const storage = new BlobWriter(this.deps.fetch, request.storageAccountName, token, network)
     const recorded = metadata.Status === "Cancelled" ? "cancelled" : "failed"
     try {
-      await storage.put(`${job.backupFolder}/metadata.json`, JSON.stringify(metadata, null, 2), undefined, true)
+      await storage.put(`${metadata.BackupFolder ?? job.backupFolder}/metadata.json`, JSON.stringify(metadata, null, 2), undefined, true)
       this.write(job, `Recorded this backup as ${recorded}. The policies it saved stay in storage but are never offered as a complete backup.`)
     } catch (error) {
       if (error instanceof BlobClaimError) this.write(job, "This backup already has a manifest, so it was left as it is.")
@@ -1136,8 +1193,9 @@ export class BackupEngine {
     const days = this.deps.retentionDays?.(job.tenantId) ?? 0
     if (days <= 0) return 0
     const cutoff = this.now().getTime() - days * 24 * 60 * 60 * 1000
-    const ordinary = await storage.list("backup-", "/")
-    const large = await storage.list("backup-large-", "", LARGE_BACKUP_CONTAINER, true)
+    // Each storage class retains its own coverage, so large discovery cannot block ordinary deletion.
+    const ordinary = isLargeBackup(current) ? { prefixes: [] } : await storage.list("backup-", "/")
+    const large = isLargeBackup(current) ? await storage.list("backup-large-", "", LARGE_BACKUP_CONTAINER, true) : { blobs: [] }
     const largePrefixes = [...new Set(large.blobs.map(name => `${name.split("/")[0]}/`))].filter(isLargeBackup)
     const prefixes = [...ordinary.prefixes, ...largePrefixes]
     const backups = prefixes

@@ -36,7 +36,7 @@ export function runObservation(outcomes: RunOutcomes, account?: string, permissi
     if (type.outcome === "saved") observation.read.push(type.folder)
     else if (type.outcome === "skipped") {
       // A deliberate mode restriction is not evidence that Microsoft removed access.
-      if (type.cause === "appOnly" || (outcomes.authMode === "delegated" && typeForFolder(type.folder)?.backupMode === "application")) observation.unread.push(type.folder)
+      if (type.cause === "storage" || type.cause === "appOnly" || (outcomes.authMode === "delegated" && typeForFolder(type.folder)?.backupMode === "application")) observation.unread.push(type.folder)
       else if (type.reader) observation.excluded.push({ folder: type.folder, cause: "reader" })
       else if (type.cause === "signedIn") observation.excluded.push({ folder: type.folder, cause: "signedIn" })
       else observation.refused.push({ folder: type.folder, cause: type.cause, ...answer(type) })

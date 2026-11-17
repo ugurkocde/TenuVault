@@ -1,3 +1,4 @@
+import { LARGE_STORAGE_UNAVAILABLE } from "./backup-storage"
 /**
  * How each type a backup was asked to cover ended, and whether the run covered all of them.
  *
@@ -19,7 +20,7 @@ import type { ModuleId } from "./services/modules"
  * - appOnly: the type needs the Backup Reader and cannot be read by a signed-in admin.
  * - signedIn: Microsoft Graph lets only a signed-in admin read the type, and the run had none.
  */
-export type SkipCause = "permission" | "role" | "license" | "signedIn" | "appOnly"
+export type SkipCause = "permission" | "role" | "license" | "signedIn" | "appOnly" | "storage"
 
 interface OutcomeOf<Kind extends string> {
   folder: string
@@ -191,7 +192,7 @@ export interface ReasonContext {
 }
 
 /** In the order a tie is settled: the cause an admin can fix first. */
-const CAUSES: readonly SkipCause[] = ["permission", "role", "license", "signedIn", "appOnly"]
+const CAUSES: readonly SkipCause[] = ["permission", "role", "license", "signedIn", "appOnly", "storage"]
 
 /**
  * What a run says when every selected type was left out, so it read nothing: that, and the cause
@@ -207,8 +208,10 @@ export function nothingReadReason(types: readonly TypeOutcome[], context: Pick<R
     license: "the tenant has no license for the product or never set it up",
     signedIn: "only a signed-in admin can read it",
     appOnly: "it needs the Backup Reader; a signed-in admin cannot read it",
+    storage: "storage is not provisioned for large backups",
   }[main]
   const leftOut = types.length === 1 ? "The selected type was left out" : `Every selected type was left out${count(main) === types.length ? "" : ", most of them"}`
+  if (main === "storage") return `Nothing could be read. ${LARGE_STORAGE_UNAVAILABLE}`
   return `Nothing could be read. ${leftOut} because ${because}.${main === "permission" ? ` ${context.settingsPage} in Settings shows what is missing.` : ""}`
 }
 
@@ -216,6 +219,7 @@ export function nothingReadReason(types: readonly TypeOutcome[], context: Pick<R
 export function skipReason(cause: SkipCause, context: ReasonContext, message?: string): string {
   const who = context.mode === "app-only" ? "Backup Reader" : "TenuVault app registration"
   switch (cause) {
+    case "storage": return LARGE_STORAGE_UNAVAILABLE
     case "appOnly":
       return "This type needs the Backup Reader; a signed-in admin cannot read it."
     case "signedIn":
