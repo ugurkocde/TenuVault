@@ -26,6 +26,16 @@ For the full list of object types, see [What gets backed up](/backups/coverage/)
 
 For original Win32 installer files you already have, use [free App Backup](/apps/app-backup/). Its encrypted installer store is separate from policy backup storage and remains accessible while signed out.
 
+## Browse backups by service
+
+Below **Backup & Restore**, the sidebar's **Services** group lists **Intune**, **Entra ID** and **Defender**. Select an enabled service to open this page filtered to its policies. A service marked **Off** opens **Settings > Services and permissions** instead.
+
+The **Service** filter offers **All**, **Intune**, **Entra ID** and **Defender**. It narrows **Contents**, **Trends by policy type**, large inventory and the **Restore** type lists. Entra ID includes Conditional Access, which still has its own backup switch. The filter stays in the page address across reloads, tab changes and back/forward navigation. Choose **All** to clear the highlighted sidebar service. An unknown service in an address shows All.
+
+The timeline, totals, downloads and **Run Backup** still cover the whole backup. This view does not change the tenant's saved backup scope or which services new backups include. Turn services on or off in Settings.
+
+![Entra ID selected in the sidebar and the backup Service filter](/images/sidebar/entra-active-light.png)
+
 ## Before you start
 
 * You are signed in to the tenant. See [Sign in to your tenant](/getting-started/connect-tenant/).

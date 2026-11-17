@@ -46,6 +46,10 @@ Choose a tenant to see three independent connections: **Microsoft Graph sign-in*
 
 ![Services and permissions with independent connection states and all three services](/images/services/healthy-light.png)
 
+The sidebar also lists **Intune**, **Entra ID** and **Defender** in a **Services** group below **Backup & Restore**. An enabled service opens backup contents filtered to that service. A service marked **Off** opens this Settings section. The badges follow the selected tenant and update when you turn a service on or off. The backup page's **Service** filter only changes the view; use the switches here to change future backup coverage.
+
+![Defender marked Off in the Services sidebar group](/images/sidebar/defender-off-light.png)
+
 The cards show **Intune**, **Entra ID** and **Defender**. Expand **Areas and access** for the permissions, backup verification and switches of each area. **Conditional Access** stays independently switchable inside Entra ID, even while the rest of Entra ID is off. Entra ID now has [67 configuration backup types](/backups/entra/) in Tenant settings, Authentication, External identities, Roles and PIM, Governance, and the opt-in Groups area. Areas with no implemented types have no switch. Defender has [17 configuration backup types](/backups/defender/) with no restore yet.
 
 | Control | What it does |

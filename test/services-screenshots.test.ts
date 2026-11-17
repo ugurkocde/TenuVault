@@ -17,3 +17,17 @@ it("captures and inventories every storage state and changed surface at 1024px i
     }
   }
 })
+
+it("captures the Services sidebar and URL filter states in both themes at 1024px", () => {
+  const folder = new URL("../docs-site/public/images/sidebar/", import.meta.url)
+  const inventory = readFileSync(new URL("README.md", folder), "utf8")
+  for (const state of ["all-services-on", "entra-active", "defender-off"]) {
+    for (const theme of ["light", "dark"]) {
+      const file = `${state}-${theme}.png`
+      expect(inventory).toContain(file)
+      const image = readFileSync(new URL(file, folder))
+      expect(image.readUInt32BE(16), file).toBe(1024)
+      expect(image.length, file).toBeGreaterThan(20_000)
+    }
+  }
+})
