@@ -530,6 +530,7 @@ export default function OnboardingPage() {
               <h3 className="font-medium text-gray-900">{permissionResult.missing.length ? "Some chosen permissions are missing" : "Permissions could not be checked"}</h3>
               <p>{permissionResult.error ?? "Your sign-in works. The registration does not allow everything you chose yet. You can fix it now or continue and add permissions later in Settings > Services and permissions."}</p>
               {permissionResult.error && <p>You can continue and check permissions later in Settings &gt; Services and permissions.</p>}
+              <SetupCallLink source="signin-error" variant="hint" />
               <PermissionRoutes report={account} missing={permissionResult.missing} />
               <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => { setAccount({ ...account }) }}>Check again</Button>
               {permissionResult.missing.length > 0 && !permissionAccepted && <Button onClick={() => setPermissionAccepted(true)}>Continue to storage</Button>}</div>

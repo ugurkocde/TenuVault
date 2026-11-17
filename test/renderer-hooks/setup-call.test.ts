@@ -15,6 +15,8 @@ const state = vi.hoisted(() => ({
   store: new Map<string, string>(),
   signIn: vi.fn<(tenant: string, clientId: string) => Promise<unknown>>(),
   createRegistration: vi.fn<() => Promise<unknown>>(),
+  checkPermissions: vi.fn(async (): Promise<{ missing: string[]; error?: string }> => ({ missing: [] })),
+  saveServices: vi.fn(async () => undefined),
   accounts: vi.fn(async (): Promise<unknown[]> => []),
   checkNewTenant: vi.fn(async (): Promise<unknown> => undefined),
   cancelBackup: vi.fn(async (_jobId: string): Promise<void> => undefined),
@@ -35,7 +37,7 @@ vi.mock("../../src/renderer/lib/bridge", () => ({
       removeItem: async (key: string) => void state.store.delete(key),
     },
     auth: { signIn: state.signIn, cancelSignIn: state.cancelSignIn, copySignInLink: async () => true, accounts: state.accounts, onSignInPhase: () => () => undefined },
-    setup: { createRegistration: state.createRegistration, cancelCreateRegistration: state.cancelSetup, cancelSignIn: async () => false, onProgress: () => () => undefined, clipboardIds: async () => null, saveScript: async () => ({ saved: false }) },
+    setup: { checkPermissions: state.checkPermissions, saveServices: state.saveServices, createRegistration: state.createRegistration, cancelCreateRegistration: state.cancelSetup, cancelSignIn: async () => false, onProgress: () => () => undefined, clipboardIds: async () => null, saveScript: async () => ({ saved: false }) },
     license: { open: async () => undefined, clipboardKey: async () => null, checkNewTenant: state.checkNewTenant, releaseTenant: async () => undefined, tenantTrialAction: async () => undefined, trialUsage: async () => null, trialWorkflowsConfigured: async () => false },
     diagnostics: { record: state.record, status: async () => ({ state: state.diagnostics, policy: false, reminder: { setup: false, signin: false } }), reminderShown: async () => undefined, consent: async () => undefined, decline: async () => undefined },
     preferences: { get: async () => ({ firstBackupNoteSeen: true }), set: async () => ({}) },
@@ -112,7 +114,9 @@ beforeEach(() => {
   state.diagnostics = "unasked"
   state.storageChoice = { kind: "local" }
   state.store.clear()
-  for (const mock of [state.signIn, state.createRegistration, state.accounts, state.checkNewTenant, state.cancelBackup, state.cancelSetup, state.cancelSignIn, state.record]) mock.mockReset()
+  for (const mock of [state.signIn, state.createRegistration, state.accounts, state.checkNewTenant, state.cancelBackup, state.cancelSetup, state.cancelSignIn, state.record, state.checkPermissions, state.saveServices]) mock.mockReset()
+  state.checkPermissions.mockResolvedValue({ missing: [] })
+  state.saveServices.mockResolvedValue(undefined)
   state.cancelBackup.mockResolvedValue(undefined)
   state.cancelSetup.mockResolvedValue(undefined)
   state.cancelSignIn.mockResolvedValue(false)
@@ -235,6 +239,14 @@ async function refusedAfterContinue() {
   await advance()
   expect(container.textContent).toContain("Sign in to your tenant")
   return container
+}
+
+/** The advisory result before storage, including missing permissions and an unavailable check. */
+async function permissionProblem(result: { missing: string[]; error?: string }) {
+  state.checkPermissions.mockResolvedValue(result)
+  state.store.set("tenuvault.onboarding.draft", JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, account: ACCOUNT, signedInAt: Date.now() }))
+  state.accounts.mockResolvedValue([ACCOUNT])
+  return render(createElement(OnboardingPage))
 }
 
 /** Runs the first backup with the answer of the start request and, when it started, the job the store reports. */
@@ -659,6 +671,38 @@ describe("errors the Sign in step shows after a later step sent the admin back",
   })
 })
 
+describe("0.6 setup steps", () => {
+  it("offers nothing during service selection or after a successful permission check", async () => {
+    const container = await render(createElement(OnboardingPage))
+    expect(container.textContent).toContain("What do you want to back up?")
+    expect(links()).toEqual([])
+    await unmount()
+    await firstBackupStep()
+    expect(links()).toEqual([])
+  })
+
+  it("offers nothing while the permission check is running", async () => {
+    state.checkPermissions.mockImplementation(() => new Promise(() => undefined))
+    state.store.set("tenuvault.onboarding.draft", JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, account: ACCOUNT, signedInAt: Date.now() }))
+    state.accounts.mockResolvedValue([ACCOUNT])
+    const container = await render(createElement(OnboardingPage))
+    expect(container.textContent).toContain("Checking permissions")
+    expect(links()).toEqual([])
+  })
+
+  it("keeps missing permissions advisory and removes the offer after a successful retry", async () => {
+    const container = await permissionProblem({ missing: ["Policy.Read.All"] })
+    expect(links()).toEqual(["signin-error"])
+    await act(async () => { button(container, "Continue to storage")!.click() })
+    expect(container.textContent).toContain("Storage chooser")
+    state.checkPermissions.mockResolvedValue({ missing: [] })
+    await act(async () => { button(container, "Check again")!.click() })
+    await advance()
+    expect(links()).toEqual([])
+    expect(container.textContent).toContain("Storage chooser")
+  })
+})
+
 describe("Support dialog", () => {
   it.each([
     ["Community", COMMUNITY, "Open GitHub issue"],
@@ -688,6 +732,8 @@ describe("every placement on every plan", () => {
     ["setup error with tenant trials", "setup-error", () => failedSetup("Microsoft Graph refused to create the app registration.", true)],
     ["first sign-in error", "signin-error", () => failedSignIn("Microsoft could not find this application in the tenant. (AADSTS700016)")],
     ["license refusal on the Sign in step", "signin-error", refusedAfterContinue],
+    ["missing chosen permissions", "signin-error", () => permissionProblem({ missing: ["Policy.Read.All"] })],
+    ["failed permission check", "signin-error", () => permissionProblem({ missing: [], error: "Microsoft did not answer." })],
     ["first backup failure", "first-backup-error", () => runFirstBackup(startFails)],
     ["Support dialog", "support", () => render(createElement(SupportDialog, { open: true, onOpenChange: vi.fn() }))],
   ]
@@ -711,6 +757,7 @@ describe("every placement on every plan", () => {
       state.tenants = []
       state.activeJobs = []
       state.store.clear()
+      state.checkPermissions.mockResolvedValue({ missing: [] })
     }
   })
 })

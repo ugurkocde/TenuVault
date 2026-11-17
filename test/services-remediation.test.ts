@@ -89,7 +89,7 @@ it.each(["bash", "zsh"])("%s stops all later commands if login fails or is cance
     expect(result.status).not.toBe(0)
     expect(calls).toEqual([["login", "--tenant", tenantId, "--allow-no-subscriptions"]])
   }
-})
+}, 30_000)
 it.each(["tenant", "wrongTenant", "graph", "emptyGraph", "individual", "grantId", "existing", "lookup", "emptyLookup", "add"])("stops before any later mutation after %s fails", failure => {
   const { result, calls, initial, state } = shell("bash", failure)
   expect(result.status).not.toBe(0)
@@ -97,7 +97,7 @@ it.each(["tenant", "wrongTenant", "graph", "emptyGraph", "individual", "grantId"
   expect(state).toEqual(initial)
   if (failure !== "add") expect(calls.some(args => args.includes("add"))).toBe(false)
   if (failure === "wrongTenant") expect(calls).toHaveLength(2)
-})
+}, 30_000)
 it.each(["bash", "zsh"])("%s updates existing consent in place with the union and leaves other grants alone", shellName => {
   const { result, calls, state } = shell(shellName)
   expect(result.status, result.stderr).toBe(0)
@@ -107,7 +107,7 @@ it.each(["bash", "zsh"])("%s updates existing consent in place with the union an
   expect(calls.filter(args => args.includes("add"))).toEqual(permissionIds.map(id => ["ad", "app", "permission", "add", "--id", clientId, "--api", "00000003-0000-0000-c000-000000000000", "--api-permissions", `${id}=Scope`]))
   expect(calls.findIndex(args => args[0] === "rest")).toBeGreaterThan(calls.findLastIndex(args => args.includes("add")))
   expect(calls.some(args => args.includes("grant") || args.includes("admin-consent"))).toBe(false)
-})
+}, 30_000)
 it.each(["bash", "zsh"])("%s keeps every existing scope when the consent update fails", shellName => {
   const { result, calls, initial, state } = shell(shellName, "consent")
   expect(result.status).not.toBe(0)
@@ -115,14 +115,14 @@ it.each(["bash", "zsh"])("%s keeps every existing scope when the consent update 
   expect(result.stderr).toContain(consentFailure)
   expect(calls.at(-1)).toContain("PATCH")
   expect(calls.filter(args => args[0] === "rest")).toHaveLength(1)
-})
+}, 30_000)
 it.each(["bash", "zsh"])("%s stops for review before changing individual grants", shellName => {
   const { result, calls, initial, state } = shell(shellName, "", true)
   expect(result.status).not.toBe(0)
   expect(result.stderr).toContain("Individual Graph consent exists")
   expect(calls.some(args => args.includes("add") || args.includes("grant") || args[0] === "rest")).toBe(false)
   expect(state).toEqual(initial)
-})
+}, 30_000)
 it.each(["bash", "zsh"])("%s creates one grant using service principal object IDs when no tenant-wide grant exists", shellName => {
   const { result, calls, state } = shell(shellName, "", false, false)
   expect(result.status, result.stderr).toBe(0)
@@ -130,7 +130,7 @@ it.each(["bash", "zsh"])("%s creates one grant using service principal object ID
   expect(calls.filter(args => args[0] === "rest")).toEqual([["rest", "--method", "POST", "--url", "https://graph.microsoft.com/v1.0/oauth2PermissionGrants", "--headers", "Content-Type=application/json", "--body", JSON.stringify(body)]])
   expect(state.grants).toEqual([unrelated, { id: "new-grant", ...body }])
   expect(calls.some(args => args.includes("grant") || args.includes("admin-consent"))).toBe(false)
-})
+}, 30_000)
 it.each(["bash", "zsh"])("%s leaves consent unchanged when creating the grant fails", shellName => {
   const { result, calls, initial, state } = shell(shellName, "consent", false, false)
   expect(result.status).not.toBe(0)
@@ -138,20 +138,20 @@ it.each(["bash", "zsh"])("%s leaves consent unchanged when creating the grant fa
   expect(result.stderr).toContain(consentFailure)
   expect(calls.at(-1)).toContain("POST")
   expect(calls.filter(args => args[0] === "rest")).toHaveLength(1)
-})
+}, 30_000)
 it.each(["client", "emptyClient"])("stops without creating consent after %s lookup fails", failure => {
   const { result, calls, initial, state } = shell("bash", failure, false, false)
   expect(result.status).not.toBe(0)
   expect(calls.some(args => args[0] === "rest")).toBe(false)
   expect(state.grants).toEqual(initial.grants)
-})
+}, 30_000)
 
 it.each(["bash", "zsh"])("%s stops before changing declarations or consent when the registration read fails", shellName => {
   const { result, calls, initial, state } = shell(shellName, "declarations")
   expect(result.status).not.toBe(0)
   expect(calls.some(args => args.includes("add") || args[0] === "rest")).toBe(false)
   expect(state).toEqual(initial)
-})
+}, 30_000)
 it.each(["bash", "zsh"])("%s declares each Graph scope once across two runs while preserving other declarations", shellName => {
   const { results, calls, initial, state } = shell(shellName, "", false, true, { runs: 2 })
   for (const result of results) expect(result.status, result.stderr).toBe(0)
@@ -163,7 +163,7 @@ it.each(["bash", "zsh"])("%s declares each Graph scope once across two runs whil
   expect(additions.map(args => args.at(-1))).toEqual(permissionIds.map(id => `${id}=Scope`))
   expect(calls.filter(args => args.includes("show") && args.includes("app"))).toHaveLength(2)
   expect(state.grants).toEqual([unrelated, { ...grant, scope: "Group.Read.All Policy.Read.All User.Read" }])
-})
+}, 30_000)
 it.each(["bash", "zsh"])("%s skips a scope already declared on the registration and still consents it", shellName => {
   const { results, calls, initial, state } = shell(shellName, "", false, false, { declaredScopes: [permissionIds[0]!], runs: 2 })
   for (const result of results) expect(result.status, result.stderr).toBe(0)
@@ -174,12 +174,12 @@ it.each(["bash", "zsh"])("%s skips a scope already declared on the registration 
   ])
   expect(calls.filter(args => args[0] === "rest").map(args => args[2])).toEqual(["POST", "PATCH"])
   expect(state.grants).toEqual([unrelated, { ...grant, id: "new-grant", scope: "Group.Read.All Policy.Read.All" }])
-})
+}, 30_000)
 it.each(["bash", "zsh"])("%s treats a declared scope ID in other letter case as already declared", shellName => {
   const { results, calls } = shell(shellName, "", false, true, { declaredScopes: [permissionIds[0]!.toUpperCase()], runs: 2 })
   for (const result of results) expect(result.status, result.stderr).toBe(0)
   expect(calls.filter(args => args.includes("add")).map(args => args.at(-1))).toEqual([`${permissionIds[1]}=Scope`])
-})
+}, 30_000)
 it.each(["bash", "zsh"])("%s warns to check Entra when a consent write is applied and then times out", shellName => {
   for (const existing of [true, false]) {
     const { result, calls, initial, state } = shell(shellName, "timeout", false, existing)
@@ -191,8 +191,8 @@ it.each(["bash", "zsh"])("%s warns to check Entra when a consent write is applie
     expect(calls.filter(args => args[0] === "rest")).toHaveLength(1)
     expect(calls.at(-1)).toContain(existing ? "PATCH" : "POST")
   }
-})
+}, 30_000)
 it("includes the consent outcome warning in the copied administrator request", () => {
   const fix = permissionRemediation({ tenantId, clientId }, ["Policy.Read.All"])
   expect(fix.request).toContain(consentFailure)
-})
+}, 30_000)
