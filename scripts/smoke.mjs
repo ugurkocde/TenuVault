@@ -11,10 +11,10 @@
  * renderer-to-main API bridge and the per tenant license gate. No tenant is signed in, so
  * the licensing service is never called. Screenshots are written to screenshot-dir.
  */
-import { spawn } from "node:child_process"
+import { execFileSync, spawn } from "node:child_process"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
-import { tmpdir } from "node:os"
+import { availableParallelism, tmpdir, uptime } from "node:os"
 import { join, resolve } from "node:path"
 import { checkSchedulePanel } from "./schedule-panel-smoke.mjs"
 import { checkBackupCancel } from "./backup-cancel-smoke.mjs"
@@ -63,6 +63,10 @@ app = spawn(packagedApp ?? electronPath, args, { stdio: ["ignore", "pipe", "pipe
 let appLog = ""
 app.stdout.on("data", (d) => (appLog += d))
 app.stderr.on("data", (d) => (appLog += d))
+
+const machineLoad = () => `${process.platform === "win32" ? `uptime ${Math.round(uptime())} seconds` : execFileSync("uptime", { encoding: "utf8" }).trim()} (${availableParallelism()} CPUs)`
+console.log(`Machine load at start: ${machineLoad()}`)
+const smokeStarted = Date.now()
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 let failures = 0
@@ -154,14 +158,27 @@ async function screenshot(name) {
   writeFileSync(join(shotsDir, `${name}.png`), Buffer.from(result.data, "base64"))
 }
 
+async function captureState(name) {
+  const stem = name.replace(/\W+/g, "-")
+  await screenshot(stem)
+  const state = await evaluate(`(() => {
+    const inspect = doc => ({ text: doc.body.innerText, html: doc.documentElement.outerHTML, focus: doc.activeElement?.outerHTML,
+      visibility: doc.visibilityState, animations: doc.getAnimations().map(a => ({ name: a.animationName, playState: a.playState, currentTime: a.currentTime, timing: a.effect?.getComputedTiming(), target: a.effect?.target?.outerHTML })) });
+    return { main: inspect(document), frames: [...document.querySelectorAll('iframe')].map(f => inspect(f.contentDocument)) };
+  })()`)
+  writeFileSync(join(shotsDir, `${stem}.json`), JSON.stringify({ elapsedMs: Date.now() - smokeStarted, uptime: machineLoad(), ...state }, null, 2))
+  writeFileSync(join(shotsDir, "main-process.log"), appLog)
+}
+
 async function check(name, fn) {
+  const started = Date.now()
   try {
     await fn()
-    console.log(`ok   ${name}`)
+    console.log(`ok   ${name} (${Date.now() - started} ms)`)
   } catch (error) {
     failures++
     console.log(`FAIL ${name}: ${error.message}`)
-    await screenshot(`fail-${name.replace(/\W+/g, "-")}`).catch(() => {})
+    await captureState(`fail-${name}`).catch(() => {})
   }
 }
 
@@ -183,6 +200,9 @@ async function assertPageInMain(text, message) {
   assert(!(await evaluate(`document.querySelector('main')?.innerText.includes("This screen could not be loaded")`)), `${message}: the page failed behind the error boundary`)
 }
 
+// Keep the automated page active when another app covers the smoke window. Otherwise
+// Chromium suspends animation frames, including the real dialog teardown checked below.
+await send("Emulation.setFocusEmulationEnabled", { enabled: true })
 await send("Page.enable")
 await send("Runtime.enable")
 
@@ -753,12 +773,14 @@ await check("settings sidebar switches sections and names the section in the URL
     assert(await waitForCondition(`document.activeElement === document.querySelector('nav[aria-label="Settings sections"] [aria-current="page"]')`), "focus did not land on the active section entry after the dialog closed")
     await evaluate(`location.hash = "#/portal/settings?section=about"`)
     assert(await waitForCondition(`${agreementOpen} && Boolean(${dialogClose})`), "dialog did not come back with its section")
+    assert(await waitForCondition(`(() => { const dialog = document.querySelector('[role="dialog"]'); return dialog?.dataset.state === "open" && !dialog.getAnimations({ subtree: true }).some(a => a.playState === "running") })()`), "license agreement enter animation did not settle")
     await evaluate(`${dialogClose}.click()`)
     assert(await waitForCondition(`!${agreementOpen}`), "license agreement dialog did not close")
     closed = true
   } finally {
     // A failure above must not leave real animations on or the agreement open (it would come back
     // with the about section) for the checks that follow.
+    if (!closed) await captureState("agreement-before-cleanup").catch(() => {})
     await disableAnimations()
     if (!closed) {
       await evaluate(`location.hash = "#/portal/settings?section=about"`)
@@ -1014,7 +1036,7 @@ await check("App Backup keeps stored access independent of sign-in and exposes g
   } finally { await send("Emulation.clearDeviceMetricsOverride") }
 })
 
-await checkAppBackupCompletion({ check, evaluate, waitForCondition, screenshot, assert, send })
+await checkAppBackupCompletion({ check, evaluate, waitForCondition, screenshot, captureState, assert, send })
 // Focused local App Backup validation; CI leaves this unset and runs the complete suite.
 if (process.env.TENUVAULT_SMOKE_SECTION === "app-backup") await finish()
 
@@ -2046,6 +2068,8 @@ if (licenseKey) {
 await finish()
 
 async function finish() {
+  writeFileSync(join(shotsDir, "main-process.log"), appLog)
+  console.log(`Machine load at finish: ${machineLoad()}`)
   ws.close()
   const exited = new Promise((r) => app.once("exit", r))
   app.kill()
