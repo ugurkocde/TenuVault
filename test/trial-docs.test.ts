@@ -14,7 +14,7 @@ describe("tenant trial guidance", () => {
     expect(index).toContain("This installation has already started its available tenant trials.")
     expect(index).toContain("Remove the saved email address for this trial")
     expect(index).toContain("any installation that joined it")
-    expect(read("docs-site/src/content/docs/licensing/manage.md")).toContain("When tenant trials are on, the welcome screen")
+    expect(read("docs-site/src/content/docs/licensing/manage.md")).toContain("The welcome screen explains that a new tenant starts with a Pro trial.")
   })
   it.each(["docs/license-network-checks.md", "tasks/reverse-trial-2026-11-09.md"])("keeps the definitive refusal and retry window rule in %s", path => {
     const text = read(path)
