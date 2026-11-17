@@ -379,7 +379,8 @@ export function changeReportMarkdown(report: ChangeReport): string {
   if (auditNote) lines.push(`- Audit log: ${md(auditNote)}`)
   if (!report.values) lines.push("- Setting values are left out of this report.")
   lines.push("")
-  lines.push("## Comparison coverage", "", ...inventoryLines(report).map(line => `- ${md(line)}`), "")
+  if (report.comparison?.inventory.length) lines.push("## Comparison coverage", "", ...inventoryLines(report).map(line => `- ${md(line)}`), "")
+  else if (report.items.length === 0) lines.push("No items were added, changed or deleted between the two backups.", "")
   for (const change of ["deleted", "modified", "added"] as const) {
     const items = report.items.filter((item) => item.change === change)
     if (!items.length) continue
@@ -430,5 +431,8 @@ export function activityLine(event: ReportActivity): string {
 
 /** The report as JSON, with the audit note cleaned like every other export. */
 export function changeReportJson(report: ChangeReport): string {
-  return JSON.stringify({ ...report, audit: { ...report.audit, note: publicAuditNote(report.audit.note, report.cloud) } }, null, 2)
+  // Keep the original export schema for ordinary backups; runtime coverage still controls delivery.
+  const { comparison, ...ordinary } = report
+  const exported = comparison?.inventory.length ? report : ordinary
+  return JSON.stringify({ ...exported, audit: { ...report.audit, note: publicAuditNote(report.audit.note, report.cloud) } }, null, 2)
 }

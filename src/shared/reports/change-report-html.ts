@@ -127,7 +127,9 @@ export function buildChangeReportDocument(report: ChangeReport, options: { brand
     if (!items.length) return ""
     return `<section><h2>${text(changeLabel(change))} (${items.length})</h2>${items.map((item) => itemHtml(item, report)).join("")}</section>`
   }).join("")
-  const empty = `<section><h2>Comparison coverage</h2><ul class="activity">${inventoryLines(report).map(line => `<li>${text(line)}</li>`).join("")}</ul></section>`
+  const empty = report.comparison?.inventory.length
+    ? `<section><h2>Comparison coverage</h2><ul class="activity">${inventoryLines(report).map(line => `<li>${text(line)}</li>`).join("")}</ul></section>`
+    : report.items.length ? "" : `<p class="none">No items were added, changed or deleted between the two backups.</p>`
 
   const other = report.otherActivity.length
     ? `<section><div class="keep"><h2>Other activity (${report.otherActivity.length + report.moreActivity})</h2><p class="lead">Audit events in this window that match no item above, for example a change that was undone before the second backup, or an object TenuVault does not back up.</p></div>

@@ -1951,7 +1951,9 @@ function ConvertTo-TvReportMarkdown {
     if ($auditNote) { $lines.Add("- Audit log: $(& $md $auditNote)") }
     if (-not $Report.values) { $lines.Add("- Setting values are left out of this report.") }
     $lines.Add("")
-    $lines.Add("## Comparison coverage"); $lines.Add(""); foreach ($line in (Get-TvInventoryLines $Report)) { $lines.Add("- $(Get-TvMarkdownText $line)") }; $lines.Add("")
+    if (@($Report.comparison.inventory).Count) {
+        $lines.Add("## Comparison coverage"); $lines.Add(""); foreach ($line in (Get-TvInventoryLines $Report)) { $lines.Add("- $(Get-TvMarkdownText $line)") }; $lines.Add("")
+    } elseif (-not @($Report.items).Count) { $lines.Add("No items were added, changed or deleted between the two backups."); $lines.Add("") }
     foreach ($change in @("deleted", "modified", "added")) {
         $items = @($Report.items | Where-Object { $_.change -eq $change })
         if (-not $items.Count) { continue }
@@ -2154,7 +2156,7 @@ function ConvertTo-TvReportHtml {
         if (-not $items.Count) { continue }
         $sections += "<section><h2>$(Get-TvHtmlText $script:ChangeLabels[$change]) ($($items.Count))</h2>" + (($items | ForEach-Object { ConvertTo-TvReportItemHtml $_ $Report }) -join "") + "</section>"
     }
-    $empty = '<section><h2>Comparison coverage</h2><ul class="activity">' + (((Get-TvInventoryLines $Report) | ForEach-Object { "<li>$(Get-TvHtmlText $_)</li>" }) -join "") + '</ul></section>'
+    $empty = if (@($Report.comparison.inventory).Count) { '<section><h2>Comparison coverage</h2><ul class="activity">' + (((Get-TvInventoryLines $Report) | ForEach-Object { "<li>$(Get-TvHtmlText $_)</li>" }) -join "") + '</ul></section>' } elseif (@($Report.items).Count) { "" } else { '<p class="none">No items were added, changed or deleted between the two backups.</p>' }
     $other = ""
     if (@($Report.otherActivity).Count) {
         $rows = (@($Report.otherActivity) | ForEach-Object {
@@ -2492,7 +2494,9 @@ function Read-TvReportAudit {
     if ($changes.Count -gt 2000) { $note = "More than 2000 Intune audit events in this window; not all of them were read, so some changes may have no actors." }
     elseif ($next) { $note = "The Intune audit log was not read to the end of this window, so some changes may have no actors." }
     # Unordered pages: the oldest events are kept, so the report still names who started the changes.
-    $kept = @($changes | Sort-Object -Property @{ Expression = { [string]$_.at } } -Stable | Select-Object -First 2000)
+    # Use the original index for ties: Sort-Object -Stable is unavailable in Windows PowerShell 5.1.
+    $indexed = for ($i = 0; $i -lt $changes.Count; $i++) { @{ Change = $changes[$i]; Index = $i } }
+    $kept = @($indexed | Sort-Object -Property @{ Expression = { [string]$_.Change.at } }, @{ Expression = { $_.Index } } | Select-Object -First 2000 | ForEach-Object { $_.Change })
     return @{ Changes = $kept; Note = $note }
 }
 
@@ -2503,6 +2507,29 @@ function Get-TvChangeReportLevel {
     $level = ([string](Get-TvAutomationVariable "TenuVaultChangeReport")).Trim().ToLowerInvariant()
     if ($level -in @("names", "full")) { return $level }
     return "off"
+}
+
+# Directory capture stays desktop-only. Declarations survive even when the large companion
+# is missing or unreadable, so an ordinary cloud comparison cannot claim it compared inventory.
+function Get-TvReportLargeFolders {
+    param([Parameter(Mandatory)][object[]]$Manifests)
+    $folders = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($metadata in $Manifests) {
+        $indexes = Get-TvProp $metadata "LargeItems"
+        if ($indexes -is [System.Collections.IDictionary]) {
+            foreach ($folder in $indexes.Keys) { if ($folder) { [void]$folders.Add([string]$folder) } }
+        }
+        foreach ($outcome in @(Get-TvProp $metadata "LargeBackupOutcomes")) {
+            $folder = Get-TvProp $outcome "Folder"
+            if ($folder -is [string] -and $folder) { [void]$folders.Add($folder) }
+        }
+    }
+    if (-not $folders.Count) {
+        foreach ($metadata in $Manifests) {
+            if (Get-TvProp $metadata "CompanionBackup") { [void]$folders.Add("Large inventory") }
+        }
+    }
+    return ,@($folders | Sort-Object)
 }
 
 function Invoke-TvChangeReport {
@@ -2529,7 +2556,7 @@ function Invoke-TvChangeReport {
         $baseline = Get-TvBackupRef $older.Name $older.Metadata
         $comparison = Get-TvBackupRef $newer.Name $newer.Metadata
         $audit = Read-TvReportAudit $baseline.timestamp $comparison.timestamp $GraphToken
-        $drift = @{ drifts = $compared.Drifts; warnings = $compared.Warnings; settingNames = $names; baseline = $baseline; comparison = $comparison }
+        $drift = @{ drifts = $compared.Drifts; warnings = $compared.Warnings; settingNames = $names; baseline = $baseline; comparison = $comparison; largeFolders = (Get-TvReportLargeFolders @($older.Metadata, $newer.Metadata)) }
         $tenantName = Get-TvAutomationVariable "TenuVaultTenantName"
         $options = @{
             TenantId = $Context.TenantId; TenantName = $(if ($tenantName) { [string]$tenantName } else { $Context.TenantId })
