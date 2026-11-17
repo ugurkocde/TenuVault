@@ -34,6 +34,7 @@ export interface ListedReport {
   trigger: "manual" | "scheduled"
   from: DriftBackupRef
   to: DriftBackupRef
+  unchanged?: boolean
   counts: ReportSummary
   audit: "included" | "unavailable"
   values: boolean

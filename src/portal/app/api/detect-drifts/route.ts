@@ -1,4 +1,5 @@
 import { backupStoragePath, isLargeBackup, LARGE_BACKUP_CONTAINER, LARGE_STORAGE_UNAVAILABLE } from "../../../../shared/backup-storage"
+import { matchingCompanions, completeHalf } from "../../../../shared/backup-companion"
 import { largeIndexes } from "../../../../shared/large-backup"
 import { decodeXml, listBlobPages, listLargeBackupPages, listOrdinaryBackupPages } from "~/lib/storage/list"
 import { typeForFolder, type Item } from "../../../../shared/intune/registry"
@@ -15,7 +16,7 @@ import { backupRef, DriftPairError, selectBackupPair, summarizeDrifts, type Back
 import { CANCELLED_HEADER, driftScanHooks, type DriftScanHooks } from "~/lib/drift/scan-hooks"
 import { mapLimit } from "../../../../shared/map-limit"
 import { REDACTED, redactSecrets } from "../../../../shared/compliance/export"
-import { backupFoldersIn } from "../../../../shared/intune/backup-names"
+import { backupFoldersIn, isBackupName } from "../../../../shared/intune/backup-names"
 import { definitionIdsIn } from "../../../../shared/intune/drift-format"
 import { graphCaller } from "~/lib/policies/graph-restore"
 import { readSettingNames } from "~/lib/drift/setting-names"
@@ -266,8 +267,32 @@ export async function POST(request: NextRequest) {
     }
     signal?.throwIfAborted()
 
+    // Reports include the inventory half of mixed runs without changing interactive drift scans.
+    let inventoryBackups: DriftResult["inventoryBackups"]
+    if (documentItems && !isLargeBackup(olderBackup.name) && !isLargeBackup(newerBackup.name)) {
+      const halves = await Promise.all([olderBackup, newerBackup].map(async backup => {
+        const metadata = backup.metadata as Record<string, any>
+        for (const outcome of metadata.LargeBackupOutcomes ?? []) if (typeof outcome.Folder === "string" && !largeFolders.includes(outcome.Folder)) largeFolders.push(outcome.Folder)
+        const id = metadata.CompanionBackup
+        if (typeof id !== "string" || !isBackupName(id) || !isLargeBackup(id)) return null
+        try {
+          const other = await loadMetadata(id)
+          if (!matchingCompanions(backup.name, metadata, id, other) || !other) return null
+          for (const folder of Object.keys(largeIndexes(other))) if (!largeFolders.includes(folder)) largeFolders.push(folder)
+          return completeHalf(other) ? id : null
+        } catch {
+          signal?.throwIfAborted()
+          return null
+        }
+      }))
+      if (halves[0] && halves[1]) inventoryBackups = { baseline: halves[0], comparison: halves[1] }
+      // Even a lost companion with no readable folder declarations cannot certify an unchanged run.
+      if (!inventoryBackups && [olderBackup, newerBackup].some(backup => (backup.metadata as any).CompanionBackup) && !largeFolders.length) largeFolders.push("Large inventory")
+    }
+
     const result: DriftResult = {
       drifts,
+      ...(inventoryBackups ? { inventoryBackups } : {}),
       ...(largeFolders.length ? { largeFolders } : {}),
       summary: summarizeDrifts(drifts),
       lastScan: new Date().toISOString(),

@@ -75,6 +75,16 @@ export interface ReportSummary {
   attributed: number
 }
 
+export interface ReportInventory {
+  folder: string
+  status: "complete" | "incomplete" | "not-performed"
+  added: number
+  modified: number
+  deleted: number
+  unchanged: number
+  examined: number
+}
+
 export interface ChangeReport {
   schemaVersion: typeof CHANGE_REPORT_SCHEMA
   tenantId: string
@@ -87,6 +97,7 @@ export interface ChangeReport {
   from: DriftBackupRef
   to: DriftBackupRef
   summary: ReportSummary
+  comparison?: { ordinary: "complete" | "incomplete"; inventory: ReportInventory[] }
   items: ReportItem[]
   /** Audit events in the window that matched no backed-up item, such as changes made and undone between the backups. */
   otherActivity: ReportActivity[]
@@ -125,7 +136,7 @@ const ORDER: Record<ReportChange, number> = { deleted: 0, modified: 1, added: 2 
 const SEVERITY_ORDER: Record<ReportSeverity, number> = { critical: 0, warning: 1, info: 2 }
 
 /** The report for one drift comparison and the audit events between its two backups. */
-export function buildChangeReport(drift: DriftResult, audit: ReportAudit, options: ReportOptions): ChangeReport {
+export function buildChangeReport(drift: DriftResult, audit: ReportAudit, options: ReportOptions, inventory: ReportInventory[] = []): ChangeReport {
   const events = "changes" in audit ? [...audit.changes].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0)) : []
   const used = new Set<string>()
   const items = drift.drifts.map((entry): ReportItem => {
@@ -177,6 +188,10 @@ export function buildChangeReport(drift: DriftResult, audit: ReportAudit, option
       deleted: items.filter((item) => item.change === "deleted").length,
       critical: items.filter((item) => item.severity === "critical").length,
       attributed: items.filter((item) => item.activity.length > 0).length,
+    },
+    comparison: {
+      ordinary: drift.warnings.length ? "incomplete" : "complete",
+      inventory: (drift.largeFolders ?? []).map(folder => inventory.find(entry => entry.folder === folder) ?? { folder, status: "not-performed", added: 0, modified: 0, deleted: 0, unchanged: 0, examined: 0 }),
     },
     items,
     otherActivity: other.slice(-MAX_OTHER_ACTIVITY),
@@ -302,16 +317,37 @@ export function reportTitle(report: Pick<ChangeReport, "tenantName" | "from" | "
  * One sentence: "3 changed, 1 added, 1 deleted; 4 of 5 with who made them." With `reason`, as in
  * the body of a cloud report's email, an unread audit log also says why, from the audit note.
  */
-export function summaryLine(report: Pick<ChangeReport, "summary" | "audit" | "items" | "cloud">, options: { reason?: boolean } = {}): string {
+export function summaryLine(report: Pick<ChangeReport, "summary" | "audit" | "items" | "cloud" | "comparison">, options: { reason?: boolean } = {}): string {
   const { added, modified, deleted, attributed } = report.summary
   const total = added + modified + deleted
-  if (total === 0) return "No changes between the two backups."
+  const inventory = report.comparison?.inventory ?? []
+  const inventoryChanges = inventory.reduce((sum, entry) => sum + entry.added + entry.modified + entry.deleted, 0)
+  const coverage = !report.comparison ? "Comparison coverage was not recorded." : report.comparison.ordinary !== "complete" ? "The ordinary comparison was incomplete." : ""
+  const missing = inventory.filter(entry => entry.status !== "complete")
+  const notes = [inventoryChanges ? `${inventoryChanges} inventory changes.` : "", coverage, ...missing.map(entry => `${entry.folder}: inventory comparison ${entry.status === "not-performed" ? "was not performed" : "was incomplete"}.`)].filter(Boolean).join(" ")
+  if (total === 0) return reportHasNoChanges(report) ? "No changes between the two backups." : notes || "No ordinary changes found."
+  const suffix = notes ? ` ${notes}` : ""
   const parts = [modified && `${modified} changed`, added && `${added} added`, deleted && `${deleted} deleted`].filter(Boolean).join(", ")
   if (report.audit.status !== "included") {
     const why = options.reason ? publicAuditNote(report.audit.note, report.cloud) : null
-    return why ? `${parts}. Who made them is unknown. ${why}` : `${parts}. Who made them is unknown: the audit log could not be read.`
+    return why ? `${parts}. Who made them is unknown. ${why}${suffix}` : `${parts}. Who made them is unknown: the audit log could not be read.${suffix}`
   }
-  return `${parts}; ${attributed} of ${total} with matching audit events.`
+  return `${parts}; ${attributed} of ${total} with matching audit events.${suffix}`
+}
+
+/** Only a completed comparison of both kinds can establish that nothing changed. */
+export function reportHasNoChanges(report: Pick<ChangeReport, "items" | "comparison">): boolean {
+  return report.items.length === 0 && report.comparison?.ordinary === "complete"
+    && report.comparison.inventory.every(entry => entry.status === "complete" && entry.added + entry.modified + entry.deleted === 0)
+}
+
+/** Shared by Markdown, PDF and the report page; counts come from index fingerprints only. */
+export function inventoryLines(report: Pick<ChangeReport, "comparison">): string[] {
+  if (!report.comparison) return ["Comparison coverage was not recorded."]
+  return [
+    `Ordinary comparison: ${report.comparison.ordinary}.`,
+    ...report.comparison.inventory.map(entry => `${entry.folder} inventory: ${entry.status === "not-performed" ? "comparison was not performed" : entry.status === "incomplete" ? "comparison was incomplete" : "comparison complete"}; ${entry.added} added, ${entry.modified} changed, ${entry.deleted} deleted, ${entry.unchanged} unchanged (${entry.examined} examined).`),
+  ]
 }
 
 /** "change-report-contoso-2026-11-06" without an extension. */
@@ -343,7 +379,7 @@ export function changeReportMarkdown(report: ChangeReport): string {
   if (auditNote) lines.push(`- Audit log: ${md(auditNote)}`)
   if (!report.values) lines.push("- Setting values are left out of this report.")
   lines.push("")
-  if (report.items.length === 0) lines.push("No items were added, changed or deleted between the two backups.", "")
+  lines.push("## Comparison coverage", "", ...inventoryLines(report).map(line => `- ${md(line)}`), "")
   for (const change of ["deleted", "modified", "added"] as const) {
     const items = report.items.filter((item) => item.change === change)
     if (!items.length) continue

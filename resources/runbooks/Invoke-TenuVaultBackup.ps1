@@ -1755,7 +1755,14 @@ function Get-TvSummaryLine {
     param([Parameter(Mandatory)][object]$Report, [switch]$Reason)
     $s = $Report.summary
     $total = $s.added + $s.modified + $s.deleted
-    if ($total -eq 0) { return "No changes between the two backups." }
+    $notes = @()
+    if (-not $Report.comparison) { $notes += "Comparison coverage was not recorded." }
+    elseif ($Report.comparison.ordinary -ne "complete") { $notes += "The ordinary comparison was incomplete." }
+    foreach ($entry in @($Report.comparison.inventory | Where-Object { $_ })) {
+        if ($entry.status -ne "complete") { $notes += "$($entry.folder): inventory comparison was not performed." }
+    }
+    $suffix = if ($notes.Count) { " " + ($notes -join " ") } else { "" }
+    if ($total -eq 0) { if ($notes.Count) { return $notes -join " " }; return "No changes between the two backups." }
     $parts = @()
     if ($s.modified) { $parts += "$($s.modified) changed" }
     if ($s.added) { $parts += "$($s.added) added" }
@@ -1763,10 +1770,20 @@ function Get-TvSummaryLine {
     $text = $parts -join ", "
     if ($Report.audit.status -ne "included") {
         $why = if ($Reason) { Get-TvPublicAuditNote $Report.audit.note } else { $null }
-        if ($why) { return "$text. Who made them is unknown. $why" }
-        return "$text. Who made them is unknown: the audit log could not be read."
+        if ($why) { return "$text. Who made them is unknown. $why$suffix" }
+        return "$text. Who made them is unknown: the audit log could not be read.$suffix"
     }
-    return "$text; $($s.attributed) of $total with matching audit events."
+    return "$text; $($s.attributed) of $total with matching audit events.$suffix"
+}
+
+function Get-TvInventoryLines {
+    param([Parameter(Mandatory)][object]$Report)
+    if (-not $Report.comparison) { return ,@("Comparison coverage was not recorded.") }
+    $lines = @("Ordinary comparison: $($Report.comparison.ordinary).")
+    foreach ($entry in @($Report.comparison.inventory | Where-Object { $_ })) {
+        $lines += "$($entry.folder) inventory: comparison was not performed; 0 added, 0 changed, 0 deleted, 0 unchanged (0 examined)."
+    }
+    return ,$lines
 }
 
 function Get-TvReportFileName {
@@ -1885,6 +1902,10 @@ function New-TvChangeReport {
             critical = @($reportItems | Where-Object { $_.severity -eq "critical" }).Count
             attributed = @($reportItems | Where-Object { @($_.activity).Count -gt 0 }).Count
         }
+        comparison = [ordered]@{
+            ordinary = if (@($Drift.warnings).Count) { "incomplete" } else { "complete" }
+            inventory = @($Drift.largeFolders | Where-Object { $_ } | ForEach-Object { [ordered]@{ folder = $_; status = "not-performed"; added = 0; modified = 0; deleted = 0; unchanged = 0; examined = 0 } })
+        }
         items = $reportItems
         otherActivity = @($other | Select-Object -Last $script:MaxOtherActivity)
         moreActivity = [Math]::Max(0, $other.Count - $script:MaxOtherActivity)
@@ -1930,7 +1951,7 @@ function ConvertTo-TvReportMarkdown {
     if ($auditNote) { $lines.Add("- Audit log: $(& $md $auditNote)") }
     if (-not $Report.values) { $lines.Add("- Setting values are left out of this report.") }
     $lines.Add("")
-    if (@($Report.items).Count -eq 0) { $lines.Add("No items were added, changed or deleted between the two backups."); $lines.Add("") }
+    $lines.Add("## Comparison coverage"); $lines.Add(""); foreach ($line in (Get-TvInventoryLines $Report)) { $lines.Add("- $(Get-TvMarkdownText $line)") }; $lines.Add("")
     foreach ($change in @("deleted", "modified", "added")) {
         $items = @($Report.items | Where-Object { $_.change -eq $change })
         if (-not $items.Count) { continue }
@@ -2133,7 +2154,7 @@ function ConvertTo-TvReportHtml {
         if (-not $items.Count) { continue }
         $sections += "<section><h2>$(Get-TvHtmlText $script:ChangeLabels[$change]) ($($items.Count))</h2>" + (($items | ForEach-Object { ConvertTo-TvReportItemHtml $_ $Report }) -join "") + "</section>"
     }
-    $empty = if (@($Report.items).Count) { "" } else { '<p class="none">No items were added, changed or deleted between the two backups.</p>' }
+    $empty = '<section><h2>Comparison coverage</h2><ul class="activity">' + (((Get-TvInventoryLines $Report) | ForEach-Object { "<li>$(Get-TvHtmlText $_)</li>" }) -join "") + '</ul></section>'
     $other = ""
     if (@($Report.otherActivity).Count) {
         $rows = (@($Report.otherActivity) | ForEach-Object {

@@ -293,3 +293,27 @@ describe("report periods", () => {
     ])
   })
 })
+
+
+it.each(["complete", "incomplete", "not-performed"] as const)("exports inventory coverage and counts through Markdown, JSON and the PDF document: %s", status => {
+  const input = { ...result([]), largeFolders: ["Users"] }
+  const report = buildChangeReport(input, { changes: [] }, options, [{ folder: "Users", status, added: 2, modified: 1, deleted: 3, unchanged: 4, examined: 10 }])
+  expect(report.summary).toMatchObject({ added: 0, modified: 0, deleted: 0 })
+  expect(summaryLine(report)).toContain("6 inventory changes")
+  for (const rendered of [changeReportMarkdown(report), buildChangeReportDocument(report).html]) {
+    expect(rendered).toContain("Users inventory:")
+    expect(rendered).toContain("2 added, 1 changed, 3 deleted, 4 unchanged")
+    expect(rendered).not.toContain("No changes between")
+    expect(rendered).not.toContain("No items were added")
+    if (status !== "complete") expect(rendered).toContain(status === "incomplete" ? "comparison was incomplete" : "comparison was not performed")
+  }
+  expect(JSON.parse(changeReportJson(report)).comparison.inventory[0]).toMatchObject({ folder: "Users", status, added: 2 })
+})
+it("never calls an unperformed or incomplete comparison unchanged", () => {
+  const report = buildChangeReport({ ...result([]), largeFolders: ["Groups"] }, { changes: [] }, options)
+  expect(summaryLine(report)).toContain("was not performed")
+  const incomplete = buildChangeReport({ ...result([]), warnings: [{ file: "policy.json", backup: "older", message: "unreadable" }] }, { changes: [] }, options)
+  expect(summaryLine(incomplete)).toContain("ordinary comparison was incomplete")
+  const { comparison: _comparison, ...legacy } = report
+  expect(summaryLine(legacy)).toContain("coverage was not recorded")
+})
