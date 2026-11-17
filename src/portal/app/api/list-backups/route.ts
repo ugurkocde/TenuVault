@@ -28,6 +28,9 @@ function formatBytes(bytes: number): string {
 
 const storageHeaders = (token: string) => ({ 'x-ms-version': '2021-12-02', 'x-ms-date': new Date().toUTCString(), Authorization: `Bearer ${token}` })
 
+// At most eight missing-discovery companion lookups per history request.
+export const COMPANION_LOOKUP_BUDGET = 8
+
 interface MetadataRead { metadata: any; metadataError?: string; unavailable?: boolean; sealed?: boolean; foreign?: boolean }
 
 /**
@@ -310,6 +313,7 @@ export async function POST(request: NextRequest) {
     const discoveryUrl = `https://${storageAccountName}.blob.core.windows.net/${LARGE_BACKUP_CONTAINER}?restype=container&comp=list&prefix=backup-large-`
     const warnings: string[] = []
     const largeText = await listLargeBackupPages(discoveryUrl, accessToken, warnings)
+    const largeDiscoveryComplete = warnings.length === 0
 
     // Parse XML response to extract backup folders
     // Summary mode groups one flat inventory in process, including older backups without manifests.
@@ -384,7 +388,7 @@ export async function POST(request: NextRequest) {
     backups.push(...described.filter((backup) => !omittedLarge.includes(backup) && !backup.foreign && !backup.unresolved && backup.ownerKind !== 'other'))
 
     // Resolve only linked manifests. Existing descriptions are reused, including their cached reads.
-    // An absent discovery entry costs one GET per distinct companion, never a payload listing.
+    // Successful discovery is authoritative. A failed or partial discovery has a fixed lookup budget.
     const byId = new Map(described.map(backup => [backup.id, backup]))
     const linkedReads = new Map<string, Promise<MetadataRead>>()
     const hidden = new Set<string>()
@@ -401,7 +405,11 @@ export async function POST(request: NextRequest) {
           cause = describedCompanion.error ? `Large companion is unreadable. ${describedCompanion.error}` : describedCompanion.status === "running" ? "Large companion is still running." : "Large companion stopped before completion (crashed or interrupted)."
         } else if (typeof companionId === "string" && parseBackupName(companionId) && isLargeBackup(companionId)) {
           let reading = linkedReads.get(companionId)
-          if (!reading) {
+          if (!reading && largeDiscoveryComplete) {
+            cause = "Large companion is missing (not found by complete discovery)."
+          } else if (!reading && linkedReads.size >= COMPANION_LOOKUP_BUDGET) {
+            cause = `Large companion is unresolved: discovery was unavailable or partial and the ${COMPANION_LOOKUP_BUDGET}-lookup recovery budget was reached. Refresh after checking large storage access.`
+          } else if (!reading) {
             reading = (async (): Promise<MetadataRead> => {
               try {
                 const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(`${companionId}/metadata.json`)}`, { headers: storageHeaders(accessToken) })
@@ -412,9 +420,11 @@ export async function POST(request: NextRequest) {
             })()
             linkedReads.set(companionId, reading)
           }
-          const read = await reading
-          other = read.metadata
-          cause = read.metadataError
+          if (reading) {
+            const read = await reading
+            other = read.metadata
+            cause = read.metadataError
+          }
         } else cause = "Large companion does not match: invalid or missing companion ID."
       }
       // A reciprocal claim identifies an unfinished half, but can never certify completion.

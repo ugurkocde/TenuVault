@@ -151,7 +151,7 @@ for (const azure of [false, true]) describe(azure ? "Azure emulator mixed runs" 
     expect(row).toMatchObject({ status: "incomplete", coverage: "incomplete", notRead: ["AuthorizationPolicy"], ordinaryOnlyExport: expect.any(Boolean) })
     expect(row.largeProblems[0].reason).toContain(state === "cancelled" ? "cancelled" : state === "running" ? "running" : state === "failed capture" ? "Expired paging token" : state === "403" ? "403" : state === "crashed" ? "crashed" : "missing")
     expect(f.requests.some(value => value.includes("payload"))).toBe(false)
-    if (["missing", "403"].includes(state)) expect(f.requests.filter(value => value === `GET /${LARGE_BACKUP_CONTAINER}/${large}/metadata.json`)).toHaveLength(1)
+    if (["missing", "403"].includes(state)) expect(f.requests.filter(value => value === `GET /${LARGE_BACKUP_CONTAINER}/${large}/metadata.json`)).toHaveLength(state === "missing" ? 0 : 1)
     expect((await validate(f.request({ backupId: ordinary }))).status).toBe(200)
   })
   it("exports either selected half as one tar and imports both with reciprocal identity intact", async () => {
