@@ -39,6 +39,8 @@ For Intel Macs, use the [Intel download](https://www.tenuvault.com/download/mac-
 A Windows x64 `.msi` is also available on the [release page](https://github.com/ugurkocde/TenuVault/releases/latest) for managed deployment.
 See the [installation guide](https://docs.tenuvault.com/getting-started/install/) for help choosing.
 
+Rather set it up together? Book a [free setup call](https://www.tenuvault.com/setup-call?src=github): 30 minutes, free on every plan. You share your screen and we guide you through connecting your tenant and the first backup.
+
 ## What it does
 
 - **[Intune backup](https://www.tenuvault.com/intune-backup).** Settings Catalog, device configurations, compliance, scripts, Administrative Templates

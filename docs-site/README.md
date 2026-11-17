@@ -22,6 +22,10 @@ npm run preview  # serve the built site
 
 Link between pages with absolute paths and a trailing slash, for example `/security/encryption/#the-recovery-key`. The build checks every internal link and heading anchor.
 
+## Screenshots
+
+See [SCREENSHOTS.md](SCREENSHOTS.md) for the full page audit, capture provenance and regeneration commands.
+
 ## Deployment
 
 Vercel deploys the site on every push to `main` that changes `docs-site/` (project root directory `docs-site`, framework Astro). Redirects in `vercel.json` only apply on Vercel, not in `npm run preview`.

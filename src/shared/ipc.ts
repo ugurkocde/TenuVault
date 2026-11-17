@@ -729,7 +729,10 @@ export interface TenuVaultBridge {
 }
 
 /** Plan failures cross the preload boundary as data, then become renderer errors. */
-export type TenuVaultPreloadBridge = Omit<TenuVaultBridge, "auth" | "license" | "schedules" | "pdfBranding" | "backupReader"> & {
+export type TenuVaultPreloadBridge = Omit<TenuVaultBridge, "auth" | "license" | "schedules" | "pdfBranding" | "backupReader" | "appSources"> & {
+  appSources: Omit<TenuVaultBridge["appSources"], "restore"> & {
+    restore: (...args: Parameters<TenuVaultBridge["appSources"]["restore"]>) => Promise<Awaited<ReturnType<TenuVaultBridge["appSources"]["restore"]>> | PlanIpcError>
+  }
   backupReader: Omit<TenuVaultBridge["backupReader"], "prepare" | "verify" | "test"> & {
     prepare: (tenantId: string) => Promise<BackupReaderState | PlanIpcError>
     verify: (tenantId: string, clientId: string, renewal?: boolean) => Promise<BackupReaderState | PlanIpcError>

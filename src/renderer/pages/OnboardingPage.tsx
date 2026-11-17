@@ -21,6 +21,7 @@ import { FirstBackupNextSteps } from "../components/FirstBackupNextSteps"
 import { PlanContext, TrialOrKey } from "../components/PlanChoice"
 import { tenantLicense, tenantPlan, useLicense, useTenantPlan } from "../lib/license"
 import { ConnectTenantSetup } from "../components/ConnectTenantSetup"
+import { SetupCallHintShown, SetupCallLink } from "../components/SetupCallLink"
 import { recordSetup, SetupDiagnosticsReminder } from "../components/SetupDiagnostics"
 import { TenantSignInForm, type SignInFields } from "../components/TenantSignInForm"
 import { bridge } from "../lib/bridge"
@@ -172,6 +173,8 @@ export default function OnboardingPage() {
     completedBackup.current = runningJobId
     setSnapshot(trackedStatus)
     setCancelling(false)
+    // A cancel that failed while the backup ran says nothing about how it ended.
+    setJobError("")
     if (tracked.isSuccessful && tenantProfileId) updateTenant(tenantProfileId, { lastBackup: new Date().toISOString(), syncStatus: "success" })
   }, [tracked?.isComplete, tracked?.isSuccessful, trackedStatus, runningJobId, tenantProfileId, updateTenant])
 
@@ -368,10 +371,14 @@ export default function OnboardingPage() {
 
   const cancelBackup = async () => {
     if (!runningJobId) return
+    const jobId = runningJobId
     setCancelling(true)
     try {
-      await bridge.backups.cancel(runningJobId)
+      await bridge.backups.cancel(jobId)
     } catch (error) {
+      // The answer can arrive after the backup ended or another one started. It then says nothing
+      // the admin can act on.
+      if (completedBackup.current === jobId || handledPollError.current === jobId || leavingBackup.current.runningJobId !== jobId) return
       setJobError(error instanceof Error ? error.message : "Could not cancel the backup. Try again.")
       setCancelling(false)
     }
@@ -380,6 +387,13 @@ export default function OnboardingPage() {
   const finished = Boolean(displayJob?.isComplete)
   const hasBackupTypes = hasOnboardingBackups(services)
   const succeeded = Boolean(displayJob?.isComplete && displayJob.isSuccessful)
+  // A backup that could not start or ended with an error. Cancelling is the admin's own choice, and
+  // an error next to a backup that is on screen is a failed cancel, not a failed backup.
+  const backupFailed = (Boolean(jobError) && !displayJob) || (finished && !succeeded && displayJob?.status !== "Cancelled")
+  // The license refusal that sent the admin back to the Sign in step leaves them stuck there. A
+  // tenant that is already connected has its own way on, and a message of the Storage step that
+  // is still set after Previous is not an error of this step.
+  const signInStuck = Boolean(addError?.license)
 
   return (
     <div className={cn("@container mx-auto space-y-4 p-5 lg:p-6", step <= 0 ? "max-w-[96rem]" : "max-w-3xl")}>
@@ -457,6 +471,7 @@ export default function OnboardingPage() {
                   <TrialKeyRefusalActions message={addError.message} source="setup-trial-key-refused" />
                   {addError.message.includes(TRIAL_USED_MESSAGE) ? <Link className="text-blue-600 underline" to="/license">Enter a Pro license key</Link> : <TrialOrKey source="setup-license-error" />}
                 </div>}
+                {signInStuck && <SetupCallLink source="signin-error" variant="hint" />}
               </div>
             )}
             {account ? (
@@ -475,28 +490,31 @@ export default function OnboardingPage() {
                 </div>
               </div>
             ) : (
-              <TenantSignInForm
-                choice={onboardingPermissions(services)}
-                initial={fields}
-                autoSignIn={autoSignIn}
-                hidePaste={Boolean(setupNotice)}
-                onFieldsChange={setFields}
-                onSignedIn={(signedIn, displayName) => {
-                  resumeCheck.current = false
-                  if (connected(signedIn.tenantId)) {
+              // The error above already offers the setup call, so an error of the form does not repeat it.
+              <SetupCallHintShown.Provider value={signInStuck}>
+                <TenantSignInForm
+                  choice={onboardingPermissions(services)}
+                  initial={fields}
+                  autoSignIn={autoSignIn}
+                  hidePaste={Boolean(setupNotice)}
+                  onFieldsChange={setFields}
+                  onSignedIn={(signedIn, displayName) => {
+                    resumeCheck.current = false
+                    if (connected(signedIn.tenantId)) {
+                      setAutoSignIn(null)
+                      setAddError({ message: "This tenant is already connected to TenuVault.", license: false, alreadyConnected: true })
+                      return
+                    }
+                    setAddError(null)
+                    // The automatic sign-in is for this one registration; a later sign-in asks again.
                     setAutoSignIn(null)
-                    setAddError({ message: "This tenant is already connected to TenuVault.", license: false, alreadyConnected: true })
-                    return
-                  }
-                  setAddError(null)
-                  // The automatic sign-in is for this one registration; a later sign-in asks again.
-                  setAutoSignIn(null)
-                  setSetupNotice("")
-                  setAccount(signedIn)
-                  setFields((current) => ({ ...current, displayName }))
-                  setStep(2)
-                }}
-              />
+                    setSetupNotice("")
+                    setAccount(signedIn)
+                    setFields((current) => ({ ...current, displayName }))
+                    setStep(2)
+                  }}
+                />
+              </SetupCallHintShown.Provider>
             )}
           </div>
         )}
@@ -576,6 +594,7 @@ export default function OnboardingPage() {
             )}
             {succeeded && credentials && <TrialShortcuts tenantId={credentials.tenantId} />}
             {succeeded && credentials && <FirstBackupNextSteps tenantId={credentials.tenantId} plan={plan} local={!credentials.storageAccountName || credentials.storageAccountName.startsWith(LOCAL_STORAGE_PREFIX)} />}
+            {backupFailed && <SetupCallLink source="first-backup-error" variant="hint" />}
             <div className="flex flex-wrap justify-end gap-2">
               {succeeded ? (
                 <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => void navigate("/portal/dashboard")}>

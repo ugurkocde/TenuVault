@@ -43,6 +43,13 @@ CIS Benchmarks is available on Pro and MSP. TenuVault is CIS Benchmarks Certifie
 
 Native framework pages link to the publisher with **Publisher reference**. Policy-pack framework pages describe their source and coverage, and link to the publisher with **Source**.
 
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/frameworks-light.webp" aria-label="Open full-size screenshot: frameworks light">
+    <img src="/images/screenshots/frameworks-light.webp" alt="The framework catalog offers the available comparison workflows" width="2880" height="1800" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>The framework catalog offers the available comparison workflows. Captured from the current app; no assessment was run. Select the image to view it full size.</figcaption>
+</figure>
+
 ## What your plan includes
 
 | | Community | Pro | MSP |

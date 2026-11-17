@@ -24,7 +24,7 @@ jobs:
   checks:
     name: Typecheck, test and smoke test
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     outputs:
       package_required: ${{ steps.changes.outputs.package_required }}
     steps:
@@ -103,6 +103,51 @@ jobs:
         with:
           name: smoke-screenshots-linux
           path: out/smoke
+          if-no-files-found: ignore
+
+      # A complete first sign-in in every browser engine, in the packaged Linux app, against a
+      # local stand-in for login.microsoftonline.com and the licensing service that the runner's
+      # hosts file and trust store point to (scripts/sign-in-e2e).
+      - name: Package the Linux app
+        run: npx electron-builder --config electron-builder.config.cjs --linux dir --publish never
+
+      - name: Install the sign-in test
+        run: |
+          npm ci --prefix scripts/sign-in-e2e
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libnss3-tools gnome-keyring libsecret-tools dbus-x11
+          browsers() { node scripts/sign-in-e2e/node_modules/playwright/cli.js install --with-deps chromium firefox webkit; }
+          browsers || { sleep 15; browsers; }
+
+      # Packaged builds keep secrets in the OS credential store: an unlocked keyring in a session
+      # bus, checked with secret-tool before the test starts.
+      - name: Sign-in end to end in the packaged app
+        timeout-minutes: 6
+        env:
+          TENUVAULT_SMOKE_APP: ${{ github.workspace }}/dist/linux-unpacked/tenuvault-desktop
+          XDG_CURRENT_DESKTOP: GNOME
+        run: |
+          # The inner script expands in the session bus shell, not here.
+          # shellcheck disable=SC2016
+          dbus-run-session -- bash -euo pipefail -c '
+            mkdir -p ~/.local/share/keyrings
+            eval "$(printf "\n" | gnome-keyring-daemon --unlock)"
+            eval "$(printf "\n" | gnome-keyring-daemon --start --components=secrets)"
+            printf probe | secret-tool store --label=probe tenuvault-sign-in-e2e probe
+            test "$(secret-tool lookup tenuvault-sign-in-e2e probe)" = probe
+            xvfb-run -a node scripts/sign-in-e2e/run.mjs out/sign-in-e2e
+          '
+
+      - name: Undo the sign-in test's changes to the runner
+        if: always()
+        run: node scripts/sign-in-e2e/runner.mjs cleanup
+
+      - name: Upload sign-in results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sign-in-e2e-linux
+          path: out/sign-in-e2e
           if-no-files-found: ignore
 
   # Unsigned installers for pull requests, so contributors see that packaging still works.
@@ -216,6 +261,35 @@ jobs:
           TENUVAULT_SMOKE_APP: ${{ github.workspace }}/${{ matrix.app }}
         run: npm run smoke -- out/smoke
 
+      # The same steps as the Release workflow's: the test is checked out from the workflow's own
+      # commit and installed on its own, so every pull request proves the release gate's setup.
+      - name: Check out the sign-in test
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .sign-in-test
+          sparse-checkout: scripts/sign-in-e2e
+          persist-credentials: false
+
+      - name: Install the sign-in test
+        shell: bash
+        run: |
+          npm ci --prefix .sign-in-test/scripts/sign-in-e2e
+          browsers() { node .sign-in-test/scripts/sign-in-e2e/node_modules/playwright/cli.js install chromium firefox webkit; }
+          browsers || { sleep 15; browsers; }
+
+      - name: Sign-in end to end in the packaged app
+        timeout-minutes: 6
+        shell: bash
+        env:
+          TENUVAULT_SMOKE_APP: ${{ github.workspace }}/${{ matrix.app }}
+        run: node .sign-in-test/scripts/sign-in-e2e/run.mjs out/sign-in-e2e
+
+      - name: Undo the sign-in test's changes to the runner
+        if: always() && hashFiles('.sign-in-test/scripts/sign-in-e2e/runner.mjs') != ''
+        shell: bash
+        run: node .sign-in-test/scripts/sign-in-e2e/runner.mjs cleanup
+
       - name: Upload installers
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -235,6 +309,14 @@ jobs:
         with:
           name: smoke-screenshots-${{ matrix.name }}
           path: out/smoke
+          if-no-files-found: ignore
+
+      - name: Upload sign-in results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sign-in-e2e-${{ matrix.name }}
+          path: out/sign-in-e2e
           if-no-files-found: ignore
 
   # Preserve the required check names even when no installer build is needed.

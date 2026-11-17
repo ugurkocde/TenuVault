@@ -17,6 +17,7 @@ While no tenant is connected, TenuVault always opens the guided setup, **Set up 
 * Three short points on what TenuVault does: choose Microsoft services to protect with encrypted backups you own, restore a single policy or a whole set, and see what changed between backups.
 * **Connect your tenant**: opens **Set up TenuVault**.
 * A note that new tenants start with a Pro trial, no card and no email needed, that setup takes a few minutes (connect your tenant with Microsoft sign-in and take a first backup), and that one tenant continues on Community Free afterwards.
+* **Rather do it together? Book a free setup call**: opens the [free setup call](/getting-started/#free-setup-call) page in your browser. The call takes 30 minutes and is free on every plan. You share your screen and we set it up in your tenant.
 * **I have a license key**.
 
 To buy a license or ask for an invoice, use the **License** page after setup. See [Activate and manage your license](/licensing/manage/). For what each plan includes, see [Plans and features](/licensing/).
@@ -29,22 +30,16 @@ To buy a license or ask for an invoice, use the **License** page after setup. Se
 
 The first tenant you sign in to without a key starts its 14 day Pro trial, unless that tenant already had one. If your organization shares a TenuVault license with that tenant, TenuVault picks it up when you sign in, and the tenant uses that plan instead. You can also start the trial or enter a key later, on the **Storage** step of the setup or on the **License** page.
 
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/welcome.webp" aria-label="Open full-size screenshot: welcome">
+    <img src="/images/screenshots/welcome.webp" alt="The welcome screen offers Connect your tenant, a free setup call, setup diagnostics and license-key entry" width="1280" height="893" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>The welcome screen offers Connect your tenant, a free setup call, setup diagnostics and license-key entry. Captured from the desktop app. Select the image to view it full size.</figcaption>
+</figure>
+
 ## Start a trial
 
 There is nothing to start: connecting a new tenant starts its 14 day Pro trial automatically, with no card and no email. The **Storage** step of the setup shows the trial with its end date. The trial ends without a charge, can be extended once, and afterwards one tenant continues on Community. See [Free trial, no card needed](/licensing/#free-trial-no-card-needed).
-
-### When tenant trials are unavailable
-
-Only then does the welcome screen show **Try Pro free for 30 days, no card**, which emails a trial key:
-
-1. Select **Try Pro free for 30 days, no card**.
-2. Enter your work email address and select **Start free trial**. No payment card is needed.
-3. TenuVault shows **Check your inbox** and a **Your trial key** field. The key usually arrives within a minute. Keys start with `TENU-`.
-4. Copy the key from the email and return to TenuVault. TenuVault finds the key on the clipboard and saves it by itself. You can also paste it into **Your trial key** and select **Save key**.
-
-TenuVault reads the clipboard only while it waits for a trial key, and only when its window gets focus. Only text shaped like a TenuVault key, starting with `TENU-`, is ever read back into the app; anything else on the clipboard is ignored.
-
-This email trial runs for 30 days and ends without a charge. See [Free trial, no card needed](/licensing/#free-trial-no-card-needed).
 
 ## Enter a license key
 

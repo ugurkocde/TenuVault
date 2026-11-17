@@ -64,6 +64,13 @@ You need: the tenant on Pro or MSP with backups in your Azure storage account (S
 3. Create the resources with **Deploy to Azure** or with the copied setup command and scripts. Add `-AlertEmail you@contoso.com` to the command (or `-NoFailureAlert`).
 4. Paste the block printed at the end of setup (or the template's `pasteIntoTenuVault` output) into the app. The Schedule tab then shows the Azure schedule, its next runs, and how the last cloud backup ended.
 
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/backup-cloud.webp" aria-label="Open full-size screenshot: backup cloud">
+    <img src="/images/screenshots/backup-cloud.webp" alt="Select In Azure, no computer needed to open the cloud setup handoff" width="2880" height="3600" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Select In Azure, no computer needed to open the cloud setup handoff. Example setup; no Azure resources were deployed. Select the image to view it full size.</figcaption>
+</figure>
+
 ### The setup script
 
 Download [`New-TenuVaultCloudBackup.ps1`](/downloads/New-TenuVaultCloudBackup.ps1) and [`Invoke-TenuVaultBackup.ps1`](/downloads/Invoke-TenuVaultBackup.ps1), keep the runbook in a `runbooks` folder next to the script, and run for example:

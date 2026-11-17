@@ -22,7 +22,7 @@ The first backup uses the default scope, **Everything except apps**: policies, s
 
 To do it later, select **Skip for now**. TenuVault opens the dashboard, and you can run the backup from **Backup & Restore** at any time.
 
-If the first backup fails or you cancel it, select **Try again** to run it again, or **Go to Backup & Restore** to continue there.
+If the first backup fails or you cancel it, select **Try again** to run it again, or **Go to Backup & Restore** to continue there. Under a first backup that failed or could not start, **Stuck here? Book a free setup call** opens the [free setup call](/getting-started/#free-setup-call) page in your browser. A backup you cancelled does not show it.
 
 ### Next steps
 
@@ -45,6 +45,13 @@ When a schedule is already on or the key is already saved, the step says so inst
 5. Select **Start backup**.
 
 For more on manual backups, see [Run a backup](/backups/).
+
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/backup-scope.webp" aria-label="Open full-size screenshot: backup scope">
+    <img src="/images/screenshots/backup-scope.webp" alt="Run Backup opens the scope picker before anything starts" width="1632" height="708" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Run Backup opens the scope picker before anything starts. Example tenant data. Select the image to view it full size.</figcaption>
+</figure>
 
 ## Read the result
 

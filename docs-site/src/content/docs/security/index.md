@@ -15,7 +15,7 @@ TenuVault is built so that your Intune configuration, your backups and your Micr
 | Who does TenuVault act as? | You, the signed-in admin. It can never do more than your own roles allow. Only scheduled backups of a tenant with a Backup Reader read as that read-only app. |
 | Do MFA and Conditional Access apply? | Yes, exactly as they do when you sign in to the Intune admin center. The Backup Reader is an application, so Conditional Access for workload identities applies to it instead. See [Conditional Access and TenuVault](/security/conditional-access/). |
 | Where do backups go? | Encrypted on your device, or into your own Azure storage account, where Azure encrypts them at rest and your role assignments decide who reads them. |
-| Does tenant data reach TenuVault servers? | No, with one opt-in exception: feedback you choose to send with **Share feedback**. It contains the text you write and, only if you tick it, a screenshot of the window that may show tenant, policy or user names. Otherwise only license checks go to tenuvault.com, and they carry no tenant configuration, backups or access tokens. |
+| Does tenant data reach TenuVault servers? | No, with one opt-in exception: feedback you choose to send with **Share feedback**. It contains the text you write and, only if you tick it, a screenshot of the window that may show tenant, policy or user names. Otherwise tenuvault.com receives license checks, the App Backup capture check and, where they apply, setup diagnostics and CIS Benchmarks downloads. None of them carry tenant configuration, backups or Microsoft access tokens. |
 | Is TenuVault data shared with anyone? | Only with the service providers that run TenuVault's services, and never sold or shared for their own marketing. Each license activation (installation ID, tenant ID, operating system and app version) is recorded with your license key in Polar, the merchant of record. Licenses shared with a tenant are stored with the tenant ID and client ID in TenuVault's database at Supabase, and Vercel hosts the services and keeps request logs. Feedback you choose to send is stored up to 12 months; the email copy to support is kept as support correspondence. See [Service providers](https://www.tenuvault.com/privacy#processors) in the privacy policy. |
 | Can I check this myself? | Yes. The source code is public at [github.com/ugurkocde/TenuVault](https://github.com/ugurkocde/TenuVault). |
 
@@ -51,7 +51,7 @@ Backups on your device are encrypted with AES-256-GCM before they are written to
 
 ## What TenuVault the company can see
 
-TenuVault talks to its own server, tenuvault.com, to check your license and, only when you send it, to receive your feedback. The table below lists everything a license check and a feedback message can include. [Network connections and data flows](/security/data-flows/) lists every request in detail.
+TenuVault talks to its own server, tenuvault.com, to check your license, to ask whether an App Backup installer capture may start, to download CIS Benchmarks content on Pro and MSP and, only when you choose to send them, to receive your feedback and setup diagnostics. The table below lists everything these requests can include. [Network connections and data flows](/security/data-flows/) lists every request in detail.
 
 | TenuVault can see | When |
 | --- | --- |
@@ -59,9 +59,11 @@ TenuVault talks to its own server, tenuvault.com, to check your license and, onl
 | Your tenant ID | Each time a tenant is activated or refreshed. |
 | The client ID of your app registration | When a license key is activated or refreshed for a tenant you are signed in to, so the license can be shared with that tenant's other admins. |
 | A random installation ID | Each activation and refresh. It is generated on your machine and identifies this installation, not you. |
-| Your operating system (Windows or macOS) and the TenuVault version | When a tenant is activated, and with organization license checks. |
+| Your operating system (Windows or macOS) and the TenuVault version | When a tenant is activated, and with organization license checks. The App Backup capture check also names them, in its standard `User-Agent` header. |
+| The signed entitlement from your last license check | On Pro and MSP, when you open the CIS Benchmarks page or load a benchmark. It contains your license key ID, the activation ID, the tenant ID, the installation ID and your plan. See [CIS Benchmarks content](/security/data-flows/#cis-benchmarks-content). |
 | A Microsoft ID token for your sign-in | When a license is shared with your tenant, or when you use a license your organization shared. The token contains identity claims such as your name and user principal name. The licensing service verifies it with Microsoft's public signing keys to confirm which tenant and app registration you signed in to, and does not store it. |
 | Your public IP address | As with any web request. The licensing service uses it only to rate limit requests. |
+| That an App Backup installer capture is starting | Each time you select **Start backup** in App Backup on Windows. The request carries one random value made for it, and no Microsoft token, tenant ID, license key or installation ID. See [Capture check](/security/data-flows/#capture-check). |
 | Setup diagnostics, if a new install chooses to share them | For 30 days after you agree: which setup steps worked, Microsoft error codes such as `AADSTS53003`, app version, operating system and a random ID that links the steps. Never tenant names or IDs, account names, client IDs, error messages, policies or backups. Kept 180 days. Turning it off deletes the events already sent; only the random ID is kept for 180 days, as a marker so late uploads are discarded. See [Setup diagnostics](/security/data-flows/#setup-diagnostics). |
 | Feedback you send | Only when you click **Send feedback** in **Share feedback**: your answers, the reply-to email if you enter one, app version, operating system, plan, page name and a random message ID. A screenshot of the window only if you tick it; it may show tenant, policy or user names. Stored up to 12 months; the email copy to support is kept as support correspondence. A keyed hash of your IP address is kept 24 hours for rate limiting. See [Feedback](/security/data-flows/#feedback). |
 
@@ -77,7 +79,7 @@ Apart from what you write in feedback and a feedback screenshot you choose to at
 | Your backup recovery key | It is created on your machine and only leaves it when you save it to a file yourself. |
 | Your storage account contents | TenuVault has no access to your Azure subscription. |
 
-TenuVault contains no analytics or crash reporting. Apart from license checks, it sends TenuVault only feedback you choose to send and, on a new install that chooses to share them, [setup diagnostics](/security/data-flows/#setup-diagnostics) for 30 days after it agrees: which setup steps worked and which Microsoft error codes stopped them, never tenant names or IDs, account names, policies or backups.
+TenuVault contains no analytics or crash reporting. Apart from license checks, the App Backup [capture check](/security/data-flows/#capture-check), which carries one random value, and, on Pro and MSP, CIS Benchmarks downloads, which carry your signed license entitlement, it sends TenuVault only feedback you choose to send and, on a new install that chooses to share them, [setup diagnostics](/security/data-flows/#setup-diagnostics) for 30 days after it agrees: which setup steps worked and which Microsoft error codes stopped them, never tenant names or IDs, account names, policies or backups.
 
 ## Control and revoke access
 

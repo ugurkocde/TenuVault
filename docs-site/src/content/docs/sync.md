@@ -49,6 +49,13 @@ The page leads you through four steps: **Choose settings**, **Choose targets**, 
 
 The status is read again when you start a new sync, after a sync or rollback finishes, and when you return to the TenuVault window, so it reflects edits made in a tenant meanwhile.
 
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/sync.webp" aria-label="Open full-size screenshot: sync">
+    <img src="/images/screenshots/sync.webp" alt="Sync starts by choosing settings from the selected source tenant" width="2880" height="2000" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Sync starts by choosing settings from the selected source tenant. Example policy list; no sync was planned or applied. Select the image to view it full size.</figcaption>
+</figure>
+
 ### 2. Choose targets
 
 Every other connected tenant shows as a card with its name and domain.

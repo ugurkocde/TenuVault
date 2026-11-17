@@ -57,7 +57,7 @@ Create one *License Keys* benefit per plan (Benefits > Create benefit > License 
 | TenuVault Desktop MSP Five, monthly and yearly | Per unit, quantity = tenants | TenuVault MSP |
 | TenuVault Desktop Pro Trial (30 days, no card) | Free, recurring monthly | TenuVault Pro |
 
-**Trial:** every paid product has a 30 day trial. The key is issued when the trial starts, so trial
+**Trial:** every paid product has a 14 day trial (card required; changed from 30 days on 2026-11-17). The key is issued when the trial starts, so trial
 users activate the app right away. The no-card trial product grants the same Pro benefit; the
 website sets its key to expire after 30 days and the licensing service flags such keys as trials
 through `DESKTOP_TRIAL_PRODUCT_ID`.

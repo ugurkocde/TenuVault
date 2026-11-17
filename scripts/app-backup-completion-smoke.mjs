@@ -17,7 +17,7 @@ export async function checkAppBackupCompletion({ check, evaluate, waitForConditi
         frame.contentWindow.tenuvault = {
           ...window.tenuvault,
           app: { ...window.tenuvault.app, info: async () => ({ ...await window.tenuvault.app.info(), platform: 'win32' }) },
-          auth: { ...window.tenuvault.auth, accounts: async () => [{ tenantId: tenant }] },
+          auth: { ...window.tenuvault.auth, accounts: async () => [{ tenantId: tenant }, { tenantId: '33333333-3333-3333-3333-333333333333' }] },
           appSources: {
             ...window.tenuvault.appSources,
             apps: async () => ({ apps: [{ id: tenant, name: 'PowerShell', publisher: 'Microsoft', version: '7.5', installContext: 'system' }], fetchedAt: new Date().toISOString() }),
@@ -25,6 +25,12 @@ export async function checkAppBackupCompletion({ check, evaluate, waitForConditi
             assignments: async () => ({ appId: tenant, checkedAt: new Date().toISOString(), status: 'device-targeted', summary: 'A device assignment includes this PC.', steps: [], warnings: [], assignments: [] }),
             capture: async () => { fixture.completed = true; return source },
             captureProgress: async () => null,
+            restoreReview: async () => ({ settingsHash: 'a'.repeat(64), observedAt: '2026-11-14T13:27:27Z', currentSettings: false, name: 'PowerShell', version: '7.6.0', publisher: 'Microsoft', installCommand: 'setup.exe /quiet', uninstallCommand: 'setup.exe /uninstall', runAs: 'system', detectionRules: 1, requirementRules: 0, blocker: null }),
+            restoreProgress: async () => null,
+            restore: async (sourceTenant, operation, sourceId, targetTenant, name, settingsHash) => {
+              fixture.restored = { sourceTenant, sourceId, targetTenant, name, settingsHash };
+              return { sourceId, tenantId: targetTenant, name, appId: '77777777-7777-7777-7777-777777777777', contentVersion: '1' };
+            },
             openFolder: async (tenantId, sourceId) => { fixture.opened.push({ tenantId, sourceId }) },
           },
         };
@@ -57,6 +63,34 @@ export async function checkAppBackupCompletion({ check, evaluate, waitForConditi
       await screenshot("09e-app-backup-selected-narrow")
       await evaluate(`${control("View all backups")}.click()`)
       assert(await waitForCondition(`${catalog}.innerText.includes('PowerShell-older-capture.zip')`), "view all did not restore other backups")
+      await send("Emulation.clearDeviceMetricsOverride")
+      await evaluate(`${control("Restore to tenant…")}.click()`)
+      assert(await waitForCondition(`Boolean(${doc}.getElementById('restore-target'))`), "restore review did not load")
+      const select = `${doc}.getElementById('restore-target')`
+      const choose = tenantId => evaluate(`(() => { const select = ${doc}.getElementById('restore-target'); select.value = ${JSON.stringify(tenantId)}; select.dispatchEvent(new window.__appCompletionFrame.contentWindow.Event('change', {bubbles:true})); })()`)
+      const note = "Restoring into another tenant is included in TenuVault Pro and MSP for that tenant."
+      assert(await evaluate(`${select}.value === window.__appCompletion.source.tenantId`), "restore must default to the source tenant")
+      assert(await evaluate(`${control("Restore unassigned app")}.disabled`), "restore must require destination confirmation")
+      // The other tenant has no plan on record in this fixture, so the dialog explains the plan and blocks the restore.
+      await choose("33333333-3333-3333-3333-333333333333")
+      assert(await waitForCondition(`${doc}.querySelector('[role=dialog]').innerText.includes(${JSON.stringify(note)})`), "plan note missing for another tenant without a plan")
+      assert(await evaluate(`${doc}.querySelector('[role=dialog] input[type=checkbox]').disabled && ${control("Restore unassigned app")}.disabled`), "restore into another tenant without a plan must be blocked")
+      await screenshot("09f-app-restore-review")
+      await send("Emulation.setDeviceMetricsOverride", { width: 1024, height: 700, deviceScaleFactor: 1, mobile: false })
+      await evaluate(`${doc}.documentElement.classList.add('dark')`)
+      assert(await waitForCondition(`${doc}.documentElement.scrollWidth <= window.__appCompletionFrame.contentWindow.innerWidth + 1`), "restore dialog overflows at minimum width")
+      await screenshot("09g-app-restore-review-dark-narrow")
+      await evaluate(`${doc}.documentElement.classList.remove('dark')`)
+      await send("Emulation.clearDeviceMetricsOverride")
+      // Restoring into the source tenant stays free.
+      await choose(await evaluate("window.__appCompletion.source.tenantId"))
+      assert(await waitForCondition(`!${doc}.querySelector('[role=dialog]').innerText.includes(${JSON.stringify(note)})`), "plan note shown for the source tenant")
+      await evaluate(`${doc}.querySelector('[role=dialog] input[type=checkbox]').click()`)
+      assert(await waitForCondition(`!${control("Restore unassigned app")}.disabled`), "restore stayed disabled after review")
+      await evaluate(`${control("Restore unassigned app")}.click()`)
+      assert(await waitForCondition(`Boolean(${control("Open restored app")})`), "restore completion action missing")
+      assert(await evaluate(`window.__appCompletion.restored.sourceTenant === window.__appCompletion.source.tenantId && window.__appCompletion.restored.targetTenant === window.__appCompletion.source.tenantId`), "restore used the wrong tenant")
+      await screenshot("09h-app-restore-complete")
     } finally {
       await send("Emulation.clearDeviceMetricsOverride")
       await evaluate("window.__appCompletionFrame?.remove(); delete window.__appCompletionFrame; delete window.__appCompletion")

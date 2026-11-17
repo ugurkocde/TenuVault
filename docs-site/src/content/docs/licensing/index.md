@@ -5,14 +5,14 @@ description: Compare the Community, Pro and MSP plans and see which features eac
 
 TenuVault has three plans: Community, which is free, and the paid Pro and MSP plans. Every tenant you connect is licensed on its own, and the plan decides how many tenants you can use and which features are available for them.
 
-[App Backup](/apps/app-backup/) is free for every configured tenant, including tenants outside paid coverage. Existing archives remain exportable while signed out and do not use the Community tenant allowance. The limits below describe the other backup, restore and automation workflows.
+[App Backup](/apps/app-backup/) is free on every plan, including tenants outside paid coverage. Existing archives remain exportable while signed out and do not use the Community tenant allowance. Restoring a captured installer into a tenant other than the one it was captured from needs Pro, MSP or a Pro trial on record for that destination tenant. The limits below describe the other backup, restore and automation workflows.
 
 ## Plans at a glance
 
 | | Community | Pro | MSP |
 | --- | --- | --- | --- |
 | Price | Free, no license key needed | Paid subscription | Paid subscription |
-| Tenants | 1 | 2 (for example production and test) | The number of tenants in your subscription. New subscriptions include 5; existing subscriptions keep their quantity (minimum 3) |
+| Tenants | 1 | 2 (for example production and test). A third tenant needs MSP | The number of tenants in your subscription. New subscriptions include 5; existing subscriptions keep their quantity (minimum 3) |
 | Installations per tenant | | 5 | 5 |
 | Free trial | | 14 days per tenant, no card and no email | Through the Pro trial |
 
@@ -28,7 +28,7 @@ The app reminds you five days and one day before the end, with the changes that 
 
 You can optionally submit an email address on the trial card or License page for setup tips and a reminder. The address is sent only when you press the button. Change it in the app during the trial, or choose **Remove the saved email address for this trial** on the License page of any installation that joined it, or use the unsubscribe link in each email at any time. See the [privacy policy](https://www.tenuvault.com/privacy).
 
-Only when tenant trials are unavailable does TenuVault offer the older email form instead. It emails a thirty-day trial key. Existing email trial keys retain their original end dates and reminders.
+Trial keys that were emailed before tenant trials started keep their original end dates and reminders.
 
 ## Buy a plan
 
@@ -44,7 +44,8 @@ Eligible nonprofits can use Pro at no cost. Email [support@tenuvault.com](mailto
 
 | Feature | Community | Pro | MSP |
 | --- | --- | --- | --- |
-| [App Backup](/apps/app-backup/): app inventory and installer backups | Free for every configured tenant | Free for every configured tenant | Free for every configured tenant |
+| [App Backup](/apps/app-backup/): app inventory, installer backups, export and restore into the source tenant | Yes | Yes | Yes |
+| [App Backup](/apps/app-backup/#restore-to-the-same-or-another-tenant): restore an installer into another tenant | | Yes | Yes |
 | Manual backups | Yes | Yes | Yes |
 | Weekly scheduled backups | Yes | Yes | Yes |
 | Daily scheduled backups | | Yes | Yes |
@@ -101,6 +102,7 @@ Pro covers two tenants and includes daily scheduled backups, the optional [Backu
 * **Community** covers the first tenant you use on a machine without a license. If you remove that tenant from TenuVault, the free plan is available for another tenant.
 * **Pro and MSP** count tenants across every machine that uses the same license key. A tenant counts from the first time it is activated, and removing it from TenuVault frees its place on the license.
 * **Installations:** each tenant can be active on up to 5 installations of TenuVault at the same time. Deactivate an installation you no longer use to free its place.
+* **More than two tenants:** Pro covers exactly two tenants, and you cannot add tenants to it. From the third tenant you need MSP. A new MSP subscription includes 5 tenants, and further tenants are added to the subscription one at a time. See [More than two tenants](/licensing/manage/#more-than-two-tenants).
 
 If you lower the number of tenants on an MSP subscription, the tenants that were activated first stay licensed.
 

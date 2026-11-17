@@ -22,6 +22,7 @@ export function createRendererBridge(raw: TenuVaultPreloadBridge): TenuVaultBrid
     license: { ...raw.license, checkNewTenant: (...args) => unwrapPlanResult(raw.license.checkNewTenant(...args)) },
     schedules: { ...raw.schedules, set: (...args) => unwrapPlanResult(raw.schedules.set(...args)) },
     pdfBranding: { ...raw.pdfBranding, set: (...args) => unwrapPlanResult(raw.pdfBranding.set(...args)) },
+    appSources: { ...raw.appSources, restore: (...args) => unwrapPlanResult(raw.appSources.restore(...args)) },
     backupReader: {
       ...raw.backupReader,
       prepare: (...args) => unwrapPlanResult(raw.backupReader.prepare(...args)),

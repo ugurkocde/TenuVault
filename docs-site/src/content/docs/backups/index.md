@@ -5,7 +5,7 @@ faq:
   - question: "How do I back up Microsoft Intune policies?"
     answer: "In TenuVault, select the tenant, open Backup & Restore and click Run Backup. Keep the saved backup choice or change it, then click Start backup. TenuVault reads the Intune configuration through Microsoft Graph with your own delegated sign-in and saves the objects in your backup choice, with their assignments where Intune has them."
   - question: "What does an Intune backup include?"
-    answer: "A full backup covers 41 Intune object types in nine areas, including Settings Catalog and device configuration policies, compliance policies, scripts, Administrative Templates, enrollment and tenant settings, plus app details and assignments. App installer files, Apple tokens and private keys cannot be exported by Microsoft Graph and are never included."
+    answer: "A full configuration backup covers 41 Intune object types in nine areas, including Settings Catalog and device configuration policies, compliance policies, scripts, Administrative Templates, enrollment and tenant settings, plus app details and assignments. It excludes installer files, Apple tokens and private keys. Use the separate App Backup Windows preview to capture supported Win32 installer content."
   - question: "Does Microsoft Intune have a built-in backup?"
     answer: "No. Intune has no native backup, point-in-time restore or recycle bin for policies, so a deleted or changed policy cannot be recovered from the Intune portal. A backup tool such as TenuVault saves the configuration through Microsoft Graph before something goes wrong."
   - question: "Where are Intune backups stored?"
@@ -24,7 +24,7 @@ Backups go to the storage you chose for the tenant: encrypted on this device, or
 
 For the full list of object types, see [What gets backed up](/backups/coverage/).
 
-For original Win32 installer files you already have, use [free App Backup](/apps/app-backup/). Its encrypted installer store is separate from policy backup storage and remains accessible while signed out.
+To retrieve supported Win32 installer content from Intune, use [free App Backup](/apps/app-backup/) on an enrolled Windows PC. Its encrypted installer store is separate from configuration backup storage and remains accessible while signed out. Capture requires no local installer file.
 
 ## Browse backups by service
 
@@ -79,7 +79,7 @@ With **Custom**, TenuVault lists the areas (for example **Device configuration**
 
 The line under the choices shows how many of the available types the backup covers, grouped by service and area. **Start backup** is unavailable until at least one type is ticked ("Choose at least one type.").
 
-When apps are included, a note explains that apps are saved as their Intune details and assignments, which makes them the slowest type to back up, and that installer files are never downloaded.
+When apps are included, a note explains that apps are saved as their Intune details and assignments, which makes them the slowest type to back up. Installer files are not downloaded by this configuration-backup workflow; [App Backup](/apps/app-backup/) handles supported installer captures separately.
 
 ### The saved backup choice
 
@@ -90,6 +90,13 @@ Each tenant has a saved backup choice. Automatic backups, **Back up all tenants 
 * To change it without running a backup, open **Backup & Restore**, then the **Schedule** tab, and edit **What to back up**. See [Schedule backups](/backups/schedules/#choose-what-automatic-backups-cover).
 
 A backup that leaves out types never ages out the only copy of those types. See [Retention](/backups/storage/#retention).
+
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/backup-scope.webp" aria-label="Open full-size screenshot: backup scope">
+    <img src="/images/screenshots/backup-scope.webp" alt="Choose Everything except apps, Everything or Custom before starting" width="1632" height="708" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Choose Everything except apps, Everything or Custom before starting. Example tenant data. Select the image to view it full size.</figcaption>
+</figure>
 
 ## Follow a running backup
 
@@ -204,6 +211,13 @@ Click an entry to open its **Backup Details**:
 | **About this backup** | **Status**, **Started** (how it started), **Included**, **Stored** and **Backup ID** |
 
 **Restore from this backup** is unavailable while a backup is running or when it holds no items.
+
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/backup-history.webp" aria-label="Open full-size screenshot: backup history">
+    <img src="/images/screenshots/backup-history.webp" alt="Backup History shows the saved scope, item count, size, duration and changes for each backup" width="2880" height="2000" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Backup History shows the saved scope, item count, size, duration and changes for each backup. Example tenant data. Select the image to view it full size.</figcaption>
+</figure>
 
 ## Where to see backups at a glance
 

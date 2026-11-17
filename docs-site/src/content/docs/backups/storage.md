@@ -61,6 +61,13 @@ A damaged or unreadable file affects only what it belongs to:
 
 TenuVault checks each file's header when it reads the inventory. Damage further into a file is found when the file is read, and that read fails with the reason instead of returning damaged content. From then on, that backup is unavailable and retention is paused, as for other damage, also after TenuVault restarts. TenuVault keeps that in `.tenuvault-damaged.json` in the tenant's backup folder, which holds the encrypted file names only, and removes the entry once the file is restored or removed. TenuVault never writes over a damaged file.
 
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/settings-storage.webp" aria-label="Open full-size screenshot: settings storage">
+    <img src="/images/screenshots/settings-storage.webp" alt="Storage and recovery holds the folder, ZIP import and recovery-key controls" width="2880" height="2000" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Storage and recovery holds the folder, ZIP import and recovery-key controls. Example local folder; no recovery key is displayed. Select the image to view it full size.</figcaption>
+</figure>
+
 ## Backups in your Azure storage account
 
 Use your own storage account when you want backups off the admin's computer, for example to share them between admins: every admin with access to the account sees, compares and restores the same backups, with no key to hand over. See [Work with other admins in one tenant](/getting-started/multiple-admins/). This needs Pro or MSP. If no storage account exists yet, [Create a storage account for TenuVault](/getting-started/create-storage-account/) covers the recommended settings, a setup script for your Azure administrator, and the role assignments for your admin group.

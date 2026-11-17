@@ -15,6 +15,20 @@ export class DisclaimerAcknowledgements {
     return ids.filter((id) => (stored[id]?.version ?? 0) < this.version)
   }
 
+  /** Native IPC writes use the same stored acceptance as HTTP API writes. */
+  async run<T>(tenantIds: string[], action: () => Promise<T>): Promise<T | AcknowledgementRequired> {
+    const required = this.required(tenantIds)
+    return required ?? action()
+  }
+
+  required(tenantIds: string[]): AcknowledgementRequired | null {
+    const missing = this.missing(tenantIds)
+    return missing.length ? {
+      error: "No changes were made. Accept the disclaimer before TenuVault changes this tenant.",
+      acknowledgement: { version: DISCLAIMER_VERSION, tenantIds: missing },
+    } : null
+  }
+
   accept(tenantIds: string[], account: (tenantId: string) => string | null, now = new Date()): void {
     const stored = this.all()
     for (const id of new Set(tenantIds.map((tenantId) => tenantId.toLowerCase()))) {
@@ -49,12 +63,8 @@ export function disclaimerGuard(acknowledgements: DisclaimerAcknowledgements) {
       return null
     }
     if (!body || typeof body !== "object" || Array.isArray(body)) return null
-    const missing = acknowledgements.missing(tenantWriteTargets(pathname, body as Record<string, unknown>))
-    if (!missing.length) return null
-    const answer: AcknowledgementRequired = {
-      error: "No changes were made. Accept the disclaimer before TenuVault changes this tenant.",
-      acknowledgement: { version: DISCLAIMER_VERSION, tenantIds: missing },
-    }
+    const answer = acknowledgements.required(tenantWriteTargets(pathname, body as Record<string, unknown>))
+    if (!answer) return null
     return Response.json(answer, { status: ACKNOWLEDGEMENT_REQUIRED })
   }
 }

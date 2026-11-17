@@ -58,7 +58,7 @@ If your tenant does not list Azure Service Management or Azure Storage among its
 
 ### If something goes wrong
 
-* If your account cannot approve the setup, Microsoft says so in the browser, for example **Need admin approval**, and nothing comes back to TenuVault. Select **Cancel** on the Connect step and use one of the **Other ways to connect**: **Someone else is the admin? Copy instructions** for your Entra administrator, or **I already have an app registration**. If you decline Microsoft's request instead, TenuVault says that you declined it and offers **Try again** or **Someone else is the admin? Copy instructions**. If Microsoft refuses your approval, TenuVault names the roles that can give it. Nothing is created in any of these cases, and TenuVault stops waiting by itself after 15 minutes. After 3 minutes without an answer, TenuVault shows **Still waiting for Microsoft?** with **Try again**, **Copy sign-in link** and **Copy instructions for your admin**; see [Still waiting for Microsoft?](/getting-started/connect-tenant/#still-waiting-for-microsoft).
+* If your account cannot approve the setup, Microsoft says so in the browser, for example **Need admin approval**, and nothing comes back to TenuVault. Select **Cancel** on the Connect step and use one of the **Other ways to connect**: **Someone else is the admin? Copy instructions** for your Entra administrator, or **I already have an app registration**. If you decline Microsoft's request instead, TenuVault says that you declined it and offers **Try again** or **Someone else is the admin? Copy instructions**. If Microsoft refuses your approval, TenuVault names the roles that can give it. Nothing is created in any of these cases, and TenuVault stops waiting by itself after 15 minutes. After 3 minutes without an answer, TenuVault shows **Still waiting for Microsoft?** with **Try again**, **Copy sign-in link**, **Copy instructions for your admin** and **Book a free setup call**; see [Still waiting for Microsoft?](/getting-started/connect-tenant/#still-waiting-for-microsoft).
 * If the tenant blocks **Microsoft Graph Command Line Tools** for your account, for example by turning its sign-in off, limiting it to assigned users or with a Conditional Access policy, the setup cannot sign in. The setup script signs in through the same app, so it is blocked too. TenuVault says so and offers **Create it by hand**: [create the app registration manually](#create-the-app-registration-manually), then select **I already have an app registration** and enter its two IDs. When Microsoft shows its own error page instead, nothing comes back to TenuVault; select **Cancel** and take the same route.
 * If your account may sign in but lacks a role that can create app registrations or grant admin consent, the setup stops with a message that names the roles. If it had already created the app registration, it removes it again first.
 * If a step fails after TenuVault created the app registration, TenuVault removes it again and tells you why. If it cannot remove it, it names the app registration to delete in the Microsoft Entra admin center. An app registration that existed before is never deleted.
@@ -67,11 +67,20 @@ If your tenant does not list Azure Service Management or Azure Storage among its
 * If the browser says that Microsoft cannot find the application, Microsoft has not finished publishing the new app registration. Wait a minute, select **Cancel sign-in** in TenuVault and sign in again.
 * If the tenant already has a TenuVault app registration whose enterprise application has sign-in turned off, the setup stops and changes nothing, whichever services you chose and whichever service that app registration was made for. Turn sign-in on again under **Entra admin center** > **Enterprise applications** > the application the message names > **Properties**, or delete the app registration, then run the setup again.
 
+When the setup stops with an error, the message also offers **Stuck here? Book a free setup call**, which opens the [free setup call](/getting-started/#free-setup-call) page in your browser.
+
 For the messages TenuVault shows, see [Troubleshooting](/troubleshooting/).
 
 ### Remove it again
 
 Delete **TenuVault Desktop** under **Entra admin center** > **App registrations**. That removes the sign-in and the consent. Backups you already saved stay where they are, on this computer or in your Azure storage.
+
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/setup-connect.webp" aria-label="Open full-size screenshot: setup connect">
+    <img src="/images/screenshots/setup-connect.webp" alt="The built-in connection screen explains the app registration before you start Microsoft sign-in" width="2880" height="2000" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>The built-in connection screen explains the app registration before you start Microsoft sign-in. Example tenant data. Select the image to view it full size.</figcaption>
+</figure>
 
 ## What the setup creates
 

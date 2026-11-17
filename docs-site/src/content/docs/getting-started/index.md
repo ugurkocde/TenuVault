@@ -16,6 +16,13 @@ Check the [Requirements](/getting-started/requirements/) first. In short, you ne
 * Someone who can create an app registration and grant admin consent in Microsoft Entra ID, once per tenant.
 * Outbound HTTPS access to Microsoft and to `www.tenuvault.com`.
 
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/dashboard.webp" aria-label="Open full-size screenshot: dashboard">
+    <img src="/images/screenshots/dashboard.webp" alt="After setup: the dashboard brings backup status, protected policies and drift into one view" width="2880" height="2000" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>After setup: the dashboard brings backup status, protected policies and drift into one view. Example tenant data. Select the image to view it full size.</figcaption>
+</figure>
+
 ## Setup checklist
 
 | Step | What you do | Where |
@@ -31,9 +38,22 @@ Check the [Requirements](/getting-started/requirements/) first. In short, you ne
 Steps 3 to 6 happen in the app's guided setup, **Set up TenuVault**, which walks you through **Connect**, **Sign in**, **Storage** and **First backup**. The setup saves your progress, so you can close TenuVault, for example while another administrator creates the app registration, and continue later. The pages in this section explain each screen in detail.
 :::
 
+## Free setup call
+
+Rather do it together? Book a [free setup call](https://www.tenuvault.com/setup-call?src=docs). It takes 30 minutes and is free on every plan, Community included. You share your screen and do every click, and we guide you through connecting your tenant and taking the first backup. We never sign in to your tenant, never ask for a password or a key, and do not record the call.
+
+The same page opens from the app, in your default browser:
+
+* **Book a free setup call** on the welcome screen.
+* **Free setup call** at the top of the guided setup, while no tenant is connected.
+* **Book a free setup call** in **Still waiting for Microsoft?**, next to the error of a setup or sign-in attempt, and under a first backup that failed.
+* **Support** > **Book a free setup call**, at any time.
+
+The app only opens the link. See [Links that open in your browser](/security/data-flows/#links-that-open-in-your-browser).
+
 ## After your first backup
 
-* [Keep original Win32 installers with free App Backup](/apps/app-backup/), separately from policy backups.
+* [Back up Win32 installer content from Intune with free App Backup](/apps/app-backup/), separately from configuration backups.
 * [Schedule backups](/backups/schedules/) so they run without you.
 * [Save your recovery key](/security/encryption/) somewhere safe, if backups stay on this device.
 * Add the other admins of the tenant with [Work with other admins in one tenant](/getting-started/multiple-admins/).

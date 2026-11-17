@@ -23,8 +23,8 @@ export function canUse(plan: Plan | null, feature: Feature): boolean {
   return plan !== null && allows(plan, feature)
 }
 
-/** A short dialog that says which plan includes a feature, with the trial, the checkout or the plans. */
-export function UpgradeDialog({ feature, message, open, onOpenChange, onCloseAutoFocus }: { feature: Feature; message?: string; open: boolean; onOpenChange: (open: boolean) => void; onCloseAutoFocus?: (event: Event) => void }) {
+/** A short dialog that says which plan includes a feature, with the trial, the checkout or the plans. tenantId is the tenant the prompt acts on when it is not the selected tenant. */
+export function UpgradeDialog({ feature, message, open, onOpenChange, onCloseAutoFocus, tenantId }: { feature: Feature; message?: string; open: boolean; onOpenChange: (open: boolean) => void; onCloseAutoFocus?: (event: Event) => void; tenantId?: string | null }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent onCloseAutoFocus={onCloseAutoFocus}>
@@ -40,7 +40,7 @@ export function UpgradeDialog({ feature, message, open, onOpenChange, onCloseAut
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
             Close
           </Button>
-          <PlanPromptButton plan={FEATURE_PLAN[feature]} source={`plan-dialog-${feature.toLowerCase()}`} onLeave={() => onOpenChange(false)} />
+          <PlanPromptButton plan={FEATURE_PLAN[feature]} source={`plan-dialog-${feature.toLowerCase()}`} onLeave={() => onOpenChange(false)} tenantId={tenantId} />
         </div>
       </DialogContent>
     </Dialog>

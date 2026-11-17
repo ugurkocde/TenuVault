@@ -11,7 +11,7 @@ You can change the location later in **Settings** > **Sign-in** > **Change stora
 
 Above the storage options, the step shows **Signed in as &lt;your account&gt;** and the plan the tenant got at sign-in:
 
-* **This tenant uses Community, the free plan**: manual and weekly backups on this device, kept for 30 days. Next to it are **I have a license key** and, while the tenant can still start its trial, **Try Pro free** (no card, no email). When tenant trials are unavailable, the trial link is **Try Pro free for 30 days, no card** instead and opens the email trial form, filled in with your sign-in name when it is an email address. See [Start TenuVault for the first time](/getting-started/first-launch/#start-a-trial).
+* **This tenant uses Community, the free plan**: manual and weekly backups on this device, kept for 30 days. Next to it are **I have a license key** and, while the tenant can still start its trial, **Try Pro free** (no card, no email). See [Start TenuVault for the first time](/getting-started/first-launch/#start-a-trial).
 * **This tenant uses Pro** or **MSP**, from your license key, **This tenant uses your Pro trial**, or **This tenant uses Pro, through the license your organization shares with it.**
 
 You can change the plan later on the **License** page.
@@ -27,6 +27,13 @@ You can change the plan later on the **License** page.
 | Protection | AES-256-GCM by TenuVault, with a key protected by your Windows account or macOS Keychain | Azure Storage encryption at rest, and your Azure role assignments |
 | Other computers can read the backups | With the recovery key and a copy of the folder | Every admin with access to the storage account, no key needed |
 | Before the first backup | Saving the recovery key is strongly recommended | Nothing else |
+
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/setup-storage.webp" aria-label="Open full-size screenshot: setup storage">
+    <img src="/images/screenshots/setup-storage.webp" alt="The Storage step lets you choose this device or your Azure storage account" width="2880" height="2000" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>The Storage step lets you choose this device or your Azure storage account. This example uses local storage. Select the image to view it full size.</figcaption>
+</figure>
 
 ## Option 1: This device, encrypted
 
@@ -94,7 +101,7 @@ Anyone with the recovery key and your backup files on this device can read your 
 
 When you select **Continue**, the button shows **Checking the license...** while TenuVault checks the license for the tenant once more. It then saves the tenant and setup moves to **First backup**.
 
-If the license no longer covers the tenant, the tenant is not saved and TenuVault signs you out of it. Setup returns to **Sign in** with the tenant ID and client ID kept, explains why, and offers **Try Pro free for 30 days, no card** and **I have a license key**. Sign in again once the license covers the tenant. See [License check at sign-in](/getting-started/connect-tenant/#license-check-at-sign-in).
+If the license no longer covers the tenant, the tenant is not saved and TenuVault signs you out of it. Setup returns to **Sign in** with the tenant ID and client ID kept, explains why, and offers **I have a license key**. When the tenant has already used its trial, it offers **Buy Pro** and **Enter a Pro license key** instead. Sign in again once the license covers the tenant. See [License check at sign-in](/getting-started/connect-tenant/#license-check-at-sign-in).
 
 ## Next step
 

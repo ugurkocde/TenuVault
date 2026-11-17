@@ -68,7 +68,7 @@ describe("App Backup local workspace", () => {
   const node = await mount()
   expect(node.textContent).toContain("Finance.intunewin")
   expect(node.textContent).toContain("Installer backups")
-  expect(node.textContent).toContain("Completely free for every configured tenant")
+  expect(node.textContent).toContain("Free on every plan. Restoring into another tenant needs Pro or MSP for that tenant.")
   await click(node, "Export archive")
   expect(api.attach).not.toHaveBeenCalled()
   expect(api.signIn).not.toHaveBeenCalled()

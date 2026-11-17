@@ -15,6 +15,13 @@ Select **OpenIntuneBaseline** in the sidebar. The section works on the tenant se
 
 The header lists the version each platform uses, for example **Versions: Windows v4.0 · macOS v1.0 · Windows 365 v1.0 · BYOD v2.0**. If GitHub cannot be reached and no versions are known yet, the header shows the error with **Retry**.
 
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/oib-home-light.webp" aria-label="Open full-size screenshot: oib home light">
+    <img src="/images/screenshots/oib-home-light.webp" alt="OpenIntuneBaseline offers New Deployment, Existing Deployment and Policy Validation" width="2880" height="1800" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>OpenIntuneBaseline offers New Deployment, Existing Deployment and Policy Validation. Real public catalog with example tenant history. Select the image to view it full size.</figcaption>
+</figure>
+
 ## Which OIB version is used
 
 OIB publishes a release per platform, tagged for example `windows-v4.0` or `macos-v1.0`. By default each platform uses its latest published release. A platform without a published release uses the `main` branch and shows **main @ *commit*** instead of a version.
@@ -69,6 +76,13 @@ Use New Deployment the first time you deploy OIB to a tenant.
 3. Choose the policy types, then review and select the policies. Policies already in the tenant are left out; use Existing Deployment to update them.
 4. Set the deployment options and deploy. See [Deploy and undo](#deploy-and-undo).
 
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/oib-new-platforms.webp" aria-label="Open full-size screenshot: oib new platforms">
+    <img src="/images/screenshots/oib-new-platforms.webp" alt="New Deployment starts with the platform selection" width="2880" height="1800" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>New Deployment starts with the platform selection. Real public catalog; no policies were deployed. Select the image to view it full size.</figcaption>
+</figure>
+
 ### Read a policy's settings before you deploy it
 
 Every policy in the list has **Show settings**. It lists each setting the policy configures in the selected OIB version, with its value, so you can read the baseline without importing it into a tenant first. Child settings are listed under the setting they belong to, and each item of a group setting (such as a list of rules) under its own **Item** line. When a policy has ten settings or more, **Filter settings** narrows the list by setting name, setting ID or value.
@@ -79,6 +93,13 @@ Every policy in the list has **Show settings**. It lists each setting the policy
 * **Why OIB sets them** opens the platform's page in the [OpenIntuneBaseline documentation](https://docs.openintunebaseline.com), which explains the reasoning behind the settings.
 
 Show settings only reads. Nothing is created or changed in the tenant.
+
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/oib-new-select.webp" aria-label="Open full-size screenshot: oib new select">
+    <img src="/images/screenshots/oib-new-select.webp" alt="Review the selected policies before moving to deployment review" width="2880" height="1800" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Review the selected policies before moving to deployment review. Real public catalog; no policies were deployed. Select the image to view it full size.</figcaption>
+</figure>
 
 ## Existing Deployment
 
@@ -121,6 +142,13 @@ It covers matched Settings Catalog and Endpoint security policies, compliance po
 * **Export CSV** and **Export PDF** save the results. The PDF report has the same layout as the comparison report, with a summary table of every validated policy and its status, and a table of value mismatches, settings missing in the tenant and settings only in the tenant for each drifted policy. Both always hold every validated policy, whatever the filters show.
 * **Saved validations** keeps the latest 50 validations per tenant, encrypted on this device. Only **Validate all** sets the OpenIntuneBaseline score in [Governance](/governance/#openintunebaseline-scores); a single policy check is saved and marked as not part of the score. When the history is full, the oldest single policy checks are removed first, and a full validation is never removed to make room for a single policy check. If every saved validation is a full validation, a new single policy check is not saved and the notice says so; export the results to keep it, or delete older saved validations to make room.
 * **Fix drift** (Pro and MSP) resets a drifted policy to its OIB configuration in place. Assignments stay. The tenant is always backed up first, and the fix can be undone.
+
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/oib-validate.webp" aria-label="Open full-size screenshot: oib validate">
+    <img src="/images/screenshots/oib-validate.webp" alt="Validation presents per-policy results and actions" width="2880" height="1800" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Validation presents per-policy results and actions. Results are simulated against the public catalog, not a live tenant assessment. Select the image to view it full size.</figcaption>
+</figure>
 
 ## Deploy and undo
 

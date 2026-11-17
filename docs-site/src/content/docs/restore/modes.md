@@ -17,6 +17,13 @@ Every restore uses one of two methods: **Create copies** or **Replace in place**
 | Confirmation checkbox | No | Yes, when anything is overwritten or recreated |
 | Plan | All plans | Pro and MSP |
 
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/restore-method.webp" aria-label="Open full-size screenshot: restore method">
+    <img src="/images/screenshots/restore-method.webp" alt="The Options step offers Create copies, Replace in place and assignment handling" width="2880" height="2000" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>The Options step offers Create copies, Replace in place and assignment handling. Example plan; no changes were applied. Select the image to view it full size.</figcaption>
+</figure>
+
 ## Create copies
 
 "Each item is created next to the current one with a [Restored] name. Nothing existing changes."

@@ -80,6 +80,13 @@ Below the cards, the table lists the events, newest first, with **Timestamp**, *
 
 **Auto-refresh** is on by default and reloads the page every 30 seconds; the time of the last reload is shown next to it. **Refresh** reloads right away.
 
+<figure class="docs-screenshot">
+  <a href="/images/screenshots/audit-log.webp" aria-label="Open full-size screenshot: audit log">
+    <img src="/images/screenshots/audit-log.webp" alt="Audit Log offers event filters, search and export for the selected tenant" width="2880" height="2000" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Audit Log offers event filters, search and export for the selected tenant. All entries here are example data. Select the image to view it full size.</figcaption>
+</figure>
+
 ## Find events
 
 * **Search**: type in **Search by user, action, or resource...** and click **Search**. The search also looks in each event's details.

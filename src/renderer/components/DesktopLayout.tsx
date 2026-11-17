@@ -48,6 +48,7 @@ import { CisJobNotifier } from "../lib/cis-jobs"
 import { BackgroundTasksPanel } from "./BackgroundTasksPanel"
 import { useScoreInvalidation } from "../features/scores/invalidate"
 import { DriftScanIndicator, DriftScanNotifier } from "../lib/drift-jobs"
+import { SetupCallLink } from "./SetupCallLink"
 import { SignInBanner } from "./SignInBanner"
 import { SupportDialog } from "./SupportDialog"
 import { FeedbackDialog } from "./FeedbackDialog"
@@ -467,6 +468,7 @@ export function DesktopLayout() {
             </div>
           </div>
           <nav aria-label="Help" className="flex items-center gap-1">
+            <SetupCallLink source="setup-header" variant="nav" className={quiet} />
             <Link to="/license" className={quiet}>License</Link>
             <button type="button" onClick={() => void openFeedback()} className={quiet}>Share feedback</button>
             <button type="button" onClick={() => setSupportOpen(true)} className={quiet}>Support</button>
