@@ -58,6 +58,7 @@ export interface BackupHistoryItem {
   tenantName: string
   timestamp: Date
   status: BackupState
+  inventoryBackedUp?: number
   policiesBackedUp: number
   duration: number // in seconds
   size: number // in bytes

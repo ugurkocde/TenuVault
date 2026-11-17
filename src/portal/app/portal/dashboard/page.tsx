@@ -380,7 +380,7 @@ function DashboardContent() {
                 <BigValue className="mt-1 text-4xl">{formatDistanceToNow(latest.timestamp, { addSuffix: true }, nowDate)}</BigValue>
                 <p className="mt-1 text-sm text-gray-500">
                   {latest.timestamp.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
-                  {latest.policiesBackedUp > 0 && `, ${latest.policiesBackedUp} policies`}
+                  {`, ${latest.policiesBackedUp} policies`}{!!latest.inventoryBackedUp && `, ${latest.inventoryBackedUp} inventory objects`}
                 </p>
               </>
             ) : backupsError ? (
@@ -483,6 +483,7 @@ function DashboardContent() {
             {protectedBackup ? (
               <>
                 <BigValue className="mt-1 text-5xl">{protectedBackup.policiesBackedUp}</BigValue>
+                {!!protectedBackup.inventoryBackedUp && <p className="mt-1 text-sm text-gray-500">{protectedBackup.inventoryBackedUp} inventory objects backed up separately</p>}
                 <p className="mt-1 text-sm text-gray-500">
                   In the latest complete backup, {protectedBackup.timestamp.toLocaleDateString(undefined, { dateStyle: "medium" })}
                 </p>

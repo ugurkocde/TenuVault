@@ -347,3 +347,12 @@ describe("Dashboard last updated label", () => {
     }
   })
 })
+
+it.each([0, 12])('renders %s protected policies and separate directory inventory on dashboard cards', policiesBackedUp => {
+  const backup = { ...storedBackup("success", hoursAgo(1)), policiesBackedUp, inventoryBackedUp: 153 }
+  state.stats = { ...emptyStats, latestBackup: backup, latestCompleteBackup: backup, backupHistory: [backup] }
+  const markup = renderDashboard()
+  expect(markup).toContain(`>${policiesBackedUp}</p>`)
+  expect(markup).toContain('153 inventory objects backed up separately')
+  expect(markup).toContain(`${policiesBackedUp} policies, 153 inventory objects`)
+})

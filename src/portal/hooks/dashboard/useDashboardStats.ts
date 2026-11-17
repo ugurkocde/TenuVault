@@ -103,7 +103,8 @@ async function fetchBackupHistory(tenant: any): Promise<BackupHistoryResult> {
       tenantName: tenant.name,
       timestamp: new Date(backup.lastModified || backup.properties?.lastModified || backup.timestamp),
       status: normalizeBackupStatus(backup),
-      policiesBackedUp: backup.metadata?.policyCount || backup.policyCount || backup.totalPolicies || 0, // Use actual count from backup
+      policiesBackedUp: backup.metadata?.policyCount ?? backup.policyCount ?? backup.totalPolicies ?? 0, // Use actual count from backup
+      inventoryBackedUp: backup.inventoryCount ?? Math.max(0, (backup.totalPolicies ?? 0) - (backup.metadata?.policyCount ?? backup.policyCount ?? backup.totalPolicies ?? 0)),
       duration: backup.duration || 0,
       size: backup.size || backup.properties?.contentLength || 0,
       error: backup.error || backup.errorMessage || backup.properties?.errorMessage,
@@ -318,8 +319,8 @@ export function useDashboardStats(selectedPeriod: string = "7d", tenantId?: numb
             ? `Backup failed${backup.error ? `: ${truncateMessage(backup.error)}` : ""}`
             : backup.status === "cancelled" ? "Backup cancelled"
             : backup.status === "partial"
-              ? `Backup completed with warnings - ${backup.policiesBackedUp} policies`
-              : backup.status === "success" ? `Backup completed successfully - ${backup.policiesBackedUp} policies`
+              ? `Backup completed with warnings - ${backup.policiesBackedUp} policies${backup.inventoryBackedUp ? `, ${backup.inventoryBackedUp} inventory objects` : ""}`
+              : backup.status === "success" ? `Backup completed successfully - ${backup.policiesBackedUp} policies${backup.inventoryBackedUp ? `, ${backup.inventoryBackedUp} inventory objects` : ""}`
               : backup.status === "running" ? "Backup is still running"
               : backup.status === "incomplete" ? "Backup is incomplete" : "Backup status is unknown",
           details: backup,

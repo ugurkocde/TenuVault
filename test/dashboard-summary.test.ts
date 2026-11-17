@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { POST } from '../src/portal/app/api/list-backups/route'
 import { NextRequest } from '../src/main/api/next-server-shim'
 import { useDashboardStats } from '../src/portal/hooks/dashboard/useDashboardStats'
+import type { TenantDashboardStats } from '../src/portal/hooks/dashboard/useDashboardStats'
 import { allows } from '../src/shared/plans'
 
 const state = vi.hoisted(() => ({ plans: ['community', 'pro'], tenants: [
@@ -102,4 +103,14 @@ it('uses saved drift timestamps through the bridge without an audit event, inclu
   expect((await query(1).queryFn()).lastDriftCheck).toBeNull()
   fetcher.mockImplementation(async input => String(input) === '/api/drift-scan' ? new Response(null, { status: 503 }) : Response.json({ backups: [] }))
   expect((await query(1).queryFn()).lastDriftCheck).toBeNull()
+})
+
+ it.each([0, 12])('keeps %s policies separate from directory inventory in the dashboard', async policyCount => {
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL) => String(input) === '/api/list-backups'
+    ? Response.json({ backups: [{ name: 'directory', timestamp: new Date().toISOString(), status: 'Success', policyCount, totalPolicies: policyCount + 153 }] })
+    : Response.json({ data: [] }))
+  const query = useDashboardStats('7d', 1) as unknown as { queryFn: () => Promise<TenantDashboardStats> }
+  const stats = await query.queryFn()
+  expect(stats.latestCompleteBackup).toMatchObject({ policiesBackedUp: policyCount, inventoryBackedUp: 153 })
+  expect(stats.recentActivity[0]?.message).toBe(`Backup completed successfully - ${policyCount} policies, 153 inventory objects`)
 })
