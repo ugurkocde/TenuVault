@@ -127,6 +127,12 @@ describe("Directory inventory", () => {
     expect(() => listSnapshot(type, { id, web: "Unexpected" })).toThrow("unexpected shape")
     expect(() => listSnapshot(type, { id, "appRoles@odata.nextLink": "https://graph.microsoft.com/v1.0/next", appRoles: [] })).toThrow("not read in full")
   })
+  it("handles long public text without backtracking over repeated credential prefixes", () => {
+    const type = TYPES.find(type => type.folder === "Applications")!
+    for (const notes of ["eyJ".repeat(5000), "<RSAKeyValue>".repeat(5000)]) expect(listSnapshot(type, { id, notes }).notes).toBe(notes)
+    expect(() => listSnapshot(type, { id, notes: "<RSAKeyValue><D>private</D>" })).toThrow("refused credential")
+    expect(() => listSnapshot(type, { id, notes: "Token: eyJhbGci.eyJzdWI.signature" })).toThrow("refused credential")
+  })
   it("sorts member IDs and marks a complete collection explicitly", async () => {
     const { index, files } = await capture()
     expect(index).toMatchObject({ complete: true, count: 2 })

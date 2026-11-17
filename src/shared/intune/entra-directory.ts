@@ -30,7 +30,11 @@ function project(value: Json, schema: Schema): Json {
   if (schema === true) {
     // Scalar fields and scalar lists never admit an unexpected object.
     if (typeof value === "object") throw new Error("A directory property has an unexpected shape")
-    if (typeof value === "string" && /-----BEGIN (?:RSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----|Bearer\s+[\w.-]+|eyJ[\w-]+\.[\w-]+\.[\w-]+|<RSAKeyValue>[\s\S]*<D>|data:application\/(?:x-pkcs12|pkcs12)/i.test(value)) throw new Error("A directory object contains a refused credential value")
+    if (typeof value === "string") {
+      // Word boundaries and separate XML scans avoid quadratic backtracking on untrusted imports.
+      const rsa = /<RSAKeyValue>/i.exec(value)?.index
+      if (/-----BEGIN (?:RSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----|Bearer\s+[\w.-]+|\beyJ[\w-]+\.[\w-]+\.[\w-]+|data:application\/(?:x-pkcs12|pkcs12)/i.test(value) || (rsa !== undefined && /<D>/i.test(value.slice(rsa)))) throw new Error("A directory object contains a refused credential value")
+    }
     return value
   }
   if (typeof value !== "object") throw new Error("A directory property has an unexpected shape")
