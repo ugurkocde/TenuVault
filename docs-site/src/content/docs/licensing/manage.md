@@ -26,7 +26,7 @@ If you have not connected a tenant yet, TenuVault opens on **Welcome to TenuVaul
 2. Paste your key into **License key** and click **Save key**.
 3. TenuVault opens **Set up TenuVault**. Your key is activated for the tenant when you sign in to it. See [Start TenuVault for the first time](/getting-started/first-launch/).
 
-When tenant trials are on, the welcome screen explains that a new tenant starts with a Pro trial. The **Storage** step of the setup offers **Try Pro free** and **I have a license key** for a tenant on Community.
+The welcome screen explains that a new tenant starts with a Pro trial. The **Storage** step of the setup offers **Try Pro free** and **I have a license key** for a tenant on Community.
 
 ### On the License page
 
