@@ -22,4 +22,15 @@ describe("shared continuation rule", () => {
     await expect(readLive(graph, type, "id")).rejects.toThrow("another collection")
     expect(calls).toHaveLength(2)
   })
+  it("keeps extra collections on their declared version without borrowing the parent's filter", async () => {
+    const calls: Array<{ path: string; version?: string }> = []
+    const graph: GraphCall = async (_method, path, _body, options) => {
+      calls.push({ path, version: options?.version })
+      return { status: 200, body: calls.length === 1 ? { id: "id", displayName: "Group" } : { value: [{ id: "member" }] } as Item }
+    }
+    const type = { folder: "Fixture", label: "Fixture", path: "groups", apiVersion: "v1.0" as const, additionalReadVersions: ["beta" as const], filter: "securityEnabled eq true", area: "Groups" as const, nameKey: "displayName" as const, extras: [{ property: "members", path: () => "https://graph.microsoft.com/beta/groups/id/members" }] }
+    expect(await readLive(graph, type, "id")).toMatchObject({ members: [{ id: "member" }] })
+    expect(calls).toEqual([{ path: "groups/id", version: "v1.0" }, { path: "groups/id/members", version: "beta" }])
+  })
+
 })

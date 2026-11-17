@@ -8,7 +8,7 @@ import { restoreCapability, typeForFolder, type GraphVersion, type IntuneType, t
 
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 import { buildRestorePlan, buildUpdatePlan, NotRestorableError, resolveStep, restoreBlocker, writeBlocker, type WriteOperation } from "../../../shared/intune/restore-plan"
-import { assignmentsUnread, graphVersion, locateObject, readObject, type GraphReader } from "../../../shared/intune/read"
+import { assignmentsUnread, graphVersion, listPath, locateObject, readObject, type GraphReader } from "../../../shared/intune/read"
 import { comparableSnapshot, sameSnapshot } from "../../../shared/intune/compare"
 import { saveWrite, removeWrite, writeKey, writeRecords } from "../../../main/storage/restore-journal"
 import { describeRequirement, moduleForFolder, restorePermissionBlocker, SERVICES_PAGE, type GrantedPermissions } from "../../../shared/services/modules"
@@ -783,7 +783,16 @@ function liveReader(graph: GraphCall, type: IntuneType): GraphReader {
   const shape = type.apiVersion || type.headers ? { version: graphVersion(type), ...(type.headers ? { headers: type.headers } : {}) } : undefined
   const reader: GraphReader = {
     get: async (path) => {
-      const response = shape ? await graph("GET", path, undefined, shape) : await graph("GET", path)
+      let request = path
+      let requestShape = shape
+      if (/^https?:/i.test(path)) {
+        const url = new URL(path)
+        const version = url.pathname.split("/")[1] as GraphVersion
+        if (url.origin !== "https://graph.microsoft.com" || url.username || url.password || url.hash || ![graphVersion(type), ...(type.additionalReadVersions ?? [])].includes(version)) throw new Error("Invalid Graph read address")
+        request = url.pathname.slice(version.length + 2) + url.search
+        if (version !== graphVersion(type)) requestShape = { ...shape, version }
+      }
+      const response = requestShape ? await graph("GET", request, undefined, requestShape) : await graph("GET", request)
       // Settings Catalog answers 400 ResourceNotFound for deleted policies instead of 404.
       if (response.status === 404 || (response.status === 400 && /ResourceNotFound/i.test(JSON.stringify(response.body)))) throw new Gone()
       if (response.status >= 300) throw new Error(errorMessage(response.body, response.status))
@@ -795,8 +804,8 @@ function liveReader(graph: GraphCall, type: IntuneType): GraphReader {
       const seen = new Set<string>()
       while (next) {
         if (seen.size >= MAX_LIST_PAGES) throw new Error(`Microsoft Graph listing did not finish after ${MAX_LIST_PAGES} pages`)
-        const request = graphContinuation(new URL(start, root).href, new URL(next, root).href, seen, type.filter)
-        const page = await reader.get(request.slice(root.length))
+        const request = graphContinuation(new URL(start, root).href, new URL(next, root).href, seen, start === listPath(type) ? type.filter : undefined)
+        const page = await reader.get(request)
         if (!Array.isArray(page.value)) throw new Error("Microsoft Graph returned an invalid collection")
         items.push(...(page.value as Item[]))
         next = typeof page["@odata.nextLink"] === "string" ? page["@odata.nextLink"] : undefined

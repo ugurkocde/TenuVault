@@ -9,7 +9,7 @@ export function graphContinuation(start: string, next: string, seen: Set<string>
   if (parsed.origin !== "https://graph.microsoft.com" || parsed.username || parsed.password) throw refuse("it leaves Microsoft Graph")
   if (parsed.hash) throw refuse("it carries a fragment")
   if (!/^\/(beta|v1\.0)\//.test(started.pathname) || parsed.pathname.toLowerCase() !== started.pathname.toLowerCase()) throw refuse("it moves to another collection")
-  if (seen.has(parsed.href)) throw refuse("it repeats a page")
+  if (seen.has(parsed.href)) throw refuse("it repeats a page: repeated continuation link")
   const filters = filtersOf(parsed)
   if (filters.some(value => !allowed.includes(value))) throw refuse("it names another filter")
   seen.add(parsed.href)
