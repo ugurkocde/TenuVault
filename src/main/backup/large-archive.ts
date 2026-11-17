@@ -10,6 +10,7 @@ import { largeFiles, type JsonFileReader } from "./large-files"
 import type { LocalBlobStore } from "../storage/local-blob-store"
 
 const BLOCK = 512
+const FILES_MAX = 5_000_000
 const ENTRY_MAX = 8 * 1024 * 1024
 export const LARGE_ARCHIVE_MAX = 32 * 1024 * 1024 * 1024
 const identity = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i
@@ -61,16 +62,27 @@ function allowance(metadata: Record<string, any>) {
   if (!Object.keys(indexes).length || legacy > 60_000 || metadata.Status !== "Success" || metadata.Failures !== 0 || metadata.Coverage !== "Complete") throw new Error("Only complete large backups can be exported or imported")
   for (const [folder, index] of Object.entries(indexes)) if (!index.complete || !typeForFolder(folder) || metadata.ItemCounts?.[folder] !== index.count) throw new Error("Invalid large backup counts")
   const count = legacy + Object.values(indexes).reduce((sum, index) => sum + index.count, 0)
-  return { count, files: Math.min(5_000_000, 1002 + count * 32), bytes: Math.min(LARGE_ARCHIVE_MAX, 128 * 1024 * 1024 + count * 65536) }
+  const limits = { count, files: 2 + count + Object.values(indexes).reduce((sum, index) => sum + index.shards, 0), bytes: Math.min(LARGE_ARCHIVE_MAX, 128 * 1024 * 1024 + count * 65536) }
+  if (limits.files > FILES_MAX) throw new Error("Archive file count exceeds the inventory allowance")
+  return {
+    limits,
+    // largeFiles calls this only for a bounded relationship declaration in a fingerprinted
+    // snapshot. Every shard is then checked against that declaration and its own fingerprint.
+    relationship: (shards: number) => {
+      limits.files += shards
+      if (limits.files > FILES_MAX) throw new Error("Archive file count exceeds the inventory allowance")
+      limits.bytes = Math.min(LARGE_ARCHIVE_MAX, limits.bytes + shards * (ENTRY_MAX + BLOCK))
+    },
+  }
 }
 
 /** Uncompressed POSIX ustar avoids ZIP's entry ceiling and compression bombs and streams to disk. */
 export async function* exportLargeArchive(tenantId: string, backupId: string, metadata: Record<string, any>, read: JsonFileReader): AsyncGenerator<Buffer> {
-  const limits = allowance(metadata)
+  const { limits, relationship } = allowance(metadata)
   if (!identity.test(tenantId) || !/^backup-\d{4}-\d{2}-\d{2}-\d{6}$/.test(backupId) || metadata.BackupFolder !== backupId) throw new Error("Invalid archive identity")
-  yield* record("tenuvault-manifest.json", { version: 2, sourceTenantId: tenantId, backupId })
   let bytes = 0, files = 1
-  for await (const file of largeFiles(metadata, read)) {
+  for await (const chunk of record("tenuvault-manifest.json", { version: 2, sourceTenantId: tenantId, backupId })) { bytes += chunk.length; yield chunk }
+  for await (const file of largeFiles(metadata, read, relationship)) {
     if (++files > limits.files) throw new Error("Archive file count exceeds the inventory allowance")
     for await (const chunk of record(file.name, file.value)) {
       bytes += chunk.length
@@ -78,6 +90,7 @@ export async function* exportLargeArchive(tenantId: string, backupId: string, me
       yield chunk
     }
   }
+  if (bytes + 2 * BLOCK > limits.bytes) throw new Error("Archive exceeds the inventory size allowance")
   yield Buffer.alloc(2 * BLOCK)
 }
 
@@ -104,7 +117,7 @@ class TarReader {
     return buffer
   }
   async next(expected: string): Promise<any> {
-    if (!safeName(expected) || ++this.files > 5_000_000) throw new Error("Unsafe archive path or count")
+    if (!safeName(expected) || ++this.files > FILES_MAX) throw new Error("Unsafe archive path or count")
     let block = await this.bytes(BLOCK)
     const text = (start: number, length: number) => block.subarray(start, start + length).toString().replace(/\0.*$/s, "")
     const nameOf = () => [text(345, 155), text(0, 100)].filter(Boolean).join("/")
@@ -152,14 +165,16 @@ async function visitArchive(path: string, visit?: (name: string, value: unknown)
     if (manifest?.version !== 2 || !identity.test(manifest.sourceTenantId) || !/^backup-\d{4}-\d{2}-\d{2}-\d{6}$/.test(manifest.backupId)) throw new Error("Invalid archive identity")
     const metadata = await tar.next("metadata.json")
     if (metadata?.BackupFolder !== manifest.backupId || (metadata.TenantId && metadata.TenantId.toLowerCase() !== manifest.sourceTenantId.toLowerCase())) throw new Error("Archive source identity mismatch")
-    const limits = allowance(metadata)
-    if (size > limits.bytes) throw new Error("Archive exceeds the inventory size allowance")
+    const { limits, relationship } = allowance(metadata)
     const read: JsonFileReader = async name => {
       if (tar.files >= limits.files) throw new Error("Archive file count exceeds the inventory allowance")
-      return tar.next(name)
+      const value = await tar.next(name)
+      if (tar.offset > limits.bytes) throw new Error("Archive exceeds the inventory size allowance")
+      return value
     }
-    for await (const entry of largeFiles(metadata, read)) if (entry.name !== "metadata.json") await visit?.(entry.name, entry.value)
+    for await (const entry of largeFiles(metadata, read, relationship)) if (entry.name !== "metadata.json") await visit?.(entry.name, entry.value)
     const digest = await tar.end()
+    if (size > limits.bytes) throw new Error("Archive exceeds the inventory size allowance")
     await visit?.("metadata.json", metadata)
     // Completion is the very last write, after the source digest and every reference were checked.
     return { tenantId: manifest.sourceTenantId.toLowerCase(), backupId: manifest.backupId, digest, count: limits.count, path }

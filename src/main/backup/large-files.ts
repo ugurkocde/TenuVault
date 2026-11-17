@@ -15,7 +15,7 @@ export async function* indexedEntries(folder: string, index: LargeIndex, read: J
 }
 
 /** A canonical archive order validates every reference before admitting its bytes. */
-export async function* largeFiles(metadata: Record<string, any>, read: JsonFileReader): AsyncGenerator<{ name: string; value: unknown }> {
+export async function* largeFiles(metadata: Record<string, any>, read: JsonFileReader, relationship?: (shards: number) => void): AsyncGenerator<{ name: string; value: unknown }> {
   yield { name: "metadata.json", value: metadata }
   const legacyPaths = new Set<string>()
   for (const [identity, item] of Object.entries(metadata.Items ?? {}) as Array<[string, { file: string; hash: string }]>) {
@@ -42,6 +42,7 @@ export async function* largeFiles(metadata: Record<string, any>, read: JsonFileR
         for (const [property, reference] of Object.entries(value) as Array<[string, any]>) {
           if (!reference || typeof reference !== "object" || Array.isArray(reference) || !["sorted-id-shards-v1", "sorted-object-shards-v1"].includes(reference.format) || !("shards" in reference)) continue
           if (!safeLargeId(property) || !reference.complete || !Number.isSafeInteger(reference.count) || reference.count < 0 || reference.count > 500_000 || reference.shards !== Math.ceil(reference.count / LARGE_SHARD_ITEMS)) throw new Error("Invalid relationship inventory")
+          relationship?.(reference.shards)
           const hash = createHash("sha256")
           let last = ""
           for (let part = 0; part < reference.shards; part++) {

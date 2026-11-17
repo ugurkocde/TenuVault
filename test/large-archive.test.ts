@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import { afterEach, expect, it } from "vitest"
 import { mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
@@ -6,6 +7,7 @@ import { Readable } from "node:stream"
 import { exportLargeArchive, importLargeArchive, reviewLargeArchive, saveLargeDownload } from "../src/main/backup/large-archive"
 import { snapshotHash } from "../src/portal/lib/policies/backup-manifest"
 import { LocalBlobStore } from "../src/main/storage/local-blob-store"
+import { INTUNE_TYPES } from "../src/shared/intune/registry"
 import { LARGE_SHARD_ITEMS } from "../src/shared/large-backup"
 const tenant = "11111111-1111-1111-1111-111111111111", backup = "backup-2026-11-16-120000"
 const roots: string[] = []
@@ -102,4 +104,82 @@ it("preserves long Unicode policy file names in POSIX path records", async () =>
   const read = async (path: string) => path.startsWith("CompliancePolicies/") ? snapshot : f.read(path)
   await saveLargeDownload(Readable.toWeb(Readable.from(exportLargeArchive(tenant, backup, metadata, read))) as ReadableStream<Uint8Array>, f.path)
   expect((await reviewLargeArchive(f.path)).count).toBe(2)
+})
+
+async function relationshipArchive(count: number, members: number) {
+  const f = await synthetic(count)
+  const member = (at: number) => `member-${String(at).padStart(8, "0")}`
+  const hash = createHash("sha256")
+  for (let at = 0; at < members; at++) hash.update(JSON.stringify(member(at)) + "\n")
+  const reference = { format: "sorted-id-shards-v1", count: members, shards: Math.ceil(members / LARGE_SHARD_ITEMS), complete: true, hash: hash.digest("hex") }
+  const snapshot = (at: number) => ({ id: `object-${String(at).padStart(8, "0")}`, members: reference })
+  const read = async (name: string) => {
+    if (name.startsWith("_index/")) return Array.from({ length: count }, (_, at) => {
+      const value = snapshot(at)
+      return { id: value.id, file: `${value.id}.json`, hash: snapshotHash(value) }
+    })
+    if (name.startsWith("_relations/")) {
+      const shard = Number(name.split("/").at(-1)!.replace(".json", ""))
+      return Array.from({ length: Math.min(LARGE_SHARD_ITEMS, members - shard * LARGE_SHARD_ITEMS) }, (_, at) => member(shard * LARGE_SHARD_ITEMS + at))
+    }
+    return snapshot(Number(name.match(/object-(\d+)/)![1]))
+  }
+  await saveLargeDownload(Readable.toWeb(Readable.from(exportLargeArchive(tenant, backup, f.metadata, read))) as ReadableStream<Uint8Array>, f.path)
+  return { ...f, read, reference, snapshot }
+}
+
+it("round trips three objects with 500000 members each beyond the parent file allowance", async () => {
+  const f = await relationshipArchive(3, 500_000)
+  const reviewed = await reviewLargeArchive(f.path)
+  expect(reviewed.count).toBe(3)
+  const store = new LocalBlobStore(join(f.root, "encrypted"), [Buffer.alloc(32, 3)])
+  await importLargeArchive(store, reviewed)
+  const account = `tvlocal-${tenant}`
+  // 1500 relationship shards, three snapshots, one index, metadata and ownership.
+  expect(await store.list(account, "intune-backups", `${backup}/`)).toHaveLength(1506)
+  for (let at = 0; at < 3; at++) {
+    const name = `${backup}/_relations/DeviceConfigurations/${f.snapshot(at).id}/members/000499.json`
+    const ids = JSON.parse((await store.get(account, "intune-backups", name)).data.toString())
+    expect(ids).toHaveLength(1000)
+    expect(ids.at(-1)).toBe("member-00499999")
+  }
+  const metadata = JSON.parse((await store.get(account, "intune-backups", `${backup}/metadata.json`)).data.toString())
+  expect(metadata.Import.sha256).toBe(reviewed.digest)
+}, 120_000)
+
+it.each([500_001, 499_999])("refuses a fingerprinted but forged relationship count of %s on export and import", async count => {
+  const f = await relationshipArchive(1, 500_000)
+  const forged = { ...f.snapshot(0), members: { ...f.reference, count, shards: Math.ceil(count / LARGE_SHARD_ITEMS) } }
+  const forgedHash = snapshotHash(forged)
+  const read = async (name: string) => name.startsWith("_index/") ? [{ id: forged.id, file: `${forged.id}.json`, hash: forgedHash }] : name.startsWith("_relations/") ? f.read(name) : forged
+  const error = count > 500_000 ? "Invalid relationship inventory" : "Invalid relationship shard"
+  await expect(saveLargeDownload(Readable.toWeb(Readable.from(exportLargeArchive(tenant, backup, f.metadata, read))) as ReadableStream<Uint8Array>, join(f.root, "forged.tar"))).rejects.toThrow(error)
+  const raw = await readFile(f.path)
+  let offset = 0
+  while (offset < raw.length - 1024) {
+    const name = raw.subarray(offset, offset + 100).toString().replace(/\0.*$/s, "")
+    const size = Number.parseInt(raw.subarray(offset + 124, offset + 136).toString(), 8)
+    const start = offset + 512
+    if (name.startsWith("_index/")) {
+      const value = JSON.parse(raw.subarray(start, start + size).toString())
+      value[0].hash = forgedHash
+      const bytes = Buffer.from(JSON.stringify(value)); expect(bytes.length).toBe(size); bytes.copy(raw, start)
+    } else if (name === `DeviceConfigurations/${forged.id}.json`) {
+      const bytes = Buffer.from(JSON.stringify(forged)); expect(bytes.length).toBe(size); bytes.copy(raw, start)
+    }
+    offset = start + Math.ceil(size / 512) * 512
+  }
+  await writeFile(f.path, raw)
+  await expect(reviewLargeArchive(f.path)).rejects.toThrow(error)
+}, 120_000)
+
+it("refuses a declared inventory beyond the global file cap before reading snapshots", async () => {
+  const f = await synthetic(1)
+  const types = INTUNE_TYPES.slice(0, 11)
+  const metadata = {
+    ...f.metadata,
+    LargeItems: Object.fromEntries(types.map(type => [type.folder, { version: 1, count: 500_000, shards: 500, complete: true }])),
+    ItemCounts: { ...Object.fromEntries(types.map(type => [type.folder, 500_000])), TotalPolicies: types.filter(type => !type.inventory).length * 500_000 },
+  }
+  await expect(exportLargeArchive(tenant, backup, metadata, async () => { throw new Error("Snapshots must not be read") }).next()).rejects.toThrow("Archive file count exceeds the inventory allowance")
 })
