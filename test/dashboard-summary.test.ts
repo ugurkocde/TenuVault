@@ -22,7 +22,7 @@ afterEach(() => vi.unstubAllGlobals())
 beforeEach(() => { state.plans = ['community', 'pro'] })
 
 describe('dashboard summary inventory', () => {
-  it('preserves every descriptor and reads unchanged metadata once without per-backup listings', async () => {
+  it('preserves every descriptor and caches metadata while discovering folders hierarchically', async () => {
     const folders = ['backup-2026-10-01-020000', '2026-09-20', 'backup-2026-09-15-020000', 'backup-2026-10-02-020000']
     const blobs: Record<string, object> = {
       [`${folders[0]}/metadata.json`]: { Status: 'Success', TenantId: args.tenantId, DurationSeconds: 12, Scope: { Excluded: [] } },
@@ -37,7 +37,11 @@ describe('dashboard summary inventory', () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input))
       if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
-      if (url.searchParams.has('delimiter')) return new Response(folders.map(folder => `<BlobPrefix><Name>${folder}/</Name></BlobPrefix>`).join(''))
+      if (url.searchParams.has('delimiter')) {
+        const prefix = url.searchParams.get('prefix') ?? ''
+        if (!prefix) return new Response(folders.map(folder => `<BlobPrefix><Name>${folder}/</Name></BlobPrefix>`).join(''))
+        return new Response(Object.keys(blobs).filter(name => name.startsWith(prefix) && !name.slice(prefix.length).includes('/')).map(xml).join(''))
+      }
       if (url.searchParams.get('comp') === 'list') return new Response(Object.keys(blobs).filter(name => name.startsWith(url.searchParams.get('prefix') ?? '')).map(xml).join(''))
       const name = url.pathname.replace('/intune-backups/', '')
       return name in blobs ? Response.json(blobs[name]) : new Response(null, { status: 404 })
@@ -47,12 +51,12 @@ describe('dashboard summary inventory', () => {
     fetcher.mockClear()
     expect(await (await POST(request(true))).json()).toEqual(full)
     const listingCalls = () => fetcher.mock.calls.filter(([input]) => new URL(String(input)).searchParams.get('comp') === 'list')
-    expect(listingCalls()).toHaveLength(1)
-    expect(fetcher.mock.calls.filter(([input]) => String(input).endsWith('metadata.json'))).toHaveLength(3)
+    expect(listingCalls()).toHaveLength(9)
+    expect(fetcher.mock.calls.filter(([input]) => String(input).endsWith('metadata.json'))).toHaveLength(4)
     fetcher.mockClear()
     expect(await (await POST(request(true))).json()).toEqual(full)
-    expect(listingCalls()).toHaveLength(1)
-    expect(fetcher.mock.calls).toHaveLength(2)
+    expect(listingCalls()).toHaveLength(9)
+    expect(fetcher.mock.calls.filter(([input]) => String(input).endsWith('metadata.json'))).toHaveLength(1)
     version++
     blobs[`${folders[0]}/metadata.json`] = { Status: 'CompletedWithWarnings', TenantId: args.tenantId }
     const changed = await (await POST(request(true))).json()

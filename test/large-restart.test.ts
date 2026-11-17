@@ -1,4 +1,6 @@
-import { expect, it } from "vitest"
+import { expect, it, vi } from "vitest"
+import { POST as history } from "../src/portal/app/api/list-backups/route"
+import { NextRequest } from "../src/main/api/next-server-shim"
 import { build } from "esbuild"
 import { spawn } from "node:child_process"
 import { mkdtemp, readdir, rm } from "node:fs/promises"
@@ -44,6 +46,22 @@ it.each([false, true])("survives process death and starts a fresh folder (Azure 
     const before = await store.list(account, "intune-backups")
     expect(before.some(blob => blob.name.endsWith("metadata.json"))).toBe(false)
     const abandoned = before[0]!.name.split("/")[0]!
+    const listings: string[] = []
+    vi.stubGlobal("fetch", vi.fn(async (input, init) => {
+      const url = new URL(String(input))
+      if (url.hostname === "login.microsoftonline.com") return Response.json({ access_token: "storage" })
+      if (url.searchParams.get("comp") === "list") { expect(url.searchParams.get("delimiter")).toBe("/"); listings.push(url.search) }
+      url.hostname = `${account}.blob.core.windows.net`
+      return handleLocalBlobRequest(store, new Request(url, init))
+    }))
+    for (const summary of [false, true]) {
+      const response = await history(new NextRequest("http://tenuvault.internal/api/list-backups", { method: "POST", body: JSON.stringify({ tenantId: TENANT, appId: CLIENT, clientSecret: "test", subscriptionId: "local", resourceGroupName: "local", storageAccountName: destination, summary }) }))
+      expect(response.status).toBe(200)
+      expect((await response.json()).backups).toMatchObject([{ id: abandoned, status: "running", largeInventory: true }])
+    }
+    expect(listings).toHaveLength(4)
+    vi.unstubAllGlobals()
+
     undo = registerTestTypes([testType("AuthorizationPolicy", "synthetic", { volume: "large", listOnly: true })])
     const engine = new BackupEngine({ getToken: async () => jwt({ scp: "Policy.Read.All" }), services: () => ({ services: ["entra"] }), now: () => new Date(Date.now() + 2000), fetch: (async (input, init) => new URL(String(input)).hostname === "graph.microsoft.com" ? Response.json({ value: [{ id: "fresh" }] }) : handleLocalBlobRequest(store, new Request(String(input).replace("syntheticstore.blob.core.windows.net", `${account}.blob.core.windows.net`), init))) as typeof fetch })
     const job = await engine.waitForJob(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: destination }))
@@ -51,5 +69,5 @@ it.each([false, true])("survives process death and starts a fresh folder (Azure 
     expect(job.coverage).toBe("complete")
     expect(job.backupFolder).not.toBe(abandoned)
     expect((await store.list(account, "intune-backups", `${abandoned}/`)).some(blob => blob.name.endsWith("metadata.json"))).toBe(false)
-  } finally { undo?.(); child.kill("SIGKILL"); await exited; await rm(root, { recursive: true, force: true }) }
+  } finally { vi.unstubAllGlobals(); undo?.(); child.kill("SIGKILL"); await exited; await rm(root, { recursive: true, force: true }) }
 }, 20_000)

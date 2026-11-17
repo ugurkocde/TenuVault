@@ -171,7 +171,7 @@ export async function importLargeArchive(store: LocalBlobStore, archive: Reviewe
   await store.createContainer(account, container)
   if ((await store.list(account, container, prefix)).length) throw new Error("This backup already exists on this device")
   const marker = `${prefix}.tenuvault-owner.json`
-  await store.put(account, container, marker, Buffer.from(JSON.stringify({ TenantId: archive.tenantId, RunId: randomUUID() })), "application/json", true)
+  await store.put(account, container, marker, Buffer.from(JSON.stringify({ TenantId: archive.tenantId, RunId: randomUUID(), LargeInventory: { version: 1 } })), "application/json", true)
   const pending = new Set<Promise<void>>()
   let failure: unknown
   try {

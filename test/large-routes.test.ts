@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest"
 import { NextRequest } from "../src/main/api/next-server-shim"
 import { ApiHost } from "../src/main/api/host"
+import { POST as history } from "../src/portal/app/api/list-backups/route"
 import { POST as contents } from "../src/portal/app/api/list-backup-contents/route"
 import { POST as compare } from "../src/portal/app/api/large-backup-page/route"
 import { POST as download } from "../src/portal/app/api/download-backup/route"
@@ -60,4 +61,30 @@ it("validates the paging request before sending anything to Microsoft", async ()
   const reads = install()
   expect((await compare(new NextRequest("http://tenuvault.internal/api/test", { method: "POST", body: "{}" }))).status).toBe(400)
   expect(reads).toEqual([])
+})
+
+it.each([false, true])("describes 150000 unfinished snapshots without enumerating them (summary: %s)", async summary => {
+  const running = "backup-" + new Date().toISOString().slice(0, 19).replace("T", "-").replace(/:/g, "")
+  const listings: string[] = []
+  vi.stubGlobal("fetch", vi.fn(async input => {
+    const url = new URL(String(input))
+    if (url.hostname === "login.microsoftonline.com") return Response.json({ access_token: "storage" })
+    if (url.searchParams.get("comp") === "list") {
+      expect(url.searchParams.get("delimiter")).toBe("/")
+      const prefix = url.searchParams.get("prefix") ?? ""
+      listings.push(prefix)
+      if (!prefix) return new Response([running, before].map(name => `<BlobPrefix><Name>${name}/</Name></BlobPrefix>`).join(""))
+      return new Response(`<Blob><Name>${prefix}.tenuvault-owner.json</Name><Properties><Content-Length>150</Content-Length></Properties></Blob><BlobPrefix><Name>${prefix}DeviceConfigurations/</Name></BlobPrefix>`)
+    }
+    if (url.pathname.endsWith(".tenuvault-owner.json")) return Response.json({ TenantId: tenant, RunId: "unfinished", LargeInventory: { version: 1 } })
+    return new Response(null, { status: 404 })
+  }))
+  const response = await history(request({ summary }))
+  expect(response.status).toBe(200)
+  expect((await response.json()).backups).toMatchObject([
+    { id: running, status: "running", runId: "unfinished", largeInventory: true, configs: 0 },
+    { id: before, status: "incomplete", runId: "unfinished", largeInventory: true, configs: 0 },
+  ])
+  // The virtual snapshot folder can hold 150000 objects. Only three hierarchical listings occur.
+  expect(listings.sort()).toEqual(["", `${before}/`, `${running}/`].sort())
 })

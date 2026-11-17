@@ -788,9 +788,10 @@ export class BackupEngine {
     // Claim the folder before writing any policy, even when retention currently keeps everything.
     // The create-only write is atomic, so two writers that start in the same second cannot share
     // one folder: the loser fails here and writes nothing else.
+    // Large runs are described in the same atomic claim, before any snapshots can be streamed.
     // The marker names this run, so the Dashboard can match a failed run to whatever folder storage holds for it.
     try {
-      await storage.put(`${backupFolder}/${BACKUP_OWNER_FILE}`, JSON.stringify({ Source: "TenuVault Desktop", TenantId: request.tenantId.toLowerCase(), RunId: job.id }), undefined, true)
+      await storage.put(`${backupFolder}/${BACKUP_OWNER_FILE}`, JSON.stringify({ Source: "TenuVault Desktop", TenantId: request.tenantId.toLowerCase(), RunId: job.id, ...(types.some(type => type.volume === "large") ? { LargeInventory: { version: 1 } } : {}) }), undefined, true)
     } catch (error) {
       if (error instanceof BlobClaimError) throw new BackupFolderTakenError(backupFolder)
       throw error

@@ -1,4 +1,3 @@
-import { INTUNE_TYPES } from "../../../../shared/intune/registry"
 import { backupTypeUse } from "../../../../shared/services/backup-use"
 import { BlobListError, decodeXml, listBlobPages } from "~/lib/storage/list"
 import { typeForFolder } from "../../../../shared/intune/registry"
@@ -46,8 +45,8 @@ const metadataCache = new MetadataCache<MetadataRead>(result => !!result.metadat
  */
 const ownerCache = new MetadataCache<OwnershipFile>(result => result.kind === 'found')
 
-/** One backup folder, described from metadata and either a folder listing or the summary inventory. */
-async function describeBackup(storageAccountName: string, name: string, accessToken: string, tenantId: string, inventory?: { text: string; cacheKey: string; version: string; owner: string }) {
+/** Read only root records first, before deciding whether snapshots can be listed. */
+async function describeBackup(storageAccountName: string, name: string, accessToken: string, tenantId: string, appId: string, summary: boolean) {
   const parsed = parseBackupName(name)!
   const legacy = parsed.precision === "day"
   const date = parsed.timestamp.slice(0, 10)
@@ -80,29 +79,26 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
   // On this device a backup can become unavailable while its metadata.json stays unchanged (another
   // of its files is damaged), so its metadata is read each time: the store checks it then.
   const local = storageAccountName.startsWith(LOCAL_STORAGE_PREFIX)
-  const metadataRead: Promise<MetadataRead> = inventory?.version
-    ? (local ? readMetadata() : metadataCache.read(inventory.cacheKey, inventory.version, readMetadata))
-    // On this device a listing leaves out a metadata.json it cannot read, so a folder listed without
-    // one is asked for it: the store answers 409 when damaged files made the backup unavailable.
-    : inventory ? (local ? readMetadata().then((read) => read.unavailable ? read : { metadata: null }) : Promise.resolve({ metadata: null })) : readMetadata()
-  // A backup made unavailable by damaged files is still listed, with the reason, so the others stay usable.
-  const metadataResult = await metadataRead
-  const listing: string | { unavailable: string } = metadataResult.metadata?.LargeItems ? "" : inventory ? inventory.text : await listBlobPages(`https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(`${name}/`)}`, accessToken).catch((error) => {
+  const list = (delimiter = "") => listBlobPages(`https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(`${name}/`)}${delimiter ? "&delimiter=/" : ""}`, accessToken).catch((error) => {
     const unavailable = error instanceof BlobListError ? unavailableReason(error.status, error.body) : null
     if (unavailable) return { unavailable }
     throw new Error(`Backup ${name} inventory is unavailable. Check storage access and retry.`)
   })
-  const unavailable = typeof listing === 'string' ? (metadataResult.unavailable ? metadataResult.metadataError! : null) : listing.unavailable
-  const filesText = typeof listing === 'string' && !unavailable ? listing : ''
-  const listedMetadata = unavailable ? null : metadataResult.metadata
-  const readError = unavailable ?? metadataResult.metadataError
-  // Ownership comes from the shared resolver (shared/backup-ownership.ts): the manifest's tenant,
-  // else the ownership marker, read just for those folders and only when the listing holds one.
-  // For a folder without a manifest the marker's run id lets the Dashboard count a failed run once.
+  const root = await list("/")
+  const records = typeof root === "string" ? root : ""
+  const record = (file: string) => [...records.matchAll(/<Blob>[\s\S]*?<\/Blob>/g)].find(match => match[0].includes(`<Name>${name}/${file}</Name>`))?.[0] ?? ""
+  const version = record("metadata.json")
+  const cacheKey = JSON.stringify([tenantId.toLowerCase(), storageAccountName, appId, name])
+  const metadataResult = summary && !local && version ? await metadataCache.read(cacheKey, version, readMetadata) : await readMetadata()
+  const listedMetadata = typeof root === "string" && !metadataResult.unavailable ? metadataResult.metadata : null
+  const readError = typeof root !== "string" ? root.unavailable : metadataResult.metadataError
+  // Resolve ownership before listing content. The atomic claim also describes a large run,
+  // including the interval before its first page and after a crash without a manifest.
+  let large = Boolean(metadataResult.metadata?.LargeItems)
   const readMarker = async (): Promise<OwnershipFile> => {
     try {
       const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(name)}/${BACKUP_OWNER_FILE}`, { headers: storageHeaders(accessToken) })
-      if (response.status === 404) return { kind: 'missing' }
+      if (response.status === 404 || (local && response.status === 409 && (metadataResult.unavailable || (!record(BACKUP_OWNER_FILE) && response.headers.get('x-ms-error-code') === 'InventoryIncomplete')))) return { kind: 'missing' }
       if (!response.ok) return { kind: 'unreadable', error: new Error(`The ownership record is unavailable (${response.status}).`) }
       const body = await readJsonCapped(response, MAX_BACKUP_ARCHIVE_BYTES)
       if (body.kind === 'oversized') return { kind: 'unreadable', error: new Error(oversizedOwnershipFile(BACKUP_OWNER_FILE)) }
@@ -114,16 +110,22 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
   }
   const { manifest, owner } = await resolveBackupOwnership(async (file) => {
     if (file === 'metadata.json') return listedMetadata ? { kind: 'found', value: listedMetadata } : readError ? { kind: 'unreadable', error: new Error(readError) } : { kind: 'missing' }
-    if (!filesText.includes(`<Name>${name}/${BACKUP_OWNER_FILE}</Name>`)) return { kind: 'missing' }
-    return inventory?.owner ? ownerCache.read(inventory.cacheKey, inventory.owner, readMarker) : readMarker()
+    const ownerVersion = record(BACKUP_OWNER_FILE)
+    const marker = await (summary && !local && ownerVersion ? ownerCache.read(cacheKey, ownerVersion, readMarker) : readMarker())
+    // An unreadable claim may describe a large run too. Leave it unresolved without a deep scan.
+    if (marker.kind === 'unreadable' || (marker.kind === 'found' && (marker.value as any)?.LargeInventory)) large = true
+    return marker
   }, tenantId)
+  const listing = typeof root !== "string" ? root : large ? "" : await list()
+  const unavailable = typeof listing === 'string' ? (metadataResult.unavailable ? metadataResult.metadataError! : null) : listing.unavailable
+  const filesText = typeof listing === 'string' && !unavailable ? listing : ''
   // A marker sealed by an earlier version that cannot be opened for this tenant is foreign (another
   // tenant's, or a key this device lacks). One that could not be read otherwise (any status but 404,
   // a network error, a body that cannot be parsed or names no tenant) leaves the folder unresolved
   // until it can be. A missing sign-in on this device leaves the marker unreadable until it is fixed.
   // Metadata the resolver could not use (it records an invalid tenant) is shown as unreadable, as it is for every other caller.
-  const metadata = listedMetadata && manifest.kind === 'found' ? listedMetadata : null
-  const metadataError = readError ?? (listedMetadata && manifest.kind === 'unreadable' && manifest.error instanceof Error ? manifest.error.message : undefined)
+  const metadata = !unavailable && listedMetadata && manifest.kind === 'found' ? listedMetadata : null
+  const metadataError = unavailable ?? readError ?? (listedMetadata && manifest.kind === 'unreadable' && manifest.error instanceof Error ? manifest.error.message : undefined)
   const markerFailure = owner.kind === 'unreadable' ? owner.error : null
   const foreignMarker = markerFailure instanceof Error && markerFailure.name === 'FetchApplicationError'
   // A folder whose manifest could not be read is not matched to its run: its status is unknown, so the run counts once, through its attempt record.
@@ -178,7 +180,7 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
     totalPolicies,
     counts,
     sizes,
-    ...(metadata?.LargeItems ? { largeInventory: true } : {}),
+    ...(large ? { largeInventory: true } : {}),
     // Kept for the dashboard's breakdown.
     policies: {
       deviceConfigurations: count('DeviceConfigurations'),
@@ -265,8 +267,8 @@ export async function POST(request: NextRequest) {
     // This avoids needing account-level permissions
 
     // List blobs in the intune-backups container
-    const summary = body.summary === true && !INTUNE_TYPES.some(type => type.volume === "large")
-    const blobsUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${summary ? "" : "&delimiter=/"}`
+    const summary = body.summary === true
+    const blobsUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&delimiter=/`
 
     let blobsText: string
     try {
@@ -301,25 +303,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Backup storage is unavailable. Check storage access and retry." }, { status: error.status })
     }
     
-    // Parse XML response to extract backup folders
-    // Summary mode groups one flat inventory in process, including older backups without manifests.
-    const inventories = new Map<string, { text: string; cacheKey: string; version: string; owner: string }>()
-    if (summary) {
-      for (const match of blobsText.matchAll(/<Blob>[\s\S]*?<\/Blob>/g)) {
-        const name = decodeXml(match[0].match(/<Name>(.*?)<\/Name>/)?.[1] ?? '')
-        const folder = name.split('/')[0]!
-        if (!parseBackupName(folder)) continue
-        let inventory = inventories.get(folder)
-        if (!inventory) {
-          inventory = { text: '', cacheKey: JSON.stringify([String(tenantId).toLowerCase(), storageAccountName, appId, folder]), version: '', owner: '' }
-          inventories.set(folder, inventory)
-        }
-        inventory.text += match[0]
-        if (name === `${folder}/metadata.json`) inventory.version = match[0]
-        if (name === `${folder}/${BACKUP_OWNER_FILE}`) inventory.owner = match[0]
-      }
-    }
-    const backupFolders = summary ? [...inventories.keys()] : backupFoldersIn(blobsText).map((folder) => folder.name)
+    // Always discover folders hierarchically: even an unregistered large type can leave
+    // an abandoned folder, so a flat summary scan cannot safely be used here.
+    const backupFolders = backupFoldersIn(blobsText).map((folder) => folder.name)
     // Backups on this device: the store says how many files in the folder could not be read, so
     // the list can say that some backups may be missing from it or unavailable.
     let damagedFiles = 0
@@ -342,7 +328,7 @@ export async function POST(request: NextRequest) {
     // whose marker cannot be opened for this tenant. Older backups that do not record a tenant are still listed.
     // A folder whose marker could not be read may be another tenant's, so it is left out too and
     // counted as unresolved; its run, if it failed, counts once through its attempt record.
-    const described = await mapLimit(backupFolders, 6, (name) => describeBackup(storageAccountName, name, accessToken, String(tenantId), inventories.get(name)))
+    const described = await mapLimit(backupFolders, 6, (name) => describeBackup(storageAccountName, name, accessToken, String(tenantId), String(appId), summary))
     const unresolved = described.filter((backup) => backup.unresolved).length
     // Folders sealed by an earlier version that this device cannot open, for the backups page's offer
     // to import a recovery key. Without the key nobody can tell whose such a folder is, so it counts

@@ -1,7 +1,10 @@
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { POST as history } from "../src/portal/app/api/list-backups/route"
+import { NextRequest } from "../src/main/api/next-server-shim"
+import { fixture, scriptedGraph } from "./helpers/backup-fixture"
 import { BackupEngine } from "../src/main/backup/engine"
 import { handleLocalBlobRequest } from "../src/main/storage/blob-emulator"
 import { LocalBlobStore } from "../src/main/storage/local-blob-store"
@@ -13,7 +16,7 @@ import { indexPath, largeIndexes } from "../src/shared/large-backup"
 const type = testType("AuthorizationPolicy", "syntheticUsers", { volume: "large", apiVersion: "v1.0", inventory: true, listOnly: true, listQuery: "$top=999&$select=id,displayName", keep: ["displayName"] })
 let undo: (() => void) | undefined
 const roots: string[] = []
-afterEach(async () => { undo?.(); undo = undefined; for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })
+afterEach(async () => { vi.unstubAllGlobals(); undo?.(); undo = undefined; for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })
 
 for (const azure of [false, true]) describe(azure ? "Azure blob protocol" : "encrypted local store", () => {
   async function setup(options: Partial<Parameters<typeof fakeGraph>[0]> = {}, extra = {}) {
@@ -186,4 +189,35 @@ it("keeps relationship coverage incomplete after an unread continuation and cont
   expect(job.coverage).toBe("incomplete")
   expect((await f.files(job)).some(name => name.endsWith("group.json"))).toBe(false)
   expect((await f.manifest(job)).LargeItems.TokenLifetimePolicies.complete).toBe(true)
+})
+
+it.each([false, true])("lists history during a streaming capture without listing snapshots (Azure protocol: %s)", async azure => {
+  undo = registerTestTypes([type])
+  let release!: () => void, reached!: () => void
+  const blocked = new Promise<void>(resolve => { release = resolve })
+  const page = new Promise<void>(resolve => { reached = resolve })
+  const f = fixture(scriptedGraph({
+    "/v1.0/syntheticUsers?$top=999&$select=id,displayName": { value: [{ id: "one" }], "@odata.nextLink": "https://graph.microsoft.com/v1.0/syntheticUsers?page=2" },
+    "/v1.0/syntheticUsers?page=2": async () => { reached(); await blocked; return Response.json({ value: [] }) },
+  }), { getToken: async () => jwt({ scp: "Policy.Read.All" }), services: () => ({ services: ["entra"] }) })
+  const job = f.engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: f.account })
+  try {
+    await page
+    const marker = await f.file(job, ".tenuvault-owner.json")
+    expect(marker).toMatchObject({ RunId: job.id, LargeInventory: { version: 1 } })
+    const listings: string[] = []
+    vi.stubGlobal("fetch", vi.fn(async (input, init) => {
+      const url = new URL(String(input))
+      if (url.hostname === "login.microsoftonline.com") return Response.json({ access_token: "storage" })
+      if (url.searchParams.get("comp") === "list") { expect(url.searchParams.get("delimiter")).toBe("/"); listings.push(url.search) }
+      url.hostname = `${f.account}.blob.core.windows.net`
+      return handleLocalBlobRequest(f.store, new Request(url, init))
+    }))
+    for (const summary of [false, true]) {
+      const response = await history(new NextRequest("http://tenuvault.internal/api/list-backups", { method: "POST", body: JSON.stringify({ tenantId: TENANT, appId: CLIENT, clientSecret: "test", subscriptionId: "local", resourceGroupName: "local", storageAccountName: azure ? "syntheticstore" : f.account, summary }) }))
+      expect(response.status).toBe(200)
+      expect((await response.json()).backups).toMatchObject([{ id: job.backupFolder, status: "running", runId: job.id, largeInventory: true }])
+    }
+    expect(listings).toHaveLength(4)
+  } finally { release(); await f.engine.waitForJob(job) }
 })
