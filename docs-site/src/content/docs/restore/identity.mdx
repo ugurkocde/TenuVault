@@ -31,6 +31,6 @@ Secrets, passwords, OATH seeds, synchronization flags, domains, devices, Microso
 
 ## Endpoint verification matrix
 
-This table renders the same data used by the restore safety code. Verification uses the local Graph index and Microsoft's resource and operation documentation. No tenant write was made for this guardrail layer. A missing contract, property list, permission, stable detection key or index match keeps the operation blocked. A missing parent contract can still have action or sub-resource APIs that require separate research. In particular, the index describes automatic auditing as POST while current Microsoft documentation describes PATCH; this discrepancy remains blocked.
+This table renders the same data used by the restore safety code. Verification uses the local Graph index and Microsoft's resource and operation documentation. No tenant write was made for this guardrail layer. Prerequisite read permissions also come from the service manifest; the writer enforces both, including Policy.Read.All for security defaults. A missing contract, property list, permission, stable detection key or index match keeps the operation blocked. A missing parent contract can still have action or sub-resource APIs that require separate research. In particular, the index describes automatic auditing as POST while current Microsoft documentation describes PATCH; this discrepancy remains blocked.
 
 <RestoreMatrix />

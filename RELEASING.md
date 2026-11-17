@@ -253,6 +253,8 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 ## Compatibility notes for the next release
 
+- Entra ID and Defender remain backup-only. Their future restore writer requires a signed-in admin, touched-object journal, protected identity checks, adds-only defaults and reconciliation of unanswered writes. No new restore capability is enabled. Restore continuation pages now use the same collection and filter validation as backups.
+
 - Cloud change reports now warn when either backup declares directory inventory that Azure Automation did not compare, including a missing or unreadable large companion. Ordinary report exports retain their previous JSON, Markdown and HTML layout. Azure Automation does not capture directory inventory.
 
 - Entra ID adds seven opt-in directory inventories: users, groups, app registrations, enterprise apps, consent grants, devices and organization contacts. The registry now contains 135 types, including 74 Entra types. Directory areas stay off for new and existing tenants. Files use object IDs and closed property allowlists; users include identity and organization profiles but never authentication methods, passwords or sign-in activity. Application credentials retain metadata only. Group membership and ownership use beta to avoid v1.0 omissions. Refused relationships retain their parent with an incomplete marker and continue; a paging or budget failure ends only that type. Directory inventory is excluded from policy counts, hygiene, live change watching and audit alert suggestions. Compare and drift use paged indexes. Restore remains unavailable and Azure Automation is unchanged.

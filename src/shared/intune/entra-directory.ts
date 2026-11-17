@@ -48,7 +48,7 @@ const refused = [{ status: 403 }, { status: 404 }]
 const ids = (path: string, property: string): Extra => ({ property, path: id => `${path}/${id}/${property}?$select=id&$top=999`, ids: true, optional: refused })
 const definitions = (path: string, property: string): Extra => ({ property, path: id => `${path}/${id}/${property}?$select=${Object.keys(DIRECTORY_EXTRA_SCHEMAS[property] as object).join(",")}&$top=999`, optional: refused })
 const directory = (folder: keyof typeof DIRECTORY_SCHEMAS, label: string, path: string, area: IntuneType["area"], extras?: Extra[]): IntuneType => ({
-  folder, label, path, area, apiVersion: "v1.0", nameKey: "displayName", volume: "large", inventory: true, listOnly: true,
+  folder, label, path, area, restoreSafety: "identity", apiVersion: "v1.0", nameKey: "displayName", volume: "large", inventory: true, listOnly: true,
   keep: Object.keys(DIRECTORY_SCHEMAS[folder]), listQuery: `$top=999&$select=${Object.keys(DIRECTORY_SCHEMAS[folder]).filter(key => key !== "manager").join(",")}`,
   normalizeSnapshot: snapshot => project(snapshot, DIRECTORY_SCHEMAS[folder]) as Item,
   neverStoredKeys, extras, limitation: "Directory objects are inventory. Restore is not available yet.",

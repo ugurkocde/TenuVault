@@ -49,7 +49,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/authorizationpolicy?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "SecurityDefaults",
@@ -92,7 +93,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/identitysecuritydefaultsenforcementpolicy?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "AdminConsentRequestPolicy",
@@ -140,7 +142,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/adminconsentrequestpolicy?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "PermissionGrantPolicies",
@@ -223,7 +226,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/permissiongrantpolicy?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "PermissionGrantPreApprovalPolicies",
@@ -289,7 +293,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/permissiongrantpreapprovalpolicy?view=graph-rest-beta",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "DefaultAppManagementPolicy",
@@ -336,7 +341,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/tenantappmanagementpolicy?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "AppManagementPolicies",
@@ -413,7 +419,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/appmanagementpolicy?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "TokenLifetimePolicies",
@@ -478,7 +485,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/tokenlifetimepolicy?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "TokenIssuancePolicies",
@@ -543,7 +551,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/tokenissuancepolicy?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "ClaimsMappingPolicies",
@@ -613,7 +622,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/claimsmappingpolicy?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "HomeRealmDiscoveryPolicies",
@@ -686,7 +696,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/homerealmdiscoverypolicy?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "ActivityBasedTimeoutPolicies",
@@ -758,7 +769,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/activitybasedtimeoutpolicy?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "DeviceRegistrationPolicy",
@@ -805,7 +817,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/deviceregistrationpolicy?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "MdmEnrollmentPolicies",
@@ -845,7 +858,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/mobilitymanagementpolicy?view=graph-rest-beta",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "unverified"
   },
   {
     "folder": "MamEnrollmentPolicies",
@@ -885,7 +899,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/mobilitymanagementpolicy?view=graph-rest-beta",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "unverified"
   },
   {
     "folder": "DirectorySettings",
@@ -937,7 +952,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/groupsetting?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "Organization",
@@ -1066,7 +1082,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/organization?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "EntraCompanyBranding",
@@ -1168,7 +1185,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/organizationalbranding?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "Domains",
@@ -1265,7 +1283,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/domain?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "never"
   },
   {
     "folder": "OnPremisesSynchronization",
@@ -1310,7 +1329,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/onpremisesdirectorysynchronization?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "never"
   },
   {
     "folder": "AuthenticationMethodsPolicy",
@@ -1427,7 +1447,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/authenticationmethodspolicy?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "AuthenticationFlowsPolicy",
@@ -1470,7 +1491,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/authenticationflowspolicy?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "AuthenticationContexts",
@@ -1527,7 +1549,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/authenticationcontextclassreference?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "CertificateBasedAuthConfigurations",
@@ -1564,7 +1587,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/certificatebasedauthconfiguration?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "CertificateBasedAuthPki",
@@ -1648,7 +1672,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/certificatebasedauthpki?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "FederatedTokenValidationPolicy",
@@ -1689,7 +1714,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/federatedtokenvalidationpolicy?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "ContinuousAccessEvaluationPolicy",
@@ -1733,7 +1759,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/continuousaccessevaluationpolicy?view=graph-rest-beta",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "HardwareOathDevices",
@@ -1821,7 +1848,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/hardwareoathtokenauthenticationmethoddevice?view=graph-rest-beta",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "never"
   },
   {
     "folder": "GroupLifecyclePolicies",
@@ -1911,7 +1939,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/grouplifecyclepolicy?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "OwnerlessGroupPolicy",
@@ -1960,7 +1989,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/ownerlessgrouppolicy?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "CrossTenantAccessPolicy",
@@ -2080,7 +2110,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/crosstenantaccesspolicy?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "CrossTenantAccessDefault",
@@ -2147,7 +2178,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/crosstenantaccesspolicyconfigurationdefault?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "CrossTenantAccessPartners",
@@ -2250,7 +2282,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/crosstenantaccesspolicyconfigurationpartner?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "CrossTenantAccessMtoTemplates",
@@ -2302,7 +2335,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/multitenantorganizationpartnerconfigurationtemplate?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "unverified"
   },
   {
     "folder": "ExternalIdentitiesPolicy",
@@ -2346,7 +2380,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/externalidentitiespolicy?view=graph-rest-beta",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "B2bManagementPolicies",
@@ -2428,7 +2463,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/b2bmanagementpolicy?view=graph-rest-beta",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "IdentityProviders",
@@ -2468,7 +2504,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/identityprovider?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "unverified"
   },
   {
     "folder": "UserFlows",
@@ -2551,7 +2588,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/b2xidentityuserflow?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "UserFlowAttributes",
@@ -2621,7 +2659,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/identityuserflowattribute?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "AuthenticationEventsFlows",
@@ -2727,7 +2766,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/authenticationeventsflow?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "AuthenticationEventListeners",
@@ -2803,7 +2843,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/authenticationeventlistener?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "CustomAuthenticationExtensions",
@@ -2890,7 +2931,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/customauthenticationextension?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "ApiConnectors",
@@ -2965,7 +3007,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/identityapiconnector?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "MultiTenantOrganization",
@@ -3037,7 +3080,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/multitenantorganization?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "EntraRoleDefinitions",
@@ -3094,7 +3138,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/unifiedroledefinition?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "EntraRoleAssignments",
@@ -3161,7 +3206,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/unifiedroleassignment?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "directory-deferred"
   },
   {
     "folder": "RoleEligibilitySchedules",
@@ -3184,7 +3230,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/unifiedroleeligibilityschedule?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "directory-deferred"
   },
   {
     "folder": "RoleAssignmentSchedules",
@@ -3207,7 +3254,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/unifiedroleassignmentschedule?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "directory-deferred"
   },
   {
     "folder": "RoleManagementPolicies",
@@ -3263,7 +3311,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/unifiedrolemanagementpolicy?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "RoleManagementPolicyAssignments",
@@ -3289,7 +3338,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/unifiedrolemanagementpolicyassignment?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "unverified"
   },
   {
     "folder": "PimGroupEligibilitySchedules",
@@ -3312,7 +3362,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/privilegedaccessgroupeligibilityschedule?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "directory-deferred"
   },
   {
     "folder": "PimGroupAssignmentSchedules",
@@ -3335,7 +3386,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/privilegedaccessgroupassignmentschedule?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "directory-deferred"
   },
   {
     "folder": "PimAlertConfigurations",
@@ -3384,7 +3436,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/unifiedrolemanagementalertconfiguration?view=graph-rest-beta",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "AdministrativeUnits",
@@ -3450,7 +3503,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/administrativeunit?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "AttributeSets",
@@ -3519,7 +3573,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/attributeset?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "CustomSecurityAttributeDefinitions",
@@ -3607,7 +3662,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/customsecurityattributedefinition?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "AccessPackageCatalogs",
@@ -3666,7 +3722,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/accesspackagecatalog?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "AccessPackages",
@@ -3772,7 +3829,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/accesspackage?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "AccessPackageAssignmentPolicies",
@@ -3857,7 +3915,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/accesspackageassignmentpolicy?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "ConnectedOrganizations",
@@ -3944,7 +4003,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/connectedorganization?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "EntitlementManagementSettings",
@@ -3987,7 +4047,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/entitlementmanagementsettings?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "AccessReviewDefinitions",
@@ -4142,7 +4203,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/accessreviewscheduledefinition?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "AccessReviewPolicy",
@@ -4185,7 +4247,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/accessreviewpolicy?view=graph-rest-beta",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "LifecycleWorkflows",
@@ -4320,7 +4383,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/identitygovernance-workflow?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "LifecycleWorkflowCustomTaskExtensions",
@@ -4400,7 +4464,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/identitygovernance-customtaskextension?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "LifecycleWorkflowSettings",
@@ -4444,7 +4509,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/identitygovernance-lifecyclemanagementsettings?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "TermsOfUseAgreements",
@@ -4521,7 +4587,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/agreement?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "Users",
@@ -5200,7 +5267,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/user?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "directory-deferred"
   },
   {
     "folder": "Groups",
@@ -5481,7 +5549,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/group?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "directory-deferred"
   },
   {
     "folder": "Applications",
@@ -5790,7 +5859,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/application?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "directory-deferred"
   },
   {
     "folder": "ServicePrincipals",
@@ -6157,7 +6227,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/serviceprincipal?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "directory-deferred"
   },
   {
     "folder": "OAuth2PermissionGrants",
@@ -6233,7 +6304,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/oauth2permissiongrant?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "directory-deferred"
   },
   {
     "folder": "EntraDevices",
@@ -6590,7 +6662,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/device?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "never"
   },
   {
     "folder": "OrgContacts",
@@ -6652,7 +6725,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/orgcontact?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "never"
   },
   {
     "folder": "DefenderCustomDetectionRules",
@@ -6735,7 +6809,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/security-detectionrule?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "DefenderCaseTypeConfigurations",
@@ -6758,7 +6833,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/security-casemanagement-casetypeconfiguration?view=graph-rest-beta",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "unverified"
   },
   {
     "folder": "DefenderWorkbooks",
@@ -6807,7 +6883,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/security-workbook?view=graph-rest-beta",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "DefenderAttackSimulations",
@@ -6910,7 +6987,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/simulation?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "never"
   },
   {
     "folder": "DefenderAttackSimulationAutomations",
@@ -6933,7 +7011,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/simulationautomation?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "never"
   },
   {
     "folder": "DefenderAttackSimulationTrainingCampaigns",
@@ -7026,7 +7105,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/trainingcampaign?view=graph-rest-beta",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "never"
   },
   {
     "folder": "DefenderAttackSimulationPayloads",
@@ -7049,7 +7129,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/payload?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "unverified"
   },
   {
     "folder": "DefenderAttackSimulationLandingPages",
@@ -7072,7 +7153,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/landingpage?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "unverified"
   },
   {
     "folder": "DefenderAttackSimulationLoginPages",
@@ -7095,7 +7177,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/loginpage?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "unverified"
   },
   {
     "folder": "DefenderAttackSimulationNotifications",
@@ -7118,7 +7201,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/endusernotification?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "unverified"
   },
   {
     "folder": "DefenderEmailSubmissionPolicies",
@@ -7212,7 +7296,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/security-emailthreatsubmissionpolicy?view=graph-rest-beta",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "DefenderIdentitySensors",
@@ -7264,7 +7349,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/security-sensor?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "DefenderIdentityAutoAuditing",
@@ -7307,7 +7393,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/security-autoauditingconfiguration?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "DefenderIdentitySensorActivation",
@@ -7338,7 +7425,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/security-sensorcandidateactivationconfiguration?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "unverified"
   },
   {
     "folder": "DefenderSecureScoreControlStates",
@@ -7382,7 +7470,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/securescorecontrolprofile?view=graph-rest-1.0",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "DefenderRoleDefinitions",
@@ -7427,7 +7516,8 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/unifiedroledefinition?view=graph-rest-beta",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "configuration"
   },
   {
     "folder": "DefenderRoleAssignments",
@@ -7454,6 +7544,7 @@
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/unifiedroleassignment?view=graph-rest-beta",
       "live": "not-run",
       "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
-    }
+    },
+    "disposition": "directory-deferred"
   }
 ]

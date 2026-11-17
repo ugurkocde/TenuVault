@@ -94,6 +94,8 @@ export interface AnswerPattern {
 
 export interface IntuneType {
   folder: string
+  /** Identity configuration writes require the journaled safety boundary. */
+  restoreSafety?: "identity"
   label: string
   area: Area
   path: string

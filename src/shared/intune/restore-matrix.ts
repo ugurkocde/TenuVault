@@ -12,6 +12,7 @@ export interface WriteContract {
 }
 export interface RestoreMatrixRow {
   folder: string
+  disposition: "configuration" | "directory-deferred" | "never" | "unverified"
   resource: string
   readPath: string
   create: WriteContract | null

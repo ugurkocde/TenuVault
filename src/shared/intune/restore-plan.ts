@@ -36,10 +36,11 @@ export type WriteOperation = "create" | "update" | "delete" | "assign"
  * a request: restore, revert, change sets with their rollback, Sync, baselines and the copy to
  * another tenant. A type is never written because it merely looks like the others.
  */
-export function writeBlocker(type: Pick<IntuneType, "restore" | "limitation">, operation: WriteOperation): string | undefined {
+export function writeBlocker(type: Pick<IntuneType, "restore" | "limitation" | "restoreSafety">, operation: WriteOperation): string | undefined {
   const capability = restoreCapability(type)
   if (capability === "none") return type.limitation ?? NOT_WRITTEN
   if (capability === "metadata") return type.limitation ?? "This type is backed up for reference only."
+  if (type.restoreSafety === "identity") return "This type requires a signed-in admin and the journaled restore safety checks before it can be written."
   // A tenant-wide setting always exists: it is replaced in place, never created or deleted.
   if (capability === "singleton" && (operation === "create" || operation === "delete")) return SINGLETON
   return undefined
