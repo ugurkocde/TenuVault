@@ -19,6 +19,7 @@ import { join, resolve } from "node:path"
 import { checkSchedulePanel } from "./schedule-panel-smoke.mjs"
 import { checkBackupCancel } from "./backup-cancel-smoke.mjs"
 import { checkAppBackupCompletion } from "./app-backup-completion-smoke.mjs"
+import { checkRestoreService } from "./restore-service-smoke.mjs"
 
 const require = createRequire(import.meta.url)
 const electronPath = require("electron")
@@ -1704,6 +1705,8 @@ await check("unsaved schedule drafts stay with their tenant", async () => {
   await go("#/portal/backup?tab=schedule", "Automatic backups")
   assert(await waitForCondition(`document.getElementById('schedule-time')?.value === '07:45'`), 'navigation discarded the draft')
 })
+
+await checkRestoreService({ check, evaluate, waitForCondition, screenshot, assert, send, go })
 
 await check("large inventory pages stay bounded in dark mode at 1024 pixels", async () => {
   await evaluate(`(() => {

@@ -63,6 +63,7 @@ interface CopyTarget {
 
 interface RestoreWizardProps {
   service?: BackupServiceFilter
+  onRunningChange?: (running: boolean) => void
   tenant: BackupTenant
   backups: BackupSummary[]
   /** Preselected backup, for example from "Restore" in the backup history. */
@@ -235,7 +236,7 @@ async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promi
  * Restores items from a backup in five steps: choose the backup, the items and how to restore them,
  * review what will happen to each item in the tenant as it is now, then watch the restore run.
  */
-export function RestoreWizard({ tenant, backups, initialBackupId, community, canCopyToTenants, copyCandidates, service = "all" }: RestoreWizardProps) {
+export function RestoreWizard({ tenant, backups, initialBackupId, community, canCopyToTenants, copyCandidates, service = "all", onRunningChange }: RestoreWizardProps) {
   const showPlanError = (error: unknown) => showFeaturePlanError(error, community
     ? ["fullRestore", "replaceRestore", "restoreAssignments", "bulkActions"]
     : !canCopyToTenants ? ["bulkActions"] : [])
@@ -299,6 +300,15 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   const [validationError, setValidationError] = useState("")
 
   const [running, setRunning] = useState(false)
+  // Keep the original items and retry context until the admin starts a new selection.
+  const [runService, setRunService] = useState<BackupServiceFilter | null>(null)
+  const contentsService = runService ?? service
+  const previousService = useRef(contentsService)
+  const [serviceNotice, setServiceNotice] = useState("")
+  useEffect(() => {
+    onRunningChange?.(running)
+    return () => onRunningChange?.(false)
+  }, [running, onRunningChange])
   const [progress, setProgress] = useState<{ total: number; done: number; current: string | null; results: Outcome[] } | null>(null)
   const [result, setResult] = useState<{ outcome: "success" | "partial" | "failed"; message: string; results: Outcome[] } | null>(null)
   const [runPaths, setRunPaths] = useState<string[]>([])
@@ -327,6 +337,11 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   // Items of the chosen backup, with names and restore blockers read from the snapshots.
   useEffect(() => {
     if (!backupId) return
+    if (previousService.current !== contentsService) {
+      setServiceNotice("Service changed. Restore selections were cleared. Choose items for this service.")
+      setStep("items")
+    }
+    previousService.current = contentsService
     setItems(null)
     setItemsError("")
     setCatalogCheck(null)
@@ -345,7 +360,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
       )
       if (controller.signal.aborted) return
       setLargePaging(contents.largePage === undefined ? null : { hasMore: contents.hasMore === true, total: contents.content.groups.reduce((sum, group) => sum + (group.count ?? group.policies.length), 0) })
-      const listed: BackupItem[] = contents.content.groups.filter(group => matchesBackupService(group.folder, service)).flatMap((group) =>
+      const listed: BackupItem[] = contents.content.groups.filter(group => matchesBackupService(group.folder, contentsService)).flatMap((group) =>
         group.policies.map((policy) => ({ path: policy.path, folder: group.folder, label: group.label, area: group.area, name: policy.displayName ?? policy.path, blocker: group.limitation })),
       )
       const details: Record<string, { name: string; blocker?: string; replaceBlocker?: string; snapshot?: unknown; readiness?: RecoveryReadiness }> = {}
@@ -366,7 +381,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
       setItemsError(error instanceof Error ? error.message : String(error))
     })
     return () => controller.abort()
-  }, [backupId, tenant, largePage, service])
+  }, [backupId, tenant, largePage, contentsService])
 
   const selectionBlocker = (item: BackupItem) => mode === "replace" && !community && !copying ? item.replaceBlocker : item.blocker
 
@@ -533,6 +548,8 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     const completed: Outcome[] = []
     const attempted: typeof batches = []
     setStep("run")
+    setRunService(contentsService)
+    setServiceNotice("")
     setRunning(true)
     setResult(null)
     setRunPaths(paths)
@@ -607,6 +624,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   }
 
   const startOver = () => {
+    setRunService(null)
     setResult(null)
     setProgress(null)
     setSelected(new Set())
@@ -628,6 +646,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
 
   return (
     <div className="space-y-6">
+      {(runService !== null && runService !== service) ? <p role="status" className="text-sm text-gray-500">This restore keeps the service and items chosen when it started.</p> : serviceNotice && <p role="status" className="text-sm text-gray-500">{serviceNotice}</p>}
       <RestoreApprovals key={tenant.credentials.tenantId} tenant={tenant} enabled={usesApproval || !!result?.results.some(outcome => outcome.approval)} revision={approvalRevision} openRevision={approvalOpenRevision} onOutcome={outcome => {
         setApprovalRevision(value => value + 1)
         setResult(current => {

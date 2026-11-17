@@ -70,13 +70,17 @@ export default function BackupRestorePage() {
   const requested = searchParams.get("tab")
   const activeTab: Tab = requested === "restore" || requested === "schedule" ? requested : "backup"
   const service = parseBackupService(searchParams.get("service"))
+  const [restoreRunning, setRestoreRunning] = useState(false)
   const setActiveTab = (tab: Tab) => setSearchParams(current => { const next = new URLSearchParams(current); next.set("tab", tab); return next })
-  const setService = (value: string) => setSearchParams(current => {
-    const next = new URLSearchParams(current)
-    if (value === "all") next.delete("service")
-    else next.set("service", value)
-    return next
-  })
+  const setService = (value: string) => {
+    if (restoreRunning) return
+    setSearchParams(current => {
+      const next = new URLSearchParams(current)
+      if (value === "all") next.delete("service")
+      else next.set("service", value)
+      return next
+    })
+  }
 
   const tenants = useTenants()
   const { selectedTenantId, selectedTenant, setSelectedTenantId } = useSelectedTenant()
@@ -303,10 +307,11 @@ export default function BackupRestorePage() {
 
       <div className="flex flex-wrap items-center gap-3">
         <label htmlFor="backup-service" className="text-sm font-medium text-gray-700">Service</label>
-        <select id="backup-service" value={service} onChange={event => setService(event.target.value)} className="h-10 rounded-full border border-border bg-card px-4 text-sm text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
+        <select id="backup-service" value={service} disabled={restoreRunning} aria-describedby={restoreRunning ? "backup-service-locked" : undefined} onChange={event => setService(event.target.value)} className="h-10 rounded-full border border-border bg-card px-4 text-sm text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
           <option value="all">All</option>
           {BACKUP_SERVICES.map(entry => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
         </select>
+        {restoreRunning && <p id="backup-service-locked" className="text-sm text-gray-500">Service cannot be changed while a restore is running.</p>}
         <p className="text-sm text-gray-500">Filters contents and type lists. Backup runs, totals and downloads cover the whole backup.</p>
       </div>
 
@@ -460,17 +465,21 @@ export default function BackupRestorePage() {
         </div>
       )}
 
-      {activeTab === "restore" && tenant && !isLoading && !blockingError && (
-        <RestoreWizard
-          key={`${selectedTenant?.id}:${restoreFrom ?? ""}:${service}`}
-          service={service}
-          tenant={tenant}
-          backups={backups}
-          initialBackupId={restoreFrom}
-          community={community}
-          canCopyToTenants={canCopyToTenants}
-          copyCandidates={copyCandidates}
-        />
+      {/* Sidebar filters can also change the tab. Keep restore progress and results mounted. */}
+      {tenant && !isLoading && !blockingError && (
+        <div hidden={activeTab !== "restore"}>
+          <RestoreWizard
+            key={`${selectedTenant?.id}:${restoreFrom ?? ""}`}
+            service={service}
+            onRunningChange={setRestoreRunning}
+            tenant={tenant}
+            backups={backups}
+            initialBackupId={restoreFrom}
+            community={community}
+            canCopyToTenants={canCopyToTenants}
+            copyCandidates={copyCandidates}
+          />
+        </div>
       )}
 
       {activeTab === "schedule" && selectedTenant?.credentials && <BackupSchedulePanel tenantId={selectedTenant.credentials.tenantId} tenantName={selectedTenant.name} tenant={selectedTenant} onStorageChange={changeStorage} />}

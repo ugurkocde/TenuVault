@@ -44,6 +44,8 @@ You can start a restore in two ways:
 
 The steps across the top are **Backup**, **Items**, **Options**, **Review** and **Restore**. You can click an earlier step to go back to it. Once a restore starts, the other steps are locked. When it finishes, use **Restore more items** to make a new selection.
 
+The **Service** filter is disabled while a restore runs. Changing the service through the sidebar or page address keeps the original restore, its progress, results and retry details. Before a restore starts, changing the service clears the selection with a notice and returns you to **Items**. After a restore, use **Restore more items** to select policies for the current service.
+
 ## Step 1: Choose a backup
 
 **Choose a backup** lists every backup for the selected tenant that holds at least one item and is not still running. Each entry shows the date and time, the number of items, the size and the backup status (**Complete**, **Completed with warnings**, **Failed**, **Cancelled**, **Incomplete** or **Status unknown**). A backup that left some types out also shows its scope.
