@@ -1,3 +1,4 @@
+import { holdConnectLinks, whileHoldingConnectLinks } from "../lib/connect-link-holds"
 import { useEffect, useRef, useState } from "react"
 import { Link, useParams, useSearchParams } from "react-router-dom"
 import { ArrowDownToLine, CheckCircle2, FolderOpen, Package, RefreshCw, Shield } from "lucide-react"
@@ -96,9 +97,10 @@ export function SourceWorkspace({ tenant }: { tenant: string }) {
     if (operation.current) return false
     setCapturing(capture); setProgress(null)
     const id = crypto.randomUUID(); operation.current = id
-    setBusy(true); setFeedbackSource(sourceId); setCancelling(false); setError(""); setNotice(""); setCompletedBackup(null)
     const cancelled = capture ? "Backup cancelled. No installer backup was stored." : "Export cancelled. No destination file was published."
+    const releaseConnectHold = holdConnectLinks()
     try {
+      setBusy(true); setFeedbackSource(sourceId); setCancelling(false); setError(""); setNotice(""); setCompletedBackup(null)
       const done = await action(id)
       if (alive.current) {
         if (done) {
@@ -119,7 +121,7 @@ export function SourceWorkspace({ tenant }: { tenant: string }) {
         else setError(message)
       }
       return false
-    } finally { operation.current = null; if (alive.current) { setBusy(false); setCancelling(false) } }
+    } finally { releaseConnectHold(); operation.current = null; if (alive.current) { setBusy(false); setCancelling(false) } }
   }
   async function cancel() {
     if (!operation.current || cancelling) return
@@ -142,7 +144,7 @@ export function SourceWorkspace({ tenant }: { tenant: string }) {
     setDeviceBusy(true); setDevice(null); setDeviceError("")
     try {
       if (platform !== "win32") return
-      if (signIn && !(await bridge.auth.accounts()).some(account => account.tenantId.toLowerCase() === tenant.toLowerCase())) await bridge.appSources.signIn(tenant)
+      if (signIn && !(await bridge.auth.accounts()).some(account => account.tenantId.toLowerCase() === tenant.toLowerCase())) await whileHoldingConnectLinks(() => bridge.appSources.signIn(tenant))
       if (!alive.current) return
       const value = await bridge.appSources.deviceStatus(tenant)
       if (alive.current) setDevice(value)

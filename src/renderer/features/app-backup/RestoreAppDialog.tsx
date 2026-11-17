@@ -1,3 +1,4 @@
+import { holdConnectLinks } from "@desktop/lib/connect-link-holds"
 import { useEffect, useRef, useState } from "react"
 import { CheckCircle2, ExternalLink } from "lucide-react"
 import { useTenants } from "~/contexts/TenantContext"
@@ -114,8 +115,9 @@ export function RestoreAppDialog({ tenant: sourceTenantId, source, onClose, onBu
     if (operation.current || !review?.settingsHash || !confirmed || !target || targetPlan === "excluded") return
     const id = crypto.randomUUID(); operation.current = id
     stopped.current = false
-    setRunning(true); onBusy(true); setError(""); setProgress(null)
+    const releaseConnectHold = holdConnectLinks()
     try {
+      setRunning(true); onBusy(true); setError(""); setProgress(null)
       let value = await bridge.appSources.restore(tenant, id, source.id, target, name, review.settingsHash)
       if (isAcknowledgementRequired(value)) {
         if (!await requestAcknowledgement(value.acknowledgement.tenantIds)) throw new Error("Restore cancelled. No changes were made.")
@@ -130,7 +132,7 @@ export function RestoreAppDialog({ tenant: sourceTenantId, source, onClose, onBu
         const message = e instanceof Error ? e.message : "Restore failed."
         setError(message.endsWith("Source operation cancelled.") ? "Restore stopped. An unassigned app may remain in the destination. Retry with the same destination and app name to continue it." : message)
       }
-    } finally { operation.current = null; onBusy(false); if (alive.current) setRunning(false) }
+    } finally { releaseConnectHold(); operation.current = null; onBusy(false); if (alive.current) setRunning(false) }
   }
   const phase = progress?.phase === "uploading" ? `Uploading installer: ${Math.floor(progress.uploadedBytes / 1024 ** 2)} of ${Math.ceil(progress.totalBytes / 1024 ** 2)} MB` : progress?.phase === "creating" ? "Creating the unassigned app…" : progress?.phase === "committing" ? "Intune is verifying the uploaded installer…" : progress?.phase === "publishing" ? "Verifying the published app…" : "Verifying backup and destination access…"
   return <Dialog open onOpenChange={open => { if (!open && !running && !loading && !signingIn) onClose() }}>

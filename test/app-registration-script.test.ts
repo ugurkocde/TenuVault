@@ -5,7 +5,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir, homedir } from "node:os"
 import { join, resolve } from "node:path"
 import { describe, expect, it } from "vitest"
-import { DESKTOP_APP_PERMISSIONS, parseSetupOutput } from "../src/shared/app-registration"
+import { DESKTOP_APP_PERMISSIONS, parseSetupOutput, setupIdsFromClipboard } from "../src/shared/app-registration"
 
 const override = process.env.TENUVAULT_TEST_POWERSHELL
 const powershell = override || ["/usr/bin/pwsh", "/usr/local/bin/pwsh", "/opt/homebrew/bin/pwsh", join(homedir(), ".local/bin/pwsh")].find(existsSync)
@@ -41,7 +41,7 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
     expect(result.status, result.stdout + result.stderr).toBe(0)
   })
 
-  async function run(scenario = "default", args: Record<string, unknown> = {}) {
+  async function run(scenario = "default", args: Record<string, unknown> = {}, installed = false, openFails = false, windowsHandler?: "quoted" | "unquoted" | "missing" | "missing-unquoted" | "empty") {
     const requests: { method: string; path: string; body: Record<string, unknown>; query: URLSearchParams; headers: Record<string, unknown>; status: number }[] = []
     let challenge = ""
     let redirect = ""
@@ -118,9 +118,12 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
     const clipboard = join(dir, "clipboard.txt")
     const argumentFile = join(dir, "arguments.json")
     writeFileSync(argumentFile, JSON.stringify(args))
+    const executable = join(dir, windowsHandler === "quoted" || windowsHandler === "missing" ? "TenuVault Desktop.exe" : "TenuVault.exe")
+    if (installed && windowsHandler !== "missing" && windowsHandler !== "missing-unquoted") writeFileSync(executable, "test executable")
+    const handlerCommand = windowsHandler === "empty" ? "" : windowsHandler === "unquoted" || windowsHandler === "missing-unquoted" ? `${executable} "%1"` : `"${executable}" "%1"`
     try {
       const output = await new Promise<{ code: number | null; text: string }>((resolveRun, reject) => {
-        const child = spawn(powershell!, ["-NoProfile", "-NonInteractive", "-File", resolve("test/fixtures/app-registration/setup-harness.ps1"), "-Server", `http://127.0.0.1:${(server.address() as { port: number }).port}`, "-Script", script, "-ClipboardFile", clipboard, "-ArgumentsFile", argumentFile])
+        const child = spawn(powershell!, ["-NoProfile", "-NonInteractive", "-File", resolve("test/fixtures/app-registration/setup-harness.ps1"), "-Server", `http://127.0.0.1:${(server.address() as { port: number }).port}`, "-Script", script, "-ClipboardFile", clipboard, "-ArgumentsFile", argumentFile], { env: { ...process.env, TENUVAULT_TEST_INSTALLED: installed ? "1" : "0", TENUVAULT_TEST_OPEN_FAIL: openFails ? "1" : "0", TENUVAULT_TEST_WINDOWS_HANDLER: windowsHandler === undefined ? "0" : "1", TENUVAULT_TEST_HANDLER_COMMAND: handlerCommand } })
         let text = ""
         child.stdout.on("data", chunk => { text += chunk })
         child.stderr.on("data", chunk => { text += chunk })
@@ -140,6 +143,11 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
     expect(result.code, result.text).toBe(0)
     expect(parseSetupOutput(result.text)).toEqual({ tenantId, clientId })
     expect(parseSetupOutput(result.clipboard)).toEqual({ tenantId, clientId })
+    const link = `tenuvault://connect?v=1&tenant=${tenantId}&client=${clientId}`
+    expect(result.text).toContain(`  Connect link:             ${link}`)
+    expect(result.clipboard.split(/\r?\n/)).toEqual([`  Tenant id:                ${tenantId}`, `  Application (client) id:  ${clientId}`, `  Connect link:             ${link}`])
+    expect(setupIdsFromClipboard(result.clipboard)).toEqual({ tenantId, clientId })
+    expect(result.text).toContain("Send this link to the admin who uses TenuVault")
     const auth = result.requests.find(r => r.path.endsWith("/authorize"))
     if (!device) {
       expect(result.pkce).toBe(true)
@@ -187,6 +195,31 @@ describe.runIf(Boolean(powershell))("real setup script over HTTP", () => {
       expect(result.requests.filter(r => r.status === 503 && r.method === "GET")).toHaveLength(1)
       expect(result.requests.filter(r => r.status === 429 && r.path.endsWith("/oauth2PermissionGrants"))).toHaveLength(1)
     }
+  }, 45000)
+
+  it.each([
+    ["opens an installed app by default", true, false, false, true],
+    ["honors NoOpen for an installed app", true, true, false, false],
+    ["skips an app that is not installed", false, false, false, false],
+    ["survives an opening failure", true, false, true, false],
+  ] as const)("%s", async (_name, installed, noOpen, failure, opened) => {
+    const result = await run("default", { NoOpen: noOpen }, installed, failure)
+    expect(result.code, result.text).toBe(0)
+    expect(result.text).toContain(opened ? "Opened TenuVault to connect this tenant" : "Send this link to the admin who uses TenuVault")
+    expect(result.text.includes("Opened test link:")).toBe(opened)
+  }, 45000)
+
+  it.each([
+    ["opens a Windows handler with a quoted executable path", "quoted", true],
+    ["opens a Windows handler with an unquoted executable path", "unquoted", true],
+    ["skips a stale Windows key whose quoted executable is missing", "missing", false],
+    ["skips a stale Windows key whose unquoted executable is missing", "missing-unquoted", false],
+    ["skips a Windows handler with an empty default value", "empty", false],
+  ] as const)("%s", async (_name, handler, opened) => {
+    const result = await run("default", {}, true, false, handler)
+    expect(result.code, result.text).toBe(0)
+    expect(result.text).toContain(opened ? "Opened TenuVault to connect this tenant" : "Send this link to the admin who uses TenuVault")
+    expect(result.text.includes("Opened test link:")).toBe(opened)
   }, 45000)
 
   it.each([["device-declined", "Device code sign-in was declined"], ["device-expired", "Device code expired"]])("stops a %s sign-in without Graph requests", async (scenario, message) => {

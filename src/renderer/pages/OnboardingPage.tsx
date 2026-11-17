@@ -1,3 +1,5 @@
+import { useConnectLinkHold } from "../lib/connect-link-holds"
+import { takeOnboardingConnect, useOnboardingConnect } from "../lib/connect-link-onboarding"
 import { trialKeyRefusalText } from "../../shared/trial-notices"
 import { showCommunityLimitError } from "../lib/plan-dialog"
 import { useEffect, useRef, useState } from "react"
@@ -22,7 +24,7 @@ import { recordSetup, SetupDiagnosticsReminder } from "../components/SetupDiagno
 import { TenantSignInForm, type SignInFields } from "../components/TenantSignInForm"
 import { bridge } from "../lib/bridge"
 import { buildTenantProfile } from "../lib/desktop-tenant"
-import { clearOnboardingDraft, loadOnboardingDraft, saveOnboardingDraft } from "../lib/onboarding-draft"
+import { clearOnboardingDraft, loadOnboardingDraft, saveOnboardingDraft, type OnboardingDraft } from "../lib/onboarding-draft"
 import type { StorageChoice } from "../lib/storage"
 import { desktopTenantCredentials, type TenantCredentials } from "../overrides/add-tenant-modal"
 import { completedWithWarnings, resolveBackupJobDisplay, toBackupJobDisplay, type BackupJobDisplay } from "~/lib/backup-job-display"
@@ -56,12 +58,21 @@ function StepHeading({ id, children }: { id: string; children: React.ReactNode }
  * continue after a restart, for example once another administrator created the app registration.
  */
 export default function OnboardingPage() {
+  // A confirmed link remounts the wizard with its draft passed in directly, so a draft that could
+  // not be written to the store cannot bring back the previous tenant.
+  const [connection, setConnection] = useState<{ version: number; draft: OnboardingDraft | null }>({ version: 0, draft: null })
+  return <OnboardingWizard key={connection.version} seed={connection.draft} onConnect={(draft) => setConnection(({ version }) => ({ version: version + 1, draft }))} />
+}
+
+function OnboardingWizard({ seed, onConnect }: { seed: OnboardingDraft | null; onConnect: (draft: OnboardingDraft) => void }) {
   const navigate = useNavigate()
   const { status } = useLicense()
   const tenants = useTenants()
   const { addTenant, updateTenant } = useTenantOperations()
   const { setSelectedTenantId } = useSelectedTenant()
-  const [initial] = useState(loadOnboardingDraft)
+  const linkConnection = useOnboardingConnect()
+  const [formVersion, setFormVersion] = useState(0)
+  const [initial] = useState(() => seed ?? loadOnboardingDraft())
   const [step, setStep] = useState<Step>(initial?.step ?? 0)
   const [fields, setFields] = useState<SignInFields>({ tenant: initial?.tenant ?? "", clientId: initial?.clientId ?? "", displayName: initial?.displayName ?? "" })
   const [account, setAccount] = useState<SignedInAccount | null>(initial?.account ?? null)
@@ -79,6 +90,7 @@ export default function OnboardingPage() {
   const [jobError, setJobError] = useState("")
   const [runningJobId, setRunningJobId] = useState<string | null>(null)
   const [cancelling, setCancelling] = useState(false)
+  useConnectLinkHold(checkingResume || creating || releasing)
   const [addError, setAddError] = useState<{ message: string; license: boolean; alreadyConnected?: boolean } | null>(null)
   // After the in-app setup: what it did, and the account the Sign in step signs in as by itself.
   const [setupNotice, setSetupNotice] = useState("")
@@ -183,6 +195,50 @@ export default function OnboardingPage() {
     }
   }
 
+  const releaseUnsavedSignIn = async () => {
+    resumeCheck.current = false
+    if (account) {
+      setReleasing(true)
+      // A release the licensing service could not take is repeated at the next start.
+      try { if (!connected(account.tenantId)) await bridge.license.releaseTenant(account.tenantId) } catch { /* see above */ }
+      finally { if (mounted.current) setReleasing(false) }
+    }
+  }
+
+  const prepareSignIn = async (next: SignInFields) => {
+    setFields(next)
+    saveOnboardingDraft({ step: 1, ...next, account: null })
+    setAddError(null)
+    await releaseUnsavedSignIn()
+    if (!mounted.current) return
+    setAccount(null)
+    setChoice(null)
+    setAutoSignIn(null)
+    setSetupNotice("")
+    setResumed(false)
+    setStep(1)
+    setFormVersion(value => value + 1)
+  }
+
+  useEffect(() => {
+    if (!linkConnection) return
+    const details = takeOnboardingConnect()
+    const existing = details && tenants.find(tenant => tenant.credentials?.tenantId?.toLowerCase() === details.tenantId)
+    if (existing) {
+      setSelectedTenantId(existing.id)
+      void navigate("/portal/dashboard")
+      return
+    }
+    if (details) void (async () => {
+      await releaseUnsavedSignIn()
+      if (!mounted.current) return
+      const draft: OnboardingDraft = { step: 1, tenant: details.tenantId, clientId: details.clientId, displayName: details.displayName ?? "", account: null }
+      await saveOnboardingDraft(draft)
+      // Remount to leave the old backup with the floating panel and start with fresh wizard state.
+      if (mounted.current) onConnect(draft)
+    })()
+  }, [linkConnection])
+
   /**
    * The in-app setup made (or found) the app registration: keep its IDs and sign in on the next
    * step, where a failed sign-in can simply be repeated. An earlier sign-in that was never saved
@@ -190,19 +246,7 @@ export default function OnboardingPage() {
    * so the wizard cannot carry on with the tenant it showed before.
    */
   const registered = async (result: RegistrationResult) => {
-    resumeCheck.current = false
-    const next = { ...fields, tenant: result.tenantId, clientId: result.clientId }
-    setFields(next)
-    saveOnboardingDraft({ step: 1, ...next, account: null })
-    setAddError(null)
-    if (account) {
-      setReleasing(true)
-      // A release the licensing service could not take is repeated at the next start.
-      try { if (!connected(account.tenantId)) await bridge.license.releaseTenant(account.tenantId) } catch { /* see above */ }
-      setReleasing(false)
-      setAccount(null)
-      setChoice(null)
-    }
+    await prepareSignIn({ ...fields, tenant: result.tenantId, clientId: result.clientId })
     // With several registrations the admin may want another one than the one TenuVault picked. A
     // sign-in that starts by itself could finish, and move on, while they are going back for it.
     const several = result.reused && result.candidateCount > 1
@@ -238,48 +282,48 @@ export default function OnboardingPage() {
       return
     }
     setCreating(true)
-    setAddError(null)
-    // The trial as the Storage step showed it. A trial that only starts during the check below
-    // was never shown here, so it keeps its welcome card in the app.
-    const shown = tenantLicense(status, account.tenantId)
-    let community = false
     try {
-      const status = await bridge.license.checkNewTenant(account.tenantId)
-      community = tenantPlan(tenantLicense(status, account.tenantId)) === "community"
-    } catch (error) {
-      if (!showCommunityLimitError(error)) {
-        const message = error instanceof Error ? error.message : String(error)
-        setAddError({ message: `${message} TenuVault signed you out of this tenant. Sign in again once the license covers it.`, license: true })
+      setAddError(null)
+      // The trial as the Storage step showed it. A trial that only starts during the check below
+      // was never shown here, so it keeps its welcome card in the app.
+      const shown = tenantLicense(status, account.tenantId)
+      let community = false
+      try {
+        const status = await bridge.license.checkNewTenant(account.tenantId)
+        community = tenantPlan(tenantLicense(status, account.tenantId)) === "community"
+      } catch (error) {
+        if (!showCommunityLimitError(error)) {
+          const message = error instanceof Error ? error.message : String(error)
+          setAddError({ message: `${message} TenuVault signed you out of this tenant. Sign in again once the license covers it.`, license: true })
+        }
+        setAccount(null)
+        setChoice(null)
+        setStep(1)
+        return
       }
-      setAccount(null)
-      setChoice(null)
-      setCreating(false)
-      setStep(1)
-      return
-    }
-    // The plan can change between the storage choice and this check, such as a trial that ended.
-    if (community && choice.kind === "azure") {
-      setAddError({ message: "This tenant is on Community now, which keeps backups on this device. Choose This device to continue.", license: false })
-      setChoice(null)
-      setCreating(false)
-      return
-    }
-    try {
-      const creds = desktopTenantCredentials(account, fields.displayName, choice)
-      const tenant = await buildTenantProfile(creds)
-      recordSetup({ name: "storage", props: { kind: choice.kind } })
-      addTenant(tenant)
-      setSelectedTenantId(tenant.id)
-      setCredentials(creds)
-      setTenantProfileId(tenant.id)
-      setTenantName(tenant.name)
-      setResumed(false)
-      setStep(3)
-      // The Storage step showed the trial, so it does not follow the admin into the app as a
-      // welcome card to dismiss. Showing it again costs nothing, so a failure is ignored.
-      if (shown?.source === "trial" && shown.trial && !shown.trialAcknowledged) void bridge.license.tenantTrialAction(account.tenantId, "acknowledge").catch(() => undefined)
-    } catch (error) {
-      if (!showCommunityLimitError(error)) setAddError({ message: error instanceof Error ? error.message : String(error), license: false })
+      // The plan can change between the storage choice and this check, such as a trial that ended.
+      if (community && choice.kind === "azure") {
+        setAddError({ message: "This tenant is on Community now, which keeps backups on this device. Choose This device to continue.", license: false })
+        setChoice(null)
+        return
+      }
+      try {
+        const creds = desktopTenantCredentials(account, fields.displayName, choice)
+        const tenant = await buildTenantProfile(creds)
+        recordSetup({ name: "storage", props: { kind: choice.kind } })
+        addTenant(tenant)
+        setSelectedTenantId(tenant.id)
+        setCredentials(creds)
+        setTenantProfileId(tenant.id)
+        setTenantName(tenant.name)
+        setResumed(false)
+        setStep(3)
+        // The Storage step showed the trial, so it does not follow the admin into the app as a
+        // welcome card to dismiss. Showing it again costs nothing, so a failure is ignored.
+        if (shown?.source === "trial" && shown.trial && !shown.trialAcknowledged) void bridge.license.tenantTrialAction(account.tenantId, "acknowledge").catch(() => undefined)
+      } catch (error) {
+        if (!showCommunityLimitError(error)) setAddError({ message: error instanceof Error ? error.message : String(error), license: false })
+      }
     } finally {
       setCreating(false)
     }
@@ -312,8 +356,9 @@ export default function OnboardingPage() {
       const started = await post<{ jobId?: string }>("/api/backup/start", credentials)
       if (!started.jobId) throw new Error("The backup could not start.")
       jobId = started.jobId
-      setRunningJobId(jobId)
+      if (mounted.current) setRunningJobId(jobId)
     } catch (error) {
+      if (!mounted.current) return
       setJob(null)
       setJobError(error instanceof Error ? error.message : String(error))
       return
@@ -458,6 +503,7 @@ export default function OnboardingPage() {
               // The error above already offers the setup call, so an error of the form does not repeat it.
               <SetupCallHintShown.Provider value={signInStuck}>
                 <TenantSignInForm
+                  key={formVersion}
                   initial={fields}
                   autoSignIn={autoSignIn}
                   hidePaste={Boolean(setupNotice)}

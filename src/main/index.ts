@@ -1,3 +1,4 @@
+import { ConnectLinkIntake, shouldRegisterProtocol } from "./deep-link"
 import { requestWindowsContent } from "./app-backup/windows-helper"
 import { requireCaptureEnabled } from "./app-backup/capture-policy"
 import { checkCaptureMetadata } from "./app-backup/capture-preflight"
@@ -36,7 +37,7 @@ import { prepareOibReportFile, printHtmlToPdf } from "./report-export"
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, net, Notification, powerMonitor, safeStorage, session, shell } from "electron"
 import { createChromiumFetch } from "./chromium-fetch"
 import { ProxyAuth, ProxyPrompts, type ProxyAuthAttempt, type ProxyChallenge } from "./proxy-auth"
-import { basename, dirname, join } from "node:path"
+import { basename, dirname, join, resolve } from "node:path"
 import type { ApiRequest, AppPreferences, ScheduleInput } from "../shared/ipc"
 import { DELEGATED_CLIENT_SECRET, INTERNAL_API_ORIGIN, RESOURCE_SCOPES } from "../shared/constants"
 import { createAuditRecorder } from "./api/audit"
@@ -67,7 +68,7 @@ import { BackupReaderService } from "./auth/backup-reader"
 // The same setup script the docs site downloads and the card copies, bundled so Save writes it exactly.
 import readerSetupScript from "../../resources/New-TenuVaultBackupReader.ps1?raw"
 import desktopSetupScript from "../../resources/New-TenuVaultDesktopApp.ps1?raw"
-import { SETUP_SCRIPT_FILE_NAME, setupIdsFromClipboard } from "../shared/app-registration"
+import { SETUP_SCRIPT_FILE_NAME } from "../shared/app-registration"
 import { licenseKeyFromClipboard } from "./license/clipboard-key"
 import { assertStorageAccountName } from "../shared/storage-account"
 import { hostname } from "node:os"
@@ -136,6 +137,22 @@ let mainWindow: BrowserWindow | null = null
 let quitting = false
 /** Started by the operating system at login: stay in the tray until opened. */
 const startedHidden = process.argv.includes("--hidden") || app.getLoginItemSettings().wasOpenedAtLogin
+
+let linkRequestedFocus = false
+let bootstrapped = false
+const connectLinks = new ConnectLinkIntake(
+  () => { if (mainWindow && !mainWindow.webContents.isLoading()) mainWindow.webContents.send("connectLink:available") },
+  () => {
+    linkRequestedFocus = true
+    if (bootstrapped) returnToApp()
+  },
+)
+// Register before ready: macOS can deliver a cold start URL before bootstrap runs.
+app.on("open-url", (event, url) => {
+  event.preventDefault()
+  if (isPrimaryInstance) connectLinks.accept(url)
+})
+if (isPrimaryInstance) connectLinks.argv(process.argv)
 
 function canEncrypt(): boolean {
   return safeStorage.isEncryptionAvailable() && (process.platform !== "linux" || safeStorage.getSelectedStorageBackend() !== "basic_text")
@@ -211,6 +228,17 @@ function answerProxyLogin(id: string, authInfo: ProxyChallenge, callback: (usern
 const chromiumFetch: typeof fetch = rejectProxyAuthResponses(createChromiumFetch((options) => net.request(options), () => proxyAuth?.attempt() ?? NO_PROXY_AUTH))
 
 async function bootstrap(): Promise<void> {
+  // Register before stores or windows are opened, including hidden tray launches.
+  // Development copies opt in with TENUVAULT_REGISTER_PROTOCOL=1 to avoid taking over installed links.
+  if (shouldRegisterProtocol(app.isPackaged, process.env.TENUVAULT_REGISTER_PROTOCOL)) {
+    // Electron quotes the executable path, including MSI installs under Program Files.
+    // Packaged launches need no app-path argument or inherited switches such as --hidden.
+    if (app.isPackaged) app.setAsDefaultProtocolClient("tenuvault", process.execPath, [])
+    else app.setAsDefaultProtocolClient("tenuvault", process.execPath, [resolve(process.argv[1]!)])
+  }
+  handleTrusted("connectLink:take", () => connectLinks.take())
+  handleTrusted("connectLink:dismiss", (_event, id: unknown) => connectLinks.dismiss(id))
+  handleTrusted("connectLink:dismissRejection", () => connectLinks.dismissRejection())
   const cipher = osCipher()
   const userData = app.getPath("userData")
   // Starting over empties the app store, but the install is not new: it is never asked about setup diagnostics.
@@ -1224,7 +1252,7 @@ async function bootstrap(): Promise<void> {
   handleTrusted("auth:copySignInLink", (_event, kind: unknown) => copySignInLink(kind, { signin: () => auth.signInLink(), setup: () => registrationSetup.signInLink() }, (text) => clipboard.writeText(text)))
   // The setup script leaves its two closing lines on the clipboard; only those two IDs are passed on.
   // Electron reads the clipboard asynchronously, so the text has to be awaited before it is parsed.
-  handleTrusted("setup:clipboardIds", async () => setupIdsFromClipboard(await clipboard.readText()))
+  handleTrusted("setup:clipboardIds", () => connectLinks.clipboardIds(() => clipboard.readText()))
   // The guided setup saves the app registration script it ships with; nothing else is written.
   handleTrusted("setup:saveScript", async () => {
     const result = await dialog.showSaveDialog(mainWindow!, {
@@ -1611,7 +1639,8 @@ async function bootstrap(): Promise<void> {
     saveFileWithDialog(await prepareOibReportFile(report, fileName, (html, options) => printHtmlToPdf(html, options, (window) => new BrowserWindow(window))), "Save PDF report"))
   handleTrusted("reports:saveFile", (_event, data: unknown, fileName: unknown, encoding: unknown) => saveExportFile(data, fileName, encoding))
 
-  createWindow()
+  bootstrapped = true
+  if (!mainWindow) createWindow()
 }
 
 /** Whether closing the window keeps TenuVault running in the tray (set once preferences load). */
@@ -1629,6 +1658,7 @@ function showWindow(): void {
  * the front, and where the system does not allow that (Windows), flash its taskbar button.
  */
 function returnToApp(): void {
+  linkRequestedFocus = false
   showWindow()
   if (process.platform === "darwin") app.focus({ steal: true })
   const window = mainWindow
@@ -1703,8 +1733,11 @@ function createWindow(): void {
   })
 
   mainWindow.once("ready-to-show", () => {
-    if (!startedHidden) mainWindow?.show()
+    if (linkRequestedFocus) returnToApp()
+    else if (!startedHidden) mainWindow?.show()
   })
+
+  mainWindow.webContents.on("did-finish-load", () => mainWindow?.webContents.send("connectLink:available"))
 
   // Closing the window keeps TenuVault in the tray so scheduled backups keep running.
   let toldAboutTray = false
@@ -1753,7 +1786,7 @@ function createWindow(): void {
 }
 
 // Starting TenuVault again (or clicking the dock icon) shows the window hidden in the tray.
-app.on("second-instance", (_event, argv) => { if (!argv.includes("--hidden")) showWindow() })
+app.on("second-instance", (_event, argv) => { if (!connectLinks.argv(argv) && !argv.includes("--hidden")) showWindow() })
 
 app.on("before-quit", () => {
   quitting = true

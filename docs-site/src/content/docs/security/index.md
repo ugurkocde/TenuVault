@@ -102,3 +102,7 @@ Windows builds are signed with Azure Trusted Signing. macOS builds are signed an
 * [Network connections and data flows](/security/data-flows/): every outbound destination and what is sent to it.
 * [Encryption and recovery key](/security/encryption/): how backups on your device and in Azure are protected, and when you need the recovery key.
 * [Conditional Access and TenuVault](/security/conditional-access/): how your policies apply, and how to keep scheduled backups running under sign-in frequency.
+
+## Connection links
+
+A `tenuvault://connect` link is untrusted input, even when it comes from an administrator, and TenuVault requires confirmation after showing both IDs and the optional name as plain text. It accepts only tenant and application identifiers plus an optional label, with no sign-in, tokens, secrets, license keys, permissions or storage settings; you still sign in with Microsoft and complete the usual setup.

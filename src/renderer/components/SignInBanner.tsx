@@ -7,6 +7,7 @@ import { settingsHref } from "../lib/settings-section"
 import { Button } from "~/components/ui/button"
 import type { SignInRequiredEvent } from "../../shared/ipc"
 import { bridge } from "../lib/bridge"
+import { holdConnectLinks } from "../lib/connect-link-holds"
 import { toast } from "../lib/toast"
 
 const promptKey = (event: SignInRequiredEvent) => `${event.tenantId.toLowerCase()} ${event.scope}`
@@ -32,6 +33,7 @@ export function SignInBanner({ hidden = false }: { hidden?: boolean }) {
 
   const signIn = async () => {
     setBusy(true)
+    const releaseConnectHold = holdConnectLinks()
     try {
       const account = await bridge.auth.reauthenticate(pending.tenantId, pending.clientId, pending.scope)
       resolve()
@@ -45,6 +47,7 @@ export function SignInBanner({ hidden = false }: { hidden?: boolean }) {
     } catch (error) {
       toast(error instanceof Error ? error.message : "Sign-in failed.", "error")
     } finally {
+      releaseConnectHold()
       setBusy(false)
     }
   }

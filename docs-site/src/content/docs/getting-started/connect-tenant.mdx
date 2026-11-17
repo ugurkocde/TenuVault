@@ -20,6 +20,16 @@ The guided setup has four steps: **Connect**, **Sign in**, **Storage** and **Fir
 
 TenuVault saves your progress on this computer, in its encrypted app store: the step, the tenant ID, the client ID, the display name, and a sign-in to a tenant that is not saved yet. No token is kept in this record. Your progress survives a restart, so you can close TenuVault while you run the setup script or wait for another administrator. When you come back, TenuVault skips the welcome screen and the setup says **Welcome back. You can continue where you left off**. A saved sign-in is resumed only while it is still signed in on this computer; otherwise you sign in again. The **First backup** step is not resumed.
 
+## Open a connection link
+
+The [setup script](/getting-started/app-registration/#use-the-setup-script-instead) prints a `tenuvault://connect` link. Open it on the computer where you use TenuVault, including when another administrator sends it to you. TenuVault opens or comes to the front and asks **Connect a tenant?**. Check the Tenant ID, Application (client) ID and optional name with your administrator. Select **Cancel** to leave your setup unchanged, or **Continue to sign in** to fill in the **Sign in** step. Then select **Sign in with Microsoft** yourself.
+
+The link only supplies identifiers and an optional default label. It cannot sign you in, grant consent, carry a token or license key, or choose storage. Your Microsoft sign-in, license choice and storage steps still apply. Nothing is saved until you continue. An unfinished sign-in from an earlier setup is given up when you accept a new connection.
+
+If that tenant is already connected, select **Open tenant** to open its dashboard, or **Cancel**. With a different client ID, TenuVault shows both client IDs and explains that the tenant uses another app registration. To switch registrations, remove the tenant in TenuVault first, then open the link again. The link cannot start a sign-in for a connected tenant. Clipboard pickup is paused until you choose what to do with the link. After **Cancel**, the same clipboard IDs are not filled in on the next window focus. You can still paste them yourself. Links wait for open dialogs, setup, sign-in, storage verification, the onboarding license check or release, restores, and installer backup or export operations on the App Backup page. Configuration backups keep running in the main process and do not delay the confirmation. If you leave the backup page to connect a tenant, the floating progress panel shows the backup progress. When several arrive, only the newest valid link is kept.
+
+On Windows, connection links work after TenuVault has been started once for your user account, including a start hidden in the tray. Registration is per user even with a per-machine MSI installation. A silent MSI deployment needs that first start before links can open the app.
+
 ## Step 1: Connect
 
 The **Connect** step, **Connect your tenant**, takes one Microsoft sign-in.
@@ -34,7 +44,7 @@ Under **Other ways to connect**:
 
 | Button | Use it when |
 | --- | --- |
-| **Someone else is the admin? Copy instructions** | You cannot grant admin consent yourself. It copies a ready-to-send message for your Entra administrator. TenuVault keeps your place; when they send back the two lines, select **I already have an app registration** and paste them. |
+| **Someone else is the admin? Copy instructions** | You cannot grant admin consent yourself. It copies a ready-to-send message for your Entra administrator. TenuVault keeps your place; when they send back the connection link, open it and confirm the IDs. Or select **I already have an app registration** and paste the two IDs. |
 | **Use the setup script instead** | You want to create the app registration with the [PowerShell script](/getting-started/app-registration/#use-the-setup-script-instead). |
 | **I already have an app registration** | The tenant has an app registration from an earlier setup and you know its two IDs. It opens the **Sign in** step. |
 

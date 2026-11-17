@@ -1,3 +1,4 @@
+import { holdConnectLinks } from "@desktop/lib/connect-link-holds"
 import { useEffect, useRef, useState } from "react"
 import { AlertCircle, Building2, Check, ChevronDown, Circle, HardDrive, Info, KeyRound, Loader2, Send, ShieldCheck, Sparkles, UserCheck, X } from "lucide-react"
 import { Alert, AlertDescription } from "~/components/ui/alert"
@@ -65,19 +66,20 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
 
   const start = async (again = false) => {
     if (busy.current) return
-    busy.current = true
-    // A restart from the recovery panel is the same route, not a new choice.
-    if (!again) recordSetup({ name: "setup_route", props: { route: "auto" } })
-    setAttempt((value) => value + 1)
-    setRunning(true)
-    setCancelling(false)
-    setError("")
-    setAttemptFailed(false)
-    setReused(false)
-    setPhase("signingIn")
-    setCompleting(false)
+    const releaseConnectHold = holdConnectLinks()
     let restartNow = false
     try {
+      busy.current = true
+      // A restart from the recovery panel is the same route, not a new choice.
+      if (!again) recordSetup({ name: "setup_route", props: { route: "auto" } })
+      setAttempt((value) => value + 1)
+      setRunning(true)
+      setCancelling(false)
+      setError("")
+      setAttemptFailed(false)
+      setReused(false)
+      setPhase("signingIn")
+      setCompleting(false)
       onRegistered(await bridge.setup.createRegistration(tenant.trim() ? { tenant: tenant.trim() } : undefined))
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : String(caught)
@@ -88,6 +90,7 @@ export function ConnectTenantSetup({ trials, onManual, onRegistered }: {
         setAttemptFailed(true)
       }
     } finally {
+      releaseConnectHold()
       busy.current = false
       restart.current = false
       setRunning(false)

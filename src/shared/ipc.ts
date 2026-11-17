@@ -1,3 +1,4 @@
+import type { ConnectLinkState } from "./deep-link"
 import type { AppSourcesBridge } from "./app-sources/types"
 import type { OptionalPermissionStatus } from "./services/optional-permissions"
 import type { PlanIpcError } from "./plan-errors"
@@ -430,6 +431,12 @@ export interface ServicesStatus {
 
 /** API exposed to the renderer on `window.tenuvault` by the preload script. */
 export interface TenuVaultBridge {
+  connectLink: {
+    takePending: () => Promise<ConnectLinkState>
+    dismiss: (id: number) => Promise<void>
+    dismissRejection: () => Promise<void>
+    onAvailable: (listener: () => void) => () => void
+  }
   appSources: AppSourcesBridge
   api: (request: ApiRequest) => Promise<ApiResponse>
   auth: {

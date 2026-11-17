@@ -1,3 +1,4 @@
+import { useConnectLinksHeld } from "../../src/renderer/lib/connect-link-holds"
 import { act, createElement } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -30,10 +31,26 @@ beforeEach(() => {
   api.restore.mockResolvedValue({ appId: "44444444-4444-4444-4444-444444444444", tenantId: target, name: "Finance (restored)", contentVersion: "1", sourceId: source.id })
 })
 afterEach(() => { act(() => root?.unmount()); root = undefined; document.body.innerHTML = ""; vi.resetAllMocks(); stored.source = tenant })
-async function mount(sourceTenant = tenant) { const node = document.createElement("div"); document.body.append(node); root = createRoot(node); await act(async () => root!.render(createElement(RestoreAppDialog, { tenant: sourceTenant, source, onClose: vi.fn(), onBusy: vi.fn() }))) }
+async function mount(sourceTenant = tenant) { const node = document.createElement("div"); document.body.append(node); root = createRoot(node); await act(async () => root!.render(createElement("div", null, createElement(RestoreAppDialog, { tenant: sourceTenant, source, onClose: vi.fn(), onBusy: vi.fn() }), createElement(ConnectHoldProbe)))) }
 const button = (label: string) => [...document.querySelectorAll("button")].find(b => b.textContent?.trim() === label)!
 async function selectTarget() { const select = document.querySelector("select")!; await act(async () => { select.value = target; select.dispatchEvent(new Event("change", { bubbles: true })) }) }
 async function confirm() { await act(async () => (document.querySelector('input[type="checkbox"]') as HTMLInputElement).click()) }
+function ConnectHoldProbe() {
+  return createElement("p", { id: "connect-held" }, useConnectLinksHeld() ? "held" : "ready")
+}
+
+it("holds connection links for the entire installer restore", async () => {
+  let finish!: (value: unknown) => void
+  api.restore.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+  await mount(); await selectTarget(); await confirm()
+  await act(async () => button("Restore unassigned app").click())
+  expect(document.querySelector("#connect-held")?.textContent).toBe("held")
+  await act(async () => root!.render(createElement(ConnectHoldProbe)))
+  expect(document.querySelector("#connect-held")?.textContent).toBe("held")
+  await act(async () => finish({ appId: "44444444-4444-4444-4444-444444444444", tenantId: target, name: "Restored", contentVersion: "1", sourceId: source.id }))
+  expect(document.querySelector("#connect-held")?.textContent).toBe("ready")
+})
+
 it("requires explicit destination and acknowledgment before restoring only the reviewed captured source", async () => {
   await mount()
   expect(button("Restore unassigned app").disabled).toBe(true)
@@ -183,4 +200,28 @@ describe("restore into another tenant on the destination's plan", () => {
     expect(document.body.textContent).toContain("Included in TenuVault Pro and MSP")
     expect(document.body.textContent).not.toContain("No assignments were added")
   })
+})
+
+it.each(["Restore failed.", "Source operation cancelled."])("releases the installer restore hold after %s", async message => {
+  let fail!: (error: Error) => void
+  api.restore.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject }))
+  await mount(); await selectTarget(); await confirm()
+  await act(async () => button("Restore unassigned app").click())
+  await act(async () => root!.render(createElement(ConnectHoldProbe)))
+  expect(document.querySelector("#connect-held")?.textContent).toBe("held")
+  await act(async () => fail(new Error(message)))
+  expect(document.querySelector("#connect-held")?.textContent).toBe("ready")
+})
+
+it("releases the installer restore hold on an early return after acknowledgement and unmount", async () => {
+  api.restore.mockResolvedValueOnce({ acknowledgement: { tenantIds: [target] }, error: "Acknowledgement required" })
+  let finish!: (accepted: boolean) => void
+  api.acknowledge.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+  await mount(); await selectTarget(); await confirm()
+  await act(async () => button("Restore unassigned app").click())
+  expect(api.acknowledge).toHaveBeenCalled()
+  await act(async () => root!.render(createElement(ConnectHoldProbe)))
+  await act(async () => finish(true))
+  expect(api.restore).toHaveBeenCalledTimes(1)
+  expect(document.querySelector("#connect-held")?.textContent).toBe("ready")
 })

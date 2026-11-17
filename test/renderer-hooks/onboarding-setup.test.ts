@@ -1,8 +1,10 @@
+import { useConnectLinksHeld } from "../../src/renderer/lib/connect-link-holds"
 import { act, createElement, useEffect, type ReactElement } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { SignedInAccount } from "../../src/shared/ipc"
+import type { BackupJob } from "../../src/portal/contexts/BackupProgressContext"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -16,7 +18,7 @@ const state = vi.hoisted(() => ({
   cancelSignIn: vi.fn(async () => undefined),
   accounts: vi.fn(async (): Promise<SignedInAccount[]> => []),
   releaseTenant: vi.fn(async () => undefined),
-  tenants: [] as { credentials?: { tenantId?: string } }[],
+  tenants: [] as { id?: number; credentials?: { tenantId?: string } }[],
   storageChoice: null as unknown,
   checkNewTenant: vi.fn(async (): Promise<unknown> => undefined),
   addTenant: vi.fn(),
@@ -24,7 +26,7 @@ const state = vi.hoisted(() => ({
   license: null as unknown,
   updateJob: vi.fn(),
   addJob: vi.fn(),
-  activeJobs: [] as { jobId: string; isComplete: boolean; isSuccessful: boolean; status: string; progress: number }[],
+  activeJobs: [] as (Pick<BackupJob, "jobId" | "isComplete" | "isSuccessful" | "status" | "progress"> & Partial<BackupJob>)[],
   openExternal: vi.fn(async (_url: string) => undefined),
   record: vi.fn(async (_event: unknown) => undefined),
   diagnostics: { state: "ineligible", policy: false, reminder: { setup: false, signin: false } } as import("../../src/shared/ipc").SetupDiagnosticsStatus,
@@ -70,6 +72,8 @@ vi.mock("../../src/renderer/components/StorageChooser", () => ({
 }))
 
 import OnboardingPage from "../../src/renderer/pages/OnboardingPage"
+import { FloatingProgress } from "../../src/portal/components/backup/floating-progress"
+import { requestOnboardingConnect } from "../../src/renderer/lib/connect-link-onboarding"
 import { setupCommand, TenantSignInForm } from "../../src/renderer/components/TenantSignInForm"
 import { loadOnboardingDraft, pendingSignInTenant, PENDING_SIGN_IN_MAX_AGE_MS, saveOnboardingDraft } from "../../src/renderer/lib/onboarding-draft"
 import { AddTenantModal } from "../../src/renderer/overrides/add-tenant-modal"
@@ -130,6 +134,31 @@ function type(element: HTMLInputElement | HTMLTextAreaElement, value: string) {
     element.dispatchEvent(new Event("input", { bubbles: true }))
   })
 }
+
+function ConnectHoldProbe() {
+  const held = useConnectLinksHeld()
+  return createElement("p", { id: "connect-held" }, held ? "held" : "ready")
+}
+
+it("holds connection links until a running setup finishes", async () => {
+  let finish!: (result: unknown) => void
+  state.createRegistration.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+  const container = await render(createElement("div", null, createElement(OnboardingPage), createElement(ConnectHoldProbe)))
+  await act(async () => button(container, "Set up with Microsoft sign-in")!.click())
+  expect(container.querySelector("#connect-held")?.textContent).toBe("held")
+  await act(async () => finish({ tenantId: TENANT, clientId: CLIENT, displayName: "TenuVault Desktop", username: "admin@test.example", ready: false, reused: false, candidateCount: 0, missingConsent: [] }))
+  expect(container.querySelector("#connect-held")?.textContent).toBe("ready")
+})
+
+it("holds connection links until a running sign-in finishes", async () => {
+  let finish!: (account: SignedInAccount) => void
+  state.signIn.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+  const container = await render(createElement("div", null, createElement(TenantSignInForm, { onSignedIn: vi.fn(), initial: { tenant: TENANT, clientId: CLIENT } }), createElement(ConnectHoldProbe)))
+  await act(async () => button(container, "Sign in with Microsoft")!.click())
+  expect(container.querySelector("#connect-held")?.textContent).toBe("held")
+  await act(async () => finish({ tenantId: TENANT, clientId: CLIENT, username: "admin@test.example" }))
+  expect(container.querySelector("#connect-held")?.textContent).toBe("ready")
+})
 
 describe("TenantSignInForm", () => {
   it("fills both IDs from the pasted script output", async () => {
@@ -589,13 +618,15 @@ describe("in-app tenant setup", () => {
   })
 
   it("says while it waits which refusal in the browser needs which route", async () => {
-    state.createRegistration.mockImplementationOnce(() => new Promise(() => {}))
+    let fail!: (error: Error) => void
+    state.createRegistration.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject }))
     const container = await render(createElement(OnboardingPage))
     await act(async () => button(container, "Set up with Microsoft sign-in")!.click())
     expect(container.textContent).toContain('If Microsoft says that you need admin approval, this account cannot approve the setup. Select Cancel and use "Someone else is the admin?" below.')
     expect(container.textContent).toContain("the setup script is blocked too")
     await act(async () => button(container, "create the app registration by hand")!.click())
     expect(state.openExternal).toHaveBeenCalledWith(MANUAL)
+    await act(async () => fail(new Error("Sign-in cancelled.")))
   })
 
   it("does not report a cancelled last sign-in as an error", async () => {
@@ -672,7 +703,8 @@ describe("in-app tenant setup", () => {
   it("says how long Microsoft may take while it waits, and what to do if the browser reports a missing application", async () => {
     let finish!: (value: typeof result) => void
     state.createRegistration.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
-    state.signIn.mockImplementationOnce(() => new Promise(() => {}))
+    let failSignIn!: (error: Error) => void
+    state.signIn.mockImplementationOnce(() => new Promise((_resolve, reject) => { failSignIn = reject }))
     const container = await render(createElement(OnboardingPage))
     await act(async () => button(container, "Set up with Microsoft sign-in")!.click())
     await act(async () => state.progress?.({ phase: "consent" }))
@@ -686,6 +718,7 @@ describe("in-app tenant setup", () => {
     expect(container.textContent).toContain("There is nothing to enter this time.")
     expect(container.textContent).toContain("If Microsoft says it cannot find the application")
     expect(button(container, "Cancel sign-in")).toBeDefined()
+    await act(async () => failSignIn(new Error("Sign-in cancelled.")))
   })
 })
 
@@ -883,4 +916,188 @@ describe("setup diagnostics hooks", () => {
     state.record.mockImplementation(async () => undefined)
     state.addTenant.mockImplementation(() => undefined)
   })
+})
+
+
+it("accepts a confirmed link in an already mounted wizard without automatic sign-in", async () => {
+  const { requestOnboardingConnect } = await import("../../src/renderer/lib/connect-link-onboarding")
+  const container = await render(createElement(OnboardingPage))
+  await act(async () => requestOnboardingConnect({ tenantId: TENANT, clientId: CLIENT, displayName: "Contoso" }))
+  expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(TENANT)
+  expect(container.querySelector<HTMLInputElement>("#clientId")!.value).toBe(CLIENT)
+  expect(container.querySelector<HTMLInputElement>("#displayName")!.value).toBe("Contoso")
+  expect(state.signIn).not.toHaveBeenCalled()
+  expect(loadOnboardingDraft()).toMatchObject({ step: 1, tenant: TENANT, clientId: CLIENT, displayName: "Contoso", account: null })
+})
+
+it("gives up an unsaved earlier sign-in before applying a confirmed link", async () => {
+  const { requestOnboardingConnect } = await import("../../src/renderer/lib/connect-link-onboarding")
+  const earlier = "2f9d4a7c-1b6e-4c3d-8a5f-9e0b7c2d4a61"
+  const account = { tenantId: earlier, clientId: CLIENT, username: "alex@fabrikam.test" }
+  state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: earlier, clientId: CLIENT, displayName: "Earlier", account, signedInAt: Date.now() }))
+  state.accounts.mockResolvedValueOnce([account])
+  const container = await render(createElement(OnboardingPage))
+  await act(async () => requestOnboardingConnect({ tenantId: TENANT, clientId: CLIENT }))
+  expect(state.releaseTenant).toHaveBeenCalledWith(earlier)
+  expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(TENANT)
+  expect(loadOnboardingDraft()?.account).toBeNull()
+  expect(state.signIn).not.toHaveBeenCalled()
+})
+
+it("opens the linked tenant even when its draft cannot be saved", async () => {
+  const { requestOnboardingConnect } = await import("../../src/renderer/lib/connect-link-onboarding")
+  const { bridge } = await import("../../src/renderer/lib/bridge")
+  const earlier = "2f9d4a7c-1b6e-4c3d-8a5f-9e0b7c2d4a61"
+  state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: earlier, clientId: CLIENT, displayName: "Earlier", account: null }))
+  const container = await render(createElement(OnboardingPage))
+  expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(earlier)
+  const error = vi.spyOn(console, "error").mockImplementation(() => undefined)
+  const write = vi.spyOn(bridge.storage, "setItem").mockRejectedValue(new Error("The disk is full."))
+  try {
+    await act(async () => requestOnboardingConnect({ tenantId: TENANT, clientId: CLIENT, displayName: "Contoso" }))
+    expect(write).toHaveBeenCalled()
+    expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(TENANT)
+    expect(container.querySelector<HTMLInputElement>("#clientId")!.value).toBe(CLIENT)
+    expect(container.querySelector<HTMLInputElement>("#displayName")!.value).toBe("Contoso")
+    expect(state.signIn).not.toHaveBeenCalled()
+  } finally {
+    write.mockRestore()
+    error.mockRestore()
+  }
+})
+
+describe("a confirmed link after the first tenant's backup", () => {
+  const otherTenant = "2f9d4a7c-1b6e-4c3d-8a5f-9e0b7c2d4a61"
+
+  function WizardAndProgress() {
+    return createElement("div", null,
+      createElement("div", { id: "wizard" }, createElement(OnboardingPage)),
+      createElement("div", { id: "floating" }, createElement(FloatingProgress)))
+  }
+
+  const refresh = () => act(async () => roots[0]!.render(createElement(MemoryRouter, { initialEntries: ["/portal/onboarding"] }, createElement(WizardAndProgress))))
+
+  async function firstTenant(start: () => Promise<Response>) {
+    const account = { tenantId: TENANT, clientId: CLIENT, username: "admin@contoso.test" }
+    saveOnboardingDraft({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "Contoso", account })
+    state.accounts.mockResolvedValueOnce([account])
+    state.storageChoice = { kind: "local" }
+    state.checkNewTenant.mockResolvedValue({ tenants: [{ plan: "community" }] })
+    state.addJob.mockImplementation((job: BackupJob) => { state.activeJobs = [...state.activeJobs, job] })
+    state.updateJob.mockImplementation((id: string, updates: Partial<BackupJob>) => {
+      state.activeJobs = state.activeJobs.map(job => job.jobId === id ? { ...job, ...updates } : job)
+    })
+    vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} })
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => url === "/api/backup/start" ? start() : Response.json({})))
+    await flush()
+    const container = await render(createElement(WizardAndProgress))
+    await act(async () => button(container, "Continue")!.click())
+    // A saved tenant's sign-in must survive the handoff.
+    state.tenants = [{ id: 1, credentials: { tenantId: TENANT } }]
+    await act(async () => button(container, "Run first backup")!.click())
+    return container
+  }
+
+  async function connectOtherTenant(container: HTMLElement) {
+    await act(async () => requestOnboardingConnect({ tenantId: otherTenant, clientId: CLIENT, displayName: "Fabrikam" }))
+    expect(loadOnboardingDraft()).toMatchObject({ step: 1, tenant: otherTenant, clientId: CLIENT, account: null })
+    expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(otherTenant)
+    state.signIn.mockResolvedValueOnce({ tenantId: otherTenant, clientId: CLIENT, username: "admin@fabrikam.test" })
+    await act(async () => button(container, "Sign in with Microsoft")!.click())
+    await act(async () => button(container, "Continue")!.click())
+    expect(state.releaseTenant).not.toHaveBeenCalled()
+  }
+
+  it.each([true, false])("starts the linked tenant with clean backup state and reveals only unfinished earlier work, complete: %s", async complete => {
+    const container = await firstTenant(async () => Response.json({ jobId: "first" }))
+    const message = complete ? "Contoso backup completed" : "Reading Contoso policies"
+    state.activeJobs = state.activeJobs.map(job => ({ ...job, isComplete: complete, isSuccessful: complete, status: complete ? "Completed" : "Running", progress: complete ? 100 : 25, progressMessage: message }))
+    await refresh()
+    if (complete) expect(container.querySelector("#wizard")?.textContent).toContain("Your first backup is done")
+    expect(container.querySelector("#floating")?.textContent).toBe("")
+    await connectOtherTenant(container)
+    await refresh()
+    expect(container.querySelector("#wizard")?.textContent).toContain("Take a first backup")
+    expect(container.querySelector("#wizard")?.textContent).not.toContain("Your first backup is done")
+    expect(container.querySelector("#wizard")?.textContent).not.toContain(message)
+    expect(button(container, "Run first backup")!.disabled).toBe(false)
+    if (complete) {
+      expect(state.updateJob).not.toHaveBeenCalled()
+      expect(container.querySelector("#floating")?.textContent).toBe("")
+    } else {
+      expect(state.updateJob).toHaveBeenCalledWith("first", { isHidden: false })
+      expect(container.querySelector("#floating")?.textContent).toContain(message)
+    }
+  })
+
+  it("shows a backup start resolving after the link handoff in the floating panel without leaking into the new wizard", async () => {
+    let started!: (response: Response) => void
+    const container = await firstTenant(() => new Promise<Response>(resolve => { started = resolve }))
+    await connectOtherTenant(container)
+    await act(async () => started(Response.json({ jobId: "late" })))
+    await refresh()
+    expect(state.addJob).toHaveBeenCalledWith(expect.objectContaining({ jobId: "late", tenantId: TENANT, credentials: expect.objectContaining({ tenantId: TENANT }), isHidden: false, quiet: true }))
+    expect(container.querySelector("#floating")?.textContent).toContain("Starting backup...")
+    expect(container.querySelector("#wizard")?.textContent).not.toContain("Starting backup...")
+    expect(container.querySelector("#wizard")?.textContent).toContain("Take a first backup")
+    expect(button(container, "Run first backup")!.disabled).toBe(false)
+  })
+
+  afterEach(() => {
+    state.addJob.mockReset()
+    state.updateJob.mockReset()
+  })
+})
+
+it("does not send a confirmed link for a connected tenant into sign-in", async () => {
+  const { requestOnboardingConnect } = await import("../../src/renderer/lib/connect-link-onboarding")
+  state.tenants = [{ id: 7, credentials: { tenantId: TENANT.toUpperCase() } }]
+  const container = await render(createElement(OnboardingPage))
+  await act(async () => requestOnboardingConnect({ tenantId: TENANT, clientId: CLIENT }))
+  expect(container.querySelector("#tenant")).toBeNull()
+  expect(loadOnboardingDraft()?.tenant).not.toBe(TENANT)
+  expect(state.signIn).not.toHaveBeenCalled()
+})
+
+it("keeps an empty sign-in form unchanged while a link is pending and after Cancel and focus", async () => {
+  const { ConnectLinkIntake } = await import("../../src/main/deep-link")
+  const intake = new ConnectLinkIntake(vi.fn(), () => window.dispatchEvent(new Event("focus")))
+  state.clipboardIds.mockImplementation(() => intake.clipboardIds(async () => OUTPUT))
+  intake.accept(`tenuvault://connect?v=1&tenant=${TENANT}&client=${CLIENT}`)
+  const container = await render(createElement(OnboardingPage))
+  await act(async () => button(container, "I already have an app registration")!.click())
+  const expectEmpty = () => {
+    expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe("")
+    expect(container.querySelector<HTMLInputElement>("#clientId")!.value).toBe("")
+    expect(loadOnboardingDraft()).toMatchObject({ tenant: "", clientId: "" })
+  }
+  expectEmpty()
+  intake.dismiss(intake.take().pending!.id)
+  await act(async () => window.dispatchEvent(new Event("focus")))
+  expectEmpty()
+})
+
+it.each(["Setup failed.", "Sign-in cancelled."])("releases the setup hold after %s", async message => {
+  state.createRegistration.mockRejectedValueOnce(new Error(message))
+  const container = await render(createElement("div", null, createElement(OnboardingPage), createElement(ConnectHoldProbe)))
+  await act(async () => button(container, "Set up with Microsoft sign-in")!.click())
+  expect(container.querySelector("#connect-held")?.textContent).toBe("ready")
+})
+
+it.each(["Sign-in failed.", "Sign-in cancelled."])("releases the sign-in hold after %s", async message => {
+  state.signIn.mockRejectedValueOnce(new Error(message))
+  const container = await render(createElement("div", null, createElement(TenantSignInForm, { onSignedIn: vi.fn(), initial: { tenant: TENANT, clientId: CLIENT } }), createElement(ConnectHoldProbe)))
+  await act(async () => button(container, "Sign in with Microsoft")!.click())
+  expect(container.querySelector("#connect-held")?.textContent).toBe("ready")
+})
+
+it("releases the sign-in hold when a failed sign-in returns early after unmount", async () => {
+  let fail!: (error: Error) => void
+  state.signIn.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject }))
+  const container = await render(createElement("div", null, createElement(TenantSignInForm, { onSignedIn: vi.fn(), initial: { tenant: TENANT, clientId: CLIENT } }), createElement(ConnectHoldProbe)))
+  await act(async () => button(container, "Sign in with Microsoft")!.click())
+  await act(async () => roots[0]!.render(createElement(ConnectHoldProbe)))
+  expect(container.querySelector("#connect-held")?.textContent).toBe("held")
+  await act(async () => fail(new Error("Sign-in cancelled.")))
+  expect(container.querySelector("#connect-held")?.textContent).toBe("ready")
 })

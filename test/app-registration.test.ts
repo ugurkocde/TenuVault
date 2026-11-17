@@ -89,7 +89,9 @@ describe("the clipboard handlers in the main process", () => {
   it("wait for the clipboard text before parsing it", () => {
     // Electron's clipboard.readText() returns a promise. Parsing the promise itself finds nothing.
     const main = readFileSync(new URL("../src/main/index.ts", import.meta.url), "utf8")
-    expect(main).toContain("setupIdsFromClipboard(await clipboard.readText())")
+    expect(main).toContain("connectLinks.clipboardIds(() => clipboard.readText())")
+    const intake = readFileSync(new URL("../src/main/deep-link.ts", import.meta.url), "utf8")
+    expect(intake).toContain("setupIdsFromClipboard(await readText())")
     expect(main).toContain("licenseKeyFromClipboard(await clipboard.readText())")
     expect(main).not.toMatch(/FromClipboard\(clipboard\.readText\(\)\)/)
   })

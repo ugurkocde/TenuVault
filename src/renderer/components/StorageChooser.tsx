@@ -6,6 +6,7 @@ import { Label } from "~/components/ui/label"
 import { cn } from "~/lib/utils"
 import storageSetupScript from "../../../resources/New-TenuVaultStorage.ps1?raw"
 import { bridge } from "../lib/bridge"
+import { holdConnectLinks } from "../lib/connect-link-holds"
 import { useTenantPlan } from "../lib/license"
 import { useBackupSettings, useLocalInventoryProblems } from "../lib/local-inventory"
 import { listStorageAccounts, type AzureStorageAccount, type StorageChoice } from "../lib/storage"
@@ -157,6 +158,7 @@ export function StorageChooser({ tenantId, clientId, initial, savedAzure, initia
     const accountName = selected
     setVerifying(true)
     setVerifyError("")
+    const releaseConnectHold = holdConnectLinks()
     try {
       await bridge.backups.verifyAzureStorage(tenantId, clientId, accountName)
       setVerifiedFor(accountName)
@@ -165,6 +167,7 @@ export function StorageChooser({ tenantId, clientId, initial, savedAzure, initia
         setVerifyError(error instanceof Error ? error.message : String(error))
       }
     } finally {
+      releaseConnectHold()
       setVerifying(false)
     }
   }

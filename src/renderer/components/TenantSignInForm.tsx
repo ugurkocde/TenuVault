@@ -1,3 +1,4 @@
+import { holdConnectLinks } from "@desktop/lib/connect-link-holds"
 import { trialKeyRefusalText } from "../../shared/trial-notices"
 import { showCommunityLimitError } from "../lib/plan-dialog"
 import { TrialKeyRefusalActions } from "./TenantTrial"
@@ -347,14 +348,15 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
     setErrors(next)
     if (next.tenant || next.clientId) { document.getElementById(next.tenant ? "tenant" : "clientId")?.focus(); return }
 
-    signingIn.current = true
-    setBusy(true)
-    setAutomatic(Boolean(loginHint))
-    setCancelling(false)
-    setAfterBrowser(null)
-    setAttempt((value) => value + 1)
+    const releaseConnectHold = holdConnectLinks()
     let again = false
     try {
+      signingIn.current = true
+      setBusy(true)
+      setAutomatic(Boolean(loginHint))
+      setCancelling(false)
+      setAfterBrowser(null)
+      setAttempt((value) => value + 1)
       const account = await (loginHint ? bridge.auth.signIn(tenant.trim(), clientId.trim(), { loginHint }) : bridge.auth.signIn(tenant.trim(), clientId.trim()))
       if (active.current) onSignedIn(account, displayName.trim())
     } catch (error) {
@@ -365,6 +367,7 @@ export function TenantSignInForm({ onSignedIn, onFieldsChange, submitLabel = "Si
       // failed does not.
       if (message !== CANCELLED && !showCommunityLimitError(error)) setErrors({ form: message, attempt: true })
     } finally {
+      releaseConnectHold()
       signingIn.current = false
       restart.current = false
       if (active.current) {

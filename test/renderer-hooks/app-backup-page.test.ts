@@ -1,4 +1,4 @@
-import { act, createElement } from "react"
+import { act, createElement, Fragment } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, describe, expect, it, vi } from "vitest"
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -9,19 +9,20 @@ const api = vi.hoisted(() => ({ info: vi.fn(async () => ({platform:"win32"})), a
 vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { app:{info:api.info}, auth:{accounts:api.accounts}, appSources: api } }))
 vi.mock("~/contexts/TenantContext", () => ({ useSelectedTenant: () => ({ selectedTenant: { id: state.selected, name: state.selected ? "Fabrikam" : "Contoso", credentials: { tenantId: ids[state.selected] } } }) }))
 vi.mock("react-router-dom", () => ({ useNavigate: () => vi.fn(), useSearchParams: () => [new URLSearchParams(), vi.fn()], useParams: () => ({ tabId: state.tab }), Link: (props: { to: string; children: React.ReactNode }) => createElement("a", { href: props.to }, props.children) }))
+import { useConnectLinksHeld } from "../../src/renderer/lib/connect-link-holds"
 import AppBackupPage from "../../src/renderer/pages/AppBackupPage"
 HTMLElement.prototype.scrollIntoView = vi.fn()
 let root: Root | undefined
 const flush = async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) }) }
-async function mount() {
+async function mount(options: { probe?: boolean; signedOut?: boolean } = {}) {
  state.fail = false
- api.accounts.mockResolvedValue(ids.map(tenantId => ({tenantId})))
+ api.accounts.mockResolvedValue(options.signedOut ? [] : ids.map(tenantId => ({tenantId})))
  api.apps.mockResolvedValue({apps:[{id:ids[0],name:"Finance",publisher:"Contoso"}],fetchedAt:"2026-11-12T00:00:00Z"})
  api.list.mockImplementation(async (tenant: string) => { if (state.fail) throw new Error("Import the matching recovery key"); return { storeName: "Sources", warnings: [], sources: state.empty ? [] : [{ id: "source", tenantId: tenant, appName: "Finance", fileName: "Finance.intunewin", bytes: 1024, createdAt: "2026-11-12T00:00:00Z", sha256: "abc" }] } })
  api.attach.mockImplementation(() => state.wait ? state.wait() : Promise.resolve(true))
  api.export.mockImplementation(() => state.wait ? state.wait() : Promise.resolve(true))
  const node = document.createElement("div"); document.body.append(node); root = createRoot(node)
- await act(async () => root!.render(createElement(AppBackupPage))); await flush(); return node
+ await act(async () => root!.render(options.probe ? createElement(Fragment, null, createElement(AppBackupPage), createElement(ConnectHoldProbe)) : createElement(AppBackupPage))); await flush(); return node
 }
 afterEach(() => { if (root) act(() => root!.unmount()); root = undefined; document.body.innerHTML = ""; state.selected = 0; state.tab = "versions"; state.empty = false; state.wait = null; vi.clearAllMocks() })
 async function click(node: HTMLElement, text: string) {
@@ -162,4 +163,47 @@ it("stops offering cancellation when the job finishes while its catalog refresh 
  expect(node.textContent).toContain("Installer exported")
  await act(async()=>finish({storeName:"Sources",warnings:[],sources:[]}));await flush()
  expect(api.cancel).not.toHaveBeenCalled()
+})
+
+function ConnectHoldProbe() {
+  return createElement("p", { id: "connect-held" }, useConnectLinksHeld() ? "held" : "ready")
+}
+it.each(["Export failed.", "Source operation cancelled.", "cancelled destination"])("releases the export hold after %s", async message => {
+  let finish!: (value: boolean) => void
+  let fail!: (error: Error) => void
+  state.wait = () => new Promise((resolve, reject) => { finish = resolve; fail = reject })
+  const node = await mount()
+  await click(node, "Export archive")
+  await act(async () => root!.render(createElement(ConnectHoldProbe)))
+  expect(node.querySelector("#connect-held")?.textContent).toBe("held")
+  await act(async () => { if (message === "cancelled destination") finish(false); else fail(new Error(message)) })
+  expect(node.querySelector("#connect-held")?.textContent).toBe("ready")
+})
+
+it.each(["success", "failure"])("holds connection links during the Windows enrollment sign-in and releases on %s", async outcome => {
+  state.tab = "apps"
+  const node = await mount({ probe: true })
+  await click(node, "Backup for Finance")
+  let finish!: () => void
+  let fail!: (error: Error) => void
+  api.accounts.mockResolvedValueOnce([])
+  api.signIn.mockImplementationOnce(() => new Promise<void>((resolve, reject) => { finish = resolve; fail = reject }))
+  await click(node, "Check Windows enrollment")
+  expect(api.signIn).toHaveBeenCalledWith(ids[0])
+  expect(node.querySelector("#connect-held")?.textContent).toBe("held")
+  await act(async () => { if (outcome === "success") finish(); else fail(new Error("Sign-in cancelled.")) }); await flush()
+  expect(node.querySelector("#connect-held")?.textContent).toBe("ready")
+})
+
+it.each(["success", "failure"])("holds connection links during Reconnect Microsoft and releases on %s", async outcome => {
+  state.tab = "apps"
+  const node = await mount({ probe: true, signedOut: true })
+  let finish!: () => void
+  let fail!: (error: Error) => void
+  api.signIn.mockImplementationOnce(() => new Promise<void>((resolve, reject) => { finish = resolve; fail = reject }))
+  await click(node, "Reconnect Microsoft")
+  expect(api.signIn).toHaveBeenCalledWith(ids[0])
+  expect(node.querySelector("#connect-held")?.textContent).toBe("held")
+  await act(async () => { if (outcome === "success") finish(); else fail(new Error("Sign-in cancelled.")) }); await flush()
+  expect(node.querySelector("#connect-held")?.textContent).toBe("ready")
 })

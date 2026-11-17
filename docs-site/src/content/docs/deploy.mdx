@@ -29,6 +29,8 @@ Use the MSI (`TenuVault-<version>-win-x64.msi`) from the [releases page](https:/
 
 Intune reads the product code and version from the MSI and installs it silently.
 
+On Windows, `tenuvault://connect` links work after TenuVault has been started once for each user, including a start hidden in the tray. The app registers the handler per user, even though the MSI installs per machine. After a silent MSI deployment, each admin must start TenuVault once before connection links can open it.
+
 To install the MSI manually or with Configuration Manager:
 
 ```powershell
