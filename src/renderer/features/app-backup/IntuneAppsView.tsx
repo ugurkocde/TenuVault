@@ -7,6 +7,7 @@ import { Link } from "react-router-dom"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
 import { bridge } from "../../lib/bridge"
+import { whileHoldingConnectLinks } from "../../lib/connect-link-holds"
 import { adminCenterLink } from "../../../shared/intune/admin-links"
 import type { IntuneBackupApp } from "../../../shared/app-sources/types"
 
@@ -34,7 +35,7 @@ export function IntuneAppsView({ tenant, devicePanel, busy, feedback, platform, 
     const current = ++generation.current
     setLoading(true); setError("")
     try {
-      if (signIn) await bridge.appSources.signIn(tenant)
+      if (signIn) await whileHoldingConnectLinks(() => bridge.appSources.signIn(tenant))
       const accounts = await bridge.auth.accounts()
       if (!alive.current || generation.current !== current) return
       if (!accounts.some(account => account.tenantId.toLowerCase() === tenant.toLowerCase())) {

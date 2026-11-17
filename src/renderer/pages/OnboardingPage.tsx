@@ -24,7 +24,7 @@ import { recordSetup, SetupDiagnosticsReminder } from "../components/SetupDiagno
 import { TenantSignInForm, type SignInFields } from "../components/TenantSignInForm"
 import { bridge } from "../lib/bridge"
 import { buildTenantProfile } from "../lib/desktop-tenant"
-import { clearOnboardingDraft, loadOnboardingDraft, saveOnboardingDraft } from "../lib/onboarding-draft"
+import { clearOnboardingDraft, loadOnboardingDraft, saveOnboardingDraft, type OnboardingDraft } from "../lib/onboarding-draft"
 import type { StorageChoice } from "../lib/storage"
 import { desktopTenantCredentials, type TenantCredentials } from "../overrides/add-tenant-modal"
 import { completedWithWarnings, resolveBackupJobDisplay, toBackupJobDisplay, type BackupJobDisplay } from "~/lib/backup-job-display"
@@ -58,11 +58,13 @@ function StepHeading({ id, children }: { id: string; children: React.ReactNode }
  * continue after a restart, for example once another administrator created the app registration.
  */
 export default function OnboardingPage() {
-  const [connectionVersion, setConnectionVersion] = useState(0)
-  return <OnboardingWizard key={connectionVersion} onConnect={() => setConnectionVersion(value => value + 1)} />
+  // A confirmed link remounts the wizard with its draft passed in directly, so a draft that could
+  // not be written to the store cannot bring back the previous tenant.
+  const [connection, setConnection] = useState<{ version: number; draft: OnboardingDraft | null }>({ version: 0, draft: null })
+  return <OnboardingWizard key={connection.version} seed={connection.draft} onConnect={(draft) => setConnection(({ version }) => ({ version: version + 1, draft }))} />
 }
 
-function OnboardingWizard({ onConnect }: { onConnect: () => void }) {
+function OnboardingWizard({ seed, onConnect }: { seed: OnboardingDraft | null; onConnect: (draft: OnboardingDraft) => void }) {
   const navigate = useNavigate()
   const { status } = useLicense()
   const tenants = useTenants()
@@ -70,7 +72,7 @@ function OnboardingWizard({ onConnect }: { onConnect: () => void }) {
   const { setSelectedTenantId } = useSelectedTenant()
   const linkConnection = useOnboardingConnect()
   const [formVersion, setFormVersion] = useState(0)
-  const [initial] = useState(loadOnboardingDraft)
+  const [initial] = useState(() => seed ?? loadOnboardingDraft())
   const [step, setStep] = useState<Step>(initial?.step ?? 0)
   const [fields, setFields] = useState<SignInFields>({ tenant: initial?.tenant ?? "", clientId: initial?.clientId ?? "", displayName: initial?.displayName ?? "" })
   const [account, setAccount] = useState<SignedInAccount | null>(initial?.account ?? null)
@@ -230,9 +232,10 @@ function OnboardingWizard({ onConnect }: { onConnect: () => void }) {
     if (details) void (async () => {
       await releaseUnsavedSignIn()
       if (!mounted.current) return
-      await saveOnboardingDraft({ step: 1, tenant: details.tenantId, clientId: details.clientId, displayName: details.displayName ?? "", account: null })
+      const draft: OnboardingDraft = { step: 1, tenant: details.tenantId, clientId: details.clientId, displayName: details.displayName ?? "", account: null }
+      await saveOnboardingDraft(draft)
       // Remount to leave the old backup with the floating panel and start with fresh wizard state.
-      if (mounted.current) onConnect()
+      if (mounted.current) onConnect(draft)
     })()
   }, [linkConnection])
 

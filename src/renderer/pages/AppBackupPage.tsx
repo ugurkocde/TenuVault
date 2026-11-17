@@ -1,4 +1,4 @@
-import { holdConnectLinks } from "../lib/connect-link-holds"
+import { holdConnectLinks, whileHoldingConnectLinks } from "../lib/connect-link-holds"
 import { useEffect, useRef, useState } from "react"
 import { Link, useParams, useSearchParams } from "react-router-dom"
 import { ArrowDownToLine, CheckCircle2, FolderOpen, Package, RefreshCw, Shield } from "lucide-react"
@@ -144,7 +144,7 @@ export function SourceWorkspace({ tenant }: { tenant: string }) {
     setDeviceBusy(true); setDevice(null); setDeviceError("")
     try {
       if (platform !== "win32") return
-      if (signIn && !(await bridge.auth.accounts()).some(account => account.tenantId.toLowerCase() === tenant.toLowerCase())) await bridge.appSources.signIn(tenant)
+      if (signIn && !(await bridge.auth.accounts()).some(account => account.tenantId.toLowerCase() === tenant.toLowerCase())) await whileHoldingConnectLinks(() => bridge.appSources.signIn(tenant))
       if (!alive.current) return
       const value = await bridge.appSources.deviceStatus(tenant)
       if (alive.current) setDevice(value)

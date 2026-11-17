@@ -44,6 +44,8 @@ describe("parseConnectLink", () => {
     ["a duplicate parameter", `${link}&tenant=${tenantId}`],
     ["an encoded duplicate", `${link}&%76=1`],
     ["a raw link over 512 characters", `${link}&name=${"a".repeat(512)}`],
+    // 64 encoded three-byte characters: a valid name, so only the raw length limit refuses it.
+    ["a raw link over 512 characters with a valid name", `${link}&name=${"%E6%97%A5".repeat(64)}`],
     ["a name over 64 characters", `${link}&name=${"a".repeat(65)}`],
     ["an encoded control", `${link}&name=abc%00def`],
     ["a raw newline", `${link}&name=abc\ndef`],

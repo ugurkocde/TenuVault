@@ -12,6 +12,12 @@ export function holdConnectLinks(): () => void {
   return () => { if (holds.delete(id)) changed() }
 }
 
+/** Runs work that must finish before a link is presented, such as a Microsoft sign-in, and always releases the hold. */
+export async function whileHoldingConnectLinks<T>(work: () => Promise<T>): Promise<T> {
+  const release = holdConnectLinks()
+  try { return await work() } finally { release() }
+}
+
 export function useConnectLinkHold(held: boolean): void {
   useLayoutEffect(() => held ? holdConnectLinks() : undefined, [held])
 }

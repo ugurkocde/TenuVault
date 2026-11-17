@@ -944,6 +944,28 @@ it("gives up an unsaved earlier sign-in before applying a confirmed link", async
   expect(state.signIn).not.toHaveBeenCalled()
 })
 
+it("opens the linked tenant even when its draft cannot be saved", async () => {
+  const { requestOnboardingConnect } = await import("../../src/renderer/lib/connect-link-onboarding")
+  const { bridge } = await import("../../src/renderer/lib/bridge")
+  const earlier = "2f9d4a7c-1b6e-4c3d-8a5f-9e0b7c2d4a61"
+  state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: earlier, clientId: CLIENT, displayName: "Earlier", account: null }))
+  const container = await render(createElement(OnboardingPage))
+  expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(earlier)
+  const error = vi.spyOn(console, "error").mockImplementation(() => undefined)
+  const write = vi.spyOn(bridge.storage, "setItem").mockRejectedValue(new Error("The disk is full."))
+  try {
+    await act(async () => requestOnboardingConnect({ tenantId: TENANT, clientId: CLIENT, displayName: "Contoso" }))
+    expect(write).toHaveBeenCalled()
+    expect(container.querySelector<HTMLInputElement>("#tenant")!.value).toBe(TENANT)
+    expect(container.querySelector<HTMLInputElement>("#clientId")!.value).toBe(CLIENT)
+    expect(container.querySelector<HTMLInputElement>("#displayName")!.value).toBe("Contoso")
+    expect(state.signIn).not.toHaveBeenCalled()
+  } finally {
+    write.mockRestore()
+    error.mockRestore()
+  }
+})
+
 describe("a confirmed link after the first tenant's backup", () => {
   const otherTenant = "2f9d4a7c-1b6e-4c3d-8a5f-9e0b7c2d4a61"
 
