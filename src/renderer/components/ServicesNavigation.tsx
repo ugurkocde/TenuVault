@@ -37,12 +37,13 @@ export function ServicesNavigation({ linkClass }: { linkClass: (active: boolean)
     <div className="space-y-0.5">
       {BACKUP_SERVICES.map(service => {
         const enabled = status?.modules.find(module => module.id === service.id)?.enabled
+        const off = enabled === false
         const active = enabled === true && pathname === "/portal/backup" && filter === service.id
         const Icon = ICONS[service.id]
-        return <Link key={service.id} to={enabled === true ? `/portal/backup?service=${service.id}` : settingsHref("services")} aria-current={active ? "page" : undefined} title={enabled === true ? `View ${service.label} backup contents` : `Open ${service.label} in Services and permissions`} className={linkClass(active)}>
+        return <Link key={service.id} to={off ? settingsHref("services") : `/portal/backup?service=${service.id}`} aria-current={active ? "page" : undefined} title={off ? `Open ${service.label} in Services and permissions` : `View ${service.label} backup contents`} className={linkClass(active)}>
           <Icon className="h-[18px] w-[18px] shrink-0" aria-hidden="true" />
           <span className="truncate">{service.label}</span>
-          {enabled === false && <span className="ml-auto inline-flex shrink-0 items-center rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium leading-4 text-gray-700">Off</span>}
+          {off && <span className="ml-auto inline-flex shrink-0 items-center rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium leading-4 text-gray-700">Off</span>}
         </Link>
       })}
     </div>

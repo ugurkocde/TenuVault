@@ -28,7 +28,7 @@ For original Win32 installer files you already have, use [free App Backup](/apps
 
 ## Browse backups by service
 
-Below **Backup & Restore**, the sidebar's **Services** group lists **Intune**, **Entra ID** and **Defender**. Select an enabled service to open this page filtered to its policies. A service marked **Off** opens **Settings > Services and permissions** instead.
+Below **Backup & Restore**, the sidebar's **Services** group lists **Intune**, **Entra ID** and **Defender**. Select an enabled service to open this page filtered to its policies. A service marked **Off** opens **Settings > Services and permissions** instead. While service status is loading or unavailable, each link opens filtered backup contents without an **Off** badge. Only a confirmed off service opens Settings.
 
 The **Service** filter offers **All**, **Intune**, **Entra ID** and **Defender**. It narrows **Contents**, **Trends by policy type**, large inventory and the **Restore** type lists. Entra ID includes Conditional Access, which still has its own backup switch. The filter stays in the page address across reloads, tab changes and back/forward navigation. Choose **All** to clear the highlighted sidebar service. An unknown service in an address shows All.
 

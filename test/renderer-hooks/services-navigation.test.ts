@@ -84,6 +84,38 @@ it("keeps an off service visible with a muted badge and opens the Settings card"
   expect(container.textContent).toContain("Services and permissions")
 })
 
+it.each([true, false])("opens backup contents while pending, then follows an explicit enabled=%s result", async enabled => {
+  let finish!: (result: ServicesStatus) => void
+  mocks.status.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+  const router = await render()
+  const link = links()[1]!
+  expect(link.textContent).toBe("Entra ID")
+  expect(link.title).toBe("View Entra ID backup contents")
+  await act(async () => link.click())
+  expect(router.state.location.pathname).toBe("/portal/backup")
+  expect(router.state.location.search).toBe("?service=entra")
+  await act(async () => finish(status("tenant-1", enabled ? [] : ["entra"])))
+  expect(links()[1]!.textContent).toBe(enabled ? "Entra ID" : "Entra IDOff")
+  expect(links()[1]!.getAttribute("href")).toBe(enabled ? "/portal/backup?service=entra" : "/portal/settings?section=services")
+  expect(active()).toBe(enabled ? "Entra ID" : undefined)
+})
+
+it.each([true, false])("keeps failed status distinct from Off, then recovers to enabled=%s", async enabled => {
+  mocks.status.mockRejectedValueOnce(new Error("Status unavailable"))
+  const router = await render()
+  expect(links().map(link => link.textContent)).toEqual(["Intune", "Entra ID", "Defender"])
+  expect(links().every(link => link.getAttribute("href")?.startsWith("/portal/backup?service="))).toBe(true)
+  await act(async () => links()[1]!.click())
+  expect(router.state.location.pathname).toBe("/portal/backup")
+  expect(router.state.location.search).toBe("?service=entra")
+  mocks.status.mockResolvedValue(status("tenant-1", enabled ? [] : ["entra"]))
+  await act(async () => mocks.changed!("tenant-1"))
+  await act(async () => links()[1]!.click())
+  expect(router.state.location.pathname).toBe(enabled ? "/portal/backup" : "/portal/settings")
+  expect(router.state.location.search).toBe(enabled ? "?service=entra" : "?section=services")
+  expect(links()[1]!.textContent).toBe(enabled ? "Entra ID" : "Entra IDOff")
+})
+
 it("refreshes service switches and drops late status results from the previous tenant and request", async () => {
   let finish!: (result: ServicesStatus) => void
   mocks.status.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))

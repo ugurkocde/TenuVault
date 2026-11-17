@@ -46,7 +46,7 @@ Choose a tenant to see three independent connections: **Microsoft Graph sign-in*
 
 ![Services and permissions with independent connection states and all three services](/images/services/healthy-light.png)
 
-The sidebar also lists **Intune**, **Entra ID** and **Defender** in a **Services** group below **Backup & Restore**. An enabled service opens backup contents filtered to that service. A service marked **Off** opens this Settings section. The badges follow the selected tenant and update when you turn a service on or off. The backup page's **Service** filter only changes the view; use the switches here to change future backup coverage.
+The sidebar also lists **Intune**, **Entra ID** and **Defender** in a **Services** group below **Backup & Restore**. An enabled service opens backup contents filtered to that service. A service marked **Off** opens this Settings section. The badges follow the selected tenant and update when you turn a service on or off. While service status is loading or unavailable, each link opens filtered backup contents without an **Off** badge. Only a confirmed off service opens Settings. The backup page's **Service** filter only changes the view; use the switches here to change future backup coverage.
 
 ![Defender marked Off in the Services sidebar group](/images/sidebar/defender-off-light.png)
 
