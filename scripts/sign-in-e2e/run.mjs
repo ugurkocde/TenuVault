@@ -153,6 +153,10 @@ async function launchApp(label) {
 /** From the welcome screen to a started first sign-in; returns the Microsoft sign-in address. */
 async function startSignIn(page) {
   await page.getByRole("button", { name: "Connect your tenant" }).click({ timeout: 30_000 })
+  // The harness also runs against 0.5.3 installers, which go straight to Connect.
+  await page.waitForFunction(() => [...document.querySelectorAll("button")].some(button => ["Continue with Intune", "I already have an app registration"].includes(button.textContent.trim())))
+  const services = page.getByRole("button", { name: "Continue with Intune", exact: true })
+  if (await services.isVisible()) await services.click()
   await page.getByRole("button", { name: "I already have an app registration" }).click()
   await page.getByText("Sign in to your tenant").waitFor()
   await page.locator("#tenant").fill(TENANT_ID)
@@ -212,7 +216,9 @@ async function signInWith(engine, standIn) {
     await opened.page.waitForURL(`http://localhost:${port}/`, { timeout: 20_000 })
     await opened.page.getByText("Go back to TenuVault").waitFor({ timeout: 10_000 })
     await opened.page.screenshot({ path: join(outDir, `${engine.name}-browser.png`) })
-    await app.page.getByText("Choose where backups are stored").waitFor({ timeout: 30_000 })
+    // The stand-in proves sign-in, not delegated Graph access. In 0.6 a valid sign-in
+    // can correctly stop at the advisory permission result before storage.
+    await app.page.getByRole("heading", { name: /^(Choose where backups are stored|Review your chosen permissions)$/ }).waitFor({ timeout: 30_000 })
     await app.page.getByText(`Signed in as ${ACCOUNT.username}`).waitFor()
     assert(standIn.log.slice(logStart).some((line) => line.includes("licensing: tenant route")), "the license check after this sign-in did not reach the local stand-in")
     await app.page.screenshot({ path: join(outDir, `${engine.name}-app.png`) })
