@@ -129,7 +129,7 @@ export interface IntuneType {
    * hygiene checks and alert suggestions, and never part of baselines or Sync.
    */
   inventory?: true
-  /** Opt-in streaming path with bounded item and relationship indexes; existing types omit it. */
+  /** Opt-in streaming path with bounded indexes; paged extras become sorted ID or definition shards. Existing types omit it. */
   volume?: "large"
   /** $expand for the detail GET. */
   expand?: string

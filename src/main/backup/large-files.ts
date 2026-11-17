@@ -1,3 +1,4 @@
+import { comparableSnapshot } from "../../shared/intune/compare"
 import { createHash } from "node:crypto"
 import { LARGE_SHARD_ITEMS, indexPath, largeIndexes, readIndexShard, relationPath, safeLargeId, type LargeEntry, type LargeIndex } from "../../shared/large-backup"
 import { snapshotHash } from "../../portal/lib/policies/backup-manifest"
@@ -39,16 +40,18 @@ export async function* largeFiles(metadata: Record<string, any>, read: JsonFileR
         if (value.id !== entry.id || snapshotHash(value as Item) !== entry.hash) throw new Error("Backup fingerprint mismatch")
         yield { name, value }
         for (const [property, reference] of Object.entries(value) as Array<[string, any]>) {
-          if (!reference || typeof reference !== "object" || Array.isArray(reference) || reference.format !== "sorted-id-shards-v1" || !("shards" in reference)) continue
+          if (!reference || typeof reference !== "object" || Array.isArray(reference) || !["sorted-id-shards-v1", "sorted-object-shards-v1"].includes(reference.format) || !("shards" in reference)) continue
           if (!safeLargeId(property) || !reference.complete || !Number.isSafeInteger(reference.count) || reference.count < 0 || reference.count > 500_000 || reference.shards !== Math.ceil(reference.count / LARGE_SHARD_ITEMS)) throw new Error("Invalid relationship inventory")
           const hash = createHash("sha256")
           let last = ""
           for (let part = 0; part < reference.shards; part++) {
             const child = relationPath(folder, entry.id, property, part), ids = await read(child)
             if (!Array.isArray(ids) || ids.length !== Math.min(LARGE_SHARD_ITEMS, reference.count - part * LARGE_SHARD_ITEMS)) throw new Error("Invalid relationship shard")
-            for (const id of ids) {
+            for (const value of ids) {
+              const id = reference.format === "sorted-id-shards-v1" ? value : value?.id
+              if (reference.format === "sorted-object-shards-v1" && (!value || typeof value !== "object" || Array.isArray(value) || Buffer.byteLength(JSON.stringify(value)) > 8192)) throw new Error("Invalid sub-collection definition")
               if (!safeLargeId(id) || id.toLowerCase() <= last.toLowerCase()) throw new Error("Invalid relationship ID")
-              hash.update(JSON.stringify(id) + "\n"); last = id
+              hash.update(JSON.stringify(reference.format === "sorted-id-shards-v1" ? value : comparableSnapshot(value)) + "\n"); last = id
             }
             yield { name: child, value: ids }
           }
