@@ -1,0 +1,24 @@
+---
+import rows from '../../../src/shared/intune/restore-matrix.json';
+---
+<div class="table-wrapper">
+<table>
+  <thead><tr><th>Type</th><th>Create</th><th>Update</th><th>Writable properties and delegated permissions</th><th>Detection and prerequisites</th><th>Protected objects and availability</th><th>Verification</th></tr></thead>
+  <tbody>{rows.map(row => <tr>
+    <td><code>{row.folder}</code></td>
+    <td>{row.create ? <><code>{row.create.method} /{row.create.path}</code><p>{row.create.version}</p></> : 'No verified parent create contract'}</td>
+    <td>{row.update ? <><code>{row.update.method} /{row.update.path}</code><p>{row.update.version}</p></> : 'No verified parent update contract'}</td>
+    <td>{['create', 'update'].map(operation => {
+      const write = row[operation as 'create' | 'update'];
+      return write && <p><strong>{operation}</strong>: {write.properties.join(', ') || 'Needs further property verification'}<br />{write.permissions.join(', ') || 'Needs permission verification'}</p>;
+    })}</td>
+    <td><p>{row.detection.kind}: {'properties' in row.detection ? row.detection.properties?.join(', ') : ''}</p><p>{row.dependsOn.join(', ') || 'No type prerequisite declared'}</p></td>
+    <td><p>{row.builtIn}</p><p>{row.reason}</p></td>
+    <td><a href={row.verification.resourceDocumentation}>Microsoft resource</a>{['create', 'update'].map(operation => {
+      const write = row[operation as 'create' | 'update'];
+      return write && <p><a href={write.documentation}>{operation} documentation</a>: index {write.index}</p>;
+    })}<p>Checked {row.verification.date}. Tenant writes: {row.verification.live}.</p></td>
+  </tr>)}</tbody>
+</table>
+</div>
+<style>.table-wrapper { overflow-x: auto; } td { min-width: 13rem; vertical-align: top; } code { overflow-wrap: anywhere; }</style>

@@ -1,0 +1,36 @@
+---
+title: Entra ID and Defender restore safety
+description: Restore availability, protected identities, adds-only changes and partial recovery for Entra ID and Defender policies.
+---
+
+import RestoreMatrix from '../../../components/RestoreMatrix.astro';
+
+Entra ID and Defender policies and directory inventory remain backup-only in this version. Preview, restore, repair, drift revert, Sync, imported backups and cross-tenant copy all refuse writes for these types. The matrix below documents the write contracts for future restore implementations. A documented Microsoft Graph API does not enable restore in TenuVault.
+
+Conditional Access and Intune retain their existing restore behavior. See [Restore modes and assignments](/restore/modes/) for those policies.
+
+## Protection before enabling restore
+
+The restore safety boundary requires the signed-in admin for the connected tenant and registration. A Backup Reader, an app-only token or an unreadable token cannot write a new type. Missing write permissions require adding restore access from Services in Settings and signing in again.
+
+The boundary protects the signed-in admin's own account, roles and authentication methods, designated recovery accounts and the connected TenuVault registration and enterprise app. Removing the last Global Administrator or Privileged Role Administrator is refused. An unresolved safety reference blocks the affected policy.
+
+Members, owners and collection entries are added by default. Removing existing entries requires a choice for that individual policy. Consent grant changes merge scopes by default. Consent grants and role assignments from imported backups are refused. New Entra ID and Defender types cannot be copied to another tenant.
+
+## What partial means
+
+Microsoft Graph offers no transaction across policies. A restore can finish some steps before another is blocked, cancelled or unanswered. A partial result records each policy's state and its dependencies. It does not promise that earlier changes were rolled back.
+
+The journal captures only the objects a run touches before writing them. It binds the run to its tenant, signed-in admin and reviewed plan. A tenant change since preview requires a new preview. Created IDs and typed reference mappings persist with the run. Dependencies with missing prerequisites or cycles are blocked for review. Replaced IDs referenced by Intune or Conditional Access require review of those policies.
+
+An unanswered write must be read back before any retry. A matching object must have an unambiguous identity and match the sent properties. An empty or ambiguous lookup leaves the outcome uncertain, with no second create. Restarting resumes from saved steps. Journal captures reject credential properties and credential values.
+
+## Never restored
+
+Secrets, passwords, OATH seeds, synchronization flags, domains, devices, Microsoft-managed and built-in objects are never recreated or overwritten by the new writer. Organizational contacts and Microsoft attack simulation content have no parent write contract. Attack simulation and training campaigns are never restored. Directory restore, memberships and privilege assignments require later implementation and review.
+
+## Endpoint verification matrix
+
+This table renders the same data used by the restore safety code. Verification uses the local Graph index and Microsoft's resource and operation documentation. No tenant write was made for this guardrail layer. A missing contract, property list, permission, stable detection key or index match keeps the operation blocked. A missing parent contract can still have action or sub-resource APIs that require separate research. In particular, the index describes automatic auditing as POST while current Microsoft documentation describes PATCH; this discrepancy remains blocked.
+
+<RestoreMatrix />
