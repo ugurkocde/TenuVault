@@ -7,7 +7,7 @@ faq:
   - question: "Does TenuVault back up app installer files?"
     answer: "Configuration backups save app details, assignments, categories, and dependency and supersedence links, not installers. The separate, free App Backup Windows preview retrieves supported Win32 installer content on an enrolled Windows PC. A captured installer can be restored as a new, unassigned app in the same tenant on every plan, or in another connected tenant with Pro or MSP for that tenant."
   - question: "Are the groups that assignments target backed up?"
-    answer: "No. Assignments are saved as references to groups; the groups themselves are not part of the backup."
+    answer: "Not by an Intune backup. Assignments are saved as references to groups. The groups themselves, with their settings and members as IDs, are backed up only when the opt-in Groups area of Entra ID is turned on."
   - question: "Are Windows update rings included?"
     answer: "Yes. Update rings are device configuration profiles, so they are backed up with Device configuration."
   - question: "Why are some types missing from a backup?"
@@ -152,7 +152,7 @@ Off until you turn the service on for the tenant in **Settings** > **Services an
 * **Built-in objects Intune recreates itself:** remediations provided by Microsoft, built-in app categories, built-in scope tags and built-in Intune roles.
 * **The Apple automated device enrollment token.** Its details and profiles are kept for reference, but the token has to be uploaded again in Intune.
 * **Android Enterprise enrollment tokens.** A restored profile gets a new token.
-* **The groups that assignments target.** Assignments are saved as references to groups; the groups themselves are not part of the backup.
+* **The groups that assignments target**, unless the opt-in Groups area of Entra ID is on. Assignments are saved as references to groups. See [Entra ID backups](/backups/entra/).
 * **Other tenant-wide Intune settings** that Microsoft Graph returns with the compliance policy settings, such as log collection, Autopilot diagnostics, Android device administrator enrollment and derived credentials.
 * **Windows Autopilot hardware hashes.** Microsoft Graph does not return them once a device is registered.
 * **Anything not listed on this page**, such as enrolled devices and their inventory.

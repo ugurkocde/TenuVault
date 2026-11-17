@@ -45,7 +45,7 @@ Paths are relative to Microsoft Graph. `{organizationId}` is resolved through th
 | FederatedTokenValidationPolicy | Federated token validation settings | `/policies/federatedTokenValidationPolicy` | v1.0 | Both | No tokens; 404 means not configured |
 | ContinuousAccessEvaluationPolicy | Legacy continuous access evaluation settings | `/identity/continuousAccessEvaluationPolicy` | beta | Both | No tokens; the specific unset-policy 404 means not configured |
 | HardwareOathDevices | Hardware OATH device metadata | `/directory/authenticationMethodDevices/hardwareOathDevices` | beta | Both | Assignee ID only; assignee names, last-use time, activation status and secret seeds are excluded |
-| GroupLifecyclePolicies | Tenant-wide group expiration policy | `/groupLifecyclePolicies` | v1.0 | Both | Groups area opt-in; group objects and membership excluded |
+| GroupLifecyclePolicies | Tenant-wide group expiration policy | `/groupLifecyclePolicies` | v1.0 | Both | Groups area opt-in; group objects and memberships are the separate Groups inventory type |
 | OwnerlessGroupPolicy | Tenant-wide ownerless group notification policy | `/policies/ownerlessGroupPolicy` | v1.0 | Admin | Groups area opt-in; the Backup Reader leaves it out |
 | CrossTenantAccessPolicy | Root policy and allowed clouds | `/policies/crossTenantAccessPolicy` | v1.0 | Both | Credentials and runtime history excluded |
 | CrossTenantAccessDefault | Default B2B access settings | `/policies/crossTenantAccessPolicy/default` | v1.0 | Both | User and group targets retain IDs and target types without names |
