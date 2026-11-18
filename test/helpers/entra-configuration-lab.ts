@@ -29,12 +29,13 @@ const safe = (value: unknown): void => {
 }
 
 /** App-only LAB adapter. Never used by the product. It cannot accept a caller's method or path. */
-export function configurationLab(token: string, tenant: string, app: string, fetchImpl: typeof fetch = fetch, recovery?: { save: (folder: string, original: Item) => void; clear: (folder: string) => void }) {
+export function configurationLab(token: string, tenant: string, app: string, fetchImpl: typeof fetch = fetch, recovery?: { save: (folder: string, original: Item) => void; clear: (folder: string) => void; recordOriginal?: (folder: string, original: Item) => void; recordVerified?: (folder: string, current: Item) => void }) {
   if (tenant !== LAB_8B_TENANT || app !== LAB_8B_APP) throw new Error("This harness is restricted to the approved lab app and tenant.")
   let claims: { tid?: string; appid?: string; azp?: string; roles?: string[] }
   try { claims = JSON.parse(Buffer.from(token.split(".")[1]!, "base64url").toString()) } catch { throw new Error("Invalid lab token") }
   if (claims.tid !== tenant || (claims.appid ?? claims.azp) !== app) throw new Error("The token does not belong to the approved lab tenant and app")
   const originals = new Map<string, Item>()
+  const pendingRecovery = new Map<string, Item>()
   const root = "https://graph.microsoft.com/v1.0/"
   const urlFor = (folder: string) => {
     if (!LAB_8B_FOLDERS.includes(folder)) throw new Error("Outside the 8b lab allowlist")
@@ -79,6 +80,8 @@ export function configurationLab(token: string, tenant: string, app: string, fet
   const prefixed = (folder: string, item: Item) => String(folder === "PermissionGrantPolicies" ? item.id : item.displayName).startsWith(prefix)
   const pause = () => fetchImpl === fetch ? new Promise(resolve => setTimeout(resolve, 1000)) : Promise.resolve()
   const cleanup = async () => {
+    // Recover singletons before a collection delete or the next test can mutate anything.
+    await recoverSingletons()
     const failures: string[] = []
     for (const folder of collections) {
       try {
@@ -99,19 +102,38 @@ export function configurationLab(token: string, tenant: string, app: string, fet
     }
     if (failures.length) throw new Error(`Cleanup needs attention for: ${failures.join(", ")}. No non-prefixed object was deleted.`)
   }
-  const verify = async (folder: string, url: string, expected: Item) => {
+  const verify = async (folder: string, url: string, expected: Item, attempts = 60) => {
     let different: string[] = []
-    for (let attempt = 0; attempt < 60; attempt++) {
+    for (let attempt = 0; attempt < attempts; attempt++) {
       let current: Item
       try { current = project(await request(url), Object.keys(expected)) } catch (error) {
         if (!(error instanceof Error) || !error.message.includes("HTTP 404")) throw error
         await pause(); continue
       }
       different = Object.keys(expected).filter(key => !(folder === "EntraCompanyBranding" && key === "usernameHintText" && expected[key] === null && current[key] === "") && !equal(current[key], expected[key]))
-      if (!different.length) return
+      if (!different.length) return current
       await pause()
     }
     throw new Error(`${folder}: read-back did not match properties ${different.join(", ")}`)
+  }
+  const recoverSingleton = async (folder: string, original: Item) => {
+    const url = urlFor(folder)
+    const body = folder === "EntraCompanyBranding" && original.usernameHintText === "" ? { usernameHintText: null } : original
+    for (let attempt = 0; attempt < 5; attempt++) {
+      // This retries only the known original, never the experimental write. A lost answer
+      // is reconciled before resending, because the original may already be committed.
+      try { await request(url, restoreMatrixRow(folder)!.update!.method, body) } catch { /* Read back refusals and lost answers alike. */ }
+      try {
+        await verify(folder, url, body, 12)
+        recovery?.clear(folder)
+        pendingRecovery.delete(folder)
+        return
+      } catch { await pause() }
+    }
+    throw new Error(`${folder}: original recovery remains unresolved after bounded retries. The recovery file is retained; no further mutation is allowed until recovery succeeds.`)
+  }
+  const recoverSingletons = async () => {
+    for (const [folder, original] of pendingRecovery) await recoverSingleton(folder, original)
   }
   return {
     cleanup,
@@ -120,11 +142,12 @@ export function configurationLab(token: string, tenant: string, app: string, fet
     },
     async verifyEndState() {
       await cleanup()
-      for (const [folder, original] of originals) { await verify(folder, urlFor(folder), original); console.log(`${folder}: original verified at end of run`) }
+      for (const [folder, original] of originals) { const current = await verify(folder, urlFor(folder), original); recovery?.recordVerified?.(folder, current); console.log(`${folder}: original verified at end of run`) }
       console.log("All three policy collections contain no TV06-TEST- objects.")
     },
     brandingAllowed: claims.roles?.includes("OrganizationalBranding.ReadWrite.All") === true && !claims.roles?.includes("Organization.ReadWrite.All"),
     async run(folder: string): Promise<{ folder: string; operations: string; productPath: string }> {
+      await recoverSingletons()
       if (folder === "EntraCompanyBranding" && (!claims.roles?.includes("OrganizationalBranding.ReadWrite.All") || claims.roles?.includes("Organization.ReadWrite.All"))) throw new Error("Branding requires the narrow role and absence of Organization.ReadWrite.All")
       const url = urlFor(folder)
       if (collections.includes(folder)) {
@@ -145,6 +168,7 @@ export function configurationLab(token: string, tenant: string, app: string, fet
       } else {
         const live = await request(url), original = project(live, selected[folder]!)
         safe(original)
+        if (!originals.has(folder)) originals.set(folder, original)
         if (folder === "AdminConsentRequestPolicy" && original.requestDurationInDays === 0) return { folder, operations: "read-only: zero-day original has no verified restore-original builder; no write", productPath: "Blocked in production" }
         // The methods parent only has an identical registration-enforcement probe. Its method
         // configurations are not inferred writable from the parent or altered by this harness.
@@ -158,21 +182,22 @@ export function configurationLab(token: string, tenant: string, app: string, fet
         if (identicalOnly.has(folder) && !equal(body, changed)) throw new Error("Lock-out-risk singleton must be identical")
         // A durable, outside-repository original is required by the real launcher.
         // Injected tests may use memory only. A failed restore leaves the recovery file intact.
-        if (!identicalOnly.has(folder)) recovery?.save(folder, body)
+        recovery?.recordOriginal?.(folder, original)
+        if (!identicalOnly.has(folder)) recovery?.save(folder, original)
         let sent = false
         try {
           const prepared = build(changed)
           // Recheck the preimage before the first mutation. The flag precedes fetch to include lost answers.
           if (!equal(project(await request(url), selected[folder]!), original)) throw new Error("Singleton changed before the lab write")
+          if (!identicalOnly.has(folder)) pendingRecovery.set(folder, original)
           sent = true
           await request(url, restoreMatrixRow(folder)!.update!.method, prepared)
           await verify(folder, url, prepared)
         } finally {
           if (sent) {
-            if (!identicalOnly.has(folder)) await request(url, restoreMatrixRow(folder)!.update!.method, folder === "EntraCompanyBranding" && body.usernameHintText === "" ? { usernameHintText: null } : body)
-            await verify(folder, url, body)
-            recovery?.clear(folder)
-          }
+            if (!identicalOnly.has(folder)) await recoverSingleton(folder, original)
+            else await verify(folder, url, body)
+          } else if (!identicalOnly.has(folder)) recovery?.clear(folder)
         }
       }
       return { folder, operations: collections.includes(folder) ? "create/read/change/restore/delete" : identicalOnly.has(folder) ? "read/identical-write/read" : "save/change/verify/restore-original/verify", productPath: "Matrix method/path and candidate payload builder only. Signed-in actor, confirmations, journal and guards use injected-fetch verification, not this app-only adapter." }

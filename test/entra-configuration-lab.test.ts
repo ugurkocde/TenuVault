@@ -36,7 +36,7 @@ function world(failure?: string) {
     if (!injected && failure === "refused") { injected = true; return new Response(null, { status: 403 }) }
     return new Response(null, { status: 204 })
   }) as typeof fetch
-  return { calls, objects, singletons, original, lab: configurationLab(token, LAB_8B_TENANT, LAB_8B_APP, fetcher) }
+  return { calls, objects, singletons, original, fetcher, lab: configurationLab(token, LAB_8B_TENANT, LAB_8B_APP, fetcher) }
 }
 describe("the prepared app-only lab harness with injected fetch only", () => {
   it("refuses another tenant, app, token identity and non-allowlisted type before any request", async () => {
@@ -122,4 +122,65 @@ describe("the prepared app-only lab harness with injected fetch only", () => {
     await expect(state.lab.run("AuthenticationMethodsPolicy")).rejects.toThrow("Credential")
     expect(state.calls.filter(call => call.method !== "GET")).toEqual([])
   })
+})
+
+for (const failure of ["refusal", "lost-response"]) it(`reconciles the restore-original ${failure} before clearing recovery`, async () => {
+  const state = world(), durable = new Map<string, Item>(), recorded = new Map<string, Item>(), verified = new Map<string, Item>()
+  let writes = 0, reconciled = false
+  const methods: string[] = []
+  const fetcher = (async (input, init) => {
+    const method = init?.method ?? "GET"
+    methods.push(method)
+    if (method !== "GET" && ++writes === 2) {
+      if (failure === "refusal") return new Response(null, { status: 503 })
+      await state.fetcher(input, init)
+      throw new Error("Recovery committed but answer lost")
+    }
+    const result = await state.fetcher(input, init)
+    if (writes >= 2 && method === "GET") reconciled = true
+    if (writes > 2 && method !== "GET") expect(reconciled).toBe(true)
+    return result
+  }) as typeof fetch
+  const lab = configurationLab(token, LAB_8B_TENANT, LAB_8B_APP, fetcher, {
+    save: (folder, original) => { durable.set(folder, original) },
+    clear: folder => { expect(reconciled).toBe(true); expect(state.singletons).toEqual(state.original); durable.delete(folder) },
+    recordOriginal: (folder, original) => { recorded.set(folder, original) },
+    recordVerified: (folder, current) => { verified.set(folder, current) },
+  })
+  await lab.run("AuthenticationFlowsPolicy")
+  expect(writes).toBe(failure === "refusal" ? 3 : 2)
+  expect(durable.size).toBe(0)
+  expect(methods.at(-1)).toBe("GET")
+  await lab.verifyEndState()
+  expect(recorded.get("AuthenticationFlowsPolicy")).toEqual(state.original.authenticationFlowsPolicy)
+  expect(verified.get("AuthenticationFlowsPolicy")).toEqual(recorded.get("AuthenticationFlowsPolicy"))
+})
+
+it("retains unresolved originals and retries singleton recovery before any further cleanup or test mutation", async () => {
+  const state = world(), durable = new Map<string, Item>()
+  let refuseRecovery = true, writes = 0
+  const mutations: string[] = []
+  const fetcher = (async (input, init) => {
+    if (init?.method !== "GET") {
+      mutations.push(`${init?.method} ${new URL(String(input)).pathname}`)
+      writes++
+      if (writes > 1 && refuseRecovery) return new Response(null, { status: 503 })
+    }
+    return state.fetcher(input, init)
+  }) as typeof fetch
+  const lab = configurationLab(token, LAB_8B_TENANT, LAB_8B_APP, fetcher, {
+    save: (folder, original) => { durable.set(folder, original) },
+    clear: folder => { expect(state.singletons).toEqual(state.original); durable.delete(folder) },
+  })
+  await expect(lab.run("AuthenticationFlowsPolicy")).rejects.toThrow("recovery remains unresolved")
+  expect(writes).toBe(6)
+  expect(durable.get("AuthenticationFlowsPolicy")).toEqual(state.original.authenticationFlowsPolicy)
+  await expect(lab.cleanup()).rejects.toThrow("recovery remains unresolved")
+  await expect(lab.run("TokenLifetimePolicies")).rejects.toThrow("recovery remains unresolved")
+  expect(mutations.every(mutation => mutation === "PATCH /v1.0/policies/authenticationFlowsPolicy")).toBe(true)
+  expect(durable.size).toBe(1)
+  refuseRecovery = false
+  await lab.verifyEndState()
+  expect(durable.size).toBe(0)
+  expect(state.singletons).toEqual(state.original)
 })
