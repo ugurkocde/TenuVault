@@ -67,6 +67,7 @@ it("does not change existing objects, never assigns a license or invites a guest
   await expect(env.lab.lifecycleUser(id)).rejects.toThrow("Existing objects")
   await expect(env.lab.manager(id, id)).rejects.toThrow("Existing objects")
   await expect(env.lab.relationship(id, id, "members", true)).rejects.toThrow("Existing objects")
+  await expect(env.lab.relationship(id, id, "../../users/other?query" as "members", false)).rejects.toThrow("relationship kind")
   await expect(env.lab.createGroup()).rejects.toThrow(LAB_9A_GROUP_BLOCKER)
   await expect(env.lab.createGroup(true)).rejects.toThrow("approved grant")
   expect(env.fetcher).not.toHaveBeenCalled()

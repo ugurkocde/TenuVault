@@ -1,4 +1,5 @@
 import { closeSync, fsyncSync, mkdirSync, openSync, writeSync, rmSync, appendFileSync, readFileSync, readdirSync, renameSync } from "node:fs"
+import { createHash } from "node:crypto"
 import { join } from "node:path"
 import { describe, it, expect } from "vitest"
 import { directory9aLab, LAB_9A_GROUP_CLEANUP, LAB_9A_DOMAIN, type DirectoryLabIntent } from "./helpers/directory-9a-lab"
@@ -15,7 +16,8 @@ describe.skipIf(!approved)("9a approved directory lab scope", () => {
     if (!response.ok || !answer.access_token) throw new Error("Lab sign-in failed")
     const lab = directory9aLab(answer.access_token, LAB_8C_TENANT, LAB_8C_APP, {
       save: intent => {
-        const temporary = join(recoveryRoot, intent.name + ".tmp"), destination = join(recoveryRoot, intent.name + ".json")
+        const key = createHash("sha256").update(intent.name).digest("hex")
+        const temporary = join(recoveryRoot, key + ".tmp"), destination = join(recoveryRoot, key + ".json")
         const file = openSync(temporary, "w", 0o600)
         try { writeSync(file, JSON.stringify(intent)); fsyncSync(file) } finally { closeSync(file) }
         renameSync(temporary, destination)

@@ -164,6 +164,7 @@ export function directory9aLab(token: string, tenant: string, app: string, recov
       await verify("users", id, { displayName: original, accountEnabled: false })
     },
     async relationship(groupId: string, principalId: string, kind: "members" | "owners", present: boolean) {
+      if (!["members", "owners"].includes(kind) || typeof present !== "boolean") throw new Error("Outside the approved relationship kind")
       const resource = await currentFixture(groupId), principal = await currentFixture(principalId)
       if (resource.fixture.folder !== "groups" || !["users", "groups"].includes(principal.fixture.folder)) throw new Error("Relationships must be between fixtures created in this run")
       if (resource.item.isAssignableToRole === true && !claims.roles?.includes("RoleManagement.ReadWrite.Directory")) throw new Error("Missing role-assignable group grant")
