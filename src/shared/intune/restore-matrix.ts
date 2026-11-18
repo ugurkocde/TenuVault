@@ -18,7 +18,7 @@ export interface WriteContract {
 }
 export interface RestoreMatrixRow {
   folder: string
-  configurationRestore?: { phase: string; confirmation: string; blockedReason: string; builder: string; lab: string }
+  configurationRestore?: { capability?: "create" | "singleton"; phase: string; confirmation: string; blockedReason: string; builder: string; lab: string }
   disposition: "configuration" | "directory-deferred" | "never" | "unverified"
   resource: string
   readPath: string

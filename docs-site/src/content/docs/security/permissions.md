@@ -86,14 +86,14 @@ The setup requests the permissions above unless you choose other services. When 
 <!-- permissions:entra:begin -->
 | Area | Backup | Restore adds |
 | --- | --- | --- |
-| Tenant settings | `Policy.Read.All`, `Policy.Read.PermissionGrant`, `GroupSettings.Read.All`, `Organization.Read.All`, `Domain.Read.All`, `OnPremDirectorySynchronization.Read.All` | `Policy.ReadWrite.Authorization`, `Policy.ReadWrite.SecurityDefaults`, `Policy.ReadWrite.ConsentRequest`, `Policy.ReadWrite.PermissionGrant`, `Policy.ReadWrite.ApplicationConfiguration`, `Policy.ReadWrite.DeviceConfiguration`, `Policy.ReadWrite.MobilityManagement`, `GroupSettings.ReadWrite.All`, `Organization.ReadWrite.All`, `Domain-InternalFederation.ReadWrite.All` |
-| Authentication | `Policy.Read.All`, `AuthenticationContext.Read.All`, `Organization.Read.All`, `PublicKeyInfrastructure.Read.All` | `Policy.ReadWrite.AuthenticationMethod`, `Policy.ReadWrite.AuthenticationFlows`, `AuthenticationContext.ReadWrite.All`, `Organization.ReadWrite.All`, `PublicKeyInfrastructure.ReadWrite.All`, `Policy.ReadWrite.FedTokenValidation` |
-| External identities | `Policy.Read.All`, `Policy.Read.B2BManagementPolicy`, `IdentityProvider.Read.All`, `IdentityUserFlow.Read.All`, `EventListener.Read.All`, `CustomAuthenticationExtension.Read.All`, `APIConnectors.Read.All`, `MultiTenantOrganization.Read.All` | `Policy.ReadWrite.CrossTenantAccess`, `Policy.ReadWrite.ExternalIdentities`, `Policy.ReadWrite.B2BManagementPolicy`, `IdentityProvider.ReadWrite.All`, `IdentityUserFlow.ReadWrite.All`, `EventListener.ReadWrite.All`, `CustomAuthenticationExtension.ReadWrite.All`, `APIConnectors.ReadWrite.All` |
-| Roles and PIM | `RoleManagement.Read.Directory`, `PrivilegedEligibilitySchedule.Read.AzureADGroup`, `GroupMember.Read.All`, `PrivilegedAssignmentSchedule.Read.AzureADGroup`, `RoleManagementAlert.Read.Directory`, `AdministrativeUnit.Read.All`, `CustomSecAttributeDefinition.Read.All` | `RoleManagement.ReadWrite.Directory`, `PrivilegedEligibilitySchedule.ReadWrite.AzureADGroup`, `PrivilegedAssignmentSchedule.ReadWrite.AzureADGroup`, `RoleManagementAlert.ReadWrite.Directory`, `AdministrativeUnit.ReadWrite.All`, `CustomSecAttributeDefinition.ReadWrite.All` |
-| Governance | `EntitlementManagement.Read.All`, `AccessReview.Read.All`, `Policy.Read.All`, `LifecycleWorkflows.Read.All`, `Agreement.Read.All` | `EntitlementManagement.ReadWrite.All`, `AccessReview.ReadWrite.All`, `Policy.ReadWrite.AccessReview`, `LifecycleWorkflows.ReadWrite.All`, `Agreement.ReadWrite.All` |
-| Groups (only when you turn the area on) | `Group.Read.All`, `Directory.Read.All` | `Group.ReadWrite.All` |
-| Users and devices (only when you turn the area on) | `User.Read.All`, `Device.Read.All`, `OrgContact.Read.All` | `User.ReadWrite.All` |
-| Applications (only when you turn the area on) | `Application.Read.All`, `Synchronization.Read.All`, `Directory.Read.All` | `Application.ReadWrite.All`, `AppRoleAssignment.ReadWrite.All`, `DelegatedPermissionGrant.ReadWrite.All` |
+| Tenant settings | `Policy.Read.All`, `Policy.Read.PermissionGrant`, `GroupSettings.Read.All`, `Organization.Read.All`, `Domain.Read.All`, `OnPremDirectorySynchronization.Read.All` | `Policy.ReadWrite.ApplicationConfiguration`, `Application.Read.All`, `OrganizationalBranding.ReadWrite.All` |
+| Authentication | `Policy.Read.All`, `AuthenticationContext.Read.All`, `Organization.Read.All`, `PublicKeyInfrastructure.Read.All` | `Policy.ReadWrite.AuthenticationFlows`, `Application.Read.All` |
+| External identities | `Policy.Read.All`, `Policy.Read.B2BManagementPolicy`, `IdentityProvider.Read.All`, `IdentityUserFlow.Read.All`, `EventListener.Read.All`, `CustomAuthenticationExtension.Read.All`, `APIConnectors.Read.All`, `MultiTenantOrganization.Read.All` | None |
+| Roles and PIM | `RoleManagement.Read.Directory`, `PrivilegedEligibilitySchedule.Read.AzureADGroup`, `GroupMember.Read.All`, `PrivilegedAssignmentSchedule.Read.AzureADGroup`, `RoleManagementAlert.Read.Directory`, `AdministrativeUnit.Read.All`, `CustomSecAttributeDefinition.Read.All` | None |
+| Governance | `EntitlementManagement.Read.All`, `AccessReview.Read.All`, `Policy.Read.All`, `LifecycleWorkflows.Read.All`, `Agreement.Read.All` | None |
+| Groups (only when you turn the area on) | `Group.Read.All`, `Directory.Read.All` | None |
+| Users and devices (only when you turn the area on) | `User.Read.All`, `Device.Read.All`, `OrgContact.Read.All` | None |
+| Applications (only when you turn the area on) | `Application.Read.All`, `Synchronization.Read.All`, `Directory.Read.All` | None |
 <!-- permissions:entra:end -->
 
 **Defender**
@@ -101,19 +101,20 @@ The setup requests the permissions above unless you choose other services. When 
 <!-- permissions:defender:begin -->
 | Area | Backup | Restore adds |
 | --- | --- | --- |
-| Detection and response | `CustomDetection.Read.All`, `Workbooks.Read.All`, `CaseManagement.Read.All` | `CustomDetection.ReadWrite.All` |
-| Email and collaboration | `AttackSimulation.Read.All`, `ThreatSubmission.Read.All` | `ThreatSubmissionPolicy.ReadWrite.All` |
-| Identity | `SecurityIdentitiesSensors.Read.All`, `SecurityIdentitiesAutoConfig.Read.All` | `SecurityIdentitiesSensors.ReadWrite.All`, `SecurityIdentitiesAutoConfig.ReadWrite.All` |
-| Posture and access | `SecurityEvents.Read.All`, `RoleManagement.Read.Defender` | `SecurityEvents.ReadWrite.All`, `RoleManagement.ReadWrite.Defender` |
+| Detection and response | `CustomDetection.Read.All`, `Workbooks.Read.All`, `CaseManagement.Read.All` | None |
+| Email and collaboration | `AttackSimulation.Read.All`, `ThreatSubmission.Read.All` | None |
+| Identity | `SecurityIdentitiesSensors.Read.All`, `SecurityIdentitiesAutoConfig.Read.All` | None |
+| Posture and access | `SecurityEvents.Read.All`, `RoleManagement.Read.Defender` | None |
 <!-- permissions:defender:end -->
 
 How to read the tables:
 
 * **Backup** is what reading the area needs. No write permission is ever requested to back up.
-* **Restore adds** is what restore access adds to it. A write permission also covers reading, so with restore access the read permission of the same name is not requested as well.
+* **Restore adds** is what restore access adds to it. Enabled Entra ID areas also include Application.Read.All to resolve and protect the connected registration and enterprise app before a write. A write permission also covers reading, so with restore access the read permission of the same name is not requested as well.
 * Groups, users and devices, and applications are backed up only when you turn the area on, with `-Areas`. Groups and users and devices hold personal data.
 * `Directory.Read.All` is part of the Groups and Applications areas because Microsoft offers no narrower permission for group expiration policies and for delegated permission grants. It also reads users, groups and applications.
-* Two write permissions are never requested, because they reach far beyond the settings they would restore: `Directory.ReadWrite.All`, which restoring group expiration policies needs, and `Policy.ReadWrite.ConditionalAccess` for the legacy continuous access evaluation policy. For Intune, `DeviceManagementManagedDevices.ReadWrite.All` stays out in the same way. Add one by hand if you want to restore those settings.
+* No Entra ID or Defender write permission is requested for a blocked type. Organization.ReadWrite.All is never requested for backup or restore. Organization notification emails, phones and privacy profile stay backup-only in 0.6 because Microsoft requires that permission to write them. Company branding uses OrganizationalBranding.ReadWrite.All.
+* Intune defaults remain unchanged: `DeviceManagementManagedDevices.ReadWrite.All` is not requested for device categories and cleanup rules. Adding a permission manually does not enable a blocked Entra ID or Defender contract.
 * What a signed-in admin can do also depends on their Entra role: Global Reader reads these settings, and a restore needs the administrator role of the setting, such as Security Administrator or Privileged Role Administrator.
 
 Some settings stay out because no requestable read permission was verified for them: service principal creation policies, the setting that restricts access to the Entra admin center, the directory role access review policy, feature rollout policies, on-premises authentication policies, application proxy connector groups, and in Defender cloud scopes and content repositories. Workbooks now have a published read contract and a successful application read and are included. Cloud scopes lack a lab grant; repositories require a delegated verification.

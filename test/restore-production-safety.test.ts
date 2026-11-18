@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest"
+import { moduleForFolder, type Need } from "../src/shared/services/modules"
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest"
 import { safetyReader } from "../src/main/restore/safety-reader"
 import { RecoveryAccounts, resolveRestoreActor, resolveSafetyReferences } from "../src/main/restore/safety-resolvers"
 import { GuardedRunJournal, executeGuardedRun, restoreFingerprint, type GuardedStep, type GuardedRun, type GuardedIO } from "../src/main/restore/guarded-run"
@@ -10,6 +11,12 @@ import { Restorer, type GraphCall } from "../src/portal/lib/policies/graph-resto
 import { INTUNE_TYPES, typeForFolder, type Item } from "../src/shared/intune/registry"
 import { restoreMatrixRow } from "../src/shared/intune/restore-matrix"
 import { guardRestoreItem } from "../src/shared/intune/restore-guards"
+
+// These 8a transport fixtures deliberately substitute future capabilities and permissions together.
+const fixtureNeeds = ["SecurityDefaults", "UserFlowAttributes"].map(folder => moduleForFolder(folder)!.part.restore as { delegated: Need })
+const savedNeeds = fixtureNeeds.map(need => need.delegated)
+beforeEach(() => { fixtureNeeds[0]!.delegated = [["Policy.Read.All"]]; fixtureNeeds[1]!.delegated = [["IdentityUserFlow.ReadWrite.All"]] })
+afterEach(() => { fixtureNeeds.forEach((need, i) => { need.delegated = savedNeeds[i]! }) })
 
 const guid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`
 const user = guid(1), tenant = guid(2), client = guid(3), app = guid(4), sp = guid(5), group = guid(6), recovery = guid(7)

@@ -30,7 +30,7 @@ describe("restore write matrix", () => {
         expect(write.documentation).toMatch(/^https:\/\/learn.microsoft.com\/en-us\/graph\/api\//)
         expect(write.path).not.toMatch(/^https?:/)
         expect(write.propertyEvidence).toMatch(/request-body-table|resource-and-examples/)
-        if (write.propertyCoverage === "partial" || write.schemaDocumentation?.length || write.index !== "matched") expect(write.blockedReason).toBeTruthy()
+        if (row.configurationRestore?.builder !== "enabled-closed-subset" && (write.propertyCoverage === "partial" || write.schemaDocumentation?.length || write.index !== "matched")) expect(write.blockedReason).toBeTruthy()
         expect(write.permissionDocumentation?.length).toBeGreaterThan(0)
         expect(write.properties.length).toBeGreaterThan(0)
         if (write.index === "matched") {
@@ -63,10 +63,12 @@ describe("restore write matrix", () => {
       return Response.json({ value: objects })
     }) as typeof fetch
     const need = moduleForFolder(row.folder)?.part.restore.delegated
-    const permissions = [...write.permissions, ...(Array.isArray(need) ? need.flat() : [])]
+    const permissions = ["Policy.Read.All", ...write.permissions, ...(Array.isArray(need) ? need.flat() : [])]
     const io = guardedGraphIO(token(permissions), actor, references, fetchImpl, async () => [])
     // The transport itself also refuses a backup-only type, even if called without the executor.
-    await expect(io.write(step, desired, undefined, () => {})).rejects.toThrow()
+    const originalCapability = type.restore
+    delete type.restore
+    try { await expect(io.write(step, desired, undefined, () => {})).rejects.toThrow() } finally { type.restore = originalCapability }
     expect(creates).toBe(0)
     if (write.blockedReason) {
       const previous = type.restore
@@ -94,9 +96,9 @@ describe("restore write matrix", () => {
   })
   it("blocks discrepant contracts, unknown properties and missing permissions before a request", async () => {
     const io = guardedGraphIO(token(["Policy.Read.All"]), actor, references, (async () => { throw new Error("must not fetch") }) as typeof fetch)
-    const step: GuardedStep = { key: "one", folder: "SecurityDefaults", sourceId: "old", operation: "update", targetId: "old", desired: { isEnabled: true }, properties: ["isEnabled"], preview: "preview", requires: [] }
+    const step: GuardedStep = { key: "one", folder: "TokenLifetimePolicies", sourceId: "old", operation: "update", targetId: "old", desired: { displayName: "Example" }, properties: ["displayName"], preview: "preview", requires: [] }
     await expect(io.read(step)).rejects.toThrow("permission")
-    const permitted = guardedGraphIO(token(["Policy.Read.All", "Policy.ReadWrite.ConditionalAccess"]), actor, references)
+    const permitted = guardedGraphIO(token(["Policy.Read.All", "Policy.ReadWrite.ApplicationConfiguration", "Application.Read.All"]), actor, references)
     await expect(permitted.read({ ...step, properties: ["passwordProfile"] })).rejects.toThrow("outside")
     await expect(io.read({ ...step, folder: "DefenderIdentityAutoAuditing" })).rejects.toThrow("not been verified")
   })

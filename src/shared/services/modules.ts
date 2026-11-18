@@ -270,7 +270,7 @@ export function checkModules(granted: GrantedPermissions, modules: readonly Serv
     const areas = module.areas.map((area): AreaCheck => {
       const needed = { backup: areaNeed(area, "backup", granted.kind), restore: areaNeed(area, "restore", granted.kind) }
       const backup = satisfied(needed.backup, granted.permissions)
-      const restore = satisfied(needed.restore, granted.permissions)
+      const restore = area.parts.some(part => part.restore[granted.kind] !== "unsupported") && satisfied(needed.restore, granted.permissions)
       return {
         label: area.label,
         folders: area.folders,

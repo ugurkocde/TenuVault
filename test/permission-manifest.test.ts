@@ -89,11 +89,8 @@ describe("What a choice of services, areas and access levels asks for", () => {
       "CustomDetection.Read.All", "Workbooks.Read.All", "CaseManagement.Read.All", "AttackSimulation.Read.All", "ThreatSubmission.Read.All",
       "SecurityIdentitiesSensors.Read.All", "SecurityIdentitiesAutoConfig.Read.All", "SecurityEvents.Read.All", "RoleManagement.Read.Defender",
     ])
-    // The write permission of the user reported settings also reads them, so its read permission is not asked for as well.
-    expect(graph({ defender: { access: "restore" } })).toEqual([
-      "CustomDetection.ReadWrite.All", "Workbooks.Read.All", "CaseManagement.Read.All", "ThreatSubmissionPolicy.ReadWrite.All", "AttackSimulation.Read.All",
-      "SecurityIdentitiesSensors.ReadWrite.All", "SecurityIdentitiesAutoConfig.ReadWrite.All", "SecurityEvents.ReadWrite.All", "RoleManagement.ReadWrite.Defender",
-    ])
+    // Defender stays backup-only until a type has an enabled restore contract.
+    expect(graph({ defender: { access: "restore" } })).toEqual(graph({ defender: { access: "backup" } }))
     // Entra ID discovers group IDs for PIM, without enabling group object backups.
     const entra = graph({ entra: { access: "backup" } })
     expect(entra).toContain("Policy.Read.All")
@@ -122,8 +119,8 @@ describe("What a choice of services, areas and access levels asks for", () => {
       if (choice.intune) expect(permissions).toContain("DeviceManagementManagedDevices.Read.All")
     }
     // Both stay named, so Settings can say what restoring those types needs and a consented one counts as TenuVault's.
-    expect(knownPermissions("delegated")[0]!.permissions).toEqual(expect.arrayContaining(["DeviceManagementManagedDevices.ReadWrite.All", "Directory.ReadWrite.All"]))
-    expect(MODULES.flatMap((module) => module.areas.flatMap((area) => area.parts.filter((part) => part.restoreNotRequested).flatMap((part) => part.folders)))).toEqual(["DeviceCategories", "DeviceCleanupRules", "ContinuousAccessEvaluationPolicy", "GroupLifecyclePolicies"])
+    expect(knownPermissions("delegated")[0]!.permissions).toEqual(expect.arrayContaining(["DeviceManagementManagedDevices.ReadWrite.All"]))
+    expect(MODULES.flatMap((module) => module.areas.flatMap((area) => area.parts.filter((part) => part.restoreNotRequested).flatMap((part) => part.folders)))).toEqual(["DeviceCategories", "DeviceCleanupRules"])
     // Restoring Entra ID never brings the permission that changes Conditional Access policies.
     expect(graphPermissions({ entra: { access: "restore", areas: ["groups", "usersAndDevices", "applications"] } }, "delegated")).not.toContain("Policy.ReadWrite.ConditionalAccess")
   })
@@ -243,8 +240,8 @@ describe("Permissions per folder and sign-in mode", () => {
   })
 
   it("stops a restore up front for a service with a token pre-check, with the folder's own permission or the reason it cannot be restored", () => {
-    expect(restorePermissionBlocker("AuthorizationPolicy", delegated("Policy.Read.All"))).toBe("Restoring Entra ID tenant settings needs the Policy.ReadWrite.Authorization permission, which the TenuVault app registration does not have. Services and permissions shows how to add it.")
-    expect(restorePermissionBlocker("AuthorizationPolicy", delegated("Policy.ReadWrite.Authorization"))).toBeUndefined()
+    expect(restorePermissionBlocker("TokenLifetimePolicies", delegated("Policy.Read.All"))).toBe("Restoring Entra ID tenant settings needs the Policy.ReadWrite.ApplicationConfiguration and Application.Read.All or Application.ReadWrite.All permission, which the TenuVault app registration does not have. Services and permissions shows how to add it.")
+    expect(restorePermissionBlocker("TokenLifetimePolicies", delegated("Policy.ReadWrite.ApplicationConfiguration", "Application.Read.All"))).toBeUndefined()
     expect(restorePermissionBlocker("HardwareOathDevices", delegated("Policy.ReadWrite.AuthenticationMethod"))).toBe("Entra ID authentication cannot be restored through Microsoft Graph.")
     expect(restorePermissionBlocker("DefenderCustomDetectionRules", application("CustomDetection.Read.All"))).toBe("Defender detection and response can only be restored by a signed-in admin.")
     // Conditional Access as before, and Intune never.

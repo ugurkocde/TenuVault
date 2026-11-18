@@ -27,7 +27,7 @@ export function guardedGraphIO(token: string, actor: RestoreActor, references: G
   }
   const request = async (url: string, method = "GET", body?: Item, etag?: string, beforeSend?: () => void): Promise<Item | null> => {
     requireRestoreActor(token, actor)
-    const options: RequestInit = { method, headers: { Authorization: `Bearer ${token}`, ...(body ? { "Content-Type": "application/json" } : {}), ...(etag ? { "If-Match": etag } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(60_000) }
+    const options: RequestInit = { method, headers: { Authorization: `Bearer ${token}`, ...(new URL(url).pathname.endsWith("/branding") ? { "Accept-Language": "0" } : {}), ...(body ? { "Content-Type": "application/json" } : {}), ...(etag ? { "If-Match": etag } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(60_000) }
     beforeSend?.()
     const response = await fetchImpl(url, options)
     if (method === "GET" && response.status === 404) return null
@@ -35,6 +35,7 @@ export function guardedGraphIO(token: string, actor: RestoreActor, references: G
     if (!response.ok) throw new Error("Microsoft Graph did not confirm the restore request.")
     if (response.status === 204) return {}
     const value = await response.json() as Item
+    if (new URL(url).pathname.endsWith("/branding") && value.usernameHintText === "") value.usernameHintText = null
     const currentEtag = response.headers.get("etag")
     return currentEtag ? { ...value, "@odata.etag": currentEtag } : value
   }

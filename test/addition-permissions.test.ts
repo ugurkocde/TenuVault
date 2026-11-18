@@ -22,7 +22,7 @@ it("limits additions to enabled services and selected opt-in areas, with no unsu
   store.setArea("tenant", "entra", "groups", true)
   expect(additionPermissions(store.get("tenant"))).toContain("Group.Read.All")
   store.setAccess("tenant", "entra", "restore")
-  expect(additionPermissions(store.get("tenant"))).toEqual(graphPermissions({ entra: { access: "backup", areas: ["groups"] } }, "delegated"))
+  expect(additionPermissions(store.get("tenant"))).toEqual(graphPermissions({ entra: { access: "restore", areas: ["groups"] } }, "delegated"))
   store.set("tenant", "entra", false)
   expect(additionPermissions(store.get("tenant"))).toEqual(["User.Read", "Organization.Read.All"])
 })

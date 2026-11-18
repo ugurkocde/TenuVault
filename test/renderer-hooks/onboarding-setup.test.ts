@@ -910,7 +910,7 @@ describe("onboarding service choices", () => {
     expect(state.createRegistration).toHaveBeenCalledWith({ choice: DEFAULT_SETUP_CHOICE })
   })
 
-  it.each([null, {}, "entra", { entra: { access: "restore" } }, { intune: { access: "everything" } }])("requires confirmation of a corrupt saved service choice before setup or saving: %j", async services => {
+  it.each([null, {}, "entra", { defender: { access: "restore" } }, { intune: { access: "everything" } }])("requires confirmation of a corrupt saved service choice before setup or saving: %j", async services => {
     const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
     state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, account, signedInAt: Date.now(), services }))
     state.accounts.mockResolvedValue([account])

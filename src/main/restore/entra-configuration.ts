@@ -23,6 +23,7 @@ export function configurationConfirmation(folder: string): string {
 
 // Evidence and payload gaps remain explicit even after a type acquires a parent write contract.
 export const CONFIGURATION_BLOCKERS: Readonly<Record<string, string>> = {
+  Organization: "Organization notification emails, phones and privacy profile are never restored in 0.6 because Microsoft requires Organization.ReadWrite.All, which TenuVault never requests.",
   PermissionGrantPreApprovalPolicies: "Pre-approval conditions need a closed polymorphic schema and reference resolution.",
   DefaultAppManagementPolicy: "Credential restriction schemas and their one-way transitions need verification. Credential values are never restored.",
   AppManagementPolicies: "Credential restriction schemas, application bindings and their one-way transitions need verification.",
@@ -42,7 +43,7 @@ export const CONFIGURATION_BLOCKERS: Readonly<Record<string, string>> = {
   HardwareOathDevices: "Hardware OATH seeds are never returned and credentials are never restored.",
 }
 
-type Schema = "string" | "boolean" | "number" | readonly [Schema] | { readonly [key: string]: Schema }
+type Schema = "nullable-string" | "string" | "boolean" | "number" | readonly [Schema] | { readonly [key: string]: Schema }
 const stringList = ["string"] as const
 const schemas: Record<string, Record<string, Schema>> = {
   AuthorizationPolicy: { allowEmailVerifiedUsersToJoinOrganization: "boolean", allowInvitesFrom: "string", allowUserConsentForRiskyApps: "boolean", allowedToSignUpEmailBasedSubscriptions: "boolean", allowedToUseSSPR: "boolean", blockMsolPowerShell: "boolean", description: "string", displayName: "string", guestUserRoleId: "string" },
@@ -52,12 +53,12 @@ const schemas: Record<string, Record<string, Schema>> = {
   TokenLifetimePolicies: { definition: stringList, displayName: "string", description: "string", isOrganizationDefault: "boolean" },
   ActivityBasedTimeoutPolicies: { definition: stringList, displayName: "string", isOrganizationDefault: "boolean" },
   DirectorySettings: { templateId: "string", values: [{ name: "string", value: "string" }] },
-  Organization: { marketingNotificationEmails: stringList, privacyProfile: { contactEmail: "string", statementUrl: "string" }, securityComplianceNotificationMails: stringList, securityComplianceNotificationPhones: stringList, technicalNotificationMails: stringList },
-  EntraCompanyBranding: { backgroundColor: "string", customAccountResetCredentialsUrl: "string", customCannotAccessYourAccountText: "string", customForgotMyPasswordText: "string", customPrivacyAndCookiesText: "string", customPrivacyAndCookiesUrl: "string", customTermsOfUseText: "string", customTermsOfUseUrl: "string", headerBackgroundColor: "string", signInPageText: "string", usernameHintText: "string" },
+  EntraCompanyBranding: { usernameHintText: "nullable-string" },
   AuthenticationFlowsPolicy: { selfServiceSignUp: { isEnabled: "boolean" } },
   AuthenticationContexts: { displayName: "string", description: "string", isAvailable: "boolean" },
 }
 function validate(value: Json, schema: Schema): boolean {
+  if (schema === "nullable-string") return value === null || typeof value === "string"
   if (typeof schema === "string") return typeof value === schema && (schema !== "number" || Number.isFinite(value))
   if (Array.isArray(schema)) return Array.isArray(value) && value.length <= 1000 && value.every(child => validate(child, schema[0]!))
   return !!value && typeof value === "object" && !Array.isArray(value) && Object.entries(value).every(([key, child]) => Object.hasOwn(schema, key) && validate(child, (schema as Record<string, Schema>)[key]!))
@@ -85,11 +86,13 @@ export function configurationPayload(folder: string, operation: GuardedStep["ope
     if (!contract.properties.includes(key) || !schema[key] || !validate(value, schema[key]!)) throw new RestoreSafetyError(`The ${folder} property ${key} needs a reviewed request builder.`)
   }
   const desired = writableSnapshot(snapshot, contract.properties)
+  if (folder === "EntraCompanyBranding" && desired.usernameHintText === "") desired.usernameHintText = null
   if (!Object.keys(desired).length) throw new RestoreSafetyError("There are no supported configuration properties to restore.")
   if (folder === "PermissionGrantPolicies" && String(snapshot.id ?? "").startsWith("microsoft-")) throw new RestoreSafetyError("Microsoft-managed permission grant policies are never restored.")
   if (folder === "DirectorySettings" && (!Array.isArray(desired.values) || desired.values.some(value => !value || typeof value !== "object" || Array.isArray(value) || typeof value.name !== "string" || typeof value.value !== "string"))) throw new RestoreSafetyError("Directory setting values need both a name and a value.")
   if (folder === "AuthenticationFlowsPolicy" && typeof (desired.selfServiceSignUp as Item)?.isEnabled !== "boolean") throw new RestoreSafetyError("The sign-up state must be explicit.")
   if (folder === "AdminConsentRequestPolicy" && (!Number.isInteger(desired.requestDurationInDays) || Number(desired.requestDurationInDays) < 1 || Number(desired.requestDurationInDays) > 60 || !["isEnabled", "notifyReviewers", "remindersEnabled", "reviewers"].every(key => key in desired))) throw new RestoreSafetyError("Consent request replacement needs the complete configuration and a duration from 1 to 60 days.")
+  if (["TokenLifetimePolicies", "ActivityBasedTimeoutPolicies"].includes(folder) && desired.isOrganizationDefault === true) throw new RestoreSafetyError("Organization-default policies are not part of the verified restore subset.")
   if (["TokenLifetimePolicies", "ActivityBasedTimeoutPolicies"].includes(folder) && (operation === "create" || "definition" in desired)) {
     const policy = folder === "TokenLifetimePolicies" ? "TokenLifetimePolicy" : "ActivityBasedTimeoutPolicy"
     const definitionSchema: Schema = folder === "TokenLifetimePolicies" ? { Version: "number", AccessTokenLifetime: "string" } : { Version: "number", ApplicationPolicies: [{ ApplicationId: "string", WebSessionIdleTimeout: "string" }] }
@@ -115,6 +118,11 @@ export function configurationDifference(step: GuardedStep, current: Item | null)
 
 /** Called again at the final send boundary. Unknown relationships fail closed. */
 export async function checkConfigurationLockout(reader: GraphReader, step: GuardedStep, current: Item | null, desired: Item): Promise<void> {
+  if (["TokenLifetimePolicies", "ActivityBasedTimeoutPolicies"].includes(step.folder) && current && current.isOrganizationDefault !== false) throw new RestoreSafetyError("Organization-default policies are not part of the verified restore subset.")
+  if (step.folder === "TokenLifetimePolicies" && current) {
+    const bindings = await reader.list(`policies/tokenLifetimePolicies/${encodeURIComponent(step.targetId ?? step.sourceId)}/appliesTo?$select=id`)
+    if (bindings.length) throw new RestoreSafetyError("Bound token policies need a separately verified restore contract.")
+  }
   if (step.folder === "SecurityDefaults" && desired.isEnabled === true) {
     const policies = await reader.list("identity/conditionalAccess/policies?$select=id,state")
     if (policies.some(policy => !["enabled", "disabled", "enabledForReportingButNotEnforced"].includes(String(policy.state)))) throw new RestoreSafetyError("Conditional Access state could not be resolved.")

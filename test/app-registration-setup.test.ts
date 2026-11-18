@@ -73,7 +73,7 @@ it.each([{}, { sharepoint: { access: "backup" } }, { intune: { access: "everythi
   state.provision.mockResolvedValueOnce({ tenantId: "tenant", clientId: "client", username: "admin", reused: false, ready: true, missingConsent: [] })
   await expect(setup.create()).resolves.toMatchObject({ clientId: "client" })
 })
-it.each(["entra", "defender"])("refuses unsupported %s restore before any browser or Graph activity", async service => {
+it.each(["defender"])("refuses unsupported %s restore before any browser or Graph activity", async service => {
   const h = host()
   state.interactive.mockImplementation(async (request: InteractiveRequest) => {
     await request.openBrowser("https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize")

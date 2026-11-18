@@ -50,7 +50,7 @@ describe("Entra 5a declarations and live fixtures", () => {
     expect(ENTRA_TYPES.map(type => type.folder).sort()).toEqual([...wanted, "GroupLifecyclePolicies", "OwnerlessGroupPolicy"].sort())
     for (const type of ENTRA_TYPES) {
       expect(moduleForFolder(type.folder)?.module.id).toBe("entra")
-      expect(restoreCapability(type)).toBe("none")
+      expect(restoreCapability(type)).toBe(["AuthenticationFlowsPolicy", "EntraCompanyBranding"].includes(type.folder) ? "singleton" : ["TokenLifetimePolicies", "ActivityBasedTimeoutPolicies"].includes(type.folder) ? "create" : "none")
       expect(adminCenterLink(type.folder, "example")?.center).toBe("Entra")
       expect(() => buildRestorePlan(type, { id: "example" })).toThrow()
       expect(() => buildUpdatePlan(type, { id: "example" }, "example")).toThrow()

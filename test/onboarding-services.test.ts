@@ -16,7 +16,9 @@ it("keeps today's exact default permissions while enabling only Intune backups",
 it("offers restore only where a writable backup type exists", () => {
   expect(canRequestRestore("intune")).toBe(true)
   expect(canRequestRestore("conditionalAccess")).toBe(true)
-  for (const id of ["entra", "defender"] as const) {
+  expect(canRequestRestore("entra")).toBe(true)
+  expect(checkedOnboardingChoice({ entra: { access: "restore" } })).toEqual({ entra: { access: "restore" } })
+  for (const id of ["defender"] as const) {
     expect(canRequestRestore(id)).toBe(false)
     expect(() => checkedOnboardingChoice({ [id]: { access: "restore" } })).toThrow("not available")
   }

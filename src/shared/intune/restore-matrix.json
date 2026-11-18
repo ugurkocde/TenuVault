@@ -49,7 +49,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
+    "reason": "An identical displayName write was verified live. Authorization changes remain blocked until effective administrator safety references are proven.",
     "indexWrites": {
       "PATCH": [
         {
@@ -61,21 +61,21 @@
       ]
     },
     "verification": {
-      "date": "2026-11-17",
+      "date": "2026-11-18",
       "method": "local-graph-index-and-microsoft-documentation",
       "resourceFound": true,
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/authorizationpolicy?view=graph-rest-1.0",
-      "live": "not-run",
+      "live": "identical-value write/read-back only (2026-11-18); changes remain blocked",
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "configuration",
     "supplementalWrites": [],
     "configurationRestore": {
-      "phase": "8b-phase1",
+      "phase": "8b-phase2",
       "confirmation": "authorization",
-      "blockedReason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
+      "blockedReason": "An identical displayName write was verified live. Authorization changes remain blocked until effective administrator safety references are proven.",
       "builder": "closed-subset-injected-fetch",
-      "lab": "prepared-not-run"
+      "lab": "live-identical-value-only"
     }
   },
   {
@@ -91,8 +91,7 @@
         "isEnabled"
       ],
       "permissions": [
-        "Policy.Read.All",
-        "Policy.ReadWrite.ConditionalAccess"
+        "Policy.Read.All"
       ],
       "documentation": "https://learn.microsoft.com/en-us/graph/api/identitysecuritydefaultsenforcementpolicy-update?view=graph-rest-1.0",
       "index": "matched",
@@ -116,7 +115,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
+    "reason": "Only an identical-value write was verified. Microsoft currently lists Policy.Read.All as least privileged; the lab holds multiple write roles, so least-privilege authorization for a changed value remains unresolved.",
     "indexWrites": {
       "PATCH": [
         {
@@ -128,21 +127,21 @@
       ]
     },
     "verification": {
-      "date": "2026-11-17",
+      "date": "2026-11-18",
       "method": "local-graph-index-and-microsoft-documentation",
       "resourceFound": true,
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/identitysecuritydefaultsenforcementpolicy?view=graph-rest-1.0",
-      "live": "not-run",
+      "live": "identical-value write/read-back only (2026-11-18); changes remain blocked",
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "configuration",
     "supplementalWrites": [],
     "configurationRestore": {
-      "phase": "8b-phase1",
+      "phase": "8b-phase2",
       "confirmation": "security-defaults",
-      "blockedReason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
+      "blockedReason": "Only an identical-value write was verified. Microsoft currently lists Policy.Read.All as least privileged; the lab holds multiple write roles, so least-privilege authorization for a changed value remains unresolved.",
       "builder": "closed-subset-injected-fetch",
-      "lab": "prepared-not-run"
+      "lab": "live-identical-value-only; permission isolation unresolved"
     }
   },
   {
@@ -191,7 +190,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
+    "reason": "The live original has requestDurationInDays zero while the staged builder requires 1 to 60. No safe restore-original contract was established.",
     "indexWrites": {
       "PUT": [
         {
@@ -203,21 +202,21 @@
       ]
     },
     "verification": {
-      "date": "2026-11-17",
+      "date": "2026-11-18",
       "method": "local-graph-index-and-microsoft-documentation",
       "resourceFound": true,
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/adminconsentrequestpolicy?view=graph-rest-1.0",
-      "live": "not-run",
+      "live": "read-only (2026-11-18); zero-day original refused before write",
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "configuration",
     "supplementalWrites": [],
     "configurationRestore": {
-      "phase": "8b-phase1",
+      "phase": "8b-phase2",
       "confirmation": "configuration",
-      "blockedReason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
+      "blockedReason": "The live original has requestDurationInDays zero while the staged builder requires 1 to 60. No safe restore-original contract was established.",
       "builder": "closed-subset-injected-fetch",
-      "lab": "prepared-not-run"
+      "lab": "read-only: original refused before any write"
     }
   },
   {
@@ -246,7 +245,7 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/permissiongrantpolicy?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "blockedReason": "Live create and read-back succeeded, but metadata PATCH was refused with HTTP 400 Request_BadRequest. Create and update remain blocked until the full lifecycle agrees with documentation.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -282,7 +281,8 @@
           "https://learn.microsoft.com/en-us/graph/api/resources/permissiongrantpolicy?view=graph-rest-1.0"
         ],
         "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
-      }
+      },
+      "blockedReason": "Live create and read-back succeeded, but metadata PATCH was refused with HTTP 400 Request_BadRequest. Create and update remain blocked until the full lifecycle agrees with documentation."
     },
     "detection": {
       "kind": "key",
@@ -294,7 +294,7 @@
     "dependsOn": [
       "Applications"
     ],
-    "reason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
+    "reason": "Live create and read-back succeeded, but metadata PATCH was refused with HTTP 400 Request_BadRequest. Create and update remain blocked until the full lifecycle agrees with documentation.",
     "indexWrites": {
       "POST": [
         {
@@ -326,11 +326,11 @@
       ]
     },
     "verification": {
-      "date": "2026-11-17",
+      "date": "2026-11-18",
       "method": "local-graph-index-and-microsoft-documentation",
       "resourceFound": true,
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/permissiongrantpolicy?view=graph-rest-1.0",
-      "live": "not-run",
+      "live": "create/read; PATCH refused HTTP 400 (2026-11-18)",
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "configuration",
@@ -397,11 +397,11 @@
       }
     ],
     "configurationRestore": {
-      "phase": "8b-phase1",
+      "phase": "8b-phase2",
       "confirmation": "permission-grants",
-      "blockedReason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
+      "blockedReason": "Live create and read-back succeeded, but metadata PATCH was refused with HTTP 400 Request_BadRequest. Create and update remain blocked until the full lifecycle agrees with documentation.",
       "builder": "closed-subset-injected-fetch",
-      "lab": "prepared-not-run"
+      "lab": "live-create/read; PATCH refused; prefixed policy deleted"
     }
   },
   {
@@ -553,7 +553,7 @@
       }
     ],
     "configurationRestore": {
-      "phase": "8b-phase1",
+      "phase": "8b-phase2",
       "confirmation": "permission-grants",
       "blockedReason": "Pre-approval conditions need a closed polymorphic schema and reference resolution.",
       "builder": "blocked",
@@ -628,7 +628,7 @@
     "disposition": "configuration",
     "supplementalWrites": [],
     "configurationRestore": {
-      "phase": "8b-phase1",
+      "phase": "8b-phase2",
       "confirmation": "app-management",
       "blockedReason": "Credential restriction schemas and their one-way transitions need verification. Credential values are never restored.",
       "builder": "blocked",
@@ -813,7 +813,7 @@
       }
     ],
     "configurationRestore": {
-      "phase": "8b-phase1",
+      "phase": "8b-phase2",
       "confirmation": "app-management",
       "blockedReason": "Credential restriction schemas, application bindings and their one-way transitions need verification.",
       "builder": "blocked",
@@ -842,11 +842,10 @@
         "https://raw.githubusercontent.com/microsoftgraph/microsoft-graph-docs-contrib/main/api-reference/v1.0/includes/permissions/tokenlifetimepolicy-post-tokenlifetimepolicies-permissions.md"
       ],
       "propertyEvidence": "resource-and-examples",
-      "propertyCoverage": "partial",
+      "propertyCoverage": "closed-subset",
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/tokenlifetimepolicy?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -875,11 +874,10 @@
         "https://raw.githubusercontent.com/microsoftgraph/microsoft-graph-docs-contrib/main/api-reference/v1.0/includes/permissions/tokenlifetimepolicy-update-permissions.md"
       ],
       "propertyEvidence": "request-body-table",
-      "propertyCoverage": "partial",
+      "propertyCoverage": "closed-subset",
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/tokenlifetimepolicy?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -899,7 +897,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
+    "reason": "Own sign-in-policy confirmation is required. Only unbound, non-default Version 1 token lifetime policies are supported.",
     "indexWrites": {
       "PATCH": [
         {
@@ -921,11 +919,11 @@
       ]
     },
     "verification": {
-      "date": "2026-11-17",
+      "date": "2026-11-18",
       "method": "local-graph-index-and-microsoft-documentation",
       "resourceFound": true,
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/tokenlifetimepolicy?view=graph-rest-1.0",
-      "live": "not-run",
+      "live": "create/read/change/restore/delete (2026-11-18)",
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "configuration",
@@ -947,11 +945,12 @@
       }
     ],
     "configurationRestore": {
-      "phase": "8b-phase1",
+      "phase": "8b-phase2",
       "confirmation": "sign-in-policy",
-      "blockedReason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
-      "builder": "closed-subset-injected-fetch",
-      "lab": "prepared-not-run"
+      "blockedReason": "",
+      "builder": "enabled-closed-subset",
+      "lab": "live-create-read-change-restore-delete; unbound non-default policies only",
+      "capability": "create"
     }
   },
   {
@@ -1079,7 +1078,7 @@
       }
     ],
     "configurationRestore": {
-      "phase": "8b-phase1",
+      "phase": "8b-phase2",
       "confirmation": "sign-in-policy",
       "blockedReason": "Legacy token issuance definitions need a supported definition schema and live evidence.",
       "builder": "blocked",
@@ -1272,7 +1271,7 @@
       }
     ],
     "configurationRestore": {
-      "phase": "8b-phase1",
+      "phase": "8b-phase2",
       "confirmation": "sign-in-policy",
       "blockedReason": "Claims transformations, signing-key requirements and application bindings need verification.",
       "builder": "blocked",
@@ -1468,7 +1467,7 @@
       }
     ],
     "configurationRestore": {
-      "phase": "8b-phase1",
+      "phase": "8b-phase2",
       "confirmation": "sign-in-policy",
       "blockedReason": "Home realm discovery definitions and federation relationships need verification.",
       "builder": "blocked",
@@ -1497,11 +1496,10 @@
         "https://raw.githubusercontent.com/microsoftgraph/microsoft-graph-docs-contrib/main/api-reference/v1.0/includes/permissions/activitybasedtimeoutpolicy-post-activitybasedtimeoutpolicies-permissions.md"
       ],
       "propertyEvidence": "resource-and-examples",
-      "propertyCoverage": "partial",
+      "propertyCoverage": "closed-subset",
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/activitybasedtimeoutpolicy?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -1529,7 +1527,7 @@
         "https://raw.githubusercontent.com/microsoftgraph/microsoft-graph-docs-contrib/main/api-reference/v1.0/includes/permissions/activitybasedtimeoutpolicy-update-permissions.md"
       ],
       "propertyEvidence": "request-body-table",
-      "propertyCoverage": "top-level",
+      "propertyCoverage": "closed-subset",
       "schemaDocumentation": [],
       "propertyAudit": {
         "date": "2026-11-17",
@@ -1550,7 +1548,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
+    "reason": "Own sign-in-policy confirmation is required. Only non-default Version 1 ApplicationPolicies timeout definitions are supported.",
     "indexWrites": {
       "POST": [
         {
@@ -1570,11 +1568,11 @@
       ]
     },
     "verification": {
-      "date": "2026-11-17",
+      "date": "2026-11-18",
       "method": "local-graph-index-and-microsoft-documentation",
       "resourceFound": true,
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/activitybasedtimeoutpolicy?view=graph-rest-1.0",
-      "live": "not-run",
+      "live": "create/read/change/restore/delete (2026-11-18)",
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "configuration",
@@ -1596,11 +1594,12 @@
       }
     ],
     "configurationRestore": {
-      "phase": "8b-phase1",
+      "phase": "8b-phase2",
       "confirmation": "sign-in-policy",
-      "blockedReason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
-      "builder": "closed-subset-injected-fetch",
-      "lab": "prepared-not-run"
+      "blockedReason": "",
+      "builder": "enabled-closed-subset",
+      "lab": "live-create-read-change-restore-delete; non-default policies only",
+      "capability": "create"
     }
   },
   {
@@ -1673,7 +1672,7 @@
     "disposition": "configuration",
     "supplementalWrites": [],
     "configurationRestore": {
-      "phase": "8b-phase1",
+      "phase": "8b-phase2",
       "confirmation": "device-registration",
       "blockedReason": "Device registration selectors, local administrator settings and lock-out effects need verification.",
       "builder": "blocked",
@@ -1722,7 +1721,7 @@
     "disposition": "unverified",
     "supplementalWrites": [],
     "configurationRestore": {
-      "phase": "8b-phase1",
+      "phase": "8b-phase2",
       "confirmation": "configuration",
       "blockedReason": "No documented parent write contract and stable create key have been settled.",
       "builder": "blocked",
@@ -1771,7 +1770,7 @@
     "disposition": "unverified",
     "supplementalWrites": [],
     "configurationRestore": {
-      "phase": "8b-phase1",
+      "phase": "8b-phase2",
       "confirmation": "configuration",
       "blockedReason": "No documented parent write contract and stable create key have been settled.",
       "builder": "blocked",
@@ -1949,11 +1948,11 @@
       }
     ],
     "configurationRestore": {
-      "phase": "8b-phase1",
+      "phase": "8b-phase2",
       "confirmation": "configuration",
       "blockedReason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
       "builder": "closed-subset-injected-fetch",
-      "lab": "not-prepared: resolve payload, identity or recycle-bin contract first"
+      "lab": "not-run: no prepared safe fixture or required lab write permission"
     }
   },
   {
@@ -1972,9 +1971,7 @@
         "securityComplianceNotificationPhones",
         "technicalNotificationMails"
       ],
-      "permissions": [
-        "Organization.ReadWrite.All"
-      ],
+      "permissions": [],
       "documentation": "https://learn.microsoft.com/en-us/graph/api/organization-update?view=graph-rest-1.0",
       "index": "matched",
       "permissionDocumentation": [
@@ -1985,7 +1982,7 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/privacyprofile?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "blockedReason": "Organization notification emails, phones and privacy profile are never restored in 0.6 because Microsoft requires Organization.ReadWrite.All, which TenuVault never requests.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -2000,7 +1997,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
+    "reason": "Organization notification emails, phones and privacy profile are never restored in 0.6 because Microsoft requires Organization.ReadWrite.All, which TenuVault never requests.",
     "indexWrites": {
       "POST": [
         {
@@ -2101,14 +2098,14 @@
       "live": "not-run",
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
-    "disposition": "configuration",
+    "disposition": "never",
     "supplementalWrites": [],
     "configurationRestore": {
-      "phase": "8b-phase1",
+      "phase": "8b-phase2",
       "confirmation": "configuration",
-      "blockedReason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
-      "builder": "closed-subset-injected-fetch",
-      "lab": "prepared-not-run"
+      "blockedReason": "Organization notification emails, phones and privacy profile are never restored in 0.6 because Microsoft requires Organization.ReadWrite.All, which TenuVault never requests.",
+      "builder": "never",
+      "lab": "not-run: organization properties and notification values are outside lab scope"
     }
   },
   {
@@ -2121,31 +2118,10 @@
       "path": "organization/{organizationId}/branding",
       "version": "v1.0",
       "properties": [
-        "backgroundColor",
-        "backgroundImage",
-        "bannerLogo",
-        "contentCustomization",
-        "customAccountResetCredentialsUrl",
-        "customCannotAccessYourAccountText",
-        "customCSS",
-        "customForgotMyPasswordText",
-        "customPrivacyAndCookiesText",
-        "customPrivacyAndCookiesUrl",
-        "customTermsOfUseText",
-        "customTermsOfUseUrl",
-        "favicon",
-        "headerBackgroundColor",
-        "headerLogo",
-        "loginPageLayoutConfiguration",
-        "loginPageTextVisibilitySettings",
-        "signInPageText",
-        "squareLogo",
-        "squareLogoDark",
         "usernameHintText"
       ],
       "permissions": [
-        "OrganizationalBranding.ReadWrite.All",
-        "Organization.ReadWrite.All"
+        "OrganizationalBranding.ReadWrite.All"
       ],
       "documentation": "https://learn.microsoft.com/en-us/graph/api/organizationalbranding-update?view=graph-rest-1.0",
       "index": "matched",
@@ -2153,20 +2129,20 @@
         "https://raw.githubusercontent.com/microsoftgraph/microsoft-graph-docs-contrib/main/api-reference/v1.0/includes/permissions/organizationalbranding-update-permissions.md"
       ],
       "propertyEvidence": "request-body-table",
-      "propertyCoverage": "top-level",
+      "propertyCoverage": "closed-subset",
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/contentcustomization?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/loginPageLayoutConfiguration?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/loginPageTextVisibilitySettings?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
           "https://learn.microsoft.com/en-us/graph/api/organizationalbranding-update?view=graph-rest-1.0",
           "https://learn.microsoft.com/en-us/graph/api/resources/organizationalbranding?view=graph-rest-1.0"
         ],
-        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields.",
+        "constraints": "Only usernameHintText is enabled. An empty hint is reset with null. Streams, localizations and other branding properties remain blocked."
       }
     },
     "detection": {
@@ -2174,7 +2150,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
+    "reason": "Own per-policy confirmation is required. Only the closed verified subset can be restored; unsupported child configuration is refused.",
     "indexWrites": {
       "POST": [
         {
@@ -2224,12 +2200,12 @@
       ]
     },
     "verification": {
-      "date": "2026-11-17",
+      "date": "2026-11-18",
       "method": "local-graph-index-and-microsoft-documentation",
       "resourceFound": true,
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/organizationalbranding?view=graph-rest-1.0",
-      "live": "not-run",
-      "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
+      "live": "save-change-verify-restore-original-verify (2026-11-18)",
+      "notes": "App-only lab adapter verified the method, path and closed subset with read-back and original-state recovery. Signed-in actor, exact confirmation, stale preview, journal and lost responses are tested with injected fetch."
     },
     "disposition": "configuration",
     "supplementalWrites": [
@@ -2260,8 +2236,7 @@
           "usernameHintText"
         ],
         "permissions": [
-          "OrganizationalBranding.ReadWrite.All",
-          "Organization.ReadWrite.All"
+          "OrganizationalBranding.ReadWrite.All"
         ],
         "documentation": "https://learn.microsoft.com/en-us/graph/api/organizationalbranding-update?view=graph-rest-1.0",
         "permissionDocumentation": [
@@ -2275,8 +2250,7 @@
         "path": "organization/{organizationId}/branding",
         "properties": [],
         "permissions": [
-          "OrganizationalBranding.ReadWrite.All",
-          "Organization.ReadWrite.All"
+          "OrganizationalBranding.ReadWrite.All"
         ],
         "documentation": "https://learn.microsoft.com/en-us/graph/api/organizationalbranding-delete?view=graph-rest-1.0",
         "permissionDocumentation": [
@@ -2288,11 +2262,12 @@
       }
     ],
     "configurationRestore": {
-      "phase": "8b-phase1",
+      "phase": "8b-phase2",
       "confirmation": "configuration",
-      "blockedReason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
-      "builder": "closed-subset-injected-fetch",
-      "lab": "prepared-not-run"
+      "blockedReason": "",
+      "builder": "enabled-closed-subset",
+      "lab": "live-save-change-verify-restore-original-verify",
+      "capability": "singleton"
     }
   },
   {
@@ -2491,7 +2466,7 @@
       }
     ],
     "configurationRestore": {
-      "phase": "8b-phase1",
+      "phase": "8b-phase2",
       "confirmation": "federation-and-certificates",
       "blockedReason": "Domains cannot be restored. Federation configurations need separate verified child contracts.",
       "builder": "blocked",
@@ -2563,7 +2538,7 @@
     "disposition": "never",
     "supplementalWrites": [],
     "configurationRestore": {
-      "phase": "8b-phase1",
+      "phase": "8b-phase2",
       "confirmation": "configuration",
       "blockedReason": "On-premises synchronization flags belong to the synchronization server and are never restored.",
       "builder": "blocked",
@@ -2696,21 +2671,21 @@
       ]
     },
     "verification": {
-      "date": "2026-11-17",
+      "date": "2026-11-18",
       "method": "local-graph-index-and-microsoft-documentation",
       "resourceFound": true,
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/authenticationmethodspolicy?view=graph-rest-1.0",
-      "live": "not-run",
+      "live": "identical-value write/read-back only (2026-11-18); changes remain blocked",
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "configuration",
     "supplementalWrites": [],
     "configurationRestore": {
-      "phase": "8b-phase1",
+      "phase": "8b-phase2",
       "confirmation": "authentication-methods",
       "blockedReason": "Authentication methods and method configurations remain blocked: a change affecting the signed-in admin is refused until usable-method and target resolution is proven. Lab verification is identical-value-only.",
       "builder": "blocked",
-      "lab": "prepared-not-run"
+      "lab": "live-identical-registrationEnforcement-only; method configurations remain blocked"
     }
   },
   {
@@ -2734,12 +2709,11 @@
         "https://raw.githubusercontent.com/microsoftgraph/microsoft-graph-docs-contrib/main/api-reference/v1.0/includes/permissions/authenticationflowspolicy-update-permissions.md"
       ],
       "propertyEvidence": "request-body-table",
-      "propertyCoverage": "partial",
+      "propertyCoverage": "closed-subset",
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/authenticationflowspolicy?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/selfservicesignupauthenticationflowconfiguration?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -2755,7 +2729,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
+    "reason": "Own per-policy confirmation is required. Only the closed verified subset can be restored; unsupported child configuration is refused.",
     "indexWrites": {
       "PATCH": [
         {
@@ -2767,21 +2741,22 @@
       ]
     },
     "verification": {
-      "date": "2026-11-17",
+      "date": "2026-11-18",
       "method": "local-graph-index-and-microsoft-documentation",
       "resourceFound": true,
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/authenticationflowspolicy?view=graph-rest-1.0",
-      "live": "not-run",
-      "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
+      "live": "save-change-verify-restore-original-verify (2026-11-18)",
+      "notes": "App-only lab adapter verified the method, path and closed subset with read-back and original-state recovery. Signed-in actor, exact confirmation, stale preview, journal and lost responses are tested with injected fetch."
     },
     "disposition": "configuration",
     "supplementalWrites": [],
     "configurationRestore": {
-      "phase": "8b-phase1",
+      "phase": "8b-phase2",
       "confirmation": "authentication",
-      "blockedReason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
-      "builder": "closed-subset-injected-fetch",
-      "lab": "prepared-not-run"
+      "blockedReason": "",
+      "builder": "enabled-closed-subset",
+      "lab": "live-save-change-verify-restore-original-verify",
+      "capability": "singleton"
     }
   },
   {
@@ -2877,11 +2852,11 @@
       }
     ],
     "configurationRestore": {
-      "phase": "8b-phase1",
+      "phase": "8b-phase2",
       "confirmation": "authentication",
       "blockedReason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
       "builder": "closed-subset-injected-fetch",
-      "lab": "not-prepared: resolve payload, identity or recycle-bin contract first"
+      "lab": "not-run: no prepared safe fixture or required lab write permission"
     }
   },
   {
@@ -2895,9 +2870,7 @@
       "properties": [
         "certificateAuthorities"
       ],
-      "permissions": [
-        "Organization.ReadWrite.All"
-      ],
+      "permissions": [],
       "documentation": "https://learn.microsoft.com/en-us/graph/api/certificatebasedauthconfiguration-post-certificatebasedauthconfiguration?view=graph-rest-1.0",
       "index": "matched",
       "permissionDocumentation": [
@@ -2909,7 +2882,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/certificatebasedauthconfiguration?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/certificateauthority?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "blockedReason": "Evidence only. Organization.ReadWrite.All is never requested in 0.6. This legacy certificate configuration remains backup-only.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -2955,20 +2928,18 @@
         "method": "DELETE",
         "path": "organization/{id}/certificateBasedAuthConfiguration/{id}",
         "properties": [],
-        "permissions": [
-          "Organization.ReadWrite.All"
-        ],
+        "permissions": [],
         "documentation": "https://learn.microsoft.com/en-us/graph/api/certificatebasedauthconfiguration-delete?view=graph-rest-1.0",
         "permissionDocumentation": [
           "https://raw.githubusercontent.com/microsoftgraph/microsoft-graph-docs-contrib/main/api-reference/v1.0/includes/permissions/certificatebasedauthconfiguration-delete-permissions.md"
         ],
-        "blockedReason": "Evidence only. This action or sub-resource has no reviewed payload, stable reconciliation key or guarded step implementation; deletion requires per-item approval.",
+        "blockedReason": "Evidence only. Organization.ReadWrite.All is never requested in 0.6. This legacy certificate configuration remains backup-only.",
         "index": "matched",
         "indexPath": "/organization/{organization-id}/certificateBasedAuthConfiguration/{certificateBasedAuthConfiguration-id}"
       }
     ],
     "configurationRestore": {
-      "phase": "8b-phase1",
+      "phase": "8b-phase2",
       "confirmation": "federation-and-certificates",
       "blockedReason": "Certificate authority chains and organization-scoped create reconciliation need verification.",
       "builder": "blocked",
@@ -3151,7 +3122,7 @@
       }
     ],
     "configurationRestore": {
-      "phase": "8b-phase1",
+      "phase": "8b-phase2",
       "confirmation": "federation-and-certificates",
       "blockedReason": "PKI create remains blocked until recycle-bin-first restoration, certificate authority children and reconciliation are verified.",
       "builder": "blocked",
@@ -3218,7 +3189,7 @@
     "disposition": "configuration",
     "supplementalWrites": [],
     "configurationRestore": {
-      "phase": "8b-phase1",
+      "phase": "8b-phase2",
       "confirmation": "federation-and-certificates",
       "blockedReason": "Federated domain validation keys and relationship checks need verification.",
       "builder": "blocked",
@@ -3287,7 +3258,7 @@
     "disposition": "configuration",
     "supplementalWrites": [],
     "configurationRestore": {
-      "phase": "8b-phase1",
+      "phase": "8b-phase2",
       "confirmation": "configuration",
       "blockedReason": "Legacy CAE migration is a one-way action, not configuration restore. Restore access is not requested.",
       "builder": "blocked",
@@ -3455,7 +3426,7 @@
       }
     ],
     "configurationRestore": {
-      "phase": "8b-phase1",
+      "phase": "8b-phase2",
       "confirmation": "configuration",
       "blockedReason": "Hardware OATH seeds are never returned and credentials are never restored.",
       "builder": "blocked",

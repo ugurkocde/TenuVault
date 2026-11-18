@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
+import { moduleForFolder, type Need } from "../src/shared/services/modules"
 import { ENTRA_AREAS } from "../src/shared/services/entra"
 import { typeForFolder, restoreCapability, type Item } from "../src/shared/intune/registry"
 import { restoreMatrixRow } from "../src/shared/intune/restore-matrix"
@@ -19,7 +20,6 @@ const cases: Record<string, Item> = {
   TokenLifetimePolicies: { displayName: "TV06-TEST-Tokens", definition: definitions.TokenLifetimePolicies, isOrganizationDefault: false },
   ActivityBasedTimeoutPolicies: { displayName: "TV06-TEST-Timeout", definition: definitions.ActivityBasedTimeoutPolicies, isOrganizationDefault: false },
   DirectorySettings: { values: [{ name: "EnableGroupCreation", value: "false" }] },
-  Organization: { marketingNotificationEmails: ["TV06-TEST-Example@example.invalid"] },
   EntraCompanyBranding: { usernameHintText: "TV06-TEST-Example" },
   AuthenticationFlowsPolicy: { selfServiceSignUp: { isEnabled: false } },
   AuthenticationContexts: { displayName: "TV06-TEST-Context", isAvailable: false },
@@ -32,9 +32,9 @@ describe("phase 1 configuration staging", () => {
     expect(ENTRA_CONFIGURATION_FOLDERS).toEqual(ENTRA_AREAS.slice(0, 2).flatMap(area => area.folders))
     for (const folder of ENTRA_CONFIGURATION_FOLDERS) {
       expect(cases[folder] || CONFIGURATION_BLOCKERS[folder], folder).toBeTruthy()
-      expect(restoreCapability(typeForFolder(folder)!)).toBe("none")
+      expect(restoreCapability(typeForFolder(folder)!)).toBe(["AuthenticationFlowsPolicy", "EntraCompanyBranding"].includes(folder) ? "singleton" : ["TokenLifetimePolicies", "ActivityBasedTimeoutPolicies"].includes(folder) ? "create" : "none")
     }
-    expect(canRequestRestore("entra")).toBe(false)
+    expect(canRequestRestore("entra")).toBe(true)
   })
   for (const [folder, reason] of Object.entries(CONFIGURATION_BLOCKERS)) it(`${folder}: keeps its unresolved or never-restorable reason`, () => {
     expect(() => configurationPayload(folder, "create", {})).toThrow(reason)
@@ -66,6 +66,8 @@ describe("phase 1 configuration staging", () => {
         // Test-only evidence substitution. Production rows and capabilities remain blocked.
         type.restore = row.detection.kind === "singleton" ? "singleton" : "create"
         contract.index = "matched"; delete contract.blockedReason
+        const need = moduleForFolder(folder)!.part.restore as { delegated: Need }, previousNeed = need.delegated
+        need.delegated = [contract.permissions]
         const permissions = [...contract.permissions, "Policy.Read.All", "Policy.ReadWrite.SecurityDefaults", "Policy.ReadWrite.ConditionalAccess"]
         const token = `header.${Buffer.from(JSON.stringify({ tid: actor.tenantId, oid: actor.userId, appid: actor.clientId, scp: permissions.join(" ") })).toString("base64url")}.signature`
         const objectId = folder === "Organization" ? actor.tenantId : id
@@ -82,6 +84,7 @@ describe("phase 1 configuration staging", () => {
             return Response.json(live, { status: 200 })
           }
           if (String(_input).endsWith("organization?$select=id")) return Response.json({ value: [{ id: actor.tenantId }] })
+          if (String(_input).includes("/appliesTo?")) return Response.json({ value: [] })
           return String(_input).includes("?$select=id,state") ? Response.json({ value: [] }) : String(_input).endsWith(row.readPath) && row.detection.kind !== "singleton" ? Response.json({ value: live ? [live] : [] }) : live ? Response.json(live) : new Response(null, { status: 404 })
         })
         const saved = store(), journal = new GuardedRunJournal(saved)
@@ -101,7 +104,7 @@ describe("phase 1 configuration staging", () => {
             expect(result.run.entries[0]!.sent).toEqual(desired)
             expect(result.run.mappings).toHaveLength(1)
           }
-        } finally { type.restore = savedType; Object.assign(contract, savedContract); if (!savedContract.blockedReason) delete contract.blockedReason }
+        } finally { need.delegated = previousNeed; type.restore = savedType; Object.assign(contract, savedContract); if (!savedContract.blockedReason) delete contract.blockedReason }
       })
     }
   }
@@ -113,8 +116,10 @@ describe("phase 1 configuration staging", () => {
     const current = { id, isEnabled: false }
     const step = approve({ key: "security", folder: "SecurityDefaults", operation: "update", sourceId: id, targetId: id, properties: ["isEnabled"], desired: { isEnabled: false }, preview: restoreFingerprint(current), requires: [] })
     const io = guardedGraphIO(token, actor, async () => ({ complete: true, principals: [], applications: [] }), async (_input, init) => { if (init?.method !== "GET") writes++; return Response.json(current) })
+    const need = moduleForFolder("SecurityDefaults")!.part.restore as { delegated: Need }, previousNeed = need.delegated
+    need.delegated = [["Policy.Read.All"]]
     try { await expect(io.write(step, { isEnabled: true }, id, () => {})).rejects.toThrow("confirmed configuration difference"); expect(writes).toBe(0) }
-    finally { type.restore = previous }
+    finally { need.delegated = previousNeed; type.restore = previous }
   })
   it("projects known read-only backup properties without hiding unsupported writable configuration", () => {
     expect(configurationPayload("SecurityDefaults", "update", { id: "securityDefaults", displayName: "Security defaults", description: "Tenant state", isEnabled: false })).toEqual({ isEnabled: false })
@@ -124,6 +129,30 @@ describe("phase 1 configuration staging", () => {
   })
   it("refuses unsupported nested children, opaque definitions and incomplete replacements", () => {
     for (const [folder, snapshot] of [["AuthenticationFlowsPolicy", { selfServiceSignUp: { isEnabled: false, secret: "x" } }], ["TokenLifetimePolicies", { definition: ['{"TokenLifetimePolicy":{"Version":1,"SigningKey":"x"}}'] }], ["TokenLifetimePolicies", { definition: ["invalid"] }], ["TokenLifetimePolicies", { definition: [] }], ["PermissionGrantPolicies", { includes: [{ id: source }] }], ["PermissionGrantPolicies", { id: "microsoft-admin", displayName: "built in" }], ["AdminConsentRequestPolicy", { requestDurationInDays: 1 }], ["DirectorySettings", { values: [{ name: "x" }] }]] as Array<[string, Item]>) expect(() => configurationPayload(folder, "update", snapshot)).toThrow()
+  })
+  it("clears the default branding hint with the narrow role and normalizes the empty read-back", async () => {
+    const scopedToken = `h.${Buffer.from(JSON.stringify({ tid: actor.tenantId, oid: actor.userId, appid: actor.clientId, scp: "Organization.Read.All OrganizationalBranding.ReadWrite.All Application.Read.All" })).toString("base64url")}.s`
+    const sent: Item[] = []
+    const io = guardedGraphIO(scopedToken, actor, async () => ({ complete: true, principals: [], applications: [] }), async (input, init) => {
+      if (String(input).includes("?$select=id")) return Response.json({ value: [{ id: actor.tenantId }] })
+      expect(new Headers(init?.headers).get("Accept-Language")).toBe("0")
+      if (init?.method !== "GET") { sent.push(JSON.parse(String(init?.body))); return new Response(null, { status: 204 }) }
+      return Response.json({ id, usernameHintText: "" })
+    })
+    const desired = configurationPayload("EntraCompanyBranding", "update", { usernameHintText: "" })
+    expect(desired).toEqual({ usernameHintText: null })
+    const step = approve({ key: "branding", folder: "EntraCompanyBranding", operation: "update", sourceId: id, targetId: id, properties: ["usernameHintText"], desired, preview: restoreFingerprint({ id, usernameHintText: null }), requires: [] })
+    await io.write(step, desired, id, () => {})
+    expect(sent).toEqual([{ usernameHintText: null }])
+    expect(await io.read(step, id)).toEqual({ id, usernameHintText: null })
+  })
+  it("refuses default, bound and unresolved token policies before changing a tenant", async () => {
+    expect(() => configurationPayload("TokenLifetimePolicies", "create", { ...cases.TokenLifetimePolicies, isOrganizationDefault: true })).toThrow("Organization-default")
+    const step: GuardedStep = { key: "tokens", folder: "TokenLifetimePolicies", sourceId: id, operation: "update", targetId: id, properties: [], desired: {}, preview: "", requires: [] }
+    const reader = { get: vi.fn(), list: vi.fn(async () => [{ id }]) }
+    await expect(checkConfigurationLockout(reader, step, { isOrganizationDefault: true }, {})).rejects.toThrow("Organization-default")
+    await expect(checkConfigurationLockout(reader, step, {}, {})).rejects.toThrow("Organization-default")
+    await expect(checkConfigurationLockout(reader, step, { isOrganizationDefault: false }, {})).rejects.toThrow("Bound token")
   })
   it("checks enabled Conditional Access before security defaults and refuses unresolved state and authentication lock-out", async () => {
     const step: GuardedStep = { key: "s", folder: "SecurityDefaults", sourceId: id, operation: "update", properties: ["isEnabled"], desired: { isEnabled: true }, preview: "", requires: [] }

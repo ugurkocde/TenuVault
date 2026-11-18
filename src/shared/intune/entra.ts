@@ -3,11 +3,11 @@ import type { Extra, IntuneType } from "./registry"
 import { ENTRA_DIRECTORY_TYPES } from "./entra-directory"
 import { entraSnapshot } from "./entra-snapshot"
 
-/** Configuration only. Every type stays backup-only until its restore rules are implemented. */
+/** Configuration restore capabilities come only from individually verified matrix subsets. */
 const limitation = "Entra ID configuration restore is not available yet."
 const neverStored = ["clientSecret", "password", "privateKey", "sharedSecret", "secretKey", "tokenSeed", "seed", "tunnelKey", "keyCredentials", "passwordCredentials", "secret", "accessToken", "refreshToken", "clientAssertion", "pfx", "pkcs12", "secretText"]
 const base = (folder: string, label: string, path: string, area: IntuneType["area"] = "Tenant settings"): IntuneType => ({
-  folder, label, path, area, restoreSafety: "identity", nameKey: "displayName", apiVersion: "v1.0", limitation: restoreMatrixRow(folder)?.configurationRestore?.blockedReason ?? limitation, neverStoredKeys: neverStored, normalizeSnapshot: entraSnapshot,
+  folder, label, path, area, restoreSafety: "identity", nameKey: "displayName", apiVersion: "v1.0", ...(restoreMatrixRow(folder)?.configurationRestore?.capability ? { restore: restoreMatrixRow(folder)!.configurationRestore!.capability } : { limitation: restoreMatrixRow(folder)?.configurationRestore?.blockedReason ?? limitation }), neverStoredKeys: neverStored, normalizeSnapshot: entraSnapshot,
 })
 const singleton = (folder: string, label: string, path: string, area?: IntuneType["area"]): IntuneType => ({
   ...base(folder, label, path, area), singleton: { id: folder, name: label },
