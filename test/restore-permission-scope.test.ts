@@ -18,7 +18,7 @@ it("requests restore permissions only for enabled types, with exactly their leas
       if (!expected[folder]) { expect(restoreCapability(type), folder).toBe("none"); expect(part.restore.delegated, folder).toBe("unsupported"); continue }
       found.push(folder)
       expect(restoreCapability(type), folder).not.toBe("none")
-      expect(part.restore.delegated, folder).toEqual([[expected[folder]], ["Application.Read.All", "Application.ReadWrite.All"]])
+      expect(part.restore.delegated, folder).toEqual(folder === "TokenLifetimePolicies" ? [[expected[folder]], ["Application.Read.All", "Application.ReadWrite.All"]] : [[expected[folder]]])
       for (const write of [restoreMatrixRow(folder)!.create, restoreMatrixRow(folder)!.update].filter(Boolean)) expect(write!.permissions, folder).toEqual([expected[folder]])
     }
   }

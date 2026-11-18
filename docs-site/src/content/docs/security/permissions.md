@@ -87,7 +87,7 @@ The setup requests the permissions above unless you choose other services. When 
 | Area | Backup | Restore adds |
 | --- | --- | --- |
 | Tenant settings | `Policy.Read.All`, `Policy.Read.PermissionGrant`, `GroupSettings.Read.All`, `Organization.Read.All`, `Domain.Read.All`, `OnPremDirectorySynchronization.Read.All` | `Policy.ReadWrite.ApplicationConfiguration`, `Application.Read.All`, `OrganizationalBranding.ReadWrite.All` |
-| Authentication | `Policy.Read.All`, `AuthenticationContext.Read.All`, `Organization.Read.All`, `PublicKeyInfrastructure.Read.All` | `Policy.ReadWrite.AuthenticationFlows`, `Application.Read.All` |
+| Authentication | `Policy.Read.All`, `AuthenticationContext.Read.All`, `Organization.Read.All`, `PublicKeyInfrastructure.Read.All` | `Policy.ReadWrite.AuthenticationFlows` |
 | External identities | `Policy.Read.All`, `Policy.Read.B2BManagementPolicy`, `IdentityProvider.Read.All`, `IdentityUserFlow.Read.All`, `EventListener.Read.All`, `CustomAuthenticationExtension.Read.All`, `APIConnectors.Read.All`, `MultiTenantOrganization.Read.All` | None |
 | Roles and PIM | `RoleManagement.Read.Directory`, `PrivilegedEligibilitySchedule.Read.AzureADGroup`, `GroupMember.Read.All`, `PrivilegedAssignmentSchedule.Read.AzureADGroup`, `RoleManagementAlert.Read.Directory`, `AdministrativeUnit.Read.All`, `CustomSecAttributeDefinition.Read.All` | None |
 | Governance | `EntitlementManagement.Read.All`, `AccessReview.Read.All`, `Policy.Read.All`, `LifecycleWorkflows.Read.All`, `Agreement.Read.All` | None |
@@ -110,7 +110,7 @@ The setup requests the permissions above unless you choose other services. When 
 How to read the tables:
 
 * **Backup** is what reading the area needs. No write permission is ever requested to back up.
-* **Restore adds** is what restore access adds to it. Enabled Entra ID areas also include Application.Read.All to resolve and protect the connected registration and enterprise app before a write. A write permission also covers reading, so with restore access the read permission of the same name is not requested as well.
+* **Restore adds** is what restore access adds to it. Tenant settings also includes Application.Read.All for the token lifetime policy binding read. The four enabled subsets cannot change protected identities or the connected registration, so unrelated identity and administrator reads are skipped. A write permission also covers reading, so with restore access the read permission of the same name is not requested as well.
 * Groups, users and devices, and applications are backed up only when you turn the area on, with `-Areas`. Groups and users and devices hold personal data.
 * `Directory.Read.All` is part of the Groups and Applications areas because Microsoft offers no narrower permission for group expiration policies and for delegated permission grants. It also reads users, groups and applications.
 * No Entra ID or Defender write permission is requested for a blocked type. Organization.ReadWrite.All is never requested for backup or restore. Organization notification emails, phones and privacy profile stay backup-only in 0.6 because Microsoft requires that permission to write them. Company branding uses OrganizationalBranding.ReadWrite.All.

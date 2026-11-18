@@ -1,6 +1,6 @@
 import { requireConfigurationApproval } from "./entra-configuration"
 import { isGraphId } from "../../shared/security"
-import { restoreMatrixRow } from "../../shared/intune/restore-matrix"
+import { operationProtections, restoreMatrixRow } from "../../shared/intune/restore-matrix"
 import { requireRestoreActor } from "./restore-actor"
 import { createHash } from "node:crypto"
 import type { KeyValueStore } from "../storage/secure-store"
@@ -194,7 +194,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
           desired.scope = mergeConsentScopes(current?.scope as string ?? "", desired.scope, step.allowRemoval)
         }
         const refs = await io.references(step, current, desired)
-        guardRestoreItem(run.actor, step.folder, entry.targetId ?? step.targetId ?? mapped, refs, step.allowRemoval === true)
+        guardRestoreItem(run.actor, step.folder, entry.targetId ?? step.targetId ?? mapped, refs, step.allowRemoval === true, operationProtections(step.folder, step.operation))
         // Only touched objects are captured, never a whole service. A failed save prevents the write.
         entry.before = current; entry.sent = desired; entry.targetId = entry.targetId ?? step.targetId ?? mapped; entry.state = "captured"; journal.save(run)
         if (signal?.aborted) break

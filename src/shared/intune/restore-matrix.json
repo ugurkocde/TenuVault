@@ -825,6 +825,8 @@
     "resource": "tokenlifetimepolicy",
     "readPath": "policies/tokenLifetimePolicies",
     "create": {
+      "protections": [],
+      "protectionReason": "The closed non-default policy, sign-up flag or username hint payload cannot change a principal, administrator role, authentication method or connected registration. Operation-specific lockout checks still apply.",
       "method": "POST",
       "path": "policies/tokenLifetimePolicies",
       "version": "v1.0",
@@ -856,6 +858,8 @@
       }
     },
     "update": {
+      "protections": [],
+      "protectionReason": "The closed non-default policy, sign-up flag or username hint payload cannot change a principal, administrator role, authentication method or connected registration. Operation-specific lockout checks still apply.",
       "method": "PATCH",
       "path": "policies/tokenLifetimePolicies/{id}",
       "version": "v1.0",
@@ -1479,6 +1483,8 @@
     "resource": "activitybasedtimeoutpolicy",
     "readPath": "policies/activityBasedTimeoutPolicies",
     "create": {
+      "protections": [],
+      "protectionReason": "The closed non-default policy, sign-up flag or username hint payload cannot change a principal, administrator role, authentication method or connected registration. Operation-specific lockout checks still apply.",
       "method": "POST",
       "path": "policies/activityBasedTimeoutPolicies",
       "version": "v1.0",
@@ -1510,6 +1516,8 @@
       }
     },
     "update": {
+      "protections": [],
+      "protectionReason": "The closed non-default policy, sign-up flag or username hint payload cannot change a principal, administrator role, authentication method or connected registration. Operation-specific lockout checks still apply.",
       "method": "PATCH",
       "path": "policies/activityBasedTimeoutPolicies/{id}",
       "version": "v1.0",
@@ -2114,6 +2122,8 @@
     "readPath": "organization/{organizationId}/branding",
     "create": null,
     "update": {
+      "protections": [],
+      "protectionReason": "The closed non-default policy, sign-up flag or username hint payload cannot change a principal, administrator role, authentication method or connected registration. Operation-specific lockout checks still apply.",
       "method": "PATCH",
       "path": "organization/{organizationId}/branding",
       "version": "v1.0",
@@ -2694,6 +2704,8 @@
     "readPath": "policies/authenticationFlowsPolicy",
     "create": null,
     "update": {
+      "protections": [],
+      "protectionReason": "The closed non-default policy, sign-up flag or username hint payload cannot change a principal, administrator role, authentication method or connected registration. Operation-specific lockout checks still apply.",
       "method": "PATCH",
       "path": "policies/authenticationFlowsPolicy",
       "version": "v1.0",

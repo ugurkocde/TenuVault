@@ -394,3 +394,39 @@ it("names missing restore access before trying protected-registration reads", as
   await expect(service.prepare(tenant, request, "update", guid(60))).rejects.toThrow("Services and permissions shows how to add it")
   expect(fetcher).not.toHaveBeenCalled()
 })
+
+it.each(["TokenLifetimePolicies", "ActivityBasedTimeoutPolicies", "AuthenticationFlowsPolicy", "EntraCompanyBranding"])("restores %s through the production service with exactly generated area permissions", async folder => {
+  const { areaPermissions } = await import("../src/shared/services/manifest")
+  const area = moduleForFolder(folder)!.area
+  const scopes = new Set(areaPermissions(area, "restore", "delegated"))
+  const scopedToken = `h.${Buffer.from(JSON.stringify({ tid: tenant, oid: user, appid: client, scp: [...scopes].join(" "), wids: ["62e90394-69f5-4237-9190-012177145e10"] })).toString("base64url")}.s`
+  const row = restoreMatrixRow(folder)!, source = guid(80)
+  const original: Item = folder === "AuthenticationFlowsPolicy" ? { selfServiceSignUp: { isEnabled: false } } : folder === "EntraCompanyBranding" ? { usernameHintText: "old hint" } : { displayName: "Original", isOrganizationDefault: false }
+  const snapshot = { id: source, ...original, ...(folder === "AuthenticationFlowsPolicy" ? { selfServiceSignUp: { isEnabled: true } } : folder === "EntraCompanyBranding" ? { usernameHintText: "Saved hint" } : { displayName: "Saved" }) }
+  let live = { id: source, ...original }, writes = 0
+  const forbidden: string[] = [], reads: string[] = []
+  const path = row.readPath.replace("{organizationId}", tenant)
+  const fetcher = (async (input, init) => {
+    const url = new URL(String(input)), resource = url.pathname.replace(/^\/v1\.0\//, "")
+    if (init?.method !== "GET") { writes++; Object.assign(live, JSON.parse(String(init?.body))); return new Response(null, { status: 204 }) }
+    reads.push(resource)
+    // Every endpoint is checked against its documented permission, even if a resolver catches the error.
+    const allowed = resource === "organization" ? scopes.has("Organization.Read.All") : resource.endsWith("/appliesTo") ? scopes.has("Application.Read.All") && scopes.has("Policy.ReadWrite.ApplicationConfiguration") : resource === path || resource === `${path}/${source}` ? scopes.has(row.update!.permissions[0]!) : false
+    if (!allowed) { forbidden.push(resource); throw new Error(`Read outside generated permission set: ${resource}`) }
+    if (resource === "organization") return Response.json({ value: [{ id: tenant }] })
+    if (resource.endsWith("/appliesTo")) return Response.json({ value: [] })
+    return Response.json(live)
+  }) as typeof fetch
+  const store = storage()
+  // Recovery identities do not need directory reads for a payload that cannot affect them.
+  store.set(`restore.recovery.${tenant}`, JSON.stringify([recovery]))
+  const journal = new GuardedRunJournal(store), service = new IdentityRestoreService(journal, new RecoveryAccounts(store), async () => ({ token: scopedToken, tenantId: tenant, clientId: client, userId: user }), fetcher)
+  const request = { path: `backup/${folder}/Policy.json`, snapshot, origin: "restore" as const }
+  const run = await service.prepare(tenant, request, "update", source)
+  await service.confirm(tenant, run.id, (await service.review(tenant, run.id)).fingerprint)
+  expect(await service.restore(tenant, { ...request, runId: run.id })).toMatchObject({ success: true })
+  expect(forbidden).toEqual([])
+  expect(reads.some(read => /directoryObjects|roleManagement|users|applications|servicePrincipals/.test(read))).toBe(false)
+  expect(writes).toBe(1)
+  expect(row.update!.protections).toEqual([])
+})

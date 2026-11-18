@@ -1,3 +1,4 @@
+import type { RestoreProtection } from "./restore-matrix"
 import type { Item, Json } from "./registry"
 
 export class RestoreSafetyError extends Error {}
@@ -10,8 +11,8 @@ export interface RestoreActor {
   tenantId: string
   userId: string
   clientId: string
-  applicationObjectId: string
-  servicePrincipalId: string
+  applicationObjectId?: string
+  servicePrincipalId?: string
   recoveryAccountIds: string[]
 }
 export interface SafetyReferences {
@@ -33,14 +34,14 @@ export function restoreOriginBlocker(folder: string, origin: RestoreOrigin): str
 }
 
 /** Unresolved protection evidence is a refusal, never permission to proceed. */
-export function guardRestoreItem(actor: RestoreActor, folder: string, id: string | undefined, references: SafetyReferences, removes: boolean): void {
-  if (!actor.tenantId || !actor.userId || !actor.clientId || !actor.applicationObjectId || !actor.servicePrincipalId || !Array.isArray(actor.recoveryAccountIds) || !references.complete) throw new RestoreSafetyError("A safety reference could not be resolved. This item was blocked.")
-  const protectedPrincipals = [actor.userId, actor.servicePrincipalId, ...actor.recoveryAccountIds]
+export function guardRestoreItem(actor: RestoreActor, folder: string, id: string | undefined, references: SafetyReferences, removes: boolean, protections: readonly RestoreProtection[] = ["identity-references", "remaining-administrators"]): void {
+  if (!actor.tenantId || !actor.userId || !actor.clientId || (protections.length > 0 && (!actor.applicationObjectId || !actor.servicePrincipalId)) || !Array.isArray(actor.recoveryAccountIds) || !references.complete) throw new RestoreSafetyError("A safety reference could not be resolved. This item was blocked.")
+  const protectedPrincipals = [actor.userId, actor.servicePrincipalId, ...actor.recoveryAccountIds].filter((id): id is string => !!id)
   const targets = [...references.principals, ...(id && ["Users", "ServicePrincipals"].includes(folder) ? [id] : [])]
-  if (targets.some(target => protectedPrincipals.some(protectedId => same(target, protectedId)))) throw new RestoreSafetyError("The signed-in admin, TenuVault connection and recovery accounts are protected, including their roles and authentication methods.")
+  if (targets.some(target => protectedPrincipals.some(protectedId => !!protectedId && same(target, protectedId)))) throw new RestoreSafetyError("The signed-in admin, TenuVault connection and recovery accounts are protected, including their roles and authentication methods.")
   const apps = [...references.applications, ...(id && folder === "Applications" ? [id] : [])]
-  if (apps.some(target => [actor.clientId, actor.applicationObjectId, actor.servicePrincipalId].some(protectedId => same(target, protectedId)))) throw new RestoreSafetyError("The TenuVault app registration and enterprise app are protected.")
-  if (removes && (assignments.has(folder) || folder === "Groups" || folder === "AdministrativeUnits")) {
+  if (apps.some(target => [actor.clientId, actor.applicationObjectId, actor.servicePrincipalId].some(protectedId => !!protectedId && same(target, protectedId)))) throw new RestoreSafetyError("The TenuVault app registration and enterprise app are protected.")
+  if (protections.includes("remaining-administrators") && removes && (assignments.has(folder) || folder === "Groups" || folder === "AdministrativeUnits")) {
     const remaining = references.remainingAdministrators
     if (!remaining?.global.length || !remaining.privilegedRole.length) throw new RestoreSafetyError("Removing the last Global Administrator or Privileged Role Administrator is refused, including when their remaining access cannot be verified.")
   }

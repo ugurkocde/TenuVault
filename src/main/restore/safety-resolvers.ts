@@ -1,3 +1,4 @@
+import { ALL_RESTORE_PROTECTIONS, operationProtections, type RestoreProtection } from "../../shared/intune/restore-matrix"
 import type { KeyValueStore } from "../storage/secure-store"
 import type { GraphReader } from "../../shared/intune/read"
 import type { Item } from "../../shared/intune/registry"
@@ -33,8 +34,9 @@ const idOf = (item: Item, key = "id"): string => {
   return value
 }
 
-export async function resolveRestoreActor(reader: GraphReader, connection: { tenantId: string; clientId: string; userId: string }, recoveryAccountIds: string[]): Promise<RestoreActor> {
+export async function resolveRestoreActor(reader: GraphReader, connection: { tenantId: string; clientId: string; userId: string }, recoveryAccountIds: string[], protections: readonly RestoreProtection[] = ALL_RESTORE_PROTECTIONS): Promise<RestoreActor> {
   if (![connection.tenantId, connection.clientId, connection.userId].every(isGuid)) throw new RestoreSafetyError("A signed-in tenant connection is required.")
+  if (!protections.length) return { ...connection, recoveryAccountIds: [] }
   const filter = encodeURIComponent(`appId eq '${connection.clientId}'`)
   const apps = await reader.list(`applications?$filter=${filter}&$select=id,appId`)
   const principals = await reader.list(`servicePrincipals?$filter=${filter}&$select=id,appId`)
@@ -45,6 +47,8 @@ export async function resolveRestoreActor(reader: GraphReader, connection: { ten
 
 /** Fresh resolution per item. Missing permissions, limited objects and incomplete pages block the item. */
 export async function resolveSafetyReferences(reader: GraphReader, step: GuardedStep, current: Item | null, desired: Item): Promise<SafetyReferences> {
+  const protections = operationProtections(step.folder, step.operation)
+  if (!protections.length) return { principals: [], applications: [], complete: true }
   const principals = new Set<string>()
   const applications = new Set<string>()
   try {
@@ -71,7 +75,7 @@ export async function resolveSafetyReferences(reader: GraphReader, step: Guarded
       }
       if (/^(appId|applicationId)$/i.test(key)) { if (!isGuid(value)) throw new Error("Unresolved app"); applications.add(value) }
     }
-    walk(current); walk(desired)
+    if (protections.includes("identity-references")) { walk(current); walk(desired) }
     if (["Users", "Groups", "ServicePrincipals", "AdministrativeUnits"].includes(step.folder)) affected.add(step.targetId ?? step.sourceId)
     if (step.folder === "Applications") applications.add(step.targetId ?? step.sourceId)
     const expanded = new Map<string, string[]>()
@@ -96,6 +100,7 @@ export async function resolveSafetyReferences(reader: GraphReader, step: Guarded
       return ids
     }
     for (const id of affected) for (const principal of await expand(id)) principals.add(principal)
+    if (!protections.includes("remaining-administrators")) return { principals: [...principals], applications: [...applications], complete: true }
     const definitions = await reader.list("roleManagement/directory/roleDefinitions?$select=id,templateId")
     const assignments = await reader.list("roleManagement/directory/roleAssignments")
     const eligibility = await reader.list("roleManagement/directory/roleEligibilityScheduleInstances")

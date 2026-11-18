@@ -1,7 +1,14 @@
 import rows from "./restore-matrix.json"
 import type { GraphVersion } from "./registry"
 
+export type RestoreProtection = "identity-references" | "remaining-administrators"
+export const ALL_RESTORE_PROTECTIONS: RestoreProtection[] = ["identity-references", "remaining-administrators"]
+export const operationProtections = (folder: string, operation: "create" | "update"): readonly RestoreProtection[] => restoreMatrixRow(folder)?.[operation]?.protections ?? ALL_RESTORE_PROTECTIONS
+
 export interface WriteContract {
+  /** Missing declarations retain every protection. Empty means the closed payload cannot affect identities. */
+  protections?: RestoreProtection[]
+  protectionReason?: string
   method: "POST" | "PATCH" | "PUT"
   path: string
   version: GraphVersion

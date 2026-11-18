@@ -23,14 +23,15 @@ export const ENTRA_AREAS: readonly PermissionArea[] = [
     part(["PermissionGrantPreApprovalPolicies"], [["Policy.Read.PermissionGrant", "Policy.ReadWrite.PermissionGrant"]], [["Policy.Read.PermissionGrant"]], "unsupported"),
     part(["DefaultAppManagementPolicy"], [["Policy.Read.All", "Policy.ReadWrite.ApplicationConfiguration"]], [["Policy.Read.All"]], "unsupported"),
     part(["AppManagementPolicies", "TokenIssuancePolicies", "ClaimsMappingPolicies", "HomeRealmDiscoveryPolicies"], [["Policy.Read.All", "Policy.ReadWrite.ApplicationConfiguration"]], [["Policy.Read.All"]], "unsupported"),
-    part(["TokenLifetimePolicies", "ActivityBasedTimeoutPolicies"], [["Policy.Read.All", "Policy.ReadWrite.ApplicationConfiguration"]], [["Policy.Read.All"]], [["Policy.ReadWrite.ApplicationConfiguration"], ["Application.Read.All", "Application.ReadWrite.All"]]),
+    part(["TokenLifetimePolicies"], [["Policy.Read.All", "Policy.ReadWrite.ApplicationConfiguration"]], [["Policy.Read.All"]], [["Policy.ReadWrite.ApplicationConfiguration"], ["Application.Read.All", "Application.ReadWrite.All"]]),
+    part(["ActivityBasedTimeoutPolicies"], [["Policy.Read.All", "Policy.ReadWrite.ApplicationConfiguration"]], [["Policy.Read.All"]], [["Policy.ReadWrite.ApplicationConfiguration"]]),
     // For app-only access Microsoft lists Policy.Read.DeviceConfiguration only, so the Backup Reader gets that one.
     part(["DeviceRegistrationPolicy"], [["Policy.Read.All", "Policy.Read.DeviceConfiguration", "Policy.ReadWrite.DeviceConfiguration"]], [["Policy.Read.DeviceConfiguration"]], "unsupported"),
     part(["MdmEnrollmentPolicies", "MamEnrollmentPolicies"], [["Policy.Read.All", "Policy.ReadWrite.MobilityManagement"]], "unsupported", "unsupported"),
     // The lab token held Directory.Read.All, so GroupSettings.Read.All is from Microsoft's permission model, not a live read.
     part(["DirectorySettings"], [["GroupSettings.Read.All", "GroupSettings.ReadWrite.All", "Directory.Read.All", "Directory.ReadWrite.All"]], [["GroupSettings.Read.All"]], "unsupported"),
     part(["Organization"], [["Organization.Read.All", "Directory.Read.All", "Directory.ReadWrite.All"]], [["Organization.Read.All"]], "unsupported"),
-    part(["EntraCompanyBranding"], [["Organization.Read.All", "OrganizationalBranding.Read.All", "OrganizationalBranding.ReadWrite.All"]], [["Organization.Read.All"]], [["OrganizationalBranding.ReadWrite.All"], ["Application.Read.All", "Application.ReadWrite.All"]]),
+    part(["EntraCompanyBranding"], [["Organization.Read.All", "OrganizationalBranding.Read.All", "OrganizationalBranding.ReadWrite.All"]], [["Organization.Read.All"]], [["OrganizationalBranding.ReadWrite.All"]]),
     // Domains remain backup-only. Microsoft's page for one federation setting lists Domain.Read.All; its list page names only Domain-InternalFederation.Read.All.
     part(["Domains"], [["Domain.Read.All", "Domain.ReadWrite.All"]], [["Domain.Read.All"]], "unsupported"),
     // Never restored: the flags belong to the sync server.
@@ -38,7 +39,7 @@ export const ENTRA_AREAS: readonly PermissionArea[] = [
   ]),
   area({ id: "authentication", label: "Authentication" }, [
     part(["AuthenticationMethodsPolicy"], [["Policy.Read.All", "Policy.Read.AuthenticationMethod", "Policy.ReadWrite.AuthenticationMethod"]], [["Policy.Read.All"]], "unsupported"),
-    part(["AuthenticationFlowsPolicy"], [["Policy.Read.All", "Policy.ReadWrite.AuthenticationFlows"]], [["Policy.Read.All"]], [["Policy.ReadWrite.AuthenticationFlows"], ["Application.Read.All", "Application.ReadWrite.All"]]),
+    part(["AuthenticationFlowsPolicy"], [["Policy.Read.All", "Policy.ReadWrite.AuthenticationFlows"]], [["Policy.Read.All"]], [["Policy.ReadWrite.AuthenticationFlows"]]),
     // The lab token also held Policy.Read.ConditionalAccess, so the live read does not prove Policy.Read.All covers it.
     part(["AuthenticationContexts"], [["AuthenticationContext.Read.All", "AuthenticationContext.ReadWrite.All", "Policy.ReadWrite.ConditionalAccess"]], [["AuthenticationContext.Read.All"]], "unsupported"),
     part(["CertificateBasedAuthConfigurations"], [["Organization.Read.All"]], [["Organization.Read.All"]], "unsupported"),

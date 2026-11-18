@@ -636,28 +636,127 @@
     {
       "service": "entra",
       "area": "tenantSettings",
-      "folders": ["TokenLifetimePolicies", "ActivityBasedTimeoutPolicies"],
-      "read": ["GET /policies/appManagementPolicies", "GET /policies/tokenLifetimePolicies", "GET /policies/tokenIssuancePolicies", "GET /policies/claimsMappingPolicies", "GET /policies/homeRealmDiscoveryPolicies", "GET /policies/activityBasedTimeoutPolicies"],
-      "write": ["POST /policies/appManagementPolicies", "POST /policies/tokenLifetimePolicies", "POST /policies/tokenIssuancePolicies", "POST /policies/claimsMappingPolicies", "POST /policies/homeRealmDiscoveryPolicies", "POST /policies/activityBasedTimeoutPolicies"],
+      "folders": [
+        "TokenLifetimePolicies"
+      ],
+      "read": [
+        "GET /policies/tokenLifetimePolicies"
+      ],
+      "write": [
+        "POST /policies/tokenLifetimePolicies"
+      ],
       "live": "200",
       "backup": {
         "delegated": [
-          {"permission": "Policy.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
-          {"permission": "Policy.ReadWrite.ApplicationConfiguration", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+          {
+            "permission": "Policy.Read.All",
+            "asked": true,
+            "model": "listed",
+            "index": "listed",
+            "status": "confirmed"
+          },
+          {
+            "permission": "Policy.ReadWrite.ApplicationConfiguration",
+            "asked": false,
+            "model": "listed",
+            "index": "not listed",
+            "status": "confirmed"
+          }
         ],
         "application": [
-          {"permission": "Policy.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+          {
+            "permission": "Policy.Read.All",
+            "asked": true,
+            "model": "listed",
+            "index": "listed",
+            "status": "confirmed"
+          }
         ]
       },
       "restore": {
         "delegated": [
-          {"permission": "Policy.ReadWrite.ApplicationConfiguration", "asked": true, "model": "listed", "index": "not listed", "status": "confirmed"},
-          {"permission": "Application.Read.All", "model": "listed", "index": "listed", "status": "confirmed", "asked": true},
-          {"permission": "Application.ReadWrite.All", "model": "listed", "index": "listed", "status": "confirmed", "asked": false}
+          {
+            "permission": "Policy.ReadWrite.ApplicationConfiguration",
+            "asked": true,
+            "model": "listed",
+            "index": "not listed",
+            "status": "confirmed"
+          },
+          {
+            "permission": "Application.Read.All",
+            "model": "listed",
+            "index": "listed",
+            "status": "confirmed",
+            "asked": true
+          },
+          {
+            "permission": "Application.ReadWrite.All",
+            "model": "listed",
+            "index": "listed",
+            "status": "confirmed",
+            "asked": false
+          }
         ],
         "application": "unsupported"
       },
-      "restoreReadDocumentation": ["https://learn.microsoft.com/en-us/graph/api/application-list?view=graph-rest-1.0", "https://learn.microsoft.com/en-us/graph/api/serviceprincipal-list?view=graph-rest-1.0"],
+      "restoreReadDocumentation": [
+        "https://learn.microsoft.com/en-us/graph/api/tokenlifetimepolicy-list-appliesto?view=graph-rest-1.0"
+      ],
+      "restoreEvidence": "2026-11-18: least-privileged delegated operation permission from current Microsoft operation table; method, path and closed payload verified by app-only lab lifecycle. Product actor and safeguards verified with injected fetch. Token holds multiple read roles, so read role isolation is not inferred."
+    },
+    {
+      "service": "entra",
+      "area": "tenantSettings",
+      "folders": [
+        "ActivityBasedTimeoutPolicies"
+      ],
+      "read": [
+        "GET /policies/activityBasedTimeoutPolicies"
+      ],
+      "write": [
+        "POST /policies/activityBasedTimeoutPolicies"
+      ],
+      "live": "200",
+      "backup": {
+        "delegated": [
+          {
+            "permission": "Policy.Read.All",
+            "asked": true,
+            "model": "listed",
+            "index": "listed",
+            "status": "confirmed"
+          },
+          {
+            "permission": "Policy.ReadWrite.ApplicationConfiguration",
+            "asked": false,
+            "model": "listed",
+            "index": "not listed",
+            "status": "confirmed"
+          }
+        ],
+        "application": [
+          {
+            "permission": "Policy.Read.All",
+            "asked": true,
+            "model": "listed",
+            "index": "listed",
+            "status": "confirmed"
+          }
+        ]
+      },
+      "restore": {
+        "delegated": [
+          {
+            "permission": "Policy.ReadWrite.ApplicationConfiguration",
+            "asked": true,
+            "model": "listed",
+            "index": "not listed",
+            "status": "confirmed"
+          }
+        ],
+        "application": "unsupported"
+      },
+      "restoreReadDocumentation": [],
       "restoreEvidence": "2026-11-18: least-privileged delegated operation permission from current Microsoft operation table; method, path and closed payload verified by app-only lab lifecycle. Product actor and safeguards verified with injected fetch. Token holds multiple read roles, so read role isolation is not inferred."
     },
     {
@@ -773,13 +872,11 @@
       },
       "restore": {
         "delegated": [
-          {"permission": "OrganizationalBranding.ReadWrite.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
-          {"permission": "Application.Read.All", "model": "listed", "index": "listed", "status": "confirmed", "asked": true},
-          {"permission": "Application.ReadWrite.All", "model": "listed", "index": "listed", "status": "confirmed", "asked": false}
+          {"permission": "OrganizationalBranding.ReadWrite.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
         ],
         "application": "unsupported"
       },
-      "restoreReadDocumentation": ["https://learn.microsoft.com/en-us/graph/api/application-list?view=graph-rest-1.0", "https://learn.microsoft.com/en-us/graph/api/serviceprincipal-list?view=graph-rest-1.0"],
+      "restoreReadDocumentation": [],
       "restoreEvidence": "2026-11-18: least-privileged delegated operation permission from current Microsoft operation table; method, path and closed payload verified by app-only lab lifecycle. Product actor and safeguards verified with injected fetch. Token holds multiple read roles, so read role isolation is not inferred."
     },
     {
@@ -867,13 +964,11 @@
       },
       "restore": {
         "delegated": [
-          {"permission": "Policy.ReadWrite.AuthenticationFlows", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
-          {"permission": "Application.Read.All", "model": "listed", "index": "listed", "status": "confirmed", "asked": true},
-          {"permission": "Application.ReadWrite.All", "model": "listed", "index": "listed", "status": "confirmed", "asked": false}
+          {"permission": "Policy.ReadWrite.AuthenticationFlows", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
         ],
         "application": "unsupported"
       },
-      "restoreReadDocumentation": ["https://learn.microsoft.com/en-us/graph/api/application-list?view=graph-rest-1.0", "https://learn.microsoft.com/en-us/graph/api/serviceprincipal-list?view=graph-rest-1.0"],
+      "restoreReadDocumentation": [],
       "restoreEvidence": "2026-11-18: least-privileged delegated operation permission from current Microsoft operation table; method, path and closed payload verified by app-only lab lifecycle. Product actor and safeguards verified with injected fetch. Token holds multiple read roles, so read role isolation is not inferred."
     },
     {

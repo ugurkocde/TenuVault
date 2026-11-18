@@ -13,7 +13,7 @@ Conditional Access and Intune retain their existing restore behavior. See [Resto
 
 The restore safety boundary requires the signed-in admin for the connected tenant and registration. A Backup Reader, an app-only token or an unreadable token cannot write a new type. Missing write permissions require adding restore access from Services in Settings and signing in again.
 
-Restore access includes Application.Read.All so the safety check can resolve the connected app registration and enterprise app. It grants no application writes. A failed safety read blocks the affected policy.
+Tenant settings restore access includes Application.Read.All to check token lifetime policy bindings. It grants no application writes. Each operation runs only the protections that its closed payload can affect. The four enabled subsets cannot remove protected identities, administrator roles, authentication methods or the connected registration. Token binding and non-default policy checks still run, and incomplete evidence blocks the affected policy.
 
 The boundary protects the signed-in admin's own account, roles and authentication methods, designated recovery accounts and the connected TenuVault registration and enterprise app. Removing the last Global Administrator or Privileged Role Administrator is refused. An unresolved safety reference blocks the affected policy.
 
