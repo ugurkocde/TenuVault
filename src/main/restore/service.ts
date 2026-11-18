@@ -8,7 +8,7 @@ import { guardedGraphIO } from "./graph-io"
 import { GuardedRunJournal, executeGuardedRun, restoreFingerprint, type GuardedRun, type GuardedStep } from "./guarded-run"
 import { RecoveryAccounts, resolveRestoreActor, resolveSafetyReferences } from "./safety-resolvers"
 import { safetyReader } from "./safety-reader"
-import { referenceSnapshots } from "./reference-scanner"
+import { referenceMatches } from "./reference-scanner"
 import type { IdentityRestoreRequest } from "./dispatch"
 import type { RestoreOutcome } from "../../portal/lib/policies/graph-restore"
 
@@ -22,7 +22,7 @@ export class IdentityRestoreService {
     // Refuse app-only tokens before even the safety reads.
     requireRestoreActor(connection.token, { ...connection, applicationObjectId: "pending", servicePrincipalId: "pending", recoveryAccountIds: [] })
     const actor = await resolveRestoreActor(reader, connection, readOnly ? [] : this.recovery.get(tenant))
-    const io = guardedGraphIO(connection.token, actor, (step, current, desired) => resolveSafetyReferences(reader, step, current, desired), this.fetchImpl, () => referenceSnapshots(connection.token, this.fetchImpl))
+    const io = guardedGraphIO(connection.token, actor, (step, current, desired) => resolveSafetyReferences(reader, step, current, desired), this.fetchImpl, (mappings, signal) => referenceMatches(connection.token, mappings, this.fetchImpl, { signal }))
     return { actor, io }
   }
   /** Called by trusted preview builders only. A renderer never supplies fingerprints or an actor. */

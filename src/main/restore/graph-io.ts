@@ -1,6 +1,5 @@
 import { restorePermissionBlocker } from "../../shared/services/modules"
 import { isGraphId } from "../../shared/security"
-import { replacedReferenceReport } from "../../shared/intune/restore-references"
 import { graphContinuation } from "../../shared/graph-continuation"
 import { restoreCapability, typeForFolder, type Item } from "../../shared/intune/registry"
 import { restoreMatrixRow } from "../../shared/intune/restore-matrix"
@@ -10,7 +9,7 @@ import { requireRestoreActor } from "./restore-actor"
 import { restoreFingerprint, type GuardedIO, type GuardedStep } from "./guarded-run"
 
 /** GET and write transport for the guarded writer. It never acquires or refreshes a sign-in. */
-export function guardedGraphIO(token: string, actor: RestoreActor, references: GuardedIO["references"], fetchImpl: typeof fetch = fetch, referenceSnapshots?: () => Promise<Array<{ path: string; snapshot: Item }>>): GuardedIO {
+export function guardedGraphIO(token: string, actor: RestoreActor, references: GuardedIO["references"], fetchImpl: typeof fetch = fetch, referenceScan?: GuardedIO["replacedReferences"]): GuardedIO {
   requireRestoreActor(token, actor)
   const contract = (step: GuardedStep) => {
     const row = restoreMatrixRow(step.folder)
@@ -47,7 +46,7 @@ export function guardedGraphIO(token: string, actor: RestoreActor, references: G
   }
   return {
     token,
-    ...(referenceSnapshots ? { replacedReferences: async (mappings) => replacedReferenceReport(await referenceSnapshots(), mappings) } : {}),
+    ...(referenceScan ? { replacedReferences: referenceScan } : {}),
     type: folder => {
       const type = typeForFolder(folder)
       if (!type || type.restoreSafety !== "identity") throw new RestoreSafetyError("This writer accepts only registered identity configuration types.")

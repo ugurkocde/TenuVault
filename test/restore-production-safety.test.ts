@@ -4,7 +4,7 @@ import { RecoveryAccounts, resolveRestoreActor, resolveSafetyReferences } from "
 import { GuardedRunJournal, executeGuardedRun, restoreFingerprint, type GuardedStep, type GuardedRun, type GuardedIO } from "../src/main/restore/guarded-run"
 import { IdentityRestoreService } from "../src/main/restore/service"
 import { restoreSafetyRoutes } from "../src/main/restore/routes"
-import { referenceSnapshots } from "../src/main/restore/reference-scanner"
+import { referenceMatches } from "../src/main/restore/reference-scanner"
 import { bindRestoreConnection, dispatchIdentityRestore, setIdentityRestoreDispatch } from "../src/main/restore/dispatch"
 import { Restorer, type GraphCall } from "../src/portal/lib/policies/graph-restore"
 import { INTUNE_TYPES, typeForFolder, type Item } from "../src/shared/intune/registry"
@@ -89,20 +89,50 @@ describe("production restore safety reads", () => {
     expect(() => guardRestoreItem(actor, "EntraRoleAssignments", guid(12), refs, true)).toThrow("last Global Administrator")
     expect((await resolveSafetyReferences(graph, step, null, { principalId: "unknown" })).complete).toBe(false)
   })
-  it("scans every registered current Intune and CA policy through details and extras and fails on an unread collection", async () => {
+  it("scans current Intune and CA references through relevant details and extras and fails on an unread collection", async () => {
     const calls: string[] = []
     const fetcher = vi.fn(async (input: RequestInfo | URL, options?: RequestInit) => {
       expect(options?.method).toBe("GET"); const url = new URL(String(input)); calls.push(url.pathname)
       if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: [{ id: user }] })
-      if (url.pathname.endsWith(`/deviceConfigurations/${user}`)) return Response.json({ id: user, displayName: "Policy", assignments: [] })
+      if (url.pathname.endsWith(`/deviceConfigurations/${user}`)) return Response.json({ id: user, displayName: "Policy", assignments: [{ target: { groupId: recovery } }] })
       if (url.pathname.endsWith("/deviceManagement")) return Response.json({ id: "settings", deviceComplianceCheckinThresholdDays: 30 })
       return Response.json({ value: [] })
     })
-    const snapshots = await referenceSnapshots(token, fetcher)
+    const snapshots = await referenceMatches(token, [{ kind: "objectId", folder: "Users", source: recovery, target: user }], fetcher)
     expect(snapshots.some(snapshot => snapshot.path === `DeviceConfigurations/${user}`)).toBe(true)
-    for (const type of INTUNE_TYPES.filter(type => type.restoreSafety !== "identity" && !type.staticIds)) expect(calls.some(path => path.endsWith(`/${type.path}`))).toBe(true)
-    await expect(referenceSnapshots(token, async () => new Response("", { status: 403 }))).rejects.toThrow()
+    for (const type of INTUNE_TYPES.filter(type => type.restoreSafety !== "identity" && !type.staticIds && !type.singleton)) expect(calls.some(path => path.endsWith(`/${type.path}`))).toBe(true)
+    await expect(referenceMatches(token, [], async () => new Response("", { status: 403 }))).rejects.toThrow()
   })
+  it("bounds every reference request and rejects cancellation, time and size limits", async () => {
+    const fetcher = vi.fn(async () => Response.json({ value: [] }))
+    await expect(referenceMatches(token, [], fetcher, { requests: 2 })).rejects.toThrow("request budget")
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    await expect(referenceMatches(token, [], fetcher, { bytes: 1 })).rejects.toThrow("size budget")
+    const controller = new AbortController(); controller.abort()
+    fetcher.mockClear()
+    await expect(referenceMatches(token, [], fetcher, { signal: controller.signal })).rejects.toThrow()
+    expect(fetcher).not.toHaveBeenCalled()
+    const stuck = vi.fn(() => new Promise<Response>(() => {}))
+    await expect(referenceMatches(token, [], stuck, { milliseconds: 10 })).rejects.toThrow()
+    expect(stuck).toHaveBeenCalledTimes(1)
+  })
+  it("scans paged assignments incrementally and never reads scripts, images or secret values", async () => {
+    const calls: string[] = []
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input)); calls.push(url.toString())
+      if (url.pathname.endsWith("/deviceManagementScripts")) return Response.json({ value: [{ id: user, roleScopeTagIds: [recovery] }] })
+      if (url.pathname.endsWith(`/deviceManagementScripts/${user}`)) {
+        expect(url.searchParams.get("$select")).toBe("id,roleScopeTagIds")
+        return Response.json({ id: user, roleScopeTagIds: [recovery], assignments: [], "assignments@odata.nextLink": `https://graph.microsoft.com/beta/deviceManagement/deviceManagementScripts/${user}/assignments?$skiptoken=next` })
+      }
+      if (url.pathname.endsWith("/assignments")) return Response.json({ value: [{ target: { groupId: recovery } }] })
+      return Response.json({ value: [] })
+    })
+    const matches = await referenceMatches(token, [{ kind: "objectId", folder: "Users", source: recovery, target: user }], fetcher)
+    expect(matches.map(match => match.property)).toEqual(["roleScopeTagIds.0", "assignments.0.target.groupId"])
+    expect(calls.some(call => /PlainText|localizedNotificationMessages|themeColorLogo/.test(call))).toBe(false)
+  })
+
 })
 
 describe("trusted identity dispatch and history", () => {
