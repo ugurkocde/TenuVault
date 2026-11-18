@@ -1,12 +1,12 @@
 import { typeForFolder, restoreCapability, type Item } from "../../shared/intune/registry"
-import { restoreMatrixRow } from "../../shared/intune/restore-matrix"
-import { RestoreSafetyError, RestoreWriteRefusedError, type RestoreActor } from "../../shared/intune/restore-guards"
+import { operationProtections, restoreMatrixRow } from "../../shared/intune/restore-matrix"
+import { RestoreSafetyError, RestoreWriteRefusedError, guardRestoreItem, type RestoreActor } from "../../shared/intune/restore-guards"
 import { isGuid } from "../../shared/security"
 import { graphContinuation } from "../../shared/graph-continuation"
 import { grantedPermissions } from "../../shared/services/token"
 import { requireRestoreActor } from "./restore-actor"
 import { directoryPayload, directoryReview, disabledUserBody, requireDirectoryApprovals, cloudObject, DIRECTORY_9A_BLOCKER } from "./directory-9a"
-import type { GuardedIO, GuardedStep } from "./guarded-run"
+import { restoreFingerprint, type GuardedIO, type GuardedStep } from "./guarded-run"
 
 const root = "https://graph.microsoft.com/v1.0/"
 const identity = (id: unknown): string => {
@@ -28,10 +28,16 @@ export function directoryPermissions(step: GuardedStep): string[] {
 /** No production caller is wired in phase 1. Both the runner and this final transport retain admission gates. */
 export function directory9aIO(token: string, actor: RestoreActor, safety: GuardedIO["references"], fetchImpl: typeof fetch = fetch, scan?: GuardedIO["replacedReferences"], wait: (ms: number) => Promise<void> = ms => new Promise(resolve => setTimeout(resolve, ms))): GuardedIO & { review: (step: GuardedStep) => Promise<ReturnType<typeof directoryReview>>; locate: (folder: "Users" | "Groups", sourceId: string) => Promise<{ action: "update" | "recycle" | "create"; current: Item | null }> } {
   requireRestoreActor(token, actor)
-  const request = async (path: string, method = "GET", body?: Item): Promise<Item | null> => {
+  const request = async (path: string, method = "GET", body?: Item, beforeRetry?: () => Promise<void>): Promise<Item | null> => {
     for (let attempt = 0; ; attempt++) {
       const response = await fetchImpl(root + path, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(60_000) })
-      if (response.status === 429 && attempt < 4) { await wait(Math.min(60_000, Math.max(1000, Number(response.headers.get("Retry-After")) * 1000 || 1000))); continue }
+      if (response.status === 429 && attempt < 4) {
+        await wait(Math.min(60_000, Math.max(1000, Number(response.headers.get("Retry-After")) * 1000 || 1000)))
+        if (method !== "GET") {
+          try { if (!beforeRetry) throw new Error("No reviewed retry"); await beforeRetry() } catch { throw new RestoreWriteRefusedError(429) }
+        }
+        continue
+      }
       if (method === "GET" && response.status === 404) return null
       if (method !== "GET" && response.status >= 400 && response.status < 500 && response.status !== 408) throw new RestoreWriteRefusedError(response.status)
       if (!response.ok) throw new Error("Directory request was not confirmed. No response body is retained.")
@@ -159,7 +165,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       if (result.blocker) throw new RestoreSafetyError(result.blocker)
       requireDirectoryApprovals(step, run, result.approvals)
       const permissions = directoryPermissions(step)
-      if (result.approvals.includes("privileged-relationship")) permissions.push("RoleManagement.ReadWrite.Directory")
+      if (result.roleAssignable && ["create", "member"].includes(step.directory!.action)) permissions.push("RoleManagement.ReadWrite.Directory")
       const granted = grantedPermissions(token)
       if (granted?.kind !== "delegated" || permissions.some(permission => !granted.permissions.has(permission))) throw new RestoreSafetyError("The signed-in connection lacks this operation's least-privileged permission.")
       const action = step.directory!.action
@@ -197,7 +203,16 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
         const answer = await fetchImpl(root + writePath, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(60_000) })
         if (!answer.ok) throw new RestoreWriteRefusedError(answer.status)
         return await answer.json() as Item
-      })() : await request(writePath, method, payload)
+      })() : await request(writePath, method, payload, async () => {
+        const current = await read(step, targetId)
+        if (restoreFingerprint(current) !== step.preview) throw new RestoreSafetyError("The tenant changed while throttled. Preview this item again.")
+        const fresh = await review(step)
+        if (fresh.blocker) throw new RestoreSafetyError(fresh.blocker)
+        requireDirectoryApprovals(step, run, fresh.approvals)
+        const references = await safety(step, current, body)
+        if (step.directory?.principalId) references.principals = [...references.principals, step.directory.principalId]
+        guardRestoreItem(actor, step.folder, targetId, references, step.allowRemoval === true, operationProtections(step.folder, step.operation))
+      })
       const id = action === "invite" ? (response?.invitedUser as Item | undefined)?.id : response?.id ?? targetId
       return { id: identity(id) }
     },

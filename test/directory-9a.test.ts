@@ -66,7 +66,7 @@ it("shows who gets what, blocks unresolved and protected principals, and binds d
 })
 
 for (const action of ["create", "update", "recycle", "invite", "member", "owner", "manager", "license"] as const) describe(action, () => {
-  for (const outcome of ["success", "timeout", "refused", "stale", "unapproved", "cancel"] as const) it(`${outcome}: uses the 8a journal and resumes without replay`, async () => admitted(async () => {
+  for (const outcome of ["success", "timeout", "refused", "stale", "unapproved", "cancel", "throttled"] as const) it(`${outcome}: uses the 8a journal and resumes without replay`, async () => admitted(async () => {
     const folder = ["member", "owner"].includes(action) ? "Groups" : "Users"
     const step = stepFor(action, folder)
     if (step.operation === "create") delete step.targetId
@@ -80,6 +80,7 @@ for (const action of ["create", "update", "recycle", "invite", "member", "owner"
       const url = new URL(String(input)), path = url.pathname.replace("/v1.0/", "")
       if (options?.method !== "GET") {
         writes++
+        if (outcome === "throttled" && writes === 1) return new Response(null, { status: 429, headers: { "Retry-After": "1" } })
         if (outcome === "refused") return new Response(null, { status: action === "license" ? 429 : 403 })
         const body = options?.body ? JSON.parse(String(options.body)) : {}
         if (action === "create") { secret = body.passwordProfile.password; live = { ...base, ...step.desired } }
@@ -109,8 +110,8 @@ for (const action of ["create", "update", "recycle", "invite", "member", "owner"
     let result = await executeGuardedRun(journal, run, io, controller.signal)
     if (outcome === "timeout" || outcome === "cancel") result = await executeGuardedRun(new GuardedRunJournal(saved), run, io)
     const state = result.run.entries[0]!.state
-    expect(state).toBe(outcome === "refused" ? "failed" : outcome === "stale" ? "blocked" : outcome === "unapproved" ? "failed-before-send" : "applied")
-    expect(writes).toBe(["stale", "unapproved"].includes(outcome) ? 0 : 1)
+    expect(state).toBe(outcome === "refused" || (outcome === "throttled" && action === "license") ? "failed" : outcome === "stale" ? "blocked" : outcome === "unapproved" ? "failed-before-send" : "applied")
+    expect(writes).toBe(["stale", "unapproved"].includes(outcome) ? 0 : outcome === "throttled" && action !== "license" ? 2 : 1)
     if (secret) { expect(secret.length).toBeGreaterThan(60); expect([...saved.values.values()].join()).not.toContain(secret); expect([...saved.values.values()].join()).not.toContain("passwordProfile") }
   }))
 })
@@ -215,4 +216,27 @@ it("retains an unanswered batch lock across run IDs", async () => admitted(async
   expect((await executeDirectoryBatches(store, identity, source, io)).status).toBe("partial")
   expect((await executeDirectoryBatches(store, { ...identity, id: "different-run" }, source, io)).status).toBe("partial")
   expect(writes).toBe(1)
+}))
+
+it("closes both relationship streams when the preview page ends", async () => {
+  const closed: string[] = []
+  async function* saved() { try { yield uuid(1); yield uuid(2) } finally { closed.push("saved") } }
+  async function* current() { try { yield uuid(3) } finally { closed.push("current") } }
+  expect(await previewDirectoryPage(relationshipDifference(saved(), current()), 1)).toHaveLength(1)
+  expect(closed.sort()).toEqual(["current", "saved"])
+})
+
+it("does not widen a Conditional Access excluded group's membership permission to role management", async () => admitted(async () => {
+  const step = stepFor("member"); step.directory!.principalId = principal.id; step.desired = { principalId: principal.id, present: true }; step.properties = Object.keys(step.desired)
+  const fetcher = vi.fn(async (input: RequestInfo | URL, options?: RequestInit) => {
+    if (options?.method !== "GET") return Response.json({ id: group.id })
+    if (String(input).includes("conditionalAccess")) return Response.json({ value: [{ conditions: { users: { excludeGroups: [group.id] } } }] })
+    if (String(input).endsWith("users/" + principal.id)) return Response.json(principal)
+    return Response.json(group)
+  })
+  const io = directory9aIO(token(["GroupMember.ReadWrite.All", "Group.Read.All", "User.Read.All", "Policy.Read.All"]), actor, refs, fetcher)
+  const review = await io.review(step), run = runFor(step)
+  expect(review.roleAssignable).toBe(false); expect(review.approvals).toContain("privileged-relationship")
+  for (const kind of review.approvals) approveDirectory(step, run, kind)
+  expect(await io.write(step, step.desired, group.id, () => {}, run)).toEqual({ id: group.id })
 }))

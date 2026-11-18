@@ -18,6 +18,7 @@ export interface DirectoryReview {
   approvals: string[]
   notices: string[]
   blocker?: string
+  roleAssignable: boolean
   changes: Array<{ property: string; before: unknown; after: unknown }>
 }
 export const DIRECTORY_9A_BLOCKER = "Directory restore is staged. Live lab lifecycle and cleanup evidence are required before this operation is admitted."
@@ -103,7 +104,10 @@ export function directoryReview(step: GuardedStep, live: Item | null, principal:
   if (intent.action === "member" && Array.isArray(live?.groupTypes) && live.groupTypes.includes("DynamicMembership")) blocker = NEVER_RESTORED["Dynamic group members"]
   if (person && !["user", "group"].includes(person.type)) blocker = "This principal type needs its own verified permission contract."
   if (person && ["owner", "manager"].includes(intent.action) && person.type !== "user") blocker = "This relationship requires a user principal. Other types need a separate verified contract."
-  const privileged = live?.isAssignableToRole === true || excludedFromCA
+  const roleAssignable = live?.isAssignableToRole === true || step.desired.isAssignableToRole === true
+  const privileged = roleAssignable || excludedFromCA
+  if (roleAssignable) notices.push("This group can confer a directory role.")
+  if (excludedFromCA) notices.push("This group is excluded from Conditional Access policies.")
   if ((["member", "owner"].includes(intent.action) && privileged) || step.desired.isAssignableToRole === true) approvals.push("privileged-relationship")
   if ((intent.action === "update" && live?.accountEnabled === false && step.desired.accountEnabled === true) || (["member", "owner"].includes(intent.action) && privileged && step.desired.present === true)) {
     approvals.push("security-response"); notices.push("The current state looks deliberate. This restore may undo a security response.")
@@ -123,7 +127,7 @@ export function directoryReview(step: GuardedStep, live: Item | null, principal:
   try {
     guardRestoreItem(actor, step.folder, step.targetId ?? step.sourceId, { complete: true, principals: person ? [person.id] : [], applications: [] }, false, ["identity-references"])
   } catch (error) { blocker = (error as Error).message }
-  return { changes: Object.entries(step.desired).filter(([key, value]) => JSON.stringify(live?.[key]) !== JSON.stringify(value)).map(([property, after]) => ({ property, before: live?.[property] ?? null, after })), principal: person, resource, privilege: intent.action, scope: `${actor.tenantId}/${resource.type}/${resource.id}`, approvals, notices, ...(blocker ? { blocker } : {}) }
+  return { roleAssignable, changes: Object.entries(step.desired).filter(([key, value]) => JSON.stringify(live?.[key]) !== JSON.stringify(value)).map(([property, after]) => ({ property, before: live?.[property] ?? null, after })), principal: person, resource, privilege: intent.action, scope: `${actor.tenantId}/${resource.type}/${resource.id}`, approvals, notices, ...(blocker ? { blocker } : {}) }
 }
 
 /** Sorted ID streams permit a merge difference without retaining a 50,000-member collection. */
@@ -137,11 +141,13 @@ export async function* relationshipDifference(saved: AsyncIterable<string>, curr
   }
   const a = checked(saved)[Symbol.asyncIterator](), b = checked(current)[Symbol.asyncIterator]()
   let left = await a.next(), right = await b.next()
-  while (!left.done || !right.done) {
-    if (right.done || (!left.done && left.value < right.value)) { yield { id: left.value!, present: true }; left = await a.next() }
-    else if (left.done || right.value < left.value) { if (exact) yield { id: right.value, present: false }; right = await b.next() }
-    else { left = await a.next(); right = await b.next() }
-  }
+  try {
+    while (!left.done || !right.done) {
+      if (right.done || (!left.done && left.value < right.value)) { yield { id: left.value!, present: true }; left = await a.next() }
+      else if (left.done || right.value < left.value) { if (exact) yield { id: right.value, present: false }; right = await b.next() }
+      else { left = await a.next(); right = await b.next() }
+    }
+  } finally { await Promise.allSettled([a.return(undefined), b.return(undefined)]) }
 }
 export async function previewDirectoryPage<T>(rows: AsyncIterable<T>, limit = 50): Promise<T[]> {
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) fail("A directory preview page must contain 1 to 100 rows.")
