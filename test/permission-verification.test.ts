@@ -37,8 +37,8 @@ function named(): Map<string, Set<SignInMode>> {
   return names
 }
 
-/** A need as the record writes it: each group's permissions in order, the first one marked as asked for. */
-const shape = (needed: Need) => (needed === "unsupported" ? "unsupported" : needed.flatMap((group) => group.map((permission, position) => `${permission}${position === 0 ? " (asked)" : ""}`)))
+/** Accepted permissions stay recorded, but the excluded organization and directory scopes are never asked for. */
+const shape = (needed: Need) => (needed === "unsupported" ? "unsupported" : needed.flatMap((group) => group.map((permission, position) => `${permission}${position === 0 && !["Organization.ReadWrite.All", "Directory.ReadWrite.All", "Directory.Read.All"].includes(permission) ? " (asked)" : ""}`)))
 const recorded = (entries: Recorded) => (entries === "unsupported" ? "unsupported" : entries.map((entry) => `${entry.permission}${entry.asked ? " (asked)" : ""}`))
 
 describe("The record of checked permissions", () => {
