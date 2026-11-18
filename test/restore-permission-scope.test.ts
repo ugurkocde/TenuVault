@@ -27,7 +27,7 @@ it("requests restore permissions only for enabled types, with exactly their leas
 })
 const excludedRestore = ["Organization.ReadWrite.All", "Directory.ReadWrite.All", "Directory.Read.All"]
 
-it("never emits excluded permissions when settling restore requirements, without filtering backup reads", () => {
+it("restore minus backup for every area and sign-in mode excludes Directory.Read.All, Directory.ReadWrite.All and Organization.ReadWrite.All", () => {
   for (const mode of ["delegated", "application"] as const) {
     for (const permission of excludedRestore) {
       const area: PermissionArea = {
@@ -40,6 +40,9 @@ it("never emits excluded permissions when settling restore requirements, without
       expect(areaPermissions(area, "restore", mode), permission).toEqual(["Directory.Read.All"])
     }
     for (const module of MODULES) for (const area of module.areas) {
+      const backup = areaPermissions(area, "backup", mode)
+      const additions = areaPermissions(area, "restore", mode).filter(scope => !backup.includes(scope))
+      for (const permission of excludedRestore) expect(additions, `${module.id}/${area.id}/${mode}`).not.toContain(permission)
       const writeOnly = { ...area, parts: area.parts.map(part => ({ ...part, backup: { delegated: "unsupported", application: "unsupported" } as const })) }
       for (const permission of excludedRestore) expect(areaPermissions(writeOnly, "restore", mode), `${module.id}/${area.id}`).not.toContain(permission)
     }

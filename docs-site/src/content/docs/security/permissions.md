@@ -307,3 +307,5 @@ Directory areas remain off until requested. Users use `User.Read.All`, devices u
 Some assigned enterprise app policy references can require access beyond the base application read permission. TenuVault records those refusals as incomplete relationships and never asks for an application write permission to improve backup coverage. Hidden membership can require `Member.Read.Hidden`. The Backup Reader does not request or accept that extra application role in this release. A refused hidden membership read stays incomplete. See [directory coverage and limitations](/backups/entra/#opt-in-directory-inventories).
 
 Existing Backup Readers holding Directory.Read.All continue to pass the read-only permission allowlist, and certificate renewal preserves that permission. Group lifecycle policy and delegated permission grant coverage remains available when the corresponding backup area is selected.
+
+For every area and sign-in mode, restore access adds none of `Directory.Read.All`, `Directory.ReadWrite.All` or `Organization.ReadWrite.All` beyond backup access for the same selection; it retains the `Directory.Read.All` backup read when Groups or Applications is selected.
