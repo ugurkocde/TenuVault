@@ -8890,7 +8890,7 @@
     },
     "builtIn": "Synced users, signed-in admin and recovery accounts.",
     "dependsOn": [],
-    "reason": "Directory restore is reserved for layer 9.",
+    "reason": "Directory restore requires live lab lifecycle and cleanup evidence in phase 2. No directory operation is admitted in production.",
     "indexWrites": {
       "POST": [
         {
@@ -11616,7 +11616,115 @@
         "index": "matched",
         "indexPath": "/users/{user-id}/todo/lists"
       }
-    ]
+    ],
+    "directoryRestore": {
+      "phase": "staged-9a-phase1",
+      "blocker": "Directory restore requires live lab lifecycle and cleanup evidence in phase 2. No directory operation is admitted in production.",
+      "actions": [
+        "create",
+        "update",
+        "recycle",
+        "invite",
+        "manager",
+        "license"
+      ],
+      "builder": "directory-9a",
+      "contracts": [
+        {
+          "action": "create",
+          "method": "POST",
+          "path": "users",
+          "delegated": [
+            "User.Create"
+          ],
+          "application": [
+            "User.Create"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/user-post-users?view=graph-rest-1.0",
+          "blocker": "Live lifecycle evidence is required. Production remains blocked. User.Create and User.ReadUpdate.All are present in the operation tables and permissions reference but missing from the older permission model."
+        },
+        {
+          "action": "update",
+          "method": "PATCH",
+          "path": "users/{id}",
+          "delegated": [
+            "User.ReadUpdate.All"
+          ],
+          "application": [
+            "User.ReadUpdate.All"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/user-update?view=graph-rest-1.0",
+          "blocker": "Live lifecycle evidence is required. Production remains blocked. User.Create and User.ReadUpdate.All are present in the operation tables and permissions reference but missing from the older permission model."
+        },
+        {
+          "action": "account state",
+          "method": "PATCH",
+          "path": "users/{id}",
+          "delegated": [
+            "User.EnableDisableAccount.All",
+            "User.Read.All"
+          ],
+          "application": [
+            "User.EnableDisableAccount.All",
+            "User.Read.All"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/user-update?view=graph-rest-1.0",
+          "blocker": "Live lifecycle evidence is required. Production remains blocked. User.Create and User.ReadUpdate.All are present in the operation tables and permissions reference but missing from the older permission model."
+        },
+        {
+          "action": "recycle",
+          "method": "POST",
+          "path": "directory/deletedItems/{id}/restore",
+          "delegated": [
+            "User.DeleteRestore.All"
+          ],
+          "application": [
+            "User.DeleteRestore.All"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/directory-deleteditems-restore?view=graph-rest-1.0",
+          "blocker": "Live lifecycle evidence is required. Production remains blocked. User.Create and User.ReadUpdate.All are present in the operation tables and permissions reference but missing from the older permission model."
+        },
+        {
+          "action": "invite",
+          "method": "POST",
+          "path": "invitations",
+          "delegated": [
+            "User.Invite.All"
+          ],
+          "application": [
+            "User.Invite.All"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/invitation-post?view=graph-rest-1.0",
+          "blocker": "Live lifecycle evidence is required. Production remains blocked. User.Create and User.ReadUpdate.All are present in the operation tables and permissions reference but missing from the older permission model."
+        },
+        {
+          "action": "manager",
+          "method": "PUT",
+          "path": "users/{id}/manager/$ref",
+          "delegated": [
+            "User.ReadWrite.All"
+          ],
+          "application": [
+            "User.ReadWrite.All"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/user-post-manager?view=graph-rest-1.0",
+          "blocker": "Live lifecycle evidence is required. Production remains blocked. User.Create and User.ReadUpdate.All are present in the operation tables and permissions reference but missing from the older permission model."
+        },
+        {
+          "action": "license",
+          "method": "POST",
+          "path": "users/{id}/assignLicense",
+          "delegated": [
+            "LicenseAssignment.ReadWrite.All"
+          ],
+          "application": [
+            "LicenseAssignment.ReadWrite.All"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/user-assignlicense?view=graph-rest-1.0",
+          "blocker": "Live lifecycle evidence is required. Production remains blocked. User.Create and User.ReadUpdate.All are present in the operation tables and permissions reference but missing from the older permission model."
+        }
+      ]
+    }
   },
   {
     "folder": "Groups",
@@ -11711,7 +11819,7 @@
     },
     "builtIn": "Synced and dynamic memberships; protected principals and privileged group relationships.",
     "dependsOn": [],
-    "reason": "Directory restore is reserved for layer 9.",
+    "reason": "Directory restore requires live lab lifecycle and cleanup evidence in phase 2. No directory operation is admitted in production.",
     "indexWrites": {
       "POST": [
         {
@@ -13437,7 +13545,125 @@
         "index": "matched",
         "indexPath": "/groups/{group-id}/resetUnseenCount"
       }
-    ]
+    ],
+    "directoryRestore": {
+      "phase": "staged-9a-phase1",
+      "blocker": "Directory restore requires live lab lifecycle and cleanup evidence in phase 2. No directory operation is admitted in production.",
+      "actions": [
+        "create",
+        "update",
+        "recycle",
+        "member",
+        "owner"
+      ],
+      "builder": "directory-9a",
+      "contracts": [
+        {
+          "action": "create",
+          "method": "POST",
+          "path": "groups",
+          "delegated": [
+            "Group.ReadWrite.All"
+          ],
+          "application": [
+            "Group.Create"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/group-post-groups?view=graph-rest-1.0",
+          "blocker": "Live lifecycle evidence is required. Production remains blocked. Group application-mode permanent deletion is unsupported in the operation table, so lab group creation is also blocked."
+        },
+        {
+          "action": "update",
+          "method": "PATCH",
+          "path": "groups/{id}",
+          "delegated": [
+            "Group.ReadWrite.All"
+          ],
+          "application": [
+            "Group.ReadWrite.All"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/group-update?view=graph-rest-1.0",
+          "blocker": "Live lifecycle evidence is required. Production remains blocked. Group application-mode permanent deletion is unsupported in the operation table, so lab group creation is also blocked."
+        },
+        {
+          "action": "recycle",
+          "method": "POST",
+          "path": "directory/deletedItems/{id}/restore",
+          "delegated": [
+            "Group.ReadWrite.All"
+          ],
+          "application": [
+            "Group.ReadWrite.All"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/directory-deleteditems-restore?view=graph-rest-1.0",
+          "blocker": "Live lifecycle evidence is required. Production remains blocked. Group application-mode permanent deletion is unsupported in the operation table, so lab group creation is also blocked."
+        },
+        {
+          "action": "member add",
+          "method": "POST",
+          "path": "groups/{id}/members/$ref",
+          "delegated": [
+            "GroupMember.ReadWrite.All"
+          ],
+          "application": [
+            "GroupMember.ReadWrite.All"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/group-post-members?view=graph-rest-1.0",
+          "blocker": "Live lifecycle evidence is required. Production remains blocked. Group application-mode permanent deletion is unsupported in the operation table, so lab group creation is also blocked."
+        },
+        {
+          "action": "member remove",
+          "method": "DELETE",
+          "path": "groups/{id}/members/{principalId}/$ref",
+          "delegated": [
+            "GroupMember.ReadWrite.All"
+          ],
+          "application": [
+            "GroupMember.ReadWrite.All"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/group-delete-members?view=graph-rest-1.0",
+          "blocker": "Live lifecycle evidence is required. Production remains blocked. Group application-mode permanent deletion is unsupported in the operation table, so lab group creation is also blocked."
+        },
+        {
+          "action": "owner add",
+          "method": "POST",
+          "path": "groups/{id}/owners/$ref",
+          "delegated": [
+            "Group.ReadWrite.All"
+          ],
+          "application": [
+            "Group.ReadWrite.All"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/group-post-owners?view=graph-rest-1.0",
+          "blocker": "Live lifecycle evidence is required. Production remains blocked. Group application-mode permanent deletion is unsupported in the operation table, so lab group creation is also blocked."
+        },
+        {
+          "action": "owner remove",
+          "method": "DELETE",
+          "path": "groups/{id}/owners/{principalId}/$ref",
+          "delegated": [
+            "Group.ReadWrite.All"
+          ],
+          "application": [
+            "Group.ReadWrite.All"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/group-delete-owners?view=graph-rest-1.0",
+          "blocker": "Live lifecycle evidence is required. Production remains blocked. Group application-mode permanent deletion is unsupported in the operation table, so lab group creation is also blocked."
+        },
+        {
+          "action": "role-assignable creation or membership",
+          "method": "POST",
+          "path": "groups or groups/{id}/members/$ref",
+          "delegated": [
+            "RoleManagement.ReadWrite.Directory"
+          ],
+          "application": [
+            "RoleManagement.ReadWrite.Directory"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/group-post-groups?view=graph-rest-1.0",
+          "blocker": "Live lifecycle evidence is required. Production remains blocked. Group application-mode permanent deletion is unsupported in the operation table, so lab group creation is also blocked."
+        }
+      ]
+    }
   },
   {
     "folder": "Applications",

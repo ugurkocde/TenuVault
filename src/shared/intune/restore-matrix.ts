@@ -27,6 +27,7 @@ export interface WriteContract {
 }
 export interface RestoreMatrixRow {
   folder: string
+  directoryRestore?: { phase: string; blocker: string; actions: string[]; builder: string; evidence?: Record<string, { date: string; result: "round-trip-matched" }>; contracts?: Array<{ action: string; method: string; path: string; delegated: string[]; application: string[]; documentation: string; blocker: string }> }
   configurationRestore?: { capability?: "create" | "singleton"; phase: string; confirmation: string; blockedReason: string; builder: string; lab: string }
   disposition: "configuration" | "directory-deferred" | "never" | "unverified"
   resource: string

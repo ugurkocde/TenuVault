@@ -9,6 +9,8 @@ import { addsOnlyPayload, RestoreSafetyError, RestoreWriteRefusedError, guardRes
 import { dependencyOrder, mappedReference, rememberMapping, type ReferenceKind, type ReplacedReference, type RestoreMapping } from "../../shared/intune/restore-references"
 
 export interface GuardedStep {
+  directory?: import("./directory-9a").DirectoryIntent
+  directoryApprovals?: Record<string, string>
   key: string
   folder: string
   sourceId: string
