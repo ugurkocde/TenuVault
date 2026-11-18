@@ -218,6 +218,7 @@ it("executes only the immutable main-process preview and reconciles through the 
   try {
     const request = { path: "backup/SecurityDefaults/securityDefaults.json", snapshot: { id: "securityDefaults", isEnabled: true }, origin: "restore" as const }
     const run = await service.prepare(tenant, request, "update", "securityDefaults")
+    await service.confirm(tenant, run.id, (await service.review(tenant, run.id)).fingerprint)
     expect(writes).toBe(0)
     const altered = await service.restore(tenant, { ...request, runId: run.id, snapshot: { ...request.snapshot, isEnabled: false } })
     expect(altered.success).toBe(false)
@@ -233,24 +234,25 @@ it("executes only the immutable main-process preview and reconciles through the 
 it("loads mappings before the real prepared preview and validates newer mappings at execution", async () => {
   const store = storage(), journal = new GuardedRunJournal(store)
   const source = guid(40), created = guid(41)
-  const mapping = { kind: "objectId" as const, folder: "CertificateBasedAuthPki", source, target: created }
-  const rowType = typeForFolder("CertificateBasedAuthPki")!, previous = rowType.restore
+  const mapping = { kind: "objectId" as const, folder: "UserFlowAttributes", source, target: created }
+  const rowType = typeForFolder("UserFlowAttributes")!, previous = rowType.restore
   rowType.restore = "create"
-  const contract = restoreMatrixRow("CertificateBasedAuthPki")!.create!, blocked = contract.blockedReason
+  const contract = restoreMatrixRow("UserFlowAttributes")!.create!, blocked = contract.blockedReason
   delete contract.blockedReason
   const calls: string[] = []
+  const configuration = { description: "Example", dataType: "string" }
   let exists = false
   const fetcher = (async (input: RequestInfo | URL, options?: RequestInit) => {
     const url = new URL(String(input)); calls.push(`${options?.method} ${url.pathname}`)
-    if (options?.method !== "GET") { expect(exists).toBe(false); exists = true; return Response.json({ id: created, displayName: "original name" }) }
+    if (options?.method !== "GET") { expect(exists).toBe(false); exists = true; return Response.json({ ...configuration, id: created, displayName: "original name" }) }
     if (url.pathname.endsWith("applications")) return Response.json({ value: [{ id: app, appId: client }] })
     if (url.pathname.endsWith("servicePrincipals")) return Response.json({ value: [{ id: sp, appId: client }] })
-    if (url.pathname.endsWith(created)) return Response.json({ id: created, displayName: "changed name" })
+    if (url.pathname.endsWith(created)) return Response.json({ ...configuration, id: created, displayName: "changed name" })
     return Response.json({ value: [] })
   }) as typeof fetch
-  const permissions = token.replace(token.split(".")[1]!, Buffer.from(JSON.stringify({ tid: tenant, oid: user, appid: client, scp: "PublicKeyInfrastructure.ReadWrite.All Policy.Read.All" })).toString("base64url"))
+  const permissions = token.replace(token.split(".")[1]!, Buffer.from(JSON.stringify({ tid: tenant, oid: user, appid: client, scp: "IdentityUserFlow.ReadWrite.All Policy.Read.All" })).toString("base64url"))
   const service = new IdentityRestoreService(journal, new RecoveryAccounts(store), async () => ({ token: permissions, tenantId: tenant, clientId: client, userId: user }), fetcher)
-  const request = { path: `backup/CertificateBasedAuthPki/${source}.json`, snapshot: { id: source, displayName: "original name" }, origin: "restore" as const }
+  const request = { path: `backup/UserFlowAttributes/${source}.json`, snapshot: { ...configuration, id: source, displayName: "original name" }, origin: "restore" as const }
   try {
     const early = await service.prepare(tenant, request, "create")
     const first = await service.prepare(tenant, request, "create")
@@ -259,7 +261,7 @@ it("loads mappings before the real prepared preview and validates newer mappings
     const later = await service.prepare(tenant, request, "create")
     expect(later.mappings).toEqual([mapping])
     expect(later.entries[0]!.step.targetId).toBe(created)
-    expect(later.entries[0]!.step.preview).toBe(restoreFingerprint({ id: created, displayName: "changed name" }))
+    expect(later.entries[0]!.step.preview).toBe(restoreFingerprint({ ...configuration, id: created, displayName: "changed name" }))
     expect((await service.restore(tenant, { ...request, runId: later.id })).success).toBe(false)
     expect(calls.filter(call => !call.startsWith("GET"))).toHaveLength(1)
     expect(calls.some(call => call.endsWith(created))).toBe(true)
@@ -282,7 +284,7 @@ for (const failure of ["preflight", "lost-response", "crash-before-send"] as con
     if (url.pathname.endsWith(`/users/${recovery}`)) return Response.json({ id: recovery })
     if (url.pathname.includes("identitySecurityDefaultsEnforcementPolicy")) {
       reads++
-      if (inject && failure === "preflight" && reads === 3) return new Response(null, { status: 503 })
+      if (inject && failure === "preflight" && reads === 5) return new Response(null, { status: 503 })
       return Response.json(live)
     }
     return Response.json({ value: [] })
@@ -293,6 +295,7 @@ for (const failure of ["preflight", "lost-response", "crash-before-send"] as con
   try {
     const request = { path: "backup/SecurityDefaults/securityDefaults.json", snapshot: { id: "securityDefaults", isEnabled: true }, origin: "restore" as const }
     const run = await service.prepare(tenant, request, "update", "securityDefaults")
+    await service.confirm(tenant, run.id, (await service.review(tenant, run.id)).fingerprint)
     if (failure === "crash-before-send") {
       const save = store.set
       store.set = (key, value) => { save(key, value); if (value.includes('"state":"uncertain"')) throw new Error("process stopped after journal commit") }
@@ -309,6 +312,7 @@ for (const failure of ["preflight", "lost-response", "crash-before-send"] as con
     await new IdentityRestoreService(journal, accounts, async () => ({ token, tenantId: tenant, clientId: client, userId: user }), fetcher).reconcile(tenant, run.id)
     expect(journal.load(tenant, run.id)!.entries[0]!.state).toBe(failure === "lost-response" ? "applied" : entry.state)
     const fresh = await service.prepare(tenant, request, "update", "securityDefaults")
+    await service.confirm(tenant, fresh.id, (await service.review(tenant, fresh.id)).fingerprint)
     const outcome = await service.restore(tenant, { ...request, runId: fresh.id })
     expect(outcome.success).toBe(failure !== "crash-before-send")
     expect(writes).toBe(failure === "lost-response" ? 2 : failure === "preflight" ? 1 : 0)

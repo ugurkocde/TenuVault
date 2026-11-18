@@ -1,3 +1,4 @@
+import { restoreMatrixRow } from "./restore-matrix"
 import type { Extra, IntuneType } from "./registry"
 import { ENTRA_DIRECTORY_TYPES } from "./entra-directory"
 import { entraSnapshot } from "./entra-snapshot"
@@ -6,7 +7,7 @@ import { entraSnapshot } from "./entra-snapshot"
 const limitation = "Entra ID configuration restore is not available yet."
 const neverStored = ["clientSecret", "password", "privateKey", "sharedSecret", "secretKey", "tokenSeed", "seed", "tunnelKey", "keyCredentials", "passwordCredentials", "secret", "accessToken", "refreshToken", "clientAssertion", "pfx", "pkcs12", "secretText"]
 const base = (folder: string, label: string, path: string, area: IntuneType["area"] = "Tenant settings"): IntuneType => ({
-  folder, label, path, area, restoreSafety: "identity", nameKey: "displayName", apiVersion: "v1.0", limitation, neverStoredKeys: neverStored, normalizeSnapshot: entraSnapshot,
+  folder, label, path, area, restoreSafety: "identity", nameKey: "displayName", apiVersion: "v1.0", limitation: restoreMatrixRow(folder)?.configurationRestore?.blockedReason ?? limitation, neverStoredKeys: neverStored, normalizeSnapshot: entraSnapshot,
 })
 const singleton = (folder: string, label: string, path: string, area?: IntuneType["area"]): IntuneType => ({
   ...base(folder, label, path, area), singleton: { id: folder, name: label },

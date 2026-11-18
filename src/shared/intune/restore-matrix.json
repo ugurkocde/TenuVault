@@ -49,7 +49,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
     "indexWrites": {
       "PATCH": [
         {
@@ -69,7 +69,14 @@
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "configuration",
-    "supplementalWrites": []
+    "supplementalWrites": [],
+    "configurationRestore": {
+      "phase": "8b-phase1",
+      "confirmation": "authorization",
+      "blockedReason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
+      "builder": "closed-subset-injected-fetch",
+      "lab": "prepared-not-run"
+    }
   },
   {
     "folder": "SecurityDefaults",
@@ -109,7 +116,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
     "indexWrites": {
       "PATCH": [
         {
@@ -129,7 +136,14 @@
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "configuration",
-    "supplementalWrites": []
+    "supplementalWrites": [],
+    "configurationRestore": {
+      "phase": "8b-phase1",
+      "confirmation": "security-defaults",
+      "blockedReason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
+      "builder": "closed-subset-injected-fetch",
+      "lab": "prepared-not-run"
+    }
   },
   {
     "folder": "AdminConsentRequestPolicy",
@@ -177,7 +191,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
     "indexWrites": {
       "PUT": [
         {
@@ -197,7 +211,14 @@
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "configuration",
-    "supplementalWrites": []
+    "supplementalWrites": [],
+    "configurationRestore": {
+      "phase": "8b-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
+      "builder": "closed-subset-injected-fetch",
+      "lab": "prepared-not-run"
+    }
   },
   {
     "folder": "PermissionGrantPolicies",
@@ -273,7 +294,7 @@
     "dependsOn": [
       "Applications"
     ],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
     "indexWrites": {
       "POST": [
         {
@@ -374,7 +395,14 @@
         "index": "matched",
         "indexPath": "/policies/permissionGrantPolicies/{permissionGrantPolicy-id}/excludes/{permissionGrantConditionSet-id}"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8b-phase1",
+      "confirmation": "permission-grants",
+      "blockedReason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
+      "builder": "closed-subset-injected-fetch",
+      "lab": "prepared-not-run"
+    }
   },
   {
     "folder": "PermissionGrantPreApprovalPolicies",
@@ -449,7 +477,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Pre-approval conditions need a closed polymorphic schema and reference resolution.",
     "indexWrites": {
       "POST": [
         {
@@ -523,7 +551,14 @@
         "blockedReason": "No exact method/path match was established in the local OpenAPI index. Evidence only. This action or sub-resource has no reviewed payload, stable reconciliation key or guarded step implementation; deletion requires per-item approval.",
         "index": "not-matched"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8b-phase1",
+      "confirmation": "permission-grants",
+      "blockedReason": "Pre-approval conditions need a closed polymorphic schema and reference resolution.",
+      "builder": "blocked",
+      "lab": "not-prepared: resolve payload, identity or recycle-bin contract first"
+    }
   },
   {
     "folder": "DefaultAppManagementPolicy",
@@ -571,7 +606,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Credential restriction schemas and their one-way transitions need verification. Credential values are never restored.",
     "indexWrites": {
       "PATCH": [
         {
@@ -591,7 +626,14 @@
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "configuration",
-    "supplementalWrites": []
+    "supplementalWrites": [],
+    "configurationRestore": {
+      "phase": "8b-phase1",
+      "confirmation": "app-management",
+      "blockedReason": "Credential restriction schemas and their one-way transitions need verification. Credential values are never restored.",
+      "builder": "blocked",
+      "lab": "not-prepared: resolve payload, identity or recycle-bin contract first"
+    }
   },
   {
     "folder": "AppManagementPolicies",
@@ -678,7 +720,7 @@
     "dependsOn": [
       "Applications"
     ],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Credential restriction schemas, application bindings and their one-way transitions need verification.",
     "indexWrites": {
       "POST": [
         {
@@ -769,7 +811,14 @@
         "blockedReason": "No exact method/path match was established in the local OpenAPI index. Evidence only. This action or sub-resource has no reviewed payload, stable reconciliation key or guarded step implementation; deletion requires per-item approval.",
         "index": "not-matched"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8b-phase1",
+      "confirmation": "app-management",
+      "blockedReason": "Credential restriction schemas, application bindings and their one-way transitions need verification.",
+      "builder": "blocked",
+      "lab": "not-prepared: resolve payload, identity or recycle-bin contract first"
+    }
   },
   {
     "folder": "TokenLifetimePolicies",
@@ -850,7 +899,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
     "indexWrites": {
       "PATCH": [
         {
@@ -896,7 +945,14 @@
         "index": "matched",
         "indexPath": "/policies/tokenLifetimePolicies/{tokenLifetimePolicy-id}"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8b-phase1",
+      "confirmation": "sign-in-policy",
+      "blockedReason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
+      "builder": "closed-subset-injected-fetch",
+      "lab": "prepared-not-run"
+    }
   },
   {
     "folder": "TokenIssuancePolicies",
@@ -975,7 +1031,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Legacy token issuance definitions need a supported definition schema and live evidence.",
     "indexWrites": {
       "PATCH": [
         {
@@ -1021,7 +1077,14 @@
         "index": "matched",
         "indexPath": "/policies/tokenIssuancePolicies/{tokenIssuancePolicy-id}"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8b-phase1",
+      "confirmation": "sign-in-policy",
+      "blockedReason": "Legacy token issuance definitions need a supported definition schema and live evidence.",
+      "builder": "blocked",
+      "lab": "not-prepared: resolve payload, identity or recycle-bin contract first"
+    }
   },
   {
     "folder": "ClaimsMappingPolicies",
@@ -1097,7 +1160,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Claims transformations, signing-key requirements and application bindings need verification.",
     "indexWrites": {
       "POST": [
         {
@@ -1207,7 +1270,14 @@
         "blockedReason": "No exact method/path match was established in the local OpenAPI index. Evidence only. This action or sub-resource has no reviewed payload, stable reconciliation key or guarded step implementation; deletion requires per-item approval.",
         "index": "not-matched"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8b-phase1",
+      "confirmation": "sign-in-policy",
+      "blockedReason": "Claims transformations, signing-key requirements and application bindings need verification.",
+      "builder": "blocked",
+      "lab": "not-prepared: resolve payload, identity or recycle-bin contract first"
+    }
   },
   {
     "folder": "HomeRealmDiscoveryPolicies",
@@ -1286,7 +1356,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Home realm discovery definitions and federation relationships need verification.",
     "indexWrites": {
       "POST": [
         {
@@ -1396,7 +1466,14 @@
         "blockedReason": "No exact method/path match was established in the local OpenAPI index. Evidence only. This action or sub-resource has no reviewed payload, stable reconciliation key or guarded step implementation; deletion requires per-item approval.",
         "index": "not-matched"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8b-phase1",
+      "confirmation": "sign-in-policy",
+      "blockedReason": "Home realm discovery definitions and federation relationships need verification.",
+      "builder": "blocked",
+      "lab": "not-prepared: resolve payload, identity or recycle-bin contract first"
+    }
   },
   {
     "folder": "ActivityBasedTimeoutPolicies",
@@ -1473,7 +1550,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
     "indexWrites": {
       "POST": [
         {
@@ -1517,7 +1594,14 @@
         "index": "matched",
         "indexPath": "/policies/activityBasedTimeoutPolicies/{activityBasedTimeoutPolicy-id}"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8b-phase1",
+      "confirmation": "sign-in-policy",
+      "blockedReason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
+      "builder": "closed-subset-injected-fetch",
+      "lab": "prepared-not-run"
+    }
   },
   {
     "folder": "DeviceRegistrationPolicy",
@@ -1567,7 +1651,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Device registration selectors, local administrator settings and lock-out effects need verification.",
     "indexWrites": {
       "PUT": [
         {
@@ -1587,7 +1671,14 @@
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "configuration",
-    "supplementalWrites": []
+    "supplementalWrites": [],
+    "configurationRestore": {
+      "phase": "8b-phase1",
+      "confirmation": "device-registration",
+      "blockedReason": "Device registration selectors, local administrator settings and lock-out effects need verification.",
+      "builder": "blocked",
+      "lab": "not-prepared: resolve payload, identity or recycle-bin contract first"
+    }
   },
   {
     "folder": "MdmEnrollmentPolicies",
@@ -1601,7 +1692,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a. No verified parent write contract; sub-resource or action-specific research is required.",
+    "reason": "No documented parent write contract and stable create key have been settled.",
     "indexWrites": {
       "POST": [
         {
@@ -1629,7 +1720,14 @@
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "unverified",
-    "supplementalWrites": []
+    "supplementalWrites": [],
+    "configurationRestore": {
+      "phase": "8b-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "No documented parent write contract and stable create key have been settled.",
+      "builder": "blocked",
+      "lab": "not-prepared: resolve payload, identity or recycle-bin contract first"
+    }
   },
   {
     "folder": "MamEnrollmentPolicies",
@@ -1643,7 +1741,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a. No verified parent write contract; sub-resource or action-specific research is required.",
+    "reason": "No documented parent write contract and stable create key have been settled.",
     "indexWrites": {
       "POST": [
         {
@@ -1671,7 +1769,14 @@
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "unverified",
-    "supplementalWrites": []
+    "supplementalWrites": [],
+    "configurationRestore": {
+      "phase": "8b-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "No documented parent write contract and stable create key have been settled.",
+      "builder": "blocked",
+      "lab": "not-prepared: resolve payload, identity or recycle-bin contract first"
+    }
   },
   {
     "folder": "DirectorySettings",
@@ -1755,7 +1860,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
     "indexWrites": {},
     "verification": {
       "date": "2026-11-17",
@@ -1842,7 +1947,14 @@
         "index": "matched",
         "indexPath": "/groups/{group-id}/settings/{directorySetting-id}"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8b-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
+      "builder": "closed-subset-injected-fetch",
+      "lab": "not-prepared: resolve payload, identity or recycle-bin contract first"
+    }
   },
   {
     "folder": "Organization",
@@ -1888,7 +2000,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
     "indexWrites": {
       "POST": [
         {
@@ -1990,7 +2102,14 @@
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "configuration",
-    "supplementalWrites": []
+    "supplementalWrites": [],
+    "configurationRestore": {
+      "phase": "8b-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
+      "builder": "closed-subset-injected-fetch",
+      "lab": "prepared-not-run"
+    }
   },
   {
     "folder": "EntraCompanyBranding",
@@ -2055,7 +2174,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
     "indexWrites": {
       "POST": [
         {
@@ -2167,7 +2286,14 @@
         "index": "matched",
         "indexPath": "/organization/{organization-id}/branding"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8b-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
+      "builder": "closed-subset-injected-fetch",
+      "lab": "prepared-not-run"
+    }
   },
   {
     "folder": "Domains",
@@ -2240,7 +2366,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Domains require ownership verification and are never restored.",
+    "reason": "Domains cannot be restored. Federation configurations need separate verified child contracts.",
     "indexWrites": {
       "POST": [
         {
@@ -2363,7 +2489,14 @@
         "index": "matched",
         "indexPath": "/domains/{domain-id}/promote"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8b-phase1",
+      "confirmation": "federation-and-certificates",
+      "blockedReason": "Domains cannot be restored. Federation configurations need separate verified child contracts.",
+      "builder": "blocked",
+      "lab": "not-prepared: resolve payload, identity or recycle-bin contract first"
+    }
   },
   {
     "folder": "OnPremisesSynchronization",
@@ -2408,7 +2541,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Synchronization flags are never restored.",
+    "reason": "On-premises synchronization flags belong to the synchronization server and are never restored.",
     "indexWrites": {
       "PATCH": [
         {
@@ -2428,7 +2561,14 @@
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "never",
-    "supplementalWrites": []
+    "supplementalWrites": [],
+    "configurationRestore": {
+      "phase": "8b-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "On-premises synchronization flags belong to the synchronization server and are never restored.",
+      "builder": "blocked",
+      "lab": "not-prepared: resolve payload, identity or recycle-bin contract first"
+    }
   },
   {
     "folder": "AuthenticationMethodsPolicy",
@@ -2472,7 +2612,7 @@
     "dependsOn": [
       "Groups"
     ],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Authentication methods and method configurations remain blocked: a change affecting the signed-in admin is refused until usable-method and target resolution is proven. Lab verification is identical-value-only.",
     "indexWrites": {
       "PATCH": [
         {
@@ -2564,7 +2704,14 @@
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "configuration",
-    "supplementalWrites": []
+    "supplementalWrites": [],
+    "configurationRestore": {
+      "phase": "8b-phase1",
+      "confirmation": "authentication-methods",
+      "blockedReason": "Authentication methods and method configurations remain blocked: a change affecting the signed-in admin is refused until usable-method and target resolution is proven. Lab verification is identical-value-only.",
+      "builder": "blocked",
+      "lab": "prepared-not-run"
+    }
   },
   {
     "folder": "AuthenticationFlowsPolicy",
@@ -2608,7 +2755,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
     "indexWrites": {
       "PATCH": [
         {
@@ -2628,7 +2775,14 @@
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "configuration",
-    "supplementalWrites": []
+    "supplementalWrites": [],
+    "configurationRestore": {
+      "phase": "8b-phase1",
+      "confirmation": "authentication",
+      "blockedReason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
+      "builder": "closed-subset-injected-fetch",
+      "lab": "prepared-not-run"
+    }
   },
   {
     "folder": "AuthenticationContexts",
@@ -2676,7 +2830,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
     "indexWrites": {
       "POST": [
         {
@@ -2721,7 +2875,14 @@
         "index": "matched",
         "indexPath": "/identity/conditionalAccess/authenticationContextClassReferences/{authenticationContextClassReference-id}"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8b-phase1",
+      "confirmation": "authentication",
+      "blockedReason": "Production remains blocked pending per-contract live write evidence. Candidate builders cover only the closed payload subset; unsupported child configuration is refused.",
+      "builder": "closed-subset-injected-fetch",
+      "lab": "not-prepared: resolve payload, identity or recycle-bin contract first"
+    }
   },
   {
     "folder": "CertificateBasedAuthConfigurations",
@@ -2767,7 +2928,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Certificate authority chains and organization-scoped create reconciliation need verification.",
     "indexWrites": {
       "POST": [
         {
@@ -2805,7 +2966,14 @@
         "index": "matched",
         "indexPath": "/organization/{organization-id}/certificateBasedAuthConfiguration/{certificateBasedAuthConfiguration-id}"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8b-phase1",
+      "confirmation": "federation-and-certificates",
+      "blockedReason": "Certificate authority chains and organization-scoped create reconciliation need verification.",
+      "builder": "blocked",
+      "lab": "not-prepared: resolve payload, identity or recycle-bin contract first"
+    }
   },
   {
     "folder": "CertificateBasedAuthPki",
@@ -2876,7 +3044,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "PKI create remains blocked until recycle-bin-first restoration, certificate authority children and reconciliation are verified.",
     "indexWrites": {
       "POST": [
         {
@@ -2981,7 +3149,14 @@
         "index": "matched",
         "indexPath": "/directory/deletedItems/{directoryObject-id}"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8b-phase1",
+      "confirmation": "federation-and-certificates",
+      "blockedReason": "PKI create remains blocked until recycle-bin-first restoration, certificate authority children and reconciliation are verified.",
+      "builder": "blocked",
+      "lab": "not-prepared: resolve payload, identity or recycle-bin contract first"
+    }
   },
   {
     "folder": "FederatedTokenValidationPolicy",
@@ -3023,7 +3198,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Federated domain validation keys and relationship checks need verification.",
     "indexWrites": {
       "PUT": [
         {
@@ -3041,7 +3216,14 @@
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "configuration",
-    "supplementalWrites": []
+    "supplementalWrites": [],
+    "configurationRestore": {
+      "phase": "8b-phase1",
+      "confirmation": "federation-and-certificates",
+      "blockedReason": "Federated domain validation keys and relationship checks need verification.",
+      "builder": "blocked",
+      "lab": "not-prepared: resolve payload, identity or recycle-bin contract first"
+    }
   },
   {
     "folder": "ContinuousAccessEvaluationPolicy",
@@ -3082,7 +3264,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Legacy CAE migration is a one-way action, not configuration restore. Restore access is not requested.",
     "indexWrites": {
       "PATCH": [
         {
@@ -3103,7 +3285,14 @@
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "configuration",
-    "supplementalWrites": []
+    "supplementalWrites": [],
+    "configurationRestore": {
+      "phase": "8b-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Legacy CAE migration is a one-way action, not configuration restore. Restore access is not requested.",
+      "builder": "blocked",
+      "lab": "not-prepared: resolve payload, identity or recycle-bin contract first"
+    }
   },
   {
     "folder": "HardwareOathDevices",
@@ -3192,7 +3381,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "OATH seeds are secrets and are never stored or restored.",
+    "reason": "Hardware OATH seeds are never returned and credentials are never restored.",
     "indexWrites": {
       "POST": [
         {
@@ -3264,7 +3453,14 @@
         "index": "matched",
         "indexPath": "/directory/authenticationMethodDevices/hardwareOathDevices/{hardwareOathTokenAuthenticationMethodDevice-id}"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8b-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Hardware OATH seeds are never returned and credentials are never restored.",
+      "builder": "blocked",
+      "lab": "not-prepared: resolve payload, identity or recycle-bin contract first"
+    }
   },
   {
     "folder": "GroupLifecyclePolicies",

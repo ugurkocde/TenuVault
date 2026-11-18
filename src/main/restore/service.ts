@@ -1,3 +1,4 @@
+import { configurationPayload, isEntraConfiguration, configurationApproval, configurationConfirmation, configurationDifference } from "./entra-configuration"
 import { randomUUID } from "node:crypto"
 import { typeForFolder, restoreCapability } from "../../shared/intune/registry"
 import { restoreMatrixRow } from "../../shared/intune/restore-matrix"
@@ -31,15 +32,32 @@ export class IdentityRestoreService {
     const type = typeForFolder(folder)
     if (!type || type.restoreSafety !== "identity" || restoreCapability(type) === "none") throw new RestoreSafetyError("This type remains backup-only.")
     const contract = restoreMatrixRow(folder)?.[operation]
-    if (!contract || Object.keys(request.snapshot).some(key => ![...contract.properties, "id", "@odata.type"].includes(key))) throw new RestoreSafetyError("This snapshot needs a reviewed request builder before restoring.")
+    if (!contract || (!isEntraConfiguration(folder) && Object.keys(request.snapshot).some(key => ![...contract.properties, "id", "@odata.type"].includes(key)))) throw new RestoreSafetyError("This snapshot needs a reviewed request builder before restoring.")
     const { actor, io } = await this.context(tenant)
-    const step: GuardedStep = { key: "configuration", folder, sourceId: String(request.snapshot.id ?? ""), operation, targetId, properties: contract.properties, desired: Object.fromEntries(contract.properties.filter(key => key in request.snapshot).map(key => [key, request.snapshot[key]!])), preview: "", requires: [] }
+    const step: GuardedStep = { key: "configuration", folder, sourceId: String(request.snapshot.id ?? ""), operation, targetId, properties: contract.properties, desired: isEntraConfiguration(folder) ? configurationPayload(folder, operation, request.snapshot) : Object.fromEntries(contract.properties.filter(key => key in request.snapshot).map(key => [key, request.snapshot[key]!])), preview: "", requires: [] }
     const mappings = this.journal.mappings(tenant)
     step.targetId ??= mappedReference(mappings, "objectId", folder, step.sourceId)
     step.preview = restoreFingerprint(await io.read(step, step.targetId))
     const run: GuardedRun = { version: 1, id: randomUUID(), tenant, actor, origin: request.origin, source: { path: request.path, fingerprint: restoreFingerprint(request.snapshot) }, entries: [{ step, state: "pending" }], mappings }
     this.journal.save(run)
     return run
+  }
+  /** Trusted per-item flow only. No bulk restore caller can supply an approval. */
+  async review(tenant: string, id: string) {
+    const run = this.journal.load(tenant, id)
+    if (!run || run.entries.length !== 1) throw new RestoreSafetyError("This restore preview is unavailable.")
+    const { io } = await this.context(tenant)
+    const step = run.entries[0]!.step
+    const current = await io.read(step, step.targetId)
+    if (restoreFingerprint(current) !== step.preview) throw new RestoreSafetyError("The tenant changed after this preview. Preview this item again.")
+    return { kind: configurationConfirmation(step.folder), fingerprint: configurationApproval(step), changes: configurationDifference(step, current) }
+  }
+  async confirm(tenant: string, id: string, fingerprint: string): Promise<void> {
+    const review = await this.review(tenant, id)
+    const run = this.journal.load(tenant, id)!
+    if (review.fingerprint !== fingerprint || run.entries[0]!.state !== "pending") throw new RestoreSafetyError("This confirmation no longer matches the pending preview.")
+    run.entries[0]!.step.confirmation = { kind: review.kind, fingerprint }
+    this.journal.save(run)
   }
   async restore(tenant: string, request: IdentityRestoreRequest): Promise<RestoreOutcome> {
     const folder = request.path.split("/")[1] ?? ""

@@ -1,3 +1,5 @@
+import { checkConfigurationLockout, configurationPayload, isEntraConfiguration, requireConfigurationApproval } from "./entra-configuration"
+import { safetyReader } from "./safety-reader"
 import { restorePermissionBlocker } from "../../shared/services/modules"
 import { isGraphId } from "../../shared/security"
 import { restoreCapability, typeForFolder, type Item } from "../../shared/intune/registry"
@@ -40,9 +42,18 @@ export function guardedGraphIO(token: string, actor: RestoreActor, references: G
     const { row, write } = contract(step)
     if (targetId !== undefined && !isGraphId(targetId)) throw new RestoreSafetyError("The target object ID is invalid.")
     const root = `https://graph.microsoft.com/${write.version}/`
-    if (/\{organizationId\}/.test(row.readPath)) throw new RestoreSafetyError("Resolve and verify the organization ID before restoring this type.")
     const path = row.detection.kind === "singleton" ? row.readPath : targetId ? `${row.readPath}/${encodeURIComponent(targetId)}` : undefined
     return { row, write, root, path }
+  }
+  const resolvedPathOf = async (step: GuardedStep, targetId?: string) => {
+    const result = pathOf(step, targetId)
+    if (step.folder === "Organization" && targetId && targetId !== actor.tenantId) throw new RestoreSafetyError("Organization restore must target the connected tenant ID.")
+    if (step.folder === "Organization" || result.row.readPath.includes("{organizationId}")) {
+      const organizations = await request(result.root + "organization?$select=id")
+      if (!Array.isArray(organizations?.value) || organizations.value.length !== 1 || (organizations.value[0] as Item)?.id !== actor.tenantId) throw new RestoreSafetyError("The connected tenant organization could not be uniquely resolved.")
+      result.path = step.folder === "Organization" ? `organization/${encodeURIComponent(actor.tenantId)}` : result.row.readPath.replace("{organizationId}", encodeURIComponent(actor.tenantId))
+    }
+    return result
   }
   return {
     token,
@@ -53,7 +64,7 @@ export function guardedGraphIO(token: string, actor: RestoreActor, references: G
       return type
     },
     read: async (step, targetId) => {
-      const { root, path } = pathOf(step, targetId ?? step.targetId ?? (step.operation === "update" ? step.sourceId : undefined))
+      const { root, path } = await resolvedPathOf(step, targetId ?? step.targetId ?? (step.operation === "update" ? step.sourceId : undefined))
       if (!path) {
         const matches = await find(step)
         if (matches.length > 1) throw new RestoreSafetyError("Create detection found an ambiguous match.")
@@ -70,19 +81,27 @@ export function guardedGraphIO(token: string, actor: RestoreActor, references: G
     write: async (step, body, targetId, beforeSend) => {
       const type = typeForFolder(step.folder)
       if (!type || ["none", "metadata"].includes(restoreCapability(type)) || (restoreCapability(type) === "singleton" && step.operation === "create")) throw new RestoreSafetyError(type?.limitation ?? "This type cannot be restored.")
-      const { row, write, root } = pathOf(step, targetId)
+      const { row, write, root, path: readPath } = await resolvedPathOf(step, targetId)
       if (Object.keys(body).some(key => !write.properties.includes(key))) throw new RestoreSafetyError("The write body contains properties outside the verified Graph contract.")
+      if (isEntraConfiguration(step.folder)) {
+        requireConfigurationApproval(step)
+        configurationPayload(step.folder, step.operation, body)
+      }
       // Directory and action-specific writers are intentionally deferred. This adapter cannot turn
       // a research row or a caller-provided path into permission to write them.
       if (row.disposition !== "configuration") throw new RestoreSafetyError("This type needs its own reviewed restore implementation.")
       let path = write.path
+      if (step.folder === "Organization") path = `organization/${encodeURIComponent(actor.tenantId)}`
+      else path = path.replace("{organizationId}", encodeURIComponent(actor.tenantId))
       const placeholders = [...path.matchAll(/\{([^}]+)\}/g)]
       if (placeholders.length) {
         if (placeholders.length !== 1 || !targetId || placeholders[0]![1] === "organizationId") throw new RestoreSafetyError("The write path has an unresolved identity.")
         path = path.replace(placeholders[0]![0], encodeURIComponent(targetId))
       }
-      const current = step.operation === "update" ? await request(root + (row.detection.kind === "singleton" ? row.readPath : `${row.readPath}/${encodeURIComponent(targetId!)}`)) : null
+      if (step.operation === "update" && !readPath) throw new RestoreSafetyError("The update path has no resolved target identity.")
+      const current = step.operation === "update" ? await request(root + readPath!) : null
       if (step.operation === "update" && restoreFingerprint(current) !== step.preview) throw new RestoreSafetyError("The tenant changed after this preview. Preview this item again.")
+      await checkConfigurationLockout(safetyReader(token, fetchImpl), step, current, body)
       const response = await request(root + path, write.method, body, typeof current?.["@odata.etag"] === "string" ? current["@odata.etag"] : undefined, beforeSend)
       return { id: typeof response?.id === "string" ? response.id : targetId ?? (row.detection.kind === "singleton" ? step.sourceId : undefined) }
     },

@@ -1,3 +1,4 @@
+import { requireConfigurationApproval } from "./entra-configuration"
 import { isGraphId } from "../../shared/security"
 import { restoreMatrixRow } from "../../shared/intune/restore-matrix"
 import { requireRestoreActor } from "./restore-actor"
@@ -20,6 +21,7 @@ export interface GuardedStep {
   requires: string[]
   references?: Array<{ property: string; kind: ReferenceKind; folder: string; source: string }>
   allowRemoval?: boolean
+  confirmation?: { kind: string; fingerprint: string }
 }
 export interface GuardedEntry {
   step: GuardedStep
@@ -160,6 +162,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
         }
         const type = io.type(step.folder)
         if (["none", "metadata"].includes(restoreCapability(type)) || (restoreCapability(type) === "singleton" && step.operation === "create")) throw new RestoreSafetyError(type.limitation ?? "This type cannot be restored.")
+        requireConfigurationApproval(step)
         const originBlock = restoreOriginBlocker(step.folder, run.origin)
         if (originBlock) throw new RestoreSafetyError(originBlock)
         if (journal.hasEarlierUnanswered(run, step)) throw new RestoreSafetyError("An earlier restore has an unanswered write for this object. Resume that run before starting another.")
