@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs"
 import { expect, it } from "vitest"
 import { MODULES } from "../src/shared/services/modules"
-import { graphPermissions, knownPermissions } from "../src/shared/services/manifest"
+import { graphPermissions, knownPermissions, readerRoles, readerScriptArguments } from "../src/shared/services/manifest"
 import { typeForFolder, restoreCapability } from "../src/shared/intune/registry"
 import { restoreMatrixRow } from "../src/shared/intune/restore-matrix"
 
@@ -34,4 +34,11 @@ it("never requests the excluded organization or directory roles through any setu
     }
   }
   for (const script of ["New-TenuVaultDesktopApp.ps1", "New-TenuVaultBackupReader.ps1"]) expect(readFileSync(new URL(`../resources/${script}`, import.meta.url), "utf8")).not.toMatch(/['"](?:Organization\.ReadWrite\.All|Directory\.Read(?:Write)?\.All)['"]/)
+})
+
+it("never repeats excluded roles from an existing reader in a renewal command", () => {
+  const excluded = ["Organization.ReadWrite.All", "Directory.ReadWrite.All", "Directory.Read.All"]
+  const roles = readerRoles()
+  expect(readerScriptArguments([...roles, ...excluded])).toBe(readerScriptArguments(roles))
+  expect(readerScriptArguments(excluded)).toBe(" -Permissions None")
 })

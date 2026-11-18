@@ -300,3 +300,5 @@ Replacing the active certificate or removing the reader discards its earlier hea
 Defender scheduled backups include the [17 supported configuration types](/backups/defender/). Detection and response also needs `Workbooks.Read.All`. Cloud scopes and content repositories remain outside coverage. No Defender type is restorable.
 
 An existing Backup Reader that holds Directory.Read.All no longer passes the read-only permission allowlist. Its owner must remove that application role and verify the reader again before scheduled backups resume. TenuVault does not revoke existing grants automatically. Use the narrower service and area roles from the generated setup; group lifecycle policies and consent grants will be excluded. Existing delegated admin access is still recognized.
+
+Certificate renewal commands omit the excluded organization and directory roles even when an older reader record still contains them. Review the permission change before running the command; the setup script removes roles outside the selected set when explicitly run against that reader.
