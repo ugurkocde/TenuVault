@@ -63,6 +63,37 @@ describe("the prepared app-only lab harness with injected fetch only", () => {
     expect(evidence.some(event => event.kind === "read-back" && event.matched === true)).toBe(true)
     expect(evidence.some(event => event.path === "/v1.0/identityGovernance/lifecycleWorkflows/settings" && event.method !== "GET")).toBe(false)
   })
+  it("honors bounded throttling recovery for cleanup without retrying an experimental write", async () => {
+    const state = world()
+    const collection = "/v1.0/security/rules/detectionRules"
+    state.objects.set(collection + "/created", { id: "created", displayName: "TV06-TEST-cleanup", collection })
+    let throttled = false
+    const fetcher = (async (input, init) => {
+      if (!throttled && init?.method === "DELETE") { throttled = true; return new Response(null, { status: 429, headers: { "Retry-After": "1" } }) }
+      return state.fetcher(input, init)
+    }) as typeof fetch
+    const lab = configuration8cLab(token, LAB_8C_TENANT, LAB_8C_APP, fetcher)
+    await lab.cleanup()
+    expect(state.objects.size).toBe(0)
+    expect(state.calls.every(call => ["GET", "DELETE"].includes(call.method))).toBe(true)
+  })
+  it("does not accept stale original reads after a definite recovery refusal", async () => {
+    const state = world(), durable = new Map<string, Item>()
+    let recoveryAttempts = 0, stale = false
+    const fetcher = (async (input, init) => {
+      if (init?.method === "PATCH" && JSON.parse(String(init.body)).displayName === "original" && ++recoveryAttempts === 1) {
+        stale = true; return Response.json({ error: { code: "Request_BadRequest" } }, { status: 400 })
+      }
+      if (stale && init?.method === "GET" && String(input).endsWith("/crossTenantAccessPolicy")) return Response.json({ displayName: "original" })
+      stale = false
+      return state.fetcher(input, init)
+    }) as typeof fetch
+    const lab = configuration8cLab(token, LAB_8C_TENANT, LAB_8C_APP, fetcher, { save: (folder, original) => { durable.set(folder, original) }, clear: folder => { durable.delete(folder) } })
+    await lab.run("CrossTenantAccessPolicy")
+    expect(recoveryAttempts).toBe(2)
+    expect(state.singletons).toEqual(state.original)
+    expect(durable.size).toBe(0)
+  })
   it("requires the exact lab grants before any request", () => {
     const guardedToken = `h.${Buffer.from(JSON.stringify({ tid: LAB_8C_TENANT, appid: LAB_8C_APP, roles: [] })).toString("base64url")}.s`
     expect(() => configuration8cLab(guardedToken, LAB_8C_TENANT, LAB_8C_APP)).toThrow("Missing lab application permission")

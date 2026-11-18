@@ -47,13 +47,18 @@ export function configuration8cLab(token: string, tenant: string, app: string, f
     const row = restoreMatrixRow(folder)!
     return `https://graph.microsoft.com/${row.update!.version}/` + row.readPath
   }
-  const requestOnce = async (url: string, method = "GET", body?: Item): Promise<Item> => {
+  const requestOnce = async (url: string, method = "GET", body?: Item, throttleAttempt = 0): Promise<Item> => {
     const parsed = new URL(url)
     const allowed = LAB_8C_FOLDERS.some(folder => parsed.pathname === new URL(urlFor(folder)).pathname || (collections.includes(folder) && parsed.pathname.startsWith(new URL(urlFor(folder)).pathname + "/") && /^[A-Za-z0-9_-]+$/.test(parsed.pathname.slice(new URL(urlFor(folder)).pathname.length + 1))))
     if (parsed.origin !== "https://graph.microsoft.com" || parsed.hash || parsed.username || parsed.password || !allowed || (method !== "GET" && parsed.search)) throw new Error("Outside the 8c lab path allowlist")
     if (body) safe(body)
     const response = await fetchImpl(url, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "Accept-Language": "0" }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(60_000) })
     recovery?.recordEvidence?.({ kind: "http", method, path: parsed.pathname, status: response.status })
+    if (response.status === 429 && ["GET", "DELETE"].includes(method) && throttleAttempt < 4) {
+      const seconds = Math.min(60, Math.max(1, Number(response.headers.get("Retry-After")) || 30))
+      if (fetchImpl === fetch) await new Promise(resolve => setTimeout(resolve, seconds * 1000))
+      return requestOnce(url, method, body, throttleAttempt + 1)
+    }
     if (method === "DELETE" && response.status === 404) return {}
     if (!response.ok) {
       const code = (await response.json().catch(() => ({})))?.error?.code
@@ -109,7 +114,7 @@ export function configuration8cLab(token: string, tenant: string, app: string, f
     if (failures.length) throw new Error(`Cleanup needs attention for: ${failures.join(", ")}. No non-prefixed object was deleted.`)
   }
   const verify = async (folder: string, url: string, expected: Item, attempts = 60) => {
-    let different: string[] = []
+    let different: string[] = [], stable = 0
     for (let attempt = 0; attempt < attempts; attempt++) {
       let current: Item
       try { current = project(await request(url), Object.keys(expected)) } catch (error) {
@@ -118,7 +123,10 @@ export function configuration8cLab(token: string, tenant: string, app: string, f
       }
       if (folder === "DefenderCustomDetectionRules" && current.status !== "disabled") throw new Error("Detection must stay disabled")
       different = Object.keys(expected).filter(key => !equal(current[key], expected[key]))
-      if (!different.length) { recovery?.recordEvidence?.({ kind: "read-back", folder, expected, actual: current, matched: true }); return current }
+      if (!different.length) {
+        stable++
+        if (stable >= (singletons.includes(folder) ? 3 : 1)) { recovery?.recordEvidence?.({ kind: "read-back", folder, expected, actual: current, matched: true }); return current }
+      } else stable = 0
       await pause()
     }
     throw new Error(`${folder}: read-back did not match properties ${different.join(", ")}`)
@@ -129,9 +137,12 @@ export function configuration8cLab(token: string, tenant: string, app: string, f
     for (let attempt = 0; attempt < 5; attempt++) {
       // This retries only the known original, never the experimental write. A lost answer
       // is reconciled before resending, because the original may already be committed.
-      try { await request(url, restoreMatrixRow(folder)!.update!.method, body) } catch { /* Read back refusals and lost answers alike. */ }
+      let refused = false
+      try { await request(url, restoreMatrixRow(folder)!.update!.method, body) } catch (error) { refused = error instanceof Error && /HTTP 4\d\d/.test(error.message) }
       try {
         await verify(folder, url, body, 12)
+        // A definite refusal cannot be reconciled from an old replica that still shows the original.
+        if (refused) { await pause(); continue }
         recovery?.clear(folder)
         pendingRecovery.delete(folder)
         return
