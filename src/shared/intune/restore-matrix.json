@@ -24,7 +24,7 @@
         "Policy.ReadWrite.Authorization"
       ],
       "documentation": "https://learn.microsoft.com/en-us/graph/api/authorizationpolicy-update?view=graph-rest-1.0",
-      "index": "matched"
+      "index": "not-matched"
     },
     "detection": {
       "kind": "singleton"
@@ -48,7 +48,7 @@
       "resourceFound": true,
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/authorizationpolicy?view=graph-rest-1.0",
       "live": "not-run",
-      "notes": "Methods, properties and delegated permissions checked against Microsoft resource and operation pages; index discrepancies remain blocked."
+      "notes": "Current Microsoft documentation uses the singleton root. The local index instead names an additional authorizationPolicy key segment. This path discrepancy remains blocked pending verification."
     },
     "disposition": "configuration"
   },

@@ -23,6 +23,11 @@ describe("restore write matrix", () => {
         expect(write.documentation).toMatch(/^https:\/\/learn.microsoft.com\/en-us\/graph\/api\//)
         expect(write.path).not.toMatch(/^https?:/)
         expect(write.properties.length).toBeGreaterThan(0)
+        if (write.index === "matched") {
+          const normalize = (path: string) => path.replace(/\{[^}]+\}/g, "{}").replace(/\/$/, "")
+          const evidence = row as typeof row & { indexWrites: Record<string, Array<{ path: string }>> }
+          expect(evidence.indexWrites[write.method]?.some(candidate => normalize(candidate.path) === normalize(`/${write.path}`))).toBe(true)
+        }
       }
     }
   })
