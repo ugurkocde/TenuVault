@@ -24,10 +24,13 @@ describe.skipIf(!approved)("8b lab contracts with guaranteed cleanup attempts", 
       },
       clear: folder => { const file = join(recoveryRoot, folder + ".json"); if (existsSync(file)) unlinkSync(file) },
     })
-  })
-  afterAll(async () => { try { await lab?.cleanup() } finally { lab = undefined } })
-  for (const folder of LAB_8B_FOLDERS) it(folder, async () => {
-    try { expect(await lab!.run(folder)).toMatchObject({ folder }) }
+    await lab.captureOriginals()
+  }, 300_000)
+  afterAll(async () => { try { await lab?.verifyEndState() } finally { lab = undefined } }, 300_000)
+  for (const folder of LAB_8B_FOLDERS) it(folder, async context => {
+    if (folder === "EntraCompanyBranding" && !lab!.brandingAllowed) { console.log("Branding skipped: narrow role missing or retired organization role present"); context.skip(); return }
+    console.log(`Verifying ${folder}`)
+    try { const result = await lab!.run(folder); expect(result).toMatchObject({ folder }); console.log(`${folder}: ${result.operations}`); if (result.operations.startsWith("read-only")) context.skip() }
     finally { await lab!.cleanup() }
   }, 300_000)
 })

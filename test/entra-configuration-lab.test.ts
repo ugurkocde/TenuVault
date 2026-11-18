@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 import { configurationLab, LAB_8B_TENANT, LAB_8B_APP, LAB_8B_FOLDERS } from "./helpers/entra-configuration-lab"
 import type { Item } from "../src/shared/intune/registry"
 
-const token = `header.${Buffer.from(JSON.stringify({ tid: LAB_8B_TENANT, appid: LAB_8B_APP })).toString("base64url")}.signature`
+const token = `header.${Buffer.from(JSON.stringify({ tid: LAB_8B_TENANT, appid: LAB_8B_APP, roles: ["OrganizationalBranding.ReadWrite.All"] })).toString("base64url")}.signature`
 function world(failure?: string) {
   const calls: Array<{ method: string; path: string; body?: Item }> = [], objects = new Map<string, Item>()
   const singletons: Record<string, Item> = {
@@ -43,11 +43,19 @@ describe("the prepared app-only lab harness with injected fetch only", () => {
     expect(() => configurationLab(token, "other", LAB_8B_APP)).toThrow("restricted")
     expect(() => configurationLab(token, LAB_8B_TENANT, "other")).toThrow("restricted")
     expect(() => configurationLab("opaque", LAB_8B_TENANT, LAB_8B_APP)).toThrow("Invalid")
-    const otherToken = `h.${Buffer.from(JSON.stringify({ tid: "other", appid: LAB_8B_APP })).toString("base64url")}.s`
+    const otherToken = `h.${Buffer.from(JSON.stringify({ tid: "other", appid: LAB_8B_APP, roles: ["OrganizationalBranding.ReadWrite.All"] })).toString("base64url")}.s`
     expect(() => configurationLab(otherToken, LAB_8B_TENANT, LAB_8B_APP)).toThrow("token")
     const state = world()
-    for (const folder of ["Users", "ConditionalAccessPolicies", "CertificateBasedAuthPki", "AuthenticationMethodsPolicy/../../users"]) await expect(state.lab.run(folder)).rejects.toThrow("allowlist")
+    for (const folder of ["Organization", "Users", "ConditionalAccessPolicies", "CertificateBasedAuthPki", "AuthenticationMethodsPolicy/../../users"]) await expect(state.lab.run(folder)).rejects.toThrow("allowlist")
     expect(state.calls).toEqual([])
+  })
+  it("refuses branding without the narrow permission or with the retired permission before any request", async () => {
+    for (const roles of [[], ["OrganizationalBranding.ReadWrite.All", "Organization.ReadWrite.All"]]) {
+      const guardedToken = `h.${Buffer.from(JSON.stringify({ tid: LAB_8B_TENANT, appid: LAB_8B_APP, roles })).toString("base64url")}.s`
+      const lab = configurationLab(guardedToken, LAB_8B_TENANT, LAB_8B_APP, (() => { throw new Error("Must not fetch") }) as typeof fetch)
+      expect(lab.brandingAllowed).toBe(false)
+      await expect(lab.run("EntraCompanyBranding")).rejects.toThrow("narrow role")
+    }
   })
   for (const folder of LAB_8B_FOLDERS) it(`${folder}: verifies read-back and leaves original singleton state and no prefixed policies`, async () => {
     const state = world()
