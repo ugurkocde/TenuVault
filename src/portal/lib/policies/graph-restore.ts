@@ -1,3 +1,4 @@
+import { bindRestoreConnection, dispatchIdentityRestore } from "../../../main/restore/dispatch"
 import { graphContinuation } from "../../../shared/graph-continuation"
 import { approvalSignal, approvalMessage, type ApprovalSignal } from "../../../shared/intune/approval"
 import { restoreApprovals, saveRestoreApproval, removeRestoreApproval, type RestoreApproval, type ApprovalStep } from "../../../main/storage/restore-approvals"
@@ -29,6 +30,8 @@ class Gone extends Error {}
 export type RestoreMode = "copy" | "replace"
 
 export interface RestoreOptions {
+  guardedRunId?: string
+  identityOrigin?: import("../../../shared/intune/restore-guards").RestoreOrigin
   approvalContext?: { tenantId: string; requesterId: string; requesterName?: string; justification?: string }
   mode: RestoreMode
   /** Stable tenant/source binding for repair requests across API calls. */
@@ -54,6 +57,8 @@ export interface RestoreOptions {
 }
 
 export interface RestoreOutcome {
+  guardedRunId?: string
+  replacedReferences?: import("../../../shared/intune/restore-references").ReplacedReference[]
   approval?: ApprovalSignal
   approvalId?: string
   approvalState?: "required" | "submitted"
@@ -120,7 +125,7 @@ function matchesCreationFields(expected: Json, actual: Json | undefined): boolea
 }
 export function graphCaller(token: string, fetchImpl: typeof fetch = fetch, options: GraphRetryOptions = {}): GraphCall {
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)))
-  return async (method, path, body, callOptions = {}) => {
+  return bindRestoreConnection(async (method, path, body, callOptions = {}) => {
     const beforeAttempt = callOptions.beforeAttempt ?? options.beforeAttempt
     beforeAttempt?.()
     const createsObject = method === "POST" && (path.split("/").length === 2 || path.endsWith("/createInstance"))
@@ -188,7 +193,7 @@ export function graphCaller(token: string, fetchImpl: typeof fetch = fetch, opti
       return { status: response.status, body: parsed, ...(approval ? { approval } : {}) }
     }
     throw new Error("Microsoft Graph retry limit reached")
-  }
+  }, options.tenant)
 }
 
 const errorMessage = (body: Item, status: number) => {
@@ -284,6 +289,7 @@ export class Restorer {
     if (!type) return { success: false, path, error: "This backup file is not an Intune type TenuVault can restore." }
     // A type without a restore capability is refused before anything of it is read or written.
     if (restoreCapability(type) === "none") return { success: false, path, action: "skipped", retryable: false, error: writeBlocker(type, "create") }
+    if (type.restoreSafety === "identity") return dispatchIdentityRestore(this.graph, { path, snapshot, origin: this.options.crossTenant ? "cross-tenant" : this.options.identityOrigin ?? "restore", runId: this.options.guardedRunId })
     const unpermitted = restorePermissionBlocker(type.folder, this.options.granted)
     if (unpermitted) return { success: false, path, action: "skipped", retryable: false, error: unpermitted }
     const source = this.remap(this.options.crossTenant ? forOtherTenant(snapshot) : snapshot)
@@ -510,6 +516,8 @@ export class Restorer {
 
   /** A repair replays only rejected/unattempted steps against the object already created. */
   async repair(path: string, token: string): Promise<RestoreOutcome> {
+    const type = typeForFolder(path.split("/")[1] ?? "")
+    if (type?.restoreSafety === "identity") return dispatchIdentityRestore(this.graph, { path, snapshot: { id: token }, origin: "repair", runId: token })
     const body = repairs.get(token)?.body ?? {}
     return withAdminLink(path, await this.repairOnce(path, token), body)
   }

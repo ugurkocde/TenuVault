@@ -1,7 +1,8 @@
+import { dispatchIdentityRestore } from "../../restore/dispatch"
 import { approvalMessage, type ApprovalSignal } from "../../../shared/intune/approval"
 import { readLive, type GraphCall } from "../../../portal/lib/policies/graph-restore"
 import { buildRestorePlan, buildUpdatePlan, resolveStep, writeBlocker } from "../../../shared/intune/restore-plan"
-import type { IntuneType, Item, Json, Step } from "../../../shared/intune/registry"
+import { restoreCapability, type IntuneType, type Item, type Json, type Step } from "../../../shared/intune/registry"
 import { isGraphId } from "../../../shared/security"
 import { matchesProposed, operationFingerprint, sameAssignments, sanitizeSnapshot, type OperationAction } from "./model"
 
@@ -168,6 +169,10 @@ export async function writeOperation(
   input: { action: OperationAction; targetId: string | null; proposed: Item | null; assignments: Item[] | null; current: Item | null },
   onCreated: (id: string) => void,
 ): Promise<WriteOutcome> {
+  if (type.restoreSafety === "identity" && restoreCapability(type) !== "none") {
+    const outcome = await dispatchIdentityRestore(graph, { path: `changeset/${type.folder}/${input.targetId ?? "configuration"}.json`, snapshot: input.proposed ?? {}, origin: "sync" })
+    return { state: "rejected", objectId: input.targetId, message: outcome.error ?? "A reviewed guarded restore run is required." }
+  }
   // The last check before a request: a change set stored before the type lost its restore capability is not sent.
   const refused = writeBlocker(type, input.action) ?? (input.assignments ? writeBlocker(type, "assign") : undefined)
   if (refused) return { state: "rejected", objectId: input.targetId, message: `Not sent: ${refused}` }

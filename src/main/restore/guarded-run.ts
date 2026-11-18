@@ -35,6 +35,7 @@ export interface GuardedRun {
   id: string
   actor: RestoreActor
   origin: RestoreOrigin
+  source?: { path: string; fingerprint: string }
   entries: GuardedEntry[]
   mappings: RestoreMapping[]
   replacedReferences?: ReplacedReference[]
@@ -84,6 +85,7 @@ export class GuardedRunJournal {
     const runs = this.runs(tenant)
     return Object.hasOwn(runs, id) ? runs[id] : undefined
   }
+  list(tenant: string): GuardedRun[] { return Object.values(this.runs(tenant)) }
   save(run: GuardedRun): void {
     assertNoSecrets(run)
     const runs = this.runs(run.tenant)
@@ -106,14 +108,14 @@ const active = new Set<string>()
  * The only writer for new services. Later layers supply verified request builders and live safety
  * resolution. Legacy writers cannot bypass this by merely enabling a registry capability.
  */
-export async function executeGuardedRun(journal: GuardedRunJournal, input: GuardedRun, io: GuardedIO, signal?: AbortSignal): Promise<{ status: "complete" | "partial"; run: GuardedRun }> {
+export async function executeGuardedRun(journal: GuardedRunJournal, input: GuardedRun, io: GuardedIO, signal?: AbortSignal, reconcileOnly = false): Promise<{ status: "complete" | "partial"; run: GuardedRun }> {
   const key = input.tenant.toLowerCase()
   if (active.has(key)) throw new RestoreSafetyError("This restore is already running.")
   active.add(key)
   try {
     requireRestoreActor(io.token, input.actor)
     const previous = journal.load(input.tenant, input.id)
-    if (previous && canonical([previous.actor, previous.origin, previous.entries.map(entry => entry.step)]) !== canonical([input.actor, input.origin, input.entries.map(entry => entry.step)])) throw new RestoreSafetyError("The restore identity or plan changed. Preview again with a new run ID.")
+    if (previous && canonical([previous.actor, previous.origin, previous.source, previous.entries.map(entry => entry.step)]) !== canonical([input.actor, input.origin, input.source, input.entries.map(entry => entry.step)])) throw new RestoreSafetyError("The restore identity or plan changed. Preview again with a new run ID.")
     const run = previous ?? structuredClone(input)
     if (!previous) for (const mapping of journal.mappings(run.tenant)) rememberMapping(run.mappings, mapping)
     if (run.actor.tenantId.toLowerCase() !== run.tenant.toLowerCase()) throw new RestoreSafetyError("The restore belongs to another tenant.")
@@ -128,6 +130,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
       const entry = run.entries.find(entry => entry.step.key === itemKey)!
       if (["applied", "blocked", "failed"].includes(entry.state)) continue
       const step = entry.step
+      if (reconcileOnly && entry.state !== "uncertain") continue
       const prerequisite = dependencies(step).find(required => run.entries.find(entry => entry.step.key === required)?.state !== "applied")
       if (prerequisite) { entry.state = "blocked"; entry.reason = `Prerequisite ${prerequisite} did not complete.`; journal.save(run); continue }
       try {
@@ -176,9 +179,9 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
           desired.scope = mergeConsentScopes(current?.scope as string ?? "", desired.scope, step.allowRemoval)
         }
         const refs = await io.references(step, current, desired)
-        guardRestoreItem(run.actor, step.folder, step.targetId, refs, step.allowRemoval === true)
+        guardRestoreItem(run.actor, step.folder, entry.targetId ?? step.targetId ?? mapped, refs, step.allowRemoval === true)
         // Only touched objects are captured, never a whole service. A failed save prevents the write.
-        entry.before = current; entry.sent = desired; entry.targetId = step.targetId; entry.state = "captured"; journal.save(run)
+        entry.before = current; entry.sent = desired; entry.targetId = entry.targetId ?? step.targetId ?? mapped; entry.state = "captured"; journal.save(run)
         if (signal?.aborted) break
         entry.state = "uncertain"; journal.save(run)
         let result: { id?: string }

@@ -1,3 +1,7 @@
+import { IdentityRestoreService } from "./restore/service"
+import { RecoveryAccounts } from "./restore/safety-resolvers"
+import { restoreSafetyRoutes } from "./restore/routes"
+import { setIdentityRestoreDispatch } from "./restore/dispatch"
 import { importLargeArchive, reviewLargeArchive, saveLargeDownload } from "./backup/large-archive"
 import { AddPermissionsFlow, permissionAdditionScopes, signInForPermissionAddition, verifyPermissionAdditionToken } from "./auth/add-permissions-flow"
 import { additionPermissions } from "./services/addition-permissions"
@@ -79,7 +83,7 @@ import { hostname } from "node:os"
 import { handleLocalBlobRequest, isLocalAccount, localRoutesRunning } from "./storage/blob-emulator"
 import { LocalBlobStore } from "./storage/local-blob-store"
 import { setRestoreApprovalStore } from "./storage/restore-approvals"
-import { setRestoreJournalStore, setRestoreJournalAuthorization } from "./storage/restore-journal"
+import { setRestoreJournalStore, setRestoreJournalAuthorization, guardedRestoreJournal } from "./storage/restore-journal"
 import { accountStore, secureCachePlugin } from "./auth/stores"
 import {
   LICENSE_API_BASE,
@@ -404,6 +408,19 @@ async function bootstrap(): Promise<void> {
     }), "this tenant's restore history")
   })
 
+  const recoveryAccounts = new RecoveryAccounts(appStore)
+  const restoreConnection = async (tenant: string) => {
+    const account = accounts.get(tenant)
+    if (!account) throw new Error("Sign in to this tenant before restoring identity policies.")
+    await license.requireEntitlement(tenant)
+    const token = await tokenFor(tenant, account.clientId, "https://graph.microsoft.com/.default", true)
+    const claims = JSON.parse(Buffer.from(token.accessToken.split(".")[1] ?? "", "base64url").toString("utf8")) as { oid?: string }
+    if (!claims.oid) throw new Error("A signed-in admin is required.")
+    return { tenantId: tenant, clientId: account.clientId, userId: claims.oid, token: token.accessToken }
+  }
+  const identityRestore = new IdentityRestoreService(guardedRestoreJournal(), recoveryAccounts, restoreConnection, bridgedFetch)
+  setIdentityRestoreDispatch((tenant, request) => identityRestore.restore(tenant, request))
+
   // Every PDF export resolves branding per tenant here: saved branding applies only on a plan with pdfBranding.
   const pdfBranding = new PdfBrandingPolicy(
     new PdfBrandingStore(appStore, (bytes) => nativeImage.createFromBuffer(bytes)),
@@ -707,7 +724,7 @@ async function bootstrap(): Promise<void> {
       await saveLargeDownload(response.body, chosen.filePath)
       return Response.json({ saved: true })
     },
-    routes: { ...routes, ...backupRoutes(engine, (tenantId) => scopes.get(tenantId).scope), ...featureRoutes(featureDeps), ...driftScanRoutes(driftJobs) },
+    routes: { ...routes, ...backupRoutes(engine, (tenantId) => scopes.get(tenantId).scope), ...featureRoutes(featureDeps), ...driftScanRoutes(driftJobs), ...restoreSafetyRoutes(guardedRestoreJournal(), recoveryAccounts, restoreConnection, async tenant => { await restoreConnection(tenant) }, identityRestore) },
     transform: surfaceTokenErrors,
     // Disabled CIS routes refuse before any licensing work. The plan comes next, so the
     // disclaimer is never accepted for a change the plan refuses anyway.

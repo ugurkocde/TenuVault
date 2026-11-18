@@ -1,3 +1,4 @@
+import { bindRestoreConnection } from "../../restore/dispatch"
 import { AuditEventType, AuditResult, AuditSeverity, type CreateAuditLogInput } from "../../../portal/lib/audit/types"
 import type { GraphCall } from "../../../portal/lib/policies/graph-restore"
 import { typeForFolder, type IntuneType, type Item } from "../../../shared/intune/registry"
@@ -239,8 +240,8 @@ function recoveryScope(record: Pick<ChangeSetRecord, "kind" | "rollbackOf">): Re
 
 /** Checks the CIS Benchmarks plan immediately before every Graph attempt made through this caller. */
 function gatedGraph(graph: GraphCall, workflow: string, tenantId: string, recovery = false): GraphCall {
-  if (workflow !== "cis-remediation" || recovery) return graph
-  return async (method, path, body, callOptions) => {
+  if (workflow !== "cis-remediation" || recovery) return bindRestoreConnection(graph, tenantId)
+  return bindRestoreConnection(async (method, path, body, callOptions) => {
     requireCisChangeSetEnabled(workflow, tenantId)
     return graph(method, path, body, {
       ...callOptions,
@@ -249,7 +250,7 @@ function gatedGraph(graph: GraphCall, workflow: string, tenantId: string, recove
         requireCisChangeSetEnabled(workflow, tenantId)
       },
     })
-  }
+  }, tenantId)
 }
 
 /** Graph failures become plain 502 answers; plan and feature errors pass through. */
