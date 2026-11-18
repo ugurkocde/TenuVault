@@ -105,6 +105,12 @@ describe("phase 1 configuration staging", () => {
       })
     }
   }
+  it("projects known read-only backup properties without hiding unsupported writable configuration", () => {
+    expect(configurationPayload("SecurityDefaults", "update", { id: "securityDefaults", displayName: "Security defaults", description: "Tenant state", isEnabled: false })).toEqual({ isEnabled: false })
+    expect(configurationPayload("AuthenticationFlowsPolicy", "update", { id: "authenticationFlowsPolicy", displayName: "Flows", description: "Configuration", selfServiceSignUp: { isEnabled: false } })).toEqual({ selfServiceSignUp: { isEnabled: false } })
+    expect(configurationPayload("AdminConsentRequestPolicy", "update", { ...cases.AdminConsentRequestPolicy, version: 3 })).toEqual(cases.AdminConsentRequestPolicy)
+    expect(() => configurationPayload("AuthenticationFlowsPolicy", "update", { unknown: true })).toThrow()
+  })
   it("refuses unsupported nested children, opaque definitions and incomplete replacements", () => {
     for (const [folder, snapshot] of [["AuthenticationFlowsPolicy", { selfServiceSignUp: { isEnabled: false, secret: "x" } }], ["TokenLifetimePolicies", { definition: ['{"TokenLifetimePolicy":{"Version":1,"SigningKey":"x"}}'] }], ["TokenLifetimePolicies", { definition: ["invalid"] }], ["TokenLifetimePolicies", { definition: [] }], ["PermissionGrantPolicies", { includes: [{ id: source }] }], ["PermissionGrantPolicies", { id: "microsoft-admin", displayName: "built in" }], ["AdminConsentRequestPolicy", { requestDurationInDays: 1 }], ["DirectorySettings", { values: [{ name: "x" }] }]] as Array<[string, Item]>) expect(() => configurationPayload(folder, "update", snapshot)).toThrow()
   })

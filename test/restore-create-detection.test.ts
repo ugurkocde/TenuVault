@@ -1,3 +1,4 @@
+import { configurationApproval, configurationConfirmation, isEntraConfiguration } from "../src/main/restore/entra-configuration"
 import { describe, expect, it } from "vitest"
 import { findCreatedByDescriptor } from "../src/main/restore/create-detection"
 import { GuardedRunJournal, executeGuardedRun, restoreFingerprint, type GuardedIO, type GuardedRun, type GuardedStep } from "../src/main/restore/guarded-run"
@@ -27,6 +28,7 @@ describe("every matrix create detection contract", () => {
     const desired: Item = Object.fromEntries(write.properties.filter(key => !["secretKey", "passwordProfile", "authenticationConfiguration"].includes(key)).map(key => [key, `fixture-${key}`]))
     for (const key of keys) expect(key in desired, `${row.folder} detection key ${key} must be writable on create`).toBe(true)
     const step: GuardedStep = { key: "one", folder: row.folder, sourceId: "source-id", operation: "create", properties: write.properties, desired, preview: restoreFingerprint(null), requires: [] }
+    if (isEntraConfiguration(step.folder)) step.confirmation = { kind: configurationConfirmation(step.folder), fingerprint: configurationApproval(step) }
     const memory = new Map<string, string>()
     const store = { get: (key: string) => memory.get(key) ?? null, set: (key: string, value: string) => { memory.set(key, value) }, delete: (key: string) => { memory.delete(key) } }
     const input: GuardedRun = { version: 1, tenant: "tenant", id: "run", actor, origin: "restore", entries: [{ step, state: "pending" }], mappings: [] }

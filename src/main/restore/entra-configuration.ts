@@ -63,6 +63,13 @@ function validate(value: Json, schema: Schema): boolean {
   return !!value && typeof value === "object" && !Array.isArray(value) && Object.entries(value).every(([key, child]) => Object.hasOwn(schema, key) && validate(child, (schema as Record<string, Schema>)[key]!))
 }
 const metadata = new Set(["id", "@odata.type", "@odata.context", "@odata.etag", "createdDateTime", "modifiedDateTime", "deletedDateTime"])
+const readOnly: Record<string, readonly string[]> = {
+  SecurityDefaults: ["displayName", "description"],
+  AdminConsentRequestPolicy: ["version"],
+  DirectorySettings: ["displayName"],
+  AuthenticationFlowsPolicy: ["displayName", "description"],
+  Organization: ["businessPhones", "city", "country", "countryLetterCode", "defaultUsageLocation", "displayName", "isMultipleDataLocationsForServicesEnabled", "onPremisesLastSyncDateTime", "onPremisesSyncEnabled", "onPremisesSyncStatus", "partnerTenantType", "postalCode", "preferredLanguage", "state", "street", "tenantType", "directorySizeQuota", "assignedPlans", "provisionedPlans", "verifiedDomains"],
+}
 const emptyExtras = new Set(["appliesTo", "includes", "excludes", "localizations"])
 
 /** Closed, deliberately partial builders. Unsupported children are refused rather than silently lost. */
@@ -72,6 +79,7 @@ export function configurationPayload(folder: string, operation: GuardedStep["ope
   const schema = schemas[folder], contract = restoreMatrixRow(folder)?.[operation]
   if (!schema || !contract) throw new RestoreSafetyError("This configuration operation has no reviewed builder.")
   for (const [key, value] of Object.entries(snapshot)) {
+    if (readOnly[folder]?.includes(key)) continue
     if (metadata.has(key) && !(key === "id" && contract.properties.includes(key))) continue
     if (emptyExtras.has(key) && Array.isArray(value) && value.length === 0) continue
     if (!contract.properties.includes(key) || !schema[key] || !validate(value, schema[key]!)) throw new RestoreSafetyError(`The ${folder} property ${key} needs a reviewed request builder.`)
