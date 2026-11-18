@@ -212,7 +212,7 @@ it("projects immutable attribute fields but requires positive live evidence that
 
 it("keeps populated backup resources and service-default or published live catalogs outside the verified subset", async () => {
   expect(() => configurationPayload("AccessPackageCatalogs", "create", { ...cases.AccessPackageCatalogs!, resources: [{ id: source }] })).toThrow("reviewed")
-  expect(() => configurationPayload("AccessPackageCatalogs", "update", { ...cases.AccessPackageCatalogs!, catalogType: "serviceDefault" })).toThrow("reviewed")
+  expect(() => configurationPayload("AccessPackageCatalogs", "update", { ...cases.AccessPackageCatalogs!, catalogType: "serviceDefault" })).toThrow("user-managed")
   const reader = { list: vi.fn() } as unknown as import("../src/shared/intune/read").GraphReader
   const step = { folder: "AccessPackageCatalogs" } as GuardedStep
   for (const current of [{ state: "published", isExternallyVisible: false, catalogType: "userManaged" }, { state: "unpublished", isExternallyVisible: true, catalogType: "userManaged" }, { state: "unpublished", isExternallyVisible: false, catalogType: "serviceDefault" }]) {

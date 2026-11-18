@@ -29,6 +29,14 @@ export function configuration8cPayload(folder: string, operation: "create" | "up
   if (folder === "UserFlowAttributes" && snapshot.userFlowAttributeType !== undefined && snapshot.userFlowAttributeType !== "custom") throw new RestoreSafetyError("Built-in attributes are never restored.")
   const body: Item = {}
   for (const [key, value] of Object.entries(snapshot)) {
+    // Full backups retain these known read fields, but confirmation permits only the contract subset.
+    if (folder === "AccessReviewPolicy" && ["displayName", "description"].includes(key)) continue
+    if (folder === "CrossTenantAccessPolicy" && key === "allowedCloudEndpoints" && Array.isArray(value) && value.every(endpoint => typeof endpoint === "string")) continue
+    if (folder === "AccessPackageCatalogs" && ["uniqueName", "serviceManagementReference"].includes(key)) {
+      if (value !== null) throw new RestoreSafetyError(`Catalog ${key} is configured and needs a reviewed request builder.`)
+      continue
+    }
+    if (folder === "AccessPackageCatalogs" && key === "catalogType" && value !== "userManaged") throw new RestoreSafetyError("Only user-managed catalog backups can be restored.")
     if (folder === "AccessPackageCatalogs" && ((key === "catalogType" && value === "userManaged") || (key === "resources" && Array.isArray(value) && value.length === 0))) continue
     if (folder === "UserFlowAttributes" && (key === "userFlowAttributeType" || (operation === "update" && ["displayName", "dataType"].includes(key)))) continue
     if (["@odata.type", "@odata.context", "@odata.etag", "createdDateTime", "modifiedDateTime"].includes(key) || (key === "id" && !contract.properties.includes(key))) continue
