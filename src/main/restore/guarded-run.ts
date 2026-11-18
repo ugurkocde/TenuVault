@@ -53,7 +53,7 @@ export interface GuardedIO {
   /** Complete descriptor-based lookup. Must reject an incomplete list, never match a guessed name. */
   findCreated: (step: GuardedStep, sent: Item) => Promise<Item[]>
   references: (step: GuardedStep, current: Item | null, desired: Item) => Promise<SafetyReferences>
-  write: (step: GuardedStep, body: Item, targetId: string | undefined, beforeSend: () => void) => Promise<{ id?: string }>
+  write: (step: GuardedStep, body: Item, targetId: string | undefined, beforeSend: () => void, run?: GuardedRun) => Promise<{ id?: string }>
 }
 const secretKey = /^(?:passwordProfile|password|passwordCredentials|keyCredentials|clientSecret|privateKey|sharedSecret|secretKey|tokenSeed|seed|tunnelKey|secret|accessToken|refreshToken|clientAssertion|pfx|pkcs12|secretText|authenticationConfiguration|certificateData|deploymentAccessKey)$/i
 function assertNoSecrets(value: unknown): void {
@@ -162,7 +162,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
         }
         const type = io.type(step.folder)
         if (["none", "metadata"].includes(restoreCapability(type)) || (restoreCapability(type) === "singleton" && step.operation === "create")) throw new RestoreSafetyError(type.limitation ?? "This type cannot be restored.")
-        requireConfigurationApproval(step)
+        requireConfigurationApproval(step, run)
         const originBlock = restoreOriginBlocker(step.folder, run.origin)
         if (originBlock) throw new RestoreSafetyError(originBlock)
         if (journal.hasEarlierUnanswered(run, step)) throw new RestoreSafetyError("An earlier restore has an unanswered write for this object. Resume that run before starting another.")
@@ -202,7 +202,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
         try {
           result = await io.write(step, desired, entry.targetId, () => {
             entry.state = "uncertain"; journal.save(run)
-          })
+          }, run)
         } catch (error) {
           if (entry.state === "captured") {
             entry.state = "failed-before-send"

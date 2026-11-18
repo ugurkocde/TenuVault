@@ -25,7 +25,8 @@ const cases: Record<string, Item> = {
   AuthenticationContexts: { displayName: "TV06-TEST-Context", isAvailable: false },
 }
 const store = () => { const values = new Map<string, string>(); return { get: (key: string) => values.get(key) ?? null, set: (key: string, value: string) => { values.set(key, value) }, delete: (key: string) => { values.delete(key) } } }
-function approve(step: GuardedStep) { step.confirmation = { kind: configurationConfirmation(step.folder), fingerprint: configurationApproval(step) }; return step }
+const approvalRun = { id: "test-run", tenant: "tenant", actor, origin: "restore" as const }
+function approve(step: GuardedStep, run = approvalRun) { step.confirmation = { kind: configurationConfirmation(step.folder), fingerprint: configurationApproval(step, run) }; return step }
 
 describe("phase 1 configuration staging", () => {
   it("accounts for every type in exactly the two requested areas without enabling an unverified write or access request", () => {
@@ -50,12 +51,12 @@ describe("phase 1 configuration staging", () => {
         expect(desired).toEqual(snapshot)
         expect(() => configurationPayload(folder, operation, { ...snapshot, unexpected: true })).toThrow("reviewed")
         const step: GuardedStep = { key: folder, folder, operation, sourceId: source, desired, properties: Object.keys(desired), preview: restoreFingerprint(null), requires: [] }
-        expect(() => requireConfigurationApproval(step)).toThrow("separately")
+        expect(() => requireConfigurationApproval(step, approvalRun)).toThrow("separately")
         approve(step)
-        requireConfigurationApproval(step)
+        requireConfigurationApproval(step, approvalRun)
         expect(configurationDifference(step, null).map(change => change.property)).toEqual(Object.keys(desired))
-        expect(() => requireConfigurationApproval({ ...step, preview: "changed" })).toThrow("separately")
-        expect(() => requireConfigurationApproval({ ...step, allowRemoval: true })).toThrow("separately")
+        expect(() => requireConfigurationApproval({ ...step, preview: "changed" }, approvalRun)).toThrow("separately")
+        expect(() => requireConfigurationApproval({ ...step, allowRemoval: true }, approvalRun)).toThrow("separately")
       })
     }
     for (const operation of ["create", "update"] as const) {
@@ -73,7 +74,7 @@ describe("phase 1 configuration staging", () => {
         const objectId = folder === "Organization" ? actor.tenantId : id
         let writes = 0, live: Item | null = operation === "create" ? null : { id: objectId, ...fixture }
         const desired = configurationPayload(folder, operation, { ...fixture, ...(operation === "create" && folder === "PermissionGrantPolicies" ? { id: "TV06-TEST-permission" } : {}), ...(operation === "create" && folder === "DirectorySettings" ? { templateId: source } : {}) })
-        const step = approve({ key: folder, folder, operation, sourceId: source, ...(operation === "update" ? { targetId: objectId } : {}), desired, properties: Object.keys(desired), preview: restoreFingerprint(live), requires: [] })
+        const step = approve({ key: folder, folder, operation, sourceId: source, ...(operation === "update" ? { targetId: objectId } : {}), desired, properties: Object.keys(desired), preview: restoreFingerprint(live), requires: [] }, { ...approvalRun, id: `${folder}-${operation}-${outcome}` })
         if (outcome === "unconfirmed") delete step.confirmation
         const fetcher = vi.fn(async (_input: RequestInfo | URL, options?: RequestInit) => {
           if (options?.method !== "GET") {
@@ -118,7 +119,7 @@ describe("phase 1 configuration staging", () => {
     const io = guardedGraphIO(token, actor, async () => ({ complete: true, principals: [], applications: [] }), async (_input, init) => { if (init?.method !== "GET") writes++; return Response.json(current) })
     const need = moduleForFolder("SecurityDefaults")!.part.restore as { delegated: Need }, previousNeed = need.delegated
     need.delegated = [["Policy.Read.All"]]
-    try { await expect(io.write(step, { isEnabled: true }, id, () => {})).rejects.toThrow("confirmed configuration difference"); expect(writes).toBe(0) }
+    try { await expect(io.write(step, { isEnabled: true }, id, () => {}, { ...approvalRun, version: 1, entries: [], mappings: [] })).rejects.toThrow("confirmed configuration difference"); expect(writes).toBe(0) }
     finally { need.delegated = previousNeed; type.restore = previous }
   })
   it("projects known read-only backup properties without hiding unsupported writable configuration", () => {
@@ -142,7 +143,7 @@ describe("phase 1 configuration staging", () => {
     const desired = configurationPayload("EntraCompanyBranding", "update", { usernameHintText: "" })
     expect(desired).toEqual({ usernameHintText: null })
     const step = approve({ key: "branding", folder: "EntraCompanyBranding", operation: "update", sourceId: id, targetId: id, properties: ["usernameHintText"], desired, preview: restoreFingerprint({ id, usernameHintText: null }), requires: [] })
-    await io.write(step, desired, id, () => {})
+    await io.write(step, desired, id, () => {}, { ...approvalRun, version: 1, entries: [], mappings: [] })
     expect(sent).toEqual([{ usernameHintText: null }])
     expect(await io.read(step, id)).toEqual({ id, usernameHintText: null })
   })

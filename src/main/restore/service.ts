@@ -60,7 +60,7 @@ export class IdentityRestoreService {
     const { io } = await this.context(tenant, false, step.folder, step.operation)
     const current = await io.read(step, step.targetId)
     if (restoreFingerprint(current) !== step.preview) throw new RestoreSafetyError("The tenant changed after this preview. Preview this item again.")
-    return { kind: configurationConfirmation(step.folder), fingerprint: configurationApproval(step), changes: configurationDifference(step, current) }
+    return { kind: configurationConfirmation(step.folder), fingerprint: configurationApproval(step, run), changes: configurationDifference(step, current) }
   }
   async confirm(tenant: string, id: string, fingerprint: string): Promise<void> {
     const review = await this.review(tenant, id)

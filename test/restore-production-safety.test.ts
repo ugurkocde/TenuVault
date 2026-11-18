@@ -430,3 +430,29 @@ it.each(["TokenLifetimePolicies", "ActivityBasedTimeoutPolicies", "Authenticatio
   expect(writes).toBe(1)
   expect(row.update!.protections).toEqual([])
 })
+
+it("rejects confirmation reuse across runs, tenants, actors and sources", async () => {
+  const store = storage(), journal = new GuardedRunJournal(store)
+  let connectedTenant = tenant
+  const scopedToken = () => `h.${Buffer.from(JSON.stringify({ tid: connectedTenant, oid: user, appid: client, scp: "Policy.ReadWrite.AuthenticationFlows" })).toString("base64url")}.s`
+  const service = new IdentityRestoreService(journal, new RecoveryAccounts(store), async () => ({ token: scopedToken(), tenantId: connectedTenant, clientId: client, userId: user }), async () => Response.json({ id: "flows", selfServiceSignUp: { isEnabled: false } }))
+  const request = { path: "backup/AuthenticationFlowsPolicy/Flows.json", snapshot: { id: "flows", selfServiceSignUp: { isEnabled: true } }, origin: "restore" as const }
+  const first = await service.prepare(tenant, request, "update")
+  const approval = (await service.review(tenant, first.id)).fingerprint
+  const second = await service.prepare(tenant, request, "update")
+  await expect(service.confirm(tenant, second.id, approval)).rejects.toThrow("confirmation no longer matches")
+  const { configurationApproval } = await import("../src/main/restore/entra-configuration")
+  const exactStep = first.entries[0]!.step
+  expect(configurationApproval(exactStep, { ...first, tenant: tenant.toUpperCase() })).toBe(approval)
+  for (const altered of [{ ...first, id: "another-run" }, { ...first, tenant: guid(90) }, { ...first, actor: { ...first.actor, userId: recovery } }, { ...first, source: { ...first.source!, path: "another-backup/AuthenticationFlowsPolicy/Flows.json" } }, { ...first, source: { ...first.source!, fingerprint: "changed" } }]) expect(configurationApproval(exactStep, altered)).not.toBe(approval)
+  connectedTenant = guid(90)
+  const other = await service.prepare(connectedTenant, request, "update")
+  await expect(service.confirm(connectedTenant, other.id, approval)).rejects.toThrow("confirmation no longer matches")
+  // A copied approval also fails at execution, independently of the confirmation endpoint.
+  second.entries[0]!.step.confirmation = { kind: "authentication", fingerprint: approval }
+  journal.save(second)
+  expect(await service.restore(tenant, { ...request, runId: second.id }).catch(error => ({ error: error.message }))).toMatchObject({ error: expect.any(String) })
+  connectedTenant = tenant
+  const result = await service.restore(tenant, { ...request, runId: second.id })
+  expect(result).toMatchObject({ success: false, error: expect.stringContaining("Confirm this configuration separately") })
+})

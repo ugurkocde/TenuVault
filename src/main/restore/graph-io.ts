@@ -79,13 +79,13 @@ export function guardedGraphIO(token: string, actor: RestoreActor, references: G
       if ([current, desired].some(value => value?.isBuiltIn === true || value?.policyType === "builtIn" || value?.source === "global" || (typeof value?.id === "string" && value.id.startsWith("microsoft-")))) throw new RestoreSafetyError("Built-in and Microsoft-managed objects are never restored.")
       return references(step, current, desired)
     },
-    write: async (step, body, targetId, beforeSend) => {
+    write: async (step, body, targetId, beforeSend, run) => {
       const type = typeForFolder(step.folder)
       if (!type || ["none", "metadata"].includes(restoreCapability(type)) || (restoreCapability(type) === "singleton" && step.operation === "create")) throw new RestoreSafetyError(type?.limitation ?? "This type cannot be restored.")
       const { row, write, root, path: readPath } = await resolvedPathOf(step, targetId)
       if (Object.keys(body).some(key => !write.properties.includes(key))) throw new RestoreSafetyError("The write body contains properties outside the verified Graph contract.")
       if (isEntraConfiguration(step.folder)) {
-        requireConfigurationApproval(step)
+        requireConfigurationApproval(step, run)
         configurationPayload(step.folder, step.operation, body)
       }
       // Directory and action-specific writers are intentionally deferred. This adapter cannot turn

@@ -3,7 +3,7 @@ import { restoreMatrixRow } from "../../shared/intune/restore-matrix"
 import { RestoreSafetyError, writableSnapshot, addsOnlyPayload } from "../../shared/intune/restore-guards"
 import type { Item, Json } from "../../shared/intune/registry"
 import type { GraphReader } from "../../shared/intune/read"
-import { restoreFingerprint, type GuardedStep } from "./guarded-run"
+import { restoreFingerprint, type GuardedRun, type GuardedStep } from "./guarded-run"
 
 export const ENTRA_CONFIGURATION_FOLDERS = ENTRA_AREAS.filter(area => ["tenantSettings", "authentication"].includes(area.id)).flatMap(area => area.folders)
 export const isEntraConfiguration = (folder: string): boolean => ENTRA_CONFIGURATION_FOLDERS.includes(folder)
@@ -104,12 +104,15 @@ export function configurationPayload(folder: string, operation: GuardedStep["ope
   return desired
 }
 
-export function configurationApproval(step: GuardedStep): string {
-  return restoreFingerprint({ folder: step.folder, operation: step.operation, sourceId: step.sourceId, targetId: step.targetId ?? null, preview: step.preview, desired: step.desired, allowRemoval: step.allowRemoval === true })
+type ConfigurationRun = Pick<GuardedRun, "id" | "tenant" | "actor" | "origin" | "source">
+export function configurationApproval(step: GuardedStep, run: ConfigurationRun): string {
+  const { confirmation: _confirmation, ...exactStep } = step
+  const { tenantId, userId, clientId, applicationObjectId, servicePrincipalId } = run.actor
+  return restoreFingerprint({ runId: run.id, tenant: run.tenant.toLowerCase(), actor: { tenantId: tenantId.toLowerCase(), userId: userId.toLowerCase(), clientId: clientId.toLowerCase(), applicationObjectId: applicationObjectId?.toLowerCase() ?? null, servicePrincipalId: servicePrincipalId?.toLowerCase() ?? null }, origin: run.origin, source: run.source ? { ...run.source } : null, step: JSON.parse(JSON.stringify(exactStep)) as Item })
 }
-export function requireConfigurationApproval(step: GuardedStep): void {
+export function requireConfigurationApproval(step: GuardedStep, run?: ConfigurationRun): void {
   if (!isEntraConfiguration(step.folder)) return
-  if (step.confirmation?.kind !== configurationConfirmation(step.folder) || step.confirmation.fingerprint !== configurationApproval(step)) throw new RestoreSafetyError("Confirm this configuration separately after reviewing its exact difference. It is never part of restore all.")
+  if (!run || step.confirmation?.kind !== configurationConfirmation(step.folder) || step.confirmation.fingerprint !== configurationApproval(step, run)) throw new RestoreSafetyError("Confirm this configuration separately after reviewing its exact difference. It is never part of restore all.")
 }
 export function configurationDifference(step: GuardedStep, current: Item | null): Array<{ property: string; before: Json; after: Json }> {
   const desired = addsOnlyPayload(current, step.desired, step.allowRemoval)
