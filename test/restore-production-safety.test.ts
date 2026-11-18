@@ -108,6 +108,16 @@ describe("production restore safety reads", () => {
     await expect(referenceMatches(token, [], fetcher, { requests: 2 })).rejects.toThrow("request budget")
     expect(fetcher).toHaveBeenCalledTimes(2)
     await expect(referenceMatches(token, [], fetcher, { bytes: 1 })).rejects.toThrow("size budget")
+    // A large answer is cancelled once it passes the budget, not read to the end first.
+    let pulled = 0, cancelled = false
+    const chunk = new Uint8Array(1024 * 1024).fill(32)
+    const streaming = vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
+      pull(stream) { pulled++; if (pulled > 20) stream.close(); else stream.enqueue(chunk) },
+      cancel() { cancelled = true },
+    }), { status: 200 }))
+    await expect(referenceMatches(token, [], streaming, { bytes: 4 * 1024 * 1024 })).rejects.toThrow("size budget")
+    expect(cancelled).toBe(true)
+    expect(pulled).toBeLessThan(10)
     const controller = new AbortController(); controller.abort()
     fetcher.mockClear()
     await expect(referenceMatches(token, [], fetcher, { signal: controller.signal })).rejects.toThrow()

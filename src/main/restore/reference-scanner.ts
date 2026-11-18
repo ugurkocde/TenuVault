@@ -14,6 +14,25 @@ export const REFERENCE_SCAN_EXCLUDED = new Set(["AppCategories", "DeviceCategori
 const referenceExtras = new Set(["assignments", "definitionValues", "settings", "roleAssignments", "relationships", "scheduledActionsForRule"])
 const referenceFields = ["roleScopeTagIds", "assignments", "groupAssignments", "apps", "conditions", "grantControls", "sessionControls", "members", "scopeMembers", "resourceScopes", "approverGroupIds", "roleAssignments", "relationships", "azureActiveDirectoryDeviceId"]
 
+/** Count bytes as they arrive, so a large answer is cancelled at the budget instead of buffered first. */
+async function readWithin(response: Response, allowance: number): Promise<string> {
+  if (!response.body) return ""
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let size = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    size += value.byteLength
+    if (size > allowance) {
+      await reader.cancel().catch(() => {})
+      throw new Error("Reference scan size budget exceeded")
+    }
+    chunks.push(value)
+  }
+  return Buffer.concat(chunks).toString("utf8")
+}
+
 export interface ReferenceScanOptions { signal?: AbortSignal; requests?: number; milliseconds?: number; bytes?: number }
 
 /** Keep matches from each policy, then release its payload. Incomplete or cancelled scans throw. */
@@ -32,9 +51,8 @@ export async function referenceMatches(token: string, mappings: readonly Restore
     const cancelled = new Promise<never>((_resolve, reject) => { abort = () => reject(signal.reason); signal.addEventListener("abort", abort, { once: true }) })
     try {
       const response = await Promise.race([fetchImpl(input, { ...init, signal: requestSignal }), cancelled])
-      const body = await Promise.race([response.text(), cancelled])
+      const body = await Promise.race([readWithin(response, (options.bytes ?? REFERENCE_SCAN_BUDGET.bytes) - bytes), cancelled])
       bytes += Buffer.byteLength(body)
-      if (bytes > (options.bytes ?? REFERENCE_SCAN_BUDGET.bytes)) throw new Error("Reference scan size budget exceeded")
       check()
       return new Response(body || null, { status: response.status, headers: response.headers })
     } finally { signal.removeEventListener("abort", abort) }
