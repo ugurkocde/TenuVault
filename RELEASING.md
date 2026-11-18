@@ -253,6 +253,8 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 ## Compatibility notes for the next release
 
+- Directory restore builders and bounded journals for users and groups are staged only. Production remains backup-only until live lifecycle and cleanup verification admits each operation. No directory write scope is added by this staging work.
+
 - Enable individually confirmed cross-tenant parent display-name updates, unpublished and externally hidden user-managed catalog create/update without resources, and the access-review ownership flag (beta). All remaining External identities, Governance, Roles and PIM and Defender operations stay blocked with their specific evidence gaps. Custom attribute creation was refused, detection action read-back did not match, lifecycle settings could not be read, and workflow writes were not approved. Provider and connector secrets must be entered again.
 - Accept full access review and cross-tenant parent backups while writing only their confirmed subsets. Catalog backups omit null uniqueName and serviceManagementReference fields; configured values, service-default catalogs and populated resources are refused. Confirmation stays bound to the full source backup.
 

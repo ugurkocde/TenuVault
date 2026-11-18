@@ -146,3 +146,21 @@ The journal keeps up to 1,000 records. When it is full, TenuVault removes comple
 * [What gets backed up](/backups/coverage/)
 * [Multi Admin Approval and TenuVault](/restore/multi-admin-approval/)
 * [Troubleshooting](/troubleshooting/)
+
+## Directory objects that are never restored
+
+These exclusions also apply to staged directory recovery. The preview reports the reason for each affected row.
+
+| Object or relationship | Reason |
+| --- | --- |
+| Application and enterprise-app secrets or private keys | Credentials were never backed up. Create replacement credentials with the application owner. |
+| Federated identity credentials | Trust credentials must be re-established by the owner. |
+| User passwords and authentication methods | Sign-in credentials were never backed up. Set up sign-in again in Entra. |
+| Members of dynamic groups | The membership rule determines members. Direct membership writes are refused. |
+| Microsoft first-party service principals | Microsoft manages these service identities. |
+| Activated PIM instances | An activation is not replayed as a permanent role assignment or eligibility. |
+| Objects synchronized from on-premises | The source directory owns them, including identities with retained synchronization identity. |
+| Devices | A device object is created by device registration. |
+| Domains | Ownership and federation need separate verification and setup. |
+
+Mail-enabled security groups and distribution groups cannot be recreated through the directory Graph flow. Microsoft 365 recovery covers its directory object only. Teams, SharePoint and mailbox content are excluded. All staged user and group restore operations still require live verification before they become available. See [Directory recovery](/restore/identity/#users-and-groups-staged-directory-recovery).
