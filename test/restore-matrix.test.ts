@@ -38,7 +38,7 @@ describe("restore write matrix", () => {
       }
     }
   })
-  for (const row of RESTORE_MATRIX.filter(row => row.create)) it(`${row.folder}: refuses capability none; a verified create reconciles an unanswered response without a second create`, async () => {
+  for (const row of RESTORE_MATRIX.filter(row => row.create)) it(`${row.folder}: refuses capability none and incomplete contracts before a create can be sent`, async () => {
     const write = row.create!
     const type = typeForFolder(row.folder)!
     const properties = write.properties
@@ -65,6 +65,14 @@ describe("restore write matrix", () => {
     // The transport itself also refuses a backup-only type, even if called without the executor.
     await expect(io.write(step, desired)).rejects.toThrow()
     expect(creates).toBe(0)
+    if (write.blockedReason) {
+      const previous = type.restore
+      type.restore = "create"
+      try { await expect(io.write(step, desired)).rejects.toThrow() }
+      finally { if (previous) type.restore = previous; else delete type.restore }
+      expect(creates).toBe(0)
+      return
+    }
     if (need === "unsupported" || write.index !== "matched" || write.blockedReason || !write.permissions.length || row.disposition !== "configuration" || write.path.includes("{organizationId}") || (row.detection.properties ?? []).some(key => !properties.includes(key))) return
     const memory = new Map<string, string>()
     const journal = new GuardedRunJournal({ get: key => memory.get(key) ?? null, set: (key, value) => { memory.set(key, value) }, delete: key => { memory.delete(key) } })

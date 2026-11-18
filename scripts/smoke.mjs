@@ -1,3 +1,4 @@
+import { checkIdentityRestoreSafety } from "./identity-restore-safety-smoke.mjs"
 /**
  * Smoke test for the built app (run `npm run build` first).
  *
@@ -1493,6 +1494,8 @@ await check("tag drafts stay with their tenant and bulk tags sync every tenant",
     await evaluate(`window.fetch = window.__tenantTagFetch; delete window.__tenantTagFetch; delete window.__tenantTagSaves`)
   }
 })
+
+await checkIdentityRestoreSafety({ check, evaluate, waitForCondition, screenshot, assert, send, go })
 
 await check("restore journal applied IDs use validated inline inputs", async () => {
   const tenantId = "11111111-1111-1111-1111-111111111111"

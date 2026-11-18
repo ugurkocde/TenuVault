@@ -159,6 +159,8 @@ interface Outcome {
   partial?: boolean
   policyId?: string
   repairToken?: string
+  guardedRunId?: string
+  replacedReferences?: import("../../../shared/intune/restore-references").ReplacedReference[]
   adminLink?: AdminLink
 }
 
@@ -1230,6 +1232,8 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                     {outcome.partial && !outcome.approvalId && outcome.policyId && <span className="block text-xs text-amber-800">Incomplete object: {outcome.policyId}. {outcome.repairToken ? "Retry repairs the remaining steps without creating another object. Repair is available for one hour in this app session." : "Check and repair it in Intune."}</span>}
                     {/* A skipped item was refused before any write, so there is nothing to check. */}
                     {outcome.retryable === false && !outcome.success && !outcome.approvalId && (!outcome.approval || outcome.partial) && outcome.action !== "skipped" && <span className="block text-xs text-amber-800">Check this item in {adminCenter(itemByPath.get(outcome.path)?.folder)} before retrying; a write may already have completed.</span>}
+                    {outcome.guardedRunId && <span className="block break-all text-xs text-gray-500">Saved restore {outcome.guardedRunId}. Review and read back its outcome in Settings, Storage and recovery.</span>}
+                    {outcome.replacedReferences?.map((reference, index) => <span key={`reference-${index}`} className="block break-all text-xs text-amber-800">Review {reference.path}, {reference.property}: {reference.mapping.kind} {reference.mapping.source} now maps to {reference.mapping.target}.</span>)}
                     {outcome.warnings?.map((warning) => (
                       <span key={warning} className="block text-xs text-amber-800">
                         <LinkedMessage text={warning} />

@@ -1,3 +1,4 @@
+import { IdentityRestoreSafety } from "../components/IdentityRestoreSafety"
 import type { WriteRecord } from "../../main/storage/restore-journal"
 import { getAppearance, setAppearance, type Appearance } from "../lib/appearance"
 import { useEffect, useId, useRef, useState, type ReactNode } from "react"
@@ -53,6 +54,7 @@ function RestoreWrites({ active }: { active: boolean }) {
           {tenants.map(tenant => <option key={tenant.id} value={tenant.credentials!.tenantId}>{tenant.name}</option>)}
         </select>
       </label>
+      <IdentityRestoreSafety key={`identity-${tenantId}`} tenantId={tenantId} />
       <TenantRestoreWrites key={tenantId} tenantId={tenantId} active={active} />
     </div>
   )

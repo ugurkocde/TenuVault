@@ -17,6 +17,16 @@ The boundary protects the signed-in admin's own account, roles and authenticatio
 
 Members, owners and collection entries are added by default. Removing existing entries requires a choice for that individual policy. Consent grant changes merge scopes by default. Consent grants and role assignments from imported backups are refused. New Entra ID and Defender types cannot be copied to another tenant.
 
+## Review recovery accounts and saved results
+
+Open **Settings > Storage and recovery** and choose the restore history tenant. **Identity restore safety** shows the recovery account object IDs saved for that tenant. Enter one ID per line and select **Save recovery accounts**. TenuVault verifies that each is an enabled cloud member account before saving the choice on this device. An empty list designates no additional recovery accounts. The signed-in admin, connected registration and enterprise app remain protected.
+
+![Identity restore safety in light mode at 1024 pixels](/images/screenshots/identity-restore-safety-light.png)
+
+![Identity restore safety in dark mode at 1024 pixels](/images/screenshots/identity-restore-safety-dark.png)
+
+The same panel lists saved guarded runs, each policy's state, created IDs and the per-policy Intune and Conditional Access reference report. **Read back saved outcome** uses fresh tenant reads and never repeats a write. An absent, ambiguous or unreadable result stays uncertain. There is no manual reset for guarded runs. Pending steps need the reviewed restore flow; a partial result does not authorize a new create. The existing Intune history controls retain their behavior.
+
 ## What partial means
 
 Microsoft Graph offers no transaction across policies. A restore can finish some steps before another is blocked, cancelled or unanswered. A partial result records each policy's state and its dependencies. It does not promise that earlier changes were rolled back.
@@ -31,6 +41,6 @@ Secrets, passwords, OATH seeds, synchronization flags, domains, devices, Microso
 
 ## Endpoint verification matrix
 
-This table renders the same data used by the restore safety code. Verification uses the local Graph index and Microsoft's resource and operation documentation. No tenant write was made for this guardrail layer. Prerequisite read permissions also come from the service manifest; the writer enforces both, including Policy.Read.All for security defaults. A missing contract, property list, permission, stable detection key or index match keeps the operation blocked. A missing parent contract can still have action or sub-resource APIs that require separate research. In particular, the index describes automatic auditing as POST while current Microsoft documentation describes PATCH; this discrepancy remains blocked.
+This table renders the same data used by the restore safety code. Verification uses the local Graph index and Microsoft's resource and operation documentation. No tenant write was made for this guardrail layer. Prerequisite read permissions also come from the service manifest; the writer enforces both, including Policy.Read.All for security defaults. A missing contract, property list, permission, stable detection key or index match keeps the operation blocked. The expandable action and sub-resource evidence records Microsoft operation pages separately from executable contracts. Those operations stay blocked until their payload, preimage and reconciliation key have a reviewed implementation. Required-property tables and examples do not establish a full writable schema. Nested and polymorphic properties also remain blocked until a closed request schema is implemented. The local OpenAPI catalog resolves nine of the earlier nineteen endpoint-documentation gaps. Ten remain blocked with their exact discrepancy in the table. Workbook resource and operation pages disagree about PUT and PATCH; neither is enabled. In particular, the index describes automatic auditing as POST while current Microsoft documentation describes PATCH; this discrepancy remains blocked.
 
 <RestoreMatrix />

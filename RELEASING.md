@@ -253,6 +253,7 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 ## Compatibility notes for the next release
 
+- Settings, Storage and recovery now saves designated recovery account IDs per tenant and shows guarded restore results, saved reference reports and read-back reconciliation. Guarded history has no manual outcome reset. Protected identity resolution includes group members, group owners and PIM eligibility; incomplete safety reads block a future identity write.
 - Entra ID and Defender remain backup-only. Their future restore writer requires a signed-in admin, touched-object journal, protected identity checks, adds-only defaults and reconciliation of unanswered writes. No new restore capability is enabled. Restore continuation pages now use the same collection and filter validation as backups.
 
 - Cloud change reports now warn when either backup declares directory inventory that Azure Automation did not compare, including a missing or unreadable large companion. Ordinary report exports retain their previous JSON, Markdown and HTML layout. Azure Automation does not capture directory inventory.
