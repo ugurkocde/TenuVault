@@ -104,6 +104,7 @@ export async function resolveSafetyReferences(reader: GraphReader, step: Guarded
     }
     const remaining = { global: [] as string[], privilegedRole: [] as string[] }
     for (const assignment of [...assignments, ...eligibility]) {
+      for (const key of ["startDateTime", "endDateTime"]) if (assignment[key] !== null && assignment[key] !== undefined && (typeof assignment[key] !== "string" || !Number.isFinite(Date.parse(assignment[key] as string)))) throw new Error("Unresolved assignment period")
       if (typeof assignment.endDateTime === "string" && Date.parse(assignment.endDateTime) <= Date.now()) continue
       if (typeof assignment.startDateTime === "string" && Date.parse(assignment.startDateTime) > Date.now()) continue
       const definition = definitions.find(item => item.id === assignment.roleDefinitionId)

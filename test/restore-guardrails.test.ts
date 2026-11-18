@@ -38,6 +38,15 @@ describe("identity restore admission", () => {
       for (const operation of ["create", "update", "delete", "assign"] as const) expect(writeBlocker({ ...type, restore: "create" }, operation)).toContain("journaled restore safety")
     }
   })
+  it("refuses reference-only capabilities and singleton creates in the guarded runner", async () => {
+    for (const restore of ["metadata", "singleton"] as const) {
+      const s = setup(1)
+      const type = s.io.type("Fixture")
+      s.io.type = () => ({ ...type, restore })
+      expect((await executeGuardedRun(s.journal, s.input, s.io)).run.entries[0]!.state).toBe("blocked")
+      expect(s.writes()).toBe(0)
+    }
+  })
   it("rejects app-only, Backup Reader, unknown and wrong-connection tokens", () => {
     requireRestoreActor(delegated, actor)
     for (const claims of [{ roles: ["Directory.ReadWrite.All"] }, { scp: "", oid: "admin" }, { scp: "write", oid: "other", tid: "tenant", appid: "client" }, { scp: "write", oid: "admin", tid: "other", appid: "client" }, { scp: "write", oid: "admin", tid: "tenant", appid: "other" }, { scp: "write", oid: "admin", tid: "tenant", appid: "client", idtyp: "app" }]) expect(() => requireRestoreActor(token(claims), actor)).toThrow("signed-in admin")

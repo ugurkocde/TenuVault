@@ -105,8 +105,8 @@ export class GuardedRunJournal {
 const active = new Set<string>()
 
 /**
- * The only writer for new services. Later layers supply verified request builders and live safety
- * resolution. Legacy writers cannot bypass this by merely enabling a registry capability.
+ * The only writer for new services. Later layers supply verified request builders. Production safety
+ * resolution is provided by the signed-in desktop connection. Legacy writers cannot bypass this by merely enabling a registry capability.
  */
 export async function executeGuardedRun(journal: GuardedRunJournal, input: GuardedRun, io: GuardedIO, signal?: AbortSignal, reconcileOnly = false): Promise<{ status: "complete" | "partial"; run: GuardedRun }> {
   const key = input.tenant.toLowerCase()
@@ -135,7 +135,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
       if (prerequisite) { entry.state = "blocked"; entry.reason = `Prerequisite ${prerequisite} did not complete.`; journal.save(run); continue }
       try {
         const type = io.type(step.folder)
-        if (restoreCapability(type) === "none") throw new RestoreSafetyError(type.limitation ?? "This type cannot be restored.")
+        if (["none", "metadata"].includes(restoreCapability(type)) || (restoreCapability(type) === "singleton" && step.operation === "create")) throw new RestoreSafetyError(type.limitation ?? "This type cannot be restored.")
         const originBlock = restoreOriginBlocker(step.folder, run.origin)
         if (originBlock) throw new RestoreSafetyError(originBlock)
         if (entry.state === "uncertain") {

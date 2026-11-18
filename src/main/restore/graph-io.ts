@@ -68,7 +68,7 @@ export function guardedGraphIO(token: string, actor: RestoreActor, references: G
     },
     write: async (step, body, targetId) => {
       const type = typeForFolder(step.folder)
-      if (!type || restoreCapability(type) === "none") throw new RestoreSafetyError(type?.limitation ?? "This type cannot be restored.")
+      if (!type || ["none", "metadata"].includes(restoreCapability(type)) || (restoreCapability(type) === "singleton" && step.operation === "create")) throw new RestoreSafetyError(type?.limitation ?? "This type cannot be restored.")
       const { row, write, root } = pathOf(step, targetId)
       if (Object.keys(body).some(key => !write.properties.includes(key))) throw new RestoreSafetyError("The write body contains properties outside the verified Graph contract.")
       // Directory and action-specific writers are intentionally deferred. This adapter cannot turn
