@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest"
-import { directoryObjectStep, directoryRelationshipSteps } from "../src/main/restore/directory-9a-plan"
+import { directoryObjectStep, directoryRelationshipSteps, mappedDirectoryIds } from "../src/main/restore/directory-9a-plan"
 import { directory9aIO } from "../src/main/restore/directory-9a-io"
 import { previewDirectoryPage } from "../src/main/restore/directory-9a"
 const id = "00000000-0000-4000-8000-000000000001", manager = "00000000-0000-4000-8000-000000000002"
@@ -41,4 +41,14 @@ it("keeps group exact choices separate, maps principals before preview and never
   expect(rows[0]).toMatchObject({ allowRemoval: true, desired: { present: false, principalId: manager }, directory: { exact: true, action: "member" } })
   const dynamic = { members: { saved: empty(), current: current() }, owners: { saved: empty(), current: empty() }, exactMembers: true, mapPrincipal: async () => manager }
   expect(await previewDirectoryPage(directoryRelationshipSteps("Groups", id, id, { groupTypes: ["DynamicMembership"] }, live, dynamic))).toEqual([])
+})
+
+it("maps recreated principals before an exact comparison, so it never adds and removes the same member", async () => {
+  async function* saved() { yield id }
+  async function* current() { yield manager }
+  async function* empty() { /* No owners. */ }
+  const relationships = { members: { saved: saved(), current: current() }, owners: { saved: empty(), current: empty() }, exactMembers: true, mapPrincipal: async () => manager }
+  expect(await previewDirectoryPage(directoryRelationshipSteps("Groups", id, id, {}, ioFor("live"), relationships))).toEqual([])
+  async function* reversed() { yield manager; yield id }
+  expect(await previewDirectoryPage(mappedDirectoryIds(reversed(), async value => value))).toEqual([id, manager])
 })
