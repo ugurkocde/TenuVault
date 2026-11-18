@@ -52,6 +52,9 @@ function covers(area: PermissionArea, areas: readonly string[] | undefined, mode
   return !(area.optIn || (mode === "application" && area.appOnlyOptIn)) || areas?.includes(area.id) === true
 }
 
+// The owner excludes these scopes from every setup and remediation request, including optional areas.
+const NEVER_REQUESTED = new Set(["Organization.ReadWrite.All", "Directory.ReadWrite.All", "Directory.Read.All"])
+
 /**
  * The permissions to add for an area, given the ones already `held`: for every group nothing held
  * satisfies, the first permission. Restore permissions are settled first, so a ReadWrite permission
@@ -64,7 +67,10 @@ export function areaPermissions(area: PermissionArea, access: AccessLevel, mode:
     for (const need of needs) {
       const needed = need[mode]
       if (needed === "unsupported") continue
-      for (const group of needed) if (!group.some((permission) => held.has(permission) || added.includes(permission))) added.push(group[0]!)
+      for (const group of needed) if (!group.some((permission) => held.has(permission) || added.includes(permission))) {
+        const permission = !NEVER_REQUESTED.has(group[0]!) ? group[0] : undefined
+        if (permission) added.push(permission)
+      }
     }
   }
   if (access === "restore") settle(area.parts.filter((part) => !part.restoreNotRequested).map((part) => part.restore))
@@ -108,7 +114,7 @@ function namedByServices(mode: SignInMode): string[] {
   return unique(
     MODULES.flatMap((module) =>
       module.areas.flatMap((area) =>
-        area.parts.flatMap((part) => [part.backup[mode], part.restore[mode]].flatMap((needed) => (needed === "unsupported" ? [] : needed.map((group) => group[0]!)))),
+        area.parts.flatMap((part) => [part.backup[mode], part.restore[mode]].flatMap((needed) => (needed === "unsupported" ? [] : needed.flatMap((group) => (!NEVER_REQUESTED.has(group[0]!) ? group[0]! : []))))),
       ),
     ),
   )

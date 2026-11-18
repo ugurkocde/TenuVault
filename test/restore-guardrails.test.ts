@@ -34,7 +34,7 @@ describe("identity restore admission", () => {
     const types = INTUNE_TYPES.filter(type => type.restoreSafety === "identity")
     expect(types).toHaveLength(91)
     for (const type of types) {
-      expect(restoreCapability(type)).toBe(["AuthenticationFlowsPolicy", "EntraCompanyBranding"].includes(type.folder) ? "singleton" : ["TokenLifetimePolicies", "ActivityBasedTimeoutPolicies"].includes(type.folder) ? "create" : "none")
+      expect(restoreCapability(type)).toBe(["AuthenticationFlowsPolicy", "EntraCompanyBranding", "CrossTenantAccessPolicy", "AccessReviewPolicy"].includes(type.folder) ? "singleton" : ["TokenLifetimePolicies", "ActivityBasedTimeoutPolicies", "AccessPackageCatalogs"].includes(type.folder) ? "create" : "none")
       for (const operation of ["create", "update", "delete", "assign"] as const) expect(writeBlocker({ ...type, restore: "create" }, operation)).toContain("journaled restore safety")
     }
   })

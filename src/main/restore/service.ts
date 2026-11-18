@@ -45,9 +45,9 @@ export class IdentityRestoreService {
     const contract = restoreMatrixRow(folder)?.[operation]
     if (!contract || (!isEntraConfiguration(folder) && Object.keys(request.snapshot).some(key => ![...contract.properties, "id", "@odata.type"].includes(key)))) throw new RestoreSafetyError("This snapshot needs a reviewed request builder before restoring.")
     const { actor, io } = await this.context(tenant, false, folder, operation)
-    // The per-policy branding review explicitly restores only the default username hint.
-    // Keep the full backup fingerprint below, while leaving every other branding field alone.
-    const candidate = folder === "EntraCompanyBranding" ? Object.fromEntries(contract.properties.filter(key => key in request.snapshot).map(key => [key, request.snapshot[key]!])) : request.snapshot
+    // These per-policy reviews explicitly restore only the named metadata subset.
+    // The full backup fingerprint still binds confirmation to the original source.
+    const candidate = ["EntraCompanyBranding", "CrossTenantAccessPolicy"].includes(folder) ? Object.fromEntries(contract.properties.filter(key => key in request.snapshot).map(key => [key, request.snapshot[key]!])) : request.snapshot
     const step: GuardedStep = { key: "configuration", folder, sourceId: String(request.snapshot.id ?? ""), operation, targetId, allowRemoval, properties: contract.properties, desired: isEntraConfiguration(folder) ? configurationPayload(folder, operation, candidate) : Object.fromEntries(contract.properties.filter(key => key in request.snapshot).map(key => [key, request.snapshot[key]!])), preview: "", requires: [] }
     if (operation === "create" && isEntraConfiguration(folder) && await io.read({ ...step, targetId: step.sourceId }, step.sourceId)) throw new RestoreSafetyError("The original policy still exists. Choose replacement and review its current values instead of recreating it.")
     const mappings = this.journal.mappings(tenant)

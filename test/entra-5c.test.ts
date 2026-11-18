@@ -42,7 +42,7 @@ describe("Entra configuration coverage closes every configuration area", () => {
       expect(read.objects).toHaveLength(data.objectCount)
       if ("cause" in read) expect(read.cause).toBe(data.cause)
       read.objects.forEach(scan)
-      expect(restoreCapability(type)).toBe("none")
+      expect(restoreCapability(type)).toBe(type.folder === "AccessPackageCatalogs" ? "create" : type.folder === "AccessReviewPolicy" ? "singleton" : "none")
       expect(() => buildRestorePlan(type, { id: "example" })).toThrow()
       expect(() => buildUpdatePlan(type, { id: "example" }, "example")).toThrow()
       expect(adminCenterLink(type.folder, "example")?.center).toBe("Entra")

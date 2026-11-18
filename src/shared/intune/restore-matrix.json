@@ -3709,7 +3709,7 @@
         "https://raw.githubusercontent.com/microsoftgraph/microsoft-graph-docs-contrib/main/api-reference/v1.0/includes/permissions/crosstenantaccesspolicy-update-permissions.md"
       ],
       "propertyEvidence": "request-body-table",
-      "propertyCoverage": "top-level",
+      "propertyCoverage": "closed-subset",
       "schemaDocumentation": [],
       "propertyAudit": {
         "date": "2026-11-17",
@@ -3721,14 +3721,17 @@
       },
       "protections": [],
       "protectionReason": "This closed subset cannot write identities, memberships, assignments, authentication methods, credentials or the connected registration. Workflow and detection execution is disabled; relationship-changing subsets are excluded.",
-      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked."
+      "liveVerification": {
+        "date": "2026-11-18",
+        "result": "round-trip-matched"
+      }
     },
     "detection": {
       "kind": "singleton"
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked.",
+    "reason": "Only the parent display name is restored after its own cross-tenant-access confirmation. Defaults, partners and tenant relationships are never written.",
     "indexWrites": {
       "POST": [
         {
@@ -3816,21 +3819,22 @@
       ]
     },
     "verification": {
-      "date": "2026-11-17",
+      "date": "2026-11-18",
       "method": "local-graph-index-and-microsoft-documentation",
       "resourceFound": true,
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/crosstenantaccesspolicy?view=graph-rest-1.0",
-      "live": "not-run",
+      "live": "live-save-change-verify-restore-original-verify (2026-11-18)",
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "configuration",
     "supplementalWrites": [],
     "configurationRestore": {
-      "phase": "8c-phase1",
+      "phase": "8c-phase2",
       "confirmation": "cross-tenant-access",
-      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked.",
-      "builder": "staged-closed-subset",
-      "lab": "not-run; phase 1 forbids lab writes"
+      "blockedReason": "",
+      "builder": "enabled-closed-subset",
+      "lab": "live-save-change-verify-restore-original-verify",
+      "capability": "singleton"
     }
   },
   {
@@ -4340,14 +4344,14 @@
       },
       "protections": [],
       "protectionReason": "This closed subset cannot write identities, memberships, assignments, authentication methods, credentials or the connected registration. Workflow and detection execution is disabled; relationship-changing subsets are excluded.",
-      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked."
+      "blockedReason": "The lab permits only identical-value writes of the leave setting. Changed-value restore is unverified and guest access is never changed."
     },
     "detection": {
       "kind": "singleton"
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked.",
+    "reason": "The lab permits only identical-value writes of the leave setting. Changed-value restore is unverified and guest access is never changed.",
     "indexWrites": {
       "PATCH": [
         {
@@ -4359,21 +4363,21 @@
       ]
     },
     "verification": {
-      "date": "2026-11-17",
+      "date": "2026-11-18",
       "method": "local-graph-index-and-microsoft-documentation",
       "resourceFound": true,
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/externalidentitiespolicy?view=graph-rest-beta",
-      "live": "not-run",
+      "live": "identical leave flag verified (2026-11-18); no changed-value evidence",
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "configuration",
     "supplementalWrites": [],
     "configurationRestore": {
-      "phase": "8c-phase1",
+      "phase": "8c-phase2",
       "confirmation": "configuration",
-      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked.",
+      "blockedReason": "The lab permits only identical-value writes of the leave setting. Changed-value restore is unverified and guest access is never changed.",
       "builder": "staged-closed-subset",
-      "lab": "not-run; phase 1 forbids lab writes"
+      "lab": "live-identical-write-only; PATCH 204 and GET 200"
     }
   },
   {
@@ -4868,7 +4872,7 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/identityuserflowattribute?view=graph-rest-1.0"
       ],
-      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked.",
+      "blockedReason": "Custom attribute creation was refused by the lab with HTTP 400 AADB2C99039. No update or restore round trip could be verified with the required TV06-TEST- prefix.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -4904,7 +4908,7 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/identityuserflowattribute?view=graph-rest-1.0"
       ],
-      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked.",
+      "blockedReason": "Custom attribute creation was refused by the lab with HTTP 400 AADB2C99039. No update or restore round trip could be verified with the required TV06-TEST- prefix.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -4926,7 +4930,7 @@
     },
     "builtIn": "Built-in user flow attributes.",
     "dependsOn": [],
-    "reason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked.",
+    "reason": "Custom attribute creation was refused by the lab with HTTP 400 AADB2C99039. No update or restore round trip could be verified with the required TV06-TEST- prefix.",
     "indexWrites": {
       "POST": [
         {
@@ -4946,11 +4950,11 @@
       ]
     },
     "verification": {
-      "date": "2026-11-17",
+      "date": "2026-11-18",
       "method": "local-graph-index-and-microsoft-documentation",
       "resourceFound": true,
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/identityuserflowattribute?view=graph-rest-1.0",
-      "live": "not-run",
+      "live": "POST 400 AADB2C99039; update not attempted; no prefixed attribute created (2026-11-18)",
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "configuration",
@@ -4972,11 +4976,11 @@
       }
     ],
     "configurationRestore": {
-      "phase": "8c-phase1",
+      "phase": "8c-phase2",
       "confirmation": "configuration",
-      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked.",
+      "blockedReason": "Custom attribute creation was refused by the lab with HTTP 400 AADB2C99039. No update or restore round trip could be verified with the required TV06-TEST- prefix.",
       "builder": "staged-closed-subset",
-      "lab": "not-run; phase 1 forbids lab writes"
+      "lab": "POST 400 AADB2C99039; update not attempted; no prefixed attribute created"
     }
   },
   {
@@ -6973,11 +6977,10 @@
         "https://raw.githubusercontent.com/microsoftgraph/microsoft-graph-docs-contrib/main/api-reference/v1.0/includes/permissions/entitlementmanagement-post-catalogs-permissions.md"
       ],
       "propertyEvidence": "request-body-table",
-      "propertyCoverage": "top-level",
+      "propertyCoverage": "closed-subset",
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/accesspackagecatalog?view=graph-rest-1.0"
       ],
-      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked. The local index still has no exact catalog write match.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -6987,7 +6990,11 @@
         "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
       },
       "protections": [],
-      "protectionReason": "This closed subset cannot write identities, memberships, assignments, authentication methods, credentials or the connected registration. Workflow and detection execution is disabled; relationship-changing subsets are excluded."
+      "protectionReason": "This closed subset cannot write identities, memberships, assignments, authentication methods, credentials or the connected registration. Workflow and detection execution is disabled; relationship-changing subsets are excluded.",
+      "liveVerification": {
+        "date": "2026-11-18",
+        "result": "round-trip-matched"
+      }
     },
     "update": {
       "method": "PATCH",
@@ -7008,9 +7015,8 @@
         "https://raw.githubusercontent.com/microsoftgraph/microsoft-graph-docs-contrib/main/api-reference/v1.0/includes/permissions/accesspackagecatalog-update-permissions.md"
       ],
       "propertyEvidence": "request-body-table",
-      "propertyCoverage": "top-level",
+      "propertyCoverage": "closed-subset",
       "schemaDocumentation": [],
-      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked. The local index still has no exact catalog write match.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -7020,7 +7026,11 @@
         "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
       },
       "protections": [],
-      "protectionReason": "This closed subset cannot write identities, memberships, assignments, authentication methods, credentials or the connected registration. Workflow and detection execution is disabled; relationship-changing subsets are excluded."
+      "protectionReason": "This closed subset cannot write identities, memberships, assignments, authentication methods, credentials or the connected registration. Workflow and detection execution is disabled; relationship-changing subsets are excluded.",
+      "liveVerification": {
+        "date": "2026-11-18",
+        "result": "round-trip-matched"
+      }
     },
     "detection": {
       "kind": "properties",
@@ -7033,14 +7043,14 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked. The local index still has no exact catalog write match.",
+    "reason": "Only unpublished, externally hidden user-managed catalog metadata is restored. Resources and assignments are excluded.",
     "indexWrites": {},
     "verification": {
-      "date": "2026-11-17",
+      "date": "2026-11-18",
       "method": "local-graph-index-and-microsoft-documentation",
       "resourceFound": true,
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/accesspackagecatalog?view=graph-rest-1.0",
-      "live": "not-run",
+      "live": "live-create-read-change-restore-delete (2026-11-18)",
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "configuration",
@@ -7061,11 +7071,12 @@
       }
     ],
     "configurationRestore": {
-      "phase": "8c-phase1",
+      "phase": "8c-phase2",
       "confirmation": "configuration",
-      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked. The local index still has no exact catalog write match.",
-      "builder": "staged-closed-subset",
-      "lab": "not-run; phase 1 forbids lab writes"
+      "blockedReason": "",
+      "builder": "enabled-closed-subset",
+      "lab": "live-create-read-change-restore-delete",
+      "capability": "create"
     }
   },
   {
@@ -8000,7 +8011,6 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/accessreviewpolicy?view=graph-rest-beta"
       ],
-      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -8010,14 +8020,18 @@
         "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
       },
       "protections": [],
-      "protectionReason": "This closed subset cannot write identities, memberships, assignments, authentication methods, credentials or the connected registration. Workflow and detection execution is disabled; relationship-changing subsets are excluded."
+      "protectionReason": "This closed subset cannot write identities, memberships, assignments, authentication methods, credentials or the connected registration. Workflow and detection execution is disabled; relationship-changing subsets are excluded.",
+      "liveVerification": {
+        "date": "2026-11-18",
+        "result": "round-trip-matched"
+      }
     },
     "detection": {
       "kind": "singleton"
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked.",
+    "reason": "Only isGroupOwnerManagementEnabled is restored after its own configuration confirmation. Review definitions, schedules, decisions and notifications are excluded.",
     "indexWrites": {
       "PATCH": [
         {
@@ -8029,11 +8043,11 @@
       ]
     },
     "verification": {
-      "date": "2026-11-17",
+      "date": "2026-11-18",
       "method": "local-graph-index-and-microsoft-documentation",
       "resourceFound": true,
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/accessreviewpolicy?view=graph-rest-beta",
-      "live": "not-run",
+      "live": "PATCH 204, GET 200, original restored with PATCH 204 and GET 200 (2026-11-18)",
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "configuration",
@@ -8057,11 +8071,12 @@
       }
     ],
     "configurationRestore": {
-      "phase": "8c-phase1",
+      "phase": "8c-phase2",
       "confirmation": "configuration",
-      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked.",
-      "builder": "staged-closed-subset",
-      "lab": "not-run; phase 1 forbids lab writes"
+      "blockedReason": "",
+      "builder": "enabled-closed-subset",
+      "lab": "live-save-change-verify-restore-original-verify; ownership flag only",
+      "capability": "singleton"
     }
   },
   {
@@ -8097,7 +8112,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/identitygovernance-workflowexecutionconditions?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/identitygovernance-task?view=graph-rest-1.0"
       ],
-      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked. Create remains blocked until recycle-bin-first restoration, closed task schemas and safe create reconciliation are verified. Activation requires separate approval.",
+      "blockedReason": "Workflow writes are outside the approved lab scope. Disabled metadata updates have injected-fetch evidence only; creation also requires recycle-bin-first recovery.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -8141,7 +8156,7 @@
       },
       "protections": [],
       "protectionReason": "This closed subset cannot write identities, memberships, assignments, authentication methods, credentials or the connected registration. Workflow and detection execution is disabled; relationship-changing subsets are excluded.",
-      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked. Create remains blocked until recycle-bin-first restoration, closed task schemas and safe create reconciliation are verified. Activation requires separate approval."
+      "blockedReason": "Workflow writes are outside the approved lab scope. Disabled metadata updates have injected-fetch evidence only; creation also requires recycle-bin-first recovery."
     },
     "detection": {
       "kind": "properties",
@@ -8159,7 +8174,7 @@
     "dependsOn": [
       "LifecycleWorkflowCustomTaskExtensions"
     ],
-    "reason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked. Create remains blocked until recycle-bin-first restoration, closed task schemas and safe create reconciliation are verified. Activation requires separate approval.",
+    "reason": "Workflow writes are outside the approved lab scope. Disabled metadata updates have injected-fetch evidence only; creation also requires recycle-bin-first recovery.",
     "indexWrites": {
       "POST": [
         {
@@ -8227,11 +8242,11 @@
       ]
     },
     "verification": {
-      "date": "2026-11-17",
+      "date": "2026-11-18",
       "method": "local-graph-index-and-microsoft-documentation",
       "resourceFound": true,
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/identitygovernance-workflow?view=graph-rest-1.0",
-      "live": "not-run",
+      "live": "not-run; workflow writes outside owner-approved scope (2026-11-18)",
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "configuration",
@@ -8379,11 +8394,11 @@
       }
     ],
     "configurationRestore": {
-      "phase": "8c-phase1",
+      "phase": "8c-phase2",
       "confirmation": "disabled-configuration",
-      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked. Create remains blocked until recycle-bin-first restoration, closed task schemas and safe create reconciliation are verified. Activation requires separate approval.",
+      "blockedReason": "Workflow writes are outside the approved lab scope. Disabled metadata updates have injected-fetch evidence only; creation also requires recycle-bin-first recovery.",
       "builder": "staged-closed-subset",
-      "lab": "not-run; phase 1 forbids lab writes"
+      "lab": "not-run; workflow writes outside owner-approved scope"
     }
   },
   {
@@ -8560,7 +8575,7 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/emailsettings?view=graph-rest-1.0"
       ],
-      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked. An identical interval probe cannot authorize changes that could schedule existing workflows.",
+      "blockedReason": "Reading the original workflow settings was refused by the lab with HTTP 403 Access denied. No write was sent. An identical interval probe cannot verify changed-value scheduling restores.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -8577,7 +8592,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked. An identical interval probe cannot authorize changes that could schedule existing workflows.",
+    "reason": "Reading the original workflow settings was refused by the lab with HTTP 403 Access denied. No write was sent. An identical interval probe cannot verify changed-value scheduling restores.",
     "indexWrites": {
       "PATCH": [
         {
@@ -8589,21 +8604,21 @@
       ]
     },
     "verification": {
-      "date": "2026-11-17",
+      "date": "2026-11-18",
       "method": "local-graph-index-and-microsoft-documentation",
       "resourceFound": true,
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/identitygovernance-lifecyclemanagementsettings?view=graph-rest-1.0",
-      "live": "not-run",
+      "live": "GET 403 Access denied; no write (2026-11-18)",
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "configuration",
     "supplementalWrites": [],
     "configurationRestore": {
-      "phase": "8c-phase1",
+      "phase": "8c-phase2",
       "confirmation": "configuration",
-      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked. An identical interval probe cannot authorize changes that could schedule existing workflows.",
+      "blockedReason": "Reading the original workflow settings was refused by the lab with HTTP 403 Access denied. No write was sent. An identical interval probe cannot verify changed-value scheduling restores.",
       "builder": "staged-closed-subset",
-      "lab": "not-run; phase 1 forbids lab writes"
+      "lab": "GET 403 Access denied; no write"
     }
   },
   {
@@ -16932,7 +16947,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/security-ruleschedule?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/enums-security?view=graph-rest-1.0"
       ],
-      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked. Rules are restored disabled, without automated response actions; activation requires separate approval.",
+      "blockedReason": "Disabled detection creation succeeded, but Graph expanded detectionAction with null fields and empty action collections. Exact read-back, update and restore reconciliation remain unverified; the prefixed rule is deleted.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -16972,7 +16987,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/security-ruleschedule?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/enums-security?view=graph-rest-1.0"
       ],
-      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked. Rules are restored disabled, without automated response actions; activation requires separate approval.",
+      "blockedReason": "Disabled detection creation succeeded, but Graph expanded detectionAction with null fields and empty action collections. Exact read-back, update and restore reconciliation remain unverified; the prefixed rule is deleted.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -16998,7 +17013,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked. Rules are restored disabled, without automated response actions; activation requires separate approval.",
+    "reason": "Disabled detection creation succeeded, but Graph expanded detectionAction with null fields and empty action collections. Exact read-back, update and restore reconciliation remain unverified; the prefixed rule is deleted.",
     "indexWrites": {
       "POST": [
         {
@@ -17018,11 +17033,11 @@
       ]
     },
     "verification": {
-      "date": "2026-11-17",
+      "date": "2026-11-18",
       "method": "local-graph-index-and-microsoft-documentation",
       "resourceFound": true,
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/security-detectionrule?view=graph-rest-1.0",
-      "live": "not-run",
+      "live": "POST 201; GET 200; detectionAction read-back mismatch; update not attempted; cleanup verified (2026-11-18)",
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "configuration",
@@ -17044,11 +17059,11 @@
       }
     ],
     "configurationRestore": {
-      "phase": "8c-phase1",
+      "phase": "8c-phase2",
       "confirmation": "disabled-configuration",
-      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked. Rules are restored disabled, without automated response actions; activation requires separate approval.",
+      "blockedReason": "Disabled detection creation succeeded, but Graph expanded detectionAction with null fields and empty action collections. Exact read-back, update and restore reconciliation remain unverified; the prefixed rule is deleted.",
       "builder": "staged-closed-subset",
-      "lab": "not-run; phase 1 forbids lab writes"
+      "lab": "POST 201; GET 200; detectionAction read-back mismatch; update not attempted; cleanup verified"
     }
   },
   {

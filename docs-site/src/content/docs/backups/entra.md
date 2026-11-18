@@ -7,7 +7,7 @@ Entra ID backups cover **74 types**, including seven opt-in directory inventorie
 
 Turn on **Entra ID** in **Settings > Services and permissions**. Existing tenants keep Entra ID off after updating, even with an **Everything** backup scope. **Groups** must be enabled separately. The scope picker offers only types of services and opt-in areas that are on. Areas without types in this build say so in Settings and setup.
 
-These new types are **backup and comparison only**. Restore, drift revert, Sync, cross-tenant copy and restoring imported backups cannot write them. A selected type that cannot be read gives **coverage incomplete**, with its cause in backup results. An empty list is a covered answer, not a missing backup. The federated token validation and continuous access evaluation policies can be **not configured**.
+Seven configuration types support individually confirmed restore subsets: token lifetime policies, activity-based timeout policies, company branding, authentication flows, the cross-tenant parent policy name, unpublished access-package catalogs and the access-review ownership flag. See [restore safety and limitations](/restore/identity/). All other types remain backup and comparison only. Sync, drift revert and cross-tenant copy cannot write these new types. A selected type that cannot be read gives **coverage incomplete**, with its cause in backup results. An empty list is a covered answer, not a missing backup. The federated token validation and continuous access evaluation policies can be **not configured**.
 
 ## Coverage
 
@@ -197,3 +197,11 @@ An object-specific HTTP 403 or 404 on a relationship retains its parent with `co
 Directory objects are inventory in the dashboard and reports. Hygiene skips them. Backup comparison and drift read sorted index pages on demand. Live change watching and audit alert suggestions cover Intune and Conditional Access only. Backup completion notifications carry counts and type labels, without directory display names, UPNs or mail values. Azure Automation remains Intune and Conditional Access only.
 
 The dashboard counts directory objects separately as inventory. A directory-only backup protects zero policies; mixed backups show the policy count and the inventory count independently, including the latest backup and activity cards.
+
+## Verified configuration restore subsets
+
+External identities restore writes only the parent cross-tenant policy display name. Defaults, partners and cloud endpoints are excluded. Governance restore supports unpublished, externally hidden user-managed catalog metadata without resources or assignments, and the access-review ownership flag (beta), never review definitions, decisions or notifications. Each operation needs its own preview and confirmation. The [permission table](/security/permissions/#restore-write-permissions-in-06) lists every write scope, why it is the least-privileged option and when it is requested.
+
+Custom attributes remain blocked after a live HTTP 400 AADB2C99039 create refusal. The external-identities leave flag was verified with identical values only. Lifecycle settings returned HTTP 403 before any write; workflow writes were outside the approved lab scope. The required permissions do not establish licensing or onboarding.
+
+TenuVault never requests Directory.Read.All or Directory.ReadWrite.All. A new least-privilege setup cannot back up group lifecycle policies or consent grants, whose read requires Directory.Read.All. Existing delegated grants remain usable. A newly provisioned Backup Reader excludes those types and reports incomplete coverage. Other directory object reads keep their narrower scopes.

@@ -63,3 +63,7 @@ Workbooks were previously deferred. They are now included: the lab app holds `Wo
 ## Verification limits
 
 The lab read on 2026-11-16 saved the user reported settings policy. Detection rules, workbooks, attack simulation lists and unified RBAC lists were empty. Identity endpoints returned their onboarding refusal; case management returned the inactive-tenant refusal. Secure Score returned HTTP 504 repeatedly, including isolated and smaller-page probes, so a successful current live read could not be verified. That remains a failed read, never a permission or licensing result. Nonempty definitions and sub-resources use labelled documented synthetic fixtures. No delegated live read is claimed.
+
+## Restore verification
+
+Defender restore remains blocked. A disabled, never-matching custom detection fixture was created in the lab, but its detectionAction read-back contained service-added null fields, empty mappings and empty action collections that the closed candidate could not reconcile. Update and restore were not attempted. Cleanup removed the fixture. No CustomDetection.ReadWrite.All scope is requested. Workflow execution, detection activation and automated response actions are not enabled by these tests. See [restore safety](/restore/identity/) for per-type reasons.

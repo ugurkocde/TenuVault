@@ -2,9 +2,9 @@ import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 import { DESKTOP_APP_PERMISSIONS, setupHandoffText } from "../src/shared/app-registration"
 import {
-  DEFAULT_SETUP_CHOICE, graphPermissions, knownPermissions, READER_ALLOWED_ROLES, readerRequiredRoles, readerRoles, readerScriptArguments, requestedPermissions, SCRIPT_SERVICE, type PermissionChoice,
+  DEFAULT_SETUP_CHOICE, areaPermissions, graphPermissions, knownPermissions, READER_ALLOWED_ROLES, readerRequiredRoles, readerRoles, readerScriptArguments, requestedPermissions, SCRIPT_SERVICE, type PermissionChoice,
 } from "../src/shared/services/manifest"
-import { areaNeed, DEFAULT_SELECTION, MODULES, MODULE_BY_ID, type ModuleId } from "../src/shared/services/modules"
+import { DEFAULT_SELECTION, MODULES, MODULE_BY_ID, type ModuleId } from "../src/shared/services/modules"
 import { OPTIONAL_PERMISSIONS } from "../src/shared/services/optional-permissions"
 import { readerView } from "../src/renderer/lib/backup-reader-view"
 import type { BackupReaderStatus } from "../src/shared/ipc"
@@ -122,7 +122,7 @@ describe("The Backup Reader", () => {
   it("may hold exactly the application permissions of the manifest, all of them read-only", () => {
     const everything: PermissionChoice = Object.fromEntries(MODULES.map((module) => [module.id, { access: "backup", areas: module.areas.filter((area) => area.optIn || area.appOnlyOptIn).map((area) => area.id) }]))
     expect([...READER_ALLOWED_ROLES].sort()).toEqual([...readerRoles(everything)].sort())
-    expect([...READER_ALLOWED_ROLES].sort()).toEqual([...new Set(MODULES.flatMap((module) => module.areas.flatMap((area) => areaNeed(area, "backup", "application").map((group) => group[0]!))))].sort())
+    expect([...READER_ALLOWED_ROLES].sort()).toEqual([...new Set(MODULES.flatMap((module) => module.areas.flatMap((area) => areaPermissions(area, "backup", "application"))))].sort())
     for (const role of READER_ALLOWED_ROLES) expect(role).toMatch(/\.Read(Basic)?(\.|$)/)
   })
 
@@ -174,7 +174,7 @@ describe("The Backup Reader", () => {
     // The sets a renewal used to change: one role of a service, a role next to Intune, and Entra ID short of one role.
     const five = [...readerRoles()]
     const entra = [...readerRoles({ entra: { access: "backup" } })]
-    for (const set of [["Domain.Read.All"], [...five, "Directory.Read.All"], [...five, ...entra.slice(0, -1)], []]) {
+    for (const set of [["Domain.Read.All"], [...five, "SecurityEvents.Read.All"], [...five, ...entra.slice(0, -1)], []]) {
       const command = commandFor(set)
       expect(command).toContain(" -Permissions ")
       expect(scriptRoles(command), command).toEqual(new Set(set))

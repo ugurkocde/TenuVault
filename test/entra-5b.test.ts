@@ -26,10 +26,10 @@ function scan(value: unknown): void {
 }
 
 describe("Entra 5b declarations and sanitized live responses", () => {
-  it("covers every folder of External identities and Roles and PIM without enabling restore", () => {
+  it("covers every folder and admits only the verified cross-tenant metadata restore", () => {
     expect(TYPES.map(type => type.folder).sort()).toEqual(MODULE_BY_ID.get("entra")!.areas.filter(area => ["externalIdentities", "roles"].includes(area.id)).flatMap(area => area.folders).sort())
     for (const type of TYPES) {
-      expect(restoreCapability(type)).toBe("none")
+      expect(restoreCapability(type)).toBe(type.folder === "CrossTenantAccessPolicy" ? "singleton" : "none")
       expect(adminCenterLink(type.folder, "example")?.center).toBe("Entra")
       expect(() => buildRestorePlan(type, { id: "example" })).toThrow()
       expect(() => buildUpdatePlan(type, { id: "example" }, "example")).toThrow()

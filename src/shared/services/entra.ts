@@ -51,7 +51,8 @@ export const ENTRA_AREAS: readonly PermissionArea[] = [
     part(["HardwareOathDevices"], [["Policy.Read.All"]], [["Policy.Read.All"]], "unsupported"),
   ]),
   area({ id: "externalIdentities", label: "External identities" }, [
-    part(["CrossTenantAccessPolicy", "CrossTenantAccessDefault", "CrossTenantAccessPartners", "CrossTenantAccessMtoTemplates"], [["Policy.Read.All", "Policy.ReadWrite.CrossTenantAccess"]], [["Policy.Read.All"]], "unsupported"),
+    part(["CrossTenantAccessPolicy"], [["Policy.Read.All", "Policy.ReadWrite.CrossTenantAccess"]], [["Policy.Read.All"]], [["Policy.ReadWrite.CrossTenantAccess"]]),
+    part(["CrossTenantAccessDefault", "CrossTenantAccessPartners", "CrossTenantAccessMtoTemplates"], [["Policy.Read.All", "Policy.ReadWrite.CrossTenantAccess"]], [["Policy.Read.All"]], "unsupported"),
     part(["ExternalIdentitiesPolicy"], [["Policy.Read.All", "Policy.ReadWrite.ExternalIdentities"]], [["Policy.Read.All"]], "unsupported"),
     // The lab read succeeded app-only with Policy.Read.All alone, but Microsoft lists only the B2B management permissions, so those are what TenuVault asks for.
     part(["B2bManagementPolicies"], [["Policy.Read.B2BManagementPolicy", "Policy.ReadWrite.B2BManagementPolicy"]], [["Policy.Read.B2BManagementPolicy"]], "unsupported"),
@@ -80,9 +81,10 @@ export const ENTRA_AREAS: readonly PermissionArea[] = [
     part(["AttributeSets", "CustomSecurityAttributeDefinitions"], [["CustomSecAttributeDefinition.Read.All", "CustomSecAttributeDefinition.ReadWrite.All"]], [["CustomSecAttributeDefinition.Read.All"]], "unsupported"),
   ]),
   area({ id: "governance", label: "Governance" }, [
-    part(["AccessPackageCatalogs", "AccessPackages", "AccessPackageAssignmentPolicies", "ConnectedOrganizations", "EntitlementManagementSettings"], [["EntitlementManagement.Read.All", "EntitlementManagement.ReadWrite.All"]], [["EntitlementManagement.Read.All"]], "unsupported"),
+    part(["AccessPackageCatalogs"], [["EntitlementManagement.Read.All", "EntitlementManagement.ReadWrite.All"]], [["EntitlementManagement.Read.All"]], [["EntitlementManagement.ReadWrite.All"]]),
+    part(["AccessPackages", "AccessPackageAssignmentPolicies", "ConnectedOrganizations", "EntitlementManagementSettings"], [["EntitlementManagement.Read.All", "EntitlementManagement.ReadWrite.All"]], [["EntitlementManagement.Read.All"]], "unsupported"),
     part(["AccessReviewDefinitions"], [["AccessReview.Read.All", "AccessReview.ReadWrite.All"]], [["AccessReview.Read.All"]], "unsupported"),
-    part(["AccessReviewPolicy"], [["Policy.Read.All", "Policy.ReadWrite.AccessReview"]], [["Policy.Read.All"]], "unsupported"),
+    part(["AccessReviewPolicy"], [["Policy.Read.All", "Policy.ReadWrite.AccessReview"]], [["Policy.Read.All"]], [["Policy.ReadWrite.AccessReview"]]),
     part(["LifecycleWorkflows", "LifecycleWorkflowCustomTaskExtensions", "LifecycleWorkflowSettings"], [["LifecycleWorkflows.Read.All", "LifecycleWorkflows.ReadWrite.All"]], [["LifecycleWorkflows.Read.All"]], "unsupported"),
     // Microsoft's pages list delegated access only; the refusal of an app-only read in the lab names the application role.
     part(["TermsOfUseAgreements"], [["Agreement.Read.All", "Agreement.ReadWrite.All"]], [["Agreement.Read.All"]], "unsupported"),

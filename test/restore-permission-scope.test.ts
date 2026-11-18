@@ -8,6 +8,7 @@ import { restoreMatrixRow } from "../src/shared/intune/restore-matrix"
 it("requests restore permissions only for enabled types, with exactly their least-privileged write permission", () => {
   const expected: Record<string, string> = {
     TokenLifetimePolicies: "Policy.ReadWrite.ApplicationConfiguration", ActivityBasedTimeoutPolicies: "Policy.ReadWrite.ApplicationConfiguration",
+    AccessReviewPolicy: "Policy.ReadWrite.AccessReview", CrossTenantAccessPolicy: "Policy.ReadWrite.CrossTenantAccess", AccessPackageCatalogs: "EntitlementManagement.ReadWrite.All",
     EntraCompanyBranding: "OrganizationalBranding.ReadWrite.All", AuthenticationFlowsPolicy: "Policy.ReadWrite.AuthenticationFlows",
   }
   const found: string[] = []
@@ -24,11 +25,13 @@ it("requests restore permissions only for enabled types, with exactly their leas
   }
   expect(found.sort()).toEqual(Object.keys(expected).sort())
 })
-it("never requests the retired organization role through any setup or reader choice", () => {
+it("never requests the excluded organization or directory roles through any setup or reader choice", () => {
   const all = Object.fromEntries(MODULES.map(module => [module.id, { access: "restore", areas: module.areas.filter(area => area.optIn || area.appOnlyOptIn).map(area => area.id) }]))
   for (const mode of ["delegated", "application"] as const) {
-    expect(graphPermissions(all, mode)).not.toContain("Organization.ReadWrite.All")
-    expect(knownPermissions(mode)[0]!.permissions).not.toContain("Organization.ReadWrite.All")
+    for (const permission of ["Organization.ReadWrite.All", "Directory.ReadWrite.All", "Directory.Read.All"]) {
+      expect(graphPermissions(all, mode)).not.toContain(permission)
+      expect(knownPermissions(mode)[0]!.permissions).not.toContain(permission)
+    }
   }
-  for (const script of ["New-TenuVaultDesktopApp.ps1", "New-TenuVaultBackupReader.ps1"]) expect(readFileSync(new URL(`../resources/${script}`, import.meta.url), "utf8")).not.toMatch(/['"]Organization\.ReadWrite\.All['"]/)
+  for (const script of ["New-TenuVaultDesktopApp.ps1", "New-TenuVaultBackupReader.ps1"]) expect(readFileSync(new URL(`../resources/${script}`, import.meta.url), "utf8")).not.toMatch(/['"](?:Organization\.ReadWrite\.All|Directory\.Read(?:Write)?\.All)['"]/)
 })

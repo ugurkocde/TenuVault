@@ -142,9 +142,9 @@ $permissionTable = @(
     @{ Service = 'Entra'; Area = 'ExternalIdentities'; OptIn = $false; Roles = @('Policy.Read.All', 'Policy.Read.B2BManagementPolicy', 'IdentityProvider.Read.All', 'IdentityUserFlow.Read.All', 'EventListener.Read.All', 'CustomAuthenticationExtension.Read.All', 'APIConnectors.Read.All', 'MultiTenantOrganization.Read.All') }
     @{ Service = 'Entra'; Area = 'Roles'; OptIn = $false; Roles = @('RoleManagement.Read.Directory', 'PrivilegedEligibilitySchedule.Read.AzureADGroup', 'GroupMember.Read.All', 'PrivilegedAssignmentSchedule.Read.AzureADGroup', 'RoleManagementAlert.Read.Directory', 'AdministrativeUnit.Read.All', 'CustomSecAttributeDefinition.Read.All') }
     @{ Service = 'Entra'; Area = 'Governance'; OptIn = $false; Roles = @('EntitlementManagement.Read.All', 'AccessReview.Read.All', 'Policy.Read.All', 'LifecycleWorkflows.Read.All', 'Agreement.Read.All') }
-    @{ Service = 'Entra'; Area = 'Groups'; OptIn = $true; Roles = @('Group.Read.All', 'Directory.Read.All') }
+    @{ Service = 'Entra'; Area = 'Groups'; OptIn = $true; Roles = @('Group.Read.All') }
     @{ Service = 'Entra'; Area = 'UsersAndDevices'; OptIn = $true; Roles = @('User.Read.All', 'Device.Read.All', 'OrgContact.Read.All') }
-    @{ Service = 'Entra'; Area = 'Applications'; OptIn = $true; Roles = @('Application.Read.All', 'Synchronization.Read.All', 'Directory.Read.All') }
+    @{ Service = 'Entra'; Area = 'Applications'; OptIn = $true; Roles = @('Application.Read.All', 'Synchronization.Read.All') }
     @{ Service = 'Defender'; Area = 'Detection'; OptIn = $false; Roles = @('CustomDetection.Read.All', 'Workbooks.Read.All', 'CaseManagement.Read.All') }
     @{ Service = 'Defender'; Area = 'Email'; OptIn = $false; Roles = @('AttackSimulation.Read.All', 'ThreatSubmission.Read.All') }
     @{ Service = 'Defender'; Area = 'Identity'; OptIn = $false; Roles = @('SecurityIdentitiesSensors.Read.All', 'SecurityIdentitiesAutoConfig.Read.All') }

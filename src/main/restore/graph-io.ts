@@ -4,7 +4,7 @@ import { restorePermissionBlocker } from "../../shared/services/modules"
 import { isGraphId } from "../../shared/security"
 import { restoreCapability, typeForFolder, type Item } from "../../shared/intune/registry"
 import { findCreatedByDescriptor } from "./create-detection"
-import { restoreMatrixRow } from "../../shared/intune/restore-matrix"
+import { restoreMatrixRow, verifiedWriteContract } from "../../shared/intune/restore-matrix"
 import { addsOnlyPayload, RestoreSafetyError, RestoreWriteRefusedError, type RestoreActor, type SafetyReferences } from "../../shared/intune/restore-guards"
 import { grantedPermissions } from "../../shared/services/token"
 import { requireRestoreActor } from "./restore-actor"
@@ -16,7 +16,7 @@ export function guardedGraphIO(token: string, actor: RestoreActor, references: G
   const contract = (step: GuardedStep) => {
     const row = restoreMatrixRow(step.folder)
     const write = row?.[step.operation]
-    if (!row || !write || write.index !== "matched" || !write.properties.length || !write.permissions.length) throw new RestoreSafetyError("This write contract has not been verified against the Graph index and Microsoft documentation.")
+    if (!row || !write || !verifiedWriteContract(write) || !write.properties.length || !write.permissions.length) throw new RestoreSafetyError("This write contract has not been verified against the Graph index and Microsoft documentation.")
     if (write.blockedReason) throw new RestoreSafetyError(write.blockedReason)
     const granted = grantedPermissions(token)
     const manifestBlocker = restorePermissionBlocker(step.folder, granted)

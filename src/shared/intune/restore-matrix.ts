@@ -16,6 +16,8 @@ export interface WriteContract {
   permissions: string[]
   documentation: string
   index: string
+  /** Explicit admission when the local index is absent but Microsoft documentation and a live lifecycle agree. */
+  liveVerification?: { date: string; result: "round-trip-matched" }
   blockedReason?: string
   propertyAudit?: { date: string; sources: string[]; result: string; excluded?: Record<string, string>; constraints?: string }
   propertyEvidence?: string
@@ -41,3 +43,5 @@ export interface RestoreMatrixRow {
 /** Research is deliberately separate from registry capability. A documented API never enables restore. */
 export const RESTORE_MATRIX = rows as RestoreMatrixRow[]
 export const restoreMatrixRow = (folder: string): RestoreMatrixRow | undefined => RESTORE_MATRIX.find(row => row.folder === folder)
+
+export const verifiedWriteContract = (write: WriteContract): boolean => write.index === "matched" || (write.index === "not-matched" && write.liveVerification?.result === "round-trip-matched" && !!write.documentation && !!write.permissionDocumentation?.length)

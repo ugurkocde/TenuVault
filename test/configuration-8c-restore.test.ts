@@ -6,7 +6,7 @@ import { typeForFolder, restoreCapability, type Item } from "../src/shared/intun
 import { restoreMatrixRow } from "../src/shared/intune/restore-matrix"
 import { GuardedRunJournal, executeGuardedRun, restoreFingerprint, type GuardedRun, type GuardedStep } from "../src/main/restore/guarded-run"
 import { guardedGraphIO } from "../src/main/restore/graph-io"
-import { configurationApproval, configurationConfirmation, configurationDifference, configurationPayload, requireConfigurationApproval } from "../src/main/restore/entra-configuration"
+import { checkConfigurationLockout, configurationApproval, configurationConfirmation, configurationDifference, configurationPayload, requireConfigurationApproval } from "../src/main/restore/entra-configuration"
 
 const actor = { tenantId: "tenant", userId: "admin", clientId: "client", applicationObjectId: "app", servicePrincipalId: "sp", recoveryAccountIds: [] }
 const id = "00000000-0000-4000-8000-000000000001"
@@ -26,9 +26,14 @@ const store = () => { const values = new Map<string, string>(); return { get: (k
 const approvalRun = { id: "test-run", tenant: "tenant", actor, origin: "restore" as const }
 function approve(step: GuardedStep, run = approvalRun) { step.confirmation = { kind: configurationConfirmation(step.folder), fingerprint: configurationApproval(step, run) }; return step }
 
-describe("phase 1 configuration staging", () => {
-  it("keeps every 8c type blocked in production with its specific reason and no area restore scopes", () => {
+describe("verified configuration subsets and blocked candidates", () => {
+  it("enables only live-verified 8c subsets and keeps all other types blocked with their specific reason", () => {
     for (const row of RESTORE_MATRIX.filter(row => isConfiguration8c(row.folder))) {
+      if (["CrossTenantAccessPolicy", "AccessPackageCatalogs", "AccessReviewPolicy"].includes(row.folder)) {
+        expect(restoreCapability(typeForFolder(row.folder)!)).toBe(row.configurationRestore!.capability)
+        expect(row.configurationRestore!.blockedReason).toBe("")
+        continue
+      }
       expect(restoreCapability(typeForFolder(row.folder)!)).toBe("none")
       expect(moduleForFolder(row.folder)!.part.restore.delegated).toBe("unsupported")
       expect(row.configurationRestore!.blockedReason).toBeTruthy()
@@ -74,7 +79,7 @@ describe("phase 1 configuration staging", () => {
         const permissions = [...contract.permissions, "Policy.Read.All", "Policy.ReadWrite.SecurityDefaults", "Policy.ReadWrite.ConditionalAccess"]
         const token = `header.${Buffer.from(JSON.stringify({ tid: actor.tenantId, oid: actor.userId, appid: actor.clientId, scp: permissions.join(" ") })).toString("base64url")}.signature`
         const objectId = id
-        const currentFixture: Item = { id: objectId, ...fixture, ...(folder === "UserFlowAttributes" ? { userFlowAttributeType: "custom" } : {}) }
+        const currentFixture: Item = { id: objectId, ...fixture, ...(folder === "AccessPackageCatalogs" ? { catalogType: "userManaged" } : {}), ...(folder === "UserFlowAttributes" ? { userFlowAttributeType: "custom" } : {}) }
         let writes = 0, live: Item | null = operation === "create" ? null : currentFixture
         const desired = configurationPayload(folder, operation, { ...fixture })
         const step = approve({ key: folder, folder, operation, sourceId: source, ...(operation === "update" ? { targetId: objectId } : {}), desired, properties: Object.keys(desired), preview: restoreFingerprint(live), requires: [] }, { ...approvalRun, id: `${folder}-${operation}-${outcome}` })
@@ -122,8 +127,8 @@ describe("phase 1 configuration staging", () => {
   })
 })
 
-// Test-only contract admission exercises the real service before any live evidence can enable it.
-// The production matrix, registry and permission manifest remain blocked after every case.
+// Enabled operations use the real production matrix and generated access. Blocked candidates
+// are admitted only inside the test process, then their original contracts are restored.
 for (const [folder, operations] of Object.entries(STAGED_8C_OPERATIONS)) for (const operation of operations) it(`${folder} ${operation}: uses only generated area scopes through the production service`, async () => {
   const { areaPermissions } = await import("../src/shared/services/manifest")
   const { IdentityRestoreService } = await import("../src/main/restore/service")
@@ -132,14 +137,16 @@ for (const [folder, operations] of Object.entries(STAGED_8C_OPERATIONS)) for (co
   const savedContracts = [row.create, row.update].map(contract => contract ? { ...contract } : null)
   const module = moduleForFolder(folder)!, need = module.part.restore as { delegated: Need }, oldNeed = need.delegated
   const fixture = fixtureFor(folder, operation), liveId = "00000000-0000-4000-8000-000000000003"
-  type.restore = row.detection.kind === "singleton" ? "singleton" : "create"
-  need.delegated = [[row[operation]!.permissions[0]!]]
-  for (const contract of [row.create, row.update]) if (contract) { delete contract.blockedReason; contract.index = "matched" }
+  if (!row.configurationRestore?.capability) {
+    type.restore = row.detection.kind === "singleton" ? "singleton" : "create"
+    need.delegated = [[row[operation]!.permissions[0]!]]
+    for (const contract of [row.create, row.update]) if (contract) { delete contract.blockedReason; contract.index = "matched" }
+  }
   try {
     const scopes = new Set(areaPermissions(module.area, "restore", "delegated"))
     const identity = { tenantId: "00000000-0000-4000-8000-000000000004", userId: source, clientId: id }
     const token = `h.${Buffer.from(JSON.stringify({ tid: identity.tenantId, oid: identity.userId, appid: identity.clientId, scp: [...scopes].join(" ") })).toString("base64url")}.s`
-    let live: Item | null = operation === "create" ? null : { ...fixture, id: source, ...(folder === "UserFlowAttributes" ? { userFlowAttributeType: "custom" } : {}) }, writes = 0
+    let live: Item | null = operation === "create" ? null : { ...fixture, id: source, ...(folder === "AccessPackageCatalogs" ? { catalogType: "userManaged" } : {}), ...(folder === "UserFlowAttributes" ? { userFlowAttributeType: "custom" } : {}) }, writes = 0
     const forbidden: string[] = []
     const fetcher = (async (input, init) => {
       const url = new URL(String(input)), resource = url.pathname.replace(/^\/(v1\.0|beta)\//, "")
@@ -150,7 +157,7 @@ for (const [folder, operations] of Object.entries(STAGED_8C_OPERATIONS)) for (co
     }) as typeof fetch
     const saved = store(), journal = new GuardedRunJournal(saved)
     const service = new IdentityRestoreService(journal, new RecoveryAccounts(saved), async () => ({ ...identity, token }), fetcher)
-    const request = { path: `backup/${folder}/Policy.json`, snapshot: { ...fixture, id: source }, origin: "restore" as const }
+    const request = { path: `backup/${folder}/Policy.json`, snapshot: { ...fixture, id: source, ...(folder === "CrossTenantAccessPolicy" ? { allowedCloudEndpoints: ["microsoftonline.com"] } : folder === "AccessPackageCatalogs" ? { catalogType: "userManaged", resources: [], createdDateTime: "2026-11-18T00:00:00Z" } : {}) }, origin: "restore" as const }
     const run = await service.prepare(identity.tenantId, request, operation)
     const review = await service.review(identity.tenantId, run.id)
     expect(review.kind).toBe(configurationConfirmation(folder))
@@ -201,4 +208,30 @@ it("projects immutable attribute fields but requires positive live evidence that
     }
     expect(writes).toBe(0)
   } finally { Object.assign(contract, savedContract); need.delegated = previousNeed; type.restore = previous }
+})
+
+it("keeps populated backup resources and service-default or published live catalogs outside the verified subset", async () => {
+  expect(() => configurationPayload("AccessPackageCatalogs", "create", { ...cases.AccessPackageCatalogs!, resources: [{ id: source }] })).toThrow("reviewed")
+  expect(() => configurationPayload("AccessPackageCatalogs", "update", { ...cases.AccessPackageCatalogs!, catalogType: "serviceDefault" })).toThrow("reviewed")
+  const reader = { list: vi.fn() } as unknown as import("../src/shared/intune/read").GraphReader
+  const step = { folder: "AccessPackageCatalogs" } as GuardedStep
+  for (const current of [{ state: "published", isExternallyVisible: false, catalogType: "userManaged" }, { state: "unpublished", isExternallyVisible: true, catalogType: "userManaged" }, { state: "unpublished", isExternallyVisible: false, catalogType: "serviceDefault" }]) {
+    await expect(checkConfigurationLockout(reader, step, current, cases.AccessPackageCatalogs!)).rejects.toThrow("user-managed")
+  }
+})
+it("admits absent catalog index entries only with explicit documentation and verified live round-trip evidence", async () => {
+  const contract = restoreMatrixRow("AccessPackageCatalogs")!.create!, evidence = contract.liveVerification
+  expect(contract.index).toBe("not-matched")
+  let reads = 0
+  const token = `h.${Buffer.from(JSON.stringify({ tid: actor.tenantId, oid: actor.userId, appid: actor.clientId, scp: "EntitlementManagement.ReadWrite.All" })).toString("base64url")}.s`
+  const io = guardedGraphIO(token, actor, async () => ({ complete: true, principals: [], applications: [] }), async () => { reads++; return Response.json({ value: [] }) })
+  const step = { folder: "AccessPackageCatalogs", operation: "create", properties: contract.properties, desired: cases.AccessPackageCatalogs! } as GuardedStep
+  try {
+    delete contract.liveVerification
+    await expect(io.read(step)).rejects.toThrow("not been verified")
+    expect(reads).toBe(0)
+    contract.liveVerification = evidence
+    await expect(io.read(step)).resolves.toBeNull()
+    expect(reads).toBe(1)
+  } finally { contract.liveVerification = evidence }
 })

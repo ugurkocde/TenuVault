@@ -5,7 +5,8 @@
     "reference": "Microsoft Graph permissions reference on Microsoft Learn (learn.microsoft.com/graph/permissions-reference, dated 2026-09-14): the identifier of each permission as a delegated and as an application permission. A permission with an identifier there is published on Microsoft Graph for that sign-in mode.",
     "model": "Microsoft's permission model for Microsoft Graph (github.com/microsoftgraph/microsoft-graph-devx-content, permissions/new/permissions.json, commit 9f88bf8f23a5), from which the permission tables on Microsoft Learn are generated: whether it lists the permission for the endpoint, method and sign-in mode (listed, not listed, or no entry when it does not know the endpoint).",
     "index": "The local Microsoft Graph documentation index (msgraph api-docs-search): whether it lists the permission for the endpoint, method and sign-in mode, in the same three words.",
-    "live": "Read-only requests against the lab tenant with an app-only token on 2026-11-14 (tasks/0.6-research/entra-inventory.md and defender-inventory.md). No write was made, so no restore permission is confirmed live."
+    "live": "Read-only requests against the lab tenant with an app-only token on 2026-11-14 (tasks/0.6-research/entra-inventory.md and defender-inventory.md). No write was made, so no restore permission is confirmed live.",
+    "live8c": "2026-11-18 approved app-only lab writes: cross-tenant parent displayName and access-review ownership flag changed, read back and restored; catalog create/read/change/restore/delete passed. Custom attribute POST refused 400 AADB2C99039; detection action read-back differed; workflow settings GET refused 403. See external layer-8c report."
   },
   "statuses": {
     "confirmed": "The permission model or the index lists the permission for one of the part's endpoints and the sign-in mode.",
@@ -1103,17 +1104,102 @@
     {
       "service": "entra",
       "area": "externalIdentities",
-      "folders": ["CrossTenantAccessPolicy", "CrossTenantAccessDefault", "CrossTenantAccessPartners", "CrossTenantAccessMtoTemplates"],
-      "read": ["GET /policies/crossTenantAccessPolicy", "GET /policies/crossTenantAccessPolicy/default", "GET /policies/crossTenantAccessPolicy/partners", "GET /policies/crossTenantAccessPolicy/templates/multiTenantOrganizationIdentitySynchronization", "GET /policies/crossTenantAccessPolicy/templates/multiTenantOrganizationPartnerConfiguration"],
+      "folders": [
+        "CrossTenantAccessPolicy"
+      ],
+      "read": [
+        "GET /policies/crossTenantAccessPolicy",
+        "GET /policies/crossTenantAccessPolicy/default",
+        "GET /policies/crossTenantAccessPolicy/partners",
+        "GET /policies/crossTenantAccessPolicy/templates/multiTenantOrganizationIdentitySynchronization",
+        "GET /policies/crossTenantAccessPolicy/templates/multiTenantOrganizationPartnerConfiguration"
+      ],
+      "write": [
+        "PATCH /policies/crossTenantAccessPolicy"
+      ],
+      "live": "2026-11-18: live-save-change-verify-restore-original-verify. App-only lab grants do not isolate delegated authorization; generated-scope production-service tests cover that boundary.",
+      "backup": {
+        "delegated": [
+          {
+            "permission": "Policy.Read.All",
+            "asked": true,
+            "model": "listed",
+            "index": "listed",
+            "status": "confirmed"
+          },
+          {
+            "permission": "Policy.ReadWrite.CrossTenantAccess",
+            "asked": false,
+            "model": "listed",
+            "index": "not listed",
+            "status": "confirmed"
+          }
+        ],
+        "application": [
+          {
+            "permission": "Policy.Read.All",
+            "asked": true,
+            "model": "listed",
+            "index": "listed",
+            "status": "confirmed"
+          }
+        ]
+      },
+      "restore": {
+        "delegated": [
+          {
+            "permission": "Policy.ReadWrite.CrossTenantAccess",
+            "asked": true,
+            "model": "listed",
+            "index": "listed",
+            "status": "confirmed"
+          }
+        ],
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "externalIdentities",
+      "folders": [
+        "CrossTenantAccessDefault",
+        "CrossTenantAccessPartners",
+        "CrossTenantAccessMtoTemplates"
+      ],
+      "read": [
+        "GET /policies/crossTenantAccessPolicy",
+        "GET /policies/crossTenantAccessPolicy/default",
+        "GET /policies/crossTenantAccessPolicy/partners",
+        "GET /policies/crossTenantAccessPolicy/templates/multiTenantOrganizationIdentitySynchronization",
+        "GET /policies/crossTenantAccessPolicy/templates/multiTenantOrganizationPartnerConfiguration"
+      ],
       "write": [],
       "live": "200",
       "backup": {
         "delegated": [
-          {"permission": "Policy.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
-          {"permission": "Policy.ReadWrite.CrossTenantAccess", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+          {
+            "permission": "Policy.Read.All",
+            "asked": true,
+            "model": "listed",
+            "index": "listed",
+            "status": "confirmed"
+          },
+          {
+            "permission": "Policy.ReadWrite.CrossTenantAccess",
+            "asked": false,
+            "model": "listed",
+            "index": "not listed",
+            "status": "confirmed"
+          }
         ],
         "application": [
-          {"permission": "Policy.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+          {
+            "permission": "Policy.Read.All",
+            "asked": true,
+            "model": "listed",
+            "index": "listed",
+            "status": "confirmed"
+          }
         ]
       },
       "restore": {
@@ -1539,17 +1625,104 @@
     {
       "service": "entra",
       "area": "governance",
-      "folders": ["AccessPackageCatalogs", "AccessPackages", "AccessPackageAssignmentPolicies", "ConnectedOrganizations", "EntitlementManagementSettings"],
-      "read": ["GET /identityGovernance/entitlementManagement/catalogs", "GET /identityGovernance/entitlementManagement/accessPackages", "GET /identityGovernance/entitlementManagement/assignmentPolicies", "GET /identityGovernance/entitlementManagement/connectedOrganizations", "GET /identityGovernance/entitlementManagement/settings"],
+      "folders": [
+        "AccessPackageCatalogs"
+      ],
+      "read": [
+        "GET /identityGovernance/entitlementManagement/catalogs",
+        "GET /identityGovernance/entitlementManagement/accessPackages",
+        "GET /identityGovernance/entitlementManagement/assignmentPolicies",
+        "GET /identityGovernance/entitlementManagement/connectedOrganizations",
+        "GET /identityGovernance/entitlementManagement/settings"
+      ],
+      "write": [
+        "POST /identityGovernance/entitlementManagement/catalogs",
+        "PATCH /identityGovernance/entitlementManagement/catalogs/{accessPackageCatalogId}"
+      ],
+      "live": "2026-11-18: live-create-read-change-restore-delete. App-only lab grants do not isolate delegated authorization; generated-scope production-service tests cover that boundary.",
+      "backup": {
+        "delegated": [
+          {
+            "permission": "EntitlementManagement.Read.All",
+            "asked": true,
+            "model": "listed",
+            "index": "listed",
+            "status": "confirmed"
+          },
+          {
+            "permission": "EntitlementManagement.ReadWrite.All",
+            "asked": false,
+            "model": "listed",
+            "index": "not listed",
+            "status": "confirmed"
+          }
+        ],
+        "application": [
+          {
+            "permission": "EntitlementManagement.Read.All",
+            "asked": true,
+            "model": "listed",
+            "index": "listed",
+            "status": "confirmed"
+          }
+        ]
+      },
+      "restore": {
+        "delegated": [
+          {
+            "permission": "EntitlementManagement.ReadWrite.All",
+            "asked": true,
+            "model": "listed",
+            "index": "no entry",
+            "status": "confirmed"
+          }
+        ],
+        "application": "unsupported"
+      }
+    },
+    {
+      "service": "entra",
+      "area": "governance",
+      "folders": [
+        "AccessPackages",
+        "AccessPackageAssignmentPolicies",
+        "ConnectedOrganizations",
+        "EntitlementManagementSettings"
+      ],
+      "read": [
+        "GET /identityGovernance/entitlementManagement/catalogs",
+        "GET /identityGovernance/entitlementManagement/accessPackages",
+        "GET /identityGovernance/entitlementManagement/assignmentPolicies",
+        "GET /identityGovernance/entitlementManagement/connectedOrganizations",
+        "GET /identityGovernance/entitlementManagement/settings"
+      ],
       "write": [],
       "live": "403 without the role",
       "backup": {
         "delegated": [
-          {"permission": "EntitlementManagement.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
-          {"permission": "EntitlementManagement.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+          {
+            "permission": "EntitlementManagement.Read.All",
+            "asked": true,
+            "model": "listed",
+            "index": "listed",
+            "status": "confirmed"
+          },
+          {
+            "permission": "EntitlementManagement.ReadWrite.All",
+            "asked": false,
+            "model": "listed",
+            "index": "not listed",
+            "status": "confirmed"
+          }
         ],
         "application": [
-          {"permission": "EntitlementManagement.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+          {
+            "permission": "EntitlementManagement.Read.All",
+            "asked": true,
+            "model": "listed",
+            "index": "listed",
+            "status": "confirmed"
+          }
         ]
       },
       "restore": {
@@ -1581,21 +1754,53 @@
     {
       "service": "entra",
       "area": "governance",
-      "folders": ["AccessReviewPolicy"],
-      "read": ["GET /policies/accessReviewPolicy"],
-      "write": [],
-      "live": "200",
+      "folders": [
+        "AccessReviewPolicy"
+      ],
+      "read": [
+        "GET /policies/accessReviewPolicy"
+      ],
+      "write": [
+        "PATCH /policies/accessReviewPolicy"
+      ],
+      "live": "2026-11-18: live-save-change-verify-restore-original-verify; ownership flag only. App-only lab grants do not isolate delegated authorization; generated-scope production-service tests cover that boundary.",
       "backup": {
         "delegated": [
-          {"permission": "Policy.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
-          {"permission": "Policy.ReadWrite.AccessReview", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
+          {
+            "permission": "Policy.Read.All",
+            "asked": true,
+            "model": "listed",
+            "index": "listed",
+            "status": "confirmed"
+          },
+          {
+            "permission": "Policy.ReadWrite.AccessReview",
+            "asked": false,
+            "model": "listed",
+            "index": "not listed",
+            "status": "confirmed"
+          }
         ],
         "application": [
-          {"permission": "Policy.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+          {
+            "permission": "Policy.Read.All",
+            "asked": true,
+            "model": "listed",
+            "index": "listed",
+            "status": "confirmed"
+          }
         ]
       },
       "restore": {
-        "delegated": "unsupported",
+        "delegated": [
+          {
+            "permission": "Policy.ReadWrite.AccessReview",
+            "asked": true,
+            "model": "listed",
+            "index": "listed",
+            "status": "confirmed"
+          }
+        ],
         "application": "unsupported"
       }
     },

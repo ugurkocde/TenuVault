@@ -22,13 +22,14 @@ const fields: Record<string, Record<string, string>> = {
 function closed(value: unknown, schema: Record<string, string>): value is Item {
   return !!value && typeof value === "object" && !Array.isArray(value) && Object.entries(value).every(([key, child]) => Object.hasOwn(schema, key) && child !== null && typeof child === schema[key] && (typeof child !== "number" || Number.isFinite(child)))
 }
-/** Candidates only. Capability and live evidence gates remain enforced by the production transport. */
+/** Closed subsets. Capability and live evidence gates remain enforced by the production transport. */
 export function configuration8cPayload(folder: string, operation: "create" | "update", snapshot: Item): Item {
   const row = restoreMatrixRow(folder), contract = row?.[operation]
   if (!contract || !STAGED_8C_OPERATIONS[folder]?.includes(operation)) throw new RestoreSafetyError(row?.configurationRestore?.blockedReason ?? "No reviewed 8c builder exists.")
   if (folder === "UserFlowAttributes" && snapshot.userFlowAttributeType !== undefined && snapshot.userFlowAttributeType !== "custom") throw new RestoreSafetyError("Built-in attributes are never restored.")
   const body: Item = {}
   for (const [key, value] of Object.entries(snapshot)) {
+    if (folder === "AccessPackageCatalogs" && ((key === "catalogType" && value === "userManaged") || (key === "resources" && Array.isArray(value) && value.length === 0))) continue
     if (folder === "UserFlowAttributes" && (key === "userFlowAttributeType" || (operation === "update" && ["displayName", "dataType"].includes(key)))) continue
     if (["@odata.type", "@odata.context", "@odata.etag", "createdDateTime", "modifiedDateTime"].includes(key) || (key === "id" && !contract.properties.includes(key))) continue
     if (!contract.properties.includes(key)) throw new RestoreSafetyError(`The ${folder} property ${key} needs a reviewed request builder.`)
@@ -39,7 +40,7 @@ export function configuration8cPayload(folder: string, operation: "create" | "up
     if (operation === "create" && (typeof body.displayName !== "string" || !["string", "boolean", "int64"].includes(String(body.dataType)))) throw new RestoreSafetyError("Custom attribute creation needs a display name and supported data type.")
     if (snapshot.userFlowAttributeType !== undefined && snapshot.userFlowAttributeType !== "custom") throw new RestoreSafetyError("Built-in attributes are never restored.")
   }
-  if (folder === "AccessPackageCatalogs" && (body.state !== "unpublished" || body.isExternallyVisible !== false)) throw new RestoreSafetyError("The staged catalog must remain unpublished and hidden externally.")
+  if (folder === "AccessPackageCatalogs" && (body.state !== "unpublished" || body.isExternallyVisible !== false)) throw new RestoreSafetyError("The catalog must remain unpublished and hidden externally.")
   if (folder === "LifecycleWorkflowSettings" && (!Number.isInteger(body.workflowScheduleIntervalInHours) || Number(body.workflowScheduleIntervalInHours) < 1 || Number(body.workflowScheduleIntervalInHours) > 24)) throw new RestoreSafetyError("The workflow schedule interval must be an integer from 1 to 24.")
   if (folder === "LifecycleWorkflows") { body.isEnabled = false; body.isSchedulingEnabled = false }
   if (folder === "DefenderCustomDetectionRules") {

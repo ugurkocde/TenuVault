@@ -130,6 +130,7 @@ export async function checkConfigurationLockout(reader: GraphReader, step: Guard
     const bindings = await reader.list(`policies/tokenLifetimePolicies/${encodeURIComponent(step.targetId ?? step.sourceId)}/appliesTo?$select=id`)
     if (bindings.length) throw new RestoreSafetyError("Bound token policies need a separately verified restore contract.")
   }
+  if (step.folder === "AccessPackageCatalogs" && current && (current.state !== "unpublished" || current.isExternallyVisible !== false || current.catalogType !== "userManaged")) throw new RestoreSafetyError("Only unpublished, externally hidden user-managed catalogs can be updated.")
   if (step.folder === "SecurityDefaults" && desired.isEnabled === true) {
     const policies = await reader.list("identity/conditionalAccess/policies?$select=id,state")
     if (policies.some(policy => !["enabled", "disabled", "enabledForReportingButNotEnforced"].includes(String(policy.state)))) throw new RestoreSafetyError("Conditional Access state could not be resolved.")

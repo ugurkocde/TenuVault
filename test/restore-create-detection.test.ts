@@ -21,7 +21,7 @@ describe("every matrix create detection contract", () => {
   })
   for (const row of creates.filter(row => row.detection.properties?.length)) for (const lost of [false, true]) it(`${row.folder}: ${lost ? "reconciles a lost response" : "creates successfully"} and restarts with exactly one object`, async () => {
     const write = row.create!, type = typeForFolder(row.folder)!
-    expect(restoreCapability(type)).toBe(["TokenLifetimePolicies", "ActivityBasedTimeoutPolicies"].includes(type.folder) ? "create" : "none")
+    expect(restoreCapability(type)).toBe(["TokenLifetimePolicies", "ActivityBasedTimeoutPolicies", "AccessPackageCatalogs"].includes(type.folder) ? "create" : "none")
     const keys = row.detection.properties!
     // Each fixture contains the complete declared detection tuple. Values are opaque to the
     // generic transport; nested builders and live schema verification belong to later layers.
@@ -79,6 +79,6 @@ describe("every matrix create detection contract", () => {
     expect(sends).toBe(1)
     expect(objects).toHaveLength(1)
     expect(lookups).toBeGreaterThanOrEqual(lost ? 4 : 2)
-    expect(restoreCapability(type)).toBe(["TokenLifetimePolicies", "ActivityBasedTimeoutPolicies"].includes(type.folder) ? "create" : "none")
+    expect(restoreCapability(type)).toBe(["TokenLifetimePolicies", "ActivityBasedTimeoutPolicies", "AccessPackageCatalogs"].includes(type.folder) ? "create" : "none")
   })
 })
