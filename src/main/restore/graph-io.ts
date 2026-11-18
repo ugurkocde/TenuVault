@@ -76,7 +76,8 @@ export function guardedGraphIO(token: string, actor: RestoreActor, references: G
     findCreated: async (step, sent) => find(step, sent),
     references: async (step, current, desired): Promise<SafetyReferences> => {
       contract(step)
-      if ([current, desired].some(value => value?.isBuiltIn === true || value?.policyType === "builtIn" || value?.source === "global" || (typeof value?.id === "string" && value.id.startsWith("microsoft-")))) throw new RestoreSafetyError("Built-in and Microsoft-managed objects are never restored.")
+      if (step.folder === "UserFlowAttributes" && current && current.userFlowAttributeType !== "custom") throw new RestoreSafetyError("The live attribute is built-in or its custom type could not be resolved.")
+      if ([current, desired].some(value => value?.isBuiltIn === true || (step.folder === "UserFlowAttributes" && value?.userFlowAttributeType !== undefined && value.userFlowAttributeType !== "custom") || value?.policyType === "builtIn" || value?.source === "global" || (typeof value?.id === "string" && value.id.startsWith("microsoft-")))) throw new RestoreSafetyError("Built-in and Microsoft-managed objects are never restored.")
       return references(step, current, desired)
     },
     write: async (step, body, targetId, beforeSend, run) => {
@@ -86,7 +87,8 @@ export function guardedGraphIO(token: string, actor: RestoreActor, references: G
       if (Object.keys(body).some(key => !write.properties.includes(key))) throw new RestoreSafetyError("The write body contains properties outside the verified Graph contract.")
       if (isEntraConfiguration(step.folder)) {
         requireConfigurationApproval(step, run)
-        configurationPayload(step.folder, step.operation, body)
+        const rebuilt = configurationPayload(step.folder, step.operation, body)
+        if (restoreFingerprint(rebuilt) !== restoreFingerprint(body)) throw new RestoreSafetyError("Configuration activation requires separate approval. Restore must keep execution disabled.")
       }
       // Directory and action-specific writers are intentionally deferred. This adapter cannot turn
       // a research row or a caller-provided path into permission to write them.
@@ -101,6 +103,7 @@ export function guardedGraphIO(token: string, actor: RestoreActor, references: G
       }
       if (step.operation === "update" && !readPath) throw new RestoreSafetyError("The update path has no resolved target identity.")
       const current = step.operation === "update" ? await request(root + readPath!) : null
+      if (step.folder === "UserFlowAttributes" && step.operation === "update" && current?.userFlowAttributeType !== "custom") throw new RestoreSafetyError("The live attribute is built-in or its custom type could not be resolved.")
       if (step.operation === "update" && restoreFingerprint(current) !== step.preview) throw new RestoreSafetyError("The tenant changed after this preview. Preview this item again.")
       if (isEntraConfiguration(step.folder) && restoreFingerprint(body) !== restoreFingerprint(addsOnlyPayload(current, step.desired, step.allowRemoval))) throw new RestoreSafetyError("The write no longer matches the confirmed configuration difference.")
       await checkConfigurationLockout(safetyReader(token, fetchImpl), step, current, body)

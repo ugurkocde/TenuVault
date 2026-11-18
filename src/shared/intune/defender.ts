@@ -1,10 +1,11 @@
+import { restoreMatrixRow } from "./restore-matrix"
 import type { IntuneType } from "./registry"
 import { defenderSnapshot, tenantControlStates } from "./defender-snapshot"
 
 const secrets = ["clientSecret", "password", "privateKey", "sharedSecret", "secretKey", "tokenSeed", "seed", "tunnelKey", "keyCredentials", "passwordCredentials", "secret", "accessToken", "refreshToken", "clientAssertion", "pfx", "pkcs12", "secretText", "deploymentAccessKey"]
 const base = (folder: string, label: string, path: string, area: IntuneType["area"]): IntuneType => ({
   folder, label, path, area, restoreSafety: "identity", nameKey: "displayName", apiVersion: "v1.0",
-  limitation: "Defender configuration restore is not available yet.",
+  limitation: restoreMatrixRow(folder)?.configurationRestore?.blockedReason ?? "Defender configuration restore is not available yet.",
   neverStoredKeys: secrets, normalizeSnapshot: defenderSnapshot, unavailable: [],
   readBudget: { durationMs: 120_000, maxRequests: 500 },
 })

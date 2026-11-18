@@ -49,7 +49,7 @@ export class IdentityRestoreService {
     // Keep the full backup fingerprint below, while leaving every other branding field alone.
     const candidate = folder === "EntraCompanyBranding" ? Object.fromEntries(contract.properties.filter(key => key in request.snapshot).map(key => [key, request.snapshot[key]!])) : request.snapshot
     const step: GuardedStep = { key: "configuration", folder, sourceId: String(request.snapshot.id ?? ""), operation, targetId, allowRemoval, properties: contract.properties, desired: isEntraConfiguration(folder) ? configurationPayload(folder, operation, candidate) : Object.fromEntries(contract.properties.filter(key => key in request.snapshot).map(key => [key, request.snapshot[key]!])), preview: "", requires: [] }
-    if (operation === "create" && isEntraConfiguration(folder) && await io.read({ ...step, operation: "update", targetId: step.sourceId }, step.sourceId)) throw new RestoreSafetyError("The original policy still exists. Choose replacement and review its current values instead of recreating it.")
+    if (operation === "create" && isEntraConfiguration(folder) && await io.read({ ...step, targetId: step.sourceId }, step.sourceId)) throw new RestoreSafetyError("The original policy still exists. Choose replacement and review its current values instead of recreating it.")
     const mappings = this.journal.mappings(tenant)
     step.targetId = mappedReference(mappings, "objectId", folder, step.sourceId) ?? targetId ?? (operation === "update" ? step.sourceId : undefined)
     step.preview = restoreFingerprint(await io.read(step, step.targetId))

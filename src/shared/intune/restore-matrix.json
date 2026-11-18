@@ -3698,8 +3698,7 @@
       "path": "policies/crossTenantAccessPolicy",
       "version": "v1.0",
       "properties": [
-        "displayName",
-        "allowedCloudEndpoints"
+        "displayName"
       ],
       "permissions": [
         "Policy.ReadWrite.CrossTenantAccess"
@@ -3719,14 +3718,17 @@
           "https://learn.microsoft.com/en-us/graph/api/resources/crosstenantaccesspolicy?view=graph-rest-1.0"
         ],
         "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
-      }
+      },
+      "protections": [],
+      "protectionReason": "This closed subset cannot write identities, memberships, assignments, authentication methods, credentials or the connected registration. Workflow and detection execution is disabled; relationship-changing subsets are excluded.",
+      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked."
     },
     "detection": {
       "kind": "singleton"
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked.",
     "indexWrites": {
       "POST": [
         {
@@ -3822,7 +3824,14 @@
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "configuration",
-    "supplementalWrites": []
+    "supplementalWrites": [],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "cross-tenant-access",
+      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked.",
+      "builder": "staged-closed-subset",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "CrossTenantAccessDefault",
@@ -3862,7 +3871,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/crosstenantaccesspolicym365collaborationoutboundsetting?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/crosstenantaccesspolicytenantrestrictions?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "blockedReason": "Cross-tenant defaults can block the signed-in admin's tenant relationships. Own confirmation, complete relationship resolution and a closed selector schema are required; lab writes are identical-value-only.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -3879,7 +3888,7 @@
     "dependsOn": [
       "CrossTenantAccessPolicy"
     ],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Cross-tenant defaults can block the signed-in admin's tenant relationships. Own confirmation, complete relationship resolution and a closed selector schema are required; lab writes are identical-value-only.",
     "indexWrites": {
       "POST": [
         {
@@ -3963,7 +3972,14 @@
         "index": "matched",
         "indexPath": "/policies/crossTenantAccessPolicy/default/m365Capabilities/{m365CapabilityBase-name}"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "cross-tenant-access",
+      "blockedReason": "Cross-tenant defaults can block the signed-in admin's tenant relationships. Own confirmation, complete relationship resolution and a closed selector schema are required; lab writes are identical-value-only.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "CrossTenantAccessPartners",
@@ -3999,7 +4015,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/crosstenantaccesspolicyb2bsetting?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/crosstenantaccesspolicyinboundtrust?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "blockedReason": "Partner trust and synchronization need resolved tenant relationships and closed selectors. Own confirmation is required; no partner creation or changed-value lab write is permitted.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -4045,7 +4061,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/crosstenantaccesspolicym365collaborationoutboundsetting?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/crosstenantaccesspolicytenantrestrictions?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "blockedReason": "Partner trust and synchronization need resolved tenant relationships and closed selectors. Own confirmation is required; no partner creation or changed-value lab write is permitted.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -4066,7 +4082,7 @@
     "dependsOn": [
       "CrossTenantAccessPolicy"
     ],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Partner trust and synchronization need resolved tenant relationships and closed selectors. Own confirmation is required; no partner creation or changed-value lab write is permitted.",
     "indexWrites": {
       "POST": [
         {
@@ -4179,7 +4195,14 @@
         "index": "matched",
         "indexPath": "/policies/crossTenantAccessPolicy/partners/{crossTenantAccessPolicyConfigurationPartner-tenantId}/m365Capabilities/{m365CapabilityBase-name}"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "cross-tenant-access",
+      "blockedReason": "Partner trust and synchronization need resolved tenant relationships and closed selectors. Own confirmation is required; no partner creation or changed-value lab write is permitted.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "CrossTenantAccessMtoTemplates",
@@ -4193,7 +4216,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a. No verified parent write contract; sub-resource or action-specific research is required.",
+    "reason": "Templates require separate child contracts and relationship lock-out checks; no parent write is enabled.",
     "indexWrites": {
       "POST": [
         {
@@ -4272,7 +4295,14 @@
         "index": "matched",
         "indexPath": "/policies/crossTenantAccessPolicy/templates/multiTenantOrganizationPartnerConfiguration/resetToDefaultSettings"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "cross-tenant-access",
+      "blockedReason": "Templates require separate child contracts and relationship lock-out checks; no parent write is enabled.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "ExternalIdentitiesPolicy",
@@ -4307,14 +4337,17 @@
         "excluded": {
           "allowDeletedIdentitiesDataRemoval": "Reserved for future use in the operation and resource documentation."
         }
-      }
+      },
+      "protections": [],
+      "protectionReason": "This closed subset cannot write identities, memberships, assignments, authentication methods, credentials or the connected registration. Workflow and detection execution is disabled; relationship-changing subsets are excluded.",
+      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked."
     },
     "detection": {
       "kind": "singleton"
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked.",
     "indexWrites": {
       "PATCH": [
         {
@@ -4334,7 +4367,14 @@
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "configuration",
-    "supplementalWrites": []
+    "supplementalWrites": [],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked.",
+      "builder": "staged-closed-subset",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "B2bManagementPolicies",
@@ -4366,7 +4406,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/stspolicy?view=graph-rest-beta",
         "https://learn.microsoft.com/en-us/graph/api/resources/policybase?view=graph-rest-beta"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "blockedReason": "The indexed write uses broad Policy.ReadWrite rather than the area-specific read permission. Domain restrictions can block lab guests; no broad grant is requested.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -4405,7 +4445,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/stspolicy?view=graph-rest-beta",
         "https://learn.microsoft.com/en-us/graph/api/resources/policybase?view=graph-rest-beta"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "blockedReason": "The indexed write uses broad Policy.ReadWrite rather than the area-specific read permission. Domain restrictions can block lab guests; no broad grant is requested.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -4429,7 +4469,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "The indexed write uses broad Policy.ReadWrite rather than the area-specific read permission. Domain restrictions can block lab guests; no broad grant is requested.",
     "indexWrites": {
       "POST": [
         {
@@ -4501,7 +4541,14 @@
         "blockedReason": "No exact method/path match was established in the local OpenAPI index. Evidence only. This action or sub-resource has no reviewed payload, stable reconciliation key or guarded step implementation; deletion requires per-item approval.",
         "index": "not-matched"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "The indexed write uses broad Policy.ReadWrite rather than the area-specific read permission. Domain restrictions can block lab guests; no broad grant is requested.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "IdentityProviders",
@@ -4515,7 +4562,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a. No verified parent write contract; sub-resource or action-specific research is required.",
+    "reason": "Polymorphic provider contracts and secret-free creation need verification. Secrets are never restored and must be entered again.",
     "indexWrites": {
       "POST": [
         {
@@ -4596,7 +4643,14 @@
         "index": "matched",
         "indexPath": "/identityProviders/{identityProvider-id}"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Polymorphic provider contracts and secret-free creation need verification. Secrets are never restored and must be entered again.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "UserFlows",
@@ -4626,7 +4680,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/b2xidentityuserflow?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/userflowapiconnectorconfiguration?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "blockedReason": "Flow keys, provider and connector bindings need typed reference resolution before creation.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -4651,7 +4705,7 @@
       "IdentityProviders",
       "UserFlowAttributes"
     ],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Flow keys, provider and connector bindings need typed reference resolution before creation.",
     "indexWrites": {
       "POST": [
         {
@@ -4779,7 +4833,14 @@
         "blockedReason": "No exact method/path match was established in the local OpenAPI index. Evidence only. This action or sub-resource has no reviewed payload, stable reconciliation key or guarded step implementation; deletion requires per-item approval.",
         "index": "not-matched"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Flow keys, provider and connector bindings need typed reference resolution before creation.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "UserFlowAttributes",
@@ -4807,7 +4868,7 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/identityuserflowattribute?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -4819,7 +4880,9 @@
           "id": "Automatically generated, read-only identity.",
           "userFlowAttributeType": "Automatically set, read-only attribute type."
         }
-      }
+      },
+      "protections": [],
+      "protectionReason": "This closed subset cannot write identities, memberships, assignments, authentication methods, credentials or the connected registration. Workflow and detection execution is disabled; relationship-changing subsets are excluded."
     },
     "update": {
       "method": "PATCH",
@@ -4841,7 +4904,7 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/identityuserflowattribute?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -4849,7 +4912,9 @@
           "https://learn.microsoft.com/en-us/graph/api/resources/identityuserflowattribute?view=graph-rest-1.0"
         ],
         "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
-      }
+      },
+      "protections": [],
+      "protectionReason": "This closed subset cannot write identities, memberships, assignments, authentication methods, credentials or the connected registration. Workflow and detection execution is disabled; relationship-changing subsets are excluded."
     },
     "detection": {
       "kind": "properties",
@@ -4861,7 +4926,7 @@
     },
     "builtIn": "Built-in user flow attributes.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked.",
     "indexWrites": {
       "POST": [
         {
@@ -4905,7 +4970,14 @@
         "index": "matched",
         "indexPath": "/identity/userFlowAttributes/{identityUserFlowAttribute-id}"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked.",
+      "builder": "staged-closed-subset",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "AuthenticationEventsFlows",
@@ -4943,7 +5015,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/onattributecollectionhandler?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/onusercreatestarthandler?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "blockedReason": "Event handlers, conditions and referenced extensions need a closed polymorphic schema and target resolution.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -4983,7 +5055,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/onattributecollectionhandler?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/onusercreatestarthandler?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "blockedReason": "Event handlers, conditions and referenced extensions need a closed polymorphic schema and target resolution.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -5013,7 +5085,7 @@
     "dependsOn": [
       "CustomAuthenticationExtensions"
     ],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Event handlers, conditions and referenced extensions need a closed polymorphic schema and target resolution.",
     "indexWrites": {
       "POST": [
         {
@@ -5184,7 +5256,14 @@
         "blockedReason": "No exact method/path match was established in the local OpenAPI index. Evidence only. This action or sub-resource has no reviewed payload, stable reconciliation key or guarded step implementation; deletion requires per-item approval.",
         "index": "not-matched"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Event handlers, conditions and referenced extensions need a closed polymorphic schema and target resolution.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "AuthenticationEventListeners",
@@ -5216,7 +5295,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/onfraudprotectionloadstarthandler?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/onpasswordsubmithandler?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "blockedReason": "Listener conditions and handlers need a closed polymorphic schema and target resolution.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -5252,7 +5331,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/onfraudprotectionloadstarthandler?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/onpasswordsubmithandler?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "blockedReason": "Listener conditions and handlers need a closed polymorphic schema and target resolution.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -5274,7 +5353,7 @@
     "dependsOn": [
       "CustomAuthenticationExtensions"
     ],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Listener conditions and handlers need a closed polymorphic schema and target resolution.",
     "indexWrites": {
       "POST": [
         {
@@ -5318,7 +5397,14 @@
         "index": "matched",
         "indexPath": "/identity/authenticationEventListeners/{authenticationEventListener-id}"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Listener conditions and handlers need a closed polymorphic schema and target resolution.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "CustomAuthenticationExtensions",
@@ -5354,7 +5440,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/customcalloutextension?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/customextensionendpointconfiguration?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "blockedReason": "Endpoint authentication and application references need verification without credentials or endpoint execution.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -5398,7 +5484,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/customextensionendpointconfiguration?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/customextensionbehavioronerror?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "blockedReason": "Endpoint authentication and application references need verification without credentials or endpoint execution.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -5420,7 +5506,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Endpoint authentication and application references need verification without credentials or endpoint execution.",
     "indexWrites": {
       "POST": [
         {
@@ -5508,7 +5594,14 @@
         "index": "matched",
         "indexPath": "/identity/customAuthenticationExtensions/validateAuthenticationConfiguration"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Endpoint authentication and application references need verification without credentials or endpoint execution.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "ApiConnectors",
@@ -5539,7 +5632,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/basicauthentication?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/pkcs12certificate?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "blockedReason": "Connector authentication requires credentials that backups cannot supply. Secrets are never restored and must be entered again; secret-free creation is not verified.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -5574,7 +5667,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/basicauthentication?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/pkcs12certificate?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "blockedReason": "Connector authentication requires credentials that backups cannot supply. Secrets are never restored and must be entered again; secret-free creation is not verified.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -5593,7 +5686,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Connector authentication requires credentials that backups cannot supply. Secrets are never restored and must be entered again; secret-free creation is not verified.",
     "indexWrites": {
       "POST": [
         {
@@ -5661,7 +5754,14 @@
         "index": "matched",
         "indexPath": "/identity/apiConnectors/{identityApiConnector-id}"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Connector authentication requires credentials that backups cannot supply. Secrets are never restored and must be entered again; secret-free creation is not verified.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "MultiTenantOrganization",
@@ -5694,14 +5794,15 @@
           "https://learn.microsoft.com/en-us/graph/api/resources/multitenantorganization?view=graph-rest-1.0"
         ],
         "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
-      }
+      },
+      "blockedReason": "Joining a multi-tenant organization requires both tenants; restore cannot recreate that relationship."
     },
     "detection": {
       "kind": "singleton"
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Joining a multi-tenant organization requires both tenants; restore cannot recreate that relationship.",
     "indexWrites": {
       "POST": [
         {
@@ -5767,7 +5868,14 @@
         "blockedReason": "No exact method/path match was established in the local OpenAPI index. Evidence only. This action or sub-resource has no reviewed payload, stable reconciliation key or guarded step implementation; deletion requires per-item approval.",
         "index": "not-matched"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Joining a multi-tenant organization requires both tenants; restore cannot recreate that relationship.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "EntraRoleDefinitions",
@@ -5797,7 +5905,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/unifiedroledefinition?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/unifiedrolepermission?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "blockedReason": "Custom role permissions require privilege and connected-registration checks; built-in role definitions are never restored. Assignments remain in layer 9c.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -5835,7 +5943,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/unifiedroledefinition?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/unifiedrolepermission?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "blockedReason": "Custom role permissions require privilege and connected-registration checks; built-in role definitions are never restored. Assignments remain in layer 9c.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -5856,7 +5964,7 @@
     },
     "builtIn": "isBuiltIn=true.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Custom role permissions require privilege and connected-registration checks; built-in role definitions are never restored. Assignments remain in layer 9c.",
     "indexWrites": {
       "POST": [
         {
@@ -5936,7 +6044,14 @@
         "blockedReason": "No exact method/path match was established in the local OpenAPI index. Evidence only. This action or sub-resource has no reviewed payload, stable reconciliation key or guarded step implementation; deletion requires per-item approval.",
         "index": "not-matched"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Custom role permissions require privilege and connected-registration checks; built-in role definitions are never restored. Assignments remain in layer 9c.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "EntraRoleAssignments",
@@ -6115,7 +6230,7 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/unifiedrolemanagementpolicyrule?view=graph-rest-1.0"
       ],
-      "blockedReason": "The nested polymorphic rule collection requires a closed type-specific request schema.",
+      "blockedReason": "PIM rule children require typed scope and role resolution, closed rule schemas and their own confirmation; assignments and schedules remain in layer 9c.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -6133,7 +6248,7 @@
     "dependsOn": [
       "EntraRoleDefinitions"
     ],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "PIM rule children require typed scope and role resolution, closed rule schemas and their own confirmation; assignments and schedules remain in layer 9c.",
     "indexWrites": {
       "PATCH": [
         {
@@ -6187,7 +6302,14 @@
         "index": "matched",
         "indexPath": "/policies/roleManagementPolicies/{unifiedRoleManagementPolicy-id}/rules/{unifiedRoleManagementPolicyRule-id}"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "PIM rule children require typed scope and role resolution, closed rule schemas and their own confirmation; assignments and schedules remain in layer 9c.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "RoleManagementPolicyAssignments",
@@ -6302,7 +6424,8 @@
           "https://learn.microsoft.com/en-us/graph/api/resources/unifiedrolemanagementalertconfiguration?view=graph-rest-beta"
         ],
         "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
-      }
+      },
+      "blockedReason": "Polymorphic PIM alert thresholds and protected-role targets need per-rule verification."
     },
     "detection": {
       "kind": "properties",
@@ -6310,7 +6433,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Polymorphic PIM alert thresholds and protected-role targets need per-rule verification.",
     "indexWrites": {
       "PATCH": [
         {
@@ -6330,7 +6453,14 @@
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "configuration",
-    "supplementalWrites": []
+    "supplementalWrites": [],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Polymorphic PIM alert thresholds and protected-role targets need per-rule verification.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "AdministrativeUnits",
@@ -6362,7 +6492,7 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/administrativeunit?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "blockedReason": "Recycle-bin-first restoration must preserve the ID before recreation. Membership, restricted units and dynamic membership are excluded; no safe configuration-only lifecycle is verified.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -6402,7 +6532,8 @@
           "https://learn.microsoft.com/en-us/graph/api/resources/administrativeunit?view=graph-rest-1.0"
         ],
         "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
-      }
+      },
+      "blockedReason": "Recycle-bin-first restoration must preserve the ID before recreation. Membership, restricted units and dynamic membership are excluded; no safe configuration-only lifecycle is verified."
     },
     "detection": {
       "kind": "properties",
@@ -6418,7 +6549,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Recycle-bin-first restoration must preserve the ID before recreation. Membership, restricted units and dynamic membership are excluded; no safe configuration-only lifecycle is verified.",
     "indexWrites": {
       "POST": [
         {
@@ -6567,7 +6698,14 @@
         "index": "matched",
         "indexPath": "/directory/deletedItems/{directoryObject-id}/restore"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Recycle-bin-first restoration must preserve the ID before recreation. Membership, restricted units and dynamic membership are excluded; no safe configuration-only lifecycle is verified.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "AttributeSets",
@@ -6595,7 +6733,7 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/attributeset?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "blockedReason": "Attribute sets cannot be deleted for guaranteed lab cleanup; irreversible creation is not part of the approved lab lifecycle.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -6631,7 +6769,8 @@
           "https://learn.microsoft.com/en-us/graph/api/resources/attributeset?view=graph-rest-1.0"
         ],
         "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
-      }
+      },
+      "blockedReason": "Attribute sets cannot be deleted for guaranteed lab cleanup; irreversible creation is not part of the approved lab lifecycle."
     },
     "detection": {
       "kind": "key",
@@ -6641,7 +6780,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Attribute sets cannot be deleted for guaranteed lab cleanup; irreversible creation is not part of the approved lab lifecycle.",
     "indexWrites": {
       "POST": [
         {
@@ -6669,7 +6808,14 @@
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "configuration",
-    "supplementalWrites": []
+    "supplementalWrites": [],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Attribute sets cannot be deleted for guaranteed lab cleanup; irreversible creation is not part of the approved lab lifecycle.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "CustomSecurityAttributeDefinitions",
@@ -6702,7 +6848,7 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/customsecurityattributedefinition?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "blockedReason": "Attribute definitions cannot be deleted for guaranteed lab cleanup; irreversible creation and one-way status transitions are not verified.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -6742,7 +6888,7 @@
         "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields.",
         "constraints": "isCollection, isSearchable, name and type are create-only. usePreDefinedValuesOnly may change only from true to false. Keep update blocked until this transition is checked."
       },
-      "blockedReason": "The usePreDefinedValuesOnly transition requires a reviewed request builder that permits true to false only."
+      "blockedReason": "Attribute definitions cannot be deleted for guaranteed lab cleanup; irreversible creation and one-way status transitions are not verified."
     },
     "detection": {
       "kind": "key",
@@ -6755,7 +6901,7 @@
     "dependsOn": [
       "AttributeSets"
     ],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Attribute definitions cannot be deleted for guaranteed lab cleanup; irreversible creation and one-way status transitions are not verified.",
     "indexWrites": {
       "POST": [
         {
@@ -6795,7 +6941,14 @@
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "configuration",
-    "supplementalWrites": []
+    "supplementalWrites": [],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Attribute definitions cannot be deleted for guaranteed lab cleanup; irreversible creation and one-way status transitions are not verified.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "AccessPackageCatalogs",
@@ -6824,7 +6977,7 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/accesspackagecatalog?view=graph-rest-1.0"
       ],
-      "blockedReason": "Current Microsoft operation and permission documentation confirms the contract, but the local index has no exact method/path match. Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked. The local index still has no exact catalog write match.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -6832,7 +6985,9 @@
           "https://learn.microsoft.com/en-us/graph/api/resources/accesspackagecatalog?view=graph-rest-1.0"
         ],
         "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
-      }
+      },
+      "protections": [],
+      "protectionReason": "This closed subset cannot write identities, memberships, assignments, authentication methods, credentials or the connected registration. Workflow and detection execution is disabled; relationship-changing subsets are excluded."
     },
     "update": {
       "method": "PATCH",
@@ -6841,7 +6996,6 @@
       "properties": [
         "displayName",
         "description",
-        "catalogType",
         "state",
         "isExternallyVisible"
       ],
@@ -6856,7 +7010,7 @@
       "propertyEvidence": "request-body-table",
       "propertyCoverage": "top-level",
       "schemaDocumentation": [],
-      "blockedReason": "Current Microsoft operation and permission documentation confirms the contract, but the local index has no exact method/path match. ",
+      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked. The local index still has no exact catalog write match.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -6864,7 +7018,9 @@
           "https://learn.microsoft.com/en-us/graph/api/resources/accesspackagecatalog?view=graph-rest-1.0"
         ],
         "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
-      }
+      },
+      "protections": [],
+      "protectionReason": "This closed subset cannot write identities, memberships, assignments, authentication methods, credentials or the connected registration. Workflow and detection execution is disabled; relationship-changing subsets are excluded."
     },
     "detection": {
       "kind": "properties",
@@ -6877,7 +7033,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked. The local index still has no exact catalog write match.",
     "indexWrites": {},
     "verification": {
       "date": "2026-11-17",
@@ -6903,7 +7059,14 @@
         "blockedReason": "No exact method/path match was established in the local OpenAPI index. Evidence only. This action or sub-resource has no reviewed payload, stable reconciliation key or guarded step implementation; deletion requires per-item approval.",
         "index": "not-matched"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked. The local index still has no exact catalog write match.",
+      "builder": "staged-closed-subset",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "AccessPackages",
@@ -6933,7 +7096,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/accesspackage?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/accesspackagecatalog?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "blockedReason": "Catalog references, resource-role children and assignment effects need typed resolution; metadata alone does not restore a package.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -6972,7 +7135,8 @@
         ],
         "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields.",
         "constraints": "catalog is read-only after creation but explicitly accepted as a create-time relationship."
-      }
+      },
+      "blockedReason": "Catalog references, resource-role children and assignment effects need typed resolution; metadata alone does not restore a package."
     },
     "detection": {
       "kind": "properties",
@@ -6987,7 +7151,7 @@
     "dependsOn": [
       "AccessPackageCatalogs"
     ],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Catalog references, resource-role children and assignment effects need typed resolution; metadata alone does not restore a package.",
     "indexWrites": {
       "POST": [
         {
@@ -7138,7 +7302,14 @@
         "index": "matched",
         "indexPath": "/identityGovernance/entitlementManagement/accessPackages/{accessPackage-id}/incompatibleGroups/{group-id}/$ref"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Catalog references, resource-role children and assignment effects need typed resolution; metadata alone does not restore a package.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "AccessPackageAssignmentPolicies",
@@ -7184,7 +7355,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/accesspackage?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/accesspackagequestion?view=graph-rest-1.0"
       ],
-      "blockedReason": "Current Microsoft operation and permission documentation confirms the contract, but the local index has no exact method/path match. The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "blockedReason": "Assignment and notification settings can grant access or send email. Closed nested schemas and side-effect-free fixtures are not verified.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -7235,7 +7406,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/accesspackageassignmentreviewsettings?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/accesspackagequestion?view=graph-rest-1.0"
       ],
-      "blockedReason": "Current Microsoft operation and permission documentation confirms the contract, but the local index has no exact method/path match. The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "blockedReason": "Assignment and notification settings can grant access or send email. Closed nested schemas and side-effect-free fixtures are not verified.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -7268,7 +7439,7 @@
       "AccessPackages",
       "ConnectedOrganizations"
     ],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Assignment and notification settings can grant access or send email. Closed nested schemas and side-effect-free fixtures are not verified.",
     "indexWrites": {},
     "verification": {
       "date": "2026-11-17",
@@ -7294,7 +7465,14 @@
         "blockedReason": "No exact method/path match was established in the local OpenAPI index. Evidence only. This action or sub-resource has no reviewed payload, stable reconciliation key or guarded step implementation; deletion requires per-item approval.",
         "index": "not-matched"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Assignment and notification settings can grant access or send email. Closed nested schemas and side-effect-free fixtures are not verified.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "ConnectedOrganizations",
@@ -7324,7 +7502,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/connectedorganization?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/identitysource?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "blockedReason": "Identity sources, sponsors and trust relationships require typed reference resolution and closed polymorphic builders.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -7360,7 +7538,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/domainidentitysource?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/externaldomainfederation?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "blockedReason": "Identity sources, sponsors and trust relationships require typed reference resolution and closed polymorphic builders.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -7381,7 +7559,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Identity sources, sponsors and trust relationships require typed reference resolution and closed polymorphic builders.",
     "indexWrites": {
       "POST": [
         {
@@ -7497,7 +7675,14 @@
         "index": "matched",
         "indexPath": "/identityGovernance/entitlementManagement/connectedOrganizations/{connectedOrganization-id}/internalSponsors/{directoryObject-id}/$ref"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Identity sources, sponsors and trust relationships require typed reference resolution and closed polymorphic builders.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "EntitlementManagementSettings",
@@ -7524,7 +7709,7 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/entitlementmanagementsettings?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "blockedReason": "External user lifecycle actions can remove access; affected-identity and recovery protections are unresolved.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -7539,7 +7724,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "External user lifecycle actions can remove access; affected-identity and recovery protections are unresolved.",
     "indexWrites": {
       "PATCH": [
         {
@@ -7559,7 +7744,14 @@
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "configuration",
-    "supplementalWrites": []
+    "supplementalWrites": [],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "External user lifecycle actions can remove access; affected-identity and recovery protections are unresolved.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "AccessReviewDefinitions",
@@ -7599,7 +7791,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/accessreviewstagesettings?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/accessreviewschedulesettings?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "blockedReason": "Automatic application of results must be disabled and activation separately approved. A new review can schedule notifications even with autoApplyDecisionsEnabled false; a side-effect-free disabled create contract is not verified.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -7638,7 +7830,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/accessreviewstagesettings?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/accessreviewschedulesettings?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "blockedReason": "Automatic application of results must be disabled and activation separately approved. A new review can schedule notifications even with autoApplyDecisionsEnabled false; a side-effect-free disabled create contract is not verified.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -7668,7 +7860,7 @@
       "Users",
       "Groups"
     ],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Automatic application of results must be disabled and activation separately approved. A new review can schedule notifications even with autoApplyDecisionsEnabled false; a side-effect-free disabled create contract is not verified.",
     "indexWrites": {
       "POST": [
         {
@@ -7774,7 +7966,14 @@
         "index": "matched",
         "indexPath": "/identityGovernance/accessReviews/definitions/{accessReviewScheduleDefinition-id}"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "disabled-configuration",
+      "blockedReason": "Automatic application of results must be disabled and activation separately approved. A new review can schedule notifications even with autoApplyDecisionsEnabled false; a side-effect-free disabled create contract is not verified.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "AccessReviewPolicy",
@@ -7801,7 +8000,7 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/accessreviewpolicy?view=graph-rest-beta"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -7809,14 +8008,16 @@
           "https://learn.microsoft.com/en-us/graph/api/resources/accessreviewpolicy?view=graph-rest-beta"
         ],
         "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
-      }
+      },
+      "protections": [],
+      "protectionReason": "This closed subset cannot write identities, memberships, assignments, authentication methods, credentials or the connected registration. Workflow and detection execution is disabled; relationship-changing subsets are excluded."
     },
     "detection": {
       "kind": "singleton"
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked.",
     "indexWrites": {
       "PATCH": [
         {
@@ -7854,7 +8055,14 @@
         "index": "matched",
         "indexPath": "/identityGovernance/accessReviews/policy"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked.",
+      "builder": "staged-closed-subset",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "LifecycleWorkflows",
@@ -7889,7 +8097,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/identitygovernance-workflowexecutionconditions?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/identitygovernance-task?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked. Create remains blocked until recycle-bin-first restoration, closed task schemas and safe create reconciliation are verified. Activation requires separate approval.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -7913,8 +8121,7 @@
         "isSchedulingEnabled"
       ],
       "permissions": [
-        "Workflow.ReadWrite.All",
-        "LifecycleWorkflows.ReadWrite.All"
+        "LifecycleWorkflows-Workflow.ReadWrite.All"
       ],
       "documentation": "https://learn.microsoft.com/en-us/graph/api/identitygovernance-workflow-update?view=graph-rest-1.0",
       "index": "matched",
@@ -7931,7 +8138,10 @@
           "https://learn.microsoft.com/en-us/graph/api/resources/identitygovernance-workflow?view=graph-rest-1.0"
         ],
         "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
-      }
+      },
+      "protections": [],
+      "protectionReason": "This closed subset cannot write identities, memberships, assignments, authentication methods, credentials or the connected registration. Workflow and detection execution is disabled; relationship-changing subsets are excluded.",
+      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked. Create remains blocked until recycle-bin-first restoration, closed task schemas and safe create reconciliation are verified. Activation requires separate approval."
     },
     "detection": {
       "kind": "properties",
@@ -7949,7 +8159,7 @@
     "dependsOn": [
       "LifecycleWorkflowCustomTaskExtensions"
     ],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked. Create remains blocked until recycle-bin-first restoration, closed task schemas and safe create reconciliation are verified. Activation requires separate approval.",
     "indexWrites": {
       "POST": [
         {
@@ -8167,7 +8377,14 @@
         "index": "matched",
         "indexPath": "/identityGovernance/lifecycleWorkflows/deletedItems/workflows/{workflow-id}"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "disabled-configuration",
+      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked. Create remains blocked until recycle-bin-first restoration, closed task schemas and safe create reconciliation are verified. Activation requires separate approval.",
+      "builder": "staged-closed-subset",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "LifecycleWorkflowCustomTaskExtensions",
@@ -8203,7 +8420,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/customextensionendpointconfiguration?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/identitygovernance-customtaskextensioncallbackconfiguration?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "blockedReason": "Authentication, callbacks and external endpoints require closed schemas and secret-free reference resolution; no endpoint may be invoked.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -8242,7 +8459,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/customextensionendpointconfiguration?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/identitygovernance-customtaskextensioncallbackconfiguration?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "blockedReason": "Authentication, callbacks and external endpoints require closed schemas and secret-free reference resolution; no endpoint may be invoked.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -8264,7 +8481,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Authentication, callbacks and external endpoints require closed schemas and secret-free reference resolution; no endpoint may be invoked.",
     "indexWrites": {
       "POST": [
         {
@@ -8309,7 +8526,14 @@
         "index": "matched",
         "indexPath": "/identityGovernance/lifecycleWorkflows/customTaskExtensions/{customTaskExtension-id}"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Authentication, callbacks and external endpoints require closed schemas and secret-free reference resolution; no endpoint may be invoked.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "LifecycleWorkflowSettings",
@@ -8321,8 +8545,7 @@
       "path": "identityGovernance/lifecycleWorkflows/settings",
       "version": "v1.0",
       "properties": [
-        "workflowScheduleIntervalInHours",
-        "emailSettings"
+        "workflowScheduleIntervalInHours"
       ],
       "permissions": [
         "LifecycleWorkflows.ReadWrite.All"
@@ -8337,7 +8560,7 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/emailsettings?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked. An identical interval probe cannot authorize changes that could schedule existing workflows.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -8345,14 +8568,16 @@
           "https://learn.microsoft.com/en-us/graph/api/resources/identitygovernance-lifecyclemanagementsettings?view=graph-rest-1.0"
         ],
         "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
-      }
+      },
+      "protections": [],
+      "protectionReason": "This closed subset cannot write identities, memberships, assignments, authentication methods, credentials or the connected registration. Workflow and detection execution is disabled; relationship-changing subsets are excluded."
     },
     "detection": {
       "kind": "singleton"
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked. An identical interval probe cannot authorize changes that could schedule existing workflows.",
     "indexWrites": {
       "PATCH": [
         {
@@ -8372,7 +8597,14 @@
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "configuration",
-    "supplementalWrites": []
+    "supplementalWrites": [],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked. An identical interval probe cannot authorize changes that could schedule existing workflows.",
+      "builder": "staged-closed-subset",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "TermsOfUseAgreements",
@@ -8403,7 +8635,7 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/agreement?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "blockedReason": "Agreement files and locale children require a closed content contract and create reconciliation; application lab authorization is not documented.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -8432,7 +8664,7 @@
       "propertyEvidence": "request-body-table",
       "propertyCoverage": "partial",
       "schemaDocumentation": [],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "blockedReason": "Agreement files and locale children require a closed content contract and create reconciliation; application lab authorization is not documented.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -8455,7 +8687,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Agreement files and locale children require a closed content contract and create reconciliation; application lab authorization is not documented.",
     "indexWrites": {
       "POST": [
         {
@@ -8499,7 +8731,14 @@
         "index": "matched",
         "indexPath": "/identityGovernance/termsOfUse/agreements/{agreement-id}"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Agreement files and locale children require a closed content contract and create reconciliation; application lab authorization is not documented.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "Users",
@@ -16668,10 +16907,10 @@
       "path": "security/rules/detectionRules",
       "version": "v1.0",
       "properties": [
+        "id",
         "description",
         "detectionAction",
         "displayName",
-        "id",
         "queryCondition",
         "schedule",
         "status"
@@ -16693,7 +16932,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/security-ruleschedule?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/enums-security?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked. Rules are restored disabled, without automated response actions; activation requires separate approval.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -16701,7 +16940,9 @@
           "https://learn.microsoft.com/en-us/graph/api/resources/security-detectionrule?view=graph-rest-1.0"
         ],
         "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
-      }
+      },
+      "protections": [],
+      "protectionReason": "This closed subset cannot write identities, memberships, assignments, authentication methods, credentials or the connected registration. Workflow and detection execution is disabled; relationship-changing subsets are excluded."
     },
     "update": {
       "method": "PATCH",
@@ -16731,7 +16972,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/security-ruleschedule?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/enums-security?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked. Rules are restored disabled, without automated response actions; activation requires separate approval.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -16739,7 +16980,9 @@
           "https://learn.microsoft.com/en-us/graph/api/resources/security-detectionrule?view=graph-rest-1.0"
         ],
         "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
-      }
+      },
+      "protections": [],
+      "protectionReason": "This closed subset cannot write identities, memberships, assignments, authentication methods, credentials or the connected registration. Workflow and detection execution is disabled; relationship-changing subsets are excluded."
     },
     "detection": {
       "kind": "properties",
@@ -16755,7 +16998,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked. Rules are restored disabled, without automated response actions; activation requires separate approval.",
     "indexWrites": {
       "POST": [
         {
@@ -16799,7 +17042,14 @@
         "index": "matched",
         "indexPath": "/security/rules/detectionRules/{detectionRule-id}"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "disabled-configuration",
+      "blockedReason": "Phase 1 staging only. Live lab writes have not run; production restore and restore access remain blocked. Rules are restored disabled, without automated response actions; activation requires separate approval.",
+      "builder": "staged-closed-subset",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "DefenderCaseTypeConfigurations",
@@ -16813,7 +17063,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a. No verified parent write contract; sub-resource or action-specific research is required.",
+    "reason": "Microsoft documents no parent write contract; case actions and child resources are not inferred writable.",
     "indexWrites": {},
     "verification": {
       "date": "2026-11-17",
@@ -16848,7 +17098,14 @@
         "blockedReason": "No exact method/path match was established in the local OpenAPI index. Evidence only. This action or sub-resource has no reviewed payload, stable reconciliation key or guarded step implementation; deletion requires per-item approval.",
         "index": "not-matched"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Microsoft documents no parent write contract; case actions and child resources are not inferred writable.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "DefenderWorkbooks",
@@ -16875,7 +17132,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/security-workbook?view=graph-rest-beta",
         "https://learn.microsoft.com/en-us/graph/api/resources/security-workbookcontent?view=graph-rest-beta"
       ],
-      "blockedReason": "Current resource documentation describes PUT upsert, but the operation page declares PATCH. No exact local security workbook contract settles the discrepancy. Blocked pending authoritative alignment.",
+      "blockedReason": "Microsoft operation and resource documentation disagree about PUT and PATCH; content schemas and application write permission remain unverified.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -16905,7 +17162,7 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/security-workbookcontent?view=graph-rest-beta"
       ],
-      "blockedReason": "Current resource documentation describes PUT upsert, but the operation page declares PATCH. No exact local security workbook contract settles the discrepancy. Blocked pending authoritative alignment.",
+      "blockedReason": "Microsoft operation and resource documentation disagree about PUT and PATCH; content schemas and application write permission remain unverified.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -16923,7 +17180,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Microsoft operation and resource documentation disagree about PUT and PATCH; content schemas and application write permission remain unverified.",
     "indexWrites": {},
     "verification": {
       "date": "2026-11-17",
@@ -16949,7 +17206,14 @@
         "blockedReason": "No exact method/path match was established in the local OpenAPI index. Evidence only. This action or sub-resource has no reviewed payload, stable reconciliation key or guarded step implementation; deletion requires per-item approval.",
         "index": "not-matched"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Microsoft operation and resource documentation disagree about PUT and PATCH; content schemas and application write permission remain unverified.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "DefenderAttackSimulations",
@@ -16996,7 +17260,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/payload?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/trainingsetting?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "blockedReason": "Attack simulations, automations, training campaigns and their content are never restored; restoring them can launch campaigns or notifications.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -17039,7 +17303,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/accounttargetcontent?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/payload?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "blockedReason": "Attack simulations, automations, training campaigns and their content are never restored; restoring them can launch campaigns or notifications.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -17070,7 +17334,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Campaigns can launch attacks and are never restored.",
+    "reason": "Attack simulations, automations, training campaigns and their content are never restored; restoring them can launch campaigns or notifications.",
     "indexWrites": {
       "POST": [
         {
@@ -17114,7 +17378,14 @@
         "index": "matched",
         "indexPath": "/security/attackSimulation/simulations/{simulation-id}"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Attack simulations, automations, training campaigns and their content are never restored; restoring them can launch campaigns or notifications.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "DefenderAttackSimulationAutomations",
@@ -17128,7 +17399,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Simulation automations are never restored. No verified parent write contract; sub-resource or action-specific research is required.",
+    "reason": "Attack simulations, automations, training campaigns and their content are never restored; restoring them can launch campaigns or notifications.",
     "indexWrites": {},
     "verification": {
       "date": "2026-11-17",
@@ -17139,7 +17410,14 @@
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "never",
-    "supplementalWrites": []
+    "supplementalWrites": [],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Attack simulations, automations, training campaigns and their content are never restored; restoring them can launch campaigns or notifications.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "DefenderAttackSimulationTrainingCampaigns",
@@ -17176,7 +17454,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/trainingsetting?view=graph-rest-beta",
         "https://learn.microsoft.com/en-us/graph/api/resources/campaignschedule?view=graph-rest-beta"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "blockedReason": "Attack simulations, automations, training campaigns and their content are never restored; restoring them can launch campaigns or notifications.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -17221,7 +17499,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/trainingsetting?view=graph-rest-beta",
         "https://learn.microsoft.com/en-us/graph/api/resources/campaignschedule?view=graph-rest-beta"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "blockedReason": "Attack simulations, automations, training campaigns and their content are never restored; restoring them can launch campaigns or notifications.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -17250,7 +17528,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Training campaigns are never restored.",
+    "reason": "Attack simulations, automations, training campaigns and their content are never restored; restoring them can launch campaigns or notifications.",
     "indexWrites": {
       "POST": [
         {
@@ -17293,7 +17571,14 @@
         "blockedReason": "No exact method/path match was established in the local OpenAPI index. Evidence only. This action or sub-resource has no reviewed payload, stable reconciliation key or guarded step implementation; deletion requires per-item approval.",
         "index": "not-matched"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Attack simulations, automations, training campaigns and their content are never restored; restoring them can launch campaigns or notifications.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "DefenderAttackSimulationPayloads",
@@ -17307,7 +17592,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a. No verified parent write contract; sub-resource or action-specific research is required.",
+    "reason": "Attack simulations, automations, training campaigns and their content are never restored; restoring them can launch campaigns or notifications.",
     "indexWrites": {},
     "verification": {
       "date": "2026-11-17",
@@ -17318,7 +17603,14 @@
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "unverified",
-    "supplementalWrites": []
+    "supplementalWrites": [],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Attack simulations, automations, training campaigns and their content are never restored; restoring them can launch campaigns or notifications.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "DefenderAttackSimulationLandingPages",
@@ -17332,7 +17624,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a. No verified parent write contract; sub-resource or action-specific research is required.",
+    "reason": "Attack simulations, automations, training campaigns and their content are never restored; restoring them can launch campaigns or notifications.",
     "indexWrites": {},
     "verification": {
       "date": "2026-11-17",
@@ -17343,7 +17635,14 @@
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "unverified",
-    "supplementalWrites": []
+    "supplementalWrites": [],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Attack simulations, automations, training campaigns and their content are never restored; restoring them can launch campaigns or notifications.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "DefenderAttackSimulationLoginPages",
@@ -17357,7 +17656,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a. No verified parent write contract; sub-resource or action-specific research is required.",
+    "reason": "Attack simulations, automations, training campaigns and their content are never restored; restoring them can launch campaigns or notifications.",
     "indexWrites": {},
     "verification": {
       "date": "2026-11-17",
@@ -17368,7 +17667,14 @@
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "unverified",
-    "supplementalWrites": []
+    "supplementalWrites": [],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Attack simulations, automations, training campaigns and their content are never restored; restoring them can launch campaigns or notifications.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "DefenderAttackSimulationNotifications",
@@ -17382,7 +17688,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a. No verified parent write contract; sub-resource or action-specific research is required.",
+    "reason": "Attack simulations, automations, training campaigns and their content are never restored; restoring them can launch campaigns or notifications.",
     "indexWrites": {},
     "verification": {
       "date": "2026-11-17",
@@ -17393,7 +17699,14 @@
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "unverified",
-    "supplementalWrites": []
+    "supplementalWrites": [],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Attack simulations, automations, training campaigns and their content are never restored; restoring them can launch campaigns or notifications.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "DefenderEmailSubmissionPolicies",
@@ -17431,7 +17744,7 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/security-emailthreatsubmissionpolicy?view=graph-rest-beta"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "blockedReason": "Reporting and notification switches can send email or redirect submissions. A notification-free lab fixture and complete policy reconciliation are not verified.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -17478,7 +17791,8 @@
           "https://learn.microsoft.com/en-us/graph/api/resources/security-emailthreatsubmissionpolicy?view=graph-rest-beta"
         ],
         "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
-      }
+      },
+      "blockedReason": "Reporting and notification switches can send email or redirect submissions. A notification-free lab fixture and complete policy reconciliation are not verified."
     },
     "detection": {
       "kind": "properties",
@@ -17500,7 +17814,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Reporting and notification switches can send email or redirect submissions. A notification-free lab fixture and complete policy reconciliation are not verified.",
     "indexWrites": {
       "POST": [
         {
@@ -17546,7 +17860,14 @@
         "index": "matched",
         "indexPath": "/security/threatSubmission/emailThreatSubmissionPolicies/{emailThreatSubmissionPolicy-id}"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Reporting and notification switches can send email or redirect submissions. A notification-free lab fixture and complete policy reconciliation are not verified.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "DefenderIdentitySensors",
@@ -17573,7 +17894,7 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/security-sensorsettings?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "blockedReason": "Sensor settings require closed polymorphic schemas; sensor operations and credentials are not configuration restore.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -17589,7 +17910,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Sensor settings require closed polymorphic schemas; sensor operations and credentials are not configuration restore.",
     "indexWrites": {
       "POST": [
         {
@@ -17647,7 +17968,14 @@
         "blockedReason": "No exact method/path match was established in the local OpenAPI index. Evidence only. This action or sub-resource has no reviewed payload, stable reconciliation key or guarded step implementation; deletion requires per-item approval.",
         "index": "not-matched"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Sensor settings require closed polymorphic schemas; sensor operations and credentials are not configuration restore.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "DefenderIdentityAutoAuditing",
@@ -17672,7 +18000,7 @@
       "propertyEvidence": "request-body-table",
       "propertyCoverage": "top-level",
       "schemaDocumentation": [],
-      "blockedReason": "Current documentation uses PATCH; the index exposes POST. A GET cannot settle write-method support. Blocked pending authoritative alignment.",
+      "blockedReason": "The index uses POST while current Microsoft documentation uses PATCH. Enabling automatic auditing also has effects outside configuration.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -17687,7 +18015,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "The index uses POST while current Microsoft documentation uses PATCH. Enabling automatic auditing also has effects outside configuration.",
     "indexWrites": {
       "POST": [
         {
@@ -17707,7 +18035,14 @@
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "configuration",
-    "supplementalWrites": []
+    "supplementalWrites": [],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "The index uses POST while current Microsoft documentation uses PATCH. Enabling automatic auditing also has effects outside configuration.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "DefenderIdentitySensorActivation",
@@ -17720,7 +18055,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a. No verified parent write contract; sub-resource or action-specific research is required.",
+    "reason": "Sensor activation keys are credentials and are never restored; activation is not a configuration write.",
     "indexWrites": {
       "POST": [
         {
@@ -17757,7 +18092,14 @@
         "blockedReason": "No exact method/path match was established in the local OpenAPI index. Evidence only. This action or sub-resource has no reviewed payload, stable reconciliation key or guarded step implementation; deletion requires per-item approval.",
         "index": "not-matched"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Sensor activation keys are credentials and are never restored; activation is not a configuration write.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "DefenderSecureScoreControlStates",
@@ -17784,7 +18126,7 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/securityvendorinformation?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "blockedReason": "Vendor and control state children need closed schemas and a verified writable state contract.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -17800,7 +18142,7 @@
     },
     "builtIn": "Microsoft control profile properties; only tenant controlStateUpdates may change.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Vendor and control state children need closed schemas and a verified writable state contract.",
     "indexWrites": {
       "PATCH": [
         {
@@ -17820,7 +18162,14 @@
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "configuration",
-    "supplementalWrites": []
+    "supplementalWrites": [],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Vendor and control state children need closed schemas and a verified writable state contract.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "DefenderRoleDefinitions",
@@ -17847,7 +18196,7 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/unifiedroledefinition?view=graph-rest-beta",
         "https://learn.microsoft.com/en-us/graph/api/resources/unifiedrolepermission?view=graph-rest-beta"
       ],
-      "blockedReason": "The Defender section of the operation page links permission include 3, but that file declares Directory permissions and include 2 declares Defender permissions. Provider permission evidence is inconsistent. Blocked pending authoritative alignment.",
+      "blockedReason": "Microsoft has no verified permission contract for this write. Built-in roles are never restored; privilege checks are unresolved.",
       "propertyAudit": {
         "date": "2026-11-17",
         "sources": [
@@ -17869,7 +18218,7 @@
     },
     "builtIn": "isBuiltIn=true or Microsoft-managed definitions.",
     "dependsOn": [],
-    "reason": "Restore is not enabled in part 8a.",
+    "reason": "Microsoft has no verified permission contract for this write. Built-in roles are never restored; privilege checks are unresolved.",
     "indexWrites": {
       "POST": [
         {
@@ -17901,7 +18250,14 @@
         "index": "matched",
         "indexPath": "/roleManagement/defender/roleDefinitions/{unifiedRoleDefinition-id}"
       }
-    ]
+    ],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Microsoft has no verified permission contract for this write. Built-in roles are never restored; privilege checks are unresolved.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   },
   {
     "folder": "DefenderRoleAssignments",
@@ -17919,7 +18275,7 @@
       "Users",
       "Groups"
     ],
-    "reason": "Restore is not enabled in part 8a. No verified parent write contract; sub-resource or action-specific research is required.",
+    "reason": "Role assignments and privilege relationships are deferred to layer 9c.",
     "indexWrites": {},
     "verification": {
       "date": "2026-11-17",
@@ -17930,6 +18286,13 @@
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "directory-deferred",
-    "supplementalWrites": []
+    "supplementalWrites": [],
+    "configurationRestore": {
+      "phase": "8c-phase1",
+      "confirmation": "configuration",
+      "blockedReason": "Role assignments and privilege relationships are deferred to layer 9c.",
+      "builder": "blocked",
+      "lab": "not-run; phase 1 forbids lab writes"
+    }
   }
 ]

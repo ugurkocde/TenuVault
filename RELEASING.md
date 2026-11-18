@@ -253,6 +253,8 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 ## Compatibility notes for the next release
 
+- Keep External identities, Governance, Roles and PIM configuration, and Defender restore blocked while their phase 1 contracts await live evidence. Workflow candidates restore disabled, detection candidates restore disabled without automated response actions, and neither path activates configuration. Provider and connector secrets must be entered again.
+
 - Enable individually reviewed Tenant settings and Authentication configuration restores only for the verified matrix subsets. These policies require their own confirmation and remain outside restore all, Sync and cross-tenant copy. Company branding restores only the default username hint from a full backup. All other new types stay blocked.
 - Never request Organization.ReadWrite.All. Organization notification emails, phones and privacy profile are backup-only in 0.6. Branding uses OrganizationalBranding.ReadWrite.All. Restore access adds only the least-privileged write permissions of enabled operations and Application.Read.All for connected-registration safety reads; blocked areas and Defender request no write permissions. Existing registrations are not automatically stripped of previously consented permissions. The setup script's default permission request stays unchanged.
 

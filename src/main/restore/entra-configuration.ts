@@ -1,3 +1,4 @@
+import { isConfiguration8c, configuration8cPayload } from "./configuration-8c"
 import { ENTRA_AREAS } from "../../shared/services/entra"
 import { restoreMatrixRow } from "../../shared/intune/restore-matrix"
 import { RestoreSafetyError, writableSnapshot, addsOnlyPayload } from "../../shared/intune/restore-guards"
@@ -6,9 +7,11 @@ import type { GraphReader } from "../../shared/intune/read"
 import { restoreFingerprint, type GuardedRun, type GuardedStep } from "./guarded-run"
 
 export const ENTRA_CONFIGURATION_FOLDERS = ENTRA_AREAS.filter(area => ["tenantSettings", "authentication"].includes(area.id)).flatMap(area => area.folders)
-export const isEntraConfiguration = (folder: string): boolean => ENTRA_CONFIGURATION_FOLDERS.includes(folder)
+export const isEntraConfiguration = (folder: string): boolean => ENTRA_CONFIGURATION_FOLDERS.includes(folder) || isConfiguration8c(folder)
 
 export function configurationConfirmation(folder: string): string {
+  if (folder.startsWith("CrossTenantAccess")) return "cross-tenant-access"
+  if (["LifecycleWorkflows", "AccessReviewDefinitions", "DefenderCustomDetectionRules"].includes(folder)) return "disabled-configuration"
   if (folder === "AuthenticationMethodsPolicy") return "authentication-methods"
   if (folder === "AuthorizationPolicy") return "authorization"
   if (folder === "SecurityDefaults") return "security-defaults"
@@ -75,6 +78,7 @@ const emptyExtras = new Set(["appliesTo", "includes", "excludes", "localizations
 
 /** Closed, deliberately partial builders. Unsupported children are refused rather than silently lost. */
 export function configurationPayload(folder: string, operation: GuardedStep["operation"], snapshot: Item): Item {
+  if (isConfiguration8c(folder)) return configuration8cPayload(folder, operation, snapshot)
   const blocked = CONFIGURATION_BLOCKERS[folder]
   if (blocked) throw new RestoreSafetyError(blocked)
   const schema = schemas[folder], contract = restoreMatrixRow(folder)?.[operation]

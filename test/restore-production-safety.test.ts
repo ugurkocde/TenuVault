@@ -255,6 +255,7 @@ it("loads mappings before the real prepared preview and validates newer mappings
     if (url.pathname.endsWith("applications")) return Response.json({ value: [{ id: app, appId: client }] })
     if (url.pathname.endsWith("servicePrincipals")) return Response.json({ value: [{ id: sp, appId: client }] })
     if (url.pathname.endsWith(created)) return Response.json({ ...configuration, id: created, displayName: "changed name" })
+    if (url.pathname.endsWith(source)) return new Response(null, { status: 404 })
     return Response.json({ value: [] })
   }) as typeof fetch
   const permissions = token.replace(token.split(".")[1]!, Buffer.from(JSON.stringify({ tid: tenant, oid: user, appid: client, scp: "IdentityUserFlow.ReadWrite.All Policy.Read.All DeviceManagementConfiguration.Read.All DeviceManagementApps.Read.All DeviceManagementServiceConfig.Read.All DeviceManagementScripts.Read.All DeviceManagementRBAC.Read.All" })).toString("base64url"))
@@ -263,6 +264,7 @@ it("loads mappings before the real prepared preview and validates newer mappings
   try {
     const early = await service.prepare(tenant, request, "create")
     const first = await service.prepare(tenant, request, "create")
+    await service.confirm(tenant, first.id, (await service.review(tenant, first.id)).fingerprint)
     expect((await service.restore(tenant, { ...request, runId: first.id })).success).toBe(true)
     expect((await service.restore(tenant, { ...request, runId: early.id })).success).toBe(false)
     const later = await service.prepare(tenant, request, "create")
