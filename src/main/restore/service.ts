@@ -1,8 +1,8 @@
 import { configurationPayload, isEntraConfiguration, configurationApproval, configurationConfirmation, configurationDifference } from "./entra-configuration"
 import { randomUUID } from "node:crypto"
-import { typeForFolder, restoreCapability } from "../../shared/intune/registry"
+import { INTUNE_TYPES, typeForFolder, restoreCapability } from "../../shared/intune/registry"
 import { operationProtections, restoreMatrixRow } from "../../shared/intune/restore-matrix"
-import { restorePermissionBlocker } from "../../shared/services/modules"
+import { canBackUp, restorePermissionBlocker } from "../../shared/services/modules"
 import { grantedPermissions } from "../../shared/services/token"
 import { mappedReference } from "../../shared/intune/restore-references"
 import { RestoreSafetyError } from "../../shared/intune/restore-guards"
@@ -11,7 +11,7 @@ import { guardedGraphIO } from "./graph-io"
 import { GuardedRunJournal, executeGuardedRun, restoreFingerprint, type GuardedRun, type GuardedStep } from "./guarded-run"
 import { RecoveryAccounts, resolveRestoreActor, resolveSafetyReferences } from "./safety-resolvers"
 import { safetyReader } from "./safety-reader"
-import { referenceMatches } from "./reference-scanner"
+import { referenceMatches, REFERENCE_SCAN_EXCLUDED } from "./reference-scanner"
 import type { IdentityRestoreRequest } from "./dispatch"
 import type { RestoreOutcome } from "../../portal/lib/policies/graph-restore"
 
@@ -28,7 +28,12 @@ export class IdentityRestoreService {
     if (permissionBlocker) throw new RestoreSafetyError(permissionBlocker)
     const protections = folder ? operationProtections(folder, operation) : undefined
     const actor = await resolveRestoreActor(reader, connection, readOnly || protections?.length === 0 ? [] : this.recovery.get(tenant), protections)
-    const io = guardedGraphIO(connection.token, actor, (step, current, desired) => resolveSafetyReferences(reader, step, current, desired), this.fetchImpl, (mappings, signal) => referenceMatches(connection.token, mappings, this.fetchImpl, { signal }))
+    const io = guardedGraphIO(connection.token, actor, (step, current, desired) => resolveSafetyReferences(reader, step, current, desired), this.fetchImpl, (mappings, signal) => {
+      const granted = grantedPermissions(connection.token)
+      // Reference reporting is advisory. Do not probe unrelated services outside the token's scopes.
+      if (!granted || INTUNE_TYPES.some(type => type.restoreSafety !== "identity" && !type.singleton && !type.staticIds && !REFERENCE_SCAN_EXCLUDED.has(type.folder) && !canBackUp(type.folder, granted))) throw new Error("Reference scan read access is unavailable")
+      return referenceMatches(connection.token, mappings, this.fetchImpl, { signal })
+    })
     return { actor, io }
   }
   /** Called by trusted preview builders only. A renderer never supplies fingerprints or an actor. */
