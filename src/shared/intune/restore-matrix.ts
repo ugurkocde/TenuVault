@@ -22,7 +22,7 @@ export interface RestoreMatrixRow {
   readPath: string
   create: WriteContract | null
   update: WriteContract | null
-  supplementalWrites: Array<{ method: string; path: string; properties: string[]; permissions: string[]; documentation: string; permissionDocumentation: string[]; blockedReason: string }>
+  supplementalWrites: Array<{ method: string; path: string; properties: string[]; permissions: string[]; documentation: string; permissionDocumentation: string[]; index: string; indexPath?: string; blockedReason: string }>
   detection: { kind: string; property?: string; properties?: string[] }
   builtIn: string
   dependsOn: string[]
