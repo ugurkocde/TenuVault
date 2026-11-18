@@ -66,12 +66,14 @@ describe("Backup Reader card", () => {
     expect(command(readerRoles({ conditionalAccess: { access: "backup" } }))).toBe(" -Services ConditionalAccess")
   })
 
-  it("names the reader's permissions one by one in the renewal command when they are not whole services, so a renewal never changes them", () => {
+  it("names the reader's permissions one by one in the renewal command when they are not whole services, while omitting excluded scopes", () => {
     const command = (roles: readonly string[]) => readerView(state(status({ verifiedRoles: [...roles] })), NOW).command.split("-AppId 44444444-4444-4444-4444-444444444444")[1]
     // Without its own parameter the script would replace this role with the five Intune ones.
     expect(command(["Domain.Read.All"])).toBe(" -Permissions Domain.Read.All")
-    // Naming no service would remove the directory permission, and so would naming Intune.
-    expect(command([...INTUNE, "Directory.Read.All"])).toBe(` -Permissions ${INTUNE.join(",")},Directory.Read.All`)
+    // A narrow extra read is preserved; excluded scopes are never echoed from older records.
+    expect(command([...INTUNE, "User.Read.All"])).toBe(` -Permissions ${INTUNE.join(",")},User.Read.All`)
+    expect(command([...INTUNE, "Directory.Read.All"])).toBe("")
+    expect(command(["Directory.Read.All"])).toBe(" -Permissions None")
     // Entra ID short of one permission is not Entra ID: -IncludeConditionalAccess alone would remove the rest.
     const entra = readerRoles({ entra: { access: "backup" } }).filter((role) => role !== "Agreement.Read.All")
     expect(command([...INTUNE, ...entra])).toBe(` -Permissions ${[...INTUNE, ...entra].sort().join(",")}`)
