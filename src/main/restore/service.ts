@@ -46,7 +46,7 @@ export class IdentityRestoreService {
     const step: GuardedStep = { key: "configuration", folder, sourceId: String(request.snapshot.id ?? ""), operation, targetId, allowRemoval, properties: contract.properties, desired: isEntraConfiguration(folder) ? configurationPayload(folder, operation, candidate) : Object.fromEntries(contract.properties.filter(key => key in request.snapshot).map(key => [key, request.snapshot[key]!])), preview: "", requires: [] }
     if (operation === "create" && isEntraConfiguration(folder) && await io.read({ ...step, operation: "update", targetId: step.sourceId }, step.sourceId)) throw new RestoreSafetyError("The original policy still exists. Choose replacement and review its current values instead of recreating it.")
     const mappings = this.journal.mappings(tenant)
-    step.targetId ??= mappedReference(mappings, "objectId", folder, step.sourceId)
+    step.targetId = mappedReference(mappings, "objectId", folder, step.sourceId) ?? targetId ?? (operation === "update" ? step.sourceId : undefined)
     step.preview = restoreFingerprint(await io.read(step, step.targetId))
     const run: GuardedRun = { version: 1, id: randomUUID(), tenant, actor, origin: request.origin, source: { path: request.path, fingerprint: restoreFingerprint(request.snapshot) }, entries: [{ step, state: "pending" }], mappings }
     this.journal.save(run)

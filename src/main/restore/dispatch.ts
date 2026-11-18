@@ -24,7 +24,7 @@ export function setIdentityRestorePreviews(service: NonNullable<typeof previews>
 export async function previewIdentityRestore(graph: GraphCall, request: IdentityRestoreRequest, operation: "create" | "update", allowRemoval = false) {
   const tenant = tenants.get(graph)
   if (!tenant || !previews) throw new Error("A signed-in desktop connection is required.")
-  const run = await previews.prepare(tenant, request, operation, operation === "update" ? String(request.snapshot.id) : undefined, allowRemoval)
+  const run = await previews.prepare(tenant, request, operation, undefined, allowRemoval)
   return { runId: run.id, ...await previews.review(tenant, run.id) }
 }
 export async function confirmIdentityRestore(graph: GraphCall, request: IdentityRestoreRequest, fingerprint: string) {

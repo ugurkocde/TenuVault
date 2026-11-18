@@ -31,7 +31,7 @@ it("reads the owned snapshot instead of renderer values and requires separate co
   const state = world()
   const preview = await POST(request({ ...base, snapshot: { selfServiceSignUp: { isEnabled: true } }, allowRemoval: true }))
   expect(preview.status).toBe(200)
-  expect(state.prepare).toHaveBeenCalledWith(tenant, expect.objectContaining({ path, snapshot }), "update", snapshot.id, true)
+  expect(state.prepare).toHaveBeenCalledWith(tenant, expect.objectContaining({ path, snapshot }), "update", undefined, true)
   expect(state.restore).not.toHaveBeenCalled()
   const result = await POST(request({ ...base, action: "restore", runId: "run", fingerprint: "reviewed" }))
   expect(result.status).toBe(200)

@@ -6,7 +6,7 @@ import { GuardedRunJournal, executeGuardedRun, restoreFingerprint, type GuardedS
 import { IdentityRestoreService } from "../src/main/restore/service"
 import { restoreSafetyRoutes } from "../src/main/restore/routes"
 import { referenceMatches, REFERENCE_SCAN_EXCLUDED } from "../src/main/restore/reference-scanner"
-import { bindRestoreConnection, dispatchIdentityRestore, setIdentityRestoreDispatch } from "../src/main/restore/dispatch"
+import { bindRestoreConnection, confirmIdentityRestore, dispatchIdentityRestore, previewIdentityRestore, setIdentityRestoreDispatch, setIdentityRestorePreviews } from "../src/main/restore/dispatch"
 import { Restorer, type GraphCall } from "../src/portal/lib/policies/graph-restore"
 import { INTUNE_TYPES, typeForFolder, type Item } from "../src/shared/intune/registry"
 import { restoreMatrixRow } from "../src/shared/intune/restore-matrix"
@@ -455,4 +455,38 @@ it("rejects confirmation reuse across runs, tenants, actors and sources", async 
   connectedTenant = tenant
   const result = await service.restore(tenant, { ...request, runId: second.id })
   expect(result).toMatchObject({ success: false, error: expect.stringContaining("Confirm this configuration separately") })
+})
+
+it("previews and updates a recreated policy through the real dispatch using its persisted target", async () => {
+  const store = storage(), journal = new GuardedRunJournal(store), source = guid(91), created = guid(92)
+  const scopedToken = `h.${Buffer.from(JSON.stringify({ tid: tenant, oid: user, appid: client, scp: "Policy.ReadWrite.ApplicationConfiguration Application.Read.All" })).toString("base64url")}.s`
+  let live: Item | null = null
+  const calls: Array<{ method: string; path: string }> = []
+  const fetcher = (async (input, init) => {
+    const url = new URL(String(input)), method = init?.method ?? "GET"
+    calls.push({ method, path: url.pathname })
+    if (method === "POST") { live = { id: created, ...JSON.parse(String(init?.body)) }; return Response.json(live, { status: 201 }) }
+    if (method === "PATCH") { expect(url.pathname).toBe(`/v1.0/policies/tokenLifetimePolicies/${created}`); Object.assign(live!, JSON.parse(String(init?.body))); return new Response(null, { status: 204 }) }
+    if (url.pathname.endsWith("/" + source)) return new Response(null, { status: 404 })
+    if (url.pathname.endsWith("/" + created)) return live ? Response.json(live) : new Response(null, { status: 404 })
+    return Response.json({ value: live && url.pathname.endsWith("/tokenLifetimePolicies") ? [live] : [] })
+  }) as typeof fetch
+  const connection = async () => ({ token: scopedToken, tenantId: tenant, clientId: client, userId: user })
+  const service = new IdentityRestoreService(journal, new RecoveryAccounts(store), connection, fetcher)
+  setIdentityRestorePreviews(service); setIdentityRestoreDispatch((tenant, request) => service.restore(tenant, request))
+  const graph = bindRestoreConnection(async () => ({ status: 200, body: {} }), tenant)
+  const request = { path: "backup/TokenLifetimePolicies/Policy.json", snapshot: { id: source, displayName: "Saved", isOrganizationDefault: false, definition: [JSON.stringify({ TokenLifetimePolicy: { Version: 1, AccessTokenLifetime: "01:00:00" } })] }, origin: "restore" as const }
+  const create = await previewIdentityRestore(graph, request, "create")
+  expect(await confirmIdentityRestore(graph, { ...request, runId: create.runId }, create.fingerprint)).toMatchObject({ success: true, policyId: created })
+  live!.displayName = "Changed after recreation"
+  // Reopen the service with the same durable store, then preview through dispatch again.
+  const restarted = new IdentityRestoreService(new GuardedRunJournal(store), new RecoveryAccounts(store), connection, fetcher)
+  setIdentityRestorePreviews(restarted); setIdentityRestoreDispatch((tenant, request) => restarted.restore(tenant, request))
+  calls.length = 0
+  const update = await previewIdentityRestore(graph, request, "update")
+  expect(update.changes).toContainEqual({ property: "displayName", before: "Changed after recreation", after: "Saved" })
+  expect(journal.load(tenant, update.runId)!.entries[0]!.step.targetId).toBe(created)
+  expect(await confirmIdentityRestore(graph, { ...request, runId: update.runId }, update.fingerprint)).toMatchObject({ success: true, policyId: created })
+  expect(calls.some(call => call.path.endsWith("/" + source))).toBe(false)
+  expect(calls.filter(call => call.method !== "GET")).toEqual([{ method: "PATCH", path: `/v1.0/policies/tokenLifetimePolicies/${created}` }])
 })
