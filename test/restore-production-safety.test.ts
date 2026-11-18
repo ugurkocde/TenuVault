@@ -4,7 +4,7 @@ import { RecoveryAccounts, resolveRestoreActor, resolveSafetyReferences } from "
 import { GuardedRunJournal, executeGuardedRun, restoreFingerprint, type GuardedStep, type GuardedRun, type GuardedIO } from "../src/main/restore/guarded-run"
 import { IdentityRestoreService } from "../src/main/restore/service"
 import { restoreSafetyRoutes } from "../src/main/restore/routes"
-import { referenceMatches } from "../src/main/restore/reference-scanner"
+import { referenceMatches, REFERENCE_SCAN_EXCLUDED } from "../src/main/restore/reference-scanner"
 import { bindRestoreConnection, dispatchIdentityRestore, setIdentityRestoreDispatch } from "../src/main/restore/dispatch"
 import { Restorer, type GraphCall } from "../src/portal/lib/policies/graph-restore"
 import { INTUNE_TYPES, typeForFolder, type Item } from "../src/shared/intune/registry"
@@ -100,7 +100,7 @@ describe("production restore safety reads", () => {
     })
     const snapshots = await referenceMatches(token, [{ kind: "objectId", folder: "Users", source: recovery, target: user }], fetcher)
     expect(snapshots.some(snapshot => snapshot.path === `DeviceConfigurations/${user}`)).toBe(true)
-    for (const type of INTUNE_TYPES.filter(type => type.restoreSafety !== "identity" && !type.staticIds && !type.singleton)) expect(calls.some(path => path.endsWith(`/${type.path}`))).toBe(true)
+    for (const type of INTUNE_TYPES.filter(type => type.restoreSafety !== "identity" && !type.staticIds && !type.singleton && !REFERENCE_SCAN_EXCLUDED.has(type.folder))) expect(calls.some(path => path.endsWith(`/${type.path}`))).toBe(true)
     await expect(referenceMatches(token, [], async () => new Response("", { status: 403 }))).rejects.toThrow()
   })
   it("bounds every reference request and rejects cancellation, time and size limits", async () => {
@@ -130,6 +130,7 @@ describe("production restore safety reads", () => {
     })
     const matches = await referenceMatches(token, [{ kind: "objectId", folder: "Users", source: recovery, target: user }], fetcher)
     expect(matches.map(match => match.property)).toEqual(["roleScopeTagIds.0", "assignments.0.target.groupId"])
+    for (const folder of REFERENCE_SCAN_EXCLUDED) expect(calls.some(call => new URL(call).pathname.endsWith(typeForFolder(folder)!.path))).toBe(false)
     expect(calls.some(call => /PlainText|localizedNotificationMessages|themeColorLogo/.test(call))).toBe(false)
   })
 
