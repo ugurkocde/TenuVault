@@ -98,6 +98,44 @@ describe("the prepared app-only lab harness with injected fetch only", () => {
     const guardedToken = `h.${Buffer.from(JSON.stringify({ tid: LAB_8C_TENANT, appid: LAB_8C_APP, roles: [] })).toString("base64url")}.s`
     expect(() => configuration8cLab(guardedToken, LAB_8C_TENANT, LAB_8C_APP)).toThrow("Missing lab application permission")
   })
+  it.each([503, "lost response"])("retains recovery after %s and three stale original reads until an acknowledged recovery", async failure => {
+    const state = world(), durable = new Map<string, Item>()
+    let failRecovery = true, staleReads = 0, recoveryAttempts = 0, originalReads = 0, clears = 0
+    const fetcher = (async (input, init) => {
+      if (init?.method === "PATCH" && JSON.parse(String(init.body)).displayName === "original") {
+        recoveryAttempts++
+        if (failRecovery) {
+          staleReads = 3
+          if (typeof failure === "string") throw new Error("Recovery response lost")
+          return new Response(null, { status: failure })
+        }
+      }
+      if (staleReads > 0 && init?.method === "GET" && String(input).endsWith("/crossTenantAccessPolicy")) {
+        staleReads--; originalReads++
+        return Response.json({ displayName: "original" })
+      }
+      return state.fetcher(input, init)
+    }) as typeof fetch
+    const lab = configuration8cLab(token, LAB_8C_TENANT, LAB_8C_APP, fetcher, {
+      save: (folder, original) => { durable.set(folder, original) },
+      clear: folder => { clears++; durable.delete(folder) },
+    })
+    await expect(lab.run("CrossTenantAccessPolicy")).rejects.toThrow("recovery file is retained")
+    expect(recoveryAttempts).toBe(5)
+    expect(originalReads).toBe(15)
+    expect(durable.get("CrossTenantAccessPolicy")).toEqual({ displayName: "original" })
+    expect(state.singletons.crossTenantAccessPolicy!.displayName).toBe("TV06-TEST-metadata")
+    await expect(lab.run("UserFlowAttributes")).rejects.toThrow("no further mutation")
+    expect(recoveryAttempts).toBe(10)
+    expect(clears).toBe(0)
+    expect(state.calls.some(call => call.method === "POST")).toBe(false)
+    failRecovery = false
+    await lab.cleanup()
+    expect(recoveryAttempts).toBe(11)
+    expect(clears).toBe(1)
+    expect(durable.size).toBe(0)
+    expect(state.singletons).toEqual(state.original)
+  })
   for (const folder of LAB_8C_FOLDERS) it(`${folder}: verifies read-back and leaves original singleton state and no prefixed policies`, async () => {
     const state = world()
     await state.lab.run(folder)

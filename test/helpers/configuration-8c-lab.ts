@@ -135,14 +135,13 @@ export function configuration8cLab(token: string, tenant: string, app: string, f
     const url = urlFor(folder)
     const body = original
     for (let attempt = 0; attempt < 5; attempt++) {
-      // This retries only the known original, never the experimental write. A lost answer
-      // is reconciled before resending, because the original may already be committed.
-      let refused = false
-      try { await request(url, restoreMatrixRow(folder)!.update!.method, body) } catch (error) { refused = error instanceof Error && /HTTP 4\d\d/.test(error.message) }
+      // Retry only the known original. A stale replica cannot prove that an unacknowledged
+      // recovery write succeeded, regardless of its error or whether it may have committed.
+      let acknowledged = false
+      try { await request(url, restoreMatrixRow(folder)!.update!.method, body); acknowledged = true } catch { /* Retain recovery until a write is acknowledged. */ }
       try {
         await verify(folder, url, body, 12)
-        // A definite refusal cannot be reconciled from an old replica that still shows the original.
-        if (refused) { await pause(); continue }
+        if (!acknowledged) { await pause(); continue }
         recovery?.clear(folder)
         pendingRecovery.delete(folder)
         return
