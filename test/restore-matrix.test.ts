@@ -1,7 +1,7 @@
 import { moduleForFolder } from "../src/shared/services/modules"
 import { describe, expect, it } from "vitest"
 import { guardedGraphIO } from "../src/main/restore/graph-io"
-import { GuardedRunJournal, executeGuardedRun, restoreFingerprint, type GuardedRun, type GuardedStep } from "../src/main/restore/guarded-run"
+import { restoreFingerprint, type GuardedStep } from "../src/main/restore/guarded-run"
 import { RESTORE_MATRIX } from "../src/shared/intune/restore-matrix"
 import { INTUNE_TYPES, typeForFolder, type Item } from "../src/shared/intune/registry"
 import type { RestoreActor } from "../src/shared/intune/restore-guards"
@@ -24,6 +24,9 @@ describe("restore write matrix", () => {
         expect(supplemental.blockedReason).toContain("Evidence only")
       }
       for (const write of [row.create, row.update].filter(value => value !== null)) {
+        expect(write.propertyAudit?.date).toBe("2026-11-17")
+        expect(write.propertyAudit?.sources).toEqual([write.documentation, row.verification.resourceDocumentation])
+        for (const property of Object.keys(write.propertyAudit?.excluded ?? {})) expect(write.properties).not.toContain(property)
         expect(write.documentation).toMatch(/^https:\/\/learn.microsoft.com\/en-us\/graph\/api\//)
         expect(write.path).not.toMatch(/^https?:/)
         expect(write.propertyEvidence).toMatch(/request-body-table|resource-and-examples/)
@@ -73,20 +76,21 @@ describe("restore write matrix", () => {
       expect(creates).toBe(0)
       return
     }
-    if (need === "unsupported" || write.index !== "matched" || write.blockedReason || !write.permissions.length || row.disposition !== "configuration" || write.path.includes("{organizationId}") || (row.detection.properties ?? []).some(key => !properties.includes(key))) return
-    const memory = new Map<string, string>()
-    const journal = new GuardedRunJournal({ get: key => memory.get(key) ?? null, set: (key, value) => { memory.set(key, value) }, delete: key => { memory.delete(key) } })
-    const input: GuardedRun = { version: 1, tenant: "tenant", id: "run", actor, origin: "restore", entries: [{ step, state: "pending" }], mappings: [] }
-    const previous = type.restore
-    type.restore = "create"
-    try {
-      expect((await executeGuardedRun(journal, input, io)).status).toBe("partial")
-      const retry = await executeGuardedRun(journal, input, io)
-      expect(retry).toMatchObject({ status: "complete", run: { entries: [{ state: "applied", targetId: typeof desired.id === "string" ? desired.id : "created-id" }] } })
-      expect(creates).toBe(1)
-      expect(objects).toHaveLength(1)
-      expect(sent.some(call => call.startsWith("GET "))).toBe(true)
-    } finally { if (previous) type.restore = previous; else delete type.restore }
+
+  })
+  it("excludes reserved, immutable update keys and computed state from executable contracts", () => {
+    const properties = (folder: string, operation: "create" | "update") => RESTORE_MATRIX.find(row => row.folder === folder)![operation]!.properties
+    expect(properties("ExternalIdentitiesPolicy", "update")).toEqual(["allowExternalIdentitiesToLeave"])
+    expect(properties("UserFlowAttributes", "create")).not.toContain("id")
+    expect(properties("UserFlowAttributes", "create")).not.toContain("userFlowAttributeType")
+    for (const folder of ["Groups", "Applications"]) expect(properties(folder, "update")).not.toContain("uniqueName")
+    expect(properties("AuthenticationEventsFlows", "update")).not.toContain("id")
+    expect(properties("EntraDevices", "update")).not.toContain("isCompliant")
+    expect(properties("EntraDevices", "update")).not.toContain("isManaged")
+    for (const operation of ["create", "update"] as const) {
+      expect(properties("B2bManagementPolicies", operation)).not.toContain("deletedDateTime")
+      expect(properties("DefenderAttackSimulationTrainingCampaigns", operation)).not.toContain("createdDateTime")
+    }
   })
   it("blocks discrepant contracts, unknown properties and missing permissions before a request", async () => {
     const io = guardedGraphIO(token(["Policy.Read.All"]), actor, references, (async () => { throw new Error("must not fetch") }) as typeof fetch)

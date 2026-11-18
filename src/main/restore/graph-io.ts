@@ -1,7 +1,7 @@
 import { restorePermissionBlocker } from "../../shared/services/modules"
 import { isGraphId } from "../../shared/security"
-import { graphContinuation } from "../../shared/graph-continuation"
 import { restoreCapability, typeForFolder, type Item } from "../../shared/intune/registry"
+import { findCreatedByDescriptor } from "./create-detection"
 import { restoreMatrixRow } from "../../shared/intune/restore-matrix"
 import { RestoreSafetyError, RestoreWriteRefusedError, type RestoreActor, type SafetyReferences } from "../../shared/intune/restore-guards"
 import { grantedPermissions } from "../../shared/services/token"
@@ -89,27 +89,7 @@ export function guardedGraphIO(token: string, actor: RestoreActor, references: G
   }
 
   async function find(step: GuardedStep, sent = step.desired): Promise<Item[]> {
-    const { row, root } = pathOf(step)
-    if (row.detection.kind === "singleton") { const current = await request(root + row.readPath); return current ? [current] : [] }
-    if (row.detection.kind === "id") throw new RestoreSafetyError("This type has no verified create reconciliation key. Its create path remains blocked.")
-    const keys = row.detection.properties ?? []
-    if (!keys.length || keys.some(key => !(key in sent))) throw new RestoreSafetyError("The descriptor's create detection key is missing.")
-    const type = typeForFolder(step.folder)!
-    const start = root + row.readPath + (type.filter ? `?$filter=${encodeURIComponent(type.filter)}` : "")
-    let next: string | undefined = start
-    const seen = new Set<string>()
-    const matches: Item[] = []
-    while (next) {
-      if (seen.size >= 10_000) throw new RestoreSafetyError("Create detection did not finish reading every page.")
-      const url = graphContinuation(start, next, seen, type.filter)
-      const page = await request(url)
-      if (!Array.isArray(page?.value)) throw new RestoreSafetyError("Create detection returned an incomplete collection.")
-      for (const candidate of page.value) {
-        if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) throw new RestoreSafetyError("Create detection returned an invalid object.")
-        if (keys.every(key => restoreFingerprint({ value: candidate[key] ?? null }) === restoreFingerprint({ value: sent[key] ?? null }))) matches.push(candidate)
-      }
-      next = typeof page["@odata.nextLink"] === "string" ? page["@odata.nextLink"] : undefined
-    }
-    return matches
+    const { row } = pathOf(step)
+    return findCreatedByDescriptor(row, sent, request)
   }
 }

@@ -34,7 +34,15 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/authorizationpolicy?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/defaultuserrolepermissions?view=graph-rest-1.0"
       ],
-      "blockedReason": "Current documentation uses PATCH /policies/authorizationPolicy; the index uses /policies/authorizationPolicy/authorizationPolicy. This alias discrepancy remains blocked."
+      "blockedReason": "Current documentation uses PATCH /policies/authorizationPolicy; the index uses /policies/authorizationPolicy/authorizationPolicy. This alias discrepancy remains blocked.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/authorizationpolicy-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/authorizationpolicy?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "singleton"
@@ -86,7 +94,15 @@
       ],
       "propertyEvidence": "request-body-table",
       "propertyCoverage": "top-level",
-      "schemaDocumentation": []
+      "schemaDocumentation": [],
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/identitysecuritydefaultsenforcementpolicy-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/identitysecuritydefaultsenforcementpolicy?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "singleton"
@@ -146,7 +162,15 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/adminconsentrequestpolicy?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/accessreviewreviewerscope?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/adminconsentrequestpolicy-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/adminconsentrequestpolicy?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "singleton"
@@ -201,7 +225,15 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/permissiongrantpolicy?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/permissiongrantpolicy-post-permissiongrantpolicies?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/permissiongrantpolicy?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "update": {
       "method": "PATCH",
@@ -221,7 +253,15 @@
       ],
       "propertyEvidence": "request-body-table",
       "propertyCoverage": "top-level",
-      "schemaDocumentation": []
+      "schemaDocumentation": [],
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/permissiongrantpolicy-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/permissiongrantpolicy?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "key",
@@ -361,7 +401,15 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/permissiongrantpreapprovalpolicy?view=graph-rest-beta",
         "https://learn.microsoft.com/en-us/graph/api/resources/preapprovaldetail?view=graph-rest-beta"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/policyroot-post-permissiongrantpreapprovalpolicies?view=graph-rest-beta",
+          "https://learn.microsoft.com/en-us/graph/api/resources/permissiongrantpreapprovalpolicy?view=graph-rest-beta"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "update": {
       "method": "PATCH",
@@ -383,7 +431,15 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/preapprovaldetail?view=graph-rest-beta"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute."
+      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/permissiongrantpreapprovalpolicy-update?view=graph-rest-beta",
+          "https://learn.microsoft.com/en-us/graph/api/resources/permissiongrantpreapprovalpolicy?view=graph-rest-beta"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "properties",
@@ -500,7 +556,15 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/policybase?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/appManagementConfiguration?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute."
+      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/tenantappmanagementpolicy-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/tenantappmanagementpolicy?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "singleton"
@@ -557,7 +621,15 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/appmanagementpolicy?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/appManagementConfiguration?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/appmanagementpolicy-post?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/appmanagementpolicy?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "update": {
       "method": "PATCH",
@@ -583,7 +655,15 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/policybase?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/appmanagementconfiguration?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute."
+      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/appmanagementpolicy-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/appmanagementpolicy?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "properties",
@@ -717,7 +797,15 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/tokenlifetimepolicy?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/tokenlifetimepolicy-post-tokenlifetimepolicies?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/tokenlifetimepolicy?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "update": {
       "method": "PATCH",
@@ -742,7 +830,15 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/tokenlifetimepolicy?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/tokenlifetimepolicy-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/tokenlifetimepolicy?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "properties",
@@ -828,7 +924,15 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/tokenissuancepolicy?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/tokenissuancepolicy-post-tokenissuancepolicy?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/tokenissuancepolicy?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "update": {
       "method": "PATCH",
@@ -851,7 +955,15 @@
       "propertyEvidence": "request-body-table",
       "propertyCoverage": "partial",
       "schemaDocumentation": [],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/tokenissuancepolicy-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/tokenissuancepolicy?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "properties",
@@ -936,7 +1048,15 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/claimsmappingpolicy?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/claimsmappingpolicy-post-claimsmappingpolicies?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/claimsmappingpolicy?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "update": {
       "method": "PATCH",
@@ -958,7 +1078,15 @@
       "propertyEvidence": "request-body-table",
       "propertyCoverage": "partial",
       "schemaDocumentation": [],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/claimsmappingpolicy-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/claimsmappingpolicy?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "properties",
@@ -1107,7 +1235,15 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/homerealmdiscoverypolicy?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/homerealmdiscoverypolicy-post-homerealmdiscoverypolicies?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/homerealmdiscoverypolicy?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "update": {
       "method": "PATCH",
@@ -1130,7 +1266,15 @@
       "propertyEvidence": "request-body-table",
       "propertyCoverage": "partial",
       "schemaDocumentation": [],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/homerealmdiscoverypolicy-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/homerealmdiscoverypolicy?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "properties",
@@ -1280,7 +1424,15 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/activitybasedtimeoutpolicy?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/activitybasedtimeoutpolicy-post-activitybasedtimeoutpolicies?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/activitybasedtimeoutpolicy?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "update": {
       "method": "PATCH",
@@ -1301,7 +1453,15 @@
       ],
       "propertyEvidence": "request-body-table",
       "propertyCoverage": "top-level",
-      "schemaDocumentation": []
+      "schemaDocumentation": [],
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/activitybasedtimeoutpolicy-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/activitybasedtimeoutpolicy?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "properties",
@@ -1391,7 +1551,16 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/azureadjoinpolicy?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/localadminpasswordsettings?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/deviceregistrationpolicy-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/deviceregistrationpolicy?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields.",
+        "constraints": "azureADRegistration cannot be modified when Intune is enabled. Keep blocked until the request builder verifies tenant state."
+      }
     },
     "detection": {
       "kind": "singleton"
@@ -1533,7 +1702,16 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/groupsettingtemplate?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/settingvalue?view=graph-rest-1.0"
       ],
-      "blockedReason": "Current Microsoft operation and permission documentation confirms the contract, but the local index has no exact method/path match. The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "Current Microsoft operation and permission documentation confirms the contract, but the local index has no exact method/path match. The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/group-post-settings?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/groupsetting?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields.",
+        "constraints": "templateId is read-only after creation but explicitly accepted on create. Updates only accept values."
+      }
     },
     "update": {
       "method": "PATCH",
@@ -1558,7 +1736,16 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/settingvalue?view=graph-rest-1.0"
       ],
-      "blockedReason": "Current Microsoft operation and permission documentation confirms the contract, but the local index has no exact method/path match. Nested or polymorphic request properties require a closed type-specific schema before this contract can execute."
+      "blockedReason": "Current Microsoft operation and permission documentation confirms the contract, but the local index has no exact method/path match. Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/groupsetting-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/groupsetting?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields.",
+        "constraints": "templateId is read-only after creation but explicitly accepted on create. Updates only accept values."
+      }
     },
     "detection": {
       "kind": "key",
@@ -1686,7 +1873,15 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/privacyprofile?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute."
+      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/organization-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/organization?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "singleton"
@@ -1845,7 +2040,15 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/loginPageLayoutConfiguration?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/loginPageTextVisibilitySettings?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute."
+      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/organizationalbranding-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/organizationalbranding?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "singleton"
@@ -1990,7 +2193,15 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/domain?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/domain-post-domains?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/domain?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "update": {
       "method": "PATCH",
@@ -2011,7 +2222,15 @@
       "propertyEvidence": "resource-and-examples",
       "propertyCoverage": "partial",
       "schemaDocumentation": [],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/domain-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/domain?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "properties",
@@ -2173,7 +2392,15 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/onpremisesdirectorysynchronizationconfiguration?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/onpremisesdirectorysynchronizationfeature?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute."
+      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/onpremisesdirectorysynchronization-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/onpremisesdirectorysynchronization?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "properties",
@@ -2228,7 +2455,15 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/registrationenforcement?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute."
+      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/authenticationmethodspolicy-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/authenticationmethodspolicy?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "singleton"
@@ -2357,7 +2592,16 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/authenticationflowspolicy?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/selfservicesignupauthenticationflowconfiguration?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/authenticationflowspolicy-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/authenticationflowspolicy?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields.",
+        "constraints": "The resource calls selfServiceSignUp read-only but the update operation explicitly accepts it. Keep blocked pending a reviewed nested schema."
+      }
     },
     "detection": {
       "kind": "singleton"
@@ -2414,7 +2658,15 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/authenticationcontextclassreference?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute."
+      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/authenticationcontextclassreference-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/authenticationcontextclassreference?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "key",
@@ -2496,7 +2748,15 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/certificatebasedauthconfiguration?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/certificateauthority?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/certificatebasedauthconfiguration-post-certificatebasedauthconfiguration?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/certificatebasedauthconfiguration?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "update": null,
     "detection": {
@@ -2571,7 +2831,15 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/certificatebasedauthpki?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute."
+      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/publickeyinfrastructureroot-post-certificatebasedauthconfigurations?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/certificatebasedauthpki?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "update": {
       "method": "PATCH",
@@ -2590,7 +2858,15 @@
       ],
       "propertyEvidence": "request-body-table",
       "propertyCoverage": "top-level",
-      "schemaDocumentation": []
+      "schemaDocumentation": [],
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/certificatebasedauthpki-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/certificatebasedauthpki?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "properties",
@@ -2732,7 +3008,15 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/validatingdomains?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute."
+      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/federatedtokenvalidationpolicy-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/federatedtokenvalidationpolicy?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "singleton"
@@ -2783,7 +3067,15 @@
       ],
       "propertyEvidence": "request-body-table",
       "propertyCoverage": "top-level",
-      "schemaDocumentation": []
+      "schemaDocumentation": [],
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/continuousaccessevaluationpolicy-update?view=graph-rest-beta",
+          "https://learn.microsoft.com/en-us/graph/api/resources/continuousaccessevaluationpolicy?view=graph-rest-beta"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "singleton"
@@ -2845,7 +3137,15 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/hardwareoathtokenauthenticationmethoddevice?view=graph-rest-beta",
         "https://learn.microsoft.com/en-us/graph/api/resources/identity?view=graph-rest-beta"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/authenticationmethoddevice-post-hardwareoathdevices?view=graph-rest-beta",
+          "https://learn.microsoft.com/en-us/graph/api/resources/hardwareoathtokenauthenticationmethoddevice?view=graph-rest-beta"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "update": {
       "method": "PATCH",
@@ -2868,7 +3168,15 @@
       ],
       "propertyEvidence": "request-body-table",
       "propertyCoverage": "top-level",
-      "schemaDocumentation": []
+      "schemaDocumentation": [],
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/hardwareoathtokenauthenticationmethoddevice-update?view=graph-rest-beta",
+          "https://learn.microsoft.com/en-us/graph/api/resources/hardwareoathtokenauthenticationmethoddevice?view=graph-rest-beta"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "properties",
@@ -2984,7 +3292,15 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/grouplifecyclepolicy?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/grouplifecyclepolicy-post-grouplifecyclepolicies?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/grouplifecyclepolicy?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "update": {
       "method": "PATCH",
@@ -3005,7 +3321,15 @@
       ],
       "propertyEvidence": "request-body-table",
       "propertyCoverage": "top-level",
-      "schemaDocumentation": []
+      "schemaDocumentation": [],
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/grouplifecyclepolicy-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/grouplifecyclepolicy?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "properties",
@@ -3148,7 +3472,15 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/emaildetails?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/targetowners?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/ownerlessgrouppolicy-upsert?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/ownerlessgrouppolicy?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "singleton"
@@ -3200,7 +3532,15 @@
       ],
       "propertyEvidence": "request-body-table",
       "propertyCoverage": "top-level",
-      "schemaDocumentation": []
+      "schemaDocumentation": [],
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/crosstenantaccesspolicy-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/crosstenantaccesspolicy?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "singleton"
@@ -3343,7 +3683,15 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/crosstenantaccesspolicym365collaborationoutboundsetting?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/crosstenantaccesspolicytenantrestrictions?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute."
+      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/crosstenantaccesspolicyconfigurationdefault-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/crosstenantaccesspolicyconfigurationdefault?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "singleton"
@@ -3472,7 +3820,16 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/crosstenantaccesspolicyb2bsetting?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/crosstenantaccesspolicyinboundtrust?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/crosstenantaccesspolicy-post-partners?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/crosstenantaccesspolicyconfigurationpartner?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields.",
+        "constraints": "tenantId is a create-only key explicitly required by the create operation, never sent in updates."
+      }
     },
     "update": {
       "method": "PATCH",
@@ -3509,7 +3866,16 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/crosstenantaccesspolicym365collaborationoutboundsetting?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/crosstenantaccesspolicytenantrestrictions?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute."
+      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/crosstenantaccesspolicyconfigurationpartner-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/crosstenantaccesspolicyconfigurationpartner?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields.",
+        "constraints": "tenantId is a create-only key explicitly required by the create operation, never sent in updates."
+      }
     },
     "detection": {
       "kind": "key",
@@ -3739,7 +4105,6 @@
       "path": "policies/externalIdentitiesPolicy",
       "version": "beta",
       "properties": [
-        "allowDeletedIdentitiesDataRemoval",
         "allowExternalIdentitiesToLeave"
       ],
       "permissions": [
@@ -3752,7 +4117,18 @@
       ],
       "propertyEvidence": "request-body-table",
       "propertyCoverage": "top-level",
-      "schemaDocumentation": []
+      "schemaDocumentation": [],
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/externalidentitiespolicy-update?view=graph-rest-beta",
+          "https://learn.microsoft.com/en-us/graph/api/resources/externalidentitiespolicy?view=graph-rest-beta"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields.",
+        "excluded": {
+          "allowDeletedIdentitiesDataRemoval": "Reserved for future use in the operation and resource documentation."
+        }
+      }
     },
     "detection": {
       "kind": "singleton"
@@ -3790,7 +4166,6 @@
       "path": "policies/b2bManagementPolicies",
       "version": "beta",
       "properties": [
-        "deletedDateTime",
         "definition",
         "description",
         "displayName",
@@ -3812,14 +4187,24 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/stspolicy?view=graph-rest-beta",
         "https://learn.microsoft.com/en-us/graph/api/resources/policybase?view=graph-rest-beta"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/policyroot-post-b2bmanagementpolicies?view=graph-rest-beta",
+          "https://learn.microsoft.com/en-us/graph/api/resources/b2bmanagementpolicy?view=graph-rest-beta"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields.",
+        "excluded": {
+          "deletedDateTime": "Deletion metadata inherited from directoryObject, not restorable configuration."
+        }
+      }
     },
     "update": {
       "method": "PATCH",
       "path": "policies/b2bManagementPolicies/{b2bManagementPolicyId}",
       "version": "beta",
       "properties": [
-        "deletedDateTime",
         "definition",
         "description",
         "displayName",
@@ -3841,12 +4226,22 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/stspolicy?view=graph-rest-beta",
         "https://learn.microsoft.com/en-us/graph/api/resources/policybase?view=graph-rest-beta"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/b2bmanagementpolicy-update?view=graph-rest-beta",
+          "https://learn.microsoft.com/en-us/graph/api/resources/b2bmanagementpolicy?view=graph-rest-beta"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields.",
+        "excluded": {
+          "deletedDateTime": "Deletion metadata inherited from directoryObject, not restorable configuration."
+        }
+      }
     },
     "detection": {
       "kind": "properties",
       "properties": [
-        "deletedDateTime",
         "definition",
         "description",
         "displayName",
@@ -4052,7 +4447,15 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/b2xidentityuserflow?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/userflowapiconnectorconfiguration?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute."
+      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/identitycontainer-post-b2xuserflows?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/b2xidentityuserflow?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "update": null,
     "detection": {
@@ -4208,10 +4611,8 @@
       "path": "identity/userFlowAttributes",
       "version": "v1.0",
       "properties": [
-        "id",
         "displayName",
         "description",
-        "userFlowAttributeType",
         "dataType"
       ],
       "permissions": [
@@ -4227,7 +4628,19 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/identityuserflowattribute?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute."
+      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/identityuserflowattribute-post?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/identityuserflowattribute?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields.",
+        "excluded": {
+          "id": "Automatically generated, read-only identity.",
+          "userFlowAttributeType": "Automatically set, read-only attribute type."
+        }
+      }
     },
     "update": {
       "method": "PATCH",
@@ -4249,7 +4662,15 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/identityuserflowattribute?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute."
+      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/identityuserflowattribute-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/identityuserflowattribute?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "properties",
@@ -4343,14 +4764,21 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/onattributecollectionhandler?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/onusercreatestarthandler?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/identitycontainer-post-authenticationeventsflows?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/authenticationeventsflow?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "update": {
       "method": "PATCH",
       "path": "identity/authenticationEventsFlows/{authenticationEventsFlow-id}",
       "version": "v1.0",
       "properties": [
-        "id",
         "displayName",
         "description",
         "conditions",
@@ -4376,7 +4804,18 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/onattributecollectionhandler?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/onusercreatestarthandler?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute."
+      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/authenticationeventsflow-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/authenticationeventsflow?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields.",
+        "excluded": {
+          "id": "Read-only entity identity."
+        }
+      }
     },
     "detection": {
       "kind": "properties",
@@ -4598,7 +5037,15 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/onfraudprotectionloadstarthandler?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/onpasswordsubmithandler?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute."
+      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/identitycontainer-post-authenticationeventlisteners?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/authenticationeventlistener?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "update": {
       "method": "PATCH",
@@ -4626,14 +5073,21 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/onfraudprotectionloadstarthandler?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/onpasswordsubmithandler?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute."
+      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/authenticationeventlistener-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/authenticationeventlistener?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "properties",
       "properties": [
         "conditions",
         "displayName",
-        "handler",
         "handler"
       ]
     },
@@ -4721,7 +5175,15 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/customcalloutextension?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/customextensionendpointconfiguration?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/identitycontainer-post-customauthenticationextensions?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/customauthenticationextension?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "update": {
       "method": "PATCH",
@@ -4757,7 +5219,15 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/customextensionendpointconfiguration?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/customextensionbehavioronerror?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute."
+      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/customauthenticationextension-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/customauthenticationextension?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "properties",
@@ -4890,7 +5360,15 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/basicauthentication?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/pkcs12certificate?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/identityapiconnector-create?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/identityapiconnector?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "update": {
       "method": "PATCH",
@@ -4917,7 +5395,15 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/basicauthentication?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/pkcs12certificate?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute."
+      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/identityapiconnector-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/identityapiconnector?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "properties",
@@ -5021,7 +5507,15 @@
       ],
       "propertyEvidence": "request-body-table",
       "propertyCoverage": "top-level",
-      "schemaDocumentation": []
+      "schemaDocumentation": [],
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/multitenantorganization-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/multitenantorganization?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "singleton"
@@ -5124,7 +5618,16 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/unifiedroledefinition?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/unifiedrolepermission?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/rbacapplication-post-roledefinitions?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/unifiedroledefinition?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields.",
+        "constraints": "Role properties are writable only on custom definitions. Built-in definitions remain blocked."
+      }
     },
     "update": {
       "method": "PATCH",
@@ -5153,7 +5656,16 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/unifiedroledefinition?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/unifiedrolepermission?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/unifiedroledefinition-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/unifiedroledefinition?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields.",
+        "constraints": "Role properties are writable only on custom definitions. Built-in definitions remain blocked."
+      }
     },
     "detection": {
       "kind": "properties",
@@ -5275,7 +5787,16 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/unifiedroleassignment?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/directoryobject?view=graph-rest-1.0"
       ],
-      "blockedReason": "No applicable delegated permission contract was established for this provider."
+      "blockedReason": "No applicable delegated permission contract was established for this provider.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/rbacapplication-post-roleassignments?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/unifiedroleassignment?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields.",
+        "constraints": "roleDefinitionId is an immutable create-time reference explicitly required by the create operation."
+      }
     },
     "update": null,
     "detection": {
@@ -5283,7 +5804,8 @@
       "properties": [
         "appScopeId",
         "directoryScopeId",
-        "principalId"
+        "principalId",
+        "roleDefinitionId"
       ]
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
@@ -5414,7 +5936,15 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/unifiedrolemanagementpolicyrule?view=graph-rest-1.0"
       ],
-      "blockedReason": "The nested polymorphic rule collection requires a closed type-specific request schema."
+      "blockedReason": "The nested polymorphic rule collection requires a closed type-specific request schema.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/unifiedrolemanagementpolicy-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/unifiedrolemanagementpolicy?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "properties",
@@ -5585,7 +6115,15 @@
       ],
       "propertyEvidence": "request-body-table",
       "propertyCoverage": "top-level",
-      "schemaDocumentation": []
+      "schemaDocumentation": [],
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/unifiedrolemanagementalertconfiguration-update?view=graph-rest-beta",
+          "https://learn.microsoft.com/en-us/graph/api/resources/unifiedrolemanagementalertconfiguration?view=graph-rest-beta"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "properties",
@@ -5645,7 +6183,15 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/administrativeunit?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/directory-post-administrativeunits?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/administrativeunit?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "update": {
       "method": "PATCH",
@@ -5669,7 +6215,15 @@
       ],
       "propertyEvidence": "request-body-table",
       "propertyCoverage": "top-level",
-      "schemaDocumentation": []
+      "schemaDocumentation": [],
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/administrativeunit-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/administrativeunit?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "properties",
@@ -5862,7 +6416,15 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/attributeset?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/directory-post-attributesets?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/attributeset?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "update": {
       "method": "PATCH",
@@ -5882,7 +6444,15 @@
       ],
       "propertyEvidence": "request-body-table",
       "propertyCoverage": "top-level",
-      "schemaDocumentation": []
+      "schemaDocumentation": [],
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/attributeset-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/attributeset?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "key",
@@ -5935,6 +6505,7 @@
         "description",
         "isCollection",
         "isSearchable",
+        "name",
         "status",
         "type",
         "usePreDefinedValuesOnly"
@@ -5952,7 +6523,16 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/customsecurityattributedefinition?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/directory-post-customsecurityattributedefinitions?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/customsecurityattributedefinition?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields.",
+        "constraints": "isCollection, isSearchable, name and type are create-only. usePreDefinedValuesOnly may change only from true to false. Keep update blocked until this transition is checked."
+      }
     },
     "update": {
       "method": "PATCH",
@@ -5973,12 +6553,23 @@
       ],
       "propertyEvidence": "request-body-table",
       "propertyCoverage": "top-level",
-      "schemaDocumentation": []
+      "schemaDocumentation": [],
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/customsecurityattributedefinition-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/customsecurityattributedefinition?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields.",
+        "constraints": "isCollection, isSearchable, name and type are create-only. usePreDefinedValuesOnly may change only from true to false. Keep update blocked until this transition is checked."
+      },
+      "blockedReason": "The usePreDefinedValuesOnly transition requires a reviewed request builder that permits true to false only."
     },
     "detection": {
       "kind": "key",
       "properties": [
-        "id"
+        "attributeSet",
+        "name"
       ]
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
@@ -6054,7 +6645,15 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/accesspackagecatalog?view=graph-rest-1.0"
       ],
-      "blockedReason": "Current Microsoft operation and permission documentation confirms the contract, but the local index has no exact method/path match. Nested or polymorphic request properties require a closed type-specific schema before this contract can execute."
+      "blockedReason": "Current Microsoft operation and permission documentation confirms the contract, but the local index has no exact method/path match. Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/entitlementmanagement-post-catalogs?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/accesspackagecatalog?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "update": {
       "method": "PATCH",
@@ -6078,7 +6677,15 @@
       "propertyEvidence": "request-body-table",
       "propertyCoverage": "top-level",
       "schemaDocumentation": [],
-      "blockedReason": "Current Microsoft operation and permission documentation confirms the contract, but the local index has no exact method/path match. "
+      "blockedReason": "Current Microsoft operation and permission documentation confirms the contract, but the local index has no exact method/path match. ",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/accesspackagecatalog-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/accesspackagecatalog?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "properties",
@@ -6147,7 +6754,16 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/accesspackage?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/accesspackagecatalog?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/entitlementmanagement-post-accesspackages?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/accesspackage?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields.",
+        "constraints": "catalog is read-only after creation but explicitly accepted as a create-time relationship."
+      }
     },
     "update": {
       "method": "PATCH",
@@ -6168,7 +6784,16 @@
       ],
       "propertyEvidence": "request-body-table",
       "propertyCoverage": "top-level",
-      "schemaDocumentation": []
+      "schemaDocumentation": [],
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/accesspackage-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/accesspackage?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields.",
+        "constraints": "catalog is read-only after creation but explicitly accepted as a create-time relationship."
+      }
     },
     "detection": {
       "kind": "properties",
@@ -6380,7 +7005,16 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/accesspackage?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/accesspackagequestion?view=graph-rest-1.0"
       ],
-      "blockedReason": "Current Microsoft operation and permission documentation confirms the contract, but the local index has no exact method/path match. The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "Current Microsoft operation and permission documentation confirms the contract, but the local index has no exact method/path match. The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/entitlementmanagement-post-assignmentpolicies?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/accesspackageassignmentpolicy?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields.",
+        "constraints": "accessPackage is a read-only relationship in the resource but explicitly required in the operation body. Keep blocked until a closed request schema limits it to the existing package ID."
+      }
     },
     "update": {
       "method": "PUT",
@@ -6422,7 +7056,16 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/accesspackageassignmentreviewsettings?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/accesspackagequestion?view=graph-rest-1.0"
       ],
-      "blockedReason": "Current Microsoft operation and permission documentation confirms the contract, but the local index has no exact method/path match. The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "Current Microsoft operation and permission documentation confirms the contract, but the local index has no exact method/path match. The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/accesspackageassignmentpolicy-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/accesspackageassignmentpolicy?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields.",
+        "constraints": "accessPackage is a read-only relationship in the resource but explicitly required in the operation body. Keep blocked until a closed request schema limits it to the existing package ID."
+      }
     },
     "detection": {
       "kind": "properties",
@@ -6502,7 +7145,15 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/connectedorganization?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/identitysource?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute."
+      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/entitlementmanagement-post-connectedorganizations?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/connectedorganization?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "update": {
       "method": "PATCH",
@@ -6530,7 +7181,15 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/domainidentitysource?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/externaldomainfederation?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute."
+      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/connectedorganization-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/connectedorganization?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "properties",
@@ -6686,7 +7345,15 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/entitlementmanagementsettings?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/entitlementmanagementsettings-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/entitlementmanagementsettings?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "singleton"
@@ -6753,7 +7420,15 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/accessreviewstagesettings?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/accessreviewschedulesettings?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/accessreviewset-post-definitions?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/accessreviewscheduledefinition?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "update": {
       "method": "PUT",
@@ -6784,7 +7459,15 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/accessreviewstagesettings?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/accessreviewschedulesettings?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute."
+      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/accessreviewscheduledefinition-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/accessreviewscheduledefinition?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "properties",
@@ -6939,7 +7622,15 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/accessreviewpolicy?view=graph-rest-beta"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/accessreviewpolicy-update?view=graph-rest-beta",
+          "https://learn.microsoft.com/en-us/graph/api/resources/accessreviewpolicy?view=graph-rest-beta"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "singleton"
@@ -6999,7 +7690,6 @@
         "description",
         "displayName",
         "executionConditions",
-        "id",
         "isEnabled",
         "isSchedulingEnabled",
         "tasks"
@@ -7020,7 +7710,18 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/identitygovernance-workflowexecutionconditions?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/identitygovernance-task?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/identitygovernance-lifecycleworkflowscontainer-post-workflows?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/identitygovernance-workflow?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields.",
+        "excluded": {
+          "id": "Service identity is allocated on creation; do not restore it from a backup."
+        }
+      }
     },
     "update": {
       "method": "PATCH",
@@ -7043,7 +7744,15 @@
       ],
       "propertyEvidence": "request-body-table",
       "propertyCoverage": "top-level",
-      "schemaDocumentation": []
+      "schemaDocumentation": [],
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/identitygovernance-workflow-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/identitygovernance-workflow?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "properties",
@@ -7052,7 +7761,6 @@
         "description",
         "displayName",
         "executionConditions",
-        "id",
         "isEnabled",
         "isSchedulingEnabled",
         "tasks"
@@ -7316,7 +8024,15 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/customextensionendpointconfiguration?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/identitygovernance-customtaskextensioncallbackconfiguration?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute."
+      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/identitygovernance-lifecycleworkflowscontainer-post-customtaskextensions?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/identitygovernance-customtaskextension?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "update": {
       "method": "PATCH",
@@ -7347,7 +8063,15 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/customextensionendpointconfiguration?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/identitygovernance-customtaskextensioncallbackconfiguration?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute."
+      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/identitygovernance-customtaskextension-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/identitygovernance-customtaskextension?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "properties",
@@ -7434,7 +8158,15 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/emailsettings?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute."
+      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/identitygovernance-lifecyclemanagementsettings-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/identitygovernance-lifecyclemanagementsettings?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "singleton"
@@ -7492,7 +8224,15 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/agreement?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/termsofusecontainer-post-agreements?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/agreement?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "update": {
       "method": "PATCH",
@@ -7513,7 +8253,15 @@
       "propertyEvidence": "request-body-table",
       "propertyCoverage": "partial",
       "schemaDocumentation": [],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/agreement-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/agreement?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "properties",
@@ -7607,7 +8355,16 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/passwordprofile?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/organization?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/user-post-users?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/user?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields.",
+        "constraints": "Synced and formerly synced properties need cloud-authority checks. The whole contract remains blocked for directory implementation."
+      }
     },
     "update": {
       "method": "PATCH",
@@ -7681,7 +8438,16 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/passwordprofile?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/organization?view=graph-rest-1.0"
       ],
-      "blockedReason": "The current operation documentation does not declare this exact method and path."
+      "blockedReason": "The current operation documentation does not declare this exact method and path.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/user-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/user?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields.",
+        "constraints": "Synced and formerly synced properties need cloud-authority checks. The whole contract remains blocked for directory implementation."
+      }
     },
     "detection": {
       "kind": "key",
@@ -10448,7 +11214,15 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/group?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/group-post-groups?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/group?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "update": {
       "method": "PATCH",
@@ -10463,7 +11237,6 @@
         "mailNickname",
         "preferredDataLocation",
         "securityEnabled",
-        "uniqueName",
         "visibility"
       ],
       "permissions": [
@@ -10484,7 +11257,18 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/assignedlabel?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/group-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/group?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields.",
+        "excluded": {
+          "uniqueName": "Immutable, read-only alternate key."
+        }
+      }
     },
     "detection": {
       "kind": "key",
@@ -12248,7 +13032,15 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/application?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/agentidentityblueprint?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required. No verified create reconciliation key is established by this parent contract.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/application-post-applications?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/application?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "update": {
       "method": "PATCH",
@@ -12275,7 +13067,6 @@
         "spa",
         "tags",
         "tokenEncryptionKeyId",
-        "uniqueName",
         "web"
       ],
       "permissions": [
@@ -12301,13 +13092,22 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/spaapplication?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/webapplication?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/application-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/application?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields.",
+        "excluded": {
+          "uniqueName": "Immutable, read-only alternate key."
+        }
+      }
     },
     "detection": {
-      "kind": "key",
-      "properties": [
-        "uniqueName"
-      ]
+      "kind": "id",
+      "reason": "The parent create contract establishes displayName only. uniqueName is an immutable alternate key without a verified create contract here. Directory restore needs its own reviewed detection rule."
     },
     "builtIn": "TenuVault connected registration, credentials and federated identity credentials.",
     "dependsOn": [],
@@ -13070,7 +13870,15 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/agentidentityblueprintprincipal?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/agentidentityblueprint?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/serviceprincipal-post-serviceprincipals?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/serviceprincipal?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "update": {
       "method": "PATCH",
@@ -13115,7 +13923,15 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/keycredential?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/permissionScope?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/serviceprincipal-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/serviceprincipal?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "key",
@@ -14453,6 +15269,7 @@
       "properties": [
         "clientId",
         "consentType",
+        "principalId",
         "resourceId",
         "scope"
       ],
@@ -14470,7 +15287,15 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/oauth2permissiongrant?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/oauth2permissiongrant-post?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/oauth2permissiongrant?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "update": {
       "method": "PATCH",
@@ -14493,7 +15318,15 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/serviceprincipal?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute."
+      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/oauth2permissiongrant-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/oauth2permissiongrant?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "key",
@@ -14584,7 +15417,15 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/device?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/device-post-devices?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/device?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "update": {
       "method": "PATCH",
@@ -14594,9 +15435,7 @@
         "accountEnabled",
         "operatingSystem",
         "operatingSystemVersion",
-        "displayName",
-        "isCompliant",
-        "isManaged"
+        "displayName"
       ],
       "permissions": [
         "Directory.AccessAsUser.All"
@@ -14611,7 +15450,19 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/device?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute."
+      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/device-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/device?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields.",
+        "excluded": {
+          "isCompliant": "Only Intune or an approved MDM application can update this state.",
+          "isManaged": "Only Intune or an approved MDM application can update this state."
+        }
+      }
     },
     "detection": {
       "kind": "properties",
@@ -15663,7 +16514,15 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/security-ruleschedule?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/enums-security?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/security-rulesroot-post-detectionrules?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/security-detectionrule?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "update": {
       "method": "PATCH",
@@ -15693,7 +16552,15 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/security-ruleschedule?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/enums-security?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute."
+      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/security-detectionrule-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/security-detectionrule?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "properties",
@@ -15829,7 +16696,15 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/security-workbook?view=graph-rest-beta",
         "https://learn.microsoft.com/en-us/graph/api/resources/security-workbookcontent?view=graph-rest-beta"
       ],
-      "blockedReason": "Current resource documentation describes PUT upsert, but the operation page declares PATCH. No exact local security workbook contract settles the discrepancy. Blocked pending authoritative alignment."
+      "blockedReason": "Current resource documentation describes PUT upsert, but the operation page declares PATCH. No exact local security workbook contract settles the discrepancy. Blocked pending authoritative alignment.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/security-post-workbooks?view=graph-rest-beta",
+          "https://learn.microsoft.com/en-us/graph/api/resources/security-workbook?view=graph-rest-beta"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "update": {
       "method": "PATCH",
@@ -15851,7 +16726,15 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/security-workbookcontent?view=graph-rest-beta"
       ],
-      "blockedReason": "Current resource documentation describes PUT upsert, but the operation page declares PATCH. No exact local security workbook contract settles the discrepancy. Blocked pending authoritative alignment."
+      "blockedReason": "Current resource documentation describes PUT upsert, but the operation page declares PATCH. No exact local security workbook contract settles the discrepancy. Blocked pending authoritative alignment.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/security-workbook-update?view=graph-rest-beta",
+          "https://learn.microsoft.com/en-us/graph/api/resources/security-workbook?view=graph-rest-beta"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "properties",
@@ -15900,13 +16783,11 @@
       "properties": [
         "attackTechnique",
         "attackType",
-        "createdBy",
         "displayName",
         "durationInDays",
         "endUserNotificationSetting",
         "includedAccountTarget",
         "landingPage",
-        "lastModifiedBy",
         "launchDateTime",
         "loginPage",
         "oAuthConsentAppDetail",
@@ -15936,7 +16817,19 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/payload?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/trainingsetting?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/attacksimulationroot-post-simulation?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/simulation?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields.",
+        "excluded": {
+          "createdBy": "Service audit identity, not restored.",
+          "lastModifiedBy": "Service audit identity, not restored."
+        }
+      }
     },
     "update": {
       "method": "PATCH",
@@ -15967,20 +16860,26 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/accounttargetcontent?view=graph-rest-1.0",
         "https://learn.microsoft.com/en-us/graph/api/resources/payload?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute."
+      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/simulation-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/simulation?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "properties",
       "properties": [
         "attackTechnique",
         "attackType",
-        "createdBy",
         "displayName",
         "durationInDays",
         "endUserNotificationSetting",
         "includedAccountTarget",
         "landingPage",
-        "lastModifiedBy",
         "launchDateTime",
         "loginPage",
         "oAuthConsentAppDetail",
@@ -16072,14 +16971,11 @@
       "path": "security/attackSimulation/trainingCampaigns",
       "version": "beta",
       "properties": [
-        "createdBy",
-        "createdDateTime",
         "description",
         "displayName",
         "endUserNotificationSetting",
         "excludedAccountTarget",
         "includedAccountTarget",
-        "lastModifiedDateTime",
         "trainingSetting",
         "campaignSchedule"
       ],
@@ -16101,21 +16997,31 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/trainingsetting?view=graph-rest-beta",
         "https://learn.microsoft.com/en-us/graph/api/resources/campaignschedule?view=graph-rest-beta"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/attacksimulationroot-post-trainingcampaigns?view=graph-rest-beta",
+          "https://learn.microsoft.com/en-us/graph/api/resources/trainingcampaign?view=graph-rest-beta"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields.",
+        "excluded": {
+          "createdBy": "Service audit identity, not restored.",
+          "createdDateTime": "Service creation metadata, not restored.",
+          "lastModifiedDateTime": "Service modification metadata, not restored."
+        }
+      }
     },
     "update": {
       "method": "PATCH",
       "path": "security/attackSimulation/trainingCampaigns/{trainingCampaignId}",
       "version": "beta",
       "properties": [
-        "createdBy",
-        "createdDateTime",
         "description",
         "displayName",
         "endUserNotificationSetting",
         "excludedAccountTarget",
         "includedAccountTarget",
-        "lastModifiedDateTime",
         "trainingSetting",
         "campaignSchedule"
       ],
@@ -16136,19 +17042,29 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/trainingsetting?view=graph-rest-beta",
         "https://learn.microsoft.com/en-us/graph/api/resources/campaignschedule?view=graph-rest-beta"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute."
+      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/trainingcampaign-update?view=graph-rest-beta",
+          "https://learn.microsoft.com/en-us/graph/api/resources/trainingcampaign?view=graph-rest-beta"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields.",
+        "excluded": {
+          "createdBy": "Service audit identity, not restored.",
+          "createdDateTime": "Service creation metadata, not restored.",
+          "lastModifiedDateTime": "Service modification metadata, not restored."
+        }
+      }
     },
     "detection": {
       "kind": "properties",
       "properties": [
-        "createdBy",
-        "createdDateTime",
         "description",
         "displayName",
         "endUserNotificationSetting",
         "excludedAccountTarget",
         "includedAccountTarget",
-        "lastModifiedDateTime",
         "trainingSetting",
         "campaignSchedule"
       ]
@@ -16336,7 +17252,15 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/security-emailthreatsubmissionpolicy?view=graph-rest-beta"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute."
+      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/security-emailthreatsubmissionpolicy-post-emailthreatsubmissionpolicies?view=graph-rest-beta",
+          "https://learn.microsoft.com/en-us/graph/api/resources/security-emailthreatsubmissionpolicy?view=graph-rest-beta"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "update": {
       "method": "PATCH",
@@ -16367,7 +17291,15 @@
       ],
       "propertyEvidence": "request-body-table",
       "propertyCoverage": "top-level",
-      "schemaDocumentation": []
+      "schemaDocumentation": [],
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/security-emailthreatsubmissionpolicy-update?view=graph-rest-beta",
+          "https://learn.microsoft.com/en-us/graph/api/resources/security-emailthreatsubmissionpolicy?view=graph-rest-beta"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "properties",
@@ -16462,7 +17394,15 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/security-sensorsettings?view=graph-rest-1.0"
       ],
-      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute."
+      "blockedReason": "Nested or polymorphic request properties require a closed type-specific schema before this contract can execute.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/security-sensor-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/security-sensor?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "properties",
@@ -16553,7 +17493,15 @@
       "propertyEvidence": "request-body-table",
       "propertyCoverage": "top-level",
       "schemaDocumentation": [],
-      "blockedReason": "Current documentation uses PATCH; the index exposes POST. A GET cannot settle write-method support. Blocked pending authoritative alignment."
+      "blockedReason": "Current documentation uses PATCH; the index exposes POST. A GET cannot settle write-method support. Blocked pending authoritative alignment.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/security-autoauditingconfiguration-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/security-autoauditingconfiguration?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "singleton"
@@ -16657,7 +17605,15 @@
       "schemaDocumentation": [
         "https://learn.microsoft.com/en-us/graph/api/resources/securityvendorinformation?view=graph-rest-1.0"
       ],
-      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required."
+      "blockedReason": "The documentation gives required properties or examples, not a complete writable payload contract. A closed type-specific request builder is required.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/securescorecontrolprofile-update?view=graph-rest-1.0",
+          "https://learn.microsoft.com/en-us/graph/api/resources/securescorecontrolprofile?view=graph-rest-1.0"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields."
+      }
     },
     "detection": {
       "kind": "properties",
@@ -16712,7 +17668,16 @@
         "https://learn.microsoft.com/en-us/graph/api/resources/unifiedroledefinition?view=graph-rest-beta",
         "https://learn.microsoft.com/en-us/graph/api/resources/unifiedrolepermission?view=graph-rest-beta"
       ],
-      "blockedReason": "The Defender section of the operation page links permission include 3, but that file declares Directory permissions and include 2 declares Defender permissions. Provider permission evidence is inconsistent. Blocked pending authoritative alignment."
+      "blockedReason": "The Defender section of the operation page links permission include 3, but that file declares Directory permissions and include 2 declares Defender permissions. Provider permission evidence is inconsistent. Blocked pending authoritative alignment.",
+      "propertyAudit": {
+        "date": "2026-11-17",
+        "sources": [
+          "https://learn.microsoft.com/en-us/graph/api/rbacapplication-post-roledefinitions?view=graph-rest-beta",
+          "https://learn.microsoft.com/en-us/graph/api/resources/unifiedroledefinition?view=graph-rest-beta"
+        ],
+        "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields.",
+        "constraints": "Role properties are writable only on custom definitions. Built-in definitions remain blocked."
+      }
     },
     "update": null,
     "detection": {

@@ -10,6 +10,7 @@ export interface WriteContract {
   documentation: string
   index: string
   blockedReason?: string
+  propertyAudit?: { date: string; sources: string[]; result: string; excluded?: Record<string, string>; constraints?: string }
   propertyEvidence?: string
   propertyCoverage?: string
   schemaDocumentation?: string[]
@@ -23,7 +24,7 @@ export interface RestoreMatrixRow {
   create: WriteContract | null
   update: WriteContract | null
   supplementalWrites: Array<{ method: string; path: string; properties: string[]; permissions: string[]; documentation: string; permissionDocumentation: string[]; index: string; indexPath?: string; blockedReason: string }>
-  detection: { kind: string; property?: string; properties?: string[] }
+  detection: { kind: string; property?: string; properties?: string[]; reason?: string }
   builtIn: string
   dependsOn: string[]
   reason: string
