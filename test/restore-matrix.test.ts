@@ -19,9 +19,16 @@ describe("restore write matrix", () => {
       expect(row.builtIn).not.toBe("")
       expect(row.verification.resourceFound).toBe(true)
       expect(row.verification.resourceDocumentation).toMatch(/^https:\/\/learn.microsoft.com\/en-us\/graph\/api\/resources\//)
+      for (const supplemental of row.supplementalWrites) {
+        expect(supplemental.documentation).toMatch(/^https:\/\/learn.microsoft.com\/en-us\/graph\/api\//)
+        expect(supplemental.blockedReason).toContain("Evidence only")
+      }
       for (const write of [row.create, row.update].filter(value => value !== null)) {
         expect(write.documentation).toMatch(/^https:\/\/learn.microsoft.com\/en-us\/graph\/api\//)
         expect(write.path).not.toMatch(/^https?:/)
+        expect(write.propertyEvidence).toMatch(/request-body-table|resource-and-examples/)
+        if (write.propertyCoverage === "partial" || write.schemaDocumentation?.length || write.index !== "matched") expect(write.blockedReason).toBeTruthy()
+        expect(write.permissionDocumentation?.length).toBeGreaterThan(0)
         expect(write.properties.length).toBeGreaterThan(0)
         if (write.index === "matched") {
           const normalize = (path: string) => path.replace(/\{[^}]+\}/g, "{}").replace(/\/$/, "")
@@ -58,7 +65,7 @@ describe("restore write matrix", () => {
     // The transport itself also refuses a backup-only type, even if called without the executor.
     await expect(io.write(step, desired)).rejects.toThrow()
     expect(creates).toBe(0)
-    if (need === "unsupported" || write.index !== "matched" || !write.permissions.length || row.disposition !== "configuration" || write.path.includes("{organizationId}") || (row.detection.properties ?? []).some(key => !properties.includes(key))) return
+    if (need === "unsupported" || write.index !== "matched" || write.blockedReason || !write.permissions.length || row.disposition !== "configuration" || write.path.includes("{organizationId}") || (row.detection.properties ?? []).some(key => !properties.includes(key))) return
     const memory = new Map<string, string>()
     const journal = new GuardedRunJournal({ get: key => memory.get(key) ?? null, set: (key, value) => { memory.set(key, value) }, delete: key => { memory.delete(key) } })
     const input: GuardedRun = { version: 1, tenant: "tenant", id: "run", actor, origin: "restore", entries: [{ step, state: "pending" }], mappings: [] }

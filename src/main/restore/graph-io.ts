@@ -16,6 +16,7 @@ export function guardedGraphIO(token: string, actor: RestoreActor, references: G
     const row = restoreMatrixRow(step.folder)
     const write = row?.[step.operation]
     if (!row || !write || write.index !== "matched" || !write.properties.length || !write.permissions.length) throw new RestoreSafetyError("This write contract has not been verified against the Graph index and Microsoft documentation.")
+    if (write.blockedReason) throw new RestoreSafetyError(write.blockedReason)
     const granted = grantedPermissions(token)
     const manifestBlocker = restorePermissionBlocker(step.folder, granted)
     if (manifestBlocker) throw new RestoreSafetyError(manifestBlocker)
@@ -69,6 +70,7 @@ export function guardedGraphIO(token: string, actor: RestoreActor, references: G
       const type = typeForFolder(step.folder)
       if (!type || restoreCapability(type) === "none") throw new RestoreSafetyError(type?.limitation ?? "This type cannot be restored.")
       const { row, write, root } = pathOf(step, targetId)
+      if (Object.keys(body).some(key => !write.properties.includes(key))) throw new RestoreSafetyError("The write body contains properties outside the verified Graph contract.")
       // Directory and action-specific writers are intentionally deferred. This adapter cannot turn
       // a research row or a caller-provided path into permission to write them.
       if (row.disposition !== "configuration") throw new RestoreSafetyError("This type needs its own reviewed restore implementation.")

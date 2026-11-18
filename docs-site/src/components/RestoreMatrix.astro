@@ -10,10 +10,10 @@ import rows from '../../../src/shared/intune/restore-matrix.json';
     <td>{row.update ? <><code>{row.update.method} /{row.update.path}</code><p>{row.update.version}</p></> : 'No verified parent update contract'}</td>
     <td>{['create', 'update'].map(operation => {
       const write = row[operation as 'create' | 'update'];
-      return write && <p><strong>{operation}</strong>: {write.properties.join(', ') || 'Needs further property verification'}<br />{write.permissions.join(', ') || 'Needs permission verification'}</p>;
+      return write && <p><strong>{operation}</strong>: {write.properties.join(', ') || 'Needs further property verification'}<br />{write.permissions.join(', ') || 'Needs permission verification'}<br />{'propertyCoverage' in write ? `Property coverage: ${write.propertyCoverage}.` : ''}{'blockedReason' in write && <strong> Blocked: {write.blockedReason}</strong>}</p>;
     })}</td>
     <td><p>{row.detection.kind}: {'properties' in row.detection ? row.detection.properties?.join(', ') : ''}</p><p>{row.dependsOn.join(', ') || 'No type prerequisite declared'}</p></td>
-    <td><p>{row.builtIn}</p><p>{row.reason}</p></td>
+    <td><p>{row.builtIn}</p><details><summary>Action and sub-resource evidence ({row.supplementalWrites.length})</summary>{row.supplementalWrites.map(write => <p><a href={write.documentation}><code>{write.method} /{write.path}</code></a><br />Properties: {write.properties.join(', ') || 'No complete request property table'}. Permissions: {write.permissions.join(', ') || 'Unresolved'}. {write.blockedReason}</p>)}</details><p>{row.reason}</p></td>
     <td><a href={row.verification.resourceDocumentation}>Microsoft resource</a>{['create', 'update'].map(operation => {
       const write = row[operation as 'create' | 'update'];
       return write && <p><a href={write.documentation}>{operation} documentation</a>: index {write.index}</p>;

@@ -9,6 +9,11 @@ export interface WriteContract {
   permissions: string[]
   documentation: string
   index: string
+  blockedReason?: string
+  propertyEvidence?: string
+  propertyCoverage?: string
+  schemaDocumentation?: string[]
+  permissionDocumentation?: string[]
 }
 export interface RestoreMatrixRow {
   folder: string
@@ -17,6 +22,7 @@ export interface RestoreMatrixRow {
   readPath: string
   create: WriteContract | null
   update: WriteContract | null
+  supplementalWrites: Array<{ method: string; path: string; properties: string[]; permissions: string[]; documentation: string; permissionDocumentation: string[]; blockedReason: string }>
   detection: { kind: string; property?: string; properties?: string[] }
   builtIn: string
   dependsOn: string[]
