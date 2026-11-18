@@ -23,7 +23,7 @@ export interface GuardedStep {
 }
 export interface GuardedEntry {
   step: GuardedStep
-  state: "pending" | "captured" | "uncertain" | "applied" | "blocked" | "failed"
+  state: "pending" | "captured" | "uncertain" | "applied" | "blocked" | "failed" | "failed-before-send"
   before?: Item | null
   sent?: Item
   targetId?: string
@@ -44,14 +44,14 @@ export interface GuardedRun {
 export interface GuardedIO {
   token: string
   /** A complete scan of current Intune and Conditional Access references, after replacements. */
-  replacedReferences?: (mappings: readonly RestoreMapping[]) => Promise<ReplacedReference[]>
+  replacedReferences?: (mappings: readonly RestoreMapping[], signal?: AbortSignal) => Promise<ReplacedReference[]>
   type: (folder: string) => IntuneType
   /** Reads through the descriptor's singleton, fixed key or object ID rule. */
   read: (step: GuardedStep, targetId?: string) => Promise<Item | null>
   /** Complete descriptor-based lookup. Must reject an incomplete list, never match a guessed name. */
   findCreated: (step: GuardedStep, sent: Item) => Promise<Item[]>
   references: (step: GuardedStep, current: Item | null, desired: Item) => Promise<SafetyReferences>
-  write: (step: GuardedStep, body: Item, targetId?: string) => Promise<{ id?: string }>
+  write: (step: GuardedStep, body: Item, targetId: string | undefined, beforeSend: () => void) => Promise<{ id?: string }>
 }
 const secretKey = /^(?:passwordProfile|password|passwordCredentials|keyCredentials|clientSecret|privateKey|sharedSecret|secretKey|tokenSeed|seed|tunnelKey|secret|accessToken|refreshToken|clientAssertion|pfx|pkcs12|secretText|authenticationConfiguration|certificateData|deploymentAccessKey)$/i
 function assertNoSecrets(value: unknown): void {
@@ -73,14 +73,18 @@ const tenantKey = (tenant: string) => `restore.guarded.${encodeURIComponent(tena
 /** All runs for a tenant share one atomic encrypted value, including unresolved earlier writes. */
 export class GuardedRunJournal {
   constructor(private readonly store: KeyValueStore) {}
-  private runs(tenant: string): Record<string, GuardedRun> {
+  private history(tenant: string): { version: 2; runs: Record<string, GuardedRun>; mappings: RestoreMapping[] } {
     const raw = this.store.get(tenantKey(tenant))
-    if (raw === null) return {}
-    let runs: Record<string, GuardedRun>
-    try { runs = JSON.parse(raw) as Record<string, GuardedRun> } catch { throw new RestoreSafetyError("Restore history could not be verified. Nothing was written.") }
-    if (!runs || typeof runs !== "object" || Array.isArray(runs) || Object.entries(runs).some(([id, run]) => !run || run.version !== 1 || run.tenant.toLowerCase() !== tenant.toLowerCase() || run.id !== id || !Array.isArray(run.entries) || !Array.isArray(run.mappings))) throw new RestoreSafetyError("Restore history could not be verified. Nothing was written.")
-    return runs
+    if (raw === null) return { version: 2, runs: {}, mappings: [] }
+    let parsed
+    try { parsed = JSON.parse(raw) } catch { throw new RestoreSafetyError("Restore history could not be verified. Nothing was written.") }
+    const runs = parsed?.version === 2 ? parsed.runs : parsed
+    const mappings: RestoreMapping[] = parsed?.version === 2 ? parsed.mappings : []
+    if (!Array.isArray(mappings)) throw new RestoreSafetyError("Restore mappings could not be verified.")
+    if (!runs || typeof runs !== "object" || Array.isArray(runs) || Object.entries(runs as Record<string, GuardedRun>).some(([id, run]) => !run || run.version !== 1 || run.tenant.toLowerCase() !== tenant.toLowerCase() || run.id !== id || !Array.isArray(run.entries) || !Array.isArray(run.mappings))) throw new RestoreSafetyError("Restore history could not be verified. Nothing was written.")
+    return { version: 2, runs, mappings }
   }
+  private runs(tenant: string): Record<string, GuardedRun> { return this.history(tenant).runs }
   load(tenant: string, id: string): GuardedRun | undefined {
     const runs = this.runs(tenant)
     return Object.hasOwn(runs, id) ? runs[id] : undefined
@@ -88,13 +92,18 @@ export class GuardedRunJournal {
   list(tenant: string): GuardedRun[] { return Object.values(this.runs(tenant)) }
   save(run: GuardedRun): void {
     assertNoSecrets(run)
-    const runs = this.runs(run.tenant)
-    if (!Object.hasOwn(runs, run.id) && Object.keys(runs).length >= 1000) throw new RestoreSafetyError("Restore history is full. Review earlier runs before continuing.")
-    this.store.set(tenantKey(run.tenant), JSON.stringify({ ...runs, [run.id]: run }))
+    const history = this.history(run.tenant)
+    history.runs[run.id] = run
+    // Mappings and unresolved writes survive independently of the bounded settled history.
+    for (const previous of Object.values(history.runs)) for (const mapping of previous.mappings) rememberMapping(history.mappings, mapping)
+    const settled = Object.values(history.runs).filter(previous => previous.entries.every(entry => ["applied", "blocked", "failed", "failed-before-send"].includes(entry.state)))
+    for (const previous of settled.filter(previous => previous.id !== run.id).slice(0, Math.max(0, settled.length - 1000))) delete history.runs[previous.id]
+    this.store.set(tenantKey(run.tenant), JSON.stringify(history))
   }
   mappings(tenant: string): RestoreMapping[] {
-    const mappings: RestoreMapping[] = []
-    for (const run of Object.values(this.runs(tenant))) for (const mapping of run.mappings) rememberMapping(mappings, mapping)
+    const history = this.history(tenant)
+    const mappings: RestoreMapping[] = [...history.mappings]
+    for (const run of Object.values(history.runs)) for (const mapping of run.mappings) rememberMapping(mappings, mapping)
     return mappings
   }
   hasEarlierUnanswered(run: GuardedRun, step: GuardedStep): boolean {
@@ -115,9 +124,11 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
   try {
     requireRestoreActor(io.token, input.actor)
     const previous = journal.load(input.tenant, input.id)
-    if (previous && canonical([previous.actor, previous.origin, previous.source, previous.entries.map(entry => entry.step)]) !== canonical([input.actor, input.origin, input.source, input.entries.map(entry => entry.step)])) throw new RestoreSafetyError("The restore identity or plan changed. Preview again with a new run ID.")
+    const identity = ({ recoveryAccountIds: _recovery, ...connection }: RestoreActor) => connection
+    if (previous && canonical([identity(previous.actor), previous.origin, previous.source, previous.entries.map(entry => entry.step)]) !== canonical([identity(input.actor), input.origin, input.source, input.entries.map(entry => entry.step)])) throw new RestoreSafetyError("The restore identity or plan changed. Preview again with a new run ID.")
     const run = previous ?? structuredClone(input)
-    if (!previous) for (const mapping of journal.mappings(run.tenant)) rememberMapping(run.mappings, mapping)
+    run.actor = structuredClone(input.actor)
+    for (const mapping of journal.mappings(run.tenant)) rememberMapping(run.mappings, mapping)
     if (run.actor.tenantId.toLowerCase() !== run.tenant.toLowerCase()) throw new RestoreSafetyError("The restore belongs to another tenant.")
     journal.save(run)
     const dependencies = (step: GuardedStep) => [...new Set([...step.requires, ...run.entries.filter(entry => restoreMatrixRow(step.folder)?.dependsOn.includes(entry.step.folder)).map(entry => entry.step.key)])]
@@ -128,16 +139,12 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
     for (const itemKey of order) {
       if (signal?.aborted) break
       const entry = run.entries.find(entry => entry.step.key === itemKey)!
-      if (["applied", "blocked", "failed"].includes(entry.state)) continue
+      if (["applied", "blocked", "failed", "failed-before-send"].includes(entry.state)) continue
       const step = entry.step
       if (reconcileOnly && entry.state !== "uncertain") continue
       const prerequisite = dependencies(step).find(required => run.entries.find(entry => entry.step.key === required)?.state !== "applied")
       if (prerequisite) { entry.state = "blocked"; entry.reason = `Prerequisite ${prerequisite} did not complete.`; journal.save(run); continue }
       try {
-        const type = io.type(step.folder)
-        if (["none", "metadata"].includes(restoreCapability(type)) || (restoreCapability(type) === "singleton" && step.operation === "create")) throw new RestoreSafetyError(type.limitation ?? "This type cannot be restored.")
-        const originBlock = restoreOriginBlocker(step.folder, run.origin)
-        if (originBlock) throw new RestoreSafetyError(originBlock)
         if (entry.state === "uncertain") {
           // Absence after an unanswered create is not proof of failure: Graph may be eventually consistent.
           const matches = step.operation === "create" ? await io.findCreated(step, entry.sent!) : [await io.read(step, entry.targetId)].filter((item): item is Item => item !== null)
@@ -151,8 +158,13 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
           rememberMapping(run.mappings, { kind: "objectId", folder: step.folder, source: step.sourceId, target: id })
           entry.state = "applied"; delete entry.reason; journal.save(run); continue
         }
+        const type = io.type(step.folder)
+        if (["none", "metadata"].includes(restoreCapability(type)) || (restoreCapability(type) === "singleton" && step.operation === "create")) throw new RestoreSafetyError(type.limitation ?? "This type cannot be restored.")
+        const originBlock = restoreOriginBlocker(step.folder, run.origin)
+        if (originBlock) throw new RestoreSafetyError(originBlock)
         if (journal.hasEarlierUnanswered(run, step)) throw new RestoreSafetyError("An earlier restore has an unanswered write for this object. Resume that run before starting another.")
         const mapped = mappedReference(run.mappings, "objectId", step.folder, step.sourceId)
+        if (mapped && step.targetId && mapped.toLowerCase() !== step.targetId.toLowerCase()) throw new RestoreSafetyError("The target mapping changed after this preview. Preview this item again.")
         const current = await io.read(step, entry.targetId ?? step.targetId ?? mapped)
         if (restoreFingerprint(current) !== step.preview) throw new RestoreSafetyError("The tenant changed after this preview. Preview this item again.")
         if (step.operation === "create" && mapped && current === null) throw new RestoreSafetyError("The previously mapped object is missing. Review its mapping before recreating it again.")
@@ -183,9 +195,20 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
         // Only touched objects are captured, never a whole service. A failed save prevents the write.
         entry.before = current; entry.sent = desired; entry.targetId = entry.targetId ?? step.targetId ?? mapped; entry.state = "captured"; journal.save(run)
         if (signal?.aborted) break
-        entry.state = "uncertain"; journal.save(run)
         let result: { id?: string }
-        try { result = await io.write(step, desired, entry.targetId) } catch (error) { if (error instanceof RestoreSafetyError) { entry.state = error instanceof RestoreWriteRefusedError ? "failed" : "blocked"; throw error } entry.reason = "The write did not return a confirmed result. It must be read back before any retry."; journal.save(run); continue }
+        try {
+          result = await io.write(step, desired, entry.targetId, () => {
+            entry.state = "uncertain"; journal.save(run)
+          })
+        } catch (error) {
+          if (entry.state === "captured") {
+            entry.state = "failed-before-send"
+            entry.reason = "The write was not sent. Preview this item again."
+          } else if (error instanceof RestoreWriteRefusedError) {
+            entry.state = "failed"; entry.reason = error.message
+          } else entry.reason = "The write did not return a confirmed result. It must be read back before any retry."
+          journal.save(run); continue
+        }
         const id = result.id ?? entry.targetId
         if (!isGraphId(id)) { entry.reason = "The write did not return an object ID. It must be read back before continuing."; journal.save(run); continue }
         entry.targetId = id
@@ -201,7 +224,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
     if (replacements.length) {
       try {
         if (!io.replacedReferences) throw new Error("Reference scan unavailable")
-        run.replacedReferences = await io.replacedReferences(replacements)
+        run.replacedReferences = await io.replacedReferences(replacements, signal)
         delete run.referenceWarning
       } catch { run.referenceWarning = "The Intune and Conditional Access reference scan did not complete. Review references to replaced IDs before activating restored policies." }
       journal.save(run)

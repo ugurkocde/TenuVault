@@ -24,9 +24,11 @@ export function guardedGraphIO(token: string, actor: RestoreActor, references: G
     if (step.properties.some(key => !write.properties.includes(key)) || Object.keys(step.desired).some(key => !write.properties.includes(key))) throw new RestoreSafetyError("The write contains properties outside the verified Graph contract.")
     return { row, write }
   }
-  const request = async (url: string, method = "GET", body?: Item, etag?: string): Promise<Item | null> => {
+  const request = async (url: string, method = "GET", body?: Item, etag?: string, beforeSend?: () => void): Promise<Item | null> => {
     requireRestoreActor(token, actor)
-    const response = await fetchImpl(url, { method, headers: { Authorization: `Bearer ${token}`, ...(body ? { "Content-Type": "application/json" } : {}), ...(etag ? { "If-Match": etag } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(60_000) })
+    const options: RequestInit = { method, headers: { Authorization: `Bearer ${token}`, ...(body ? { "Content-Type": "application/json" } : {}), ...(etag ? { "If-Match": etag } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(60_000) }
+    beforeSend?.()
+    const response = await fetchImpl(url, options)
     if (method === "GET" && response.status === 404) return null
     if (method !== "GET" && response.status >= 400 && response.status < 500 && response.status !== 408) throw new RestoreWriteRefusedError(response.status)
     if (!response.ok) throw new Error("Microsoft Graph did not confirm the restore request.")
@@ -66,7 +68,7 @@ export function guardedGraphIO(token: string, actor: RestoreActor, references: G
       if ([current, desired].some(value => value?.isBuiltIn === true || value?.policyType === "builtIn" || value?.source === "global" || (typeof value?.id === "string" && value.id.startsWith("microsoft-")))) throw new RestoreSafetyError("Built-in and Microsoft-managed objects are never restored.")
       return references(step, current, desired)
     },
-    write: async (step, body, targetId) => {
+    write: async (step, body, targetId, beforeSend) => {
       const type = typeForFolder(step.folder)
       if (!type || ["none", "metadata"].includes(restoreCapability(type)) || (restoreCapability(type) === "singleton" && step.operation === "create")) throw new RestoreSafetyError(type?.limitation ?? "This type cannot be restored.")
       const { row, write, root } = pathOf(step, targetId)
@@ -82,7 +84,7 @@ export function guardedGraphIO(token: string, actor: RestoreActor, references: G
       }
       const current = step.operation === "update" ? await request(root + (row.detection.kind === "singleton" ? row.readPath : `${row.readPath}/${encodeURIComponent(targetId!)}`)) : null
       if (step.operation === "update" && restoreFingerprint(current) !== step.preview) throw new RestoreSafetyError("The tenant changed after this preview. Preview this item again.")
-      const response = await request(root + path, write.method, body, typeof current?.["@odata.etag"] === "string" ? current["@odata.etag"] : undefined)
+      const response = await request(root + path, write.method, body, typeof current?.["@odata.etag"] === "string" ? current["@odata.etag"] : undefined, beforeSend)
       return { id: typeof response?.id === "string" ? response.id : targetId ?? (row.detection.kind === "singleton" ? step.sourceId : undefined) }
     },
   }

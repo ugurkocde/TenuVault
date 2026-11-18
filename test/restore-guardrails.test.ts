@@ -24,7 +24,7 @@ function setup(count = 3) {
     read: async (_step, id) => id ? objects.get(id) ?? null : null,
     findCreated: async (step) => [...objects.values()].filter(value => value.displayName === step.desired.displayName),
     references: async () => references,
-    write: async (_step, body) => { const id = `new${++writes}`; objects.set(id, { ...body, id }); return { id } },
+    write: async (_step, body, _id, beforeSend) => { beforeSend(); const id = `new${++writes}`; objects.set(id, { ...body, id }); return { id } },
   }
   return { journal, objects, input, io, memory, writes: () => writes }
 }
@@ -80,10 +80,10 @@ describe("durable touched-object journal", () => {
   it("captures before the write, saves every created ID, resumes without duplicate writes and reports partial per item", async () => {
     const s = setup()
     const write = s.io.write
-    s.io.write = async (step, body, id) => {
+    s.io.write = async (step, body, id, beforeSend) => {
       const entry = s.journal.load("tenant", "run")!.entries.find(entry => entry.step.key === step.key)!
-      expect(entry).toMatchObject({ before: null, sent: body, state: "uncertain" })
-      return write(step, body, id)
+      expect(entry).toMatchObject({ before: null, sent: body, state: "captured" })
+      return write(step, body, id, beforeSend)
     }
     expect((await executeGuardedRun(s.journal, s.input, s.io)).status).toBe("complete")
     expect(s.journal.load("tenant", "run")!.mappings).toHaveLength(3)
@@ -94,7 +94,7 @@ describe("durable touched-object journal", () => {
     const s = setup()
     const controller = new AbortController()
     const write = s.io.write
-    s.io.write = async (step, body, id) => { const result = await write(step, body, id); if (step.key === `step${boundary}`) controller.abort(); return result }
+    s.io.write = async (step, body, id, beforeSend) => { const result = await write(step, body, id, beforeSend); if (step.key === `step${boundary}`) controller.abort(); return result }
     const first = await executeGuardedRun(s.journal, s.input, s.io, controller.signal)
     expect(first.status).toBe(boundary === 2 ? "complete" : "partial")
     expect((await executeGuardedRun(s.journal, s.input, s.io)).status).toBe("complete")
@@ -103,7 +103,7 @@ describe("durable touched-object journal", () => {
   it("reconciles a committed create whose response timed out before resuming its dependents", async () => {
     const s = setup()
     const write = s.io.write
-    s.io.write = async (step, body, id) => { await write(step, body, id); throw new Error("timeout") }
+    s.io.write = async (step, body, id, beforeSend) => { await write(step, body, id, beforeSend); throw new Error("timeout") }
     const first = await executeGuardedRun(s.journal, s.input, s.io)
     expect(first).toMatchObject({ status: "partial", run: { entries: [{ state: "uncertain" }, { state: "blocked" }, { state: "blocked" }] } })
     s.io.write = write
@@ -116,7 +116,7 @@ describe("durable touched-object journal", () => {
   it("never retries an unanswered create based on absence or an ambiguous match", async () => {
     for (const matches of [[], [{ id: "one", displayName: "Policy 0" }, { id: "two", displayName: "Policy 0" }]]) {
       const s = setup(1)
-      s.io.write = async () => { throw new Error("secret tenant error") }
+      s.io.write = async (_step, _body, _id, beforeSend) => { beforeSend(); throw new Error("secret tenant error") }
       await executeGuardedRun(s.journal, s.input, s.io)
       s.io.findCreated = async () => matches
       const retry = await executeGuardedRun(s.journal, s.input, s.io)
@@ -149,7 +149,7 @@ describe("durable touched-object journal", () => {
     const step = s.input.entries[0]!.step
     Object.assign(step, { folder: "OAuth2PermissionGrants", operation: "update", targetId: "existing", properties: ["scope", "nested", "displayName"], desired: { scope: "User.Read", nested: { owners: ["add"] }, displayName: "After" }, preview: restoreFingerprint(current) })
     let attempts = 0
-    s.io.write = async (_step, body, id) => { attempts++; s.objects.set(id!, { ...body, id: id! }); throw new Error("timeout") }
+    s.io.write = async (_step, body, id, beforeSend) => { beforeSend(); attempts++; s.objects.set(id!, { ...body, id: id! }); throw new Error("timeout") }
     const first = await executeGuardedRun(s.journal, s.input, s.io)
     expect(first.run.entries[0]).toMatchObject({ state: "uncertain", before: current, sent: { scope: "Mail.Read User.Read", nested: { owners: ["keep", "add"] } } })
     expect((await executeGuardedRun(s.journal, s.input, s.io)).status).toBe("complete")
@@ -200,7 +200,7 @@ describe("durable touched-object journal", () => {
     for (const refused of [false, true]) {
       const s = setup(1)
       const write = s.io.write
-      s.io.write = async () => { if (refused) throw new RestoreWriteRefusedError(403); throw new Error("timeout") }
+      s.io.write = async (_step, _body, _id, beforeSend) => { beforeSend(); if (refused) throw new RestoreWriteRefusedError(403); throw new Error("timeout") }
       const first = await executeGuardedRun(s.journal, s.input, s.io)
       expect(first.run.entries[0]!.state).toBe(refused ? "failed" : "uncertain")
       s.io.write = write
@@ -224,6 +224,50 @@ describe("durable touched-object journal", () => {
     const deleted = await executeGuardedRun(s.journal, s.input, s.io)
     expect(deleted.run.entries[0]!.reason).toContain("Review its mapping")
     expect(s.writes()).toBe(1)
+  })
+  it("validates journal mappings even when a preview was already saved", async () => {
+    const s = setup(1)
+    const saved = { ...structuredClone(s.input), id: "prepared" }
+    s.journal.save(saved)
+    await executeGuardedRun(s.journal, s.input, s.io)
+    const result = await executeGuardedRun(s.journal, saved, s.io)
+    expect(result.run.entries[0]!.state).toBe("blocked")
+    expect(s.writes()).toBe(1)
+    saved.mappings = [{ kind: "objectId", folder: "Fixture", source: "old0", target: "conflicting" }]
+    s.journal.save({ ...saved, mappings: [] })
+    await expect(executeGuardedRun(s.journal, saved, s.io)).resolves.toBeDefined()
+    const unsaved = { ...saved, id: "conflict" }
+    await expect(executeGuardedRun(s.journal, unsaved, s.io)).rejects.toThrow("ambiguous")
+  })
+  it("uses fresh recovery protections for later writes while allowing read-only reconciliation", async () => {
+    const s = setup(2), write = s.io.write
+    s.io.write = async (step, body, id, beforeSend) => { await write(step, body, id, beforeSend); throw new Error("lost response") }
+    await executeGuardedRun(s.journal, s.input, s.io)
+    const changed = { ...s.input, actor: { ...actor, recoveryAccountIds: ["new-recovery"] } }
+    const reconciled = await executeGuardedRun(s.journal, changed, s.io, undefined, true)
+    expect(reconciled.run.entries[0]!.state).toBe("applied")
+    s.io.references = async () => ({ ...references, principals: ["new-recovery"] })
+    s.io.write = write
+    const resumed = await executeGuardedRun(s.journal, changed, s.io)
+    expect(resumed.run.entries[1]!.reason).toContain("protected")
+    expect(s.writes()).toBe(1)
+    await expect(executeGuardedRun(s.journal, { ...changed, actor: { ...changed.actor, clientId: "different" } }, s.io)).rejects.toThrow()
+  })
+  it("retains mappings and every unresolved write when settled history reaches its boundary", () => {
+    const s = setup(1)
+    const old = { ...structuredClone(s.input), id: "old", entries: [{ ...s.input.entries[0]!, state: "applied" as const }], mappings: [{ kind: "objectId" as const, folder: "Fixture", source: "old0", target: "new1" }] }
+    // Migrate the original on-disk shape with history already at its boundary.
+    const runs = Object.fromEntries(Array.from({ length: 1000 }, (_, i) => [String(i), { ...old, id: String(i), mappings: i ? [] : old.mappings }]))
+    s.memory.set("restore.guarded.tenant", JSON.stringify(runs))
+    s.journal.save({ ...s.input, id: "unanswered", entries: [{ ...s.input.entries[0]!, state: "uncertain", sent: { displayName: "Policy 0" } }] })
+    s.journal.save({ ...old, id: "1001", mappings: [] })
+    expect(s.journal.list("tenant")).toHaveLength(1001)
+    expect(s.journal.load("tenant", "0")).toBeUndefined()
+    expect(s.journal.load("tenant", "unanswered")!.entries[0]!.state).toBe("uncertain")
+    expect(s.journal.mappings("tenant")).toEqual(old.mappings)
+    expect(s.journal.hasEarlierUnanswered({ ...s.input, id: "fresh" }, s.input.entries[0]!.step)).toBe(true)
+    s.journal.save({ ...old, id: "1002", mappings: [] })
+    expect(s.journal.list("tenant")).toHaveLength(1001)
   })
   it("refuses overlapping execution and a journal that cannot save", async () => {
     const s = setup(1)
@@ -255,4 +299,3 @@ describe("typed reference dependencies", () => {
     expect(dependencyOrder([{ key: "a", requires: ["missing"] }]).blocked.a).toContain("missing")
   })
 })
-

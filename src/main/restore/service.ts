@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { typeForFolder, restoreCapability } from "../../shared/intune/registry"
 import { restoreMatrixRow } from "../../shared/intune/restore-matrix"
+import { mappedReference } from "../../shared/intune/restore-references"
 import { RestoreSafetyError } from "../../shared/intune/restore-guards"
 import { requireRestoreActor } from "./restore-actor"
 import { guardedGraphIO } from "./graph-io"
@@ -14,13 +15,13 @@ import type { RestoreOutcome } from "../../portal/lib/policies/graph-restore"
 export interface RestoreConnection { token: string; tenantId: string; clientId: string; userId: string }
 export class IdentityRestoreService {
   constructor(private readonly journal: GuardedRunJournal, private readonly recovery: RecoveryAccounts, private readonly connection: (tenant: string) => Promise<RestoreConnection>, private readonly fetchImpl: typeof fetch = fetch) {}
-  private async context(tenant: string) {
+  private async context(tenant: string, readOnly = false) {
     const connection = await this.connection(tenant)
     if (connection.tenantId.toLowerCase() !== tenant.toLowerCase()) throw new RestoreSafetyError("This connection belongs to another tenant.")
     const reader = safetyReader(connection.token, this.fetchImpl)
     // Refuse app-only tokens before even the safety reads.
     requireRestoreActor(connection.token, { ...connection, applicationObjectId: "pending", servicePrincipalId: "pending", recoveryAccountIds: [] })
-    const actor = await resolveRestoreActor(reader, connection, this.recovery.get(tenant))
+    const actor = await resolveRestoreActor(reader, connection, readOnly ? [] : this.recovery.get(tenant))
     const io = guardedGraphIO(connection.token, actor, (step, current, desired) => resolveSafetyReferences(reader, step, current, desired), this.fetchImpl, () => referenceSnapshots(connection.token, this.fetchImpl))
     return { actor, io }
   }
@@ -33,8 +34,10 @@ export class IdentityRestoreService {
     if (!contract || Object.keys(request.snapshot).some(key => ![...contract.properties, "id", "@odata.type"].includes(key))) throw new RestoreSafetyError("This snapshot needs a reviewed request builder before restoring.")
     const { actor, io } = await this.context(tenant)
     const step: GuardedStep = { key: "configuration", folder, sourceId: String(request.snapshot.id ?? ""), operation, targetId, properties: contract.properties, desired: Object.fromEntries(contract.properties.filter(key => key in request.snapshot).map(key => [key, request.snapshot[key]!])), preview: "", requires: [] }
-    step.preview = restoreFingerprint(await io.read(step, targetId))
-    const run: GuardedRun = { version: 1, id: randomUUID(), tenant, actor, origin: request.origin, source: { path: request.path, fingerprint: restoreFingerprint(request.snapshot) }, entries: [{ step, state: "pending" }], mappings: [] }
+    const mappings = this.journal.mappings(tenant)
+    step.targetId ??= mappedReference(mappings, "objectId", folder, step.sourceId)
+    step.preview = restoreFingerprint(await io.read(step, step.targetId))
+    const run: GuardedRun = { version: 1, id: randomUUID(), tenant, actor, origin: request.origin, source: { path: request.path, fingerprint: restoreFingerprint(request.snapshot) }, entries: [{ step, state: "pending" }], mappings }
     this.journal.save(run)
     return run
   }
@@ -53,7 +56,7 @@ export class IdentityRestoreService {
   async reconcile(tenant: string, id: string): Promise<void> {
     const run = this.journal.load(tenant, id)
     if (!run) throw new RestoreSafetyError("This restore is unavailable.")
-    const { actor, io } = await this.context(tenant)
+    const { actor, io } = await this.context(tenant, true)
     const readOnly = { ...io, write: async () => { throw new RestoreSafetyError("Resume pending steps from the reviewed restore flow.") } }
     // The runner's reconcile-only mode skips every step that has not already been sent.
     await executeGuardedRun(this.journal, { ...run, actor }, readOnly, undefined, true)

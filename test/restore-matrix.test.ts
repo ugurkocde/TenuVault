@@ -63,12 +63,12 @@ describe("restore write matrix", () => {
     const permissions = [...write.permissions, ...(Array.isArray(need) ? need.flat() : [])]
     const io = guardedGraphIO(token(permissions), actor, references, fetchImpl, async () => [])
     // The transport itself also refuses a backup-only type, even if called without the executor.
-    await expect(io.write(step, desired)).rejects.toThrow()
+    await expect(io.write(step, desired, undefined, () => {})).rejects.toThrow()
     expect(creates).toBe(0)
     if (write.blockedReason) {
       const previous = type.restore
       type.restore = "create"
-      try { await expect(io.write(step, desired)).rejects.toThrow() }
+      try { await expect(io.write(step, desired, undefined, () => {})).rejects.toThrow() }
       finally { if (previous) type.restore = previous; else delete type.restore }
       expect(creates).toBe(0)
       return

@@ -8,6 +8,7 @@ import { referenceSnapshots } from "../src/main/restore/reference-scanner"
 import { bindRestoreConnection, dispatchIdentityRestore, setIdentityRestoreDispatch } from "../src/main/restore/dispatch"
 import { Restorer, type GraphCall } from "../src/portal/lib/policies/graph-restore"
 import { INTUNE_TYPES, typeForFolder, type Item } from "../src/shared/intune/registry"
+import { restoreMatrixRow } from "../src/shared/intune/restore-matrix"
 import { guardRestoreItem } from "../src/shared/intune/restore-guards"
 
 const guid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`
@@ -185,5 +186,90 @@ it("executes only the immutable main-process preview and reconciles through the 
     await service.reconcile(tenant, run.id)
     expect(writes).toBe(1)
     expect([...store.values.values()].join()).not.toContain(token)
+  } finally { type.restore = previous }
+})
+
+it("loads mappings before the real prepared preview and validates newer mappings at execution", async () => {
+  const store = storage(), journal = new GuardedRunJournal(store)
+  const source = guid(40), created = guid(41)
+  const mapping = { kind: "objectId" as const, folder: "CertificateBasedAuthPki", source, target: created }
+  const rowType = typeForFolder("CertificateBasedAuthPki")!, previous = rowType.restore
+  rowType.restore = "create"
+  const contract = restoreMatrixRow("CertificateBasedAuthPki")!.create!, blocked = contract.blockedReason
+  delete contract.blockedReason
+  const calls: string[] = []
+  let exists = false
+  const fetcher = (async (input: RequestInfo | URL, options?: RequestInit) => {
+    const url = new URL(String(input)); calls.push(`${options?.method} ${url.pathname}`)
+    if (options?.method !== "GET") { expect(exists).toBe(false); exists = true; return Response.json({ id: created, displayName: "original name" }) }
+    if (url.pathname.endsWith("applications")) return Response.json({ value: [{ id: app, appId: client }] })
+    if (url.pathname.endsWith("servicePrincipals")) return Response.json({ value: [{ id: sp, appId: client }] })
+    if (url.pathname.endsWith(created)) return Response.json({ id: created, displayName: "changed name" })
+    return Response.json({ value: [] })
+  }) as typeof fetch
+  const permissions = token.replace(token.split(".")[1]!, Buffer.from(JSON.stringify({ tid: tenant, oid: user, appid: client, scp: "PublicKeyInfrastructure.ReadWrite.All Policy.Read.All" })).toString("base64url"))
+  const service = new IdentityRestoreService(journal, new RecoveryAccounts(store), async () => ({ token: permissions, tenantId: tenant, clientId: client, userId: user }), fetcher)
+  const request = { path: `backup/CertificateBasedAuthPki/${source}.json`, snapshot: { id: source, displayName: "original name" }, origin: "restore" as const }
+  try {
+    const early = await service.prepare(tenant, request, "create")
+    const first = await service.prepare(tenant, request, "create")
+    expect((await service.restore(tenant, { ...request, runId: first.id })).success).toBe(true)
+    expect((await service.restore(tenant, { ...request, runId: early.id })).success).toBe(false)
+    const later = await service.prepare(tenant, request, "create")
+    expect(later.mappings).toEqual([mapping])
+    expect(later.entries[0]!.step.targetId).toBe(created)
+    expect(later.entries[0]!.step.preview).toBe(restoreFingerprint({ id: created, displayName: "changed name" }))
+    expect((await service.restore(tenant, { ...request, runId: later.id })).success).toBe(false)
+    expect(calls.filter(call => !call.startsWith("GET"))).toHaveLength(1)
+    expect(calls.some(call => call.endsWith(created))).toBe(true)
+  } finally { rowType.restore = previous; contract.blockedReason = blocked }
+})
+
+for (const failure of ["preflight", "lost-response", "crash-before-send"] as const) it(`recovers the production send boundary after ${failure}`, async () => {
+  const store = storage(), journal = new GuardedRunJournal(store)
+  let live: Item = { id: "securityDefaults", isEnabled: false }, reads = 0, writes = 0
+  let inject = true
+  const fetcher = (async (input: RequestInfo | URL, options?: RequestInit) => {
+    const url = new URL(String(input))
+    if (options?.method !== "GET") {
+      writes++; live = { ...live, ...JSON.parse(String(options?.body)) }
+      if (inject && failure === "lost-response") throw new Error("response lost")
+      return new Response(null, { status: 204 })
+    }
+    if (url.pathname.endsWith("applications")) return Response.json({ value: [{ id: app, appId: client }] })
+    if (url.pathname.endsWith("servicePrincipals")) return Response.json({ value: [{ id: sp, appId: client }] })
+    if (url.pathname.endsWith(`/users/${recovery}`)) return Response.json({ id: recovery })
+    if (url.pathname.includes("identitySecurityDefaultsEnforcementPolicy")) {
+      reads++
+      if (inject && failure === "preflight" && reads === 3) return new Response(null, { status: 503 })
+      return Response.json(live)
+    }
+    return Response.json({ value: [] })
+  }) as typeof fetch
+  const service = new IdentityRestoreService(journal, new RecoveryAccounts(store), async () => ({ token, tenantId: tenant, clientId: client, userId: user }), fetcher)
+  const type = typeForFolder("SecurityDefaults")!, previous = type.restore
+  type.restore = "singleton"
+  try {
+    const request = { path: "backup/SecurityDefaults/securityDefaults.json", snapshot: { id: "securityDefaults", isEnabled: true }, origin: "restore" as const }
+    const run = await service.prepare(tenant, request, "update", "securityDefaults")
+    if (failure === "crash-before-send") {
+      const save = store.set
+      store.set = (key, value) => { save(key, value); if (value.includes('"state":"uncertain"')) throw new Error("process stopped after journal commit") }
+    }
+    await service.restore(tenant, { ...request, runId: run.id }).catch(() => {})
+    const entry = journal.load(tenant, run.id)!.entries[0]!
+    expect(entry.state).toBe(failure === "preflight" ? "failed-before-send" : "uncertain")
+    expect(writes).toBe(failure === "lost-response" ? 1 : 0)
+    inject = false
+    store.set = (key, value) => { store.values.set(key, value) }
+    const accounts = new RecoveryAccounts(store)
+    // A changed protection list cannot prevent read-back of an already sent write.
+    store.set(`restore.recovery.${tenant}`, JSON.stringify([recovery]))
+    await new IdentityRestoreService(journal, accounts, async () => ({ token, tenantId: tenant, clientId: client, userId: user }), fetcher).reconcile(tenant, run.id)
+    expect(journal.load(tenant, run.id)!.entries[0]!.state).toBe(failure === "lost-response" ? "applied" : entry.state)
+    const fresh = await service.prepare(tenant, request, "update", "securityDefaults")
+    const outcome = await service.restore(tenant, { ...request, runId: fresh.id })
+    expect(outcome.success).toBe(failure !== "crash-before-send")
+    expect(writes).toBe(failure === "lost-response" ? 2 : failure === "preflight" ? 1 : 0)
   } finally { type.restore = previous }
 })
