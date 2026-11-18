@@ -2,6 +2,8 @@ import { configurationPayload, isEntraConfiguration, configurationApproval, conf
 import { randomUUID } from "node:crypto"
 import { typeForFolder, restoreCapability } from "../../shared/intune/registry"
 import { restoreMatrixRow } from "../../shared/intune/restore-matrix"
+import { restorePermissionBlocker } from "../../shared/services/modules"
+import { grantedPermissions } from "../../shared/services/token"
 import { mappedReference } from "../../shared/intune/restore-references"
 import { RestoreSafetyError } from "../../shared/intune/restore-guards"
 import { requireRestoreActor } from "./restore-actor"
@@ -16,25 +18,32 @@ import type { RestoreOutcome } from "../../portal/lib/policies/graph-restore"
 export interface RestoreConnection { token: string; tenantId: string; clientId: string; userId: string }
 export class IdentityRestoreService {
   constructor(private readonly journal: GuardedRunJournal, private readonly recovery: RecoveryAccounts, private readonly connection: (tenant: string) => Promise<RestoreConnection>, private readonly fetchImpl: typeof fetch = fetch) {}
-  private async context(tenant: string, readOnly = false) {
+  private async context(tenant: string, readOnly = false, folder?: string) {
     const connection = await this.connection(tenant)
     if (connection.tenantId.toLowerCase() !== tenant.toLowerCase()) throw new RestoreSafetyError("This connection belongs to another tenant.")
     const reader = safetyReader(connection.token, this.fetchImpl)
     // Refuse app-only tokens before even the safety reads.
     requireRestoreActor(connection.token, { ...connection, applicationObjectId: "pending", servicePrincipalId: "pending", recoveryAccountIds: [] })
+    const permissionBlocker = !readOnly && folder ? restorePermissionBlocker(folder, grantedPermissions(connection.token)) : undefined
+    if (permissionBlocker) throw new RestoreSafetyError(permissionBlocker)
     const actor = await resolveRestoreActor(reader, connection, readOnly ? [] : this.recovery.get(tenant))
     const io = guardedGraphIO(connection.token, actor, (step, current, desired) => resolveSafetyReferences(reader, step, current, desired), this.fetchImpl, (mappings, signal) => referenceMatches(connection.token, mappings, this.fetchImpl, { signal }))
     return { actor, io }
   }
   /** Called by trusted preview builders only. A renderer never supplies fingerprints or an actor. */
-  async prepare(tenant: string, request: IdentityRestoreRequest, operation: GuardedStep["operation"], targetId?: string): Promise<GuardedRun> {
+  async prepare(tenant: string, request: IdentityRestoreRequest, operation: GuardedStep["operation"], targetId?: string, allowRemoval = false): Promise<GuardedRun> {
     const folder = request.path.split("/")[1] ?? ""
     const type = typeForFolder(folder)
     if (!type || type.restoreSafety !== "identity" || restoreCapability(type) === "none") throw new RestoreSafetyError("This type remains backup-only.")
+    if (operation === "create" && restoreCapability(type) === "singleton") throw new RestoreSafetyError("This setting can only be replaced in place.")
     const contract = restoreMatrixRow(folder)?.[operation]
     if (!contract || (!isEntraConfiguration(folder) && Object.keys(request.snapshot).some(key => ![...contract.properties, "id", "@odata.type"].includes(key)))) throw new RestoreSafetyError("This snapshot needs a reviewed request builder before restoring.")
-    const { actor, io } = await this.context(tenant)
-    const step: GuardedStep = { key: "configuration", folder, sourceId: String(request.snapshot.id ?? ""), operation, targetId, properties: contract.properties, desired: isEntraConfiguration(folder) ? configurationPayload(folder, operation, request.snapshot) : Object.fromEntries(contract.properties.filter(key => key in request.snapshot).map(key => [key, request.snapshot[key]!])), preview: "", requires: [] }
+    const { actor, io } = await this.context(tenant, false, folder)
+    // The per-policy branding review explicitly restores only the default username hint.
+    // Keep the full backup fingerprint below, while leaving every other branding field alone.
+    const candidate = folder === "EntraCompanyBranding" ? Object.fromEntries(contract.properties.filter(key => key in request.snapshot).map(key => [key, request.snapshot[key]!])) : request.snapshot
+    const step: GuardedStep = { key: "configuration", folder, sourceId: String(request.snapshot.id ?? ""), operation, targetId, allowRemoval, properties: contract.properties, desired: isEntraConfiguration(folder) ? configurationPayload(folder, operation, candidate) : Object.fromEntries(contract.properties.filter(key => key in request.snapshot).map(key => [key, request.snapshot[key]!])), preview: "", requires: [] }
+    if (operation === "create" && isEntraConfiguration(folder) && await io.read({ ...step, operation: "update", targetId: step.sourceId }, step.sourceId)) throw new RestoreSafetyError("The original policy still exists. Choose replacement and review its current values instead of recreating it.")
     const mappings = this.journal.mappings(tenant)
     step.targetId ??= mappedReference(mappings, "objectId", folder, step.sourceId)
     step.preview = restoreFingerprint(await io.read(step, step.targetId))
@@ -46,8 +55,8 @@ export class IdentityRestoreService {
   async review(tenant: string, id: string) {
     const run = this.journal.load(tenant, id)
     if (!run || run.entries.length !== 1) throw new RestoreSafetyError("This restore preview is unavailable.")
-    const { io } = await this.context(tenant)
     const step = run.entries[0]!.step
+    const { io } = await this.context(tenant, false, step.folder)
     const current = await io.read(step, step.targetId)
     if (restoreFingerprint(current) !== step.preview) throw new RestoreSafetyError("The tenant changed after this preview. Preview this item again.")
     return { kind: configurationConfirmation(step.folder), fingerprint: configurationApproval(step), changes: configurationDifference(step, current) }
@@ -65,7 +74,7 @@ export class IdentityRestoreService {
     if (!type || type.restoreSafety !== "identity" || restoreCapability(type) === "none") return { success: false, path: request.path, action: "skipped", retryable: false, error: "This type remains backup-only." }
     const run = request.runId ? this.journal.load(tenant, request.runId) : undefined
     if (!run || run.source?.path !== request.path || (request.origin !== "repair" && run.source.fingerprint !== restoreFingerprint(request.snapshot)) || (request.origin !== "repair" && run.origin !== request.origin) || run.entries.length !== 1 || run.entries[0]!.step.folder !== folder || (request.origin !== "repair" && run.entries[0]!.step.sourceId !== request.snapshot.id)) return { success: false, path: request.path, retryable: false, error: "Preview this identity restore before continuing." }
-    const { actor, io } = await this.context(tenant)
+    const { actor, io } = await this.context(tenant, false, folder)
     const result = await executeGuardedRun(this.journal, { ...run, actor }, io)
     const entry = result.run.entries[0]!
     return { success: result.status === "complete", path: request.path, policyId: entry.targetId, partial: result.status === "partial", retryable: false, error: entry.reason, guardedRunId: run.id, replacedReferences: result.run.replacedReferences, warnings: result.run.referenceWarning ? [result.run.referenceWarning] : [] }

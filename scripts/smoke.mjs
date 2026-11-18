@@ -1,3 +1,4 @@
+import { checkConfigurationRestore } from "./configuration-restore-smoke.mjs"
 import { checkIdentityRestoreSafety } from "./identity-restore-safety-smoke.mjs"
 /**
  * Smoke test for the built app (run `npm run build` first).
@@ -1825,6 +1826,7 @@ await check("unsaved schedule drafts stay with their tenant", async () => {
 })
 
 await checkRestoreService({ check, evaluate, waitForCondition, screenshot, assert, send, go })
+await checkConfigurationRestore({ check, evaluate, waitForCondition, screenshot, assert, send, go })
 
 await check("large inventory pages stay bounded in dark mode at 1024 pixels", async () => {
   await evaluate(`(() => {

@@ -325,3 +325,72 @@ for (const failure of ["preflight", "lost-response", "crash-before-send"] as con
     expect(writes).toBe(failure === "lost-response" ? 2 : failure === "preflight" ? 1 : 0)
   } finally { type.restore = previous }
 })
+
+it("restores the explicit username-hint subset from a full branding backup and binds the complete source", async () => {
+  const store = storage(), journal = new GuardedRunJournal(store)
+  const brandingToken = `h.${Buffer.from(JSON.stringify({ tid: tenant, oid: user, appid: client, scp: "Organization.Read.All OrganizationalBranding.ReadWrite.All Application.Read.All" })).toString("base64url")}.s`
+  const live: Item = { id: "EntraCompanyBranding", usernameHintText: "Current hint", backgroundColor: "#333333", localizations: [{ id: "fr", usernameHintText: "Current localized hint" }] }
+  const writes: Item[] = []
+  const fetcher = (async (input: RequestInfo | URL, options?: RequestInit) => {
+    const url = new URL(String(input))
+    if (options?.method !== "GET") {
+      const body = JSON.parse(String(options?.body)) as Item
+      writes.push(body); Object.assign(live, body)
+      return new Response(null, { status: 204 })
+    }
+    if (url.pathname.endsWith("applications")) return Response.json({ value: [{ id: app, appId: client }] })
+    if (url.pathname.endsWith("servicePrincipals")) return Response.json({ value: [{ id: sp, appId: client }] })
+    if (url.pathname.endsWith("organization")) return Response.json({ value: [{ id: tenant }] })
+    if (url.pathname.endsWith("branding")) return Response.json(live)
+    return Response.json({ value: [] })
+  }) as typeof fetch
+  const service = new IdentityRestoreService(journal, new RecoveryAccounts(store), async () => ({ token: brandingToken, tenantId: tenant, clientId: client, userId: user }), fetcher)
+  const snapshot = { id: "EntraCompanyBranding", usernameHintText: "Saved hint", backgroundColor: "#ffffff", localizations: [{ id: "fr", usernameHintText: "Saved localized hint" }] }
+  const request = { path: "backup/EntraCompanyBranding/Branding.json", snapshot, origin: "restore" as const }
+  const run = await service.prepare(tenant, request, "update", snapshot.id)
+  expect(run.entries[0]!.step.desired).toEqual({ usernameHintText: "Saved hint" })
+  const review = await service.review(tenant, run.id)
+  expect(review.changes).toEqual([{ property: "usernameHintText", before: "Current hint", after: "Saved hint" }])
+  await service.confirm(tenant, run.id, review.fingerprint)
+  expect((await service.restore(tenant, { ...request, runId: run.id, snapshot: { ...snapshot, backgroundColor: "#000000" } })).success).toBe(false)
+  expect(writes).toEqual([])
+  expect((await service.restore(tenant, { ...request, runId: run.id })).success).toBe(true)
+  expect(writes).toEqual([{ usernameHintText: "Saved hint" }])
+  expect(live.backgroundColor).toBe("#333333")
+  expect(live.localizations).toEqual([{ id: "fr", usernameHintText: "Current localized hint" }])
+})
+
+it.each(["TokenLifetimePolicies", "ActivityBasedTimeoutPolicies"])("refuses to recreate %s when its original ID still exists with changed contents", async folder => {
+  const store = storage(), journal = new GuardedRunJournal(store)
+  const source = guid(60)
+  const scopedToken = `h.${Buffer.from(JSON.stringify({ tid: tenant, oid: user, appid: client, scp: "Policy.ReadWrite.ApplicationConfiguration Application.Read.All" })).toString("base64url")}.s`
+  let exists = true, writes = 0
+  const fetcher = (async (input: RequestInfo | URL, options?: RequestInit) => {
+    const url = new URL(String(input))
+    if (options?.method !== "GET") { writes++; throw new Error("Must not write during preview") }
+    if (url.pathname.endsWith("applications")) return Response.json({ value: [{ id: app, appId: client }] })
+    if (url.pathname.endsWith("servicePrincipals")) return Response.json({ value: [{ id: sp, appId: client }] })
+    if (url.pathname.endsWith("/" + source)) return exists ? Response.json({ id: source, displayName: "Renamed since backup", definition: ["changed"], isOrganizationDefault: false }) : new Response(null, { status: 404 })
+    return Response.json({ value: [] })
+  }) as typeof fetch
+  const service = new IdentityRestoreService(journal, new RecoveryAccounts(store), async () => ({ token: scopedToken, tenantId: tenant, clientId: client, userId: user }), fetcher)
+  const definition = folder === "TokenLifetimePolicies" ? { TokenLifetimePolicy: { Version: 1, AccessTokenLifetime: "01:00:00" } } : { ActivityBasedTimeoutPolicy: { Version: 1, ApplicationPolicies: [{ ApplicationId: "default", WebSessionIdleTimeout: "00:05:00" }] } }
+  const request = { path: `backup/${folder}/Policy.json`, snapshot: { id: source, displayName: "Original policy", isOrganizationDefault: false, definition: [JSON.stringify(definition)] }, origin: "restore" as const }
+  await expect(service.prepare(tenant, request, "create")).rejects.toThrow("original policy still exists")
+  expect(journal.list(tenant)).toEqual([])
+  expect(writes).toBe(0)
+  exists = false
+  const run = await service.prepare(tenant, request, "create")
+  expect(run.entries[0]!.step.preview).toBe(restoreFingerprint(null))
+  expect(writes).toBe(0)
+})
+
+it("names missing restore access before trying protected-registration reads", async () => {
+  const store = storage(), fetcher = vi.fn(async () => { throw new Error("Must not reach Graph") })
+  const readOnlyToken = `h.${Buffer.from(JSON.stringify({ tid: tenant, oid: user, appid: client, scp: "Policy.Read.All" })).toString("base64url")}.s`
+  const service = new IdentityRestoreService(new GuardedRunJournal(store), new RecoveryAccounts(store), async () => ({ token: readOnlyToken, tenantId: tenant, clientId: client, userId: user }), fetcher)
+  const request = { path: "backup/TokenLifetimePolicies/Policy.json", snapshot: { id: guid(60), displayName: "Policy" }, origin: "restore" as const }
+  await expect(service.prepare(tenant, request, "update", guid(60))).rejects.toThrow("Policy.ReadWrite.ApplicationConfiguration")
+  await expect(service.prepare(tenant, request, "update", guid(60))).rejects.toThrow("Services and permissions shows how to add it")
+  expect(fetcher).not.toHaveBeenCalled()
+})

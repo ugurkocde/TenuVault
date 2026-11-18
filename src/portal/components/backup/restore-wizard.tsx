@@ -1,6 +1,8 @@
 "use client"
 
 import { matchesBackupService, type BackupServiceFilter } from "@desktop/lib/backup-service"
+import { ConfigurationRestore } from "./configuration-restore"
+import { restoreCapability } from "../../../shared/intune/registry"
 import { RestoreApprovals } from "./restore-approvals"
 import { reviewedDependencyMappings, type RecoveryReadiness } from "../../../shared/intune/recovery"
 import { settingDefinitionIds, type DeprecatedSettingHit } from "../../../shared/intune/settings-catalog"
@@ -886,6 +888,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                                       )}
                                     </span>
                                   </label>
+                                  {!copying && typeForFolder(item.folder)?.restoreSafety === "identity" && !["none", "metadata"].includes(restoreCapability(typeForFolder(item.folder)!)) && <ConfigurationRestore key={`${tenant.credentials.tenantId}:${tenant.credentials.appId}:${tenant.storageAccountName}:${backupId}:${item.path}`} tenant={tenant} backupId={backupId!} path={item.path} singleton={restoreCapability(typeForFolder(item.folder)!) === "singleton"} />}
                                 </li>
                               ))}
                               <li className="pl-11">

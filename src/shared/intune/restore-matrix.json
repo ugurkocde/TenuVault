@@ -2150,7 +2150,7 @@
     },
     "builtIn": "Microsoft-managed or built-in objects are never recreated or overwritten.",
     "dependsOn": [],
-    "reason": "Own per-policy confirmation is required. Only the closed verified subset can be restored; unsupported child configuration is refused.",
+    "reason": "Own per-policy confirmation restores only the default username hint from the full backup. Other branding properties and localizations stay as configured.",
     "indexWrites": {
       "POST": [
         {
@@ -2205,7 +2205,7 @@
       "resourceFound": true,
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/organizationalbranding?view=graph-rest-1.0",
       "live": "save-change-verify-restore-original-verify (2026-11-18)",
-      "notes": "App-only lab adapter verified the method, path and closed subset with read-back and original-state recovery. Signed-in actor, exact confirmation, stale preview, journal and lost responses are tested with injected fetch."
+      "notes": "App-only lab adapter verified the default hint update and null reset with original-state recovery. Injected-fetch tests verify the full-source fingerprint and explicit hint-only projection, signed-in actor, confirmation, stale preview, journal and lost responses."
     },
     "disposition": "configuration",
     "supplementalWrites": [
@@ -2721,7 +2721,7 @@
           "https://learn.microsoft.com/en-us/graph/api/resources/authenticationflowspolicy?view=graph-rest-1.0"
         ],
         "result": "Reviewed every allowed property against the current Microsoft operation request body and resource descriptions, including reserved, read-only, immutable and service-managed fields.",
-        "constraints": "The resource calls selfServiceSignUp read-only but the update operation explicitly accepts it. Keep blocked pending a reviewed nested schema."
+        "constraints": "The update operation explicitly accepts selfServiceSignUp.isEnabled. A closed boolean builder and live save-change-restore verification settled this subset on 2026-11-18."
       }
     },
     "detection": {

@@ -30,5 +30,5 @@ it("never requests the retired organization role through any setup or reader cho
     expect(graphPermissions(all, mode)).not.toContain("Organization.ReadWrite.All")
     expect(knownPermissions(mode)[0]!.permissions).not.toContain("Organization.ReadWrite.All")
   }
-  for (const script of ["New-TenuVaultDesktopApp.ps1", "New-TenuVaultBackupReader.ps1"]) expect(readFileSync(new URL(`../resources/${script}`, import.meta.url), "utf8")).not.toMatch(/['"]Organization\.ReadWrite\.All['"]/) 
+  for (const script of ["New-TenuVaultDesktopApp.ps1", "New-TenuVaultBackupReader.ps1"]) expect(readFileSync(new URL(`../resources/${script}`, import.meta.url), "utf8")).not.toMatch(/['"]Organization\.ReadWrite\.All['"]/)
 })

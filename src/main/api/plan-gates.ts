@@ -43,6 +43,8 @@ export function requiredFeatures(pathname: string, body: Record<string, unknown>
       if (body.assignments === true) features.push("restoreAssignments")
       return features
     }
+    case "/api/restore-configuration":
+      return body.operation === "update" ? ["replaceRestore"] : []
     case "/api/restore-validate":
       return ["fullRestore"]
     case "/api/revert-policy":

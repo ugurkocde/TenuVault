@@ -1,7 +1,7 @@
 import { IdentityRestoreService } from "./restore/service"
 import { RecoveryAccounts } from "./restore/safety-resolvers"
 import { restoreSafetyRoutes } from "./restore/routes"
-import { setIdentityRestoreDispatch } from "./restore/dispatch"
+import { setIdentityRestorePreviews, setIdentityRestoreDispatch } from "./restore/dispatch"
 import { importLargeArchive, reviewLargeArchive, saveLargeDownload } from "./backup/large-archive"
 import { AddPermissionsFlow, permissionAdditionScopes, signInForPermissionAddition, verifyPermissionAdditionToken } from "./auth/add-permissions-flow"
 import { additionPermissions } from "./services/addition-permissions"
@@ -419,6 +419,7 @@ async function bootstrap(): Promise<void> {
     return { tenantId: tenant, clientId: account.clientId, userId: claims.oid, token: token.accessToken }
   }
   const identityRestore = new IdentityRestoreService(guardedRestoreJournal(), recoveryAccounts, restoreConnection, bridgedFetch)
+  setIdentityRestorePreviews(identityRestore)
   setIdentityRestoreDispatch((tenant, request) => identityRestore.restore(tenant, request))
 
   // Every PDF export resolves branding per tenant here: saved branding applies only on a plan with pdfBranding.
