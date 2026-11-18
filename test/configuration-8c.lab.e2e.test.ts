@@ -1,4 +1,4 @@
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, unlinkSync, writeFileSync, writeSync } from "node:fs"
+import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, unlinkSync, writeFileSync, writeSync } from "node:fs"
 import { join } from "node:path"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { configuration8cLab, LAB_8C_APP, LAB_8C_FOLDERS, LAB_8C_TENANT } from "./helpers/configuration-8c-lab"
@@ -23,6 +23,7 @@ describe.skipIf(!approved)("8c lab contracts with guaranteed cleanup attempts", 
     const originals: Record<string, unknown> = {}, final: Record<string, unknown> = {}
     const artifact = () => writeFileSync(join(artifactRoot, "singleton-originals.json"), JSON.stringify({ tenant: LAB_8C_TENANT, originals, verifiedEndState: final }, null, 2), { mode: 0o600 })
     lab = configuration8cLab(answer.access_token, LAB_8C_TENANT, LAB_8C_APP, fetch, {
+      recordEvidence: event => appendFileSync(join(artifactRoot, "evidence.jsonl"), JSON.stringify(event) + "\n", { mode: 0o600 }),
       recordOriginal: (folder, original) => {
         // Only non-personal settings are retained in the review artifact.
         if (!LAB_8C_FOLDERS.includes(folder)) return

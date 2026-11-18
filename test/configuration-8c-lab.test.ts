@@ -50,6 +50,19 @@ describe("the prepared app-only lab harness with injected fetch only", () => {
     for (const folder of ["Organization", "Users", "ConditionalAccessPolicies", "CertificateBasedAuthPki", "AuthenticationMethodsPolicy/../../users"]) await expect(state.lab.run(folder)).rejects.toThrow("allowlist")
     expect(state.calls).toEqual([])
   })
+  it("isolates an unreadable singleton before writes while still verifying the other contracts", async () => {
+    const state = world(), evidence: Item[] = []
+    const fetcher = (async (input, init) => String(input).endsWith("/settings") ? Response.json({ error: { code: "Access denied" } }, { status: 403 }) : state.fetcher(input, init)) as typeof fetch
+    const lab = configuration8cLab(token, LAB_8C_TENANT, LAB_8C_APP, fetcher, { save: () => {}, clear: () => {}, recordEvidence: event => { evidence.push(event) } })
+    await lab.captureOriginals()
+    await expect(lab.run("LifecycleWorkflowSettings")).rejects.toThrow("HTTP 403")
+    await lab.run("AccessReviewPolicy")
+    await lab.verifyEndState()
+    expect(state.singletons).toEqual(state.original)
+    expect(evidence).toContainEqual({ kind: "http", method: "GET", path: "/v1.0/identityGovernance/lifecycleWorkflows/settings", status: 403 })
+    expect(evidence.some(event => event.kind === "read-back" && event.matched === true)).toBe(true)
+    expect(evidence.some(event => event.path === "/v1.0/identityGovernance/lifecycleWorkflows/settings" && event.method !== "GET")).toBe(false)
+  })
   it("requires the exact lab grants before any request", () => {
     const guardedToken = `h.${Buffer.from(JSON.stringify({ tid: LAB_8C_TENANT, appid: LAB_8C_APP, roles: [] })).toString("base64url")}.s`
     expect(() => configuration8cLab(guardedToken, LAB_8C_TENANT, LAB_8C_APP)).toThrow("Missing lab application permission")

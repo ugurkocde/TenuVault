@@ -29,7 +29,7 @@ const safe = (value: unknown): void => {
 }
 
 /** App-only LAB adapter. Never used by the product. It cannot accept a caller's method or path. */
-export function configuration8cLab(token: string, tenant: string, app: string, fetchImpl: typeof fetch = fetch, recovery?: { save: (folder: string, original: Item) => void; clear: (folder: string) => void; recordOriginal?: (folder: string, original: Item) => void; recordVerified?: (folder: string, current: Item) => void }) {
+export function configuration8cLab(token: string, tenant: string, app: string, fetchImpl: typeof fetch = fetch, recovery?: { save: (folder: string, original: Item) => void; clear: (folder: string) => void; recordOriginal?: (folder: string, original: Item) => void; recordVerified?: (folder: string, current: Item) => void; recordEvidence?: (event: Item) => void }) {
   if (tenant !== LAB_8C_TENANT || app !== LAB_8C_APP) throw new Error("This harness is restricted to the approved lab app and tenant.")
   let claims: { tid?: string; appid?: string; azp?: string; roles?: string[] }
   try { claims = JSON.parse(Buffer.from(token.split(".")[1]!, "base64url").toString()) } catch { throw new Error("Invalid lab token") }
@@ -40,6 +40,7 @@ export function configuration8cLab(token: string, tenant: string, app: string, f
   }
   const originals = new Map<string, Item>()
   const pendingRecovery = new Map<string, Item>()
+  const unavailable = new Map<string, Error>()
 
   const urlFor = (folder: string) => {
     if (!LAB_8C_FOLDERS.includes(folder)) throw new Error("Outside the 8c lab allowlist")
@@ -52,6 +53,7 @@ export function configuration8cLab(token: string, tenant: string, app: string, f
     if (parsed.origin !== "https://graph.microsoft.com" || parsed.hash || parsed.username || parsed.password || !allowed || (method !== "GET" && parsed.search)) throw new Error("Outside the 8c lab path allowlist")
     if (body) safe(body)
     const response = await fetchImpl(url, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "Accept-Language": "0" }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(60_000) })
+    recovery?.recordEvidence?.({ kind: "http", method, path: parsed.pathname, status: response.status })
     if (method === "DELETE" && response.status === 404) return {}
     if (!response.ok) {
       const code = (await response.json().catch(() => ({})))?.error?.code
@@ -116,7 +118,7 @@ export function configuration8cLab(token: string, tenant: string, app: string, f
       }
       if (folder === "DefenderCustomDetectionRules" && current.status !== "disabled") throw new Error("Detection must stay disabled")
       different = Object.keys(expected).filter(key => !equal(current[key], expected[key]))
-      if (!different.length) return current
+      if (!different.length) { recovery?.recordEvidence?.({ kind: "read-back", folder, expected, actual: current, matched: true }); return current }
       await pause()
     }
     throw new Error(`${folder}: read-back did not match properties ${different.join(", ")}`)
@@ -143,7 +145,14 @@ export function configuration8cLab(token: string, tenant: string, app: string, f
   return {
     cleanup,
     async captureOriginals() {
-      for (const folder of singletons) originals.set(folder, project(await request(urlFor(folder)), selected[folder]!))
+      for (const folder of singletons) {
+        try {
+          const original = project(await request(urlFor(folder)), selected[folder]!)
+          originals.set(folder, original); recovery?.recordOriginal?.(folder, original)
+        } catch (error) {
+          unavailable.set(folder, error instanceof Error ? error : new Error("Original unavailable"))
+        }
+      }
     },
     async verifyEndState() {
       await cleanup()
@@ -153,6 +162,7 @@ export function configuration8cLab(token: string, tenant: string, app: string, f
     async run(folder: string): Promise<{ folder: string; operations: string; productPath: string }> {
       await recoverSingletons()
       const url = urlFor(folder)
+      if (unavailable.has(folder)) throw unavailable.get(folder)!
       if (collections.includes(folder)) {
         const name = prefix + crypto.randomUUID()
         const fixture: Item = folder === "UserFlowAttributes" ? { displayName: name, description: "Lab original", dataType: "string" }
