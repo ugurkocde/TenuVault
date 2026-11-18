@@ -105,6 +105,17 @@ describe("phase 1 configuration staging", () => {
       })
     }
   }
+  it("refuses a different body at the final send boundary even when its properties are allowlisted", async () => {
+    const type = typeForFolder("SecurityDefaults")!, previous = type.restore
+    type.restore = "singleton"
+    const token = `h.${Buffer.from(JSON.stringify({ tid: actor.tenantId, oid: actor.userId, appid: actor.clientId, scp: "Policy.Read.All Policy.ReadWrite.ConditionalAccess" })).toString("base64url")}.s`
+    let writes = 0
+    const current = { id, isEnabled: false }
+    const step = approve({ key: "security", folder: "SecurityDefaults", operation: "update", sourceId: id, targetId: id, properties: ["isEnabled"], desired: { isEnabled: false }, preview: restoreFingerprint(current), requires: [] })
+    const io = guardedGraphIO(token, actor, async () => ({ complete: true, principals: [], applications: [] }), async (_input, init) => { if (init?.method !== "GET") writes++; return Response.json(current) })
+    try { await expect(io.write(step, { isEnabled: true }, id, () => {})).rejects.toThrow("confirmed configuration difference"); expect(writes).toBe(0) }
+    finally { type.restore = previous }
+  })
   it("projects known read-only backup properties without hiding unsupported writable configuration", () => {
     expect(configurationPayload("SecurityDefaults", "update", { id: "securityDefaults", displayName: "Security defaults", description: "Tenant state", isEnabled: false })).toEqual({ isEnabled: false })
     expect(configurationPayload("AuthenticationFlowsPolicy", "update", { id: "authenticationFlowsPolicy", displayName: "Flows", description: "Configuration", selfServiceSignUp: { isEnabled: false } })).toEqual({ selfServiceSignUp: { isEnabled: false } })
