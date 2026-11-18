@@ -432,6 +432,8 @@ it.each(["TokenLifetimePolicies", "ActivityBasedTimeoutPolicies", "Authenticatio
   expect(forbidden).toEqual([])
   expect(reads.some(read => /directoryObjects|roleManagement|users|applications|servicePrincipals/.test(read))).toBe(false)
   expect(writes).toBe(1)
+  expect(run.actor).not.toHaveProperty("token")
+  expect([...store.values.values()].join()).not.toContain(scopedToken)
   expect(row[operation]!.protections).toEqual([])
 })
 

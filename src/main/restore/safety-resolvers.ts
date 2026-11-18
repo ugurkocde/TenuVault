@@ -36,7 +36,7 @@ const idOf = (item: Item, key = "id"): string => {
 
 export async function resolveRestoreActor(reader: GraphReader, connection: { tenantId: string; clientId: string; userId: string }, recoveryAccountIds: string[], protections: readonly RestoreProtection[] = ALL_RESTORE_PROTECTIONS): Promise<RestoreActor> {
   if (![connection.tenantId, connection.clientId, connection.userId].every(isGuid)) throw new RestoreSafetyError("A signed-in tenant connection is required.")
-  if (!protections.length) return { ...connection, recoveryAccountIds: [] }
+  if (!protections.length) return { tenantId: connection.tenantId, clientId: connection.clientId, userId: connection.userId, recoveryAccountIds: [] }
   const filter = encodeURIComponent(`appId eq '${connection.clientId}'`)
   const apps = await reader.list(`applications?$filter=${filter}&$select=id,appId`)
   const principals = await reader.list(`servicePrincipals?$filter=${filter}&$select=id,appId`)
