@@ -240,3 +240,22 @@ it("does not widen a Conditional Access excluded group's membership permission t
   for (const kind of review.approvals) approveDirectory(step, run, kind)
   expect(await io.write(step, step.desired, group.id, () => {}, run)).toEqual({ id: group.id })
 }))
+
+it("preserves paused dynamic rules and requires an independent activation approval, refusing unresolved CA beneficiaries", () => {
+  const dynamic = { ...group, groupTypes: ["DynamicMembership"], membershipRule: "user.department -eq \"IT\"", membershipRuleProcessingState: "Paused" }
+  expect(directoryPayload("Groups", "update", dynamic).membershipRuleProcessingState).toBe("Paused")
+  expect(directoryPayload("Groups", "create", { ...dynamic, membershipRuleProcessingState: null }).membershipRuleProcessingState).toBe("Paused")
+  expect(() => directoryPayload("Groups", "update", { ...dynamic, membershipRuleProcessingState: "unknown" })).toThrow("unsupported")
+  const step = stepFor("update"); step.desired = { membershipRule: dynamic.membershipRule, membershipRuleProcessingState: "On" }
+  expect(directoryReview(step, dynamic, null, actor, false).approvals).toContain("security-response")
+  expect(directoryReview(step, dynamic, null, actor, true).blocker).toContain("future beneficiaries")
+})
+
+it("can review a new dynamic directory group without treating it as an unresolved existing group", async () => {
+  const step = stepFor("create"); delete step.targetId
+  step.desired = directoryPayload("Groups", "create", { ...group, groupTypes: ["DynamicMembership"], membershipRule: "user.department -eq \"IT\"", membershipRuleProcessingState: "Paused" })
+  const fetcher = vi.fn()
+  const io = directory9aIO(token(), actor, refs, fetcher)
+  expect((await io.review(step)).blocker).toBeUndefined()
+  expect(fetcher).not.toHaveBeenCalled()
+})

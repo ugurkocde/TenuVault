@@ -69,7 +69,10 @@ export function directoryPayload(folder: string, action: "create" | "update", so
   const result = strings(source, ["displayName", "description", ...(action === "create" ? ["mailNickname"] : [])])
   if (groupTypes.includes("DynamicMembership")) {
     if (typeof source.membershipRule !== "string" || !source.membershipRule) fail("A dynamic group needs its rule.")
-    result.membershipRule = source.membershipRule!; result.membershipRuleProcessingState = "On"
+    result.membershipRule = source.membershipRule!
+    const state = source.membershipRuleProcessingState ?? "Paused"
+    if (state !== "On" && state !== "Paused") fail("The dynamic membership processing state is unsupported.")
+    result.membershipRuleProcessingState = state
   }
   if (action === "create") {
     if (!result.displayName || !result.mailNickname) fail("Group creation needs a name and alias.")
@@ -109,7 +112,8 @@ export function directoryReview(step: GuardedStep, live: Item | null, principal:
   if (roleAssignable) notices.push("This group can confer a directory role.")
   if (excludedFromCA) notices.push("This group is excluded from Conditional Access policies.")
   if ((["member", "owner"].includes(intent.action) && privileged) || step.desired.isAssignableToRole === true) approvals.push("privileged-relationship")
-  if ((intent.action === "update" && live?.accountEnabled === false && step.desired.accountEnabled === true) || (["member", "owner"].includes(intent.action) && privileged && step.desired.present === true)) {
+  if (excludedFromCA && intent.action === "update" && (step.desired.membershipRule !== undefined || step.desired.membershipRuleProcessingState !== undefined)) blocker = "Changing a Conditional Access excluded dynamic group cannot resolve its future beneficiaries. This rule restore is blocked."
+  if ((intent.action === "update" && live?.membershipRuleProcessingState === "Paused" && step.desired.membershipRuleProcessingState === "On") || (intent.action === "update" && live?.accountEnabled === false && step.desired.accountEnabled === true) || (["member", "owner"].includes(intent.action) && privileged && step.desired.present === true)) {
     approvals.push("security-response"); notices.push("The current state looks deliberate. This restore may undo a security response.")
   }
   if (["member", "owner"].includes(intent.action) && step.desired.present === false) {

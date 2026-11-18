@@ -127,7 +127,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
     if (resource) { cloudObject(resource); if (step.folder === "Groups") directoryPayload("Groups", "update", resource) }
     const principal = intent.principalId ? await resolvePrincipal(intent.principalId) : null
     let excluded = false
-    if (step.folder === "Groups" && ["member", "owner"].includes(intent.action)) {
+    if (step.folder === "Groups" && (["member", "owner"].includes(intent.action) || (intent.action === "update" && (step.desired.membershipRule !== undefined || step.desired.membershipRuleProcessingState !== undefined)))) {
       if (!resource || typeof resource.isAssignableToRole !== "boolean") throw new RestoreSafetyError("The group's privilege could not be resolved.")
       for await (const policy of list("identity/conditionalAccess/policies?$select=id,conditions")) {
         const users = (policy.conditions as Item | undefined)?.users as Item | undefined
