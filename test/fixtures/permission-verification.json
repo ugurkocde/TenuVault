@@ -1884,11 +1884,11 @@
       "note": "Microsoft offers no narrower permission. The write permission changes the whole directory, so setup never asks for it.",
       "backup": {
         "delegated": [
-          {"permission": "Directory.Read.All", "asked": false, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Directory.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
           {"permission": "Directory.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
         ],
         "application": [
-          {"permission": "Directory.Read.All", "asked": false, "model": "listed", "index": "listed", "status": "confirmed"}
+          {"permission": "Directory.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
         ]
       },
       "restore": {
@@ -2047,12 +2047,12 @@
       "note": "Microsoft offers no narrower read permission.",
       "backup": {
         "delegated": [
-          {"permission": "Directory.Read.All", "asked": false, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Directory.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
           {"permission": "DelegatedPermissionGrant.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"},
           {"permission": "Directory.ReadWrite.All", "asked": false, "model": "listed", "index": "not listed", "status": "confirmed"}
         ],
         "application": [
-          {"permission": "Directory.Read.All", "asked": false, "model": "listed", "index": "listed", "status": "confirmed"}
+          {"permission": "Directory.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
         ]
       },
       "restore": {

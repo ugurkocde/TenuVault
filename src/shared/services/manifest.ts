@@ -52,8 +52,8 @@ function covers(area: PermissionArea, areas: readonly string[] | undefined, mode
   return !(area.optIn || (mode === "application" && area.appOnlyOptIn)) || areas?.includes(area.id) === true
 }
 
-// The owner excludes these scopes from every setup and remediation request, including optional areas.
-const NEVER_REQUESTED = new Set(["Organization.ReadWrite.All", "Directory.ReadWrite.All", "Directory.Read.All"])
+// Restore access must use the narrower permissions of the enabled operations. Backup reads keep their own requirements.
+const NEVER_REQUESTED_FOR_RESTORE = new Set(["Organization.ReadWrite.All", "Directory.ReadWrite.All", "Directory.Read.All"])
 
 /**
  * The permissions to add for an area, given the ones already `held`: for every group nothing held
@@ -63,17 +63,17 @@ const NEVER_REQUESTED = new Set(["Organization.ReadWrite.All", "Directory.ReadWr
  */
 export function areaPermissions(area: PermissionArea, access: AccessLevel, mode: SignInMode, held: ReadonlySet<string> = new Set()): string[] {
   const added: string[] = []
-  const settle = (needs: readonly PermissionArea["parts"][number]["backup"][]) => {
+  const settle = (needs: readonly PermissionArea["parts"][number]["backup"][], restore = false) => {
     for (const need of needs) {
       const needed = need[mode]
       if (needed === "unsupported") continue
-      for (const group of needed) if (!group.some((permission) => held.has(permission) || added.includes(permission))) {
-        const permission = !NEVER_REQUESTED.has(group[0]!) ? group[0] : undefined
-        if (permission) added.push(permission)
+      for (const group of needed) {
+        if (restore && NEVER_REQUESTED_FOR_RESTORE.has(group[0]!)) continue
+        if (!group.some((permission) => held.has(permission) || added.includes(permission))) added.push(group[0]!)
       }
     }
   }
-  if (access === "restore") settle(area.parts.filter((part) => !part.restoreNotRequested).map((part) => part.restore))
+  if (access === "restore") settle(area.parts.filter((part) => !part.restoreNotRequested).map((part) => part.restore), true)
   settle(area.parts.map((part) => part.backup))
   return added
 }
@@ -114,7 +114,7 @@ function namedByServices(mode: SignInMode): string[] {
   return unique(
     MODULES.flatMap((module) =>
       module.areas.flatMap((area) =>
-        area.parts.flatMap((part) => [part.backup[mode], part.restore[mode]].flatMap((needed) => (needed === "unsupported" ? [] : needed.flatMap((group) => (!NEVER_REQUESTED.has(group[0]!) ? group[0]! : []))))),
+        area.parts.flatMap((part) => [part.backup[mode], part.restore[mode]].flatMap((needed) => (needed === "unsupported" ? [] : needed.map((group) => group[0]!)))),
       ),
     ),
   )
@@ -275,14 +275,15 @@ export function readerChoice(roles: readonly string[]): PermissionChoice {
 }
 
 /**
- * The parameters that make New-TenuVaultBackupReader.ps1 preserve the allowed roles a reader has,
- * with a leading space, for renewal or another computer's certificate. A
+ * The parameters that make New-TenuVaultBackupReader.ps1 set exactly the roles a reader has, with a
+ * leading space, so a renewal or another computer's certificate never changes its permissions. A
  * reader for Intune, with or without Conditional Access, keeps the switches it was set up with, and
  * a reader for whole services and areas names them.
  *
  * The script grants what it is given and removes every other role. Services and areas can only
  * name whole ones, so a reader that holds part of a service, a role next to its services, or no
- * role at all gets its roles named one by one. Excluded roles are never repeated in a renewal request.
+ * role at all gets its roles named one by one. Organization.ReadWrite.All and Directory.ReadWrite.All
+ * are never repeated in a renewal request.
  */
 export function readerScriptArguments(roles: readonly string[]): string {
   const choice = readerChoice(roles)
@@ -290,7 +291,7 @@ export function readerScriptArguments(roles: readonly string[]): string {
   const rolesOf = (id: ModuleId) => readerRoles({ [id]: choice[id] })
   // A service whose permissions another one brings along is not named: Entra ID reads everything Conditional Access needs.
   const services = held.filter((id) => !rolesOf(id).every((role) => held.some((other) => other !== id && rolesOf(other).includes(role))))
-  const exact = unique(roles.filter(role => !NEVER_REQUESTED.has(role))).sort()
+  const exact = unique(roles.filter((role) => role !== "Organization.ReadWrite.All" && role !== "Directory.ReadWrite.All")).sort()
   const named = new Set(services.flatMap(rolesOf))
   if (!services.length || named.size !== exact.length || !exact.every((role) => named.has(role))) return ` -Permissions ${exact.join(",") || "None"}`
   const inventory = choice.intune?.areas?.includes("devices") ? " -IncludeDeviceCategories" : ""

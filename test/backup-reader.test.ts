@@ -431,6 +431,28 @@ describe("Backup Reader per service", () => {
     expect(await tokens.excludedTypes!()).toEqual(verified.excludedTypes)
   })
 
+  it("verifies and renews a reader holding Directory.Read.All without interrupting scheduled backup coverage", async () => {
+    const selection: ServiceSelection = { services: ["entra"], areas: { entra: ["groups", "applications"] } }
+    const roles = [...readerRoles({ entra: { access: "backup", areas: ["groups", "applications"] } })]
+    expect(roles).toContain("Directory.Read.All")
+    expect(checkReaderToken(graphToken({ roles }), app, "graph", selection)).toEqual([...roles].sort())
+    const { reader } = service({ selection, graph: () => graphToken({ roles }) })
+    reader.prepare(TENANT, "LAPTOP-1")
+    const before = await reader.verify(TENANT, READER)
+    expect(before.state).toBe("verified")
+    expect(before.verifiedRoles).toEqual([...roles].sort())
+    expect(before.excludedTypes).not.toContain("GroupLifecyclePolicies")
+    expect(before.excludedTypes).not.toContain("OAuth2PermissionGrants")
+    reader.prepare(TENANT, "LAPTOP-1")
+    const renewed = await reader.verify(TENANT, READER)
+    expect(renewed.verifiedRoles).toEqual(before.verifiedRoles)
+    expect(renewed.excludedTypes).toEqual(before.excludedTypes)
+    const tokens = reader.tokens(scheduled)!
+    expect(await tokens.graph()).toBe(graphToken({ roles }))
+    expect(await tokens.excludedTypes!()).toEqual(before.excludedTypes)
+    expect(reader.status(TENANT)!.roleChange).toBeNull()
+  })
+
   it("tests an Entra-only reader with an Entra read, never an Intune one", () => {
     expect(readerConfidenceRead(ENTRA, entraRoles)).toEqual({ label: "Entra ID", path: "policies/authorizationPolicy?$select=id" })
     expect(readerConfidenceRead({ services: ["defender"] }, [...readerRoles({ defender: { access: "backup" } })])?.path).toBe("security/secureScoreControlProfiles?$top=1&$select=id")

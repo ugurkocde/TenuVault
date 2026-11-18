@@ -105,7 +105,8 @@ describe("New-TenuVaultBackupReader.ps1", () => {
     const ENTRA = [...readerRoles({ entra: { access: "backup" } })]
     it.each<[string, string[]]>([
       ["one Entra ID permission alone", ["Domain.Read.All"]],
-      ["Intune and one user read permission next to it", [...FIVE, "User.Read.All"]],
+      ["Directory.Read.All alone", ["Directory.Read.All"]],
+      ["Intune and one directory permission next to it", [...FIVE, "Directory.Read.All"]],
       ["Intune and Entra ID short of one permission", [...FIVE, ...ENTRA.filter((role) => role !== "Agreement.Read.All")]],
       ["the device inventory permission without the rest of Intune", [DEVICE_INVENTORY_ROLE, CONDITIONAL_ACCESS_ROLE]],
       ["no permission at all", []],
@@ -162,7 +163,6 @@ describe("New-TenuVaultBackupReader.ps1", () => {
     }, 90_000)
 
     it.each([
-      [{ Permissions: ["Directory.Read.All"] }, "-Permissions names Directory.Read.All, which is not a read permission a Backup Reader may hold. Nothing was changed."],
       [{ Permissions: ["Mail.Read"] }, "-Permissions names Mail.Read, which is not a read permission a Backup Reader may hold. Nothing was changed."],
       [{ Permissions: [CONDITIONAL_ACCESS_ROLE, "DeviceManagementApps.ReadWrite.All"] }, "-Permissions names DeviceManagementApps.ReadWrite.All, which is not a read permission a Backup Reader may hold. Nothing was changed."],
       [{ Permissions: [CONDITIONAL_ACCESS_ROLE, "Policy.ReadWrite.ConditionalAccess"] }, "-Permissions names Policy.ReadWrite.ConditionalAccess, which is not a read permission a Backup Reader may hold. Nothing was changed."],

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs"
 import { expect, it } from "vitest"
-import { MODULES } from "../src/shared/services/modules"
-import { graphPermissions, knownPermissions, readerRoles, readerScriptArguments } from "../src/shared/services/manifest"
+import { MODULES, type PermissionArea } from "../src/shared/services/modules"
+import { areaPermissions, graphPermissions, knownPermissions, missingForChoice, readerRoles, readerScriptArguments } from "../src/shared/services/manifest"
 import { typeForFolder, restoreCapability } from "../src/shared/intune/registry"
 import { restoreMatrixRow } from "../src/shared/intune/restore-matrix"
 
@@ -25,20 +25,50 @@ it("requests restore permissions only for enabled types, with exactly their leas
   }
   expect(found.sort()).toEqual(Object.keys(expected).sort())
 })
-it("never requests the excluded organization or directory roles through any setup or reader choice", () => {
-  const all = Object.fromEntries(MODULES.map(module => [module.id, { access: "restore", areas: module.areas.filter(area => area.optIn || area.appOnlyOptIn).map(area => area.id) }]))
+const excludedRestore = ["Organization.ReadWrite.All", "Directory.ReadWrite.All", "Directory.Read.All"]
+
+it("never emits excluded permissions when settling restore requirements, without filtering backup reads", () => {
   for (const mode of ["delegated", "application"] as const) {
-    for (const permission of ["Organization.ReadWrite.All", "Directory.ReadWrite.All", "Directory.Read.All"]) {
-      expect(graphPermissions(all, mode)).not.toContain(permission)
-      expect(knownPermissions(mode)[0]!.permissions).not.toContain(permission)
+    for (const permission of excludedRestore) {
+      const area: PermissionArea = {
+        id: "test", label: "Test", folders: ["Test"],
+        parts: [{ folders: ["Test"], backup: { delegated: [["Directory.Read.All"]], application: [["Directory.Read.All"]] }, restore: { delegated: [[permission, "Policy.ReadWrite.CrossTenantAccess"]], application: [[permission, "Policy.ReadWrite.CrossTenantAccess"]] } }],
+      }
+      expect(areaPermissions({ ...area, parts: area.parts.map(part => ({ ...part, backup: { delegated: "unsupported", application: "unsupported" } })) }, "restore", mode), permission).toEqual([])
+      expect(areaPermissions(area, "backup", mode), permission).toEqual(["Directory.Read.All"])
+      // Restore access includes the selected backup reads, but never adds a broad scope for a write.
+      expect(areaPermissions(area, "restore", mode), permission).toEqual(["Directory.Read.All"])
+    }
+    for (const module of MODULES) for (const area of module.areas) {
+      const writeOnly = { ...area, parts: area.parts.map(part => ({ ...part, backup: { delegated: "unsupported", application: "unsupported" } as const })) }
+      for (const permission of excludedRestore) expect(areaPermissions(writeOnly, "restore", mode), `${module.id}/${area.id}`).not.toContain(permission)
     }
   }
-  for (const script of ["New-TenuVaultDesktopApp.ps1", "New-TenuVaultBackupReader.ps1"]) expect(readFileSync(new URL(`../resources/${script}`, import.meta.url), "utf8")).not.toMatch(/['"](?:Organization\.ReadWrite\.All|Directory\.Read(?:Write)?\.All)['"]/)
 })
 
-it("never repeats excluded roles from an existing reader in a renewal command", () => {
-  const excluded = ["Organization.ReadWrite.All", "Directory.ReadWrite.All", "Directory.Read.All"]
-  const roles = readerRoles()
-  expect(readerScriptArguments([...roles, ...excluded])).toBe(readerScriptArguments(roles))
-  expect(readerScriptArguments(excluded)).toBe(" -Permissions None")
+it("never requests organization or directory write roles through setup, remediation, or reader choices", () => {
+  const all = Object.fromEntries(MODULES.map(module => [module.id, { access: "restore", areas: module.areas.filter(area => area.optIn || area.appOnlyOptIn).map(area => area.id) }]))
+  for (const mode of ["delegated", "application"] as const) {
+    for (const permission of excludedRestore.slice(0, 2)) {
+      expect(graphPermissions(all, mode)).not.toContain(permission)
+      expect(missingForChoice(all, { kind: mode, permissions: new Set() })).not.toContain(permission)
+      expect(knownPermissions(mode)[0]!.permissions).not.toContain(permission)
+    }
+    const backup = graphPermissions({ entra: { access: "backup", areas: ["groups", "applications"] } }, mode)
+    const restore = graphPermissions({ entra: { access: "restore", areas: ["groups", "applications"] } }, mode)
+    expect(backup).toContain("Directory.Read.All")
+    expect(restore).toContain("Directory.Read.All")
+    for (const permission of excludedRestore) expect(restore.filter(scope => !backup.includes(scope))).not.toContain(permission)
+    expect(graphPermissions({ entra: { access: "restore" } }, mode)).not.toContain("Directory.Read.All")
+  }
+  for (const script of ["New-TenuVaultDesktopApp.ps1", "New-TenuVaultBackupReader.ps1"]) expect(readFileSync(new URL(`../resources/${script}`, import.meta.url), "utf8")).not.toMatch(/['"](?:Organization\.ReadWrite\.All|Directory\.ReadWrite\.All)['"]/)
+})
+
+it("preserves Directory.Read.All during renewal while never repeating the excluded write roles", () => {
+  const writes = excludedRestore.slice(0, 2)
+  const roles = [...readerRoles(), "Directory.Read.All"]
+  expect(readerScriptArguments(roles)).toBe(` -Permissions ${roles.sort().join(",")}`)
+  expect(readerScriptArguments(["Directory.Read.All"])).toBe(" -Permissions Directory.Read.All")
+  expect(readerScriptArguments([...roles, ...writes])).toBe(readerScriptArguments(roles))
+  expect(readerScriptArguments(writes)).toBe(" -Permissions None")
 })

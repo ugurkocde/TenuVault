@@ -56,9 +56,9 @@ For a tenant that backs up Entra ID or Defender, name the services with `-Servic
 | External identities | `Policy.Read.All`, `Policy.Read.B2BManagementPolicy`, `IdentityProvider.Read.All`, `IdentityUserFlow.Read.All`, `EventListener.Read.All`, `CustomAuthenticationExtension.Read.All`, `APIConnectors.Read.All`, `MultiTenantOrganization.Read.All` |
 | Roles and PIM | `RoleManagement.Read.Directory`, `PrivilegedEligibilitySchedule.Read.AzureADGroup`, `GroupMember.Read.All`, `PrivilegedAssignmentSchedule.Read.AzureADGroup`, `RoleManagementAlert.Read.Directory`, `AdministrativeUnit.Read.All`, `CustomSecAttributeDefinition.Read.All` |
 | Governance | `EntitlementManagement.Read.All`, `AccessReview.Read.All`, `Policy.Read.All`, `LifecycleWorkflows.Read.All`, `Agreement.Read.All` |
-| Groups (only with `-Areas`) | `Group.Read.All` |
+| Groups (only with `-Areas`) | `Group.Read.All`, `Directory.Read.All` |
 | Users and devices (only with `-Areas`) | `User.Read.All`, `Device.Read.All`, `OrgContact.Read.All` |
-| Applications (only with `-Areas`) | `Application.Read.All`, `Synchronization.Read.All` |
+| Applications (only with `-Areas`) | `Application.Read.All`, `Synchronization.Read.All`, `Directory.Read.All` |
 <!-- permissions:entra:end -->
 
 **Defender**
@@ -299,6 +299,4 @@ Replacing the active certificate or removing the reader discards its earlier hea
 
 Defender scheduled backups include the [17 supported configuration types](/backups/defender/). Detection and response also needs `Workbooks.Read.All`. Cloud scopes and content repositories remain outside coverage. No Defender type is restorable.
 
-An existing Backup Reader that holds Directory.Read.All no longer passes the read-only permission allowlist. Its owner must remove that application role and verify the reader again before scheduled backups resume. TenuVault does not revoke existing grants automatically. Use the narrower service and area roles from the generated setup; group lifecycle policies and consent grants will be excluded. Existing delegated admin access is still recognized.
-
-Certificate renewal commands omit the excluded organization and directory roles even when an older reader record still contains them. Review the permission change before running the command; the setup script removes roles outside the selected set when explicitly run against that reader.
+Directory.Read.All is a backup read permission in the opt-in Groups and Applications areas, covering group lifecycle policies and delegated permission grants. Existing readers holding it pass the read-only allowlist. Certificate renewal preserves it, including when it is held alongside a partial service permission set. It is never a restore permission.

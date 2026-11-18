@@ -96,9 +96,22 @@ describe("What a choice of services, areas and access levels asks for", () => {
     expect(entra).toContain("Policy.Read.All")
     expect(entra).toContain("GroupMember.Read.All")
     for (const directory of ["Directory.Read.All", "User.Read.All", "Group.Read.All", "Device.Read.All", "Application.Read.All"]) expect(entra, directory).not.toContain(directory)
-    expect(graph({ entra: { access: "backup", areas: ["groups"] } }).filter((permission) => !entra.includes(permission))).toEqual(["Group.Read.All"])
+    expect(graph({ entra: { access: "backup", areas: ["groups"] } }).filter((permission) => !entra.includes(permission))).toEqual(["Group.Read.All", "Directory.Read.All"])
     expect(graph({ entra: { access: "backup", areas: ["usersAndDevices"] } }).filter((permission) => !entra.includes(permission))).toEqual(["User.Read.All", "Device.Read.All", "OrgContact.Read.All"])
-    expect(graph({ entra: { access: "backup", areas: ["applications"] } }).filter((permission) => !entra.includes(permission))).toEqual(["Application.Read.All", "Synchronization.Read.All"])
+    expect(graph({ entra: { access: "backup", areas: ["applications"] } }).filter((permission) => !entra.includes(permission))).toEqual(["Application.Read.All", "Synchronization.Read.All", "Directory.Read.All"])
+  })
+
+  it.each(["groups", "applications"])("keeps Directory.Read.All as an opt-in backup read for %s in both sign-in modes", (area) => {
+    const folder = area === "groups" ? "GroupLifecyclePolicies" : "OAuth2PermissionGrants"
+    for (const mode of ["delegated", "application"] as const) {
+      expect(graphPermissions({ entra: { access: "backup" } }, mode)).not.toContain("Directory.Read.All")
+      const choice: PermissionChoice = { entra: { access: "backup", areas: [area] } }
+      const permissions = graphPermissions(choice, mode)
+      expect(permissions).toContain("Directory.Read.All")
+      expect(knownPermissions(mode)[0]!.permissions).toContain("Directory.Read.All")
+      expect(canBackUp(folder, { kind: mode, permissions: new Set(permissions) })).toBe(true)
+      expect(missingForChoice(choice, { kind: mode, permissions: new Set(permissions.filter(permission => permission !== "Directory.Read.All")) })).toEqual(["Directory.Read.All"])
+    }
   })
 
   it("lets a ReadWrite permission stand in for its Read one, and asks for a shared permission once", () => {
@@ -147,7 +160,7 @@ describe("What a choice of services, areas and access levels asks for", () => {
       expect(missingForChoice(choice, granted), JSON.stringify(choice)).toEqual([])
       for (const [id, picked] of Object.entries(choice)) for (const area of MODULE_BY_ID.get(id as ModuleId)!.areas) {
         if (area.optIn && !picked.areas?.includes(area.id)) continue
-        for (const folder of area.folders) expect(canBackUp(folder, granted), folder).toBe(!["GroupLifecyclePolicies", "OAuth2PermissionGrants"].includes(folder))
+        for (const folder of area.folders) expect(canBackUp(folder, granted), folder).toBe(true)
         if (picked.access === "restore") for (const part of area.parts.filter((candidate) => !candidate.restoreNotRequested && candidate.restore.delegated !== "unsupported")) {
           for (const group of part.restore.delegated as readonly (readonly string[])[]) expect(group.some((permission) => granted.permissions.has(permission)), part.folders[0]).toBe(true)
         }
@@ -232,7 +245,7 @@ describe("Permissions per folder and sign-in mode", () => {
     expect(settings.missingBackup!.map((group) => group[0])).toEqual(["Policy.Read.PermissionGrant", "GroupSettings.Read.All", "Domain.Read.All", "OnPremDirectorySynchronization.Read.All"])
     expect(entra.backup).toBe("missing")
     const ready = checkModules(delegated(...graphPermissions({ entra: { access: "backup", areas: ["groups", "usersAndDevices", "applications"] } }, "delegated")), [MODULE_BY_ID.get("entra")!])[0]!
-    expect(ready.backup).toBe("partial")
+    expect(ready.backup).toBe("ready")
     expect(ready.restore).toBe("missing")
     // App-only, the folders only a signed-in admin can read do not count against the area.
     expect(areaNeed(MODULE_BY_ID.get("entra")!.areas[0]!, "backup", "application").flat()).not.toContain("OnPremDirectorySynchronization.Read.All")
@@ -343,7 +356,7 @@ describe("Backup Reader roles from the manifest", () => {
   it("may hold the read permission of any area of any service, and nothing else", () => {
     const everything = readerRoles(Object.fromEntries(MODULES.map((module) => [module.id, { access: "backup" as const, areas: module.areas.filter((area) => area.optIn || area.appOnlyOptIn).map((area) => area.id) }])))
     expect([...READER_ALLOWED_ROLES].sort()).toEqual([...everything].sort())
-    for (const role of ["DeviceManagementManagedDevices.Read.All", "Policy.Read.All", "SecurityEvents.Read.All"]) expect(READER_ALLOWED_ROLES.has(role), role).toBe(true)
+    for (const role of ["DeviceManagementManagedDevices.Read.All", "Policy.Read.All", "Directory.Read.All", "SecurityEvents.Read.All"]) expect(READER_ALLOWED_ROLES.has(role), role).toBe(true)
     for (const role of ["Mail.Read", "Policy.ReadWrite.ConditionalAccess", "DeviceManagementApps.ReadWrite.All", "User.Read"]) expect(READER_ALLOWED_ROLES.has(role), role).toBe(false)
   })
 
@@ -356,7 +369,7 @@ describe("Backup Reader roles from the manifest", () => {
     expect(readerExcludedFolders(entra, { services: ["entra"] })).toEqual(["MdmEnrollmentPolicies", "MamEnrollmentPolicies", "OnPremisesSynchronization"])
     // An opt-in area that is on needs its own roles; one that is off is not the reader's to miss.
     expect(readerExcludedFolders(entra, { services: ["entra"], areas: { entra: ["groups"] } })).toEqual(["MdmEnrollmentPolicies", "MamEnrollmentPolicies", "OnPremisesSynchronization", "Groups", "GroupLifecyclePolicies", "OwnerlessGroupPolicy"])
-    expect(readerExcludedFolders(readerRoles({ entra: { access: "backup", areas: ["groups"] } }), { services: ["entra"], areas: { entra: ["groups"] } })).toEqual(["MdmEnrollmentPolicies", "MamEnrollmentPolicies", "OnPremisesSynchronization", "GroupLifecyclePolicies", "OwnerlessGroupPolicy"])
+    expect(readerExcludedFolders(readerRoles({ entra: { access: "backup", areas: ["groups"] } }), { services: ["entra"], areas: { entra: ["groups"] } })).toEqual(["MdmEnrollmentPolicies", "MamEnrollmentPolicies", "OnPremisesSynchronization", "OwnerlessGroupPolicy"])
   })
 
   it("reads a reader's roles back as the services and areas it was set up for, for every combination", () => {
@@ -389,7 +402,7 @@ describe("Backup Reader roles from the manifest", () => {
     // One Entra ID role alone: without its own parameter the script would grant the five Intune roles in its place.
     expect(readerScriptArguments(["Domain.Read.All"])).toBe(" -Permissions Domain.Read.All")
     // A role next to a whole service: naming the service alone would remove it.
-    expect(readerScriptArguments([...five, "SecurityEvents.Read.All"])).toBe(named([...five, "SecurityEvents.Read.All"]))
+    expect(readerScriptArguments([...five, "Directory.Read.All"])).toBe(named([...five, "Directory.Read.All"]))
     // Entra ID short of one role: -IncludeConditionalAccess alone would remove every other Entra ID role.
     const short = [...five, ...entra.filter((role) => role !== "Agreement.Read.All")]
     expect(short).toHaveLength(five.length + entra.length - 1)
