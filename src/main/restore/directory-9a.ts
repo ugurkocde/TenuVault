@@ -35,7 +35,7 @@ export const NEVER_RESTORED = {
 } as const
 const fail = (message: string): never => { throw new RestoreSafetyError(message) }
 export function cloudObject(snapshot: Item): void {
-  if (snapshot.onPremisesSyncEnabled === true || snapshot.onPremisesImmutableId || snapshot.onPremisesLastSyncDateTime) fail(NEVER_RESTORED["On-premises synchronized objects"])
+  if ((snapshot.onPremisesSyncEnabled === true || snapshot.onPremisesSyncEnabled === false) || snapshot.onPremisesImmutableId || snapshot.onPremisesLastSyncDateTime) fail(NEVER_RESTORED["On-premises synchronized objects"])
 }
 const strings = (source: Item, fields: readonly string[]): Item => Object.fromEntries(fields.filter(key => source[key] !== undefined).map(key => {
   const value = source[key]

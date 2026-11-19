@@ -1,6 +1,6 @@
 import { typeForFolder, restoreCapability, type Item } from "../../shared/intune/registry"
 import { restoreMatrixRow } from "../../shared/intune/restore-matrix"
-import { RestoreSafetyError, RestoreWriteRefusedError, guardRestoreItem, type RestoreActor } from "../../shared/intune/restore-guards"
+import { RestoreSafetyError, RestoreWriteDeferredError, RestoreWriteRefusedError, guardRestoreItem, type RestoreActor } from "../../shared/intune/restore-guards"
 import { isGuid } from "../../shared/security"
 import { graphContinuation } from "../../shared/graph-continuation"
 import { grantedPermissions } from "../../shared/services/token"
@@ -32,24 +32,72 @@ export function directoryPermissions(step: GuardedStep): string[] {
   return action === "create" ? ["User.Create"] : ["User.ReadUpdate.All", ...(step.desired.accountEnabled !== undefined ? ["User.EnableDisableAccount.All", "User.Read.All"] : [])]
 }
 /** The same operation evidence gates the preview and the final transport. */
-export function directory9aIO(token: string, actor: RestoreActor, safety: GuardedIO["references"], fetchImpl: typeof fetch = fetch, scan?: GuardedIO["replacedReferences"], wait: (ms: number) => Promise<void> = ms => new Promise(resolve => setTimeout(resolve, ms))): GuardedIO & { review: (step: GuardedStep) => Promise<ReturnType<typeof directoryReview>>; ids: (id: string, kind: "members" | "owners") => AsyncIterable<string>; locate: (folder: "Users" | "Groups", sourceId: string) => Promise<{ action: "update" | "recycle" | "create"; current: Item | null }> } {
+export function directory9aIO(token: string, actor: RestoreActor, safety: GuardedIO["references"], fetchImpl: typeof fetch = fetch, scan?: GuardedIO["replacedReferences"], wait?: (ms: number) => Promise<void>, signal?: AbortSignal): GuardedIO & { review: (step: GuardedStep) => Promise<ReturnType<typeof directoryReview>>; ids: (id: string, kind: "members" | "owners") => AsyncIterable<string>; locate: (folder: "Users" | "Groups", sourceId: string) => Promise<{ action: "update" | "recycle" | "create"; current: Item | null }> } {
   requireRestoreActor(token, actor)
-  const request = async (path: string, method = "GET", body?: Item, beforeRetry?: () => Promise<void>): Promise<Item | null> => {
+  const pause = (ms: number) => new Promise<void>((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const finish = (error?: unknown) => {
+      clearTimeout(timer); signal?.removeEventListener("abort", abort)
+      if (error) reject(error); else resolve()
+    }
+    const abort = () => finish(signal?.reason)
+    if (signal?.aborted) { abort(); return }
+    signal?.addEventListener("abort", abort, { once: true })
+    if (wait) void wait(ms).then(() => finish(), finish)
+    else timer = setTimeout(() => finish(), ms)
+  })
+  const request = async (path: string, method = "GET", body?: Item, validateSend?: () => Promise<void>, beforeSend?: () => void): Promise<Item | null> => {
     for (let attempt = 0; ; attempt++) {
-      const url = new URL(root + path)
+      const url = new URL(path.startsWith("https://") ? path : root + path)
       if (method === "GET" && /^(users|groups)\/[0-9a-f-]+$/i.test(path)) url.searchParams.set("$select", path.startsWith("users/") ? "id,displayName,userPrincipalName,mailNickname,userType,accountEnabled,givenName,surname,jobTitle,department,officeLocation,usageLocation,assignedLicenses,onPremisesSyncEnabled,onPremisesImmutableId,onPremisesLastSyncDateTime" : "id,displayName,description,mailNickname,groupTypes,mailEnabled,securityEnabled,isAssignableToRole,membershipRule,membershipRuleProcessingState,onPremisesSyncEnabled")
-      const response = await fetchImpl(url.href, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(60_000) })
+      if (method !== "GET") {
+        try {
+          signal?.throwIfAborted()
+          await validateSend?.()
+          signal?.throwIfAborted()
+        } catch (error) {
+          if (signal?.aborted) throw new RestoreWriteDeferredError("The directory write was cancelled before sending.")
+          if (attempt) throw new RestoreWriteRefusedError(429)
+          throw error
+        }
+      } else if (signal?.aborted) throw new RestoreWriteDeferredError("The directory read was cancelled before sending a write.")
+      const requestSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000)
+      beforeSend?.()
+      if (method !== "GET" && signal?.aborted) throw new RestoreWriteDeferredError("The directory write was cancelled before sending.")
+      const response = await fetchImpl(url.href, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}), signal: requestSignal }).catch(error => {
+        if (method === "GET" && signal?.aborted) throw new RestoreWriteDeferredError("The directory read was cancelled before sending a write.")
+        throw error
+      })
       if (response.status === 429 && attempt < 4) {
-        await wait(Math.min(60_000, Math.max(1000, Number(response.headers.get("Retry-After")) * 1000 || 1000)))
-        if (method !== "GET") {
-          try { if (!beforeRetry) throw new Error("No reviewed retry"); await beforeRetry() } catch { throw new RestoreWriteRefusedError(429) }
+        const retryAfter = response.headers.get("Retry-After")
+        const delay = retryAfter && !Number.isFinite(Number(retryAfter)) ? Date.parse(retryAfter) - Date.now() : Number(retryAfter) * 1000
+        try { await pause(Math.min(60_000, Math.max(1000, delay || 1000))) }
+        catch (error) {
+          if (method !== "GET") throw new RestoreWriteDeferredError("The throttled directory write was not applied. Resume to continue.")
+          if (signal?.aborted) throw new RestoreWriteDeferredError("The directory read was cancelled before sending a write.")
+          throw error
         }
         continue
       }
       if (method === "GET" && response.status === 404) return null
       if (method !== "GET" && response.status >= 400 && response.status < 500 && response.status !== 408) throw new RestoreWriteRefusedError(response.status)
       if (!response.ok) throw new Error("Directory request was not confirmed. No response body is retained.")
-      return response.status === 204 ? {} : await response.json() as Item
+      return response.status === 204 ? {} : await response.json().catch(error => {
+        if (method === "GET" && signal?.aborted) throw new RestoreWriteDeferredError("The directory read was cancelled before sending a write.")
+        throw error
+      }) as Item
+    }
+  }
+  const ids = async function* (id: string, kind: "members" | "owners"): AsyncGenerator<string> {
+    const start = `https://graph.microsoft.com/${kind === "members" ? "beta" : "v1.0"}/groups/${identity(id)}/${kind}?$select=id&$top=999`
+    let next: string | undefined = start
+    const seen = new Set<string>()
+    while (next) {
+      const page = await request(graphContinuation(start, next, seen))
+      if (!Array.isArray(page?.value)) throw new RestoreSafetyError("Invalid relationship collection.")
+      for (const item of page.value as Item[]) yield identity(item?.id)
+      if (page["@odata.nextLink"] !== undefined && typeof page["@odata.nextLink"] !== "string") throw new RestoreSafetyError("Invalid relationship continuation.")
+      next = page["@odata.nextLink"] as string | undefined
     }
   }
   const list = async function* (path: string): AsyncGenerator<Item> {
@@ -146,7 +194,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       if (!admin) throw new RestoreSafetyError("Security-group creation requires a current tenant-wide Groups Administrator or Global Administrator assignment. Non-admin creation can implicitly make the restoring account an owner.")
     }
     const principal = intent.principalId ? await resolvePrincipal(intent.principalId) : null
-    let excluded = false, inherited = false, indirectUserChange = false
+    let excluded = false, included = false, inherited = false, indirectUserChange = false, emptiesTarget = false
     if (step.folder === "Users" && (intent.action === "manager" || (intent.action === "update" && step.desired.displayName !== undefined && step.desired.displayName !== resource?.displayName))) {
       for await (const policy of list("identity/conditionalAccess/policies?$select=id,conditions")) {
         const users = (policy.conditions as Item | undefined)?.users as Item | undefined
@@ -158,9 +206,16 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       if (["member", "owner"].includes(intent.action)) for await (const parent of list(`groups/${identity(step.targetId ?? step.sourceId)}/memberOf?$select=id`)) { if (parent) { inherited = true; break } }
       for await (const policy of list("identity/conditionalAccess/policies?$select=id,conditions")) {
         const users = (policy.conditions as Item | undefined)?.users as Item | undefined
-        if (!users || !Array.isArray(users.excludeGroups)) throw new RestoreSafetyError("Conditional Access exclusions could not be resolved.")
+        if (!users || !Array.isArray(users.includeGroups) || !Array.isArray(users.excludeGroups) || [...users.includeGroups, ...users.excludeGroups].some(id => !isGuid(id))) throw new RestoreSafetyError("Conditional Access dependencies could not be resolved.")
         if (users.excludeGroups.includes(step.targetId ?? step.sourceId)) excluded = true
+        if (users.includeGroups.includes(step.targetId ?? step.sourceId)) included = true
       }
+    }
+    if (included && intent.action === "member" && step.desired.present === false) {
+      let survivor = false
+      // Consume every page: a partial read must never establish that a CA target stays populated.
+      for await (const id of ids(step.targetId ?? step.sourceId, "members")) if (id !== intent.principalId) survivor = true
+      emptiesTarget = !survivor
     }
     const compared = ["member", "owner", "manager", "license"].includes(intent.action) ? { ...resource, ...await read(step, step.targetId) } : resource
     const result = directoryReview(step, compared, principal, actor, excluded)
@@ -178,26 +233,13 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       if (types.includes("Unified")) requireEvidence("microsoft365", "Microsoft 365 group restore has no matched complete live lifecycle.")
       if (types.includes("DynamicMembership")) requireEvidence("dynamic rule", "Dynamic rule restore remains blocked: paused fixture evidence does not establish safe future beneficiaries.")
     }
+    if (emptiesTarget) result.blocker ??= "This removal could empty a Conditional Access target group. A complete fresh membership read must show another member remains."
     if (excluded) requireEvidence("privileged-links", "Conditional Access excluded groups remain blocked: indirect security-response recovery is not admitted.")
     if (principal?.["@odata.type"] === "#microsoft.graph.group") requireEvidence("nested-links", "Nested group relationships have no live round trip or admitted indirect-beneficiary guard.")
     return result
   }
   return {
-    ids: async function* (id, kind) {
-      const start = `https://graph.microsoft.com/${kind === "members" ? "beta" : "v1.0"}/groups/${identity(id)}/${kind}?$select=id&$top=999`
-      let next: string | undefined = start
-      const seen = new Set<string>()
-      while (next) {
-        const url = graphContinuation(start, next, seen)
-        const response = await fetchImpl(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(60_000) })
-        if (!response.ok) throw new RestoreSafetyError("A complete current relationship read is required.")
-        const page = await response.json() as Item
-        if (!Array.isArray(page.value)) throw new RestoreSafetyError("Invalid relationship collection.")
-        for (const item of page.value as Item[]) yield identity(item.id)
-        if (page["@odata.nextLink"] !== undefined && typeof page["@odata.nextLink"] !== "string") throw new RestoreSafetyError("Invalid relationship continuation.")
-        next = page["@odata.nextLink"] as string | undefined
-      }
-    },
+    ids,
     token, type: folder => typeForFolder(folder)!, ...(scan ? { replacedReferences: scan } : {}), read, review,
     locate: async (folder, sourceId) => {
       const path = `${folder === "Users" ? "users" : "groups"}/${identity(sourceId)}`
@@ -217,7 +259,9 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       if (step.directory?.principalId) refs.principals = [...refs.principals, step.directory.principalId]
       return refs
     },
-    write: async (step, body, targetId, beforeSend, run) => {
+    write: async (step, body, targetId, beforeSend, run, writeSignal) => {
+      if (writeSignal && writeSignal !== signal) return directory9aIO(token, actor, safety, fetchImpl, scan, wait, writeSignal).write(step, body, targetId, beforeSend, run, writeSignal)
+      if (signal?.aborted) throw new RestoreWriteDeferredError("The directory write was cancelled before sending.")
       requireRestoreActor(token, actor)
       if (restoreFingerprint(body) !== restoreFingerprint(step.desired)) throw new RestoreSafetyError("The directory write no longer matches its approved difference.")
       const type = typeForFolder(step.folder), row = restoreMatrixRow(step.folder)
@@ -260,22 +304,23 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
         if (!Array.isArray(license.disabledPlans) || license.disabledPlans.some(plan => !isGuid(plan))) throw new RestoreSafetyError("Invalid disabled license plans.")
         method = "POST"; writePath = `${path}/assignLicense`; payload = { addLicenses: [license], removeLicenses: [] }
       } else throw new RestoreSafetyError("Unsupported directory intent.")
-      beforeSend()
       // License writes are never replayed, including on a definite throttle or lost response.
       const response = action === "license" ? await (async () => {
-        const answer = await fetchImpl(root + writePath, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(60_000) })
+        if (signal?.aborted) throw new RestoreWriteDeferredError("The directory write was cancelled before sending.")
+        beforeSend()
+        const answer = await fetchImpl(root + writePath, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000) })
         if (!answer.ok) throw new RestoreWriteRefusedError(answer.status)
         return await answer.json() as Item
       })() : await request(writePath, method, payload, async () => {
         const current = await read(step, targetId)
-        if (restoreFingerprint(current) !== step.preview) throw new RestoreSafetyError("The tenant changed while throttled. Preview this item again.")
+        if (restoreFingerprint(current) !== step.preview) throw new RestoreSafetyError("The tenant changed before sending. Preview this item again.")
         const fresh = await review(step)
         if (fresh.blocker) throw new RestoreSafetyError(fresh.blocker)
         requireDirectoryApprovals(step, run, fresh.approvals)
         const references = await safety(step, current, body)
         if (step.directory?.principalId) references.principals = [...references.principals, step.directory.principalId]
         guardRestoreItem(actor, step.folder, targetId, references, step.allowRemoval === true, guardedProtections(step))
-      })
+      }, beforeSend)
       const id = action === "invite" ? (response?.invitedUser as Item | undefined)?.id : response?.id ?? targetId
       return { id: identity(id) }
     },

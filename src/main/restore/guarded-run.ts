@@ -5,7 +5,7 @@ import { requireRestoreActor } from "./restore-actor"
 import { createHash } from "node:crypto"
 import type { KeyValueStore } from "../storage/secure-store"
 import { restoreCapability, type IntuneType, type Item } from "../../shared/intune/registry"
-import { addsOnlyPayload, RestoreSafetyError, RestoreWriteRefusedError, guardRestoreItem, mergeConsentScopes, restoreOriginBlocker, writableSnapshot, type RestoreActor, type RestoreOrigin, type SafetyReferences } from "../../shared/intune/restore-guards"
+import { addsOnlyPayload, RestoreSafetyError, RestoreWriteDeferredError, RestoreWriteRefusedError, guardRestoreItem, mergeConsentScopes, restoreOriginBlocker, writableSnapshot, type RestoreActor, type RestoreOrigin, type SafetyReferences } from "../../shared/intune/restore-guards"
 import { dependencyOrder, mappedReference, rememberMapping, type ReferenceKind, type ReplacedReference, type RestoreMapping } from "../../shared/intune/restore-references"
 
 export interface GuardedStep {
@@ -55,7 +55,7 @@ export interface GuardedIO {
   /** Complete descriptor-based lookup. Must reject an incomplete list, never match a guessed name. */
   findCreated: (step: GuardedStep, sent: Item) => Promise<Item[]>
   references: (step: GuardedStep, current: Item | null, desired: Item) => Promise<SafetyReferences>
-  write: (step: GuardedStep, body: Item, targetId: string | undefined, beforeSend: () => void, run?: GuardedRun) => Promise<{ id?: string }>
+  write: (step: GuardedStep, body: Item, targetId: string | undefined, beforeSend: () => void, run?: GuardedRun, signal?: AbortSignal) => Promise<{ id?: string }>
 }
 /** The closed directory adapter refuses privileged links and state changes at its final send boundary.
  * Other writers retain the full descriptor protections, including remaining administrators. */
@@ -207,9 +207,11 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
         try {
           result = await io.write(step, desired, entry.targetId, () => {
             entry.state = "uncertain"; journal.save(run)
-          }, run)
+          }, run, signal)
         } catch (error) {
-          if (entry.state === "captured") {
+          if (error instanceof RestoreWriteDeferredError) {
+            entry.state = "captured"; delete entry.reason
+          } else if (entry.state === "captured") {
             entry.state = "failed-before-send"
             entry.reason = "The write was not sent. Preview this item again."
           } else if (error instanceof RestoreWriteRefusedError) {

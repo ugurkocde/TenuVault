@@ -35,11 +35,11 @@ export async function* mappedDirectoryIds(source: AsyncIterable<string>, map: (i
     for await (const entry of spool.entries()) yield entry.id
   } finally { await spool.close() }
 }
-export async function* directoryRelationshipSteps(folder: "Users" | "Groups", sourceId: string, targetId: string, snapshot: Item, io: ReturnType<typeof directory9aIO>, relationships?: { members: { saved: AsyncIterable<string>; current: AsyncIterable<string> }; owners: { saved: AsyncIterable<string>; current: AsyncIterable<string> }; exactMembers?: boolean; exactOwners?: boolean; savedIdsAreTargets?: boolean; signal?: AbortSignal; mapPrincipal: (source: string) => Promise<string> }): AsyncGenerator<GuardedStep> {
+export async function* directoryRelationshipSteps(folder: "Users" | "Groups", sourceId: string, targetId: string, snapshot: Item, io: ReturnType<typeof directory9aIO>, relationships?: { members: { saved: AsyncIterable<string>; current: AsyncIterable<string> }; owners: { saved: AsyncIterable<string>; current: AsyncIterable<string> }; exactMembers?: boolean; exactOwners?: boolean; savedIdsAreTargets?: boolean; signal?: AbortSignal; mapPrincipal: (source: string) => Promise<string> }, resolve = true): AsyncGenerator<GuardedStep> {
   if (!isGuid(sourceId) || !isGuid(targetId)) throw new RestoreSafetyError("Resolve the restored object ID before reviewing relationships.")
   const make = async (action: "manager" | "license" | "member" | "owner", desired: Item, principalId?: string, exact = false): Promise<GuardedStep> => {
     const step: GuardedStep = { key: `${folder}:${sourceId}:${action}:${principalId ?? JSON.stringify(desired)}`, folder, sourceId, targetId, operation: "update", directory: { action, ...(principalId ? { principalId } : {}), ...(exact ? { exact: true } : {}) }, desired, properties: Object.keys(desired), requires: [], ...(exact ? { allowRemoval: true } : {}), preview: "" }
-    step.preview = restoreFingerprint(await io.read(step, targetId))
+    if (resolve) step.preview = restoreFingerprint(await io.read(step, targetId))
     return step
   }
   if (folder === "Users") {

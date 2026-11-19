@@ -19,7 +19,7 @@ import type { RestoreConnection } from "./service"
 import type { IdentityRestoreRequest } from "./dispatch"
 
 export interface DirectoryOptions { stage: "object" | "relationships"; exactMembers: boolean; exactOwners: boolean; previousRunId?: string }
-export interface DirectoryPage { run: GuardedRun; rows: Array<{ key: string; review: DirectoryReview }>; more: boolean; options: DirectoryOptions; selection?: string[] }
+export interface DirectoryPage { inventory?: { id: string; count: number; offset: number; targetId: string }; run: GuardedRun; rows: Array<{ key: string; review: DirectoryReview }>; more: boolean; options: DirectoryOptions; selection?: string[] }
 const fail = (message: string): never => { throw new RestoreSafetyError(message) }
 const key = (tenant: string, id: string) => `restore.directory.review.${tenant.toLowerCase()}.${id}`
 /** Owned backup readers are supplied by the authenticated route, never by the renderer. */
@@ -71,16 +71,18 @@ export class DirectoryRestoreService {
       object.properties = Object.keys(object.desired)
     }
     const run: GuardedRun = { version: 1, id: randomUUID(), tenant, actor, origin: "restore", source: { path: request.path, fingerprint: restoreFingerprint(snapshot) }, entries: [], mappings: [] }
-    let after = ""
+    let inventory: DirectoryPage["inventory"]
     if (options.previousRunId) {
       const previous = this.load(tenant, options.previousRunId)
       if (folder !== "Groups" || options.stage !== "relationships" || previous.run.source?.path !== request.path || previous.run.source.fingerprint !== run.source!.fingerprint || previous.options.exactMembers !== options.exactMembers || previous.options.exactOwners !== options.exactOwners || previous.run.actor.userId !== actor.userId || previous.run.actor.clientId !== actor.clientId) fail("Continue the original group's relationship preview and exact choices.")
-      after = previous.run.entries.at(-1)?.step.key ?? ""
+      if (!previous.inventory) fail("Preview this group again to create its relationship inventory.")
+      inventory = { ...previous.inventory!, offset: previous.inventory!.offset + previous.run.entries.length }
+      if (inventory.targetId !== object.targetId) fail("The restored group mapping changed. Preview its relationships again.")
     }
     const page: DirectoryPage = { run, rows: [], more: false, options }
-    let steps: AsyncIterable<typeof object>
+    let steps: AsyncIterable<typeof object> = (async function* () {})()
     if (options.stage === "object") steps = (async function* () { yield object })()
-    else {
+    else if (!inventory) {
       if (object.directory?.action !== "update") fail("Restore the directory object before reviewing its relationships.")
       const target = object.targetId!
       const mapPrincipal = async (id: string) => directoryMappedId(this.store, tenant, "Users", id) ?? directoryMappedId(this.store, tenant, "Groups", id) ?? id
@@ -104,10 +106,33 @@ export class DirectoryRestoreService {
         members: { saved: folder === "Groups" ? mappedDirectoryIds(saved("members"), mapPrincipal) : empty(), current: folder === "Groups" ? mappedDirectoryIds(io.ids(target, "members"), async id => id) : empty() },
         owners: { saved: folder === "Groups" ? mappedDirectoryIds(saved("owners"), mapPrincipal) : empty(), current: folder === "Groups" ? mappedDirectoryIds(io.ids(target, "owners"), async id => id) : empty() },
         exactMembers: options.exactMembers, exactOwners: options.exactOwners, mapPrincipal, savedIdsAreTargets: true,
-      })
+      }, false)
+      // Persist the complete immutable difference once, with at most 50 unresolved rows per record.
+      // Cursoring over these records happens before any per-row Graph resolution on later pages.
+      inventory = { id: run.id, count: 0, offset: 0, targetId: target }
+      let chunk: typeof object[] = [], part = 0
+      const inventoryKey = (part: number) => `restore.directory.inventory.${tenant.toLowerCase()}.${run.id}.${part}`
+      try {
+        for await (const step of steps) {
+          if (++inventory.count > 1_000_000) fail("The directory difference limit was reached.")
+          chunk.push(step)
+          if (chunk.length === 50) { this.store.set(inventoryKey(part++), JSON.stringify(chunk)); chunk = [] }
+        }
+        if (chunk.length) this.store.set(inventoryKey(part++), JSON.stringify(chunk))
+      } catch (error) {
+        for (let index = 0; index < part; index++) this.store.delete(inventoryKey(index))
+        throw error
+      }
+    }
+    if (inventory) {
+      const raw = this.store.get(`restore.directory.inventory.${tenant.toLowerCase()}.${inventory.id}.${inventory.offset / 50}`)
+      if (!raw && inventory.offset < inventory.count) fail("The saved relationship difference is unavailable. Preview again.")
+      const chunk: typeof object[] = raw ? JSON.parse(raw!) : []
+      steps = (async function* () { for (const step of chunk) { step.preview = restoreFingerprint(await io.read(step, step.targetId)); yield step } })()
+      page.inventory = inventory
+      page.more = inventory.offset + chunk.length < inventory.count
     }
     for await (const step of steps) {
-      if (after && step.key <= after) continue
       if (page.rows.length === 50) { page.more = true; break }
       const review = await io.review(step)
       const blocker = directoryAdmission(step)

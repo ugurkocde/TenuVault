@@ -136,9 +136,12 @@ it("retries bounded throttles and rejects hostile continuations before attaching
   const io = directory9aIO(token(), actor, refs, vi.fn(async () => ++calls < 3 ? new Response(null, { status: 429, headers: { "Retry-After": "2" } }) : new Response(null, { status: 404 })), undefined, wait)
   expect((await io.locate("Users", user.id)).action).toBe("create")
   expect(wait.mock.calls).toEqual([[2000], [2000]])
-  const fetcher = vi.fn(async () => Response.json({ value: [], "@odata.nextLink": "https://evil.example/users" }))
+  const fetcher = vi.fn(async (_input: RequestInfo | URL) => Response.json({ value: [], "@odata.nextLink": "https://evil.example/users" }))
   const bad = directory9aIO(token(), actor, refs, fetcher)
-  await expect(bad.review({ ...stepFor("member"), targetId: group.id })).rejects.toThrow()
+  const collect = async () => { for await (const _ of bad.ids(group.id, "members")) { /* Fully follow the relationship inventory. */ } }
+  await expect(collect()).rejects.toThrow()
+  expect(fetcher).toHaveBeenCalledTimes(1)
+  expect(String(fetcher.mock.calls[0]![0])).toContain(`/beta/groups/${group.id}/members`)
 })
 it("streams 50,000 membership differences and loads only a bounded preview", async () => {
   let loaded = 0
@@ -153,7 +156,7 @@ it("streams 50,000 membership differences and loads only a bounded preview", asy
   expect(await previewDirectoryPage(relationshipDifference(empty(), current()))).toEqual([])
   expect(await previewDirectoryPage(relationshipDifference(empty(), current(), true))).toEqual([{ id: uuid(60_000), present: false }])
 })
-it("batches 50,000 members and 2,000 users, persists a bounded cursor and resumes a cancelled page without duplicates", async () => admitted(async () => {
+it("journal and batch engine: processes 50,000 members and 2,000 users, persists a bounded cursor and resumes a cancelled page without duplicates", async () => admitted(async () => {
   for (const total of [50_000, 2000]) {
     const store = storage(), controller = new AbortController(), applied = new Set<string>()
     let largest = 0, writes = 0
@@ -235,11 +238,12 @@ it("does not widen a Conditional Access excluded group's membership permission t
   const fetcher = vi.fn(async (input: RequestInfo | URL, options?: RequestInit) => {
     if (options?.method !== "GET") return Response.json({ id: group.id })
     if (String(input).includes("/memberOf")) return Response.json({ value: [] })
-    if (String(input).includes("conditionalAccess")) return Response.json({ value: [{ conditions: { users: { excludeGroups: [group.id] } } }] })
+    if (String(input).includes("conditionalAccess")) return Response.json({ value: [{ conditions: { users: { includeGroups: [], excludeGroups: [group.id] } } }] })
     if (new URL(String(input)).pathname.endsWith("users/" + principal.id)) return Response.json(principal)
     return Response.json(group)
   })
   const io = directory9aIO(token(["GroupMember.ReadWrite.All", "Group.Read.All", "User.Read.All", "Policy.Read.All"]), actor, refs, fetcher)
+  step.preview = restoreFingerprint(await io.read(step))
   const review = await io.review(step), run = runFor(step)
   expect(review.roleAssignable).toBe(false); expect(review.approvals).toContain("privileged-relationship")
   for (const kind of review.approvals) approveDirectory(step, run, kind)
@@ -274,4 +278,111 @@ it("selects the optional user fields needed to reconcile an unanswered create", 
   })
   const io = directory9aIO(token(), actor, refs, fetcher)
   expect(await io.findCreated(step, step.desired)).toEqual([expect.objectContaining({ ...step.desired, id: uuid(90) })])
+})
+
+function retryWorld(removal = false) {
+  const step = stepFor("member")
+  step.directory = { action: "member", principalId: principal.id, ...(removal ? { exact: true } : {}) }
+  step.allowRemoval = removal; step.desired = { principalId: principal.id, present: !removal }; step.properties = Object.keys(step.desired)
+  const members = new Set(removal ? [principal.id, uuid(31)] : [])
+  const controller = new AbortController()
+  let attempts = 0, applied = 0, mode = "success", included = false
+  const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input)), path = url.pathname.replace(/^\/(v1\.0|beta)\//, "")
+    if (init?.method !== "GET") {
+      attempts++
+      if (mode === "throttle" && attempts === 1) return new Response(null, { status: 429 })
+      applied++
+      if (removal) members.delete(principal.id); else members.add(principal.id)
+      if (mode === "unanswered") { controller.abort(); throw new Error("Answer lost") }
+      return new Response(null, { status: 204 })
+    }
+    if (path === `groups/${group.id}`) return Response.json(group)
+    if (path.endsWith("/memberOf")) return Response.json({ value: [] })
+    if (path.includes("conditionalAccess")) return Response.json({ value: [{ conditions: { users: { includeGroups: included ? [group.id] : [], excludeGroups: [] } } }] })
+    if (path === `groups/${group.id}/members`) return Response.json({ value: [...members].map(id => ({ id })) })
+    if (path.includes("/members/")) return members.has(principal.id) ? Response.json(principal) : new Response(null, { status: 404 })
+    return Response.json(principal)
+  })
+  const configure = (next: string, ca = false) => { mode = next; included = ca }
+  return { step, members, controller, fetcher, configure, attempts: () => attempts, applied: () => applied }
+}
+it("cancels a throttled write promptly and resumes its definitely unapplied attempt", async () => {
+  const env = retryWorld(), saved = storage(), journal = new GuardedRunJournal(saved)
+  env.configure("throttle")
+  let waiting!: () => void
+  const reached = new Promise<void>(resolve => { waiting = resolve })
+  let release!: () => void
+  const io = directory9aIO(token(), actor, refs, env.fetcher, undefined, async () => { waiting(); await new Promise<void>(resolve => { release = resolve }) })
+  env.step.preview = restoreFingerprint(await io.read(env.step))
+  const run = runFor(env.step)
+  for (const kind of (await io.review(env.step)).approvals) approveDirectory(env.step, run, kind)
+  const pending = executeGuardedRun(journal, run, io, env.controller.signal)
+  await reached; env.controller.abort()
+  let result: Awaited<typeof pending>
+  try { result = await Promise.race([pending, new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Cancellation did not interrupt backoff")), 100))]) }
+  finally { release(); await pending }
+  expect(env.attempts()).toBe(1); expect(result.run.entries[0]!.state).toBe("captured")
+  expect((await executeGuardedRun(journal, run, directory9aIO(token(), actor, refs, env.fetcher))).status).toBe("complete")
+  expect(env.attempts()).toBe(2); expect(env.applied()).toBe(1)
+})
+it("retains an unanswered cancelled send for reconciliation instead of retrying it", async () => {
+  const env = retryWorld(), journal = new GuardedRunJournal(storage())
+  env.configure("unanswered")
+  const io = directory9aIO(token(), actor, refs, env.fetcher)
+  env.step.preview = restoreFingerprint(await io.read(env.step))
+  const run = runFor(env.step)
+  for (const kind of (await io.review(env.step)).approvals) approveDirectory(env.step, run, kind)
+  expect((await executeGuardedRun(journal, run, io, env.controller.signal)).run.entries[0]!.state).toBe("uncertain")
+  expect((await executeGuardedRun(journal, run, io)).status).toBe("complete")
+  expect(env.attempts()).toBe(1)
+})
+it("rechecks CA membership before a throttled removal retry and consumes all membership pages", async () => {
+  const env = retryWorld(true); env.configure("throttle", true)
+  let pages = 0
+  const original = env.fetcher.getMockImplementation()!
+  env.fetcher.mockImplementation(async (input, init) => {
+    const url = new URL(String(input))
+    if (url.pathname.endsWith("/members")) {
+      pages++
+      return url.searchParams.has("$skiptoken") ? Response.json({ value: [...env.members].filter(id => id !== principal.id).map(id => ({ id })) }) : Response.json({ value: [{ id: principal.id }], "@odata.nextLink": url.href + "&$skiptoken=rest" })
+    }
+    return original(input, init)
+  })
+  const io = directory9aIO(token(), actor, refs, env.fetcher, undefined, async () => { env.members.delete(uuid(31)) })
+  env.step.preview = restoreFingerprint(await io.read(env.step))
+  const run = runFor(env.step)
+  for (const kind of (await io.review(env.step)).approvals) approveDirectory(env.step, run, kind)
+  expect((await executeGuardedRun(new GuardedRunJournal(storage()), run, io)).status).toBe("partial")
+  expect(env.attempts()).toBe(1); expect(env.members.has(principal.id)).toBe(true); expect(pages).toBeGreaterThan(2)
+})
+
+it("checks cancellation at the final send boundary before attaching a write", async () => {
+  const env = retryWorld(), io = directory9aIO(token(), actor, refs, env.fetcher)
+  env.step.preview = restoreFingerprint(await io.read(env.step))
+  const run = runFor(env.step)
+  for (const kind of (await io.review(env.step)).approvals) approveDirectory(env.step, run, kind)
+  await expect(io.write(env.step, env.step.desired, group.id, () => env.controller.abort(), run, env.controller.signal)).rejects.toThrow("cancelled before sending")
+  expect(env.attempts()).toBe(0)
+})
+it("blocks removals if a later CA policy or membership page cannot be read completely", async () => {
+  for (const collection of ["policies", "members"]) {
+    const env = retryWorld(true); env.configure("success", true)
+    const original = env.fetcher.getMockImplementation()!
+    env.fetcher.mockImplementation(async (input, init) => {
+      const url = new URL(String(input))
+      if (url.pathname.endsWith("/" + collection)) {
+        if (url.searchParams.has("$skiptoken")) return new Response(null, { status: 403 })
+        const page = await original(input, init)
+        return Response.json({ ...await page.json(), "@odata.nextLink": url.href + (url.search ? "&" : "?") + "$skiptoken=unreadable" })
+      }
+      return original(input, init)
+    })
+    const io = directory9aIO(token(), actor, refs, env.fetcher)
+    env.step.preview = restoreFingerprint(await io.read(env.step))
+    await expect(io.review(env.step)).rejects.toThrow()
+    const run = runFor(env.step)
+    expect((await executeGuardedRun(new GuardedRunJournal(storage()), run, io)).status).toBe("partial")
+    expect(env.attempts()).toBe(0)
+  }
 })

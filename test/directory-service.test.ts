@@ -3,6 +3,7 @@ import { expect, it, vi } from "vitest"
 import { DirectoryRestoreService } from "../src/main/restore/directory-service"
 import { RecoveryAccounts } from "../src/main/restore/safety-resolvers"
 import { restoreFingerprint } from "../src/main/restore/guarded-run"
+import { LARGE_SHARD_ITEMS } from "../src/shared/large-backup"
 import type { Item } from "../src/shared/intune/registry"
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`
 const tenant = id(1), app = id(2), admin = id(3), resource = id(10)
@@ -13,7 +14,7 @@ function world(count = 0, missing = false) {
   const store = { partitioned: true as const, get: (key: string) => data.get(key) ?? null, set: (key: string, value: string) => { data.set(key, value) }, delete: (key: string) => { data.delete(key) } }
   const group: Item = { id: resource, displayName: "Group", mailNickname: "group", groupTypes: [], mailEnabled: false, securityEnabled: true, isAssignableToRole: false }
   const saved = Array.from({ length: count }, (_, n) => id(100 + n))
-  const declaration = { format: "sorted-id-shards-v1", count, shards: count ? 1 : 0, complete: true, hash: createHash("sha256").update(saved.map(value => JSON.stringify(value) + "\n").join("")).digest("hex") }
+  const declaration = { format: "sorted-id-shards-v1", count, shards: Math.ceil(count / LARGE_SHARD_ITEMS), complete: true, hash: createHash("sha256").update(saved.map(value => JSON.stringify(value) + "\n").join("")).digest("hex") }
   const snapshot: Item & { members: typeof declaration; owners: typeof declaration } = { ...group, members: declaration, owners: { ...declaration, count: 0, shards: 0, hash: createHash("sha256").digest("hex") } }
   const token = `h.${Buffer.from(JSON.stringify({ tid: tenant, oid: admin, appid: app, scp: "User.Create User.ReadUpdate.All User.ReadWrite.All User.Read.All Group.ReadWrite.All Group.Read.All GroupMember.ReadWrite.All Application.Read.All Policy.Read.All" })).toString("base64url")}.s`
   const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -41,7 +42,7 @@ function world(count = 0, missing = false) {
   const connection = async () => ({ token, tenantId: tenant, clientId: app, userId: admin })
   const service = () => new DirectoryRestoreService(store, new RecoveryAccounts(store), connection, fetcher)
   const request = { path: `backup/Groups/${resource}.json`, snapshot, origin: "restore" as const }
-  const read = async () => saved
+  const read = async (name: string) => { const part = Number(name.match(/(\d+)\.json$/)?.[1] ?? 0); return saved.slice(part * LARGE_SHARD_ITEMS, (part + 1) * LARGE_SHARD_ITEMS) }
   return { service, request, group, saved, read, data, writes, members, fetcher }
 }
 it("executes a real 50-row relationship preview in bounded batches and resumes without duplicates", async () => {
@@ -170,4 +171,103 @@ it("blocks user name changes when Conditional Access groups could inherit the re
   const page = await env.service().prepare(tenant, request, options, env.read)
   expect(page.rows[0]!.review.blocker).toContain("dynamic-membership review")
   expect(env.writes).toEqual([])
+})
+
+function caGroup(env: ReturnType<typeof world>, included = true) {
+  const original = env.fetcher.getMockImplementation()!
+  env.fetcher.mockImplementation(async (input, init) => String(input).includes("conditionalAccess") ? Response.json({ value: [{ conditions: { users: { includeGroups: included ? [resource] : [], excludeGroups: included ? [] : [resource] } } }] }) : original(input, init))
+}
+it("keeps the last member of a Conditional Access included group across batch boundaries", async () => {
+  const env = world(), service = env.service()
+  for (let n = 0; n < 21; n++) env.members.add(id(100 + n))
+  caGroup(env)
+  const page = await service.prepare(tenant, env.request, { ...options, stage: "relationships", exactMembers: true }, env.read)
+  const result = await service.execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals])))
+  expect(env.members.size).toBe(1)
+  expect(env.writes).toHaveLength(20)
+  expect(result.status).toBe("partial")
+})
+it("blocks emptying a CA target and refuses excluded groups or incomplete policy pages", async () => {
+  for (const mode of ["included", "excluded", "incomplete"] as const) {
+    const env = world(); env.members.add(id(100)); caGroup(env, mode !== "excluded")
+    if (mode === "incomplete") {
+      const original = env.fetcher.getMockImplementation()!
+      env.fetcher.mockImplementation(async (input, init) => String(input).includes("conditionalAccess") ? Response.json({ value: [{ conditions: { users: { excludeGroups: [] } } }] }) : original(input, init))
+      await expect(env.service().prepare(tenant, env.request, { ...options, stage: "relationships", exactMembers: true }, env.read)).rejects.toThrow("Conditional Access")
+    } else {
+      const page = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships", exactMembers: true }, env.read)
+      expect(page.rows[0]!.review.blocker).toContain("Conditional Access")
+    }
+    expect(env.writes).toEqual([])
+  }
+})
+it("pages a durable 5,000-member production difference at constant Graph cost after restart", async () => {
+  const env = world(5000), read = vi.fn(env.read)
+  const costs: number[] = [], keys = new Set<string>()
+  let previousRunId: string | undefined
+  for (let n = 0; n < 100; n++) {
+    const before = env.fetcher.mock.calls.length
+    const page = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships", previousRunId }, read)
+    costs.push(env.fetcher.mock.calls.length - before)
+    expect(page.rows).toHaveLength(50)
+    for (const row of page.rows) { expect(keys.has(row.key)).toBe(false); keys.add(row.key) }
+    expect(page.more).toBe(n < 99)
+    previousRunId = page.runId
+    expect(costs[n]).toBeLessThanOrEqual(costs[0]! + 5)
+    // Later pages must use the immutable difference, even if live membership changes.
+    env.members.add(id(100 + n))
+  }
+  expect(keys.size).toBe(5000)
+  expect(read).toHaveBeenCalledTimes(5)
+  expect(Math.max(...[...env.data.values()].map(value => value.length))).toBeLessThan(150_000)
+}, 60_000)
+it("retries a throttled later relationship page through production prepare", async () => {
+  const env = world(2), original = env.fetcher.getMockImplementation()!
+  let attempts = 0
+  env.fetcher.mockImplementation(async (input, init) => {
+    const url = new URL(String(input))
+    if (url.pathname.endsWith("/members")) {
+      if (!url.searchParams.has("$skiptoken")) return Response.json({ value: [], "@odata.nextLink": url.href + "&$skiptoken=next" })
+      if (++attempts === 1) return new Response(null, { status: 429, headers: { "Retry-After": "0" } })
+      return Response.json({ value: [] })
+    }
+    return original(input, init)
+  })
+  const page = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
+  expect(page.rows).toHaveLength(2)
+  expect(attempts).toBe(2)
+})
+for (const folder of ["Users", "Groups"] as const) it(`rejects saved and live formerly synced ${folder} with nullable legacy fields`, async () => {
+  // Graph's selected fields can be null after sync is disabled; false still identifies a formerly synced object.
+  const former = { onPremisesSyncEnabled: false, onPremisesImmutableId: null, onPremisesLastSyncDateTime: null }
+  const env = world()
+  const snapshot = folder === "Groups" ? env.request.snapshot : { id: id(100), displayName: "Saved", userType: "Member" }
+  const request = { ...env.request, path: `backup/${folder}/${snapshot.id}.json`, snapshot: { ...snapshot, ...former } }
+  await expect(env.service().prepare(tenant, request, options, env.read)).rejects.toThrow("formerly synced")
+  const original = env.fetcher.getMockImplementation()!
+  env.fetcher.mockImplementation(async (input, init) => {
+    const response = await original(input, init)
+    return new URL(String(input)).pathname.endsWith(`/${snapshot.id}`) ? Response.json({ ...await response.json(), ...former }) : response
+  })
+  await expect(env.service().prepare(tenant, { ...request, snapshot }, options, env.read)).rejects.toThrow("formerly synced")
+  expect(env.writes).toEqual([])
+})
+
+it("cancels the production adapter's throttle wait and resumes after restart", async () => {
+  const env = world(1), service = env.service()
+  const page = await service.prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
+  const original = env.fetcher.getMockImplementation()!
+  let reached!: () => void, attempts = 0
+  const throttled = new Promise<void>(resolve => { reached = resolve })
+  env.fetcher.mockImplementation(async (input, init) => {
+    if (init?.method === "POST" && ++attempts === 1) { reached(); return new Response(null, { status: 429, headers: { "Retry-After": "60" } }) }
+    return original(input, init)
+  })
+  const request = { ...env.request, runId: page.runId }, approvals = { [page.rows[0]!.key]: page.rows[0]!.review.approvals }
+  const pending = service.execute(tenant, request, page.fingerprint, approvals)
+  await throttled; await service.cancel(tenant, page.runId)
+  expect(await pending).toMatchObject({ status: "partial", outcomes: [{ state: "captured" }] })
+  expect(attempts).toBe(1); expect(env.writes).toEqual([])
+  expect(await env.service().execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ status: "complete" })
+  expect(attempts).toBe(2); expect(env.writes).toHaveLength(1)
 })
