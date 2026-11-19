@@ -60,7 +60,7 @@ export function createAuditRecorder(
 
     if (["/api/restore-configuration", "/api/restore-directory"].includes(path) && JSON.parse(requestBody).action !== "restore") return
     if (["/api/restore-directory", "/api/restore-configuration", "/api/restore-backup", "/api/revert-policy"].includes(path) && request.method === "POST") {
-      void recordRestore(requestBody, response.clone(), dispatch, accountFor, path === "/api/revert-policy", onRestore, onTrialUsage)
+      void recordRestore(requestBody, response.clone(), dispatch, accountFor, path === "/api/revert-policy", onRestore, onTrialUsage, path === "/api/restore-directory")
         .catch((error: unknown) => console.error("[audit] Failed to record restore:", error))
       return
     }
@@ -120,7 +120,7 @@ export function createAuditRecorder(
 }
 
 /** Restore runs synchronously and can partially fail despite returning HTTP 200. */
-async function recordRestore(bodyText: string, response: Response, dispatch: (request: Request) => Promise<Response>, accountFor: (id: string) => SignedInAccount | null, policyCopy = false, onRestore?: (notice: RestoreNotice) => void, onTrialUsage?: (tenant: string, feature: Feature) => void) {
+async function recordRestore(bodyText: string, response: Response, dispatch: (request: Request) => Promise<Response>, accountFor: (id: string) => SignedInAccount | null, policyCopy = false, onRestore?: (notice: RestoreNotice) => void, onTrialUsage?: (tenant: string, feature: Feature) => void, directory = false) {
   const body = JSON.parse(bodyText) as AuditBody & { backupId?: string; originalName?: string; action?: string; mode?: string; approvalAction?: string; approvalId?: string; restoreType?: string; selectedPolicies?: unknown[]; assignments?: boolean }
   if (typeof body?.tenantId !== "string" || !body.tenantId || !body.appId || !body.clientSecret || !body.storageAccountName) return
   if (["detect", "list", "dismiss"].includes(body.approvalAction ?? "")) return
@@ -128,6 +128,15 @@ async function recordRestore(bodyText: string, response: Response, dispatch: (re
     outcome?: { success: boolean; partial?: boolean; approval?: unknown; approvalState?: string; policyId?: string; path: string; error?: string }
     success?: boolean; jobId?: string; policyId?: string; status?: string; error?: string; partial?: boolean
     details?: { restoredCount: number; partialCount?: number; failedCount: number; approvalCount?: number; duration: number; results: { path: string; success: boolean; policyId?: string; error?: string }[] }
+  }
+  if (directory) {
+    // Directory history stays in its encrypted journal. Audit and notices retain only totals.
+    const count = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0
+    data.details = { restoredCount: count(data.details?.restoredCount), failedCount: count(data.details?.failedCount), partialCount: count(data.details?.partialCount), duration: 0, results: [] }
+    data.status = data.success === true ? "Completed" : data.partial === true ? "PartiallyCompleted" : "Failed"
+    data.error = data.error ? "Directory restore did not complete. Review the saved directory page." : undefined
+    delete data.policyId; delete data.jobId; delete data.outcome
+    delete body.policyId; delete body.originalName; delete body.approvalId; delete body.approvalAction
   }
   const approvalAction = body.approvalAction
   if (approvalAction && data.outcome) {

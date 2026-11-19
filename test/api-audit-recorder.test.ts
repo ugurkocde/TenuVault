@@ -202,3 +202,31 @@ it("keeps the OIB audit after a tally recorder throws", async () => {
   await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce())
   expect(tally).toHaveBeenCalledOnce()
 })
+
+it("keeps restored directory identities out of audit, notifications and logs while attributing the admin", async () => {
+  const entries: unknown[] = [], notices: unknown[] = []
+  const logs = [vi.spyOn(console, "log"), vi.spyOn(console, "warn"), vi.spyOn(console, "error"), vi.spyOn(console, "debug")].map(spy => spy.mockImplementation(() => {}))
+  const account = { username: "admin@example.com", name: "Restoring admin" }
+  const record = createAuditRecorder(async request => { entries.push(await request.json()); return Response.json({ success: true }) }, () => account as ReturnType<Parameters<typeof createAuditRecorder>[1]>, notice => { notices.push(notice) })
+  const privateValues = ["Restored User Private", "restored-upn@example.com", "restored-mail@example.com", "00000000-0000-4000-8000-000000000999", "Restored Group Private", "00000000-0000-4000-8000-000000000998"]
+  for (const folder of ["Users", "Groups"]) {
+    const restoredId = privateValues[folder === "Users" ? 3 : 5], restoredName = privateValues[folder === "Users" ? 0 : 4]
+    record(new Request("http://tenuvault.internal/api/restore-directory", { method: "POST" }), JSON.stringify({ ...credentials, action: "restore", stage: "object", backupId: "backup", path: `backup/${folder}/${restoredId}.json`, snapshot: { id: restoredId, displayName: restoredName, userPrincipalName: privateValues[1], mail: privateValues[2] } }), Response.json({ success: true, status: "complete", outcomes: [{ key: `${folder}:${restoredId}:update`, targetId: restoredId, state: "applied" }], details: { restoredCount: 1, failedCount: 0, partialCount: 0, duration: 0, results: [] } }))
+  }
+  await vi.waitFor(() => expect(entries).toHaveLength(2))
+  expect(entries.every(entry => (entry as { user: unknown }).user && JSON.stringify(entry).includes(account.username))).toBe(true)
+  const output = JSON.stringify([entries, notices, logs.map(log => log.mock.calls)])
+  for (const value of privateValues) expect(output).not.toContain(value)
+  expect(notices).toHaveLength(2)
+  expect(logs.every(log => log.mock.calls.length === 0)).toBe(true)
+})
+
+it("redacts directory object details from failed audit results and notification fields", async () => {
+  const secret = "Private restored identity 00000000-0000-4000-8000-000000000999 person@example.com"
+  const entries: unknown[] = [], notices: unknown[] = []
+  const record = createAuditRecorder(async request => { entries.push(await request.json()); return Response.json({ success: true }) }, () => null, notice => { notices.push(notice) })
+  record(new Request("http://tenuvault.internal/api/restore-directory", { method: "POST" }), JSON.stringify({ ...credentials, action: "restore", backupId: "backup", originalName: secret, policyId: secret }), Response.json({ success: false, partial: true, status: secret, error: secret, policyId: secret, jobId: secret, details: { restoredCount: 1, failedCount: 1, partialCount: 0, duration: 0, results: [{ path: secret, error: secret }] } }))
+  await vi.waitFor(() => expect(entries).toHaveLength(1))
+  expect(JSON.stringify([entries, notices])).not.toContain(secret)
+  expect((entries[0] as { logEntry: { details: unknown } }).logEntry.details).toMatchObject({ restoredCount: 1, failedCount: 1, results: [] })
+})
