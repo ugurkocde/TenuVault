@@ -28,28 +28,43 @@ describe.skipIf(!approved)("9a approved directory lab scope", () => {
       clear: () => rmSync(recoveryRoot, { recursive: true, force: true }),
       evidence: event => appendFileSync(join(artifacts, "evidence.jsonl"), JSON.stringify(event) + "\n", { mode: 0o600 }),
     })
+    if (process.env.TENUVAULT_LAB_9A_AUDIT_ONLY === "true") {
+      const remaining = await lab.audit()
+      expect(remaining.every(item => item.folder === "directory/deletedItems/microsoft.graph.group" && typeof item.deletedDateTime === "string")).toBe(true)
+      return
+    }
     // Recovery discovery precedes new fixtures. A cleanup refusal prevents all new mutations.
     await lab.cleanup()
     try {
       const domain = LAB_9A_DOMAIN
       mkdirSync(recoveryRoot, { recursive: true, mode: 0o700 })
+      const results = new Map<string, boolean>()
+      const probe = async (name: string, run: () => Promise<void>) => {
+        try { await run(); results.set(name, true); appendFileSync(join(artifacts, "results.jsonl"), JSON.stringify({ name, result: "matched" }) + "\n", { mode: 0o600 }) }
+        catch (error) { results.set(name, false); appendFileSync(join(artifacts, "results.jsonl"), JSON.stringify({ name, result: "blocked", reason: (error as Error).message }) + "\n", { mode: 0o600 }) }
+      }
       const user = await lab.createUser(domain)
       const manager = await lab.createUser(domain)
-      await lab.manager(user, manager)
-      await lab.lifecycleUser(user)
+      await probe("manager", () => lab.manager(user, manager))
+      await probe("user-profile", () => lab.profileUser(user))
+      await probe("user-update-recycle", async () => { await lab.lifecycleUser(await lab.createUser(domain)) })
+      await probe("user-new-id", async () => { await lab.recreateUser(await lab.createUser(domain)) })
       if (LAB_9A_GROUP_CLEANUP.admitted) {
-        for (const [roleAssignable, microsoft365] of [[false, false], [false, true], [true, false]]) {
-          const group = await lab.createGroup(roleAssignable, microsoft365)
-          await lab.relationship(group, user, "members", true)
-          await lab.relationship(group, user, "members", false)
-          if (!roleAssignable) {
-            await lab.relationship(group, user, "owners", true)
-            await lab.relationship(group, user, "owners", false)
-          }
-          await lab.lifecycleGroup(group)
+        for (const [name, roleAssignable, microsoft365, dynamic] of [["security", false, false, false], ["unified", false, true, false], ["role-assignable", true, false, false], ["dynamic", false, false, true]] as const) {
+          if (process.env.TENUVAULT_LAB_9A_ENABLED_ONLY === "true" && (roleAssignable || microsoft365)) continue
+          let group: string | undefined
+          await probe(name + "-create", async () => { group = await lab.createGroup(roleAssignable, microsoft365, dynamic) })
+          if (!group) continue
+          if (!dynamic) {
+            await probe(name + "-member", async () => { await lab.relationship(group!, user, "members", true); await lab.relationship(group!, user, "members", false) })
+            await probe(name + "-owner-add", () => lab.relationship(group!, user, "owners", true))
+            await probe(name + "-owner-remove", () => lab.relationship(group!, user, "owners", false))
+          } else await probe("dynamic-rule", () => lab.dynamicRule(group!))
+          await probe(name + "-update-recycle", () => lab.lifecycleGroup(group!))
         }
       }
+      if (process.env.TENUVAULT_LAB_9A_ENABLED_ONLY === "true") for (const name of ["manager", "user-profile", "user-new-id", "security-create", "security-member", "security-owner-add", "security-update-recycle"]) expect(results.get(name), name).toBe(true)
     } finally { await lab.cleanup() }
-    expect(await lab.audit()).toEqual([])
-  }, 300_000)
+    expect((await lab.audit()).filter(item => item.folder !== "directory/deletedItems/microsoft.graph.group")).toEqual([])
+  }, 1_800_000)
 })

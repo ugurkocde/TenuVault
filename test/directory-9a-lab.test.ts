@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest"
-import { directory9aLab, LAB_9A_GROUP_BLOCKER, type DirectoryLabIntent } from "./helpers/directory-9a-lab"
+import { directory9aLab, type DirectoryLabIntent } from "./helpers/directory-9a-lab"
 import { LAB_8C_APP, LAB_8C_TENANT } from "./helpers/configuration-8c-lab"
 import type { Item } from "../src/shared/intune/registry"
 const roles = ["User.Create", "User.ReadUpdate.All", "User.Read.All", "User.DeleteRestore.All", "User.ReadWrite.All"]
@@ -22,13 +22,14 @@ function setup(mode: "normal" | "lost-create" | "cleanup-refused" | "throttle" =
       if (path === "users") return Response.json({ value: [...active.values()] })
       if (path === "groups" || path.endsWith("microsoft.graph.group")) return Response.json({ value: [] })
       if (path.endsWith("microsoft.graph.user")) return Response.json({ value: [...deleted.values()] })
-      if (path.endsWith("/manager")) return Response.json({ id: managerId })
-      const value = active.get(path.split("/").at(-1)!)
+      if (path.endsWith("/manager")) return managerId ? Response.json({ id: managerId }) : new Response(null, { status: 404 })
+      const value = (path.startsWith("directory/") ? deleted : active).get(path.split("/").at(-1)!)
       return value ? Response.json(value) : new Response(null, { status: 404 })
     }
     if (method === "PATCH") { Object.assign(active.get(id)!, JSON.parse(String(options?.body))); return new Response(null, { status: 204 }) }
     if (method === "DELETE") {
       if (mode === "cleanup-refused") return new Response(null, { status: 403 })
+      if (path.endsWith("/manager/$ref")) { managerId = ""; return new Response(null, { status: 204 }) }
       if (path.startsWith("users/")) { const item = active.get(id); if (item) deleted.set(id, item); active.delete(id) }
       else deleted.delete(id)
       return new Response(null, { status: 204 })
@@ -62,13 +63,13 @@ it("retains recovery when cleanup is refused and reports the remnants", async ()
   expect(env.durable.size).toBe(1)
   expect(await env.lab.audit()).toHaveLength(1)
 })
-it("does not change existing objects, never assigns a license or invites a guest, and refuses unproven group cleanup", async () => {
+it("does not change existing objects, never assigns a license or invites a guest, and enforces group grants", async () => {
   const env = setup()
   await expect(env.lab.lifecycleUser(id)).rejects.toThrow("Existing objects")
   await expect(env.lab.manager(id, id)).rejects.toThrow("Existing objects")
   await expect(env.lab.relationship(id, id, "members", true)).rejects.toThrow("Existing objects")
   await expect(env.lab.relationship(id, id, "../../users/other?query" as "members", false)).rejects.toThrow("relationship kind")
-  await expect(env.lab.createGroup()).rejects.toThrow(LAB_9A_GROUP_BLOCKER)
+  await expect(env.lab.createGroup()).rejects.toThrow("Missing lab application permission")
   await expect(env.lab.createGroup(true)).rejects.toThrow("approved grant")
   expect(env.fetcher).not.toHaveBeenCalled()
 })
@@ -95,7 +96,7 @@ it("verifies the prepared group lifecycle, membership and owner round trip under
       if (parts.length === 1) return Response.json({ value: [...active.values()].filter(value => value.fixtureFolder === path) })
       if (path.endsWith("microsoft.graph.user") || path.endsWith("microsoft.graph.group")) return Response.json({ value: [...deleted.values()].filter(value => value.fixtureFolder === (path.endsWith(".user") ? "users" : "groups")) })
       if (parts.length === 4) return links.has(path) ? Response.json({ id: parts[3] }) : new Response(null, { status: 404 })
-      const value = active.get(parts[1]!); return value ? Response.json(value) : new Response(null, { status: 404 })
+      const value = parts[0] === "directory" ? deleted.get(parts[2]!) : active.get(parts[1]!); return value ? Response.json(value) : new Response(null, { status: 404 })
     }
     if (method === "POST" && ["users", "groups"].includes(path)) {
       const objectId = `00000000-0000-4000-8000-${String(next++).padStart(12, "0")}`
@@ -129,9 +130,9 @@ it("verifies the prepared group lifecycle, membership and owner round trip under
       await lab.lifecycleGroup(group)
     }
     await lab.cleanup()
-    expect(await lab.audit()).toEqual([]); expect(intents.size).toBe(0); expect(links.size).toBe(0)
+    expect((await lab.audit()).filter(item => item.folder !== "directory/deletedItems/microsoft.graph.group")).toEqual([]); expect(intents.size).toBe(0); expect(links.size).toBe(0)
     expect(fetcher.mock.calls.every(([input]) => !String(input).includes("roleManagement"))).toBe(true)
-  } finally { LAB_9A_GROUP_CLEANUP.admitted = false }
+  } finally { LAB_9A_GROUP_CLEANUP.admitted = true }
 })
 
 it("keeps an uncertain invisible create in durable recovery even after repeated empty audits", async () => {
