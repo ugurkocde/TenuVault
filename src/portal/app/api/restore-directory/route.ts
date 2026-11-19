@@ -1,3 +1,4 @@
+import { DIRECTORY_9B_FOLDERS } from "../../../../main/restore/directory-9b"
 import { NextResponse, type NextRequest } from "next/server"
 import { backupStoragePath } from "../../../../shared/backup-storage"
 import { typeForFolder, restoreCapability, type Item } from "../../../../shared/intune/registry"
@@ -16,7 +17,7 @@ export async function POST(request: NextRequest) {
   const { tenantId, appId, clientSecret, storageAccountName, backupId, path, action } = body
   if (![tenantId, appId, clientSecret, storageAccountName, backupId, path].every(value => typeof value === "string" && value) || !/^[a-zA-Z0-9_-]+$/.test(backupId) || !validPolicyPath(path, backupId) || !["preview", "restore", "cancel", "resume"].includes(action) || !["object", "relationships"].includes(body.stage)) return NextResponse.json({ error: "Choose one directory object from this backup." }, { status: 400 })
   const type = typeForFolder(path.split("/")[1] ?? "")
-  if (!type || !["Users", "Groups"].includes(type.folder) || ["none", "metadata"].includes(restoreCapability(type))) return NextResponse.json({ error: "This type remains backup-only." }, { status: 409 })
+  if (!type || (!["Users", "Groups"].includes(type.folder) && !DIRECTORY_9B_FOLDERS.includes(type.folder)) || (!DIRECTORY_9B_FOLDERS.includes(type.folder) && ["none", "metadata"].includes(restoreCapability(type)))) return NextResponse.json({ error: "This type remains backup-only." }, { status: 409 })
   try {
     const storageToken = await token(tenantId, appId, clientSecret, "https://storage.azure.com/.default")
     const read = (name: string) => fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(name)}`, { headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${storageToken}` } })

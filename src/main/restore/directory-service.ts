@@ -1,3 +1,7 @@
+import { directory9bIO } from "./directory-9b-io"
+import { applicationObjectStep, applicationRelationshipSteps } from "./directory-9b-plan"
+import { DIRECTORY_9B_FOLDERS, applicationAdmission, applicationReview } from "./directory-9b"
+import type { GuardedStep } from "./guarded-run"
 import { randomUUID, createHash } from "node:crypto"
 import { INTUNE_TYPES, type Item } from "../../shared/intune/registry"
 import { canBackUp } from "../../shared/services/modules"
@@ -43,7 +47,7 @@ export class DirectoryRestoreService {
       if (!granted || INTUNE_TYPES.some(type => type.restoreSafety !== "identity" && !type.singleton && !type.staticIds && !REFERENCE_SCAN_EXCLUDED.has(type.folder) && !canBackUp(type.folder, granted))) throw new Error("Reference scan read access is unavailable")
       return referenceMatches(connection.token, mappings, this.fetchImpl, { signal })
     })
-    return { actor, io }
+    return { actor, io, applicationIO: directory9bIO(connection.token, actor, this.fetchImpl) }
   }
   private load(tenant: string, id: string): DirectoryPage {
     if (!isGuid(id)) fail("Select a saved directory preview.")
@@ -54,6 +58,7 @@ export class DirectoryRestoreService {
   private save(page: DirectoryPage) { this.store.set(key(page.run.tenant, page.run.id), JSON.stringify(page)) }
   async prepare(tenant: string, request: IdentityRestoreRequest, options: DirectoryOptions, read: (path: string) => Promise<unknown>) {
     const folder = request.path.split("/")[1]
+    if (DIRECTORY_9B_FOLDERS.includes(folder ?? "")) return this.prepareApplications(tenant, request, options, read)
     if (!["Users", "Groups"].includes(folder ?? "") || request.origin !== "restore") fail("Directory restore requires an owned same-tenant backup.")
     const snapshot = request.snapshot, sourceId = snapshot.id
     if (!isGuid(sourceId)) fail("The directory source ID is missing.")
@@ -142,6 +147,62 @@ export class DirectoryRestoreService {
     this.save(page)
     return this.view(page)
   }
+  private async prepareApplications(tenant: string, request: IdentityRestoreRequest, options: DirectoryOptions, read: (path: string) => Promise<unknown>) {
+    if (request.origin !== "restore") fail("Application access requires an owned same-tenant backup. Imported grants and cross-tenant restores are refused.")
+    const folder = request.path.split("/")[1]!, snapshot = request.snapshot
+    const { actor, applicationIO: io } = await this.context(tenant)
+    const readSource = async (sourceFolder: string, id: string): Promise<Item> => {
+      if (!["ServicePrincipals", "Applications"].includes(sourceFolder) || !isGuid(id)) fail("Invalid saved app reference.")
+      const item = await read(`${request.path.split("/")[0]}/${sourceFolder}/${id}.json`)
+      if (!item || typeof item !== "object" || Array.isArray(item)) fail("The saved app reference is unavailable.")
+      return item as Item
+    }
+    const object = await applicationObjectStep(folder, snapshot, io, readSource, directoryMappedId(this.store, tenant, folder, String(snapshot.id)))
+    const run: GuardedRun = { version: 1, id: randomUUID(), tenant, actor, origin: "restore", source: { path: request.path, fingerprint: restoreFingerprint(snapshot) }, entries: [], mappings: [] }
+    const page: DirectoryPage = { run, rows: [], more: false, options }
+    let steps: GuardedStep[] = []
+    if (options.stage === "object") steps = [object]
+    else {
+      if (folder === "OAuth2PermissionGrants" || object.directory?.action !== "update") fail("Restore the app object before reviewing its relationships.")
+      if (options.exactMembers || options.exactOwners) fail("Application relationships are adds only. Exact removal is not admitted.")
+      let inventory: NonNullable<DirectoryPage["inventory"]>
+      if (options.previousRunId) {
+        const previous = this.load(tenant, options.previousRunId)
+        if (!previous.inventory || previous.run.source?.path !== request.path || previous.run.source.fingerprint !== run.source!.fingerprint || previous.run.actor.userId !== actor.userId || previous.run.actor.clientId !== actor.clientId || previous.inventory.targetId !== object.targetId) fail("Continue the original application's relationship preview.")
+        inventory = { ...previous.inventory!, offset: previous.inventory!.offset + previous.run.entries.length }
+      } else {
+        inventory = { id: run.id, count: 0, offset: 0, targetId: object.targetId! }
+        let chunk: GuardedStep[] = [], part = 0
+        try {
+          for await (const step of applicationRelationshipSteps(request.path, snapshot, object.targetId!, io, read, readSource)) {
+            if (++inventory.count > 1_000_000) fail("The application difference limit was reached.")
+            chunk.push(step)
+            if (chunk.length === 50) { this.store.set(`restore.directory.inventory.${tenant.toLowerCase()}.${run.id}.${part++}`, JSON.stringify(chunk)); chunk = [] }
+          }
+          if (chunk.length) this.store.set(`restore.directory.inventory.${tenant.toLowerCase()}.${run.id}.${part++}`, JSON.stringify(chunk))
+        } catch (error) {
+          for (let index = 0; index < part; index++) this.store.delete(`restore.directory.inventory.${tenant.toLowerCase()}.${run.id}.${index}`)
+          throw error
+        }
+      }
+      const raw = this.store.get(`restore.directory.inventory.${tenant.toLowerCase()}.${inventory.id}.${inventory.offset / 50}`)
+      if (!raw && inventory.offset < inventory.count) fail("The application relationship inventory is unavailable.")
+      steps = raw ? JSON.parse(raw) : []
+      page.inventory = inventory; page.more = inventory.offset + steps.length < inventory.count
+    }
+    for (const step of steps) {
+      let review: DirectoryReview
+      try { await io.hydrate(step); step.preview = restoreFingerprint(await io.read(step, step.targetId)); review = await io.review(step) }
+      catch (error) {
+        review = applicationReview(step, null, { id: snapshot.id!, displayName: snapshot.displayName ?? "Unresolved application" }, null, actor)
+        review.blocker = error instanceof RestoreSafetyError ? error.message : "A reference could not be resolved. This item is blocked."
+      }
+      review.blocker ??= applicationAdmission(step)
+      page.rows.push({ key: step.key, review }); run.entries.push({ step, state: "pending" })
+    }
+    this.save(page)
+    return this.view(page)
+  }
   private view(page: DirectoryPage) {
     return { runId: page.run.id, fingerprint: restoreFingerprint({ source: page.run.source!, rows: page.rows as unknown as Item["rows"], options: page.options as unknown as Item }), rows: page.rows, more: page.more, options: page.options }
   }
@@ -153,7 +214,8 @@ export class DirectoryRestoreService {
   async execute(tenant: string, request: IdentityRestoreRequest, fingerprint: string, approvals: Record<string, string[]>) {
     const page = this.load(tenant, request.runId!)
     if (page.run.source?.path !== request.path || page.run.source.fingerprint !== restoreFingerprint(request.snapshot) || this.view(page).fingerprint !== fingerprint) fail("The backup or preview changed. Preview this object again.")
-    const { actor, io } = await this.context(tenant)
+    const context = await this.context(tenant), actor = context.actor
+    const io = DIRECTORY_9B_FOLDERS.includes(request.path.split("/")[1]!) ? context.applicationIO : context.io
     if (actor.userId !== page.run.actor.userId || actor.clientId !== page.run.actor.clientId) fail("Resume with the admin and connection that reviewed this page.")
     const selection = page.rows.filter(row => !row.review.blocker && row.review.approvals.every(kind => approvals[row.key]?.includes(kind))).map(row => row.key)
     if (!selection.length || (page.selection && JSON.stringify(page.selection) !== JSON.stringify(selection))) fail("Approve each selected row separately. A resumed page must keep its original selection.")

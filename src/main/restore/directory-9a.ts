@@ -3,9 +3,14 @@ import type { Item } from "../../shared/intune/registry"
 import { RestoreSafetyError, guardRestoreItem, type RestoreActor } from "../../shared/intune/restore-guards"
 import { restoreFingerprint, type GuardedRun, type GuardedStep } from "./guarded-run"
 
-export type DirectoryAction = "create" | "update" | "recycle" | "invite" | "member" | "owner" | "manager" | "license"
+export type DirectoryAction = "create" | "update" | "recycle" | "invite" | "member" | "owner" | "manager" | "license" | "gallery" | "consent" | "app-role" | "policy"
 export interface DirectoryIntent {
   action: DirectoryAction
+  clientAppId?: string
+  resourceAppId?: string
+  templateId?: string
+  roleName?: string
+  unresolved?: string
   principalId?: string
   /** Exact membership/ownership is selected for this resource, never the whole run. */
   exact?: boolean

@@ -47,4 +47,46 @@ export async function checkDirectoryRestore({ check, evaluate, waitForCondition,
       await go("#/portal/backup?tab=schedule", "Automatic backups")
     }
   })
+  await check("application restore shows staged risks and blocks execution in both themes at 1024 pixels", async () => {
+    await evaluate(`(() => {
+      window.__directoryFetch = window.fetch; window.__directoryRequests = [];
+      const backupId = 'application-restore', path = backupId + '/Applications/00000000-0000-4000-8000-000000000010.json';
+      window.fetch = (input, init) => {
+        const route = String(input);
+        if (route === '/api/list-backups') return Promise.resolve(Response.json({ backups: [{ id: backupId, timestamp: '2026-11-18T00:00:00Z', status: 'Success', totalPolicies: 1, counts: { Applications: 1 }, scope: null, size: 100, duration: 1 }] }));
+        if (route === '/api/list-backup-contents') return Promise.resolve(Response.json({ content: { groups: [{ folder: 'Applications', label: 'applications', area: 'Applications', policies: [{ path, displayName: 'Recovery app registration' }] }] } }));
+        if (route === '/api/restore-preview') return Promise.resolve(Response.json({ items: [{ path, name: 'Recovery app registration', blocker: 'Use the separate directory review.', replaceBlocker: 'Use the separate directory review.' }] }));
+        if (route === '/api/restore-directory') {
+          const body = JSON.parse(init.body); window.__directoryRequests.push(body);
+          return Promise.resolve(Response.json(body.action === 'preview' ? { runId: 'reviewed-directory-page', fingerprint: 'bound-directory-page', more: true, rows: [{ key: 'member', review: { principal: { id: 'p', name: 'Recovery member', type: 'user' }, resource: { id: 'g', name: 'Recovery app registration', type: 'group' }, privilege: 'member', scope: 'tenant/group/00000000-0000-4000-8000-000000000010', approvals: ['directory-item', 'security-response'], notices: ['The current state looks deliberate. This restore may undo a security response.'], changes: [{ property: 'present', before: false, after: true }], blocker: 'Phase 2 lifecycle evidence is required.', roleAssignable: false } }] } : { status: 'complete', failed: 0 }));
+        }
+        return window.__directoryFetch(input, init);
+      };
+    })()`)
+    const click = async text => assert(await evaluate(`(() => { const button = [...document.querySelectorAll('button')].find(b => b.innerText.trim().startsWith(${JSON.stringify(text)})); if (!button || button.disabled) return false; button.click(); return true; })()`), `${text} was unavailable`)
+    try {
+      await go("#/portal/tenants", "Tenant Management"); await go("#/portal/backup", "Backup & Restore")
+      await click("Refresh")
+      assert(await waitForCondition(`[...document.querySelectorAll('button')].some(b => b.innerText.includes('Restore from this backup') && !b.disabled)`), "directory backup did not load")
+      await click("Restore from this backup")
+      assert(await waitForCondition(`!![...document.querySelectorAll('button[aria-expanded]')].find(b => b.textContent.trim().startsWith('Applications'))`), "directory picker did not load")
+      await evaluate(`[...document.querySelectorAll('button[aria-expanded]')].find(b => b.textContent.trim().startsWith('Applications')).click()`)
+      await click("Review directory restore")
+      await click("Preview directory changes")
+      assert(await waitForCondition(`document.body.innerText.includes('Recovery member (user)')`), "resolved principal is missing")
+      assert(await evaluate(`[...document.querySelectorAll('button')].find(b => b.innerText.startsWith('Execute approved')).disabled`), "unapproved page can execute")
+      assert(await evaluate(`document.body.innerText.includes('breaks every client') && document.body.innerText.includes('SAML signing keys') && document.body.innerText.includes('Phase 2 lifecycle evidence')`), "staged application risks or blocker are missing")
+      await send("Emulation.setDeviceMetricsOverride", { width: 1024, height: 900, deviceScaleFactor: 1, mobile: false })
+      for (const dark of [false, true]) {
+        await evaluate(`document.documentElement.classList.toggle('dark', ${dark}); [...document.querySelectorAll('button')].find(b => b.innerText.startsWith('Execute approved')).scrollIntoView({ block: 'center' })`)
+        assert(await evaluate(`document.documentElement.scrollWidth <= window.innerWidth`), "directory review overflows at 1024 pixels")
+        await screenshot(`application-restore-${dark ? 'dark' : 'light'}-1024`)
+      }
+      assert(await evaluate(`window.__directoryRequests.every(request => request.action === 'preview')`), "application review sent an unapproved write")
+    } finally {
+      await evaluate(`window.fetch = window.__directoryFetch; delete window.__directoryFetch; delete window.__directoryRequests; document.documentElement.classList.remove('dark')`)
+      await send("Emulation.clearDeviceMetricsOverride")
+      await go("#/portal/backup?tab=schedule", "Automatic backups")
+    }
+  })
 }

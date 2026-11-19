@@ -13828,7 +13828,7 @@
     },
     "builtIn": "TenuVault connected registration, credentials and federated identity credentials.",
     "dependsOn": [],
-    "reason": "Directory restore is reserved for layer 9.",
+    "reason": "Application restore is staged for layer 9b phase 1. Every operation remains blocked in production.",
     "indexWrites": {
       "POST": [
         {
@@ -14558,7 +14558,74 @@
         "blockedReason": "No exact method/path match was established in the local OpenAPI index. Evidence only. This action or sub-resource needs an individually reviewed builder, identity key, preimage and reconciliation contract. Directory relationships are deferred to layer 9.",
         "index": "not-matched"
       }
-    ]
+    ],
+    "directoryRestore": {
+      "phase": "staged",
+      "blocker": "Phase 2 live lifecycle, delegated safety and cleanup evidence are required.",
+      "actions": [
+        "create",
+        "update",
+        "recycle",
+        "owner"
+      ],
+      "builder": "src/main/restore/directory-9b-io.ts",
+      "contracts": [
+        {
+          "action": "create",
+          "method": "POST",
+          "path": "applications",
+          "delegated": [
+            "AppRegistration.Create"
+          ],
+          "application": [
+            "AppRegistration.Create"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/application-post-applications?view=graph-rest-1.0",
+          "blocker": "App recreation changes appId and has no unique reconciler. AppRegistration.Create appears in the current operation table but is absent from the permission reference; availability and safe delegated ownership require phase 2 verification."
+        },
+        {
+          "action": "update",
+          "method": "PATCH",
+          "path": "applications/{id}",
+          "delegated": [
+            "Application.ReadWrite.All"
+          ],
+          "application": [
+            "Application.ReadWrite.OwnedBy"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/application-update?view=graph-rest-1.0",
+          "blocker": "Phase 2 live lifecycle, delegated safety and cleanup evidence are required. Only displayName and description are staged."
+        },
+        {
+          "action": "recycle",
+          "method": "POST",
+          "path": "directory/deletedItems/{id}/restore",
+          "delegated": [
+            "Application.ReadWrite.All"
+          ],
+          "application": [
+            "Application.ReadWrite.OwnedBy"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/directory-deleteditems-restore?view=graph-rest-1.0",
+          "blocker": "Recovered credentials, inherited access and relationships cannot yet be completely verified. Never bypass this blocker by recreating a deleted identity."
+        },
+        {
+          "action": "owner",
+          "method": "POST",
+          "path": "applications/{id}/owners/$ref",
+          "delegated": [
+            "Application.ReadWrite.All",
+            "Directory.Read.All"
+          ],
+          "application": [
+            "Application.ReadWrite.OwnedBy",
+            "Directory.Read.All"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/application-post-owners?view=graph-rest-1.0",
+          "blocker": "Phase 2 live lifecycle, delegated safety and cleanup evidence are required. Each privileged owner addition requires individual and security-response approvals. Owners are adds only."
+        }
+      ]
+    }
   },
   {
     "folder": "ServicePrincipals",
@@ -14660,7 +14727,7 @@
     "dependsOn": [
       "Applications"
     ],
-    "reason": "Directory restore is reserved for layer 9.",
+    "reason": "Application restore is staged for layer 9b phase 1. Every operation remains blocked in production.",
     "indexWrites": {
       "POST": [
         {
@@ -15973,7 +16040,118 @@
         "blockedReason": "No exact method/path match was established in the local OpenAPI index. Evidence only. This action or sub-resource needs an individually reviewed builder, identity key, preimage and reconciliation contract. Directory relationships are deferred to layer 9.",
         "index": "not-matched"
       }
-    ]
+    ],
+    "directoryRestore": {
+      "phase": "staged",
+      "blocker": "Phase 2 live lifecycle, delegated safety and cleanup evidence are required.",
+      "actions": [
+        "create",
+        "gallery",
+        "update",
+        "app-role",
+        "policy",
+        "recycle",
+        "owner"
+      ],
+      "builder": "src/main/restore/directory-9b-io.ts",
+      "contracts": [
+        {
+          "action": "create",
+          "method": "POST",
+          "path": "servicePrincipals",
+          "delegated": [
+            "Application.ReadWrite.All"
+          ],
+          "application": [
+            "Application.ReadWrite.OwnedBy"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/serviceprincipal-post-serviceprincipals?view=graph-rest-1.0",
+          "blocker": "Phase 2 live lifecycle, delegated safety and cleanup evidence are required. Resolve appId and Microsoft ownership before recreation."
+        },
+        {
+          "action": "gallery",
+          "method": "POST",
+          "path": "applicationTemplates/{templateId}/instantiate",
+          "delegated": [
+            "Application.ReadWrite.All"
+          ],
+          "application": [
+            "Application.ReadWrite.OwnedBy"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/applicationtemplate-instantiate?view=graph-rest-1.0",
+          "blocker": "Template provenance is absent from backup v1. Gallery creation has no unique reconciliation key or approved credential-free lifecycle evidence."
+        },
+        {
+          "action": "update",
+          "method": "PATCH",
+          "path": "servicePrincipals/{id}",
+          "delegated": [
+            "Application.ReadWrite.All"
+          ],
+          "application": [
+            "Application.ReadWrite.OwnedBy"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/serviceprincipal-update?view=graph-rest-1.0",
+          "blocker": "Phase 2 live lifecycle, delegated safety and cleanup evidence are required. SSO, provisioning and credential properties are excluded."
+        },
+        {
+          "action": "app-role",
+          "method": "POST",
+          "path": "servicePrincipals/{principalId}/appRoleAssignments",
+          "delegated": [
+            "AppRoleAssignment.ReadWrite.All",
+            "Application.Read.All"
+          ],
+          "application": [
+            "AppRoleAssignment.ReadWrite.All",
+            "Application.Read.All"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/serviceprincipal-post-approleassignments?view=graph-rest-1.0",
+          "blocker": "Phase 2 live lifecycle, delegated safety and cleanup evidence are required. Each assignment needs its own approval and appId-based mapping. User and group assignments need their own verified principal mapping contracts."
+        },
+        {
+          "action": "policy",
+          "method": "POST",
+          "path": "servicePrincipals/{id}/{layer8Policy}/$ref",
+          "delegated": [
+            "Policy.ReadWrite.ApplicationConfiguration"
+          ],
+          "application": [
+            "Policy.ReadWrite.ApplicationConfiguration"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/serviceprincipal-post-claimsmappingpolicies?view=graph-rest-1.0",
+          "blocker": "Policy bindings require typed layer 8 configuration references and a separately verified binding permission contract."
+        },
+        {
+          "action": "recycle",
+          "method": "POST",
+          "path": "directory/deletedItems/{id}/restore",
+          "delegated": [
+            "Application.ReadWrite.All"
+          ],
+          "application": [
+            "Application.ReadWrite.OwnedBy"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/directory-deleteditems-restore?view=graph-rest-1.0",
+          "blocker": "Recovered credentials, inherited access and relationships cannot yet be completely verified. Never bypass this blocker by recreating a deleted identity."
+        },
+        {
+          "action": "owner",
+          "method": "POST",
+          "path": "servicePrincipals/{id}/owners/$ref",
+          "delegated": [
+            "Application.ReadWrite.All",
+            "Directory.Read.All"
+          ],
+          "application": [
+            "Application.ReadWrite.OwnedBy",
+            "Directory.Read.All"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/serviceprincipal-post-owners?view=graph-rest-1.0",
+          "blocker": "Phase 2 live lifecycle, delegated safety and cleanup evidence are required. Each privileged owner addition requires individual and security-response approvals. Owners are adds only."
+        }
+      ]
+    }
   },
   {
     "folder": "OAuth2PermissionGrants",
@@ -16058,7 +16236,7 @@
     "dependsOn": [
       "ServicePrincipals"
     ],
-    "reason": "Directory restore is reserved for layer 9.",
+    "reason": "Application restore is staged for layer 9b phase 1. Every operation remains blocked in production.",
     "indexWrites": {
       "POST": [
         {
@@ -16103,7 +16281,30 @@
         "index": "matched",
         "indexPath": "/oauth2PermissionGrants/{oAuth2PermissionGrant-id}"
       }
-    ]
+    ],
+    "directoryRestore": {
+      "phase": "staged",
+      "blocker": "Phase 2 live lifecycle, delegated safety and cleanup evidence are required.",
+      "actions": [
+        "consent"
+      ],
+      "builder": "src/main/restore/directory-9b-io.ts",
+      "contracts": [
+        {
+          "action": "consent",
+          "method": "POST/PATCH",
+          "path": "oauth2PermissionGrants[/{id}]",
+          "delegated": [
+            "DelegatedPermissionGrant.ReadWrite.All"
+          ],
+          "application": [
+            "DelegatedPermissionGrant.ReadWrite.All"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/oauth2permissiongrant-post?view=graph-rest-1.0",
+          "blocker": "Phase 2 live lifecycle, delegated safety and cleanup evidence are required. Same-tenant owned backups only. Map through appId, merge scopes and approve each grant separately."
+        }
+      ]
+    }
   },
   {
     "folder": "EntraDevices",

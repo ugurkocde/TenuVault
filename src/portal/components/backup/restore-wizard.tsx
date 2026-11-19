@@ -889,8 +889,8 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                                       )}
                                     </span>
                                   </label>
-                                  {!copying && ["Users", "Groups"].includes(item.folder) && <DirectoryRestore key={`${tenant.credentials.tenantId}:${tenant.credentials.appId}:${tenant.storageAccountName}:${backupId}:${item.path}`} tenant={tenant} backupId={backupId!} path={item.path} />}
-                                  {!copying && !["Users", "Groups"].includes(item.folder) && typeForFolder(item.folder)?.restoreSafety === "identity" && !["none", "metadata"].includes(restoreCapability(typeForFolder(item.folder)!)) && <ConfigurationRestore key={`${tenant.credentials.tenantId}:${tenant.credentials.appId}:${tenant.storageAccountName}:${backupId}:${item.path}`} tenant={tenant} backupId={backupId!} path={item.path} singleton={restoreCapability(typeForFolder(item.folder)!) === "singleton"} />}
+                                  {!copying && ["Users", "Groups", "Applications", "ServicePrincipals", "OAuth2PermissionGrants"].includes(item.folder) && <DirectoryRestore key={`${tenant.credentials.tenantId}:${tenant.credentials.appId}:${tenant.storageAccountName}:${backupId}:${item.path}`} tenant={tenant} backupId={backupId!} path={item.path} />}
+                                  {!copying && !["Users", "Groups", "Applications", "ServicePrincipals", "OAuth2PermissionGrants"].includes(item.folder) && typeForFolder(item.folder)?.restoreSafety === "identity" && !["none", "metadata"].includes(restoreCapability(typeForFolder(item.folder)!)) && <ConfigurationRestore key={`${tenant.credentials.tenantId}:${tenant.credentials.appId}:${tenant.storageAccountName}:${backupId}:${item.path}`} tenant={tenant} backupId={backupId!} path={item.path} singleton={restoreCapability(typeForFolder(item.folder)!) === "singleton"} />}
                                 </li>
                               ))}
                               <li className="pl-11">
