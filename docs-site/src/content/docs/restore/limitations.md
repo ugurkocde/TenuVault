@@ -163,4 +163,12 @@ These exclusions also apply to staged directory recovery. The preview reports th
 | Devices | A device object is created by device registration. |
 | Domains | Ownership and federation need separate verification and setup. |
 
-Mail-enabled security groups and distribution groups cannot be recreated through the directory Graph flow. Microsoft 365 recovery covers its directory object only. Teams, SharePoint and mailbox content are excluded. All staged user and group restore operations still require live verification before they become available. See [Directory recovery](/restore/identity/#users-and-groups-staged-directory-recovery).
+Mail-enabled security groups and distribution groups cannot be recreated through the directory Graph flow. Microsoft 365 recovery covers its directory object only. Teams, SharePoint and mailbox content are excluded. Only the admitted closed directory subsets are available. See [Directory recovery](/restore/identity/#users-and-groups).
+
+## Directory restore boundaries
+
+Directory restore supports disabled cloud member creation, existing cloud member display names, static security-group creation/descriptions, manager assignment and ordinary user member/owner relationships. See [the per-operation boundaries](/restore/identity/#users-and-groups). Each removal needs the group's exact choice and an individual approval. Account state, recycle recovery, guests, licenses, Microsoft 365 groups, dynamic rules, role-assignable or Conditional Access excluded groups, nested principals and other unverified fields remain blocked with reasons.
+
+Passwords and authentication methods, application secrets/private keys, federated identity credentials, dynamic members, Microsoft first-party service principals, activated PIM instances, synced objects, devices and domains are never restored. Recreation gets a new ID; review policy targets and external integrations before activation. Application recreation would also get a new app ID, but is not enabled here.
+
+The lab leaves only soft-deleted test groups, which Entra permanently removes after 30 days. They are audited by ID and deletion date. Test users are permanently removed; earlier runs' deleted groups are never restored by a later run.

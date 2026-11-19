@@ -1,3 +1,4 @@
+import { checkDirectoryRestore } from "./directory-restore-smoke.mjs"
 import { checkConfigurationRestore } from "./configuration-restore-smoke.mjs"
 import { checkIdentityRestoreSafety } from "./identity-restore-safety-smoke.mjs"
 /**
@@ -1826,6 +1827,7 @@ await check("unsaved schedule drafts stay with their tenant", async () => {
 })
 
 await checkRestoreService({ check, evaluate, waitForCondition, screenshot, assert, send, go })
+await checkDirectoryRestore({ check, evaluate, waitForCondition, screenshot, assert, send, go })
 await checkConfigurationRestore({ check, evaluate, waitForCondition, screenshot, assert, send, go })
 
 await check("large inventory pages stay bounded in dark mode at 1024 pixels", async () => {
