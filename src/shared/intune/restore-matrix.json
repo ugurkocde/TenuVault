@@ -8890,7 +8890,7 @@
     },
     "builtIn": "Synced users, signed-in admin and recovery accounts.",
     "dependsOn": [],
-    "reason": "Directory restore requires live lab lifecycle and cleanup evidence in phase 2. No directory operation is admitted in production.",
+    "reason": "Only the closed subsets in the separate directory review are admitted. Recycle recovery, account state, invitations, licenses and privileged or unverified relationship variants remain blocked.",
     "indexWrites": {
       "POST": [
         {
@@ -9476,12 +9476,12 @@
       ]
     },
     "verification": {
-      "date": "2026-11-17",
-      "method": "local-graph-index-and-microsoft-documentation",
+      "date": "2026-11-18",
+      "method": "local-graph-index-microsoft-documentation-and-approved-lab",
       "resourceFound": true,
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/user?view=graph-rest-1.0",
-      "live": "not-run",
-      "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
+      "live": "Approved app-only fixture lifecycle and final cleanup audited. See individual directory operation evidence.",
+      "notes": "Current operation tables establish delegated least privilege. The app-only token held a union of roles. Production admits only closed metadata and ordinary user links after individual review. Generic configuration transport remains blocked. Owner removal, privileged links and other unsupported variants retain explicit reasons."
     },
     "disposition": "directory-deferred",
     "supplementalWrites": [
@@ -11618,8 +11618,8 @@
       }
     ],
     "directoryRestore": {
-      "phase": "staged-9a-phase1",
-      "blocker": "Directory restore requires live lab lifecycle and cleanup evidence in phase 2. No directory operation is admitted in production.",
+      "phase": "enabled",
+      "blocker": "Use the separate directory review. Only verified closed metadata and ordinary user relationships are admitted.",
       "actions": [
         "create",
         "update",
@@ -11641,7 +11641,7 @@
             "User.Create"
           ],
           "documentation": "https://learn.microsoft.com/en-us/graph/api/user-post-users?view=graph-rest-1.0",
-          "blocker": "Live lifecycle evidence is required. Production remains blocked. User.Create and User.ReadUpdate.All are present in the operation tables and permissions reference but missing from the older permission model."
+          "blocker": ""
         },
         {
           "action": "update",
@@ -11654,7 +11654,7 @@
             "User.ReadUpdate.All"
           ],
           "documentation": "https://learn.microsoft.com/en-us/graph/api/user-update?view=graph-rest-1.0",
-          "blocker": "Live lifecycle evidence is required. Production remains blocked. User.Create and User.ReadUpdate.All are present in the operation tables and permissions reference but missing from the older permission model."
+          "blocker": ""
         },
         {
           "action": "account state",
@@ -11669,7 +11669,7 @@
             "User.Read.All"
           ],
           "documentation": "https://learn.microsoft.com/en-us/graph/api/user-update?view=graph-rest-1.0",
-          "blocker": "Live lifecycle evidence is required. Production remains blocked. User.Create and User.ReadUpdate.All are present in the operation tables and permissions reference but missing from the older permission model."
+          "blocker": "Account activation is blocked: enabled accounts were outside the approved lab scope."
         },
         {
           "action": "recycle",
@@ -11682,7 +11682,7 @@
             "User.DeleteRestore.All"
           ],
           "documentation": "https://learn.microsoft.com/en-us/graph/api/directory-deleteditems-restore?view=graph-rest-1.0",
-          "blocker": "Live lifecycle evidence is required. Production remains blocked. User.Create and User.ReadUpdate.All are present in the operation tables and permissions reference but missing from the older permission model."
+          "blocker": "Recycle restore is blocked: inherited relationships and account state do not yet have a delegated safety review."
         },
         {
           "action": "invite",
@@ -11695,7 +11695,7 @@
             "User.Invite.All"
           ],
           "documentation": "https://learn.microsoft.com/en-us/graph/api/invitation-post?view=graph-rest-1.0",
-          "blocker": "Live lifecycle evidence is required. Production remains blocked. User.Create and User.ReadUpdate.All are present in the operation tables and permissions reference but missing from the older permission model."
+          "blocker": "Guest invitations were outside the approved lab scope."
         },
         {
           "action": "manager",
@@ -11708,7 +11708,7 @@
             "User.ReadWrite.All"
           ],
           "documentation": "https://learn.microsoft.com/en-us/graph/api/user-post-manager?view=graph-rest-1.0",
-          "blocker": "Live lifecycle evidence is required. Production remains blocked. User.Create and User.ReadUpdate.All are present in the operation tables and permissions reference but missing from the older permission model."
+          "blocker": ""
         },
         {
           "action": "license",
@@ -11721,9 +11721,23 @@
             "LicenseAssignment.ReadWrite.All"
           ],
           "documentation": "https://learn.microsoft.com/en-us/graph/api/user-assignlicense?view=graph-rest-1.0",
-          "blocker": "Live lifecycle evidence is required. Production remains blocked. User.Create and User.ReadUpdate.All are present in the operation tables and permissions reference but missing from the older permission model."
+          "blocker": "License assignments were outside the approved lab scope."
         }
-      ]
+      ],
+      "evidence": {
+        "create": {
+          "date": "2026-11-18",
+          "result": "round-trip-matched"
+        },
+        "update": {
+          "date": "2026-11-18",
+          "result": "round-trip-matched"
+        },
+        "manager": {
+          "date": "2026-11-18",
+          "result": "round-trip-matched"
+        }
+      }
     }
   },
   {
@@ -11819,7 +11833,7 @@
     },
     "builtIn": "Synced and dynamic memberships; protected principals and privileged group relationships.",
     "dependsOn": [],
-    "reason": "Directory restore requires live lab lifecycle and cleanup evidence in phase 2. No directory operation is admitted in production.",
+    "reason": "Only the closed subsets in the separate directory review are admitted. Recycle recovery, account state, invitations, licenses and privileged or unverified relationship variants remain blocked.",
     "indexWrites": {
       "POST": [
         {
@@ -12036,12 +12050,12 @@
       ]
     },
     "verification": {
-      "date": "2026-11-17",
-      "method": "local-graph-index-and-microsoft-documentation",
+      "date": "2026-11-18",
+      "method": "local-graph-index-microsoft-documentation-and-approved-lab",
       "resourceFound": true,
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/group?view=graph-rest-1.0",
-      "live": "not-run",
-      "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
+      "live": "Approved app-only fixture lifecycle and final cleanup audited. See individual directory operation evidence.",
+      "notes": "Current operation tables establish delegated least privilege. The app-only token held a union of roles. Production admits only closed metadata and ordinary user links after individual review. Generic configuration transport remains blocked. Owner removal, privileged links and other unsupported variants retain explicit reasons."
     },
     "disposition": "directory-deferred",
     "supplementalWrites": [
@@ -13547,8 +13561,8 @@
       }
     ],
     "directoryRestore": {
-      "phase": "staged-9a-phase1",
-      "blocker": "Directory restore requires live lab lifecycle and cleanup evidence in phase 2. No directory operation is admitted in production.",
+      "phase": "enabled",
+      "blocker": "Use the separate directory review. Only verified closed metadata and ordinary user relationships are admitted.",
       "actions": [
         "create",
         "update",
@@ -13569,7 +13583,7 @@
             "Group.Create"
           ],
           "documentation": "https://learn.microsoft.com/en-us/graph/api/group-post-groups?view=graph-rest-1.0",
-          "blocker": "Live lifecycle evidence is required. Production remains blocked. Group application-mode permanent deletion is unsupported in the operation table, so lab group creation is also blocked."
+          "blocker": ""
         },
         {
           "action": "update",
@@ -13582,7 +13596,7 @@
             "Group.ReadWrite.All"
           ],
           "documentation": "https://learn.microsoft.com/en-us/graph/api/group-update?view=graph-rest-1.0",
-          "blocker": "Live lifecycle evidence is required. Production remains blocked. Group application-mode permanent deletion is unsupported in the operation table, so lab group creation is also blocked."
+          "blocker": ""
         },
         {
           "action": "recycle",
@@ -13595,7 +13609,7 @@
             "Group.ReadWrite.All"
           ],
           "documentation": "https://learn.microsoft.com/en-us/graph/api/directory-deleteditems-restore?view=graph-rest-1.0",
-          "blocker": "Live lifecycle evidence is required. Production remains blocked. Group application-mode permanent deletion is unsupported in the operation table, so lab group creation is also blocked."
+          "blocker": "Recycle restore is blocked: inherited relationships and account state do not yet have a delegated safety review."
         },
         {
           "action": "member add",
@@ -13608,7 +13622,7 @@
             "GroupMember.ReadWrite.All"
           ],
           "documentation": "https://learn.microsoft.com/en-us/graph/api/group-post-members?view=graph-rest-1.0",
-          "blocker": "Live lifecycle evidence is required. Production remains blocked. Group application-mode permanent deletion is unsupported in the operation table, so lab group creation is also blocked."
+          "blocker": ""
         },
         {
           "action": "member remove",
@@ -13621,7 +13635,7 @@
             "GroupMember.ReadWrite.All"
           ],
           "documentation": "https://learn.microsoft.com/en-us/graph/api/group-delete-members?view=graph-rest-1.0",
-          "blocker": "Live lifecycle evidence is required. Production remains blocked. Group application-mode permanent deletion is unsupported in the operation table, so lab group creation is also blocked."
+          "blocker": ""
         },
         {
           "action": "owner add",
@@ -13634,7 +13648,7 @@
             "Group.ReadWrite.All"
           ],
           "documentation": "https://learn.microsoft.com/en-us/graph/api/group-post-owners?view=graph-rest-1.0",
-          "blocker": "Live lifecycle evidence is required. Production remains blocked. Group application-mode permanent deletion is unsupported in the operation table, so lab group creation is also blocked."
+          "blocker": ""
         },
         {
           "action": "owner remove",
@@ -13647,7 +13661,7 @@
             "Group.ReadWrite.All"
           ],
           "documentation": "https://learn.microsoft.com/en-us/graph/api/group-delete-owners?view=graph-rest-1.0",
-          "blocker": "Live lifecycle evidence is required. Production remains blocked. Group application-mode permanent deletion is unsupported in the operation table, so lab group creation is also blocked."
+          "blocker": "Owner removal remains blocked after intermittent live refusals, including HTTP 400. Restore adds owners only."
         },
         {
           "action": "role-assignable creation or membership",
@@ -13660,9 +13674,40 @@
             "RoleManagement.ReadWrite.Directory"
           ],
           "documentation": "https://learn.microsoft.com/en-us/graph/api/group-post-groups?view=graph-rest-1.0",
-          "blocker": "Live lifecycle evidence is required. Production remains blocked. Group application-mode permanent deletion is unsupported in the operation table, so lab group creation is also blocked."
+          "blocker": "Role-assignable groups are blocked until privileged delegated safety resolution is verified."
+        },
+        {
+          "action": "dynamic rule",
+          "method": "PATCH",
+          "path": "groups/{id}",
+          "delegated": [
+            "Group.ReadWrite.All"
+          ],
+          "application": [
+            "Group.ReadWrite.All"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/group-update?view=graph-rest-1.0",
+          "blocker": "Paused fixture rules do not establish safe future beneficiaries. Dynamic restore stays blocked."
         }
-      ]
+      ],
+      "evidence": {
+        "create": {
+          "date": "2026-11-18",
+          "result": "round-trip-matched"
+        },
+        "update": {
+          "date": "2026-11-18",
+          "result": "round-trip-matched"
+        },
+        "member": {
+          "date": "2026-11-18",
+          "result": "round-trip-matched"
+        },
+        "owner": {
+          "date": "2026-11-18",
+          "result": "round-trip-matched"
+        }
+      }
     }
   },
   {

@@ -39,6 +39,7 @@ export class IdentityRestoreService {
   /** Called by trusted preview builders only. A renderer never supplies fingerprints or an actor. */
   async prepare(tenant: string, request: IdentityRestoreRequest, operation: GuardedStep["operation"], targetId?: string, allowRemoval = false): Promise<GuardedRun> {
     const folder = request.path.split("/")[1] ?? ""
+    if (["Users", "Groups"].includes(folder)) throw new RestoreSafetyError("Use the separate directory review and batch executor.")
     const type = typeForFolder(folder)
     if (!type || type.restoreSafety !== "identity" || restoreCapability(type) === "none") throw new RestoreSafetyError("This type remains backup-only.")
     if (operation === "create" && restoreCapability(type) === "singleton") throw new RestoreSafetyError("This setting can only be replaced in place.")
@@ -76,6 +77,7 @@ export class IdentityRestoreService {
   }
   async restore(tenant: string, request: IdentityRestoreRequest): Promise<RestoreOutcome> {
     const folder = request.path.split("/")[1] ?? ""
+    if (["Users", "Groups"].includes(folder)) throw new RestoreSafetyError("Use the separate directory review and batch executor.")
     const type = typeForFolder(folder)
     if (!type || type.restoreSafety !== "identity" || restoreCapability(type) === "none") return { success: false, path: request.path, action: "skipped", retryable: false, error: "This type remains backup-only." }
     const run = request.runId ? this.journal.load(tenant, request.runId) : undefined

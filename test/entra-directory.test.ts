@@ -45,7 +45,7 @@ async function capture(type = TYPES[1]!, options: { relationError?: number; obje
 
 describe("Directory inventory", () => {
   for (const type of TYPES) {
-    it(`${type.folder}: stores a sanitized live shape with a closed allowlist and no restore path`, async () => {
+    it(`${type.folder}: stores a sanitized live shape with a closed allowlist and no generic restore path`, async () => {
       const data = JSON.parse(readFileSync(new URL(`./fixtures/entra-directory/${type.folder}.json`, import.meta.url), "utf8"))
       const source = { ...(data.samples.object ?? { id }), ...secrets, unexpected: "private", id: type.folder === "OAuth2PermissionGrants" ? "A".repeat(44) : id }
       // Every retained nested value has an explicit schema, even if Graph adds new properties.
@@ -56,7 +56,7 @@ describe("Directory inventory", () => {
       expect(snapshot).not.toHaveProperty("unexpected")
       expect(source.secretText).toBe("client-secret")
       for (const [property, sample] of Object.entries(data.samples)) if (property !== "object" && property in DIRECTORY_EXTRA_SCHEMAS) scan(directoryExtraSnapshot(property, { ...(sample as Item), ...secrets }))
-      expect(restoreCapability(type)).toBe("none")
+      expect(restoreCapability(type)).toBe(["Users", "Groups"].includes(type.folder) ? "create" : "none")
       expect(() => buildRestorePlan(type, snapshot)).toThrow()
       expect(() => buildUpdatePlan(type, snapshot, id)).toThrow()
       expect(adminCenterLink(type.folder, id)?.center).toBe("Entra")

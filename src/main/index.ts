@@ -1,3 +1,6 @@
+import { DirectoryRestoreStore } from "./storage/directory-restore-store"
+import { DirectoryRestoreService } from "./restore/directory-service"
+import { setDirectoryRestoreService } from "./restore/directory-dispatch"
 import { IdentityRestoreService } from "./restore/service"
 import { RecoveryAccounts } from "./restore/safety-resolvers"
 import { restoreSafetyRoutes } from "./restore/routes"
@@ -419,6 +422,7 @@ async function bootstrap(): Promise<void> {
     return { tenantId: tenant, clientId: account.clientId, userId: claims.oid, token: token.accessToken }
   }
   const identityRestore = new IdentityRestoreService(guardedRestoreJournal(), recoveryAccounts, restoreConnection, bridgedFetch)
+  setDirectoryRestoreService(new DirectoryRestoreService(new DirectoryRestoreStore(join(userData, "directory-restore"), cipher), recoveryAccounts, restoreConnection, bridgedFetch))
   setIdentityRestorePreviews(identityRestore)
   setIdentityRestoreDispatch((tenant, request) => identityRestore.restore(tenant, request))
 

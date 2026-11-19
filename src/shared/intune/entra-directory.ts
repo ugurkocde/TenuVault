@@ -1,3 +1,4 @@
+import { restoreMatrixRow } from "./restore-matrix"
 import { LARGE_MAX_ITEMS, LARGE_SHARD_ITEMS } from "../large-backup"
 import type { Extra, IntuneType, Item, Json } from "./registry"
 
@@ -51,7 +52,7 @@ const directory = (folder: keyof typeof DIRECTORY_SCHEMAS, label: string, path: 
   folder, label, path, area, restoreSafety: "identity", apiVersion: "v1.0", nameKey: "displayName", volume: "large", inventory: true, listOnly: true,
   keep: Object.keys(DIRECTORY_SCHEMAS[folder]), listQuery: `$top=999&$select=${Object.keys(DIRECTORY_SCHEMAS[folder]).filter(key => key !== "manager").join(",")}`,
   normalizeSnapshot: snapshot => project(snapshot, DIRECTORY_SCHEMAS[folder]) as Item,
-  neverStoredKeys, extras, limitation: "Directory objects are inventory. Restore is not available yet.",
+  neverStoredKeys, extras, ...(restoreMatrixRow(folder)?.directoryRestore?.phase === "enabled" ? { restore: "create" as const, limitation: "Use the separate directory review. Only verified operations are available." } : { limitation: "Directory objects are inventory. Restore is not available yet." }),
 })
 export function directoryObjectId(folder: string, id: unknown): boolean {
   return typeof id === "string" && (folder === "OAuth2PermissionGrants" ? /^[A-Za-z0-9_-]{40,160}$/.test(id) : /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))

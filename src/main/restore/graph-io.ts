@@ -81,6 +81,7 @@ export function guardedGraphIO(token: string, actor: RestoreActor, references: G
       return references(step, current, desired)
     },
     write: async (step, body, targetId, beforeSend, run) => {
+      if (["Users", "Groups"].includes(step.folder)) throw new RestoreSafetyError("Use the separate directory review and batch executor.")
       const type = typeForFolder(step.folder)
       if (!type || ["none", "metadata"].includes(restoreCapability(type)) || (restoreCapability(type) === "singleton" && step.operation === "create")) throw new RestoreSafetyError(type?.limitation ?? "This type cannot be restored.")
       const { row, write, root, path: readPath } = await resolvedPathOf(step, targetId)

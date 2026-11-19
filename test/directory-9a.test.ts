@@ -17,21 +17,22 @@ const stepFor = (action: NonNullable<GuardedStep["directory"]>["action"], folder
 const runFor = (step: GuardedStep): GuardedRun => ({ version: 1, id: "run", tenant: actor.tenantId, actor, origin: "restore", source: { path: "backup/source", fingerprint: "native" }, entries: [{ step, state: "pending" }], mappings: [] })
 async function admitted<T>(fn: () => Promise<T>): Promise<T> {
   const saved = ["Users", "Groups"].map(folder => ({ type: typeForFolder(folder)!, restore: typeForFolder(folder)!.restore, row: restoreMatrixRow(folder)!, phase: restoreMatrixRow(folder)!.directoryRestore!.phase, evidence: restoreMatrixRow(folder)!.directoryRestore!.evidence }))
-  for (const value of saved) { value.type.restore = "create"; value.row.directoryRestore!.phase = "enabled"; value.row.directoryRestore!.evidence = Object.fromEntries(["create", "update", "recycle", "invite", "member", "owner", "manager", "license"].map(action => [action, { date: "test-only", result: "round-trip-matched" as const }])) }
+  for (const value of saved) { value.type.restore = "create"; value.row.directoryRestore!.phase = "enabled"; value.row.directoryRestore!.evidence = Object.fromEntries(["create", "update", "recycle", "invite", "member", "owner", "manager", "license", "owner remove", "account state", "dynamic rule", "role-assignable", "role-assignable creation", "microsoft365", "privileged-links", "nested-links"].map(action => [action, { date: "test-only", result: "round-trip-matched" as const }])) }
   try { return await fn() } finally { for (const value of saved) { value.type.restore = value.restore; value.row.directoryRestore!.phase = value.phase; if (value.evidence) value.row.directoryRestore!.evidence = value.evidence; else delete value.row.directoryRestore!.evidence } }
 }
 const refs = async () => ({ complete: true, principals: [], applications: [], remainingAdministrators: { global: [uuid(100)], privilegedRole: [uuid(101)] } })
 
-it("keeps all directory operations blocked in production and setup unchanged", async () => {
+it("admits only individually evidenced operations and refuses licenses and invitations", async () => {
   for (const folder of ["Users", "Groups"]) {
-    expect(restoreCapability(typeForFolder(folder)!)).toBe("none")
-    expect(restoreMatrixRow(folder)!.directoryRestore!.blocker).toContain("phase 2")
-    const fetcher = vi.fn()
-    const io = directory9aIO(token(), actor, refs, fetcher)
-    await expect(io.write(stepFor("create", folder), {}, undefined, vi.fn(), runFor(stepFor("create", folder)))).rejects.toThrow("staged")
+    expect(restoreCapability(typeForFolder(folder)!)).toBe("create")
+    expect(restoreMatrixRow(folder)!.directoryRestore!.phase).toBe("enabled")
+    const fetcher = vi.fn(), io = directory9aIO(token(), actor, refs, fetcher)
+    const step = stepFor(folder === "Users" ? "license" : "recycle", folder)
+    await expect(io.write(step, {}, undefined, vi.fn(), runFor(step))).rejects.toThrow()
     expect(fetcher).not.toHaveBeenCalled()
   }
 })
+
 it("builds disabled users, refuses synced and guest creation, and separates group creation flags", () => {
   expect(directoryPayload("Users", "create", user)).toMatchObject({ accountEnabled: false })
   expect(directoryPayload("Users", "create", { ...user, accountEnabled: true, passwordProfile: { password: "never restore" } })).not.toHaveProperty("passwordProfile")
@@ -188,9 +189,11 @@ it("batches 50,000 members and 2,000 users, persists a bounded cursor and resume
 for (const operation of ["create", "update"] as const) it(`group ${operation}: refuses an unapproved write and preserves an unknown create without duplicating it`, async () => admitted(async () => {
   const step = stepFor(operation)
   if (operation === "create") delete step.targetId
-  step.desired = directoryPayload("Groups", operation, group); step.properties = Object.keys(step.desired)
+  step.desired = operation === "create" ? directoryPayload("Groups", operation, group) : { description: "Restored description" }; step.properties = Object.keys(step.desired)
   let writes = 0, live: Item | null = operation === "create" ? null : group
   const fetcher = vi.fn(async (_url: RequestInfo | URL, options?: RequestInit) => {
+    if (String(_url).includes("roleAssignments")) return Response.json({ value: [{ principalId: actor.userId, directoryScopeId: "/", roleDefinitionId: uuid(50) }] })
+    if (String(_url).includes("roleDefinitions")) return Response.json({ templateId: "fdd7a751-b60b-444a-984c-02652fe8fa1c" })
     if (options?.method !== "GET") { writes++; live = { ...group, ...step.desired }; throw new Error("Lost create response") }
     if (String(_url).includes("deletedItems")) return new Response(null, { status: 404 })
     return live ? Response.json(live) : new Response(null, { status: 404 })
@@ -231,7 +234,7 @@ it("does not widen a Conditional Access excluded group's membership permission t
   const fetcher = vi.fn(async (input: RequestInfo | URL, options?: RequestInit) => {
     if (options?.method !== "GET") return Response.json({ id: group.id })
     if (String(input).includes("conditionalAccess")) return Response.json({ value: [{ conditions: { users: { excludeGroups: [group.id] } } }] })
-    if (String(input).endsWith("users/" + principal.id)) return Response.json(principal)
+    if (new URL(String(input)).pathname.endsWith("users/" + principal.id)) return Response.json(principal)
     return Response.json(group)
   })
   const io = directory9aIO(token(["GroupMember.ReadWrite.All", "Group.Read.All", "User.Read.All", "Policy.Read.All"]), actor, refs, fetcher)
@@ -251,11 +254,11 @@ it("preserves paused dynamic rules and requires an independent activation approv
   expect(directoryReview(step, dynamic, null, actor, true).blocker).toContain("future beneficiaries")
 })
 
-it("can review a new dynamic directory group without treating it as an unresolved existing group", async () => {
+it("refuses non-admin group creation before Graph can implicitly add the caller as owner", async () => {
   const step = stepFor("create"); delete step.targetId
   step.desired = directoryPayload("Groups", "create", { ...group, groupTypes: ["DynamicMembership"], membershipRule: "user.department -eq \"IT\"", membershipRuleProcessingState: "Paused" })
-  const fetcher = vi.fn()
+  const fetcher = vi.fn(async () => Response.json({ value: [] }))
   const io = directory9aIO(token(), actor, refs, fetcher)
-  expect((await io.review(step)).blocker).toBeUndefined()
-  expect(fetcher).not.toHaveBeenCalled()
+  await expect(io.review(step)).rejects.toThrow("Non-admin creation")
+  expect(fetcher).toHaveBeenCalledTimes(1)
 })

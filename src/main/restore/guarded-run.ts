@@ -57,6 +57,9 @@ export interface GuardedIO {
   references: (step: GuardedStep, current: Item | null, desired: Item) => Promise<SafetyReferences>
   write: (step: GuardedStep, body: Item, targetId: string | undefined, beforeSend: () => void, run?: GuardedRun) => Promise<{ id?: string }>
 }
+/** The closed directory adapter refuses privileged links and state changes at its final send boundary.
+ * Other writers retain the full descriptor protections, including remaining administrators. */
+export const guardedProtections = (step: GuardedStep) => step.directory && ["Users", "Groups"].includes(step.folder) ? ["identity-references"] as const : operationProtections(step.folder, step.operation)
 const secretKey = /^(?:passwordProfile|password|passwordCredentials|keyCredentials|clientSecret|privateKey|sharedSecret|secretKey|tokenSeed|seed|tunnelKey|secret|accessToken|refreshToken|clientAssertion|pfx|pkcs12|secretText|authenticationConfiguration|certificateData|deploymentAccessKey)$/i
 function assertNoSecrets(value: unknown): void {
   if (typeof value === "string" && /-----BEGIN .*PRIVATE KEY-----|Bearer\s+[\w.-]+|\beyJ[\w-]+\.[\w-]+\.[\w-]+/i.test(value)) throw new RestoreSafetyError("Credential values cannot be saved in restore history.")
@@ -196,7 +199,7 @@ export async function executeGuardedRun(journal: GuardedRunJournal, input: Guard
           desired.scope = mergeConsentScopes(current?.scope as string ?? "", desired.scope, step.allowRemoval)
         }
         const refs = await io.references(step, current, desired)
-        guardRestoreItem(run.actor, step.folder, entry.targetId ?? step.targetId ?? mapped, refs, step.allowRemoval === true, operationProtections(step.folder, step.operation))
+        guardRestoreItem(run.actor, step.folder, entry.targetId ?? step.targetId ?? mapped, refs, step.allowRemoval === true, guardedProtections(step))
         // Only touched objects are captured, never a whole service. A failed save prevents the write.
         entry.before = current; entry.sent = desired; entry.targetId = entry.targetId ?? step.targetId ?? mapped; entry.state = "captured"; journal.save(run)
         if (signal?.aborted) break

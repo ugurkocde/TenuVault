@@ -1,12 +1,12 @@
 import { typeForFolder, restoreCapability, type Item } from "../../shared/intune/registry"
-import { operationProtections, restoreMatrixRow } from "../../shared/intune/restore-matrix"
+import { restoreMatrixRow } from "../../shared/intune/restore-matrix"
 import { RestoreSafetyError, RestoreWriteRefusedError, guardRestoreItem, type RestoreActor } from "../../shared/intune/restore-guards"
 import { isGuid } from "../../shared/security"
 import { graphContinuation } from "../../shared/graph-continuation"
 import { grantedPermissions } from "../../shared/services/token"
 import { requireRestoreActor } from "./restore-actor"
 import { directoryPayload, directoryReview, disabledUserBody, requireDirectoryApprovals, cloudObject, DIRECTORY_9A_BLOCKER } from "./directory-9a"
-import { restoreFingerprint, type GuardedIO, type GuardedStep } from "./guarded-run"
+import { guardedProtections, restoreFingerprint, type GuardedIO, type GuardedStep } from "./guarded-run"
 
 const root = "https://graph.microsoft.com/v1.0/"
 const identity = (id: unknown): string => {
@@ -14,6 +14,12 @@ const identity = (id: unknown): string => {
   return id
 }
 /** Least privilege by operation. Blocked operations contribute no product setup permission. */
+export function directoryAdmission(step: GuardedStep): string | undefined {
+  const contract = restoreMatrixRow(step.folder)?.directoryRestore
+  const action = step.directory?.action
+  const kinds = [action ?? "missing", ...(step.folder === "Users" && step.desired.accountEnabled !== undefined && action === "update" ? ["account state"] : []), ...(action === "owner" && step.desired.present === false ? ["owner remove"] : []), ...(step.desired.membershipRule !== undefined ? ["dynamic rule"] : []), ...(step.desired.isAssignableToRole === true ? ["role-assignable creation"] : [])]
+  if (contract?.phase !== "enabled" || kinds.some(kind => contract.evidence?.[kind]?.result !== "round-trip-matched")) return contract?.contracts?.find(row => row.action === kinds.find(kind => !contract.evidence?.[kind]))?.blocker || DIRECTORY_9A_BLOCKER
+}
 export function directoryPermissions(step: GuardedStep): string[] {
   const action = step.directory?.action
   if (action === "member") return ["GroupMember.ReadWrite.All"]
@@ -25,12 +31,14 @@ export function directoryPermissions(step: GuardedStep): string[] {
   if (step.folder === "Groups") return ["Group.ReadWrite.All"]
   return action === "create" ? ["User.Create"] : ["User.ReadUpdate.All", ...(step.desired.accountEnabled !== undefined ? ["User.EnableDisableAccount.All", "User.Read.All"] : [])]
 }
-/** No production caller is wired in phase 1. Both the runner and this final transport retain admission gates. */
-export function directory9aIO(token: string, actor: RestoreActor, safety: GuardedIO["references"], fetchImpl: typeof fetch = fetch, scan?: GuardedIO["replacedReferences"], wait: (ms: number) => Promise<void> = ms => new Promise(resolve => setTimeout(resolve, ms))): GuardedIO & { review: (step: GuardedStep) => Promise<ReturnType<typeof directoryReview>>; locate: (folder: "Users" | "Groups", sourceId: string) => Promise<{ action: "update" | "recycle" | "create"; current: Item | null }> } {
+/** The same operation evidence gates the preview and the final transport. */
+export function directory9aIO(token: string, actor: RestoreActor, safety: GuardedIO["references"], fetchImpl: typeof fetch = fetch, scan?: GuardedIO["replacedReferences"], wait: (ms: number) => Promise<void> = ms => new Promise(resolve => setTimeout(resolve, ms))): GuardedIO & { review: (step: GuardedStep) => Promise<ReturnType<typeof directoryReview>>; ids: (id: string, kind: "members" | "owners") => AsyncIterable<string>; locate: (folder: "Users" | "Groups", sourceId: string) => Promise<{ action: "update" | "recycle" | "create"; current: Item | null }> } {
   requireRestoreActor(token, actor)
   const request = async (path: string, method = "GET", body?: Item, beforeRetry?: () => Promise<void>): Promise<Item | null> => {
     for (let attempt = 0; ; attempt++) {
-      const response = await fetchImpl(root + path, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(60_000) })
+      const url = new URL(root + path)
+      if (method === "GET" && /^(users|groups)\/[0-9a-f-]+$/i.test(path)) url.searchParams.set("$select", path.startsWith("users/") ? "id,displayName,userPrincipalName,userType,accountEnabled,givenName,surname,jobTitle,department,officeLocation,usageLocation,onPremisesSyncEnabled,onPremisesImmutableId,onPremisesLastSyncDateTime" : "id,displayName,description,mailNickname,groupTypes,mailEnabled,securityEnabled,isAssignableToRole,membershipRule,membershipRuleProcessingState,onPremisesSyncEnabled")
+      const response = await fetchImpl(url.href, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(60_000) })
       if (response.status === 429 && attempt < 4) {
         await wait(Math.min(60_000, Math.max(1000, Number(response.headers.get("Retry-After")) * 1000 || 1000)))
         if (method !== "GET") {
@@ -125,6 +133,18 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
     let resource = step.operation === "create" ? null : await request(target(step))
     if (!resource && intent.action === "recycle") resource = await request(`directory/deletedItems/${identity(step.targetId ?? step.sourceId)}`)
     if (resource) { cloudObject(resource); if (step.folder === "Groups") directoryPayload("Groups", "update", resource) }
+    // Delegated non-admin group creation implicitly adds the caller as an owner.
+    // A fresh tenant-wide Groups Administrator or Global Administrator assignment
+    // establishes the documented security-group exception without restoring ownership.
+    if (step.folder === "Groups" && intent.action === "create") {
+      let admin = false
+      for await (const assignment of list(`roleManagement/directory/roleAssignments?$filter=${encodeURIComponent(`principalId eq '${actor.userId}'`)}`)) {
+        if (assignment.principalId !== actor.userId || assignment.directoryScopeId !== "/") continue
+        const definition = await request(`roleManagement/directory/roleDefinitions/${identity(assignment.roleDefinitionId)}?$select=templateId`)
+        if (["fdd7a751-b60b-444a-984c-02652fe8fa1c", "62e90394-69f5-4237-9190-012177145e10"].includes(String(definition?.templateId))) admin = true
+      }
+      if (!admin) throw new RestoreSafetyError("Security-group creation requires a current tenant-wide Groups Administrator or Global Administrator assignment. Non-admin creation can implicitly make the restoring account an owner.")
+    }
     const principal = intent.principalId ? await resolvePrincipal(intent.principalId) : null
     let excluded = false
     if (step.folder === "Groups" && (["member", "owner"].includes(intent.action) || (intent.action === "update" && (step.desired.membershipRule !== undefined || step.desired.membershipRuleProcessingState !== undefined)))) {
@@ -135,9 +155,37 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
         if (users.excludeGroups.includes(step.targetId ?? step.sourceId)) excluded = true
       }
     }
-    return directoryReview(step, resource, principal, actor, excluded)
+    const result = directoryReview(step, resource, principal, actor, excluded)
+    if (resource && step.folder === "Groups" && typeof resource.isAssignableToRole !== "boolean") result.blocker ??= "The group's role-assignable state could not be resolved."
+    if (principal && ["member", "owner", "manager"].includes(intent.action) && principal["@odata.type"] !== "#microsoft.graph.user") result.blocker ??= "Only user principals have an admitted relationship contract."
+    const evidence = restoreMatrixRow(step.folder)?.directoryRestore?.evidence ?? {}
+    const requireEvidence = (kind: string, reason: string) => { if (!evidence[kind]) result.blocker ??= reason }
+    if (resource?.isAssignableToRole === true || step.desired.isAssignableToRole === true) requireEvidence("role-assignable", "Role-assignable groups remain blocked: privileged restore and delegated safety resolution are not admitted.")
+    if (Array.isArray(resource?.groupTypes ?? step.desired.groupTypes)) {
+      const types = (resource?.groupTypes ?? step.desired.groupTypes) as string[]
+      if (types.includes("Unified")) requireEvidence("microsoft365", "Microsoft 365 group restore has no matched complete live lifecycle.")
+      if (types.includes("DynamicMembership")) requireEvidence("dynamic rule", "Dynamic rule restore remains blocked: paused fixture evidence does not establish safe future beneficiaries.")
+    }
+    if (excluded) requireEvidence("privileged-links", "Conditional Access excluded groups remain blocked: indirect security-response recovery is not admitted.")
+    if (principal?.["@odata.type"] === "#microsoft.graph.group") requireEvidence("nested-links", "Nested group relationships have no live round trip or admitted indirect-beneficiary guard.")
+    return result
   }
   return {
+    ids: async function* (id, kind) {
+      const start = `https://graph.microsoft.com/${kind === "members" ? "beta" : "v1.0"}/groups/${identity(id)}/${kind}?$select=id&$top=999`
+      let next: string | undefined = start
+      const seen = new Set<string>()
+      while (next) {
+        const url = graphContinuation(start, next, seen)
+        const response = await fetchImpl(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(60_000) })
+        if (!response.ok) throw new RestoreSafetyError("A complete current relationship read is required.")
+        const page = await response.json() as Item
+        if (!Array.isArray(page.value)) throw new RestoreSafetyError("Invalid relationship collection.")
+        for (const item of page.value as Item[]) yield identity(item.id)
+        if (page["@odata.nextLink"] !== undefined && typeof page["@odata.nextLink"] !== "string") throw new RestoreSafetyError("Invalid relationship continuation.")
+        next = page["@odata.nextLink"] as string | undefined
+      }
+    },
     token, type: folder => typeForFolder(folder)!, ...(scan ? { replacedReferences: scan } : {}), read, review,
     locate: async (folder, sourceId) => {
       const path = `${folder === "Users" ? "users" : "groups"}/${identity(sourceId)}`
@@ -159,8 +207,9 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
     },
     write: async (step, body, targetId, beforeSend, run) => {
       requireRestoreActor(token, actor)
+      if (restoreFingerprint(body) !== restoreFingerprint(step.desired)) throw new RestoreSafetyError("The directory write no longer matches its approved difference.")
       const type = typeForFolder(step.folder), row = restoreMatrixRow(step.folder)
-      if (!type || restoreCapability(type) === "none" || row?.directoryRestore?.phase !== "enabled" || row.directoryRestore.evidence?.[step.directory?.action ?? ""]?.result !== "round-trip-matched") throw new RestoreSafetyError(DIRECTORY_9A_BLOCKER)
+      if (!type || restoreCapability(type) === "none" || !row || directoryAdmission(step)) throw new RestoreSafetyError(directoryAdmission(step) ?? DIRECTORY_9A_BLOCKER)
       const result = await review(step)
       if (result.blocker) throw new RestoreSafetyError(result.blocker)
       requireDirectoryApprovals(step, run, result.approvals)
@@ -168,6 +217,8 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       if (result.roleAssignable && ["create", "member"].includes(step.directory!.action)) permissions.push("RoleManagement.ReadWrite.Directory")
       const granted = grantedPermissions(token)
       if (granted?.kind !== "delegated" || permissions.some(permission => !granted.permissions.has(permission))) throw new RestoreSafetyError("The signed-in connection lacks this operation's least-privileged permission.")
+      const admittedFields = step.folder === "Users" ? (step.directory?.action === "create" ? ["displayName", "mailNickname", "userPrincipalName", "accountEnabled"] : ["displayName"]) : ["description"]
+      if (["create", "update"].includes(step.directory!.action) && !(step.folder === "Groups" && step.directory?.action === "create") && Object.keys(body).some(name => !admittedFields.includes(name))) throw new RestoreSafetyError("Only the live-verified directory metadata subset can be restored.")
       const action = step.directory!.action
       const path = target(step, targetId)
       let method = "PATCH", writePath = path, payload: Item | undefined = body
@@ -211,7 +262,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
         requireDirectoryApprovals(step, run, fresh.approvals)
         const references = await safety(step, current, body)
         if (step.directory?.principalId) references.principals = [...references.principals, step.directory.principalId]
-        guardRestoreItem(actor, step.folder, targetId, references, step.allowRemoval === true, operationProtections(step.folder, step.operation))
+        guardRestoreItem(actor, step.folder, targetId, references, step.allowRemoval === true, guardedProtections(step))
       })
       const id = action === "invite" ? (response?.invitedUser as Item | undefined)?.id : response?.id ?? targetId
       return { id: identity(id) }

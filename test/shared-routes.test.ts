@@ -11,8 +11,8 @@ describe("portal API routes", () => {
   )
 
   it("load under the Next.js shims", () => {
-    expect(Object.keys(routes).length).toBe(29)
-    for (const path of ["/api/restore-configuration", "/api/large-backup-page", "/api/list-backups", "/api/restore-backup", "/api/restore-validate", "/api/detect-drifts", "/api/fetch-tenant-details", "/api/frameworks", "/api/oib", "/api/restore-journal", "/api/cloud-backup-status", "/api/settings-catalog-check"]) {
+    expect(Object.keys(routes).length).toBe(30)
+    for (const path of ["/api/restore-directory", "/api/restore-configuration", "/api/large-backup-page", "/api/list-backups", "/api/restore-backup", "/api/restore-validate", "/api/detect-drifts", "/api/fetch-tenant-details", "/api/frameworks", "/api/oib", "/api/restore-journal", "/api/cloud-backup-status", "/api/settings-catalog-check"]) {
       expect(routes[path]?.POST, path).toBeTypeOf("function")
     }
   })

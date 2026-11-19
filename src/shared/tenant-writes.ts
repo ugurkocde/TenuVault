@@ -16,6 +16,7 @@ export function tenantWriteTargets(pathname: string, body: Record<string, unknow
         ? body.targetTenants.map((target: { tenantId?: unknown }) => target?.tenantId).filter((id): id is string => typeof id === "string")
         : []
     }
+    case "/api/restore-directory":
     case "/api/restore-configuration":
       return action === "restore" ? tenant : []
     case "/api/revert-policy":

@@ -482,6 +482,18 @@
     "User.ReadWrite.All": {
       "delegated": "204e0828-b5ca-4ad8-b9f3-f32a958e7cc4",
       "application": null
+    },
+    "User.Create": {
+      "delegated": "d8ce6a2a-46ff-438e-96bc-020f23870a55",
+      "application": null
+    },
+    "User.ReadUpdate.All": {
+      "delegated": "f8b099f1-a6ce-4e00-8fff-5f783ff4faeb",
+      "application": null
+    },
+    "GroupMember.ReadWrite.All": {
+      "delegated": "f81125ac-d3b7-4573-a3b2-7099cc39df9e",
+      "application": null
     }
   },
   "parts": [
@@ -1856,8 +1868,8 @@
         "GET /groups/{id}/members",
         "GET /groups/{id}/owners"
       ],
-      "write": [],
-      "live": "200",
+      "write": ["POST /groups", "PATCH /groups/{id}", "POST /groups/{id}/members/$ref", "DELETE /groups/{id}/members/{id}/$ref", "POST /groups/{id}/owners/$ref", "DELETE /groups/{id}/owners/{id}/$ref"],
+      "live": "2026-11-18 approved 9a fixture lifecycle. The application token holds a union of roles, so acceptance does not isolate each alternative. Current operation tables and reference identifiers establish delegated least privilege. Privileged variants stay blocked.",
       "backup": {
         "delegated": [
           {"permission": "Group.Read.All", "asked": true, "model": "listed", "index": "not listed", "status": "confirmed"},
@@ -1870,7 +1882,14 @@
         ]
       },
       "restore": {
-        "delegated": "unsupported",
+        "delegated": [
+          {"permission": "Group.ReadWrite.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "GroupMember.ReadWrite.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "User.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Application.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Policy.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "RoleManagement.Read.Directory", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ],
         "application": "unsupported"
       }
     },
@@ -1920,8 +1939,8 @@
       "area": "usersAndDevices",
       "folders": ["Users"],
       "read": ["GET /users"],
-      "write": [],
-      "live": "200",
+      "write": ["POST /users", "PATCH /users/{id}", "PUT /users/{id}/manager/$ref"],
+      "live": "2026-11-18 approved 9a fixture lifecycle. The application token holds a union of roles, so acceptance does not isolate each alternative. Current operation tables and reference identifiers establish delegated least privilege. Privileged variants stay blocked.",
       "backup": {
         "delegated": [
           {"permission": "User.Read.All", "asked": true, "model": "listed", "index": "not listed", "status": "confirmed"},
@@ -1934,7 +1953,12 @@
         ]
       },
       "restore": {
-        "delegated": "unsupported",
+        "delegated": [
+          {"permission": "User.Create", "asked": true, "model": "no entry", "index": "no entry", "status": "confirmed"},
+          {"permission": "User.ReadUpdate.All", "asked": true, "model": "no entry", "index": "no entry", "status": "confirmed"},
+          {"permission": "User.ReadWrite.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"},
+          {"permission": "Application.Read.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ],
         "application": "unsupported"
       }
     },

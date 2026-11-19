@@ -58,8 +58,8 @@ export function createAuditRecorder(
       return
     }
 
-    if (path === "/api/restore-configuration" && JSON.parse(requestBody).action !== "restore") return
-    if (["/api/restore-configuration", "/api/restore-backup", "/api/revert-policy"].includes(path) && request.method === "POST") {
+    if (["/api/restore-configuration", "/api/restore-directory"].includes(path) && JSON.parse(requestBody).action !== "restore") return
+    if (["/api/restore-directory", "/api/restore-configuration", "/api/restore-backup", "/api/revert-policy"].includes(path) && request.method === "POST") {
       void recordRestore(requestBody, response.clone(), dispatch, accountFor, path === "/api/revert-policy", onRestore, onTrialUsage)
         .catch((error: unknown) => console.error("[audit] Failed to record restore:", error))
       return
