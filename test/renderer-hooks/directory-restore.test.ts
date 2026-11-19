@@ -11,7 +11,7 @@ const page = { runId: "run", fingerprint: "bound", more: true, rows: [{ key: "me
 afterEach(async () => { if (root) await act(async () => root.unmount()); document.body.innerHTML = ""; vi.unstubAllGlobals() })
 const click = async (name: string) => act(async () => button(name).click())
 it("shows who gets what and requires each approval before sending its saved page", async () => {
-  const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => Response.json(JSON.parse(String(init?.body)).action === "preview" ? page : { status: "complete" }))
+  const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => Response.json(JSON.parse(String(init?.body)).action === "preview" ? page : { status: "complete", replacedReferences: [{ path: "DeviceConfigurations/p", property: "groupId", mapping: { kind: "objectId", folder: "Groups", source: "old", target: "new" } }] }))
   vi.stubGlobal("fetch", fetcher)
   root = createRoot(document.body.appendChild(document.createElement("div")))
   await act(async () => root.render(createElement(DirectoryRestore, props)))
@@ -27,6 +27,7 @@ it("shows who gets what and requires each approval before sending its saved page
   await click("Execute approved changes or resume page")
   expect(JSON.parse(String(fetcher.mock.calls[1]![1]?.body))).toMatchObject({ action: "restore", runId: "run", fingerprint: "bound", approvals: { member: ["directory-item", "security-response"] }, exactMembers: false, exactOwners: false })
   expect(document.body.textContent).toContain("Directory page completed")
+  expect(document.body.textContent).toContain("DeviceConfigurations/p, groupId. Old ID: old. New ID: new.")
 })
 it("invalidates the preview when the per-group exact choice changes", async () => {
   vi.stubGlobal("fetch", vi.fn(async () => Response.json(page)))

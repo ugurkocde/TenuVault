@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react"
 import { Button } from "~/components/ui/button"
 import type { BackupTenant } from "./types"
+import type { ReplacedReference } from "../../../shared/intune/restore-references"
 import type { DirectoryReview } from "../../../main/restore/directory-9a"
 
 interface Review { runId: string; fingerprint: string; more: boolean; rows: Array<{ key: string; review: DirectoryReview }> }
@@ -12,11 +13,12 @@ export function DirectoryRestore({ tenant, backupId, path }: { tenant: BackupTen
   const [open, setOpen] = useState(false), [busy, setBusy] = useState(false)
   const [stage, setStage] = useState("object"), [exactMembers, setExactMembers] = useState(false), [exactOwners, setExactOwners] = useState(false)
   const [review, setReview] = useState<Review | null>(null), [approvals, setApprovals] = useState<Record<string, string[]>>({}), [message, setMessage] = useState("")
+  const [references, setReferences] = useState<ReplacedReference[]>([])
   const [outcomes, setOutcomes] = useState<Array<{ key: string; state: string; reason?: string; targetId?: string }>>([])
   const [resumeId, setResumeId] = useState("")
   const generation = useRef(0)
   useEffect(() => () => { generation.current++ }, [tenant.credentials.tenantId, tenant.credentials.appId, backupId, path])
-  const invalidate = () => { generation.current++; setReview(null); setApprovals({}); setOutcomes([]); setMessage("") }
+  const invalidate = () => { generation.current++; setReview(null); setApprovals({}); setOutcomes([]); setReferences([]); setMessage("") }
   const send = async (action: "preview" | "restore" | "cancel" | "resume" | "next") => {
     const run = action === "cancel" ? generation.current : ++generation.current
     if (action !== "cancel") setBusy(true)
@@ -26,9 +28,9 @@ export function DirectoryRestore({ tenant, backupId, path }: { tenant: BackupTen
       const data = await response.json()
       if (generation.current !== run) return
       if (!response.ok) throw new Error(data.error ?? "Directory restore could not finish.")
-      if (action === "preview" || action === "resume" || action === "next") { setReview(data); if (data.options) { setStage(data.options.stage); setExactMembers(data.options.exactMembers); setExactOwners(data.options.exactOwners) } setApprovals({}); setOutcomes([]); setMessage(data.rows.length ? "Review each row separately." : "No relationship differences remain in this page.") }
+      if (action === "preview" || action === "resume" || action === "next") { setReview(data); if (data.options) { setStage(data.options.stage); setExactMembers(data.options.exactMembers); setExactOwners(data.options.exactOwners) } setApprovals({}); setOutcomes([]); setReferences([]); setMessage(data.rows.length ? "Review each row separately." : "No relationship differences remain in this page.") }
       else if (action === "cancel") setMessage("Cancellation requested. In-flight writes are reconciled before a retry.")
-      else { setOutcomes(data.outcomes ?? []); setMessage(data.status === "complete" ? "Directory page completed. Preview again for remaining differences." : `Directory restore is partial. Applied changes are retained. Review the results and warnings. Resume unanswered steps with the same approvals. ${(data.warnings ?? []).join(" ")}`) }
+      else { setOutcomes(data.outcomes ?? []); setReferences(data.replacedReferences ?? []); setMessage(data.status === "complete" ? "Directory page completed. Preview again for remaining differences." : `Directory restore is partial. Applied changes are retained. Review the results and warnings. Resume unanswered steps with the same approvals. ${(data.warnings ?? []).join(" ")}`) }
     } catch (error) { if (generation.current === run) setMessage(error instanceof Error ? error.message : "Directory restore could not finish.") }
     finally { if (action !== "cancel" && generation.current === run) setBusy(false) }
   }
@@ -58,6 +60,7 @@ export function DirectoryRestore({ tenant, backupId, path }: { tenant: BackupTen
         <div className="flex flex-wrap gap-2"><Button size="sm" disabled={busy || !selected} onClick={() => void send("restore")}>Execute approved changes or resume page</Button>{busy && <Button size="sm" variant="outline" onClick={() => void send("cancel")}>Cancel directory restore</Button>}</div>
       </>}
       {outcomes.length > 0 && <div className="max-h-64 space-y-2 overflow-auto" aria-label="Directory page results">{outcomes.map(outcome => <p key={outcome.key} className="break-all">{review?.rows.find(row => row.key === outcome.key)?.review.privilege ?? "Change"}: {outcome.state}. {outcome.targetId && <>Target ID: {outcome.targetId}. </>}{outcome.reason}</p>)}</div>}
+      {references.length > 0 && <div className="max-h-64 space-y-2 overflow-auto"><p>Policies that still reference old IDs need review:</p>{references.map((reference, index) => <p className="break-all" key={index}>{reference.path}, {reference.property}. Old ID: {reference.mapping.source}. New ID: {reference.mapping.target}.</p>)}</div>}
       <p role="status" aria-live="polite">{message}</p>
     </div>}
   </div>

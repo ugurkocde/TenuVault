@@ -1,5 +1,8 @@
 import { randomUUID, createHash } from "node:crypto"
-import type { Item } from "../../shared/intune/registry"
+import { INTUNE_TYPES, type Item } from "../../shared/intune/registry"
+import { canBackUp } from "../../shared/services/modules"
+import { grantedPermissions } from "../../shared/services/token"
+import { referenceMatches, REFERENCE_SCAN_EXCLUDED } from "./reference-scanner"
 import { isGuid } from "../../shared/security"
 import { RestoreSafetyError } from "../../shared/intune/restore-guards"
 import { relationPath, LARGE_SHARD_ITEMS } from "../../shared/large-backup"
@@ -34,7 +37,12 @@ export class DirectoryRestoreService {
       const principals = [step.targetId ?? step.sourceId]
       if (step.directory?.principalId) principals.push(step.directory.principalId)
       return { complete: true, principals, applications: [] }
-    }, this.fetchImpl)
+    }, this.fetchImpl, (mappings, signal) => {
+      const granted = grantedPermissions(connection.token)
+      // Unrelated policy reads are advisory and never add a permission to directory restore.
+      if (!granted || INTUNE_TYPES.some(type => type.restoreSafety !== "identity" && !type.singleton && !type.staticIds && !REFERENCE_SCAN_EXCLUDED.has(type.folder) && !canBackUp(type.folder, granted))) throw new Error("Reference scan read access is unavailable")
+      return referenceMatches(connection.token, mappings, this.fetchImpl, { signal })
+    })
     return { actor, io }
   }
   private load(tenant: string, id: string): DirectoryPage {
@@ -136,17 +144,18 @@ export class DirectoryRestoreService {
         const start = Number(cursor ?? 0), end = Math.min(entries.length, start + limit)
         return { entries: entries.slice(start, end), next: end < entries.length ? String(end) : null }
       } }, io, controller.signal)
-      const outcomes = [], warnings = new Set<string>()
+      const outcomes = [], warnings = new Set<string>(), replacedReferences = []
       for (let batch = 0; batch <= result.batches; batch++) {
         const prefix = `restore.directory.${encodeURIComponent(tenant)}.${encodeURIComponent(page.run.id)}.batch.${batch}.`
         const journal = new GuardedRunJournal({ get: name => this.store.get(prefix + name), set: () => fail("History is read-only."), delete: () => fail("History is read-only.") })
         const run = journal.load(tenant, page.run.id)
         if (run) {
+          replacedReferences.push(...(run.replacedReferences ?? []))
           if (run.referenceWarning) warnings.add(run.referenceWarning)
           outcomes.push(...run.entries.map(entry => ({ key: entry.step.key, state: entry.state, reason: entry.reason, targetId: entry.targetId })))
         }
       }
-      return { ...result, outcomes, warnings: [...warnings] }
+      return { ...result, outcomes, replacedReferences, warnings: [...warnings] }
     } finally { this.running.delete(runningKey) }
   }
   async cancel(tenant: string, id: string) {

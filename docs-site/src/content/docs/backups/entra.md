@@ -7,7 +7,7 @@ Entra ID backups cover **74 types**, including seven opt-in directory inventorie
 
 Turn on **Entra ID** in **Settings > Services and permissions**. Existing tenants keep Entra ID off after updating, even with an **Everything** backup scope. **Groups** must be enabled separately. The scope picker offers only types of services and opt-in areas that are on. Areas without types in this build say so in Settings and setup.
 
-Seven configuration types support individually confirmed restore subsets: token lifetime policies, activity-based timeout policies, company branding, authentication flows, the cross-tenant parent policy name, unpublished access-package catalogs and the access-review ownership flag. See [restore safety and limitations](/restore/identity/). All other types remain backup and comparison only. Sync, drift revert and cross-tenant copy cannot write these new types. A selected type that cannot be read gives **coverage incomplete**, with its cause in backup results. An empty list is a covered answer, not a missing backup. The federated token validation and continuous access evaluation policies can be **not configured**.
+Seven configuration types support individually confirmed restore subsets: token lifetime policies, activity-based timeout policies, company branding, authentication flows, the cross-tenant parent policy name, unpublished access-package catalogs and the access-review ownership flag. See [restore safety and limitations](/restore/identity/). Users and Groups also have separately reviewed directory restore subsets described below. Other types remain backup and comparison only. Sync, drift revert and cross-tenant copy cannot write these new types. A selected type that cannot be read gives **coverage incomplete**, with its cause in backup results. An empty list is a covered answer, not a missing backup. The federated token validation and continuous access evaluation policies can be **not configured**.
 
 ## Coverage
 
@@ -172,7 +172,7 @@ See the dark-mode variants in the [Services screenshot inventory](/images/servic
 
 ## Opt-in directory inventories
 
-All seven types use paged capture and indexes, are available to both sign-in modes, and have no restore capability. New and existing tenants leave Groups, Users and devices, and Applications off until an admin enables each area. Settings and onboarding explain the personal data each area stores. The Backup Reader gets these areas' application permissions only when requested. The existing 67 configuration types retain their read path.
+All seven types use paged capture and indexes and are available to both backup sign-in modes. Users and Groups have limited restore subsets through the signed-in admin only; the other five remain backup and comparison only. New and existing tenants leave Groups, Users and devices, and Applications off until an admin enables each area. Settings and onboarding explain the personal data each area stores. The Backup Reader gets these areas' application permissions only when requested. The existing 67 configuration types retain their read path.
 
 | Folder | What is stored | Graph path | Version | Sign-in | Excluded or limited |
 | --- | --- | --- | --- | --- | --- |
@@ -187,6 +187,12 @@ All seven types use paged capture and indexes, are available to both sign-in mod
 Directory imports require the sharded tar format and validate object IDs before reading snapshots. Imported snapshots and relationship definitions must satisfy the same closed property allowlists as captured Graph responses. Legacy ZIP archives cannot introduce directory objects with named files. Existing Intune ZIP archives remain supported.
 
 The exact [property allowlists](/security/data-flows/#directory-property-allowlists) include every retained nested field. Graph cannot return application secret values or private keys. Certificate bytes are deliberately not requested. Assigned enterprise app policy references can need additional access that Graph enforces; a refusal keeps the app with incomplete coverage rather than requesting a write permission. The Microsoft-owned filter is `appOwnerOrganizationId ne f8cdef31-a31e-4b4a-93e4-5f571e91255a`, with `ConsistencyLevel: eventual` and `$count=true`. This excludes the owner tenant from the inventory, without excluding tenant-created applications based on display names or tags.
+
+### Directory restore availability
+
+**Review directory restore** restores disabled cloud member creation, user display names, static security-group creation/descriptions, saved managers, ordinary user member adds/removals and owner additions. Security-group creation needs fresh readable proof of a tenant-wide Groups Administrator or Global Administrator assignment, preventing implicit caller ownership. Each row needs its own approval. Exact membership is a choice for that group; owner removal remains blocked after live refusals. Saved pages resume through the same directory flow.
+
+Account state, recycle recovery, guests, licenses, Microsoft 365 groups, dynamic rules, privileged group relationships and nested principals remain blocked with specific reasons. A recreated object gets a new ID and needs reference review. [Directory restore](/restore/identity/#users-and-groups) describes the closed subsets, approvals and limitations. Backup capture and Backup Reader provisioning and renewal are unchanged.
 
 ### Relationships and incomplete coverage
 
