@@ -1,0 +1,69 @@
+{
+  "folder": "AccessReviewDefinitions",
+  "outcome": "saved",
+  "objectCount": 1,
+  "source": "Documented synthetic configuration, not a live successful detail read",
+  "responses": {
+    "/v1.0/identityGovernance/accessReviews/definitions": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "example",
+            "displayName": "Example review"
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/accessReviews/definitions/example": {
+      "status": 200,
+      "body": {
+        "id": "example",
+        "displayName": "Example review",
+        "scope": {
+          "@odata.type": "#microsoft.graph.accessReviewQueryScope",
+          "query": "/groups/group-id/members",
+          "queryType": "MicrosoftGraph"
+        },
+        "reviewers": [
+          {
+            "query": "/users/b",
+            "queryType": "MicrosoftGraph"
+          },
+          {
+            "query": "/users/a",
+            "queryType": "MicrosoftGraph"
+          }
+        ],
+        "settings": {
+          "instanceDurationInDays": 7,
+          "autoApplyDecisionsEnabled": false
+        },
+        "stageSettings": [
+          {
+            "stageId": "2",
+            "dependsOn": [
+              "1"
+            ],
+            "durationInDays": 3,
+            "reviewers": [
+              {
+                "query": "/users/b",
+                "queryType": "MicrosoftGraph"
+              },
+              {
+                "query": "/users/a",
+                "queryType": "MicrosoftGraph"
+              }
+            ]
+          },
+          {
+            "stageId": "1",
+            "durationInDays": 3,
+            "reviewers": []
+          }
+        ]
+      }
+    }
+  }
+}

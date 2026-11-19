@@ -1,3 +1,4 @@
+import { IntunePageGuard } from "./components/IntunePageGuard"
 import { CommunityTenantPicker } from "./components/CommunityTenantPicker"
 import "./lib/appearance"
 import { lazy, Suspense, useState, type ReactNode } from "react"
@@ -59,7 +60,7 @@ function Home() {
  * process (sign-in, token requests, local backups, scheduled backups), so the plan is shown in
  * the guided setup once the tenant is known. A setup already in progress skips the welcome.
  */
-function LicenseGate({ children }: { children: ReactNode }) {
+export function LicenseGate({ children }: { children: ReactNode }) {
   const { pathname } = useLocation()
   const { status, error, refresh } = useLicense()
   const tenants = useTenants()
@@ -114,24 +115,24 @@ export function App() {
                       <Route path="dashboard" element={<DashboardPage />} />
                       <Route path="tenants" element={<TenantsPage />} />
                       <Route path="backup" element={<BackupPage />} />
-                      <Route path="app-backup/:tabId?" element={<AppBackupPage />} />
+                      <Route path="app-backup/:tabId?" element={<IntunePageGuard><AppBackupPage /></IntunePageGuard>} />
                       <Route path="drift" element={<DriftPage />} />
-                      <Route path="sync" element={<SyncPage />} />
+                      <Route path="sync" element={<IntunePageGuard><SyncPage /></IntunePageGuard>} />
                       <Route path="audit" element={<AuditPage />} />
                       <Route path="onboarding" element={<OnboardingPage />} />
                       <Route path="settings" element={<SettingsPage />} />
                       <Route path="overview" element={<OverviewPage />} />
-                      <Route path="frameworks" element={<FrameworksPage />} />
+                      <Route path="frameworks" element={<IntunePageGuard><FrameworksPage /></IntunePageGuard>} />
                       <Route path="frameworks/oib" element={<Navigate to="/portal/oib" replace />} />
-                      <Route path="frameworks/:frameworkId" element={<FrameworksPage />} />
-                      <Route path="baselines" element={<BaselinesPage />} />
-                      <Route path="baselines/:baselineId" element={<BaselinesPage />} />
+                      <Route path="frameworks/:frameworkId" element={<IntunePageGuard><FrameworksPage /></IntunePageGuard>} />
+                      <Route path="baselines" element={<IntunePageGuard><BaselinesPage /></IntunePageGuard>} />
+                      <Route path="baselines/:baselineId" element={<IntunePageGuard><BaselinesPage /></IntunePageGuard>} />
                       {["governance", "changes", "operations", "reports"].map((hub) => (
                         <Route key={hub} path={`${hub}/:tabId?`} element={<HubPage hubId={hub} />} />
                       ))}
                       <Route path="alerts/:tabId?" element={<HubPage hubId="alerts" />} />
-                      <Route path="oib" element={<OibPage />} />
-                      <Route path="oib/:flow" element={<OibPage />} />
+                      <Route path="oib" element={<IntunePageGuard><OibPage /></IntunePageGuard>} />
+                      <Route path="oib/:flow" element={<IntunePageGuard><OibPage /></IntunePageGuard>} />
                     </Route>
                   </Route>
                   <Route path="*" element={<Home />} />

@@ -7,7 +7,7 @@ import { useTenants } from "~/contexts/TenantContext"
 import { useConfirm } from "~/components/ConfirmDialog"
 import readerScript from "../../../resources/New-TenuVaultBackupReader.ps1?raw"
 import type { BackupReaderState } from "../../shared/ipc"
-import { READER_CA_GUIDE_URL, READER_GUIDE_URL, readerAzureRequest, readerEntraRequest, readerErrorGuidance, readerStorageCommand, readerView } from "../lib/backup-reader-view"
+import { excludedSummary, READER_CA_GUIDE_URL, READER_GUIDE_URL, readerAzureRequest, readerEntraRequest, readerErrorGuidance, readerStorageCommand, readerView } from "../lib/backup-reader-view"
 import { isGuid } from "../../shared/security"
 import { bridge } from "../lib/bridge"
 import { showFeaturePlanError } from "../lib/plan-dialog"
@@ -108,7 +108,7 @@ export function BackupReaderSettings() {
   }
 
   if (!tenants.length) return null
-  const { reader, verified, waiting, daysLeft, expiry, command, excluded, storageAccountName, canAct } = readerView(state)
+  const { reader, verified, waiting, daysLeft, expiry, command, excluded, roleChange, storageAccountName, canAct } = readerView(state)
   const disabled = !canAct || !!busy
 
   return (
@@ -173,13 +173,14 @@ export function BackupReaderSettings() {
               <dt className="self-start text-gray-500">Permissions</dt>
               <dd className="flex flex-wrap gap-1">{reader.verifiedRoles?.map((role) => <span key={role} className="rounded-full bg-secondary px-2 py-0.5 font-mono">{role.replace("DeviceManagement", "").replace(".Read.All", "")}</span>)}</dd>
             </dl>
-            {excluded.length > 0 && <p className="text-xs">Scheduled backups leave out {excluded.join(" and ")}; manual backups include them.</p>}
+            {excluded.length > 0 && <p className="text-xs">Scheduled backups leave out {excludedSummary(excluded)}; manual backups include them.</p>}
+            {roleChange && <ReaderGuidance message={roleChange} tone="warning" />}
             <div className="space-y-1 border-t border-gray-100 pt-2">
               <p className="text-xs font-medium text-gray-500">Confidence checks</p>
               <ul className="space-y-1 text-xs">
                 <CheckLine state="ok">Certificate and permissions accepted by Microsoft{reader.verifiedAt ? `, last verified ${day(reader.verifiedAt)}` : ""}</CheckLine>
                 <CheckLine state={reader.lastTest ? (reader.lastTest.graph ? "ok" : "fail") : "unknown"}>
-                  Intune read test{reader.lastTest ? `, ${day(reader.lastTest.at)}` : ": not run yet. Use Test now so tonight is not the first proof."}
+                  Read test{reader.lastTest ? `, ${day(reader.lastTest.at)}` : ": not run yet. Use Test now so tonight is not the first proof."}
                 </CheckLine>
                 <CheckLine state={reader.lastTest?.storage === null || reader.lastTest?.storage === undefined ? (storageAccountName ? "unknown" : "ok") : reader.lastTest.storage ? "ok" : "fail"}>
                   {storageAccountName ? `Azure backup container in ${storageAccountName}` : "Backups stay on this device, so no Azure storage check is needed"}

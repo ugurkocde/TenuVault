@@ -1,3 +1,4 @@
+import { backupStoragePath } from "../../../../shared/backup-storage"
 import { type NextRequest, NextResponse } from "next/server"
 import { decodeXml, listBlobPages } from "~/lib/storage/list"
 import { validPolicyPath } from "~/lib/policies/restore"
@@ -5,7 +6,7 @@ import { validateBackup, type SnapshotRead } from "~/lib/policies/restore-valida
 import { readOwnedBackup } from "~/lib/policies/backup-owner"
 import type { Item } from "../../../../shared/intune/registry"
 
-const blobUrl = (storageAccountName: string, name: string) => `https://${storageAccountName}.blob.core.windows.net/intune-backups/${name.split("/").map(encodeURIComponent).join("/")}`
+const blobUrl = (storageAccountName: string, name: string) => `https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(name)}`
 const storageHeaders = (storageToken: string) => ({ "x-ms-version": "2021-12-02", Authorization: `Bearer ${storageToken}` })
 
 async function storageToken(tenantId: string, appId: string, clientSecret: string): Promise<string> {
@@ -36,17 +37,23 @@ export async function POST(request: NextRequest) {
   try {
     const token = await storageToken(tenantId, appId, clientSecret)
 
-    const listUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(`${backupId}/`)}`
-    const xml = await listBlobPages(listUrl, token)
-    const listedPaths: string[] = []
-    for (const match of xml.matchAll(/<Blob>[\s\S]*?<Name>(.*?)<\/Name>[\s\S]*?<\/Blob>/g)) {
-      const name = decodeXml(match[1] ?? "")
-      if (validPolicyPath(name, backupId)) listedPaths.push(name)
-    }
-
     const owned = await readOwnedBackup((name) => fetch(blobUrl(storageAccountName, name), { headers: storageHeaders(token) }), backupId, tenantId)
     if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
     const metadata = owned.metadata
+    const listedPaths: string[] = []
+    if (metadata?.LargeItems) {
+      for (const [key, value] of Object.entries(metadata.Items ?? {})) {
+        const path = `${backupId}/${key.split('/')[0]}/${(value as { file: string }).file}`
+        if (validPolicyPath(path, backupId)) listedPaths.push(path)
+      }
+    } else {
+      const listUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(`${backupId}/`)}`
+      const xml = await listBlobPages(listUrl, token)
+      for (const match of xml.matchAll(/<Blob>[\s\S]*?<Name>(.*?)<\/Name>[\s\S]*?<\/Blob>/g)) {
+        const name = decodeXml(match[1] ?? "")
+        if (validPolicyPath(name, backupId)) listedPaths.push(name)
+      }
+    }
 
     const readSnapshot = async (path: string): Promise<SnapshotRead> => {
       let response: Response

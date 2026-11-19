@@ -1,3 +1,4 @@
+import { backupBlobName, backupContainer, backupStoragePath, LARGE_BACKUP_CONTAINER, logicalBackupName } from "../../shared/backup-storage"
 import { assertStorageAccountName } from "../../shared/storage-account"
 import { BACKUP_CONTAINER, MAX_BACKUP_ARCHIVE_BYTES } from "../../shared/constants"
 import { readJsonCapped } from "../../shared/capped-body"
@@ -5,7 +6,7 @@ import { oversizedOwnershipFile } from "../../shared/backup-ownership"
 import { retryDelay, retryableStatus, sleep } from "../graph-retry"
 import { FetchApplicationError } from "../api/network-error"
 import type { NetworkCircuit } from "./engine"
-import { MAX_LIST_PAGES, REQUEST_ATTEMPTS, BlobClaimError, ProtectedBlobError, RequestTimeoutError, RetryableStorageError, StorageError, TokenError, isImmutabilityRefusal, requestFailure, storageError, storageFailure, withAbort, withRequestTimeout } from "./request"
+import { MAX_LIST_PAGES, REQUEST_ATTEMPTS, BlobClaimError, ProtectedBlobError, RequestTimeoutError, RetryableStorageError, StorageError, LargeStorageError, TokenError, isImmutabilityRefusal, requestFailure, storageError, storageFailure, withAbort, withRequestTimeout } from "./request"
 
 /** Writes blobs to Azure or, for local accounts, to the encrypted store via the fetch bridge. */
 export class BlobWriter {
@@ -18,8 +19,8 @@ export class BlobWriter {
     assertStorageAccountName(account)
   }
 
-  async ensureContainer(): Promise<void> {
-    await this.request(`${BACKUP_CONTAINER}?restype=container`, { method: "PUT" }, async (response) => {
+  async ensureContainer(container = BACKUP_CONTAINER): Promise<void> {
+    await this.request(`${container}?restype=container`, { method: "PUT" }, async (response) => {
       if (response.ok || response.status === 409) return
       throw new StorageError(await storageError(response, this.account))
     })
@@ -30,8 +31,8 @@ export class BlobWriter {
    * A create-only body must be unique to its writer (the engine includes the run id), so a retry
    * that finds identical bytes knows its own earlier attempt created the blob.
    */
-  async put(name: string, body: string, beforeCommit?: NetworkCircuit, createOnly = false, onDispatch?: () => void): Promise<void> {
-    const path = `${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`
+  async put(name: string, body: string, beforeCommit?: NetworkCircuit, createOnly = false, onDispatch?: () => void, signal?: AbortSignal): Promise<void> {
+    const path = backupStoragePath(name)
     // The earlier PUT may have landed. Read it back and compare it with what this writer sent.
     const landed = async (response: Response, signal: AbortSignal) => {
       const stored = await this.request(path, { method: "GET", signal }, async (readBack) => {
@@ -46,6 +47,7 @@ export class BlobWriter {
       method: "PUT",
       headers: { "x-ms-blob-type": "BlockBlob", "content-type": "application/json", ...(createOnly ? { "if-none-match": "*" } : {}) },
       body,
+      ...(signal ? { signal } : {}),
     }, async (response, signal, ambiguous) => {
       if (response.ok) return
       if (createOnly && (response.status === 412 || response.headers.get("x-ms-error-code") === "BlobAlreadyExists")) {
@@ -65,29 +67,39 @@ export class BlobWriter {
   }
 
   /** Lists blob names and, with a delimiter, virtual folders under a prefix. */
-  async list(prefix: string, delimiter = ""): Promise<{ blobs: string[]; prefixes: string[] }> {
+  async list(prefix: string, delimiter = "", container = backupContainer(prefix), physicalPrefix = false): Promise<{ blobs: string[]; prefixes: string[]; sizes: Map<string, number> }> {
     const blobs: string[] = []
+    const sizes = new Map<string, number>()
     const prefixes: string[] = []
     let marker = ""
     const seen = new Set<string>()
     do {
       if (seen.size >= MAX_LIST_PAGES) throw new Error(`Storage listing did not finish after ${MAX_LIST_PAGES} pages`)
-      const query = new URLSearchParams({ restype: "container", comp: "list", prefix, ...(delimiter ? { delimiter } : {}), ...(marker ? { marker } : {}) })
-      const xml = await this.request(`${BACKUP_CONTAINER}?${query.toString()}`, { method: "GET" }, async (response) => {
+      const query = new URLSearchParams({ restype: "container", comp: "list", prefix: physicalPrefix ? prefix : backupBlobName(prefix), ...(delimiter ? { delimiter } : {}), ...(marker ? { marker } : {}) })
+      const xml = await this.request(`${container}?${query.toString()}`, { method: "GET" }, async (response) => {
         if (response.status === 404) return null
         if (!response.ok) throw await storageFailure(response, this.account)
         return response.text()
       })
       if (xml === null) break
       const decode = (value: string) => value.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&")
-      for (const m of xml.matchAll(/<BlobPrefix><Name>([^<]*)<\/Name><\/BlobPrefix>/g)) prefixes.push(decode(m[1]!))
-      for (const m of xml.matchAll(/<Blob><Name>([^<]*)<\/Name>/g)) blobs.push(decode(m[1]!))
+      for (const m of xml.matchAll(/<BlobPrefix><Name>([^<]*)<\/Name><\/BlobPrefix>/g)) prefixes.push(logicalBackupName(decode(m[1]!)))
+      for (const m of xml.matchAll(/<Blob><Name>([^<]*)<\/Name>/g)) blobs.push(logicalBackupName(decode(m[1]!)))
+      for (const m of xml.matchAll(/<Blob>[\s\S]*?<Name>([^<]*)<\/Name>[\s\S]*?<Content-Length>(\d+)<\/Content-Length>[\s\S]*?<\/Blob>/g)) sizes.set(logicalBackupName(decode(m[1]!)), Number(m[2]))
       // The marker is XML-escaped like the names; send back the name it stands for.
       marker = decode(/<NextMarker>([^<]+)<\/NextMarker>/.exec(xml)?.[1] ?? "")
       if (marker && seen.has(marker)) throw new Error("Storage returned a repeated continuation marker")
       seen.add(marker)
     } while (marker)
-    return { blobs, prefixes }
+    return { blobs, prefixes, sizes }
+  }
+
+  /** Root records and payload together, for deletion after ownership has been checked. */
+  async listFolder(prefix: string): Promise<{ blobs: string[]; sizes: Map<string, number> }> {
+    const payload = await this.list(prefix)
+    if (backupContainer(prefix) !== LARGE_BACKUP_CONTAINER) return payload
+    const roots = await this.list(prefix, "", LARGE_BACKUP_CONTAINER, true)
+    return { blobs: [...roots.blobs, ...payload.blobs], sizes: new Map([...roots.sizes, ...payload.sizes]) }
   }
 
   /**
@@ -96,7 +108,7 @@ export class BlobWriter {
    * the same as a missing blob, so retention keeps it and counts the container as shared.
    */
   async readJson(name: string): Promise<Record<string, unknown> | null> {
-    return this.request(`${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`, { method: "GET" }, async (response) => {
+    return this.request(backupStoragePath(name), { method: "GET" }, async (response) => {
       if (response.status === 404) return null
       if (!response.ok) throw await storageFailure(response, this.account)
       // Capped like every other backup read; an oversized file is unreadable, never buffered whole.
@@ -110,7 +122,7 @@ export class BlobWriter {
   }
 
   async delete(name: string): Promise<void> {
-    await this.request(`${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`, {
+    await this.request(backupStoragePath(name), {
       method: "DELETE",
     }, async (response) => {
       if (!response.ok && response.status !== 404) {
@@ -162,6 +174,9 @@ export class BlobWriter {
       } catch (error) {
         this.network?.signal.throwIfAborted()
         beforeCommit?.signal.throwIfAborted()
+        if (path.startsWith(`${LARGE_BACKUP_CONTAINER}/`) || path.startsWith(`${LARGE_BACKUP_CONTAINER}?`)) {
+          if (error instanceof StorageError && !(error instanceof BlobClaimError) && !(error instanceof ProtectedBlobError)) throw new LargeStorageError(response?.status, { cause: error })
+        }
         if (response && (response.status === 401 || response.status === 403) && !(error instanceof ProtectedBlobError)) {
           this.network?.authFailed("backup storage", response.status, error instanceof Error ? error.message : String(error))
         }
@@ -172,7 +187,7 @@ export class BlobWriter {
         const retrySignal = beforeCommit
           ? AbortSignal.any([beforeCommit.signal, ...(this.network ? [this.network.signal] : [])])
           : this.network?.signal
-        await sleep(retryDelay(response, attempt), retrySignal)
+        await sleep(retryDelay(response, attempt), init.signal ? AbortSignal.any([init.signal, ...(retrySignal ? [retrySignal] : [])]) : retrySignal)
       }
     }
   }

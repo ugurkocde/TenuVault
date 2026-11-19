@@ -101,7 +101,7 @@ The journal stores the method, target path, tenant, time, a short policy name an
 2. Under **Restore history tenant**, select the tenant.
 3. The **Restore write history** card lists every recorded write for that tenant, newest first. Click **Refresh history** to reload it. If the refresh fails, the previous records stay visible with an error.
 
-Opening or changing the history requires the tenant's stored sign-in, an active license, and live Intune management access for that tenant. Records of other tenants are never shown.
+Opening or changing the history requires the tenant's stored sign-in, an active license, and live management access to a service the tenant backs up: Intune, or Entra Conditional Access when Intune is turned off for the tenant under **Settings** > **Services and permissions**. Records of other tenants are never shown.
 
 Each record shows the policy name (or "Object name unavailable"), the time, its state, the tenant, the request method and path, and the object ID if known. States are:
 
@@ -146,3 +146,35 @@ The journal keeps up to 1,000 records. When it is full, TenuVault removes comple
 * [What gets backed up](/backups/coverage/)
 * [Multi Admin Approval and TenuVault](/restore/multi-admin-approval/)
 * [Troubleshooting](/troubleshooting/)
+
+## Directory objects that are never restored
+
+These exclusions also apply to staged directory recovery. The preview reports the reason for each affected row.
+
+| Object or relationship | Reason |
+| --- | --- |
+| Application and enterprise-app secrets or private keys | Credentials were never backed up. Create replacement credentials with the application owner. |
+| Federated identity credentials | Trust credentials must be re-established by the owner. |
+| User passwords and authentication methods | Sign-in credentials were never backed up. Set up sign-in again in Entra. |
+| Members of dynamic groups | The membership rule determines members. Direct membership writes are refused. |
+| Microsoft first-party service principals | Microsoft manages these service identities. |
+| Activated PIM instances | An activation is not replayed as a permanent role assignment or eligibility. |
+| Objects synchronized from on-premises | The source directory owns them, including identities with retained synchronization identity. |
+| Devices | A device object is created by device registration. |
+| Domains | Ownership and federation need separate verification and setup. |
+
+Mail-enabled security groups and distribution groups cannot be recreated through the directory Graph flow. Microsoft 365 recovery covers its directory object only. Teams, SharePoint and mailbox content are excluded. Only the admitted closed directory subsets are available. See [Directory recovery](/restore/identity/#users-and-groups).
+
+## Directory restore boundaries
+
+Directory restore supports disabled cloud member creation, existing cloud member display names, static security-group creation/nonempty descriptions, manager assignment and ordinary user member/owner relationships. See [the per-operation boundaries](/restore/identity/#users-and-groups). Each removal needs the group's exact choice and an individual approval. Account state, recycle recovery, guests, licenses, Microsoft 365 groups, dynamic rules, role-assignable or Conditional Access excluded groups, nested principals and other unverified fields remain blocked with reasons.
+
+Passwords and authentication methods, application secrets/private keys, federated identity credentials, dynamic members, Microsoft first-party service principals, activated PIM instances, synced objects, devices and domains are never restored. Recreation gets a new ID; review policy targets and external integrations before activation. Application recreation would also get a new app ID, but is not enabled here.
+
+The lab leaves only soft-deleted test groups, which Entra permanently removes after 30 days. They are audited by ID and deletion date. Test users are permanently removed; earlier runs' deleted groups are never restored by a later run.
+
+Clearing a group description is blocked because a live null restore did not consistently match read-back.
+
+Group link restore also refuses a resource with any current directory membership, including parent groups, directory roles and administrative units. This avoids granting inherited privilege through an unverified ancestor. The lookup uses existing group read access.
+
+User display-name and manager changes are blocked when Conditional Access group targeting or exclusions exist or cannot be completely read. Their dynamic-membership effects need a separate verified review. Every access addition and manager change also has separate privilege and security-response approvals.

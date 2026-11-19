@@ -18,7 +18,7 @@ const state = vi.hoisted(() => ({
   selected: null as Tenant | null,
   updateTenant: vi.fn(),
   onStarted: null as null | ((jobId: string) => void),
-  modal: null as null | { tenantName: string; credentials: { tenantId: string } | null; jobId: string; onComplete: (success: boolean) => void },
+  modal: null as null | { tenantName: string; credentials: { tenantId: string } | null; jobId: string; open: boolean; onComplete: (success: boolean, needsAttention?: boolean) => void },
 }))
 vi.mock("react-router-dom", () => ({ useSearchParams: () => [new URLSearchParams(), vi.fn()] }))
 vi.mock("~/contexts/TenantContext", () => ({
@@ -29,6 +29,7 @@ vi.mock("~/contexts/TenantContext", () => ({
 vi.mock("@desktop/lib/license", () => ({ useTenantPlan: () => null }))
 vi.mock("@desktop/lib/bridge", () => ({ bridge: { license: { open: vi.fn() } } }))
 vi.mock("@desktop/lib/backup-list", () => ({ useBackupList: () => ({ backups: [], loading: false, error: "", unresolved: 0, refresh: vi.fn() }) }))
+vi.mock("../../src/renderer/components/ServiceBackupNotice", () => ({ ServiceBackupNotice: () => null }))
 vi.mock("@desktop/components/BackupSchedulePanel", () => ({ BackupSchedulePanel: () => null }))
 vi.mock("@desktop/components/FirstBackupNote", () => ({ FirstBackupNote: () => createElement("p", null, "First backup note") }))
 vi.mock("@desktop/components/RunBackupDialog", () => ({
@@ -49,6 +50,16 @@ afterEach(() => {
 })
 
 describe("Backup page after switching tenants during a backup", () => {
+  it("keeps a completed backup with coverage warnings open for review", async () => {
+    state.selected = tenantA
+    const root = createRoot(document.body.appendChild(document.createElement("div")))
+    roots.push(root)
+    await act(async () => root.render(createElement(BackupRestorePage)))
+    await act(async () => state.onStarted!("job-incomplete"))
+    await act(async () => state.modal!.onComplete(true, true))
+    expect(state.modal).toMatchObject({ open: true, jobId: "job-incomplete" })
+  })
+
   it("keeps the job on the tenant that ran it and never stamps the newly selected tenant", async () => {
     state.selected = tenantA
     const root = createRoot(document.body.appendChild(document.createElement("div")))

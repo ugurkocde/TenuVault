@@ -1,0 +1,19 @@
+{
+  "folder": "DefenderRoleAssignments",
+  "path": "roleManagement/defender/roleAssignments",
+  "apiVersion": "beta",
+  "shape": "list",
+  "signIn": "both",
+  "objectCount": 0,
+  "verified": "2026-11-16",
+  "source": "Live app-only read through GraphSession and readObject",
+  "outcome": "saved",
+  "responses": {
+    "/beta/roleManagement/defender/roleAssignments": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    }
+  }
+}

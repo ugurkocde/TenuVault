@@ -1,10 +1,12 @@
+import { DEFENDER_TYPES } from "./defender"
 import type { Item } from "./registry"
 
 /**
  * Where an admin opens a restored object: the Intune admin center, or the Entra admin center for
- * Conditional Access. Each address below was checked against a live tenant (November 2026). Types
- * whose page needs parameters that could not be confirmed open their list page instead, so a link
- * never lands on an error or on another object.
+ * Conditional Access and directory configuration. Original Intune and Conditional Access addresses
+ * were checked against a live tenant in November 2026. Directory configuration opens its setting
+ * area; policies with no dedicated portal editor open the applications or Conditional Access list.
+ * A link never invents the parameters of an individual object page.
  */
 
 const INTUNE = "https://intune.microsoft.com"
@@ -12,7 +14,7 @@ const ENTRA = "https://entra.microsoft.com"
 
 export interface AdminLink {
   url: string
-  center: "Intune" | "Entra"
+  center: "Intune" | "Entra" | "Defender"
   /** False when the link opens the list the object is in, not the object itself. */
   exact: boolean
 }
@@ -58,8 +60,83 @@ function enrollmentList(item: Item): AdminLink {
  */
 export function adminCenterLink(folder: string, id: string, item: Item = {}): AdminLink | undefined {
   if (!id) return undefined
+  if (DEFENDER_TYPES.some(type => type.folder === folder)) return { url: "https://security.microsoft.com", center: "Defender", exact: false }
   const name = str(item.displayName) || str(item.name)
   switch (folder) {
+    case "AuthorizationPolicy": return entra("Microsoft_AAD_IAM/UsersManagementMenuBlade/~/UserSettings", false)
+    case "SecurityDefaults": return entra("Microsoft_AAD_IAM/ActiveDirectoryMenuBlade/~/Properties", false)
+    case "AdminConsentRequestPolicy": return entra("Microsoft_AAD_IAM/ConsentPoliciesMenuBlade/~/AdminConsentSettings", false)
+    case "PermissionGrantPolicies":
+    case "PermissionGrantPreApprovalPolicies": return entra("Microsoft_AAD_IAM/ConsentPoliciesMenuBlade/~/UserSettings", false)
+    case "DefaultAppManagementPolicy":
+    case "AppManagementPolicies":
+    case "TokenLifetimePolicies":
+    case "TokenIssuancePolicies":
+    case "ClaimsMappingPolicies":
+    case "HomeRealmDiscoveryPolicies":
+    case "ActivityBasedTimeoutPolicies": return entra("Microsoft_AAD_IAM/StartboardApplicationsMenuBlade/~/AppAppsPreview", false)
+    case "DeviceRegistrationPolicy": return entra("Microsoft_AAD_Devices/DevicesMenuBlade/~/DeviceSettings", false)
+    case "MdmEnrollmentPolicies":
+    case "MamEnrollmentPolicies": return entra("Microsoft_AAD_IAM/ActiveDirectoryMenuBlade/~/Mobility", false)
+    case "DirectorySettings": return entra("Microsoft_AAD_IAM/GroupsManagementMenuBlade/~/General", false)
+    case "Users": return entra("Microsoft_AAD_UsersAndTenants/UserManagementMenuBlade/~/AllUsers", false)
+    case "Groups": return entra("Microsoft_AAD_IAM/GroupsManagementMenuBlade/~/AllGroups", false)
+    case "Applications": return entra("Microsoft_AAD_RegisteredApps/ApplicationsListBlade", false)
+    case "ServicePrincipals":
+    case "OAuth2PermissionGrants": return entra("Microsoft_AAD_IAM/StartboardApplicationsMenuBlade/~/AppAppsPreview", false)
+    case "EntraDevices": return entra("Microsoft_AAD_Devices/DevicesMenuBlade/~/Devices", false)
+    case "OrgContacts": return entra("Microsoft_AAD_IAM/ContactsListBlade", false)
+    case "Organization": return entra("Microsoft_AAD_IAM/ActiveDirectoryMenuBlade/~/Properties", false)
+    case "EntraCompanyBranding": return entra("Microsoft_AAD_IAM/ActiveDirectoryMenuBlade/~/LoginPageConfiguration", false)
+    case "Domains": return entra("Microsoft_AAD_IAM/DomainNamesBlade", false)
+    case "OnPremisesSynchronization": return entra("Microsoft_AAD_Connect_Provisioning/AADConnectMenuBlade/~/Overview", false)
+    case "AuthenticationMethodsPolicy":
+    case "AuthenticationFlowsPolicy":
+    case "HardwareOathDevices": return entra("Microsoft_AAD_IAM/AuthenticationMethodsMenuBlade/~/AdminAuthMethods", false)
+    case "AuthenticationContexts": return CONDITIONAL_ACCESS("AuthenticationContext")
+    case "CertificateBasedAuthConfigurations":
+    case "CertificateBasedAuthPki": return entra("Microsoft_AAD_IAM/AuthenticationMethodsMenuBlade/~/CertificateBasedAuthentication", false)
+    case "FederatedTokenValidationPolicy":
+    case "ContinuousAccessEvaluationPolicy": return CONDITIONAL_ACCESS("Policies")
+    case "GroupLifecyclePolicies": return entra("Microsoft_AAD_IAM/GroupsManagementMenuBlade/~/Lifecycle", false)
+    case "OwnerlessGroupPolicy": return entra("Microsoft_AAD_IAM/GroupsManagementMenuBlade/~/General", false)
+    case "CrossTenantAccessPolicy":
+    case "CrossTenantAccessDefault":
+    case "CrossTenantAccessPartners":
+    case "CrossTenantAccessMtoTemplates": return entra("Microsoft_AAD_IAM/CompanyRelationshipsMenuBlade/~/Settings", false)
+    case "ExternalIdentitiesPolicy":
+    case "B2bManagementPolicies": return entra("Microsoft_AAD_IAM/CompanyRelationshipsMenuBlade/~/Settings", false)
+    case "IdentityProviders": return entra("Microsoft_AAD_IAM/IdentityProvidersMenuBlade/~/AllIdentityProviders", false)
+    case "UserFlows":
+    case "UserFlowAttributes":
+    case "AuthenticationEventsFlows":
+    case "ApiConnectors": return entra("Microsoft_AAD_IAM/CompanyRelationshipsMenuBlade/~/UserFlows", false)
+    case "AuthenticationEventListeners":
+    case "CustomAuthenticationExtensions": return entra("Microsoft_AAD_IAM/StartboardApplicationsMenuBlade/~/CustomAuthenticationExtensions", false)
+    case "MultiTenantOrganization": return entra("Microsoft_AAD_IAM/CompanyRelationshipsMenuBlade/~/MultitenantOrganization", false)
+    case "EntraRoleDefinitions":
+    case "EntraRoleAssignments": return entra("Microsoft_AAD_IAM/RolesManagementMenuBlade/~/AllRoles", false)
+    case "RoleEligibilitySchedules":
+    case "RoleAssignmentSchedules":
+    case "RoleManagementPolicies":
+    case "RoleManagementPolicyAssignments":
+    case "PimAlertConfigurations": return entra("Microsoft_Azure_PIMCommon/CommonMenuBlade/~/aadroles", false)
+    case "PimGroupEligibilitySchedules":
+    case "PimGroupAssignmentSchedules": return entra("Microsoft_Azure_PIMCommon/CommonMenuBlade/~/aadgroup", false)
+    case "AdministrativeUnits": return entra("Microsoft_AAD_IAM/AdministrativeUnitsMenuBlade/~/AllAdministrativeUnits", false)
+    case "AttributeSets":
+    case "CustomSecurityAttributeDefinitions": return entra("Microsoft_AAD_IAM/CustomSecurityAttributesMenuBlade/~/AttributeSets", false)
+    case "AccessPackageCatalogs":
+    case "AccessPackages":
+    case "AccessPackageAssignmentPolicies":
+    case "ConnectedOrganizations":
+    case "EntitlementManagementSettings": return entra("Microsoft_AAD_ERM/DashboardBlade", false)
+    case "AccessReviewDefinitions":
+    case "AccessReviewPolicy": return entra("Microsoft_AAD_ERM/AccessReviewsBlade", false)
+    case "LifecycleWorkflows":
+    case "LifecycleWorkflowCustomTaskExtensions":
+    case "LifecycleWorkflowSettings": return entra("Microsoft_AAD_LifecycleWorkflows/LifecycleWorkflowsMenuBlade/~/overview", false)
+    case "TermsOfUseAgreements": return CONDITIONAL_ACCESS("TermsOfUse")
     case "DeviceConfigurations": return configurationPage(id, 0)
     case "CompliancePolicies":
     case "DeviceCompliancePolicies": return configurationPage(id, 1)

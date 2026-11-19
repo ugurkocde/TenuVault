@@ -97,3 +97,15 @@ it('keeps a known failed run failed after its folder without a manifest turns in
     .toMatchObject({ failed: 1, inProgress: 1, latestStatus: 'running' })
   expect(backupSummary(folders.slice(0, 1), [{ timestamp: now, runId: 'run-failed' }], { since })).toMatchObject({ failed: 1, latestStatus: 'failed' })
 })
+
+
+it("counts resolved history rows independently of copied run IDs", () => {
+  const ordinary = { status: "success" as const, timestamp: now, runId: "mixed", tenantId: 1 }
+  expect(backupSummary([ordinary, { ...ordinary, status: "incomplete" }], [], { since: now }))
+    .toMatchObject({ stored: 2, successful: 1, failed: 1, finished: 2, successRate: 50 })
+})
+it("scopes failed attempts and live runs by tenant", () => {
+  const folders = [{ status: "success" as const, timestamp: now, runId: "same", tenantId: 1 }, { status: "running" as const, timestamp: now, runId: "same", tenantId: 2 }]
+  expect(backupSummary(folders, [{ timestamp: now, runId: "same", tenantId: 3 }], { since: now, live: [{ tenantId: 2, runId: "same" }] }))
+    .toMatchObject({ successful: 1, failed: 1, inProgress: 1 })
+})

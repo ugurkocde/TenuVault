@@ -364,6 +364,7 @@ describe("backup listing is scoped to the tenant", () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input))
       if (url.hostname === "login.microsoftonline.com") return Response.json({ access_token: "test" })
+      if (url.pathname.endsWith(".tenuvault-owner.json")) return new Response(null, { status: 404 })
       if (url.pathname.endsWith("metadata.json")) return Response.json(owners[url.pathname.split("/")[2]!])
       if (url.searchParams.get("delimiter")) return new Response(Object.keys(owners).map((name) => `<BlobPrefix><Name>${name}/</Name></BlobPrefix>`).join(""))
       return new Response(`<Blobs><Blob><Name>${url.searchParams.get("prefix")}metadata.json</Name><Properties><Content-Length>7</Content-Length></Properties></Blob></Blobs>`)

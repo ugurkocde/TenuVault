@@ -18,12 +18,16 @@
         key never leaves the computer that runs TenuVault
       * grants admin consent for those permissions
 
-    Permissions (application, read-only):
+    Permissions (application, read-only), for Intune, which is the default:
       DeviceManagementApps.Read.All, DeviceManagementConfiguration.Read.All,
       DeviceManagementRBAC.Read.All, DeviceManagementScripts.Read.All,
       DeviceManagementServiceConfig.Read.All
     With -IncludeDeviceCategories also DeviceManagementManagedDevices.Read.All.
     With -IncludeConditionalAccess also Policy.Read.All.
+    With -Services, the read permissions of the services you name instead. The permission table
+    in this script lists them per service and area, and the Backup Reader page of the docs too.
+    With -Permissions, exactly the read permissions you name, for a reader that holds only part
+    of a service.
 
     What it can and cannot do: it reads all Intune configuration tenant-wide, including script
     contents and encrypted OMA-URI values in plain text (Microsoft documents
@@ -51,6 +55,26 @@
 .PARAMETER DisplayName
     Name of the app registration. Default: "TenuVault Backup Reader".
 
+.PARAMETER Services
+    The services scheduled backups read with the Backup Reader: Intune, ConditionalAccess, Entra,
+    Defender. Default: Intune, which is what the script has always granted. Name the services the
+    tenant backs up in TenuVault; the reader gets the read permissions of each and no others. An
+    empty list is refused; leave the parameter out to get the default.
+
+.PARAMETER Areas
+    Areas of Entra that the reader reads only on request: Groups, UsersAndDevices, Applications.
+    Groups and UsersAndDevices hold personal data. Needs Entra in -Services. An empty list is
+    refused; leave the parameter out to read none of these areas.
+
+.PARAMETER Permissions
+    The reader's permissions named one by one, in place of -Services and -Areas, for example
+    -Permissions Policy.Read.All,Domain.Read.All. For an existing reader whose permissions are
+    not exactly those of whole services and areas: TenuVault shows this parameter in its renewal
+    command, so a renewal or another computer's certificate keeps the permissions the reader has.
+    Only the read permissions in this script's permission table and
+    DeviceManagementManagedDevices.Read.All are accepted; anything else is refused before sign-in.
+    Pass None for a reader that holds no permission.
+
 .PARAMETER IncludeDeviceCategories
     Also grants DeviceManagementManagedDevices.Read.All, which device categories and device
     cleanup rules need. It also exposes the managed device inventory (device names, serial
@@ -69,6 +93,9 @@
 
 .EXAMPLE
     ./New-TenuVaultBackupReader.ps1 -CertificatePath ./renewal.cer -AppId 4f1e...
+
+.EXAMPLE
+    ./New-TenuVaultBackupReader.ps1 -CertificatePath ./TenuVault-Backup-Reader.cer -Services Intune,Entra
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -76,6 +103,9 @@ param(
     [string]$TenantId,
     [string]$AppId,
     [string]$DisplayName = "TenuVault Backup Reader",
+    [ValidateSet('Intune', 'ConditionalAccess', 'Entra', 'Defender')][string[]]$Services,
+    [ValidateSet('Groups', 'UsersAndDevices', 'Applications')][string[]]$Areas,
+    [string[]]$Permissions,
     [switch]$IncludeDeviceCategories,
     [switch]$IncludeConditionalAccess
 )
@@ -93,6 +123,69 @@ if ($certificate.HasPrivateKey) { throw "'$CertificatePath' contains a private k
 if ($certificate.NotAfter -le (Get-Date)) { throw "The certificate expired on $($certificate.NotAfter). Create a new one in TenuVault > Settings > Background runner > Backup Reader." }
 if ($AppId -and $AppId -notmatch '^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$') { throw "-AppId must be an application (client) ID." }
 $thumbprint = $certificate.Thumbprint
+
+# What the reader needs to read each service and area, as Microsoft Graph application permissions.
+# All of them are read-only. TenuVault's own tests keep this table equal to the one the app uses.
+# BEGIN PERMISSION TABLE
+$defaultServices = @('Intune')
+$permissionTable = @(
+    @{ Service = 'ConditionalAccess'; Area = 'NamedLocations'; OptIn = $false; Roles = @('Policy.Read.All') }
+    @{ Service = 'ConditionalAccess'; Area = 'AuthenticationStrengths'; OptIn = $false; Roles = @('Policy.Read.All') }
+    @{ Service = 'ConditionalAccess'; Area = 'Policies'; OptIn = $false; Roles = @('Policy.Read.All') }
+    @{ Service = 'Intune'; Area = 'Configuration'; OptIn = $false; Roles = @('DeviceManagementConfiguration.Read.All') }
+    @{ Service = 'Intune'; Area = 'Apps'; OptIn = $false; Roles = @('DeviceManagementApps.Read.All') }
+    @{ Service = 'Intune'; Area = 'Enrollment'; OptIn = $false; Roles = @('DeviceManagementServiceConfig.Read.All') }
+    @{ Service = 'Intune'; Area = 'Scripts'; OptIn = $false; Roles = @('DeviceManagementScripts.Read.All') }
+    @{ Service = 'Intune'; Area = 'Roles'; OptIn = $false; Roles = @('DeviceManagementRBAC.Read.All') }
+    @{ Service = 'Entra'; Area = 'TenantSettings'; OptIn = $false; Roles = @('Policy.Read.All', 'Policy.Read.PermissionGrant', 'Policy.Read.DeviceConfiguration', 'GroupSettings.Read.All', 'Organization.Read.All', 'Domain.Read.All') }
+    @{ Service = 'Entra'; Area = 'Authentication'; OptIn = $false; Roles = @('Policy.Read.All', 'AuthenticationContext.Read.All', 'Organization.Read.All', 'PublicKeyInfrastructure.Read.All') }
+    @{ Service = 'Entra'; Area = 'ExternalIdentities'; OptIn = $false; Roles = @('Policy.Read.All', 'Policy.Read.B2BManagementPolicy', 'IdentityProvider.Read.All', 'IdentityUserFlow.Read.All', 'EventListener.Read.All', 'CustomAuthenticationExtension.Read.All', 'APIConnectors.Read.All', 'MultiTenantOrganization.Read.All') }
+    @{ Service = 'Entra'; Area = 'Roles'; OptIn = $false; Roles = @('RoleManagement.Read.Directory', 'PrivilegedEligibilitySchedule.Read.AzureADGroup', 'GroupMember.Read.All', 'PrivilegedAssignmentSchedule.Read.AzureADGroup', 'RoleManagementAlert.Read.Directory', 'AdministrativeUnit.Read.All', 'CustomSecAttributeDefinition.Read.All') }
+    @{ Service = 'Entra'; Area = 'Governance'; OptIn = $false; Roles = @('EntitlementManagement.Read.All', 'AccessReview.Read.All', 'Policy.Read.All', 'LifecycleWorkflows.Read.All', 'Agreement.Read.All') }
+    @{ Service = 'Entra'; Area = 'Groups'; OptIn = $true; Roles = @('Group.Read.All', 'Directory.Read.All') }
+    @{ Service = 'Entra'; Area = 'UsersAndDevices'; OptIn = $true; Roles = @('User.Read.All', 'Device.Read.All', 'OrgContact.Read.All') }
+    @{ Service = 'Entra'; Area = 'Applications'; OptIn = $true; Roles = @('Application.Read.All', 'Synchronization.Read.All', 'Directory.Read.All') }
+    @{ Service = 'Defender'; Area = 'Detection'; OptIn = $false; Roles = @('CustomDetection.Read.All', 'Workbooks.Read.All', 'CaseManagement.Read.All') }
+    @{ Service = 'Defender'; Area = 'Email'; OptIn = $false; Roles = @('AttackSimulation.Read.All', 'ThreatSubmission.Read.All') }
+    @{ Service = 'Defender'; Area = 'Identity'; OptIn = $false; Roles = @('SecurityIdentitiesSensors.Read.All', 'SecurityIdentitiesAutoConfig.Read.All') }
+    @{ Service = 'Defender'; Area = 'Posture'; OptIn = $false; Roles = @('SecurityEvents.Read.All', 'RoleManagement.Read.Defender') }
+)
+# END PERMISSION TABLE
+# A list that was passed empty is refused: taking it for a parameter that was left out would
+# request the default permissions without saying so.
+foreach ($name in 'Services', 'Areas', 'Permissions') {
+    if ($PSBoundParameters.ContainsKey($name) -and -not $PSBoundParameters[$name]) { throw "-$name was given without a value. Name at least one, or leave -$name out. Nothing was changed." }
+}
+$chosenServices = $Services
+if (-not $chosenServices) { $chosenServices = $defaultServices }
+foreach ($name in $Areas) {
+    if (-not ($permissionTable | Where-Object { $_.OptIn -and $_.Area -eq $name -and $chosenServices -contains $_.Service })) { throw "-Areas names $name, which belongs to a service that is not in -Services. Nothing was changed." }
+}
+# Every read permission a Backup Reader may hold: the table's, and the device inventory one that has its own switch.
+$allowedPermissions = @($permissionTable | ForEach-Object { $_.Roles }) + "DeviceManagementManagedDevices.Read.All"
+$roles = @()
+if ($PSBoundParameters.ContainsKey('Permissions')) {
+    # The permissions named one by one. Only a read permission of the table, or the device inventory
+    # one that has its own switch, is accepted, so the reader stays read-only whatever is typed.
+    if ($PSBoundParameters.ContainsKey('Services') -or $PSBoundParameters.ContainsKey('Areas')) { throw "-Permissions names the reader's permissions one by one and cannot be combined with -Services or -Areas. Nothing was changed." }
+    if ($Permissions -contains 'None' -and @($Permissions).Count -gt 1) { throw "-Permissions None cannot be combined with a permission. Nothing was changed." }
+    foreach ($name in $Permissions) {
+        if ($name -eq 'None') { continue }
+        if ($allowedPermissions -notcontains $name) { throw "-Permissions names $name, which is not a read permission a Backup Reader may hold. Nothing was changed." }
+        if ($roles -notcontains $name) { $roles += $name }
+    }
+} else {
+    foreach ($row in $permissionTable) {
+        if ($chosenServices -notcontains $row.Service) { continue }
+        if ($row.OptIn -and $Areas -notcontains $row.Area) { continue }
+        foreach ($name in $row.Roles) { if ($roles -notcontains $name) { $roles += $name } }
+    }
+}
+# Sorted by name, as the script has always listed them.
+[string[]]$roles = $roles
+[Array]::Sort($roles, [StringComparer]::Ordinal)
+if ($IncludeDeviceCategories -and $roles -notcontains "DeviceManagementManagedDevices.Read.All") { $roles += "DeviceManagementManagedDevices.Read.All" }
+if ($IncludeConditionalAccess -and $roles -notcontains "Policy.Read.All") { $roles += "Policy.Read.All" }
 
 # The Graph modules only load together at one version (see New-TenuVaultDesktopApp.ps1).
 $graphModules = "Microsoft.Graph.Applications"
@@ -137,23 +230,15 @@ Connect-MgGraph @connectParams
 $context = Get-MgContext
 
 $graphAppId = "00000003-0000-0000-c000-000000000000"
-$roles = @(
-    "DeviceManagementApps.Read.All",
-    "DeviceManagementConfiguration.Read.All",
-    "DeviceManagementRBAC.Read.All",
-    "DeviceManagementScripts.Read.All",
-    "DeviceManagementServiceConfig.Read.All"
-)
-if ($IncludeDeviceCategories) { $roles += "DeviceManagementManagedDevices.Read.All" }
-if ($IncludeConditionalAccess) { $roles += "Policy.Read.All" }
-
 $graph = Get-MgServicePrincipal -Filter "appId eq '$graphAppId'"
-$wanted = foreach ($role in $roles) {
+$wanted = @(foreach ($role in $roles) {
     $appRole = $graph.AppRoles | Where-Object { $_.Value -eq $role -and $_.AllowedMemberTypes -contains "Application" }
     if (-not $appRole) { throw "Application permission $role was not found on Microsoft Graph." }
     $appRole
-}
-$requiredResourceAccess = @(@{ ResourceAppId = $graphAppId; ResourceAccess = @($wanted | ForEach-Object { @{ Id = $_.Id; Type = "Role" } }) })
+})
+# A reader that holds no permission (-Permissions None) declares none.
+$requiredResourceAccess = @()
+if ($wanted) { $requiredResourceAccess = @(@{ ResourceAppId = $graphAppId; ResourceAccess = @($wanted | ForEach-Object { @{ Id = $_.Id; Type = "Role" } }) }) }
 
 if ($AppId) {
     $app = Get-MgApplication -Filter "appId eq '$AppId'"
@@ -228,11 +313,26 @@ foreach ($assignment in $assigned) {
     $keep = $assignment.ResourceId -eq $graph.Id -and ($wanted.Id -contains $assignment.AppRoleId)
     if (-not $keep -and $PSCmdlet.ShouldProcess($app.AppId, "Remove permission $($assignment.AppRoleId) on $($assignment.ResourceDisplayName)")) {
         $name = ($graph.AppRoles | Where-Object Id -eq $assignment.AppRoleId).Value
-        if ($name -eq "DeviceManagementManagedDevices.Read.All") {
+        # How to keep a permission is only said for one a Backup Reader may hold. A write permission, or
+        # one TenuVault does not know, is removed with the plain line below: no parameter would keep it.
+        $holdable = $name -and $allowedPermissions -contains $name
+        if (-not $holdable) { }
+        elseif ($PSBoundParameters.ContainsKey('Permissions')) {
+            Write-Warning "Removing $name because -Permissions does not name it. Every computer using this reader must verify it again in TenuVault. Run the script again with $name in -Permissions to keep it."
+        }
+        elseif ($name -eq "DeviceManagementManagedDevices.Read.All") {
             Write-Warning "Removing DeviceManagementManagedDevices.Read.All because -IncludeDeviceCategories was not given. Every computer using this reader must verify it again in TenuVault. Run the script again with -IncludeDeviceCategories to keep it."
         }
-        if ($name -eq "Policy.Read.All") {
+        elseif ($name -eq "Policy.Read.All" -and $PSBoundParameters.ContainsKey('Services')) {
+            # With -Services the permission comes from a service that reads Entra policies, or from the switch.
+            $readBy = ($permissionTable | Where-Object { $_.Roles -contains $name } | ForEach-Object { $_.Service } | Select-Object -Unique) -join ' or '
+            Write-Warning "Removing Policy.Read.All because no service in -Services needs it and -IncludeConditionalAccess was not given. Every computer using this reader must verify it again in TenuVault. Run the script again with $readBy in -Services, or with -IncludeConditionalAccess, to keep it."
+        }
+        elseif ($name -eq "Policy.Read.All") {
             Write-Warning "Removing Policy.Read.All because -IncludeConditionalAccess was not given. Every computer using this reader must verify it again in TenuVault. Run the script again with -IncludeConditionalAccess to keep it."
+        }
+        else {
+            Write-Warning "Removing $name because the services and areas of this run do not need it. Every computer using this reader must verify it again in TenuVault. Run the script again with the -Services and -Areas the reader had to keep it."
         }
         Write-Host "Removing permission $(if ($name) { $name } else { $assignment.AppRoleId }) on $($assignment.ResourceDisplayName): the Backup Reader stays read-only."
         Remove-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $sp.Id -AppRoleAssignmentId $assignment.Id

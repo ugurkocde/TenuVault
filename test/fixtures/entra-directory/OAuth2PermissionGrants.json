@@ -1,0 +1,28 @@
+{
+  "verified": "2026-11-17",
+  "liveCount": 80,
+  "samples": {
+    "object": {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "clientId": "Example",
+      "consentType": "Example",
+      "principalId": null,
+      "resourceId": "Example",
+      "scope": "Example"
+    }
+  },
+  "shapes": {
+    "object": {
+      "pages": 1,
+      "entries": 80,
+      "keys": [
+        "id",
+        "clientId",
+        "consentType",
+        "principalId",
+        "resourceId",
+        "scope"
+      ]
+    }
+  }
+}

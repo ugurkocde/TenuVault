@@ -1,0 +1,74 @@
+{
+  "folder": "DefenderRoleAssignments",
+  "source": "Synthetic documented shape; not a nonempty live read",
+  "outcome": "saved",
+  "objectCount": 1,
+  "responses": {
+    "/beta/roleManagement/defender/roleAssignments": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "example",
+            "principalIds": [
+              "person-b",
+              "person-a"
+            ],
+            "directoryScopeIds": [
+              "scope-b",
+              "scope-a"
+            ],
+            "roleDefinitionId": "role-id",
+            "principals": [
+              {
+                "id": "00000000-0000-4000-8000-000000000002",
+                "displayName": "Example person",
+                "email": "person@example.test",
+                "userPrincipalName": "person@example.test",
+                "mail": "person@example.test"
+              },
+              {
+                "id": "00000000-0000-4000-8000-000000000001",
+                "displayName": "Example person",
+                "email": "person@example.test",
+                "userPrincipalName": "person@example.test",
+                "mail": "person@example.test"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "/beta/roleManagement/defender/roleAssignments/example": {
+      "status": 200,
+      "body": {
+        "id": "example",
+        "principalIds": [
+          "person-b",
+          "person-a"
+        ],
+        "directoryScopeIds": [
+          "scope-b",
+          "scope-a"
+        ],
+        "roleDefinitionId": "role-id",
+        "principals": [
+          {
+            "id": "00000000-0000-4000-8000-000000000002",
+            "displayName": "Example person",
+            "email": "person@example.test",
+            "userPrincipalName": "person@example.test",
+            "mail": "person@example.test"
+          },
+          {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "displayName": "Example person",
+            "email": "person@example.test",
+            "userPrincipalName": "person@example.test",
+            "mail": "person@example.test"
+          }
+        ]
+      }
+    }
+  }
+}

@@ -26,6 +26,16 @@ For the full list of object types, see [What gets backed up](/backups/coverage/)
 
 To retrieve supported Win32 installer content from Intune, use [free App Backup](/apps/app-backup/) on an enrolled Windows PC. Its encrypted installer store is separate from configuration backup storage and remains accessible while signed out. Capture requires no local installer file.
 
+## Browse backups by service
+
+Below **Backup & Restore**, the sidebar's **Services** group lists **Intune**, **Entra ID** and **Defender**. Select an enabled service to open this page filtered to its policies. A service marked **Off** opens **Settings > Services and permissions** instead. While service status is loading or unavailable, each link opens filtered backup contents without an **Off** badge. Only a confirmed off service opens Settings.
+
+The **Service** filter offers **All**, **Intune**, **Entra ID** and **Defender**. It narrows **Contents**, **Trends by policy type**, large inventory and the **Restore** type lists. Entra ID includes Conditional Access, which still has its own backup switch. The filter stays in the page address across reloads, tab changes and back/forward navigation. Choose **All** to clear the highlighted sidebar service. An unknown service in an address shows All.
+
+The timeline, totals, downloads and **Run Backup** still cover the whole backup. This view does not change the tenant's saved backup scope or which services new backups include. Turn services on or off in Settings.
+
+![Entra ID selected in the sidebar and the backup Service filter](/images/sidebar/entra-active-light.png)
+
 ## Before you start
 
 * You are signed in to the tenant. See [Sign in to your tenant](/getting-started/connect-tenant/).
@@ -62,12 +72,12 @@ The **Back up** dialog offers three choices:
 | Choice | What it covers |
 | --- | --- |
 | **Everything except apps** | "Policies, scripts, updates, enrollment and tenant settings." Every type except apps. App categories, policy sets, app configuration and app protection policies are still included. |
-| **Everything** | "Also app details and assignments. Installer files are never included." All selectable types. |
+| **Everything** | "Also app details and assignments. Installer files are never included." Every supported type of the services and opt-in areas that are on. |
 | **Custom** | "Choose areas and individual types." |
 
 With **Custom**, TenuVault lists the areas (for example **Device configuration** or **Enrollment**). Tick an area to include all of its types, or expand it to tick individual types. When the tenant has an earlier backup, each area and type shows how many items it held last time, and the dialog estimates the total number of items.
 
-The line under the choices shows how many of the selectable types the backup covers. **Start backup** is unavailable until at least one type is ticked ("Choose at least one type.").
+The line under the choices shows how many of the available types the backup covers, grouped by service and area. **Start backup** is unavailable until at least one type is ticked ("Choose at least one type.").
 
 When apps are included, a note explains that apps are saved as their Intune details and assignments, which makes them the slowest type to back up. Installer files are not downloaded by this configuration-backup workflow; [App Backup](/apps/app-backup/) handles supported installer captures separately.
 
@@ -94,8 +104,8 @@ The **Backup Progress** dialog shows:
 
 * a progress bar with the current step, for example "Reading Intune configuration..." or "Backing up" a type, and the result when the backup ends
 * **Policies saved** (**Saved so far** while it runs), **Types backed up** and **Duration**
-* **Needs attention**, when a type could not be read or was left out, or some objects could not be saved
-* each type that was backed up, with its count, and the types that had nothing to back up
+* **Needs attention**, when a type could not be read or was left out, or some objects could not be saved. When the backup has ended, the first line says **Coverage incomplete** with how many of the selected types were not read in full (see [Coverage](#coverage)).
+* each type that was backed up, with its count, the types that had nothing to back up, and the types that are not set up in this tenant
 * the error, if the backup fails
 * **Show raw log**, which opens the technical log with **Copy log** and the job ID
 
@@ -111,17 +121,23 @@ The log lists what TenuVault did, with a time stamp per line. Typical lines:
 
 | Log line | Meaning |
 | --- | --- |
-| "Leaving out N of 44 types: ..." | The backup choice excludes these types |
+| "Leaving out N of M types: ..." | The backup choice excludes these types |
+| "Intune is turned off for this tenant, so its types are not backed up. ..." | Intune is off for the tenant under **Settings** > **Services and permissions**, so this backup holds no Intune policies. Turn it on there to back them up again. |
 | "Found N ... (N built-in skipped)." | Items found for a type. Built-in objects Intune recreates itself are skipped. |
 | "Backed up N ..." | All items of a type are saved |
 | "Skipped ...: access was denied. The app registration may lack the permission or admin consent, or your Intune role may not allow it." | Microsoft Graph refused access to this type: a permission or its admin consent is missing, or your Intune role does not cover it. The backup continues without it. |
+| "Skipped ...: Microsoft refused the read ..." | Microsoft Graph refused to read this type, and the line says why as far as Microsoft's answer tells: a missing permission, a role your account lacks, or a product the tenant has no license for or never set up. The backup continues without the type. See [Coverage](#coverage). |
+| "... is not set up in this tenant." | Microsoft answered that this setting was never made. There is nothing to save, and nothing is missing from the backup. |
 | "Could not read ...: ..." | A whole type could not be listed. The backup completes with warnings. |
 | "Could not back up "name": ..." | One item could not be read. The backup completes with warnings. |
 | "Removed N backups older than N days." | Retention removed old backups |
 | "Older backups were kept because this backup is incomplete." | Retention was skipped because of warnings |
 | "Backup completed: N policies in ..." | The final count and duration |
+| "Backup failed: nothing could be read. ..." | Every selected type was left out, so the backup holds nothing. The line names the cause most types share. See [Coverage](#coverage). |
 
-If Microsoft Graph throttles requests, TenuVault pauses and retries automatically. If your sign-in expires during a backup, the backup stops instead of reporting every remaining item as a warning. Sign in again and run a new backup.
+If Microsoft Graph throttles requests, TenuVault pauses and retries automatically. If your sign-in expires during a backup, the backup stops instead of reporting every remaining item as a warning, whichever service was being read. Sign in again and run a new backup.
+
+Some Entra ID and Defender endpoints refuse a read with the same answer Microsoft gives for a sign-in that ended. TenuVault asks such a request once more with a new sign-in token. Only when the new token gets the same answer is the type left out; when no new token can be had, the backup stops and you are asked to sign in again.
 
 ## Read the result
 
@@ -131,7 +147,7 @@ A backup ends with one of these results:
 | --- | --- |
 | **Complete** | Every item of every included type was saved |
 | **Completed with warnings** | Some items or types could not be read. The rest was saved. The log and **Backup Details** list what is missing. |
-| **Failed** | No item could be saved, or the backup stopped after it started saving, for example because the sign-in expired, Microsoft Graph stopped responding or the 30 minute deadline passed. It holds only the policies it saved and is never used as a complete backup. The timeline shows how it started, and retention removes it like any other backup once it is older than the retention period. |
+| **Failed** | No item could be saved, every selected type was left out so nothing could be read, or the backup stopped after it started saving, for example because the sign-in expired, Microsoft Graph stopped responding or the 30 minute deadline passed. It holds only the policies it saved and is never used as a complete backup. The timeline shows how it started, and retention removes it like any other backup once it is older than the retention period. |
 | **Cancelled** | You cancelled the backup after it started saving. It is shown in a neutral tone, because you stopped it on purpose. Like a failed backup, it holds only the policies it saved, is never used as a complete backup, and retention removes it once it is older than the retention period. On the Dashboard it counts in the backups in storage, but not as successful or failed and not in **Success Rate**, and it does not change **Tenant Health**. Backups cancelled with an earlier version, which recorded them as failed, are shown as cancelled too. |
 | **Incomplete** | The backup stopped and could not record its result, for example because TenuVault was closed or the storage could not be reached. It holds only part of the tenant. |
 | **Status unknown** | The backup's summary could not be read, so whether it finished is not known. **Backup Details** shows why, for example "This backup was encrypted by an earlier TenuVault version. Import the recovery key of the device that made it to open it." for an older encrypted Azure backup, or a damaged file on this device. Import that recovery key, or select **Refresh** when the storage did not answer. Drift detection does not offer it until its summary can be read. |
@@ -147,7 +163,28 @@ The dashboard refreshes backup summaries every 30 seconds. It reuses unchanged s
 
 A backup attempt can fail before any backup is saved. It does not appear in the timeline, but the Dashboard counts it as **Failed** and in **Success Rate** for the period. An automatic attempt also appears in the [Schedule status](/backups/schedules/#when-a-scheduled-backup-fails). Click a scheduled or tray failure notification to open the affected tenant's **Schedule** tab.
 
-Types skipped because access was denied do not make the backup incomplete. **Backup Details** lists them: "Left out because access was denied". Open the app registration in Microsoft Entra, go to **API permissions** and select **Grant admin consent for &lt;your tenant&gt;**, or run the setup script again. Then sign out of the tenant in TenuVault and sign in again. If every permission already shows **Granted**, check that your Intune role covers these items. See [Create the app registration](/getting-started/app-registration/#3-add-the-delegated-permissions).
+### Coverage
+
+The result says whether the backup finished and can be used. Coverage says whether it holds every type you asked it to cover. Each selected type ends in exactly one outcome:
+
+| Outcome | Meaning | Coverage |
+| --- | --- | --- |
+| Saved | Every object of the type was saved. A type the tenant has none of is saved with a count of 0. | Complete |
+| Not set up in this tenant | Microsoft answered that the setting was never made. There is nothing to save. | Complete |
+| Left out | The sign-in could not read the type. The reason names the cause: a permission or its admin consent is missing, your account has no role that can read it, the tenant has no license for the product or never set it up, or only a signed-in admin can read it and the backup ran as the Backup Reader. | Incomplete |
+| Not read | The type, or some of its objects, could not be read, for example because Microsoft Graph returned an error, did not answer, or asked for a longer pause than a backup waits. | Incomplete |
+
+A backup with a type that was left out or not read shows **Coverage incomplete** in the **Backup Progress** dialog and in **Backup Details**, with the types concerned. A type that was left out does not change the result: the backup is still **Complete**, scheduled backups do not retry it, and no failure is notified. A type that was not read makes the result **Completed with warnings**, as before.
+
+One case is different: when every selected type was left out, the backup read nothing and holds nothing. It ends as **Failed** with "Backup failed: nothing could be read" and the cause most of the types share, for example a missing permission or a product the tenant has no license for. Scheduled backups retry it, a failure is notified, and older backups are kept. A backup whose types are all empty or not set up in the tenant did read the tenant and stays **Complete**.
+
+An Entra ID or Defender endpoint that fails ends its own type, and the backup goes on with the other types and services. When Microsoft Graph stops answering the requests of one of these services, the rest of that service is not read and the other services are.
+
+Types the backup choice leaves out, and the types of a service that is turned off for the tenant, are not selected. They never make coverage incomplete.
+
+Retention follows coverage per type: an older backup stays while it holds the newest copy of a type that later backups left out or did not read.
+
+Types skipped because access was denied do not change the result. **Backup Details** lists them: "Left out because access was denied". Open the app registration in Microsoft Entra, go to **API permissions** and select **Grant admin consent for &lt;your tenant&gt;**, or run the setup script again. Then sign out of the tenant in TenuVault and sign in again. If every permission already shows **Granted**, check that your Intune role covers these items. See [Create the app registration](/getting-started/app-registration/#3-add-the-delegated-permissions).
 
 ## Backup history
 
@@ -156,7 +193,7 @@ The **Backup History** tab of **Backup & Restore** shows the **Backup Timeline**
 Each entry shows:
 
 * the date and time
-* what the backup covered: **Everything**, **Everything except apps**, or the number of types, for example "12 of 44 types"
+* what the backup covered: **Everything**, **Everything except apps**, or the number of types, for example "12 of 135 types"
 * how it started: **Manual**, **Scheduled** or **From tray**
 * the result, when it is not **Complete**
 * **Items**, **Size**, **Duration** and **Changes** since the previous backup (see [Compare backups](/backups/compare/))
@@ -168,7 +205,7 @@ Click an entry to open its **Backup Details**:
 | Part | What it shows |
 | --- | --- |
 | Buttons | **View Changes** ([Compare backups](/backups/compare/)), **Download** ([export as ZIP](/backups/storage/#export-a-backup-as-a-zip-file)) and **Restore from this backup** ([Restore Intune policies](/restore/)) |
-| Warnings | Why a backup is incomplete, how many items or types could not be read, and which types were left out for missing permissions |
+| Warnings | Why a backup is incomplete, how many items or types could not be read, and which types were left out for missing permissions. **Coverage incomplete** lists every selected type the backup does not hold in full. Backups made before version 0.6 do not record coverage and show the other lines only. |
 | Totals | **Items**, **Size**, **Duration** and **Changes since the previous backup** |
 | **Contents** | Item counts per area. Expand an area for counts per type, and to see how many of its types the backup did not include. Areas left out entirely show **Not included**. |
 | **About this backup** | **Status**, **Started** (how it started), **Included**, **Stored** and **Backup ID** |

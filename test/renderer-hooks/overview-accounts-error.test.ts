@@ -1,3 +1,4 @@
+vi.mock("@desktop/components/ServiceBackupNotice", () => ({ ServiceBackupNotice: () => null }))
 import type { LicenseStatus, TenantLicenseStatus } from "../../src/shared/ipc"
 import { act, createElement } from "react"
 import { createRoot, type Root } from "react-dom/client"

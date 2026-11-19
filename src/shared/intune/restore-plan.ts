@@ -1,4 +1,4 @@
-import { cleanAssignment, COMMON_READ_ONLY, itemName, type IntuneType, type Item, type Json, type Step } from "./registry"
+import { cleanAssignment, COMMON_READ_ONLY, itemName, restoreCapability, type IntuneType, type Item, type Json, type Step } from "./registry"
 import { isGraphId } from "../security"
 
 /**
@@ -25,12 +25,30 @@ export interface PlanOptions {
 export class NotRestorableError extends Error {}
 
 const SINGLETON = "This is a tenant-wide setting, not a policy. Restore replaces it in place in the same tenant; it cannot be created as a copy or copied to another tenant."
+const NOT_WRITTEN = "TenuVault backs this type up and compares it, and never writes it to a tenant."
+
+/** What a request does to a tenant: create an object, change or delete an existing one, or set its assignments. */
+export type WriteOperation = "create" | "update" | "delete" | "assign"
+
+/**
+ * Why a type's restore capability does not allow a write, or undefined when it does. A type that
+ * declares no capability allows none. Everything that can change a tenant asks here before it sends
+ * a request: restore, revert, change sets with their rollback, Sync, baselines and the copy to
+ * another tenant. A type is never written because it merely looks like the others.
+ */
+export function writeBlocker(type: Pick<IntuneType, "restore" | "limitation" | "restoreSafety">, operation: WriteOperation): string | undefined {
+  const capability = restoreCapability(type)
+  if (capability === "none") return type.limitation ?? NOT_WRITTEN
+  if (capability === "metadata") return type.limitation ?? "This type is backed up for reference only."
+  if (type.restoreSafety === "identity") return "This type requires a signed-in admin and the journaled restore safety checks before it can be written."
+  // A tenant-wide setting always exists: it is replaced in place, never created or deleted.
+  if (capability === "singleton" && (operation === "create" || operation === "delete")) return SINGLETON
+  return undefined
+}
 
 /** Why a snapshot cannot be recreated, or undefined when it can. */
 export function restoreBlocker(type: IntuneType, snapshot: Item): string | undefined {
-  if (type.restore === "metadata") return type.limitation ?? "This type is backed up for reference only."
-  if (type.restore === "singleton") return SINGLETON
-  return type.restorable?.(snapshot)
+  return writeBlocker(type, "create") ?? type.restorable?.(snapshot)
 }
 
 const MAC_PASSWORD_RESET = "Macs that get this policy make every local account, including LAPS and Platform SSO accounts, set a new password at the next sign-in. Tell those users before you restore it."
@@ -117,7 +135,8 @@ export function buildRestorePlan(type: IntuneType, snapshot: Item, options: Plan
  * Assignments are replaced as a whole when requested.
  */
 export function buildUpdatePlan(type: IntuneType, snapshot: Item, id: string, options: PlanOptions & { current?: Item } = {}): Step[] {
-  if (type.restore === "metadata") throw new NotRestorableError(type.limitation ?? "This type is backed up for reference only.")
+  const blocked = writeBlocker(type, "update")
+  if (blocked) throw new NotRestorableError(blocked)
   if (options.includeAssignments && (type.assign === "post" || type.folder === "RoleDefinitions")) {
     throw new NotRestorableError(`Assignment replacement is not supported for ${type.label}. Turn off Restore assignments and reconcile assignments in Intune.`)
   }

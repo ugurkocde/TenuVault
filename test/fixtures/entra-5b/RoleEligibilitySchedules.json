@@ -1,0 +1,65 @@
+{
+  "folder": "RoleEligibilitySchedules",
+  "path": "roleManagement/directory/roleEligibilitySchedules",
+  "apiVersion": "v1.0",
+  "shape": "list",
+  "signIn": "both",
+  "objectCount": 1,
+  "verified": "2026-11-16",
+  "source": "Live app-only read through GraphSession and readObject",
+  "outcome": "saved",
+  "responses": {
+    "/v1.0/roleManagement/directory/roleEligibilitySchedules": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-9c129a29bfb7",
+            "principalId": "00000000-0000-4000-8000-c78f34d92bb6",
+            "roleDefinitionId": "00000000-0000-4000-8000-f6aa865a8464",
+            "directoryScopeId": "/",
+            "appScopeId": null,
+            "createdUsing": "00000000-0000-4000-8000-9c129a29bfb7",
+            "createdDateTime": "2024-05-20T12:17:14.2Z",
+            "modifiedDateTime": "0001-01-01T08:00:00Z",
+            "status": "Provisioned",
+            "memberType": "Direct",
+            "scheduleInfo": {
+              "startDateTime": "2024-05-20T12:17:14.2Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          }
+        ]
+      }
+    },
+    "/v1.0/roleManagement/directory/roleEligibilitySchedules/00000000-0000-4000-8000-9c129a29bfb7": {
+      "status": 200,
+      "body": {
+        "id": "00000000-0000-4000-8000-9c129a29bfb7",
+        "principalId": "00000000-0000-4000-8000-c78f34d92bb6",
+        "roleDefinitionId": "00000000-0000-4000-8000-f6aa865a8464",
+        "directoryScopeId": "/",
+        "appScopeId": null,
+        "createdUsing": "00000000-0000-4000-8000-9c129a29bfb7",
+        "createdDateTime": "2024-05-20T12:17:14.2Z",
+        "modifiedDateTime": "0001-01-01T08:00:00Z",
+        "status": "Provisioned",
+        "memberType": "Direct",
+        "scheduleInfo": {
+          "startDateTime": "2024-05-20T12:17:14.2Z",
+          "recurrence": null,
+          "expiration": {
+            "type": "noExpiration",
+            "endDateTime": null,
+            "duration": null
+          }
+        }
+      }
+    }
+  }
+}

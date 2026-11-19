@@ -60,6 +60,7 @@ For more on manual backups, see [Run a backup](/backups/).
 | **Backup completed successfully** | Every object in scope was saved. |
 | **Backup completed with &lt;n&gt; warnings** | Most objects were saved, but some could not be read. **Needs attention** lists each one with the reason. Older backups are kept because this backup is incomplete. |
 | **Backup failed: no policies could be saved** | Nothing was saved. Check **Needs attention** or the raw log for the first error. |
+| **Backup failed: nothing could be read** | Every selected type was left out, for example for a missing permission or a product the tenant has no license for. The error names the main cause, and **Needs attention** lists the reason per type. |
 
 Below the result, TenuVault shows:
 
@@ -95,3 +96,9 @@ Once you have a successful backup, [practice an Intune restore](https://www.tenu
 ## Related pages
 
 * [Set up and schedule Microsoft Intune backups](https://www.tenuvault.com/guides/intune-backup-setup): the setup guide, on the product site
+
+## Your chosen services
+
+The first backup step names the services selected during setup. Intune is included only if you chose it. Entra ID now has [67 configuration types](/backups/entra/), so an Entra-only setup can use **Run first backup** immediately. Defender-only setups can also back up their [17 supported configuration types](/backups/defender/). Entirely pending areas cannot be switched on in Settings. Conditional Access backups are already available when selected. For a tenant with only services whose backup types have not arrived, the step explains that there are no backup types to run yet and offers **Skip for now**. Apps are left out by default only for an Intune backup.
+
+![First backup for an Entra-only setup](/images/onboarding/11-backup-first-light.png)

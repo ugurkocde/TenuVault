@@ -1,0 +1,36 @@
+{
+  "folder": "LifecycleWorkflowCustomTaskExtensions",
+  "outcome": "saved",
+  "objectCount": 1,
+  "source": "Documented synthetic configuration, not a live successful detail read",
+  "responses": {
+    "/v1.0/identityGovernance/lifecycleWorkflows/customTaskExtensions": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "example",
+            "displayName": "Example task extension"
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/lifecycleWorkflows/customTaskExtensions/example": {
+      "status": 200,
+      "body": {
+        "id": "example",
+        "displayName": "Example task extension",
+        "endpointConfiguration": {
+          "@odata.type": "#microsoft.graph.logicAppTriggerEndpointConfiguration",
+          "subscriptionId": "subscription",
+          "resourceGroupName": "example",
+          "logicAppWorkflowName": "example"
+        },
+        "authenticationConfiguration": {
+          "@odata.type": "#microsoft.graph.azureAdTokenAuthentication",
+          "resourceId": "application-id"
+        }
+      }
+    }
+  }
+}

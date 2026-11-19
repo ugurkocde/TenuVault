@@ -1,5 +1,6 @@
 "use client"
 
+import { ServiceBackupNotice } from "@desktop/components/ServiceBackupNotice"
 import { useBackupProgress } from "~/contexts/BackupProgressContext"
 import { trackBackup } from "@desktop/lib/backups"
 import { RunBackupDialog } from "@desktop/components/RunBackupDialog"
@@ -1079,6 +1080,8 @@ function TenantsPageContent() {
                 </div>
               )}
 
+              {tenant.credentials && <ServiceBackupNotice tenantId={tenant.credentials.tenantId} />}
+
               {/* Sync Status */}
               <div className="flex items-center justify-between rounded-2xl bg-gray-50 px-4 py-3 mb-4">
                 <div className="flex items-center gap-2">
@@ -1301,6 +1304,7 @@ function TenantsPageContent() {
                           <div className="text-sm text-gray-500">{tenant.domain}</div>
                         </div>
                       </div>
+                      {tenant.credentials && <div className="mt-3 w-64 whitespace-normal"><ServiceBackupNotice tenantId={tenant.credentials.tenantId} /></div>}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className={cn(

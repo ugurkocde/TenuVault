@@ -1,0 +1,38 @@
+{
+  "folder": "IdentityProviders",
+  "path": "identity/identityProviders",
+  "apiVersion": "v1.0",
+  "shape": "list",
+  "signIn": "both",
+  "objectCount": 3,
+  "verified": "2026-11-16",
+  "source": "Live app-only read through GraphSession and readObject",
+  "outcome": "saved",
+  "responses": {
+    "/v1.0/identity/identityProviders": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "@odata.type": "#microsoft.graph.builtInIdentityProvider",
+            "id": "AADSignup-OAUTH",
+            "displayName": "Example displayName",
+            "identityProviderType": "AADSignup"
+          },
+          {
+            "@odata.type": "#microsoft.graph.builtInIdentityProvider",
+            "id": "EmailOtpSignup-OAUTH",
+            "displayName": "Example displayName",
+            "identityProviderType": "EmailOTP"
+          },
+          {
+            "@odata.type": "#microsoft.graph.builtInIdentityProvider",
+            "id": "MSASignup-OAUTH",
+            "displayName": "Example displayName",
+            "identityProviderType": "MicrosoftAccount"
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "folder": "MdmEnrollmentPolicies",
+  "path": "policies/mobileDeviceManagementPolicies",
+  "apiVersion": "beta",
+  "shape": "list",
+  "signIn": "admin",
+  "objectCount": 0,
+  "verified": "2026-11-15",
+  "source": "Live app-only read through GraphSession and readObject",
+  "outcome": "skipped",
+  "cause": "signedIn",
+  "responses": {
+    "/beta/policies/mobileDeviceManagementPolicies": {
+      "status": 401,
+      "body": {
+        "error": {
+          "code": "AccessDenied",
+          "message": "Unsupported app-only call."
+        }
+      }
+    }
+  }
+}

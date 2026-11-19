@@ -141,7 +141,7 @@ describe("damage kinds in the backup list", () => {
       const request = new Request(input, init)
       const url = new URL(request.url)
       if (url.hostname === "login.microsoftonline.com") return Response.json({ access_token: "token" })
-      if (url.searchParams.get("restype") === "container" && !url.searchParams.get("comp")) {
+      if (url.pathname === "/intune-backups" && url.searchParams.get("restype") === "container" && !url.searchParams.get("comp")) {
         return new Response(null, { status: 200, headers: { "x-tenuvault-unreadable-files": "3", "x-tenuvault-unavailable-backups": "0", "x-tenuvault-unreadable-file-names": "ab12.tvb", [DAMAGE_KINDS_HEADER]: kindsHeader } })
       }
       if (localAccountFromUrl(url)) return handleLocalBlobRequest(store, request)
@@ -191,6 +191,8 @@ describe("the folder Open backup folder shows", () => {
     mkdirSync(join(root, account, CONTAINER), { recursive: true })
     expect(await folderToOpen(root, TENANT)).toBe(join(root, account, CONTAINER))
     expect(await folderToOpen(root, TENANT.toUpperCase())).toBe(join(root, account, CONTAINER))
+    mkdirSync(join(root, account, "intune-backups-large"), { recursive: true })
+    expect(await folderToOpen(root, TENANT)).toBe(join(root, account))
   })
 
   it("refuses anything but a tenant ID, so the folder never leaves the root", async () => {

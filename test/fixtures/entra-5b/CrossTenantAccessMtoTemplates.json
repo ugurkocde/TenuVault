@@ -1,0 +1,39 @@
+{
+  "folder": "CrossTenantAccessMtoTemplates",
+  "path": "policies/crossTenantAccessPolicy/templates",
+  "apiVersion": "v1.0",
+  "shape": "two singletons",
+  "signIn": "both",
+  "objectCount": 2,
+  "verified": "2026-11-16",
+  "source": "Live app-only read through GraphSession and readObject",
+  "outcome": "saved",
+  "responses": {
+    "/v1.0/policies/crossTenantAccessPolicy/templates/multiTenantOrganizationIdentitySynchronization": {
+      "status": 200,
+      "body": {
+        "id": "00000000-0000-4000-8000-f89ba50b8d73",
+        "templateApplicationLevel": "newPartners,existingPartners",
+        "userSyncInbound": {
+          "isSyncAllowed": null
+        }
+      }
+    },
+    "/v1.0/policies/crossTenantAccessPolicy/templates/multiTenantOrganizationPartnerConfiguration": {
+      "status": 200,
+      "body": {
+        "id": "00000000-0000-4000-8000-e95728915445",
+        "templateApplicationLevel": "newPartners,existingPartners",
+        "inboundTrust": null,
+        "b2bCollaborationOutbound": null,
+        "b2bCollaborationInbound": null,
+        "b2bDirectConnectOutbound": null,
+        "b2bDirectConnectInbound": null,
+        "automaticUserConsentSettings": {
+          "inboundAllowed": null,
+          "outboundAllowed": null
+        }
+      }
+    }
+  }
+}

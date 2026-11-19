@@ -99,6 +99,20 @@ function sidebarLink(container: HTMLElement, href: string): HTMLAnchorElement {
 }
 
 describe("sidebar plan badges for paid screens", () => {
+  it("places Services after Backup & Restore without changing the other navigation order", async () => {
+    const container = await render(createElement(DesktopLayout))
+    const nav = container.querySelector('nav[aria-label="Main navigation"]')!
+    const group = nav.querySelector('section[aria-label="Services"]')!
+    expect(group.querySelector("h2")?.textContent).toBe("Services")
+    expect([...group.querySelectorAll("a")].map(link => link.textContent)).toEqual(["Intune", "Entra ID", "Defender"])
+    expect(group.previousElementSibling?.textContent).toBe("Backup & Restore")
+    expect(group.parentElement?.nextElementSibling?.textContent).toContain("App Backup")
+    const filtered = await render(createElement(DesktopLayout), "/portal/backup?service=entra")
+    expect(sidebarLink(filtered, "/portal/backup").className).not.toContain("bg-primary")
+    const unknown = await render(createElement(DesktopLayout), "/portal/backup?service=unknown")
+    expect(sidebarLink(unknown, "/portal/backup").className).toContain("bg-primary")
+  })
+
   it("badges each hub by all of its tabs, and the audit log and Sync by their feature", () => {
     expect(NAV_PLAN_FEATURES["/portal/audit"]).toEqual(["auditLog"])
     expect(NAV_PLAN_FEATURES["/portal/sync"]).toEqual(["sync"])

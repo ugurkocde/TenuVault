@@ -111,6 +111,7 @@ export async function checkBackupCancel({ check, evaluate, waitForCondition, scr
           frame.contentWindow.tenuvault = {
             ...window.tenuvault,
             storage: { ...window.tenuvault.storage, setItem: async () => {}, removeItem: async () => {} },
+            setup: { ...window.tenuvault.setup, checkPermissions: async () => ({ missing: [] }), saveServices: async () => {} },
             auth: { ...window.tenuvault.auth, signIn: async () => ({ tenantId: '99999999-9999-9999-9999-999999999999', clientId: '22222222-2222-2222-2222-222222222222', username: 'smoke@example.test', name: 'Smoke' }) },
             license: { ...window.tenuvault.license, checkNewTenant: async () => window.tenuvault.license.status() },
             backups: { ...window.tenuvault.backups, cancel: async id => {

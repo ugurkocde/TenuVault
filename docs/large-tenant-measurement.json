@@ -1,0 +1,83 @@
+{
+  "machine": {
+    "hostname": "MacBook-Air-UK.local",
+    "platform": "darwin",
+    "release": "27.2.0",
+    "cpu": "Apple M5",
+    "cores": 10,
+    "ramGiB": 24,
+    "node": "v26.7.0"
+  },
+  "scale": 1,
+  "collections": {
+    "syntheticUsers": {
+      "count": 100000,
+      "bytes": 1024
+    },
+    "syntheticGroups": {
+      "count": 20000,
+      "bytes": 1024,
+      "members": {
+        "object": 0,
+        "count": 50000
+      }
+    },
+    "syntheticApps": {
+      "count": 30000,
+      "bytes": 1024
+    }
+  },
+  "uptimeBefore": "20:26  up 1 day, 17:16, 1 user, load averages: 3.49 7.40 7.40",
+  "uptimeAfter": "20:44  up 1 day, 17:34, 1 user, load averages: 5.35 7.31 8.63",
+  "wallSeconds": 1103.432180959,
+  "peakRssBytes": 415989760,
+  "requests": 20223,
+  "throttles": 20,
+  "storedBytes": 232653471,
+  "files": 150202,
+  "status": "Completed",
+  "coverage": "complete",
+  "results": {
+    "types": [
+      {
+        "folder": "AuthorizationPolicy",
+        "label": "AuthorizationPolicy (test)",
+        "area": "Tenant administration",
+        "inventory": true,
+        "state": "saved",
+        "saved": 100000,
+        "failed": 0,
+        "found": 100000
+      },
+      {
+        "folder": "AuthenticationMethodsPolicy",
+        "label": "AuthenticationMethodsPolicy (test)",
+        "area": "Tenant administration",
+        "inventory": true,
+        "state": "saved",
+        "saved": 20000,
+        "failed": 0,
+        "found": 20000
+      },
+      {
+        "folder": "TokenLifetimePolicies",
+        "label": "TokenLifetimePolicies (test)",
+        "area": "Tenant administration",
+        "inventory": true,
+        "state": "saved",
+        "saved": 30000,
+        "failed": 0,
+        "found": 30000
+      }
+    ],
+    "notices": [
+      {
+        "level": "warning",
+        "message": "Intune is turned off for this tenant, so its types are not backed up. Services and permissions in Settings turns it on again."
+      }
+    ],
+    "coverage": "complete",
+    "totalPolicies": 0,
+    "warnings": 0
+  }
+}

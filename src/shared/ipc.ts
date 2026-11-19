@@ -1,10 +1,13 @@
+import type { PermissionAdditionPreview, PermissionAdditionResult } from "./registration-additions"
 import type { AppSourcesBridge } from "./app-sources/types"
 import type { OptionalPermissionStatus } from "./services/optional-permissions"
 import type { PlanIpcError } from "./plan-errors"
 import type { BackupScope } from "./intune/scope"
 import type { ReportPayload } from "./oib/report"
 import type { PdfBranding } from "./pdf/theme"
-import type { ModuleCheck, ModuleId } from "./services/modules"
+import type { AccessLevel, ModuleCheck, ModuleId, ServiceSelection } from "./services/modules"
+import type { ConnectionHealthReport } from "./connection-health/model"
+import type { PermissionChoice } from "./services/manifest"
 import type { FeedbackInput, FeedbackSendResult, FeedbackSnapshot } from "./feedback"
 
 /** The saved PDF branding and whether any tenant on this machine is on a plan that applies it. */
@@ -47,8 +50,13 @@ export interface BackupReaderStatus {
   lastTest: BackupReaderTestResult | null
   /** The last scheduled backup that actually ran with the reader. */
   lastRun: { at: string; status: string } | null
-  /** Types scheduled backups leave out because the reader has no permission for them. */
+  /** Types the tenant backs up that scheduled backups leave out because the reader cannot read them. */
   excludedTypes: string[]
+  /**
+   * How the reader's Microsoft Graph permissions differ from the verified ones, as the last token
+   * showed. Scheduled backups keep using only what was verified until the admin verifies again.
+   */
+  roleChange: { added: string[]; removed: string[]; at: string } | null
   /** A renewal certificate is waiting to be uploaded and verified. */
   renewalPending: boolean
 }
@@ -59,6 +67,11 @@ export interface BackupReaderState {
   /** The tenant's plan includes the Backup Reader. */
   available: boolean
   reader: BackupReaderStatus | null
+  /**
+   * The setup script parameters for the first setup of this tenant's reader, with a leading space:
+   * the services it backs up. Empty for a tenant that backs up Intune, as before.
+   */
+  setupArguments: string
   /** The tenant's Azure backup storage account; omitted when backups stay on this device. */
   storageAccountName?: string
   /** After a verification: the reader works for Microsoft Graph but cannot write backups to the tenant's Azure storage. */
@@ -241,6 +254,8 @@ export interface BackupSettings {
 
 /** What a tenant backs up. `saved` is false while the tenant uses the default. */
 export interface BackupScopeSetting {
+  /** Current service choices, returned with the scope but never persisted in it. */
+  selection?: ServiceSelection
   scope: BackupScope
   saved: boolean
 }
@@ -407,8 +422,8 @@ export interface ServiceModuleStatus {
   id: ModuleId
   label: string
   description: string
-  /** Opt-in modules start off for every tenant; the others are always on. */
-  optIn: boolean
+  /** The admin can turn the service on or off for the tenant. */
+  switchable: boolean
   enabled: boolean
   roles: string
   /** Restore permissions this module adds on top of the default setup, and the setup switch for new app registrations. */
@@ -436,6 +451,8 @@ export interface TenuVaultBridge {
     signIn: (tenant: string, clientId: string, options?: { loginHint?: string }) => Promise<SignedInAccount>
     signOut: (tenantId: string) => Promise<void>
     accounts: () => Promise<SignedInAccount[]>
+    /** Called after an account is saved or removed, before any old verification is reused. */
+    onAccountsChanged: (listener: (tenantId: string) => void) => () => void
     /** Signs in again to an existing tenant profile, for `scope` (Microsoft Graph when omitted). */
     reauthenticate: (tenantId: string, clientId: string, scope?: string) => Promise<SignedInAccount>
     /** Called when a background request needs the admin to sign in again. Returns an unsubscribe function. */
@@ -479,7 +496,10 @@ export interface TenuVaultBridge {
      * registration through Microsoft Graph, or finds the one TenuVault made earlier. The token
      * stays in the main process, in memory only. `tenant` is for guest and partner admins.
      */
-    createRegistration: (options?: { tenant?: string }) => Promise<RegistrationResult>
+    /** `choice` names the services, areas and access levels to ask permissions for; without it, what a setup always asked for. */
+    checkPermissions: (tenantId: string, clientId: string, choice: PermissionChoice) => Promise<{ missing: string[]; error?: string }>
+    saveServices: (tenantId: string, clientId: string, choice: PermissionChoice) => Promise<void>
+    createRegistration: (options?: { tenant?: string; choice?: PermissionChoice }) => Promise<RegistrationResult>
     /** Stops waiting for the setup sign-in in the browser. */
     cancelCreateRegistration: () => Promise<void>
     /** Stops only a setup sign-in that still waits for the browser. Resolves with whether one was. */
@@ -523,10 +543,40 @@ export interface TenuVaultBridge {
     liveRuns: (tenantId: string) => Promise<string[]>
   }
   services: {
-    /** The tenant's service modules and what its app registration may do with each. `refresh` gets a new token, so recent consent changes show. */
+    previewAddition: (tenantId: string, missing: readonly string[]) => Promise<PermissionAdditionPreview>
+    confirmAddition: (tenantId: string, previewId: string) => Promise<PermissionAdditionResult>
+    cancelAddition: (tenantId: string) => Promise<void>
+    /** The tenant's service modules that have types to back up, and what its app registration may do with each. `refresh` gets a new token, so recent consent changes show. */
     status: (tenantId: string, clientId: string, refresh?: boolean) => Promise<ServicesStatus>
-    /** Turns an opt-in service module on or off for the tenant's backups. */
-    setEnabled: (tenantId: string, clientId: string, id: ModuleId, enabled: boolean) => Promise<ServicesStatus>
+    /** Turns a service module on or off for the tenant's backups. */
+    setEnabled: (tenantId: string, clientId: string, id: ModuleId, enabled: boolean, confirmation?: { confirmed: true }) => Promise<ServicesStatus>
+    /**
+     * Sets what TenuVault asks for at setup for a service of the tenant: read access for backups, or
+     * read and write access so it can also restore. Answers with the tenant's connection health,
+     * which names the permissions the choice still needs.
+     */
+    setAccess: (tenantId: string, id: ModuleId, access: AccessLevel) => Promise<ConnectionHealthReport>
+    /** Turns an opt-in area of a service on or off for the tenant's backups. Answers with the tenant's connection health. */
+    setArea: (tenantId: string, id: ModuleId, area: string, enabled: boolean) => Promise<ConnectionHealthReport>
+  }
+  /**
+   * Connection health of a connected tenant: the state of the admin's sign-in, of the Backup Reader
+   * and of the storage sign-in, what each service and area may do and whether the last backup
+   * proved it, and what changed. See shared/connection-health/model.
+   */
+  health: {
+    /** What is known now, from what was observed so far. Asks Microsoft nothing. */
+    report: (tenantId: string) => Promise<ConnectionHealthReport>
+    /**
+     * Checks the connection without any sign-in window. A page that opens gets the answer of a
+     * check made within the last minute; `again` is the admin asking to check again, which always
+     * asks Microsoft, also for the Backup Reader.
+     */
+    check: (tenantId: string, again?: boolean) => Promise<ConnectionHealthReport>
+    /** Acknowledge exactly the changes of the displayed report, using its acknowledgement receipt. */
+    acknowledge: (tenantId: string, receipt: string) => Promise<ConnectionHealthReport>
+    /** Called with a tenant ID when what is known about that tenant changed. Returns an unsubscribe function. */
+    onChanged: (listener: (tenantId: string) => void) => () => void
   }
   license: {
     trialWorkflowsConfigured: (tenantId: string) => Promise<boolean>

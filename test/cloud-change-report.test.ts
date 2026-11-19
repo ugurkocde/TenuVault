@@ -110,6 +110,33 @@ describe.runIf(Boolean(pwsh))("cloud change reports match the desktop app", () =
     }, 60_000)
   }
 
+  it.each(["inventory-older", "inventory-newer", "inventory-inline", "inventory-companion-only"])("keeps an unchanged ordinary cloud report when inventory was not compared: %s", scenario => {
+    const run = runReport(scenario)
+    expect(run.writes).toHaveLength(1)
+    const note = JSON.parse(run.writes[0]!.body)
+    expect(note.changes).toBe(0)
+    expect(note.email.summary).toContain("inventory comparison was not performed")
+    expect(note.email.summary).not.toContain("No changes between")
+    expect(run.output.join("\n")).toContain("inventory comparison was not performed")
+    for (const file of note.files) {
+      expect(file.content).toContain("Comparison coverage")
+      expect(file.content).toContain("comparison was not performed")
+      expect(file.content).not.toContain("No items were added")
+      if (scenario !== "inventory-companion-only") expect(file.content).toContain("Users inventory")
+      if (scenario === "inventory-inline") expect(file.content).toContain("Groups inventory")
+    }
+    expect(run.methods).toEqual(["Get", "Put"])
+    // No directory payload read or capture is added to Azure Automation.
+    expect(run.reads.some(uri => uri.includes("backup-large-"))).toBe(false)
+    const folder = mkdtempSync(join(tmpdir(), "tenuvault-report-inventory-"))
+    try {
+      const notePath = join(folder, "note.json")
+      writeFileSync(notePath, JSON.stringify(note))
+      const mail = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", mailScript, "-NotePath", notePath, "-TenantId", fixture.tenantId], { encoding: "utf8" }))
+      expect(JSON.stringify(mail)).toContain("inventory comparison was not performed")
+    } finally { rmSync(folder, { recursive: true, force: true }) }
+  }, 60_000)
+
   it("sends the same email as the desktop app when the audit log was throttled, saying who is unknown and why", async () => {
     const desktop = await desktopReport({ values: true, actors: true, auditError: throttledDesktop })
     const cloud = cloudReport({ values: true, actors: true, auditError: throttledDesktop })

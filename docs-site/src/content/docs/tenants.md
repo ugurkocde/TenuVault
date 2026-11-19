@@ -13,8 +13,13 @@ A tenant in TenuVault is one Microsoft Intune tenant you have signed in to, toge
 | **Dashboard** | Sidebar | Backup overview of the selected tenant |
 | **All tenants** | Sidebar, when two or more tenants are connected | Status of every connected tenant at a glance |
 | **Tenants** | Sidebar | The **Tenant Management** page: rename, tag, refresh, back up and remove tenants |
+| **Services** | Below **Backup & Restore** in the sidebar | **Intune**, **Entra ID** and **Defender** shortcuts to filtered backup contents for the selected tenant |
 | **Settings** | Sidebar | Sign in again and change where a tenant's backups are stored |
 | **License** | Sidebar | License state of each tenant and license sharing |
+
+The **Services** group always lists all three services. A service marked **Off** opens **Settings > Services and permissions**, where you can turn it on. The badges follow the selected tenant and update when a service changes. An enabled service opens **Backup & Restore** with that service selected; its sidebar entry stays highlighted until you choose **All** in the page's **Service** filter.
+
+![Services navigation beside the backup timeline](/images/sidebar/all-services-on-light.png)
 
 ## Switch between tenants
 
@@ -24,6 +29,8 @@ The Dashboard, Backup & Restore, Drift Detection and Audit Log pages work on one
 2. Under **Tenants**, select the tenant you want. A check mark shows the current one.
 
 The switcher marks tenants your license does not cover right now with a warning icon, and shows **Not licensed** under the selected tenant's name when it applies. The menu also has **All tenants** (when two or more tenants are connected) and **Connect a tenant**.
+
+Notification links wait for saved tenants to load, then select the tenant the work belongs to before opening its workflow. If that tenant is no longer connected or is unknown on this computer, TenuVault shows **The linked tenant is not connected** with **Open Tenants**. Connect or choose a tenant there to continue. If the linked tenant is removed while its page is open, the workflow closes and the same notice appears.
 
 The **Backup & Restore** page has its own **Select tenant** list. Choosing a tenant there changes the same selection.
 

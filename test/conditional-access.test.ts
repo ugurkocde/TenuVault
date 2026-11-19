@@ -322,6 +322,7 @@ describe("Backing up Conditional Access", () => {
   const jwt = (scp: string) => `e30.${Buffer.from(JSON.stringify({ scp })).toString("base64url")}.sig`
 
   function setup(options: { modules: Array<"conditionalAccess">; scopes: string }) {
+    const services = { services: ["intune" as const, ...options.modules] }
     const store = new LocalBlobStore(mkdtempSync(join(tmpdir(), "tv-ca-")), [randomBytes(32)])
     const graphPaths: string[] = []
     const engine = new BackupEngine({
@@ -338,7 +339,7 @@ describe("Backing up Conditional Access", () => {
         throw new Error(`unexpected ${url}`)
       }) as typeof fetch,
       getToken: async () => jwt(options.scopes),
-      enabledModules: () => options.modules,
+      services: () => services,
       now: () => new Date("2026-11-03T02:00:00Z"),
     })
     const run = async () => {

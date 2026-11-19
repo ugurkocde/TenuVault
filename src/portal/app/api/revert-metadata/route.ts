@@ -1,3 +1,4 @@
+import { backupStoragePath } from "../../../../shared/backup-storage"
 import { readLegacyRevertHistory, revertHistoryPath } from "~/lib/policies/revert-history"
 import { type NextRequest, NextResponse } from "next/server"
 
@@ -51,7 +52,7 @@ export async function POST(request: NextRequest) {
     const accessToken = tokenData.access_token
 
     // Fetch this tenant's history; a container can be shared by several tenants.
-    const read = (name: string) => fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${name.split("/").map(encodeURIComponent).join("/")}`, {
+    const read = (name: string) => fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(name)}`, {
       headers: {
         'x-ms-version': '2021-12-02',
         'x-ms-date': new Date().toUTCString(),

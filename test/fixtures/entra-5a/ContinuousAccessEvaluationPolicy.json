@@ -1,0 +1,22 @@
+{
+  "folder": "ContinuousAccessEvaluationPolicy",
+  "path": "identity/continuousAccessEvaluationPolicy",
+  "apiVersion": "beta",
+  "shape": "singleton",
+  "signIn": "both",
+  "objectCount": 0,
+  "verified": "2026-11-15",
+  "source": "Live app-only read through GraphSession and readObject",
+  "outcome": "notConfigured",
+  "responses": {
+    "/beta/identity/continuousAccessEvaluationPolicy": {
+      "status": 404,
+      "body": {
+        "error": {
+          "code": "ResourceNotFound",
+          "message": "CAE settings not found."
+        }
+      }
+    }
+  }
+}

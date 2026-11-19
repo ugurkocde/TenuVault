@@ -2,15 +2,28 @@ import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 import { CONSENT_ROLES, CONSENT_ROLES_TEXT, DESKTOP_APP_PERMISSIONS, MANUAL_APP_REGISTRATION_URL, parseSetupOutput, setupHandoffText, setupIdsFromClipboard, SETUP_SCRIPT_DOWNLOAD_URL, suggestsCreatingByHand } from "../src/shared/app-registration"
 import { licenseKeyFromClipboard } from "../src/main/license/clipboard-key"
+import { graphPermissions } from "../src/shared/services/manifest"
 
 const script = readFileSync(new URL("../resources/New-TenuVaultDesktopApp.ps1", import.meta.url), "utf8")
 
 describe("the app registration shown in the guided setup", () => {
   it("lists exactly the default permissions the setup script grants", () => {
     for (const entry of DESKTOP_APP_PERMISSIONS) expect(script).toContain(`AppId  = "${entry.appId}"`)
-    const graph = /AppId\s*=\s*"00000003-0000-0000-c000-000000000000"\s*Scopes\s*=\s*@\(([^)]*)\)/.exec(script)?.[1] ?? ""
-    const scopes = [...graph.matchAll(/"([^"]+)"/g)].map((match) => match[1])
-    expect(DESKTOP_APP_PERMISSIONS[0]!.permissions).toEqual(scopes)
+    // The list as every setup has requested it, written out: a default setup must never ask for more, less or another order.
+    expect(DESKTOP_APP_PERMISSIONS[0]!.permissions).toEqual([
+      "User.Read",
+      "Organization.Read.All",
+      "Policy.Read.All",
+      "DeviceManagementConfiguration.ReadWrite.All",
+      "DeviceManagementApps.ReadWrite.All",
+      "DeviceManagementServiceConfig.ReadWrite.All",
+      "DeviceManagementScripts.ReadWrite.All",
+      "DeviceManagementRBAC.ReadWrite.All",
+      "DeviceManagementManagedDevices.Read.All",
+    ])
+    // The script takes its Microsoft Graph list from its permission table, which test/permission-parity.test.ts
+    // holds to the manifest, and test/app-registration-script.test.ts runs it to see this exact list requested.
+    expect(script).toMatch(/AppId\s*=\s*"00000003-0000-0000-c000-000000000000"\s*Scopes\s*=\s*\$graphScopes/)
     for (const entry of DESKTOP_APP_PERMISSIONS.slice(1)) {
       expect(script).toContain(`Name   = "${entry.api}"`)
       expect(entry.permissions).toEqual(["user_impersonation"])
@@ -62,6 +75,16 @@ describe("parseSetupOutput", () => {
 })
 
 describe("setupHandoffText", () => {
+  it("lists the permissions of the manifest for the default setup and for a choice, with the command for it", () => {
+    const listed = (text: string) => /Microsoft Graph: (.*)/.exec(text)![1]!.split(", ")
+    expect(listed(setupHandoffText())).toEqual(DESKTOP_APP_PERMISSIONS[0]!.permissions)
+    expect(setupHandoffText()).toContain("   ./New-TenuVaultDesktopApp.ps1\n")
+    expect(setupHandoffText()).toContain("  Azure Storage: user_impersonation")
+    const choice = { entra: { access: "backup" as const, areas: ["groups"] }, defender: { access: "restore" as const } }
+    expect(listed(setupHandoffText(choice))).toEqual(graphPermissions(choice, "delegated"))
+    expect(setupHandoffText(choice)).toContain("   ./New-TenuVaultDesktopApp.ps1 -Services Entra,Defender -RestoreAccess Defender -Areas Groups\n")
+  })
+
   it("gives another administrator everything they need, without an em dash", () => {
     const text = setupHandoffText()
     expect(text).toContain(SETUP_SCRIPT_DOWNLOAD_URL)

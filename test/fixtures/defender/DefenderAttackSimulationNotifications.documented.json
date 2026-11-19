@@ -1,0 +1,73 @@
+{
+  "folder": "DefenderAttackSimulationNotifications",
+  "source": "Synthetic documented shape; not a nonempty live read",
+  "outcome": "saved",
+  "objectCount": 1,
+  "responses": {
+    "/v1.0/security/attackSimulation/endUserNotifications?$filter=source%20eq%20'tenant'": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "example",
+            "displayName": "Example campaign",
+            "source": "tenant",
+            "createdBy": {
+              "id": "00000000-0000-4000-8000-000000000001",
+              "displayName": "Example person",
+              "email": "person@example.test",
+              "userPrincipalName": "person@example.test",
+              "mail": "person@example.test"
+            },
+            "lastModifiedBy": {
+              "id": "00000000-0000-4000-8000-000000000001",
+              "displayName": "Example person",
+              "email": "person@example.test",
+              "userPrincipalName": "person@example.test",
+              "mail": "person@example.test"
+            }
+          }
+        ]
+      }
+    },
+    "/v1.0/security/attackSimulation/endUserNotifications/example": {
+      "status": 200,
+      "body": {
+        "id": "example",
+        "displayName": "Example campaign",
+        "source": "tenant",
+        "createdBy": {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "displayName": "Example person",
+          "email": "person@example.test",
+          "userPrincipalName": "person@example.test",
+          "mail": "person@example.test"
+        },
+        "lastModifiedBy": {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "displayName": "Example person",
+          "email": "person@example.test",
+          "userPrincipalName": "person@example.test",
+          "mail": "person@example.test"
+        }
+      }
+    },
+    "/v1.0/security/attackSimulation/endUserNotifications/example/details": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "b",
+            "language": "de",
+            "content": "<p>Beispiel</p>"
+          },
+          {
+            "id": "a",
+            "language": "en",
+            "content": "<p>Example</p>"
+          }
+        ]
+      }
+    }
+  }
+}

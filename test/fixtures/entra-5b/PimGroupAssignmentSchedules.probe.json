@@ -1,0 +1,56 @@
+{
+  "folder": "PimGroupAssignmentSchedules",
+  "source": "Live diagnostic: first directory group, not discovered as a PIM resource; no coverage claim",
+  "objectCount": 2,
+  "responses": {
+    "/v1.0/identityGovernance/privilegedAccess/group/assignmentSchedules?$filter=groupId%20eq%20%2700000000-0000-4000-8000-608cd6db456b%27": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-608cd6db456b_member_00000000-0000-4000-8000-41b30a434401",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-41b30a434401",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-608cd6db456b",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:03:32.0434977Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          },
+          {
+            "id": "00000000-0000-4000-8000-608cd6db456b_member_00000000-0000-4000-8000-8e3ead324ef9",
+            "createdDateTime": null,
+            "modifiedDateTime": null,
+            "createdUsing": null,
+            "status": "Provisioned",
+            "principalId": "00000000-0000-4000-8000-8e3ead324ef9",
+            "accessId": "member",
+            "groupId": "00000000-0000-4000-8000-608cd6db456b",
+            "memberType": "direct",
+            "assignmentType": "assigned",
+            "scheduleInfo": {
+              "startDateTime": "2026-11-16T14:03:32.0434977Z",
+              "recurrence": null,
+              "expiration": {
+                "type": "noExpiration",
+                "endDateTime": null,
+                "duration": null
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

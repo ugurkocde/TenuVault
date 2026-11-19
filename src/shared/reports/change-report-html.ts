@@ -1,7 +1,7 @@
 import { redactText } from "../compliance/export"
 import { escapeHtml, type OibPrintOptions } from "../oib/report-html"
 import { luminance, resolveBrandTheme, themeCssVariables, type PdfBranding } from "../pdf/theme"
-import { activityLine, changeLabel, publicAuditNote, reportTime, reportTitle, summaryLine, type ChangeReport, type ReportChange, type ReportItem } from "./change-report"
+import { activityLine, changeLabel, publicAuditNote, reportTime, reportTitle, exportSummaryLine, inventoryLines, type ChangeReport, type ReportChange, type ReportItem } from "./change-report"
 
 /**
  * A change report as a standalone HTML document that the main process prints to PDF with
@@ -127,7 +127,9 @@ export function buildChangeReportDocument(report: ChangeReport, options: { brand
     if (!items.length) return ""
     return `<section><h2>${text(changeLabel(change))} (${items.length})</h2>${items.map((item) => itemHtml(item, report)).join("")}</section>`
   }).join("")
-  const empty = report.items.length ? "" : `<p class="none">No items were added, changed or deleted between the two backups.</p>`
+  const empty = report.comparison?.inventory.length
+    ? `<section><h2>Comparison coverage</h2><ul class="activity">${inventoryLines(report).map(line => `<li>${text(line)}</li>`).join("")}</ul></section>`
+    : report.items.length ? "" : `<p class="none">No items were added, changed or deleted between the two backups.</p>`
 
   const other = report.otherActivity.length
     ? `<section><div class="keep"><h2>Other activity (${report.otherActivity.length + report.moreActivity})</h2><p class="lead">Audit events in this window that match no item above, for example a change that was undone before the second backup, or an object TenuVault does not back up.</p></div>
@@ -149,7 +151,7 @@ export function buildChangeReportDocument(report: ChangeReport, options: { brand
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:"><title>${text(title)}</title><style>${rootVariables}${STYLE}${pageBoxes}</style></head><body>
 ${header}
 ${tiles}
-<p class="lead">${text(summaryLine(report))}</p>
+<p class="lead">${text(exportSummaryLine(report))}</p>
 ${callouts}${empty}${sections}${other}${warnings}${provenance}
 </body></html>`
 

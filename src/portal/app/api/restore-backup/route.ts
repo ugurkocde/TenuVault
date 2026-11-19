@@ -1,3 +1,4 @@
+import { backupStoragePath } from "../../../../shared/backup-storage"
 import { restoreApprovals, dismissRestoreApproval, saveRestoreApproval } from "../../../../main/storage/restore-approvals"
 import { parseDependencyMappings } from "../../../../shared/intune/recovery"
 import { randomUUID } from "node:crypto"
@@ -35,7 +36,7 @@ export async function getAccessToken(tenantId: string, appId: string, clientSecr
   return tokenData.access_token
 }
 
-const blobUrl = (storageAccountName: string, name: string) => `https://${storageAccountName}.blob.core.windows.net/intune-backups/${name.split("/").map(encodeURIComponent).join("/")}`
+const blobUrl = (storageAccountName: string, name: string) => `https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(name)}`
 const storageHeaders = (storageToken: string) => ({ 'x-ms-version': '2021-12-02', Authorization: `Bearer ${storageToken}` })
 
 async function readSnapshot(policyPath: string, storageAccountName: string, storageToken: string, expected?: ManifestEntry): Promise<Item> {
@@ -142,6 +143,8 @@ export async function POST(request: NextRequest) {
     let paths: string[]
     if (restoreType === 'selective' && selectedPolicies) {
       paths = selectedPolicies.map((policy: { path: string }) => policy.path)
+    } else if (owned.metadata?.LargeItems) {
+      paths = Object.entries(owned.metadata.Items ?? {}).map(([key, value]) => `${backupId}/${key.split('/')[0]}/${(value as { file: string }).file}`)
     } else {
       // Full restore - fetch all policies from the backup
       const policyFiles: string[] = []
@@ -174,7 +177,7 @@ export async function POST(request: NextRequest) {
               { mode: 'copy', assignments: false, prefix: '', crossTenant: true, repairScope: repairScope(target.tenantId), granted: grantedPermissions(targetToken) }),
           }
         }))
-      : [{ restorer: new Restorer(graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) }), { mode, assignments, approvalContext: requesterContext(graphToken, tenantId, body.justification), repairScope: repairScope(tenantId), granted: grantedPermissions(graphToken) }) }]
+      : [{ restorer: new Restorer(graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) }), { mode, assignments, guardedRunId: typeof body.guardedRunId === "string" ? body.guardedRunId : undefined, approvalContext: requesterContext(graphToken, tenantId, body.justification), repairScope: repairScope(tenantId), granted: grantedPermissions(graphToken) }) }]
     try {
       if (dependencyMappings.length) for (const { restorer } of targets) await restorer.mapDependencies(dependencyMappings)
     } catch (error) {

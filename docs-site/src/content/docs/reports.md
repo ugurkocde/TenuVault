@@ -45,6 +45,7 @@ Click a report in the **Reports** list to open it. It has these parts, in the ap
 * **Changed**: each changed item with the settings that changed, before and after. A renamed item shows its previous name.
 * **Added**: each new item with the settings it has, including its assignments.
 * **Other activity**: audit events in the same period that match no item in the report. This is where you see a change that was made and undone between the two backups, or a change to something TenuVault does not back up.
+* **Comparison coverage**: whether the ordinary comparison completed, plus separate counts of added, changed, deleted and unchanged inventory objects for each large folder. Directory inventory is compared from bounded index pages without reading every object. Mixed runs use the verified inventory companion of each backup. A missing or incomplete comparison is stated explicitly. Inventory changes have no per-object settings or audit attribution in these reports.
 * **Not compared**: files that could not be read and were left out.
 
 Each item lists at most 300 settings. An item with more says how many are not listed; the backup itself holds the full item.
@@ -111,3 +112,9 @@ Like the scheduled backups themselves, this runs only while TenuVault is running
 * [Compare backups](/backups/compare/): the changes of one backup in Backup History
 * [Drift detection](/drift/): act on recent changes, with revert and restore
 * [Notifications](/notifications/): alerts and Intune change digests in Teams, email or webhooks
+
+Scheduled reports skip unchanged backups only when both the ordinary and inventory comparisons completed and found no changes. Inventory changes, unreadable index pages and comparisons that were not performed still produce a report. Older saved reports without recorded coverage cannot establish that nothing changed.
+
+### Inventory in cloud reports
+
+Azure Automation still backs up Intune and Conditional Access only. If either compared backup declares directory inventory, including a missing or unreadable large companion, its cloud report says that inventory comparison was not performed. Zero ordinary policy changes do not establish that the inventory is unchanged. The report and email retain this warning. Backups without inventory keep their existing export layout.

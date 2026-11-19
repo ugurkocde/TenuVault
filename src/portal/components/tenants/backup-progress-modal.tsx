@@ -46,7 +46,7 @@ interface BackupProgressModalProps {
     automationAccountName: string
     storageAccountName?: string
   } | null
-  onComplete?: (success: boolean) => void
+  onComplete?: (success: boolean, needsAttention?: boolean) => void
 }
 
 type JobStatus = BackupJobDisplay
@@ -103,7 +103,7 @@ export function BackupProgressModal({
     setSnapshot(trackedStatus)
     setCancelling(false)
     setCancelError("")
-    latest.current.onComplete?.(tracked.isSuccessful)
+    latest.current.onComplete?.(tracked.isSuccessful, completedWithWarnings(tracked))
   }, [tracked?.isComplete, tracked?.isSuccessful, jobId])
 
   const handleRunInBackground = () => {

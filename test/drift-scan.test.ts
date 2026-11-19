@@ -175,6 +175,23 @@ const request = (body: Record<string, unknown> = {}) => new NextRequest('http://
 const comparable = (drifts: any[]) => drifts.map(({ id: _id, detectedAt: _at, ...rest }) => rest).sort((a, b) => a.backupFile.localeCompare(b.backupFile))
 
 describe('Drift scan', () => {
+  it.each([OLD, NEW])('keeps legacy compliance deletions when %s carries large inventory', async largeBackup => {
+    const backups: Record<string, FakeBackup> = {
+      [OLD]: { metadata: { TenantId: TENANT_A, Status: 'Success', Scope: { Included: ['CompliancePolicies', 'DeviceConfigurations'] } }, files: {
+        'DeviceCompliancePolicies/Legacy.json': { id: 'legacy', displayName: 'Legacy compliance', '@odata.type': '#microsoft.graph.windows10CompliancePolicy', passwordRequired: true },
+      } },
+      [NEW]: { metadata: { TenantId: TENANT_A, Status: 'Success', Scope: { Included: ['CompliancePolicies', 'DeviceConfigurations'] } }, files: {} },
+    }
+    backups[largeBackup]!.metadata!.LargeItems = { DeviceConfigurations: { version: 1, count: 150000, shards: 150, complete: true } }
+    const { stub } = fakeStorage(backups)
+    const response = await drift(request({ baseline: OLD, comparison: NEW }))
+    expect(response.status).toBe(200)
+    const result = await response.json()
+    expect(result.drifts).toMatchObject([{ changeType: 'deleted', configId: 'legacy', configName: 'Legacy compliance' }])
+    const prefixes = stub.mock.calls.map(([input]) => new URL(String(input)).searchParams.get('prefix')).filter(Boolean)
+    expect(prefixes.sort()).toEqual([`${OLD}/CompliancePolicies/`, `${OLD}/DeviceCompliancePolicies/`, `${NEW}/CompliancePolicies/`, `${NEW}/DeviceCompliancePolicies/`].sort())
+  })
+
   it('skips items whose stored fingerprints match and finds the same drift as a full compare', async () => {
     const full = fakeStorage(twoBackups(false))
     const fullResponse = await drift(request())
@@ -289,10 +306,10 @@ describe('Drift scan', () => {
     expect(response.status).toBe(200)
     expect((await response.json()).summary.total).toBe(3)
 
-    // The container once for its backups, then each backup once. Listing every type folder of
+    // Both discovery namespaces, then each backup once. Listing every type folder of
     // both backups took 1 + 2 x 40 requests.
     const lists = storage.stub.mock.calls.map(([input]) => new URL(String(input))).filter(url => url.searchParams.get('comp') === 'list')
-    expect(lists.map(url => url.searchParams.get('prefix'))).toEqual([null, `${NEW}/`, `${OLD}/`])
+    expect(lists.map(url => url.searchParams.get('prefix'))).toEqual([null, 'backup-large-', `${NEW}/`, `${OLD}/`])
 
     // Found the backups, read both metadata files, listed both backups, then compared.
     expect(progress.slice(0, 7).map(step => `${step.phase} ${step.done}/${step.total}`)).toEqual([
@@ -612,4 +629,18 @@ describe('Drift scan jobs', () => {
     expect((await call(routes, '/api/drift-scan', { action: 'cancel', tenantId: TENANT_A, jobId: 'missing' })).status).toBe(404)
     expect(new DriftJobError('x').status).toBe(400)
   })
+})
+
+
+it("selects an ordinary pair past a lone newer large backup and refuses cross-class pairs", async () => {
+  const folders = [
+    { name: "backup-large-2026-11-17-120000", timestamp: "2026-11-17T12:00:00Z" },
+    { name: "backup-2026-11-16-120000", timestamp: "2026-11-16T12:00:00Z" },
+    { name: "backup-2026-11-15-120000", timestamp: "2026-11-15T12:00:00Z" },
+  ]
+  const options = { folders, tenantId: TENANT_A, load: async () => ({ Status: "Success" }) }
+  const pair = await selectBackupPair(options)
+  expect(pair.comparison.name).toBe(folders[1]!.name)
+  expect(pair.baseline.name).toBe(folders[2]!.name)
+  await expect(selectBackupPair({ ...options, baseline: folders[2]!.name, comparison: folders[0]!.name })).rejects.toMatchObject({ code: "INVALID_PAIR" })
 })

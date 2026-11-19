@@ -1,0 +1,29 @@
+{
+  "folder": "CertificateBasedAuthConfigurations",
+  "path": "organization/{organizationId}/certificateBasedAuthConfiguration",
+  "apiVersion": "v1.0",
+  "shape": "list",
+  "signIn": "both",
+  "objectCount": 0,
+  "verified": "2026-11-15",
+  "source": "Live app-only read through GraphSession and readObject",
+  "outcome": "saved",
+  "responses": {
+    "/v1.0/organization?$select=id": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "00000000-0000-4000-8000-836b20d0164d"
+          }
+        ]
+      }
+    },
+    "/v1.0/organization/00000000-0000-4000-8000-836b20d0164d/certificateBasedAuthConfiguration": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    }
+  }
+}

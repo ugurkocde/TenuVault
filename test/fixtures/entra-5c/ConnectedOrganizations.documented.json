@@ -1,0 +1,69 @@
+{
+  "folder": "ConnectedOrganizations",
+  "outcome": "saved",
+  "objectCount": 1,
+  "source": "Documented synthetic configuration, not a live successful detail read",
+  "responses": {
+    "/v1.0/identityGovernance/entitlementManagement/connectedOrganizations": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "example",
+            "displayName": "Example connected organization"
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/entitlementManagement/connectedOrganizations/example": {
+      "status": 200,
+      "body": {
+        "id": "example",
+        "displayName": "Example connected organization",
+        "state": "configured",
+        "identitySources": [
+          {
+            "@odata.type": "#microsoft.graph.azureActiveDirectoryTenant",
+            "tenantId": "b"
+          },
+          {
+            "@odata.type": "#microsoft.graph.domainIdentitySource",
+            "domainName": "example.test"
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/entitlementManagement/connectedOrganizations/example/internalSponsors?$select=id": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "b"
+          },
+          {
+            "id": "a"
+          },
+          {
+            "id": "b"
+          }
+        ]
+      }
+    },
+    "/v1.0/identityGovernance/entitlementManagement/connectedOrganizations/example/externalSponsors?$select=id": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "b"
+          },
+          {
+            "id": "a"
+          },
+          {
+            "id": "b"
+          }
+        ]
+      }
+    }
+  }
+}

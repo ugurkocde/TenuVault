@@ -2,9 +2,11 @@ import { act, createElement } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+vi.mock("../../src/renderer/components/ServiceBackupNotice", () => ({ ServiceBackupNotice: () => null }))
+
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-const state = vi.hoisted(() => ({ tenant: 0, damagedFiles: 3, sealed: 0, refresh: (() => Promise.resolve("updated")) as () => Promise<string> }))
+const state = vi.hoisted(() => ({ warnings: [] as string[], tenant: 0, damagedFiles: 3, sealed: 0, refresh: (() => Promise.resolve("updated")) as () => Promise<string> }))
 const backups = vi.hoisted(() => ({ importRecoveryKey: vi.fn(), openFolder: vi.fn() }))
 vi.mock("react-router-dom", () => ({ useSearchParams: () => [new URLSearchParams(), vi.fn()] }))
 const tenants = vi.hoisted(() => [
@@ -19,7 +21,7 @@ vi.mock("~/contexts/TenantContext", () => ({
 vi.mock("@desktop/lib/license", () => ({ useTenantPlan: () => null }))
 vi.mock("@desktop/lib/bridge", () => ({ bridge: { license: { open: vi.fn() }, backups } }))
 vi.mock("@desktop/lib/backup-list", () => ({
-  useBackupList: () => ({ backups: [], loading: false, error: "", unresolved: 0, sealed: state.sealed, damagedFiles: state.damagedFiles, damagedFileNames: [], damagedKinds: { counts: { key: state.damagedFiles, os: 0, duplicate: 0, damaged: 0 }, codes: [], names: { key: [], os: [], duplicate: [], damaged: [] } }, refresh: () => state.refresh() }),
+  useBackupList: () => ({ warnings: state.warnings, backups: [], loading: false, error: "", unresolved: 0, sealed: state.sealed, damagedFiles: state.damagedFiles, damagedFileNames: [], damagedKinds: { counts: { key: state.damagedFiles, os: 0, duplicate: 0, damaged: 0 }, codes: [], names: { key: [], os: [], duplicate: [], damaged: [] } }, refresh: () => state.refresh() }),
 }))
 vi.mock("@desktop/components/BackupSchedulePanel", () => ({ BackupSchedulePanel: () => null }))
 vi.mock("@desktop/components/RunBackupDialog", () => ({ RunBackupDialog: () => null }))
@@ -51,6 +53,19 @@ async function click(container: HTMLElement, label: string) {
 const cards = (container: HTMLElement, title: string) => [...container.querySelectorAll("[role=status]")].filter((card) => card.querySelector("p.font-medium")?.textContent?.includes(title)).length
 
 describe("Backup History notices", () => {
+  it("shows the large-storage provisioning warning without hiding ordinary history", () => {
+    state.warnings = ["Storage not provisioned for large backups. Rerun New-TenuVaultStorage.ps1 -BackupReaderAppId <application ID>."]
+    const container = document.createElement("div")
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    roots.push(root)
+    act(() => root.render(createElement(BackupRestorePage)))
+    const warning = [...container.querySelectorAll('[role="status"]')].find(node => node.textContent?.includes("Storage not provisioned for large backups"))!
+    expect(warning.textContent).toContain("New-TenuVaultStorage.ps1")
+    expect(warning.classList.contains("bg-blue-50")).toBe(true)
+    state.warnings = []
+  })
+
   it("shows one card per notice for each tenant, also when both notices are shown and the tenant changes", () => {
     state.damagedFiles = 3
     const container = document.createElement("div")

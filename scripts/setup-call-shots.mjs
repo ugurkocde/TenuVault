@@ -203,6 +203,8 @@ try {
     handle("auth:cancelSignIn", () => undefined)
     handle("auth:copySignInLink", () => true)
     handle("auth:accounts", () => [${JSON.stringify(ACCOUNT)}])
+    handle("setup:checkPermissions", () => ({ missing: [] }))
+    handle("setup:saveServices", () => undefined)
     handle("setup:createRegistration", ${createRegistration})
     handle("setup:cancelCreateRegistration", () => undefined)
     handle("setup:clipboardIds", () => null)

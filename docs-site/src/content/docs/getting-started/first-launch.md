@@ -14,7 +14,7 @@ While no tenant is connected, TenuVault always opens the guided setup, **Set up 
 
 ## What the welcome screen shows
 
-* Three short points on what TenuVault does: back up your Intune policies encrypted on this computer, restore a single policy or a whole set, and see what changed between backups.
+* Three short points on what TenuVault does: choose Microsoft services to protect with encrypted backups you own, restore a single policy or a whole set, and see what changed between backups.
 * **Connect your tenant**: opens **Set up TenuVault**.
 * A note that new tenants start with a Pro trial, no card and no email needed, that setup takes a few minutes (connect your tenant with Microsoft sign-in and take a first backup), and that one tenant continues on Community Free afterwards.
 * **Rather do it together? Book a free setup call**: opens the [free setup call](/getting-started/#free-setup-call) page in your browser. The call takes 30 minutes and is free on every plan. You share your screen and we set it up in your tenant.
@@ -25,7 +25,8 @@ To buy a license or ask for an invoice, use the **License** page after setup. Se
 ## Connect your tenant
 
 1. Select **Connect your tenant**.
-2. TenuVault opens **Set up TenuVault** on the **Connect** step, where one Microsoft sign-in creates the app registration in your tenant. Continue with [Create the app registration](/getting-started/app-registration/).
+2. Choose services on **What do you want to back up?** Intune is preselected. Select **Continue with Intune**, or choose Entra ID and Defender too.
+3. On **Connect**, review the setup-only access before signing in. Continue with [Create the app registration](/getting-started/app-registration/).
 
 The first tenant you sign in to without a key starts its 14 day Pro trial, unless that tenant already had one. If your organization shares a TenuVault license with that tenant, TenuVault picks it up when you sign in, and the tenant uses that plan instead. You can also start the trial or enter a key later, on the **Storage** step of the setup or on the **License** page.
 
@@ -68,3 +69,17 @@ Backups on this device become unreadable unless you exported their [recovery key
 ## Next step
 
 [Create the app registration](/getting-started/app-registration/).
+
+## Choose services
+
+![Service choice with Intune preselected](/images/onboarding/02-choice-default-light.png)
+
+Expand **Coverage and permissions** on a card to see the areas it covers, read and write permission counts, and coverage limits. Details scroll inside the card so Continue stays in view. Select **Show the exact permissions** below the cards for the full delegated permission names, grouped by area and marked Read or Write. Entra ID contains a separate Conditional Access switch. Groups, Users and devices, and Applications are opt-in and off initially. Areas with personal data explain what is stored before you turn them on.
+
+**Customize access** offers Backup only, or Backup and restore where this version has a restore capability. Intune keeps its earlier default, including read access to Conditional Access without enabling those backups. Entra ID and Defender start with backup permissions only. Entra ID backs up 67 configuration types across its supported areas. Defender backs up [17 Microsoft Graph configuration types](/backups/defender/). Pending directory-only areas cannot be selected yet. Conditional Access backups work when selected. See [Entra ID coverage](/backups/entra/).
+
+Your service choice and setup progress survive a restart in encrypted app settings. Connecting another tenant uses the same flow with a choice for that tenant.
+
+If a saved service choice cannot be read, setup returns to the service cards with no service selected. Choose the services again and confirm before continuing. Drafts saved before service choices were introduced keep the Intune default.
+
+Links from background jobs select the requested tenant before checking whether Intune is on. Governance keeps its tabs visible when Intune is off, so Accepted deviations and Customizations remain reachable.

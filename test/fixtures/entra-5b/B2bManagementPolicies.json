@@ -1,0 +1,19 @@
+{
+  "folder": "B2bManagementPolicies",
+  "path": "policies/b2bManagementPolicies",
+  "apiVersion": "beta",
+  "shape": "list",
+  "signIn": "both",
+  "objectCount": 0,
+  "verified": "2026-11-16",
+  "source": "Live app-only read through GraphSession and readObject",
+  "outcome": "saved",
+  "responses": {
+    "/beta/policies/b2bManagementPolicies": {
+      "status": 200,
+      "body": {
+        "value": []
+      }
+    }
+  }
+}

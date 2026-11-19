@@ -1,0 +1,21 @@
+{
+  "folder": "CrossTenantAccessPolicy",
+  "path": "policies/crossTenantAccessPolicy",
+  "apiVersion": "v1.0",
+  "shape": "singleton",
+  "signIn": "both",
+  "objectCount": 1,
+  "verified": "2026-11-16",
+  "source": "Live app-only read through GraphSession and readObject",
+  "outcome": "saved",
+  "responses": {
+    "/v1.0/policies/crossTenantAccessPolicy": {
+      "status": 200,
+      "body": {
+        "id": "crossTenantAccessPolicy",
+        "displayName": "Example displayName",
+        "allowedCloudEndpoints": []
+      }
+    }
+  }
+}

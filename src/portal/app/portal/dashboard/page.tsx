@@ -1,5 +1,6 @@
 "use client"
 
+import { ServiceBackupNotice } from "@desktop/components/ServiceBackupNotice"
 import { useState, useEffect, Suspense } from "react"
 import { useRouter } from "next/navigation"
 import { Link } from "react-router-dom"
@@ -223,7 +224,7 @@ function DashboardContent() {
   const tenantJobs = activeJobs.filter((job) => job.tenantId?.toLowerCase() === tenantGuid && !job.isComplete)
   // Every backup count on the tiles comes from this one summary, so the tiles cannot disagree.
   const backupStats = stats
-    ? backupSummary(stats.backupHistory, stats.failedAttempts, { since: stats.periodStart, live: [...stats.liveRuns, ...tenantJobs.map((job) => job.jobId)] })
+    ? backupSummary(stats.backupHistory, stats.failedAttempts, { since: stats.periodStart, live: [...(stats.scopedLiveRuns ?? stats.liveRuns.map(runId => ({ tenantId: tenant?.id, runId }))), ...tenantJobs.map((job) => ({ tenantId: tenant?.id, runId: job.jobId }))] })
     : null
   const nowDate = new Date(relativeNow)
   // Null when no backup finished in the period, or the backups could not be read, which the tile shows as "No data".
@@ -379,7 +380,7 @@ function DashboardContent() {
                 <BigValue className="mt-1 text-4xl">{formatDistanceToNow(latest.timestamp, { addSuffix: true }, nowDate)}</BigValue>
                 <p className="mt-1 text-sm text-gray-500">
                   {latest.timestamp.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
-                  {latest.policiesBackedUp > 0 && `, ${latest.policiesBackedUp} policies`}
+                  {`, ${latest.policiesBackedUp} policies`}{!!latest.inventoryBackedUp && `, ${latest.inventoryBackedUp} inventory objects`}
                 </p>
               </>
             ) : backupsError ? (
@@ -438,6 +439,7 @@ function DashboardContent() {
             {schedulesError ? <Chip tone="warning">Unknown</Chip> : schedule?.enabled ? <Chip tone="success">On</Chip> : <Chip>Off</Chip>}
           </div>
           <TileLabel className="mt-6">Next Backup</TileLabel>
+          <ServiceBackupNotice tenantId={tenantGuid} />
           {schedulesError ? (
             <>
               <BigValue className="mt-1">Unavailable</BigValue>
@@ -481,6 +483,7 @@ function DashboardContent() {
             {protectedBackup ? (
               <>
                 <BigValue className="mt-1 text-5xl">{protectedBackup.policiesBackedUp}</BigValue>
+                {!!protectedBackup.inventoryBackedUp && <p className="mt-1 text-sm text-gray-500">{protectedBackup.inventoryBackedUp} inventory objects backed up separately</p>}
                 <p className="mt-1 text-sm text-gray-500">
                   In the latest complete backup, {protectedBackup.timestamp.toLocaleDateString(undefined, { dateStyle: "medium" })}
                 </p>

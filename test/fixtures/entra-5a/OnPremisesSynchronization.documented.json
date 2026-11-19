@@ -1,0 +1,44 @@
+{
+  "folder": "OnPremisesSynchronization",
+  "source": "Documented resource shape, synthetic values, no delegated lab read",
+  "documentation": "https://learn.microsoft.com/graph/api/resources/onpremisesdirectorysynchronization?view=graph-rest-1.0",
+  "outcome": "saved",
+  "responses": {
+    "/v1.0/directory/onPremisesSynchronization": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "example-sync",
+            "configuration": {
+              "accidentalDeletionPrevention": {
+                "synchronizationPreventionType": "enabledForCount",
+                "alertThreshold": 500
+              }
+            },
+            "features": {
+              "passwordSyncEnabled": true,
+              "userWritebackEnabled": false
+            }
+          }
+        ]
+      }
+    },
+    "/v1.0/directory/onPremisesSynchronization/example-sync": {
+      "status": 200,
+      "body": {
+        "id": "example-sync",
+        "configuration": {
+          "accidentalDeletionPrevention": {
+            "synchronizationPreventionType": "enabledForCount",
+            "alertThreshold": 500
+          }
+        },
+        "features": {
+          "passwordSyncEnabled": true,
+          "userWritebackEnabled": false
+        }
+      }
+    }
+  }
+}

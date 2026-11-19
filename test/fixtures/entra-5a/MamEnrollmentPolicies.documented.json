@@ -1,0 +1,49 @@
+{
+  "folder": "MamEnrollmentPolicies",
+  "source": "Documented resource shape, synthetic values, no delegated lab read",
+  "documentation": "https://learn.microsoft.com/graph/api/resources/mobileappmanagementpolicy?view=graph-rest-beta",
+  "outcome": "saved",
+  "responses": {
+    "/beta/policies/mobileAppManagementPolicies": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "example-mam",
+            "displayName": "Example MAM",
+            "appliesTo": "selected",
+            "discoveryUrl": "https://example.test/discovery",
+            "complianceUrl": "https://example.test/compliance",
+            "termsOfUseUrl": "https://example.test/terms",
+            "isValid": true
+          }
+        ]
+      }
+    },
+    "/beta/policies/mobileAppManagementPolicies/example-mam": {
+      "status": 200,
+      "body": {
+        "id": "example-mam",
+        "displayName": "Example MAM",
+        "appliesTo": "selected",
+        "discoveryUrl": "https://example.test/discovery",
+        "complianceUrl": "https://example.test/compliance",
+        "termsOfUseUrl": "https://example.test/terms",
+        "isValid": true
+      }
+    },
+    "/beta/policies/mobileAppManagementPolicies/example-mam/includedGroups?$select=id": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "z"
+          },
+          {
+            "id": "a"
+          }
+        ]
+      }
+    }
+  }
+}

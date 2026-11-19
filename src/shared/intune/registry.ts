@@ -4,9 +4,11 @@
  *
  * Backup, restore, backup listings and drift detection all read this list, so adding a type here
  * (and to its service module in shared/services/modules) is the only change needed to cover it.
- * All paths are relative to https://graph.microsoft.com/beta/.
+ * Paths are relative to https://graph.microsoft.com/beta/, or to the version a type names.
  */
 
+import { DEFENDER_TYPES } from "./defender"
+import { ENTRA_TYPES } from "./entra"
 import { COMPLIANCE_SETTING_KEYS, COMPLIANCE_SETTINGS_ID, complianceSettingChanges, complianceSettingsUpdate } from "./compliance-settings"
 import { createState, isMicrosoftManaged, MICROSOFT_MANAGED, policyBody, policyChanges, policyWarnings, replaceState, strengthBody, strengthUpdate } from "./conditional-access"
 import { AUTOPILOT_DEVICE_DELAY, AUTOPILOT_DEVICE_PROPERTIES, AUTOPILOT_DEVICE_REIMPORT, autopilotDeviceChanges, autopilotDeviceUpdate } from "./autopilot-devices"
@@ -25,6 +27,18 @@ export type Area =
   | "Enrollment"
   | "Tenant administration"
   | "Conditional Access"
+  | "Users and devices"
+  | "Applications"
+  | "Tenant settings"
+  | "Authentication"
+  | "Groups"
+  | "External identities"
+  | "Roles and PIM"
+  | "Governance"
+  | "Detection and response"
+  | "Email and collaboration"
+  | "Identity"
+  | "Posture and access"
 
 /** An extra collection read after the detail GET and stored on the snapshot under `property`. */
 export interface Extra {
@@ -33,6 +47,21 @@ export interface Extra {
   path: (id: string) => string
   /** The path returns one object; its `property` is stored instead of a collection. */
   single?: boolean
+  /** Stores the complete singleton response of a sub-resource. */
+  object?: true
+  /**
+   * Stores the collection as the sorted IDs of its entries instead of the entries, for relationships
+   * such as members or owners: the order Graph returns them in is not stable, and the objects have
+   * their own backup. The path asks for IDs only ($select=id). A page that cannot be read fails the
+   * object, so a list of IDs is never shorter than the collection.
+   */
+  ids?: true
+  /** An unread sub-read may keep the parent, only when the caller records incomplete coverage. */
+  optional?: readonly AnswerPattern[]
+  /** A sub-collection that does not exist before customization is stored as an empty list. */
+  notConfigured?: readonly AnswerPattern[]
+  /** Whether the parent configuration permits treating this sub-read as not configured. */
+  notConfiguredWhen?: (parent: Item) => boolean
   /**
    * Read for every entry of this extra, when Graph cannot expand it (max $expand depth is 1) or returns it
    * incomplete. With `property` the collection is stored on the entry; without, the object is merged into it.
@@ -48,22 +77,48 @@ export interface Extra {
  */
 export type RestoreKind = "create" | "singleton" | "metadata"
 
+/** What may be written for a type: its restore kind, or nothing at all for a type that declares none. */
+export type RestoreCapability = RestoreKind | "none"
+
+/** The Microsoft Graph versions a type can be read from. */
+export type GraphVersion = "beta" | "v1.0"
+
+/** An answer of Microsoft Graph to a refused request: its HTTP status and, when given, the error code and a part of the message. */
+export interface AnswerPattern {
+  status: number
+  /** The error code, compared without case. */
+  code?: string
+  /** Text the error message contains, compared without case. */
+  message?: string
+}
+
 export interface IntuneType {
   folder: string
+  /** Identity configuration writes require the journaled safety boundary. */
+  restoreSafety?: "identity"
   label: string
   area: Area
   path: string
+  /** The Microsoft Graph version every path of the type is relative to. Beta when left out. */
+  apiVersion?: GraphVersion
+  /** Versions used only by sub-resources that have no endpoint in the primary version. */
+  additionalReadVersions?: readonly GraphVersion[]
+  /** Headers every read of the type sends, such as ConsistencyLevel for a query that needs it. */
+  headers?: Readonly<Record<string, string>>
   /**
-   * A tenant-wide object read from `path` itself rather than a collection. Graph gives it no ID, so backups
-   * store it under `id`, named `name`, with only `properties` kept from the read.
+   * A tenant-wide object read from `path` itself rather than a collection. Backups store it under `id`,
+   * named `name`. With `properties` only those are kept from the read; without, every property is.
+   * `collection`: Graph answers `path` with a list that holds exactly this one object, as it does for
+   * some policies in beta, instead of the object itself.
    */
-  singleton?: { id: string; name: string; properties: string[] }
+  singleton?: { id: string; name: string; properties?: string[]; collection?: true }
   /** Property holding the object's name. */
   nameKey: "displayName" | "name" | "profileName" | "tokenName" | "serialNumber"
   /**
    * Keeps only these properties (and `id`) of every read, for objects whose other properties change on
    * their own or hold secrets. A kept value Graph leaves out or returns as null is stored as "", because
-   * some lists return "" where the detail GET returns null for the same empty value.
+   * some lists return "" where the detail GET returns null for the same empty value. What the type's
+   * `extras` read is stored next to the kept properties, and `neverStored` is removed from them too.
    */
   keep?: string[]
   /** The list GET returns every property `keep` names, so backups store the list entry and skip the detail GET. */
@@ -78,6 +133,8 @@ export interface IntuneType {
    * hygiene checks and alert suggestions, and never part of baselines or Sync.
    */
   inventory?: true
+  /** Opt-in streaming path with bounded indexes; paged extras become sorted ID or definition shards. Existing types omit it. */
+  volume?: "large"
   /** $expand for the detail GET. */
   expand?: string
   /** $select for the detail GET, for types that leave properties out by default. */
@@ -88,8 +145,46 @@ export interface IntuneType {
    * who can read the backup: in Azure, everyone with read access to the container.
    */
   secrets?: (item: Item) => Array<{ path: string; apply: (value: string) => void }>
-  /** Extra query for the list GET, for example a $filter. */
+  /** Extra query for the list GET, for example a $top. */
   listQuery?: string
+  /** Fixed child entities of a container without a list endpoint. Each is read before saving. */
+  staticIds?: readonly string[]
+  /** Discover scope IDs, then list this collection once per scope. A refused discovery fails the type. */
+  listSource?: { path: string; filter: (id: string) => string; budget?: { durationMs: number; maxRequests: number } }
+  /** Shared deadline and actual GET allowance across the entire type, including object sub-reads. */
+  readBudget?: { durationMs: number; maxRequests: number }
+  /** Graph uses this key instead of id for partners. The stored identity is still id. */
+  idKey?: "tenantId"
+  /** A mode not supported by the type, even when the service offers that mode. */
+  backupMode?: "application"
+  /**
+   * A $filter Microsoft Graph requires on the list: without it Graph refuses the request, or returns
+   * objects that are not the tenant's own. It is sent with the list and kept on every following page.
+   */
+  filter?: string
+  /**
+   * Answers to the read of the type itself that mean the tenant never set it up, such as a 404 for a
+   * tenant-wide policy nobody configured. The backup records the type as not configured, not as a failure.
+   */
+  notConfigured?: readonly AnswerPattern[]
+  /** Recorded availability refusals of this type's own list, never discovery or detail reads. */
+  unavailable?: readonly AnswerPattern[]
+  /** Expanded collections that must be present, even when empty, before coverage is complete. */
+  requiredCollections?: readonly string[]
+  /** Unordered collections at dotted paths, sorted by identity after all pages. $content identifies ID-less subject sets by their complete content. */
+  unorderedCollections?: Readonly<Record<string, string>>
+  /** Normalize references after all reads, before exclusions, ordering and fingerprinting. Must not mutate the response. */
+  normalizeSnapshot?: (snapshot: Item) => Item
+  /**
+   * Properties that are never stored: values that change on their own, or that must not leave the
+   * tenant. They are removed before a snapshot is written or fingerprinted. A dotted path reaches into
+   * an object, and into every entry of a list on the way. The ID is always kept.
+   */
+  neverStored?: readonly string[]
+  /** Property names removed at every depth, including future nested credential fields. */
+  neverStoredKeys?: readonly string[]
+  /** Maximum UTF-8 bytes of the stored JSON, for text configuration with separate binary streams. */
+  maxSnapshotBytes?: number
   extras?: Extra[]
   /**
    * Assignments are read from {id}/assignments, and earlier versions read them with $expand, which Graph
@@ -99,7 +194,11 @@ export interface IntuneType {
   assignmentsFormerlyExpanded?: true
   /** Returns a reason to leave an item out of backups (built-in objects Intune recreates itself). */
   skip?: (item: Item) => string | undefined
-  restore: RestoreKind
+  /**
+   * What restore may do with the type. A type that leaves it out is backed up and compared, and
+   * nothing ever writes it to a tenant: see restoreCapability and writeBlocker.
+   */
+  restore?: RestoreKind
   /** Why a type or item cannot be fully restored. */
   limitation?: string
   /** Shown when restoring this type with its assignments has side effects beyond the object itself. */
@@ -1144,9 +1243,16 @@ export const INTUNE_TYPES: IntuneType[] = [
     review: policyChanges,
     warnings: policyWarnings,
   },
+  ...ENTRA_TYPES,
+  ...DEFENDER_TYPES,
 ]
 
 export const TYPE_BY_FOLDER = new Map(INTUNE_TYPES.map((type) => [type.folder.toLowerCase(), type]))
+
+/** What may be written for a type. A type without a declared restore kind can never be written. */
+export function restoreCapability(type: Pick<IntuneType, "restore">): RestoreCapability {
+  return type.restore ?? "none"
+}
 
 export function typeForFolder(folder: string): IntuneType | undefined {
   return TYPE_BY_FOLDER.get(folder.toLowerCase())

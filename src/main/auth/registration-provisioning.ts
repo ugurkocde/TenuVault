@@ -1,5 +1,5 @@
-import { CONSENT_ROLES_TEXT, DESKTOP_APP_PERMISSIONS } from "../../shared/app-registration"
-import { OPTIONAL_PERMISSIONS } from "../../shared/services/optional-permissions"
+import { CONSENT_ROLES_TEXT } from "../../shared/app-registration"
+import { DEFAULT_SETUP_CHOICE, GRAPH_APP_ID, knownPermissions, requestedPermissions, showsApproval, type ApiPermissions, type PermissionChoice } from "../../shared/services/manifest"
 import type { RegistrationResult, SetupProgress } from "../../shared/ipc"
 
 interface Application {
@@ -31,11 +31,12 @@ export interface ProvisioningOptions {
   progress: (progress: SetupProgress) => void
   signal?: AbortSignal
   sleep?: (ms: number) => Promise<void>
+  /** The services, areas and access levels to ask permissions for. When left out, what a setup has always asked for. */
+  choice?: PermissionChoice
 }
 // The stable Graph version, as the setup script uses it. The first real setups ran against it.
 const ROOT = "https://graph.microsoft.com/v1.0"
 const NOTES = "Used by the TenuVault desktop app. Delegated permissions only, no credentials."
-const GRAPH_APP_ID = "00000003-0000-0000-c000-000000000000"
 const APPLICATION_FIELDS = "id,appId,displayName,notes,signInAudience,publicClient,web,spa,passwordCredentials,keyCredentials,createdDateTime"
 
 /**
@@ -137,31 +138,34 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
   // Microsoft's own enterprise applications for the APIs TenuVault uses. One the tenant has not
   // used yet is only added when a registration is created: while an existing one is used, the
   // setup writes nothing at all.
-  const resources: ((typeof DESKTOP_APP_PERMISSIONS)[number] & { principal?: Principal })[] = []
-  for (const resource of DESKTOP_APP_PERMISSIONS) {
+  const resources: (ApiPermissions & { principal?: Principal })[] = []
+  for (const resource of requestedPermissions(options.choice ?? DEFAULT_SETUP_CHOICE, "delegated")) {
     resources.push({ ...resource, principal: (await list<Principal>(`/servicePrincipals?$filter=${encodeURIComponent(`appId eq '${resource.appId}'`)}&${principalFields}`))[0] })
   }
   // An existing registration is used only when an administrator has already given it tenant-wide
-  // consent for TenuVault's Intune permissions. Any member of a tenant may create app
+  // consent for TenuVault's work: for one of the Intune permissions a setup asks for by default,
+  // for most of what backing up Entra ID or Defender asks for, or for everything a setup for
+  // Conditional Access alone asks for (see showsApproval). One permission that many apps are
+  // given, or the ones every sign-in has, say nothing alone. Any member of a tenant may create app
   // registrations, with any name and note, and remains their owner. Granting consent to such a
   // registration would hand its owner an app that administrators sign in through. Tenant-wide
   // consent can only come from an administrator, so it is the proof that one trusted it before.
   // Even then the setup writes nothing to it: it only ever gives consent to the one it creates.
   const graphResource = resources.find(resource => resource.appId === GRAPH_APP_ID)!
   const graphPrincipalId = graphResource.principal?.id
-  const intune = new Set(graphResource.permissions.filter(permission => permission.startsWith("DeviceManagement")))
-  // For choosing among several, only permissions TenuVault knows count: the default set and the
-  // ones its switches add. Consent for anything else says nothing about which one the admins use.
-  const known = new Map(resources.flatMap(resource => resource.principal ? [[resource.principal.id, new Set<string>(
-    resource.appId === GRAPH_APP_ID ? [...resource.permissions, ...OPTIONAL_PERMISSIONS.flatMap(entry => entry.permissions), "Policy.ReadWrite.ConditionalAccess"] : resource.permissions,
-  )] as const] : []))
+  // For choosing among several, only permissions TenuVault knows count: everything the permission
+  // manifest names. Consent for anything else says nothing about which one the admins use.
+  const known = new Map(knownPermissions("delegated").flatMap(api => {
+    const principal = resources.find(resource => resource.appId === api.appId)?.principal
+    return principal ? [[principal.id, new Set(api.permissions)] as const] : []
+  }))
   const candidates = []
   for (const candidate of (await list<Application>(`/applications?$filter=${encodeURIComponent("startswith(displayName,'TenuVault')")}&$select=${APPLICATION_FIELDS}`)).filter(looksLikeTenuVault)) {
     const principal = (await list<Principal>(`/servicePrincipals?$filter=${encodeURIComponent(`appId eq '${candidate.appId}'`)}&${principalFields}`))[0]
     if (!principal) continue
     const grants = await list<Grant>(`/oauth2PermissionGrants?$filter=${encodeURIComponent(`clientId eq '${principal.id}'`)}`)
     const tenantWide = grants.filter(grant => grant.consentType === "AllPrincipals")
-    if (!tenantWide.some(grant => grant.resourceId === graphPrincipalId && grant.scope.split(/\s+/).some(scope => intune.has(scope)))) continue
+    if (!showsApproval(new Set(tenantWide.filter(grant => grant.resourceId === graphPrincipalId).flatMap(grant => grant.scope.split(/\s+/))))) continue
     const score = new Set(tenantWide.flatMap(grant => grant.scope.split(/\s+/).filter(scope => known.get(grant.resourceId)?.has(scope)).map(scope => `${grant.resourceId}:${scope}`))).size
     candidates.push({ app: candidate, principal, grants, disabled: principal.accountEnabled === false, score })
   }
@@ -177,7 +181,7 @@ export async function provisionRegistration(options: ProvisioningOptions): Promi
   }
   let created: Application | undefined
   let app = existing
-  /** Default permissions the reused registration has no tenant-wide consent for. */
+  /** Permissions of the choice the reused registration has no tenant-wide consent for. */
   const missingConsent: string[] = []
   progress({ phase: "registration", reused: Boolean(existing) })
   try {

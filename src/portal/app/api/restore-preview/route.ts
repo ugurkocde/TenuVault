@@ -1,3 +1,4 @@
+import { backupStoragePath } from "../../../../shared/backup-storage"
 import { recoveryReadiness, type RecoveryReadiness } from "../../../../shared/intune/recovery"
 import { type NextRequest, NextResponse } from "next/server"
 import { validPolicyPath } from "~/lib/policies/restore"
@@ -63,17 +64,17 @@ export async function POST(request: NextRequest) {
   try {
     const [storageToken, graphToken] = await Promise.all([
       token(tenantId, appId, clientSecret, "https://storage.azure.com/.default"),
-      // An opt-in service's items are checked against the app registration's permissions, so a restore
+      // Items of a service with a token pre-check are checked against the app registration's permissions, so a restore
       // that would be refused shows as not restorable here instead of failing when it starts.
       live === true
         ? token(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default")
-        : paths.some((path) => moduleForFolder(String(path).split("/")[1] ?? "")?.module.optIn)
+        : paths.some((path) => moduleForFolder(String(path).split("/")[1] ?? "")?.module.precheck)
           // Without the token the restore still checks the permission before its first write.
           ? token(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default").catch(() => "")
           : Promise.resolve(""),
     ])
     const granted = grantedPermissions(graphToken)
-    const owned = await readOwnedBackup((name) => fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${name.split("/").map(encodeURIComponent).join("/")}`, {
+    const owned = await readOwnedBackup((name) => fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(name)}`, {
       headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${storageToken}` },
     }), backupId, tenantId, storageAccountName)
     if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
@@ -86,7 +87,8 @@ export async function POST(request: NextRequest) {
       const type = typeForFolder(folder === "DeviceCompliancePolicies" ? "CompliancePolicies" : folder)
       const fallbackName = (path.split("/")[2] ?? "").replace(/\.json$/, "")
       if (!type) return { path, folder, name: fallbackName, blocker: "This backup file is not an Intune type TenuVault can restore.", replaceBlocker: "This type cannot be replaced." }
-      const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${path.split("/").map(encodeURIComponent).join("/")}`, {
+      if (type.volume === "large") return { path, folder: type.folder, name: fallbackName, blocker: type.limitation ?? "This inventory cannot be restored.", replaceBlocker: type.limitation ?? "This inventory cannot be restored." }
+      const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(path)}`, {
         headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${storageToken}` },
       })
       if (!response.ok) return { path, folder: type.folder, name: fallbackName, live: "error", error: "The backup file could not be read.", blocker: "The backup file could not be read.", replaceBlocker: "The backup file could not be read." }
@@ -135,7 +137,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-/** Marks an item not restorable when the app registration lacks its opt-in service's write permission. */
+/** Marks an item not restorable when the app registration lacks the write permission of its pre-checked service. */
 function withPermission(item: PreviewItem, granted: ReturnType<typeof grantedPermissions>): PreviewItem {
   const blocker = restorePermissionBlocker(item.folder, granted)
   return blocker ? { ...item, blocker: item.blocker ?? blocker, replaceBlocker: item.replaceBlocker ?? blocker } : item

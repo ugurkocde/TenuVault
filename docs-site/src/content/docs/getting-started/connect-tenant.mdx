@@ -38,7 +38,7 @@ Under **Other ways to connect**:
 | **Use the setup script instead** | You want to create the app registration with the [PowerShell script](/getting-started/app-registration/#use-the-setup-script-instead). |
 | **I already have an app registration** | The tenant has an app registration from an earlier setup and you know its two IDs. It opens the **Sign in** step. |
 
-The admins who use TenuVault need an Intune role, for example Intune Administrator.
+The admins who use TenuVault need roles for the services they choose. For Intune, for example, use Intune Administrator.
 
 <figure class="docs-screenshot">
   <a href="/images/screenshots/setup-connect.webp" aria-label="Open full-size screenshot: setup connect">
@@ -155,3 +155,21 @@ TenuVault keeps your sign-in in a token cache encrypted with Windows data protec
 ## Next step
 
 [Choose where backups are stored](/getting-started/choose-storage/).
+
+## Follow your service choice
+
+Before Connect, **What do you want to back up?** offers Intune, Entra ID and Defender. The main button names your choice. Each connect route uses the same permissions:
+
+* **Set up with Microsoft sign-in** creates the registration with your chosen services, opt-in areas and access levels. Before Microsoft opens, TenuVault explains that Microsoft Graph Command Line Tools gets broader setup-only access, Application.ReadWrite.All and DelegatedPermissionGrant.ReadWrite.All, to create the registration and grant consent. Its sign-in stays in memory and is dropped when setup ends. A second sign-in follows through TenuVault with the chosen permissions.
+* **Use the setup script instead** shows the generated command, including `-Services`, `-RestoreAccess` and `-Areas` as needed. Save the script and run the displayed command.
+* **Create it by hand** shows the permission list for your choice next to the manual guide. Use that list when adding delegated API permissions.
+* **Someone else is the admin? Copy instructions** includes the same chosen command and permission list in the message for your administrator.
+* **I already have an app registration** opens the ID form. After sign-in TenuVault checks the chosen permissions in the Microsoft Graph token, without reading or changing the registration.
+
+After sign-in, **Checking permissions** appears before storage is available. TenuVault waits up to 20 seconds for the result. If the check fails or takes longer, **Permissions could not be checked** explains what happened. You can retry with **Check again**, or choose storage and continue, then check permissions later in **Settings > Services and permissions**.
+
+When chosen permissions are missing, **Review your chosen permissions** shows exactly what is missing, with the Azure CLI commands, registration link and text for your administrator from **Services and permissions**. Select **Check again** after consent changes, or **Continue to storage** to fix permissions later. A check that cannot run is advisory and allows setup to continue. A successful check adds no confirmation step.
+
+![Permission result after sign-in](/images/onboarding/10-permissions-missing-light.png)
+
+The choice is saved to this tenant before it is added. On a tenant without Intune, Intune workflows such as OpenIntuneBaseline, frameworks, company baselines, App Backup and Sync explain that they need Intune and link to **Settings > Services and permissions**. Other services and stored backups remain available.

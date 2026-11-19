@@ -146,6 +146,41 @@ describe("BackupResults", () => {
     expect(renderToStaticMarkup(createElement(BackupResults, { job: { ...job, results: none } }))).toContain("none saved, 2 failed")
   })
 
+  it("says that coverage is incomplete, with how many selected types were not read in full", () => {
+    const html = renderToStaticMarkup(createElement(BackupResults, { job: { ...job, results: { ...results, coverage: "incomplete" as const } } }))
+    // Settings (one object failed), Scripts (left out) and Apps (not read): three of six selected types.
+    expect(html).toContain("Coverage incomplete: 3 of 6 selected types were not read in full")
+    expect(html.indexOf("Coverage incomplete")).toBeLessThan(html.indexOf("Could not read apps"))
+    const one: Results = { types: [type("A", { found: 1, saved: 1 }), type("B", { label: "scripts", state: "skipped", reason: "No permission." })], notices: [], coverage: "incomplete" }
+    expect(renderToStaticMarkup(createElement(BackupResults, { job: { ...job, results: one }, compact: true }))).toContain("Coverage incomplete: 1 of 2 selected types was not read in full")
+  })
+
+  it("says nothing about coverage while the backup runs, when it is complete, or for results that do not record it", () => {
+    const running = renderToStaticMarkup(createElement(BackupResults, { job: { ...job, isComplete: false, results: { ...results, coverage: "incomplete" as const } } }))
+    expect(running).not.toContain("Coverage incomplete")
+    expect(renderToStaticMarkup(createElement(BackupResults, { job: { ...job, results: { ...results, coverage: "complete" as const } } }))).not.toContain("Coverage incomplete")
+    expect(renderToStaticMarkup(createElement(BackupResults, { job }))).not.toContain("Coverage incomplete")
+  })
+
+  it("lists types the tenant never set up apart from problems and from empty types", () => {
+    const unset: Results = { types: [type("A", { found: 1, saved: 1 }), type("B", { label: "federated token validation policy", state: "notConfigured" }), type("C", { label: "access review policy", state: "notConfigured" })], notices: [], coverage: "complete" }
+    const html = renderToStaticMarkup(createElement(BackupResults, { job: { ...job, results: unset } }))
+    expect(html).toContain("2 types are not set up in this tenant")
+    expect(html).not.toContain("Needs attention")
+    expect(html).not.toContain("had nothing to back up")
+    const summary = summarizeBackupResults(unset, true)
+    expect(summary.notConfigured.map((entry) => entry.folder)).toEqual(["B", "C"])
+    expect(summary.coverageGap).toBeUndefined()
+    expect(summary.typesBackedUp).toBe(1)
+  })
+
+  it("words a type whose read was refused part way as not read in full, with what it saved", () => {
+    const partWay: Results = { types: [type("A", { label: "administrative units", state: "skipped", found: 20, saved: 2, reason: "Microsoft refused the read." })], notices: [], coverage: "incomplete" }
+    const html = renderToStaticMarkup(createElement(BackupResults, { job: { ...job, results: partWay } }))
+    expect(html).toContain("Administrative units not read in full, 2 saved")
+    expect(html).not.toContain("Administrative units left out")
+  })
+
   it("offers only the raw log when the job has no per type results", () => {
     const html = renderToStaticMarkup(createElement(BackupResults, { job: { ...job, results: undefined } }))
     expect(html).toContain("Show raw log")

@@ -253,9 +253,135 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 ## Compatibility notes for the next release
 
+- Directory exact membership preserves at least one member in Conditional Access target groups and refuses unreadable policy dependencies. Synced and formerly synced users and groups remain blocked. Throttle waits can be cancelled and safely resumed, relationship previews reuse a saved bounded difference, and Windows startup keeps file flushes without requiring directory handles.
+
+- Directory restore now has separate per-object review and 50-row relationship pages, with individual approvals, per-group exact choices and 20-step durable batches. Only disabled cloud member creation, user display names, static security-group creation/nonempty descriptions, managers and ordinary user links are admitted. Saved page IDs resume in this directory flow. Directory state is encrypted in a separate directory-restore folder under app data.
+- Directory restore opt-in adds only the admitted operation scopes and the read scopes needed for protection. Backup, Backup Reader provisioning, allowlist and renewal remain unchanged. Account state, recycle recovery, invitations, licenses, Microsoft 365 groups, dynamic rules, privileged groups and nested principals remain blocked. Recreated identities get new IDs and need reference review; recreated users need sign-in setup in Entra.
+- Approved lab cleanup soft-deletes test groups and leaves them in deleted items for Entra's 30-day expiration. Every run permanently removes test users and audits deletion dates for retained groups. Later runs never restore an earlier run's groups.
+
+- Directory restore builders and bounded journals for users and groups are staged only. Production remains backup-only until live lifecycle and cleanup verification admits each operation. No directory write scope is added by this staging work.
+
+- Enable individually confirmed cross-tenant parent display-name updates, unpublished and externally hidden user-managed catalog create/update without resources, and the access-review ownership flag (beta). All remaining External identities, Governance, Roles and PIM and Defender operations stay blocked with their specific evidence gaps. Custom attribute creation was refused, detection action read-back did not match, lifecycle settings could not be read, and workflow writes were not approved. Provider and connector secrets must be entered again.
+- Accept full access review and cross-tenant parent backups while writing only their confirmed subsets. Catalog backups omit null uniqueName and serviceManagementReference fields; configured values, service-default catalogs and populated resources are refused. Confirmation stays bound to the full source backup.
+
+- Enable individually reviewed Tenant settings and Authentication configuration restores only for the verified matrix subsets. These policies require their own confirmation and remain outside restore all, Sync and cross-tenant copy. Company branding restores only the default username hint from a full backup. Together with the three metadata types above, seven configuration types now have enabled subsets. All other new types stay blocked.
+- Never request Organization.ReadWrite.All or Directory.ReadWrite.All. Directory.Read.All remains a backup read permission only in the opt-in Groups and Applications areas, covering group lifecycle policies and delegated permission grants. It is never requested for restore operations. Existing Backup Readers holding it continue to pass the allowlist, and certificate renewal preserves that read permission. Organization notification emails, phones and privacy profile are backup-only in 0.6. Branding uses OrganizationalBranding.ReadWrite.All. Restore access adds only the least-privileged write permissions of enabled operations and Application.Read.All for token lifetime policy binding reads; blocked areas and Defender request no write permissions. Existing registrations are not automatically stripped of previously consented permissions. The setup script's default permission request stays unchanged.
+
+
+- Settings, Storage and recovery now saves designated recovery account IDs per tenant and shows guarded restore results, saved reference reports and read-back reconciliation. Guarded history has no manual outcome reset. Protected identity resolution includes group members, group owners and PIM eligibility; incomplete safety reads block a future identity write.
+- The guarded Entra ID restore writer requires a signed-in admin, touched-object journal, protected identity checks, adds-only defaults and reconciliation of unanswered writes. Unverified types and all Defender types remain backup-only. Restore continuation pages now use the same collection and filter validation as backups.
+
+- Cloud change reports now warn when either backup declares directory inventory that Azure Automation did not compare, including a missing or unreadable large companion. Ordinary report exports retain their previous JSON, Markdown and HTML layout. Azure Automation does not capture directory inventory.
+
+- Entra ID adds seven opt-in directory inventories: users, groups, app registrations, enterprise apps, consent grants, devices and organization contacts. The registry now contains 135 types, including 74 Entra types. Directory areas stay off for new and existing tenants. Files use object IDs and closed property allowlists; users include identity and organization profiles but never authentication methods, passwords or sign-in activity. Application credentials retain metadata only. Group membership and ownership use beta to avoid v1.0 omissions. Refused relationships retain their parent with an incomplete marker and continue; a paging or budget failure ends only that type. Directory inventory is excluded from policy counts, hygiene, live change watching and audit alert suggestions. Compare and drift use paged indexes. Restore remains unavailable and Azure Automation is unchanged.
+
+- Large backups use `intune-backups-large`, with claims and manifests under `backup-large-<UTC start time>/` and snapshots and shards under `payload/backup-large-<UTC start time>/`. Ordinary and older backups keep their existing paths in `intune-backups`. Before a Backup Reader captures large types, rerun `New-TenuVaultStorage.ps1 -BackupReaderAppId <application ID>` with the usual storage arguments to provision both containers and the writer role on each. History adds one bounded discovery listing and, locally, one container-properties read; it never enumerates large payloads. No large backups using the earlier unreleased layout are migrated.
+- Ordinary types always stay in `intune-backups`. Mixed runs publish ordinary snapshots first, then write a separate large companion folder with the same run ID and start time. History resolves reciprocal manifests with matching folder, tenant and nonempty run IDs into one run with combined status and coverage. Missing, unreadable, running, cancelled, interrupted or mismatched companions make the run incomplete with per-large-type causes, including recorded capture failures. Ordinary restore and comparison remain independent. Retention evaluates verified complete pairs together and protects runs inside retention. Owned incomplete, cancelled, crashed, orphaned and partly deleted halves expire after the tenant's retention period plus a 7-day recovery grace, on both storages. Cleanup requires a consistent app ownership claim for the tenant; unverified, forged and foreign claims are kept and reported. Forever deletes nothing. Claims are deleted last so the next eligible pass finishes interrupted cleanup. Logs report deleted and retained counts and bytes; history shows recovery guidance and known costs, explicitly marking unfinished large payload costs as unavailable when no size manifest exists. Ordinary backups without companions retain their existing behavior. Dashboard counts resolved history rows without regrouping copied run IDs and scopes attempt reconciliation by tenant. Complete large discovery proves an undiscovered companion is missing with zero extra GETs; failed or partial discovery permits at most 8 direct companion lookups per request and marks the rest unresolved with a cause. Complete mixed runs export and import as a single version 3 tar preserving both reciprocal manifests. An explicitly labeled ordinary-only ZIP removes companion dependencies and imports independently. Ordinary-only ZIP export and import remain unchanged. Each manifest links its companion; the ordinary manifest records large outcomes separately in `LargeBackupOutcomes`. A missing, refused or unwritable large container affects only large types, reported as not read with cause `storage` and the message "Storage not provisioned for large backups" plus the provisioning step. Large discovery failures omit large history with a warning and preserve all ordinary history. A large-only import needs no ordinary container. Existing ordinary and 0.5.x paths and request counts remain unchanged, apart from the already introduced bounded large discovery request. A Backup Reader with only its 0.5.x container assignment needs no storage changes for ordinary types; rerun the provisioning script above only to enable large storage, rather than granting a broader Contributor role.
+
+
+- Large inventory infrastructure is opt-in through a type's volume declaration. Existing ordinary type snapshots and inline Items manifests remain unchanged. Large backups add bounded LargeItems indexes and sorted relationship shards, require this release to browse, and export as uncompressed POSIX tar. Backups without large types retain ZIP and remain readable by the current release. The archive importer accepts both formats, enforces proportional finite limits and commits metadata last. Large runs yield to queued tenants at page boundaries and leave other tenants' schedules eligible while running.
+
+- Defender is opt-in and now backs up 17 Microsoft Graph configuration types. It does not cover Office 365 threat policies or Defender for Endpoint settings. Restore remains unavailable. Workbooks add Workbooks.Read.All to Detection and response. Existing Intune selections stay unchanged.
+
+- Entra configuration references now store people by ID without subject descriptions, actor names or principal profiles. Configured notification recipient email addresses remain stored as policy settings. On-behalf requestors use stable subject identity. Workflow execution times and other runtime status are excluded from storage and drift; existing backups are not rewritten and a comparison with an older backup can show the excluded fields being removed once.
+- Governance adds entitlement management, review definitions, current lifecycle workflows/tasks and terms metadata. Lifecycle license refusals leave coverage incomplete. Review decisions, workflow versions and PDF content are excluded. Each Governance type has a 120-second, 500-GET budget that leaves other types running.
+- Entra ID now backs up 67 configuration types in Tenant settings, Authentication, External identities, Roles and PIM, Governance, and two opt-in Groups settings. Existing tenants keep Entra ID off. Only individually verified configuration subsets support restore; Azure Automation remains Intune and Conditional Access only. Four types need a signed-in admin. Branding stores JSON up to 1 MiB, without image or CSS streams. Directory settings include custom banned password words. Refused domain federation sub-reads keep the domain and report incomplete coverage.
+- PIM group schedule reads share candidate discovery and stop each type after 120 seconds or 500 schedule GETs, including retries and pages. A bounded type reports incomplete coverage while other services are saved. API connectors now report their Backup Reader restriction separately from missing permissions.
+- PIM group discovery now needs GroupMember.Read.All alongside the existing schedule read permissions. API connectors are app-only until delegated read access is verified. New Entra types remain backup-only; role assignments and schedules store principal IDs without profiles.
+
+- Adding permissions checks the connected access token's delegated claims for existing consent and refreshed access. This avoids false refusals when the sign-in response lists fully qualified scopes or `.default`. Unreadable and app-only tokens require a delegated sign-in. Scope names and known registration GUIDs are compared without regard to case, while existing consented scopes keep their spelling when updated.
+
+- Settings can add delegated service, area and supported restore permissions to the exact connected registration after an administrator sign-in and preview. This separate action requires existing tenant-wide consent and a credential-free, single-tenant public client with root-path HTTP localhost or 127.0.0.1 redirects, with or without a port. Individual consent requires separate administrator review. Existing grants are updated in place; partial or unanswered writes require a fresh preview before retrying. The app rereads each exact write target immediately before updating it and reports observed concurrent changes as partial. Graph offers no documented conditional update for these whole-value replacements; a simultaneous edit can still be lost. Quick setup reuse and the Backup Reader are unchanged.
+
+* Setup now keeps a service choice per tenant. Intune keeps its previous default permissions, including read access to Conditional Access while its backups stay off. Entra ID can back up its supported configuration areas; other Entra ID areas and Defender still prepare permissions only. Intune-only workflows direct tenants without Intune to Services and permissions. Links for tenants that are not connected show a notice and a link to Tenants before opening any workflow. After sign-in, setup waits up to 20 seconds for the permission result before offering storage; a failed or stalled check shows an advisory notice and allows setup to continue.
+
 Put these in the next stable release's notes, then remove them here.
 
-None yet.
+- **Services and permissions.** Settings now checks Graph sign-in, the Backup Reader and storage
+  independently, shows exact missing-permission routes and dated backup verification, and requires
+  confirmation before Intune is turned off. Intune off is visible in backup history and schedules.
+  Conditional Access keeps its independent choice inside the Entra ID card. Entra ID and Defender
+  remain off for existing tenants; their cards say when this build has no backup types yet.
+  The Azure CLI permission route skips scopes already declared on the registration. If a consent
+  write fails, check consent in Entra before retrying because the request may have been applied.
+
+- **Connection health history.** Health records now keep the active Backup Reader certificate's
+  public SHA-256 thumbprint. Earlier health evidence is discarded when its account, registration,
+  storage connection or active reader credential changes, including after restarting the app.
+  Older health evidence with no persisted ownership is discarded conservatively at the next read.
+  Acknowledgements use the displayed report's receipt, so later notices remain visible.
+
+- **Connection checks.** TenuVault asks Microsoft for a new token of the signed-in admin when it
+  starts (for the tenant that is open only), after a sign-in, and when a backup of a tenant starts
+  and ends, and for a new Backup Reader token before a scheduled backup that runs with the reader.
+  Admins who watch the Entra sign-in logs see more non-interactive sign-ins of the TenuVault app
+  registration than before. No new destination and no new permission: the firewall allow list
+  does not change.
+
+- **Setup diagnostics.** New installs ask once on the welcome screen whether to share setup
+  diagnostics with `POST https://www.tenuvault.com/api/desktop-events` (schema 1); turning it off
+  or the policy sends `POST /api/desktop-events/erase`. The website's ingest and erase endpoints
+  and the privacy page's setup diagnostics section must be deployed before a
+  build with this feature ships, nightlies included; until then a sharing install retries with
+  backoff and drops its queue after 7 days. The event names and props are a contract with that
+  endpoint: they are add-only, and a new event or prop ships on the server before any app sends
+  it. Existing installs are never asked. Admins can turn it off with the `DisableSetupDiagnostics`
+  policy (Windows DWORD under `SOFTWARE\Policies\TenuVault`, macOS managed preference for
+  `com.tenuvault.desktop`).
+- **Services per tenant.** Intune can be turned off for a tenant under Settings > Services and
+  permissions; it stays on for every existing tenant until an admin turns it off. The setting is
+  stored in the same place and shape as before (`services.modules` in the app state), with more
+  fields per service. Versions before 0.6 ignore those fields and always back up Intune, so a
+  downgrade backs up Intune again for a tenant that had it off. Restore history now needs access
+  to a service the tenant backs up (Intune while it is on), and its refusal message no longer
+  names Intune.
+- **Backup Reader per service.** A Backup Reader now follows the services its tenant backs up. The
+  five Intune permissions are required only while Intune is on, and the reader may hold the read
+  permission of any service (`New-TenuVaultBackupReader.ps1 -Services`, `-Areas`). Versions
+  before 0.6 know only the Intune permissions and `Policy.Read.All`: they refuse a reader that
+  holds any other permission ("permissions beyond read-only backup"), and its scheduled backups
+  stop on that computer. A reader shared by several computers must not get Entra ID or Defender
+  permissions before every one of them runs 0.6. A reader verified before the update keeps
+  working unchanged. A change of its permissions no longer stops scheduled backups: they keep
+  running with the verified permissions the reader still has, leave out what a removed permission
+  read, and the Backup Reader card asks for a new verification.
+- **Setup script parameters.** `New-TenuVaultDesktopApp.ps1` takes `-Services`, `-RestoreAccess`
+  and `-Areas`. Without them it requests exactly the permissions it requested before, and every
+  existing switch works as before. Quick setup still reuses an app registration that has
+  tenant-wide admin consent for one of the Intune permissions of the default set, and now also one
+  whose consent covers more than half of the permissions that backing up Entra ID or Defender asks
+  for, or everything a setup for Conditional Access alone asks for (`User.Read`,
+  `Organization.Read.All` and `Policy.Read.All`). When sign-in to the enterprise application of
+  such a registration is turned off, setup stops instead of creating another one.
+
+- **Backup coverage and outcomes.** A backup's `metadata.json` gains two fields: `Coverage`
+  (`Complete` or `Incomplete`) and `Outcomes` (one entry per selected type: saved, not configured,
+  skipped with a cause, or failed). `Status`, `Failures`, `SkippedTypes`, `FailedTypes` and every
+  other field keep their meaning and their values, so the result of a backup, scheduled retries,
+  notifications and retention do not change for a tenant that backs up what it did before. What
+  is new to see: a backup with a type that was left out (for example one the app registration is
+  denied, or one the Backup Reader does not read) shows "Coverage incomplete" in the backup result
+  and in Backup Details. Versions before 0.6 ignore both fields and import such a backup as
+  before. A backup that holds a type those versions do not know is refused there as a whole
+  ("Unsupported backup item"). Backups made before 0.6 import into 0.6 and show no coverage.
+- **A backup that read nothing fails.** A backup in which every selected type was left out (for a
+  missing permission, role or license, or because only a signed-in admin can read it) used to end
+  as successful although it held nothing. It now ends as failed with "Backup failed: nothing
+  could be read" and the cause most of its types share. The scheduler retries it, the
+  notification is a failure and every older backup is kept. This shows for a tenant that backs
+  up only Conditional Access, Entra ID or Defender. For Intune it shows only when the backup
+  choice leaves out device configuration profiles, compliance policies, settings catalog and
+  endpoint security policies and administrative templates, and every remaining type is denied;
+  a refused read of those four always failed the backup. A backup that read some types and left
+  others out ends as before, and so does one whose types are all empty or not set up.
+- **Refusals and pauses are counted per service.** For a tenant that backs up Intune and
+  Conditional Access, refused reads and throttling are now counted for each service on its own.
+  Five consecutive refused Intune reads end the backup even when Conditional Access reads succeed
+  in between, and a pause of more than five minutes that Microsoft Graph asks of Intune no longer
+  stops the Conditional Access reads. Requests that get no answer still count for both together.
+- **Restore capability.** Every type has a restore capability, and a type without one is never
+  written to a tenant by restore, revert, change sets, Sync, baselines or the copy to another
+  tenant. Every type of earlier versions keeps what it could do.
 
 ## Cutting a stable release
 

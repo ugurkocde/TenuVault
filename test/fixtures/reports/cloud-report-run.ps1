@@ -10,6 +10,19 @@ param([Parameter(Mandatory)][string]$FixturePath, [string]$Level = "full", [stri
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "../../../resources/runbooks/Invoke-TenuVaultBackup.ps1") -LibraryOnly
 $fixture = ConvertFrom-TvJson ([IO.File]::ReadAllText($FixturePath))
+# No ordinary changes, with directory declarations on either side. The cloud runbook never
+# needs to read the companion: a missing or unreadable companion is still unperformed inventory.
+if ($Scenario -like "inventory-*") {
+    $fixture.newer.metadata.Items = $fixture.older.metadata.Items
+    $fixture.newer.files = $fixture.older.files
+    $fixture.audit = @()
+    $side = if ($Scenario -eq "inventory-newer") { "newer" } else { "older" }
+    $fixture[$side].metadata["CompanionBackup"] = "backup-large-2026-11-05-020000"
+    if ($Scenario -ne "inventory-companion-only") {
+        $fixture[$side].metadata["LargeBackupOutcomes"] = @(@{ Folder = "Users"; Outcome = "saved"; Count = 1 })
+    }
+    if ($Scenario -eq "inventory-inline") { $fixture.older.metadata["LargeItems"] = @{ Groups = @{ complete = $true } } }
+}
 $tenant = [string]$fixture.tenantId
 $other = "11111111-1111-1111-1111-111111111111"
 $account = "tvteststore"

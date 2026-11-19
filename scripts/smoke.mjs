@@ -1,3 +1,6 @@
+import { checkDirectoryRestore } from "./directory-restore-smoke.mjs"
+import { checkConfigurationRestore } from "./configuration-restore-smoke.mjs"
+import { checkIdentityRestoreSafety } from "./identity-restore-safety-smoke.mjs"
 /**
  * Smoke test for the built app (run `npm run build` first).
  *
@@ -11,14 +14,15 @@
  * renderer-to-main API bridge and the per tenant license gate. No tenant is signed in, so
  * the licensing service is never called. Screenshots are written to screenshot-dir.
  */
-import { spawn } from "node:child_process"
+import { execFileSync, spawn } from "node:child_process"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
-import { tmpdir } from "node:os"
+import { availableParallelism, tmpdir, uptime } from "node:os"
 import { join, resolve } from "node:path"
 import { checkSchedulePanel } from "./schedule-panel-smoke.mjs"
 import { checkBackupCancel } from "./backup-cancel-smoke.mjs"
 import { checkAppBackupCompletion } from "./app-backup-completion-smoke.mjs"
+import { checkRestoreService } from "./restore-service-smoke.mjs"
 import { disableAutoUpdate } from "./smoke-update-policy.mjs"
 
 const require = createRequire(import.meta.url)
@@ -62,6 +66,10 @@ app = spawn(packagedApp ?? electronPath, args, { stdio: ["ignore", "pipe", "pipe
 let appLog = ""
 app.stdout.on("data", (d) => (appLog += d))
 app.stderr.on("data", (d) => (appLog += d))
+
+const machineLoad = () => `${process.platform === "win32" ? `uptime ${Math.round(uptime())} seconds` : execFileSync("uptime", { encoding: "utf8" }).trim()} (${availableParallelism()} CPUs)`
+console.log(`Machine load at start: ${machineLoad()}`)
+const smokeStarted = Date.now()
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 let failures = 0
@@ -153,14 +161,27 @@ async function screenshot(name) {
   writeFileSync(join(shotsDir, `${name}.png`), Buffer.from(result.data, "base64"))
 }
 
+async function captureState(name) {
+  const stem = name.replace(/\W+/g, "-")
+  await screenshot(stem)
+  const state = await evaluate(`(() => {
+    const inspect = doc => ({ text: doc.body.innerText, html: doc.documentElement.outerHTML, focus: doc.activeElement?.outerHTML,
+      visibility: doc.visibilityState, animations: doc.getAnimations().map(a => ({ name: a.animationName, playState: a.playState, currentTime: a.currentTime, timing: a.effect?.getComputedTiming(), target: a.effect?.target?.outerHTML })) });
+    return { main: inspect(document), frames: [...document.querySelectorAll('iframe')].map(f => inspect(f.contentDocument)) };
+  })()`)
+  writeFileSync(join(shotsDir, `${stem}.json`), JSON.stringify({ elapsedMs: Date.now() - smokeStarted, uptime: machineLoad(), ...state }, null, 2))
+  writeFileSync(join(shotsDir, "main-process.log"), appLog)
+}
+
 async function check(name, fn) {
+  const started = Date.now()
   try {
     await fn()
-    console.log(`ok   ${name}`)
+    console.log(`ok   ${name} (${Date.now() - started} ms)`)
   } catch (error) {
     failures++
     console.log(`FAIL ${name}: ${error.message}`)
-    await screenshot(`fail-${name.replace(/\W+/g, "-")}`).catch(() => {})
+    await captureState(`fail-${name}`).catch(() => {})
   }
 }
 
@@ -182,6 +203,9 @@ async function assertPageInMain(text, message) {
   assert(!(await evaluate(`document.querySelector('main')?.innerText.includes("This screen could not be loaded")`)), `${message}: the page failed behind the error boundary`)
 }
 
+// Keep the automated page active when another app covers the smoke window. Otherwise
+// Chromium suspends animation frames, including the real dialog teardown checked below.
+await send("Emulation.setFocusEmulationEnabled", { enabled: true })
 await send("Page.enable")
 await send("Runtime.enable")
 
@@ -428,9 +452,9 @@ await check("hung license checks time out and ignore late responses after retry"
     assert(await evaluate(`window.__licenseTimeout.calls === 4 && ${body}.innerText.includes("Welcome to TenuVault")`), "background check did not keep the loaded status")
     await evaluate(`window.__licenseTimeout.onChanged({ ...window.__licenseTimeout.status, hasKey: true })`)
     // With a key and no tenant the app opens the guided setup, which has the window to itself.
-    assert(await waitForCondition(`${body}.innerText.includes("Set up with Microsoft sign-in")`), "license change was not delivered during the pending check")
+    assert(await waitForCondition(`${body}.innerText.includes("What do you want to back up?")`), "license change was not delivered during the pending check")
     assert(await waitForCondition(`window.__licenseTimeout.expired === 2 && window.__licenseTimeout.timers.size === 0`), "hung background check did not time out")
-    assert(await evaluate(`${body}.innerText.includes("Set up with Microsoft sign-in") && !${body}.querySelector('[role="alert"]')`), "background timeout discarded the loaded status")
+    assert(await evaluate(`${body}.innerText.includes("What do you want to back up?") && !${body}.querySelector('[role="alert"]')`), "background timeout discarded the loaded status")
     await evaluate(`window.__licenseTimeout.refresh()`)
     assert(await waitForCondition(`window.__licenseTimeout.calls === 5 && ${body}.innerText.includes("Welcome to TenuVault")`), "background timeout left the refresh guard locked")
     await evaluate(`window.__licenseTimeout.resolveBackground()`)
@@ -458,6 +482,8 @@ await check("malformed license keys are rejected", async () => {
 await check("Community users can reach the tenant sign-in without a key", async () => {
   await evaluate(`[...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Connect your tenant").click()`)
   assert(await waitForText("Set up TenuVault", 15000), "tenant sign-in did not open")
+  assert(await waitForText("What do you want to back up?"), "service choice missing")
+  await evaluate(`[...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Continue with Intune").click()`)
   assert(await waitForText("Set up with Microsoft sign-in"), "setup checklist missing")
   // Until a tenant is connected the guided setup has the window to itself.
   assert(!(await evaluate(`Boolean(document.querySelector('nav[aria-label="Main navigation"]'))`)), "sidebar shown during the first setup")
@@ -497,8 +523,7 @@ await check("a failed page keeps the sidebar and offers recovery", async () => {
     // React keeps a rejected lazy import. Reload retries the module after the failure is removed.
     await go("#/portal/overview", "This screen could not be loaded")
     await evaluate(`[...document.querySelectorAll('main button')].find(b => b.textContent === 'Reload').click()`)
-    assert(await waitForText("Welcome to TenuVault"), "Reload did not restart the app")
-    await evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent.includes('Connect your tenant')).click()`)
+    assert(await waitForText("All tenants"), "Reload did not restore the page with a saved setup draft")
     await go("#/portal/overview", "All tenants")
     assert(await waitForCondition(`Boolean(document.querySelector('main h1')?.textContent.includes('All tenants'))`), "Reload did not recover the page")
     await go("#/portal/dashboard", "Dashboard")
@@ -672,7 +697,8 @@ await check("tenants page offers delegated sign-in", async () => {
   assert(opened, "Connect tenant button not found")
   // Connect tenant opens the guided setup, the one way to connect a tenant on the desktop.
   assert(await waitForCondition(`location.hash === "#/portal/onboarding"`), "Connect tenant did not open the guided setup")
-  assert(await waitForText("Set up with Microsoft sign-in"), "guided setup did not open")
+  await evaluate(`[...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Continue with Intune")?.click()`)
+  assert(await waitForText("Set up with Microsoft sign-in"), "connect step did not open")
   assert(!(await evaluate(`document.body.innerText.includes("Client Secret")`)), "setup still asks for a client secret")
   await screenshot("03-add-tenant")
 })
@@ -750,12 +776,14 @@ await check("settings sidebar switches sections and names the section in the URL
     assert(await waitForCondition(`document.activeElement === document.querySelector('nav[aria-label="Settings sections"] [aria-current="page"]')`), "focus did not land on the active section entry after the dialog closed")
     await evaluate(`location.hash = "#/portal/settings?section=about"`)
     assert(await waitForCondition(`${agreementOpen} && Boolean(${dialogClose})`), "dialog did not come back with its section")
+    assert(await waitForCondition(`(() => { const dialog = document.querySelector('[role="dialog"]'); return dialog?.dataset.state === "open" && !dialog.getAnimations({ subtree: true }).some(a => a.playState === "running") })()`), "license agreement enter animation did not settle")
     await evaluate(`${dialogClose}.click()`)
     assert(await waitForCondition(`!${agreementOpen}`), "license agreement dialog did not close")
     closed = true
   } finally {
     // A failure above must not leave real animations on or the agreement open (it would come back
     // with the about section) for the checks that follow.
+    if (!closed) await captureState("agreement-before-cleanup").catch(() => {})
     await disableAnimations()
     if (!closed) {
       await evaluate(`location.hash = "#/portal/settings?section=about"`)
@@ -1011,7 +1039,7 @@ await check("App Backup keeps stored access independent of sign-in and exposes g
   } finally { await send("Emulation.clearDeviceMetricsOverride") }
 })
 
-await checkAppBackupCompletion({ check, evaluate, waitForCondition, screenshot, assert, send })
+await checkAppBackupCompletion({ check, evaluate, waitForCondition, screenshot, captureState, assert, send })
 // Focused local App Backup validation; CI leaves this unset and runs the complete suite.
 if (process.env.TENUVAULT_SMOKE_SECTION === "app-backup") await finish()
 
@@ -1469,6 +1497,8 @@ await check("tag drafts stay with their tenant and bulk tags sync every tenant",
   }
 })
 
+await checkIdentityRestoreSafety({ check, evaluate, waitForCondition, screenshot, assert, send, go })
+
 await check("restore journal applied IDs use validated inline inputs", async () => {
   const tenantId = "11111111-1111-1111-1111-111111111111"
   const originalId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
@@ -1796,6 +1826,55 @@ await check("unsaved schedule drafts stay with their tenant", async () => {
   assert(await waitForCondition(`document.getElementById('schedule-time')?.value === '07:45'`), 'navigation discarded the draft')
 })
 
+await checkRestoreService({ check, evaluate, waitForCondition, screenshot, assert, send, go })
+await checkDirectoryRestore({ check, evaluate, waitForCondition, screenshot, assert, send, go })
+await checkConfigurationRestore({ check, evaluate, waitForCondition, screenshot, assert, send, go })
+
+await check("large inventory pages stay bounded in dark mode at 1024 pixels", async () => {
+  await evaluate(`(() => {
+    window.__largeOriginalFetch = window.fetch;
+    const backupId = 'backup-2026-11-16-000000';
+    window.fetch = (input, init) => {
+      const route = String(input);
+      if (route === '/api/list-backups') return Promise.resolve(Response.json({ backups: [{ id: backupId, timestamp: '2026-11-16T00:00:00Z', type: 'manual', status: 'Success', totalPolicies: 100000, counts: { DeviceConfigurations: 100000 }, scope: null, size: 200000000, duration: 1200, changes: null, comparedWith: null, largeInventory: true }] }));
+      if (route === '/api/list-backup-contents') {
+        const page = JSON.parse(init.body).largePage || 0;
+        const policies = Array.from({ length: 1000 }, (_, index) => ({ path: backupId + '/DeviceConfigurations/object-' + (page * 1000 + index) + '.json', displayName: 'object-' + (page * 1000 + index) }));
+        return Promise.resolve(Response.json({ largePage: page, hasMore: page < 99, content: { metadata: { LargeItems: { DeviceConfigurations: { count: 100000 } } }, groups: [{ folder: 'DeviceConfigurations', label: 'Synthetic inventory', area: 'Tenant administration', count: 100000, limitation: 'This inventory cannot be restored.', policies }] } }));
+      }
+      if (route === '/api/restore-preview') return Promise.resolve(Response.json({ items: JSON.parse(init.body).paths.map(path => ({ path, name: path.split('/').pop(), blocker: 'This inventory cannot be restored.', replaceBlocker: 'This inventory cannot be restored.' })) }));
+      return window.__largeOriginalFetch(input, init);
+    };
+  })()`)
+  try {
+    // Remount the page so the fixture replaces a cached sign-in failure before controls appear.
+    await go("#/portal/tenants", "Tenant Management")
+    await go("#/portal/backup?tab=backup", "Backup & Restore")
+    assert(await waitForText('Backup Timeline'), 'backup history did not open')
+    await evaluate(`[...document.querySelectorAll('button')].find(button => button.innerText.trim() === 'Refresh').click()`)
+    assert(await waitForText('Large inventory, page 1'), 'large contents did not load')
+    await send('Emulation.setDeviceMetricsOverride', { width: 1024, height: 900, deviceScaleFactor: 1, mobile: false })
+    await evaluate(`document.documentElement.classList.add('dark')`)
+    await evaluate(`[...document.querySelectorAll('summary')].find(summary => summary.textContent.includes('Synthetic inventory'))?.click()`)
+    assert((await evaluate(`document.querySelectorAll('li').length`)) < 1500, 'the screen rendered the full inventory')
+    assert(await evaluate(`document.documentElement.scrollWidth <= window.innerWidth`), 'large contents overflow at 1024 pixels')
+    await evaluate(`[...document.querySelectorAll('p')].find(item => item.textContent.startsWith('Large inventory, page'))?.scrollIntoView({ block: 'center' })`)
+    await screenshot('layer7a-large-contents-dark-1024')
+    await evaluate(`[...document.querySelectorAll('button')].find(button => button.innerText.trim() === 'Next page').click()`)
+    assert(await waitForText('Large inventory, page 2'), 'next contents page did not replace the first')
+    assert(!(await evaluate(`document.querySelector('main').innerText.includes('object-0')`)), 'prior contents rows accumulated')
+    await evaluate(`[...document.querySelectorAll('button')].find(button => button.innerText.includes('Restore from this backup')).click()`)
+    assert(await waitForText('Inventory page 1.'), 'the restore picker did not load a bounded page')
+    assert(await evaluate(`document.documentElement.scrollWidth <= window.innerWidth`), 'the inventory picker overflowed at 1024 pixels')
+    await evaluate(`[...document.querySelectorAll('span')].find(item => item.textContent.startsWith('Inventory page 1.'))?.scrollIntoView({ block: 'center' })`)
+    await screenshot('layer7a-large-picker-dark-1024')
+  } finally {
+    await evaluate(`window.fetch = window.__largeOriginalFetch; delete window.__largeOriginalFetch; document.documentElement.classList.remove('dark')`)
+    await send('Emulation.clearDeviceMetricsOverride')
+    await go("#/portal/backup?tab=schedule", "Automatic backups")
+  }
+})
+
 await check("switching tenants cannot show an older tenant's drift results", async () => {
   // Scans run as main-process jobs; this stands in for /api/drift-scan and holds the first tenant's scan open.
   await evaluate(`(() => {
@@ -1996,6 +2075,8 @@ if (licenseKey) {
 await finish()
 
 async function finish() {
+  writeFileSync(join(shotsDir, "main-process.log"), appLog)
+  console.log(`Machine load at finish: ${machineLoad()}`)
   ws.close()
   const exited = new Promise((r) => app.once("exit", r))
   app.kill()

@@ -284,3 +284,15 @@ describe("localInventoryProblem", () => {
     expect(failing.damage).toHaveBeenCalledWith(account(TENANT_A), CONTAINER)
   })
 })
+
+it("checks damage in the large namespace beside healthy ordinary backups", async () => {
+  const root = folder()
+  try {
+    const store = new LocalBlobStore(root, [Buffer.alloc(32, 3)])
+    await store.createContainer(account(TENANT_A), "intune-backups-large")
+    await store.put(account(TENANT_A), "intune-backups-large", "backup-large-2020-01-01-000000/.tenuvault-owner.json", Buffer.from("{}"), "application/json")
+    const dir = join(root, account(TENANT_A), "intune-backups-large")
+    writeFileSync(join(dir, readdirSync(dir).find(name => name.endsWith(".tvb"))!), "damaged")
+    expect(await inventoryProblem(store, TENANT_A)).not.toBeNull()
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})

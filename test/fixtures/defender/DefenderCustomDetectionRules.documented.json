@@ -1,0 +1,102 @@
+{
+  "folder": "DefenderCustomDetectionRules",
+  "source": "Synthetic documented shape; not a nonempty live read",
+  "outcome": "saved",
+  "objectCount": 1,
+  "responses": {
+    "/v1.0/security/rules/detectionRules": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "example",
+            "displayName": "Example detection",
+            "isEnabled": true,
+            "queryCondition": {
+              "queryText": "DeviceEvents | take 10"
+            },
+            "schedule": {
+              "period": "24H",
+              "nextRunDateTime": "2026-11-17T00:00:00Z"
+            },
+            "lastRunDetails": {
+              "lastRunDateTime": "2026-11-16T00:00:00Z"
+            },
+            "status": "Running",
+            "detectionAction": {
+              "responseActions": [
+                {
+                  "@odata.type": "#microsoft.graph.security.isolateDeviceResponseAction",
+                  "identifier": "DeviceId"
+                },
+                {
+                  "@odata.type": "#microsoft.graph.security.markUserAsCompromisedResponseAction",
+                  "identifier": "AccountObjectId"
+                }
+              ],
+              "alertTemplate": {
+                "title": "Example alert",
+                "severity": "medium",
+                "impactedAssets": [
+                  {
+                    "identifier": "DeviceId",
+                    "assetType": "device"
+                  },
+                  {
+                    "identifier": "AccountObjectId",
+                    "assetType": "user"
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    "/v1.0/security/rules/detectionRules/example": {
+      "status": 200,
+      "body": {
+        "id": "example",
+        "displayName": "Example detection",
+        "isEnabled": true,
+        "queryCondition": {
+          "queryText": "DeviceEvents | take 10"
+        },
+        "schedule": {
+          "period": "24H",
+          "nextRunDateTime": "2026-11-17T00:00:00Z"
+        },
+        "lastRunDetails": {
+          "lastRunDateTime": "2026-11-16T00:00:00Z"
+        },
+        "status": "Running",
+        "detectionAction": {
+          "responseActions": [
+            {
+              "@odata.type": "#microsoft.graph.security.isolateDeviceResponseAction",
+              "identifier": "DeviceId"
+            },
+            {
+              "@odata.type": "#microsoft.graph.security.markUserAsCompromisedResponseAction",
+              "identifier": "AccountObjectId"
+            }
+          ],
+          "alertTemplate": {
+            "title": "Example alert",
+            "severity": "medium",
+            "impactedAssets": [
+              {
+                "identifier": "DeviceId",
+                "assetType": "device"
+              },
+              {
+                "identifier": "AccountObjectId",
+                "assetType": "user"
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

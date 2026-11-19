@@ -89,7 +89,7 @@ describe("bounded backup jobs", () => {
       if (url.hostname !== "graph.microsoft.com") return
       pages++
       if (pages === 29) return new Response(null, { status: 429, headers: { "Retry-After": "300" } })
-      return new Promise(resolve => { setTimeout(() => resolve(Response.json({ value: [], "@odata.nextLink": `https://graph.microsoft.com/beta/page?n=${pages}` })), 60_000) })
+      return new Promise(resolve => { setTimeout(() => resolve(Response.json({ value: [], "@odata.nextLink": `https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations?n=${pages}` })), 60_000) })
     } })
     const job = engine.start(request)
     await vi.advanceTimersByTimeAsync(JOB_DEADLINE_MS - 1)
@@ -159,7 +159,7 @@ function expectFailedManifestOnly(job: BackupJob, saved: Map<string, string>, ca
 function nearDeadlineListing(url: URL, page: number, lastPage = 30, lastDelay = 59_500): Promise<Response> | undefined {
   if (url.hostname !== "graph.microsoft.com") return
   return new Promise(resolve => { setTimeout(() => resolve(Response.json({ value: [],
-    ...(page < lastPage ? { "@odata.nextLink": `https://graph.microsoft.com/beta/page?n=${page}` } : {}),
+    ...(page < lastPage ? { "@odata.nextLink": `https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations?n=${page}` } : {}),
   })), page < lastPage ? 60_000 : lastDelay) })
 }
 

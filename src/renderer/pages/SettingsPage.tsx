@@ -1,3 +1,4 @@
+import { IdentityRestoreSafety } from "../components/IdentityRestoreSafety"
 import type { WriteRecord } from "../../main/storage/restore-journal"
 import { getAppearance, setAppearance, type Appearance } from "../lib/appearance"
 import { useEffect, useId, useRef, useState, type ReactNode } from "react"
@@ -53,6 +54,7 @@ function RestoreWrites({ active }: { active: boolean }) {
           {tenants.map(tenant => <option key={tenant.id} value={tenant.credentials!.tenantId}>{tenant.name}</option>)}
         </select>
       </label>
+      <IdentityRestoreSafety key={`identity-${tenantId}`} tenantId={tenantId} />
       <TenantRestoreWrites key={tenantId} tenantId={tenantId} active={active} />
     </div>
   )
@@ -276,7 +278,7 @@ function BackupsOnDevice() {
             setSettings(await bridge.backups.settings())
             toast(`Imported ${result.backupId}. Select this device as storage for tenant ${result.tenantId} to preview and restore it.`, "success")
           }
-        })}><Upload className="mr-2 h-4 w-4" /> Import backup ZIP</Button>
+        })}><Upload className="mr-2 h-4 w-4" /> Import backup archive</Button>
         <UnreadableBackupsNotice settings={settings} affected={inventory.affected.length > 0} checking={inventory.checking} onChange={setSettings} />
         <div className="space-y-2">
           <p className="text-xs font-medium text-gray-500">Folder</p>
@@ -948,7 +950,7 @@ export default function SettingsPage() {
         <SettingsSectionNav section={section} />
         <div className="min-w-0 w-full max-w-5xl flex-1">
           {panel("signin", <div className="space-y-6"><TenantSettings active={section === "signin"} /><ProxySignInSettings /></div>)}
-          {panel("services", <ServicesSettings />)}
+          {panel("services", <ServicesSettings active={section === "services"} />)}
           {panel("storage", <div className="space-y-6"><BackupsOnDevice /><RestoreWrites active={section === "storage"} /></div>)}
           {panel("background", <div className="space-y-6"><BackgroundAndRetention /><BackupReaderSettings /></div>)}
           {panel("notifications", <NotificationSettings />)}

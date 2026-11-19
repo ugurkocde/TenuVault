@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
 import { createHash } from "node:crypto"
+import { moduleForFolder } from "../src/shared/services/modules"
 import { INTUNE_TYPES, typeForFolder } from "../src/shared/intune/registry"
 import { listSnapshot } from "../src/shared/intune/read"
 import { comparableSnapshot } from "../src/shared/intune/compare"
@@ -44,7 +45,7 @@ const template = JSON.parse(readFileSync(new URL("../resources/cloud-backup/azur
 
 describe("Invoke-TenuVaultBackup.ps1 type table", () => {
   it("covers every desktop registry type with the same folder, path and read shape", () => {
-    for (const type of INTUNE_TYPES) {
+    for (const type of INTUNE_TYPES.filter(type => ["intune", "conditionalAccess"].includes(moduleForFolder(type.folder)!.module.id))) {
       const row = runbook.split("\n").find((line) => line.includes(`Folder = '${type.folder}'`))
       expect(row, type.folder).toBeTruthy()
       expect(row).toContain(`Path = '${type.path}'`)
@@ -65,7 +66,7 @@ describe("Invoke-TenuVaultBackup.ps1 type table", () => {
         if (extra.each) expect(row).toContain(`Template = '${extra.each.path("{id}", "{entryId}")}'`)
       }
     }
-    expect([...runbook.matchAll(/Folder = '/g)]).toHaveLength(INTUNE_TYPES.length)
+    expect([...runbook.matchAll(/Folder = '/g)]).toHaveLength(INTUNE_TYPES.filter(type => ["intune", "conditionalAccess"].includes(moduleForFolder(type.folder)!.module.id)).length)
   })
 
   it("mirrors the singleton, the built-in skips and the masked OMA-URI rule", () => {

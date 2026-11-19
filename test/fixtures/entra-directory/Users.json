@@ -1,0 +1,125 @@
+{
+  "verified": "2026-11-17",
+  "liveCount": 28,
+  "samples": {
+    "object": {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "displayName": "Example",
+      "userPrincipalName": "Example",
+      "givenName": "Example",
+      "surname": "Example",
+      "mail": "Example",
+      "otherMails": [],
+      "proxyAddresses": [
+        "Example"
+      ],
+      "userType": "Example",
+      "accountEnabled": true,
+      "createdDateTime": "Example",
+      "creationType": null,
+      "jobTitle": "Example",
+      "department": "Example",
+      "companyName": "Example",
+      "employeeId": null,
+      "employeeType": null,
+      "employeeHireDate": null,
+      "officeLocation": "Example",
+      "usageLocation": "Example",
+      "businessPhones": [
+        "Example"
+      ],
+      "mobilePhone": null,
+      "streetAddress": "Example",
+      "city": "Example",
+      "state": "Example",
+      "postalCode": "Example",
+      "country": "Example",
+      "preferredLanguage": "Example",
+      "onPremisesImmutableId": null,
+      "onPremisesSyncEnabled": null,
+      "onPremisesSamAccountName": null,
+      "onPremisesDomainName": null,
+      "onPremisesSecurityIdentifier": null,
+      "identities": [
+        {
+          "signInType": "Example",
+          "issuer": "Example",
+          "issuerAssignedId": "Example"
+        }
+      ],
+      "assignedLicenses": [
+        {
+          "disabledPlans": [],
+          "skuId": "Example"
+        }
+      ],
+      "assignedPlans": [
+        {
+          "assignedDateTime": "Example",
+          "capabilityStatus": "Example",
+          "service": "Example",
+          "servicePlanId": "Example"
+        }
+      ],
+      "licenseAssignmentStates": [
+        {
+          "skuId": "Example",
+          "disabledPlans": [],
+          "assignedByGroup": null,
+          "state": "Example",
+          "error": "Example",
+          "lastUpdatedDateTime": null
+        }
+      ],
+      "manager": {
+        "id": "00000000-0000-4000-8000-000000000001"
+      }
+    }
+  },
+  "shapes": {
+    "object": {
+      "pages": 1,
+      "entries": 28,
+      "keys": [
+        "id",
+        "displayName",
+        "userPrincipalName",
+        "givenName",
+        "surname",
+        "mail",
+        "otherMails",
+        "proxyAddresses",
+        "userType",
+        "accountEnabled",
+        "createdDateTime",
+        "creationType",
+        "jobTitle",
+        "department",
+        "companyName",
+        "employeeId",
+        "employeeType",
+        "employeeHireDate",
+        "officeLocation",
+        "usageLocation",
+        "businessPhones",
+        "mobilePhone",
+        "streetAddress",
+        "city",
+        "state",
+        "postalCode",
+        "country",
+        "preferredLanguage",
+        "onPremisesImmutableId",
+        "onPremisesSyncEnabled",
+        "onPremisesSamAccountName",
+        "onPremisesDomainName",
+        "onPremisesSecurityIdentifier",
+        "identities",
+        "assignedLicenses",
+        "assignedPlans",
+        "licenseAssignmentStates",
+        "manager"
+      ]
+    }
+  }
+}

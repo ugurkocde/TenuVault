@@ -14,6 +14,8 @@ import {
   reportFileName,
   reportTitle,
   summaryLine,
+  reportHasNoChanges,
+  type ReportInventory,
   type ChangeReport,
   type ReportAudit,
 } from "../../../shared/reports/change-report"
@@ -131,6 +133,7 @@ function listed(record: Stored<ReportRecord>) {
     from: report.from,
     to: report.to,
     counts: report.summary,
+    unchanged: reportHasNoChanges(report),
     audit: report.audit.status,
     values: report.values,
     lastSend: record.sends[record.sends.length - 1] ?? null,
@@ -274,7 +277,7 @@ export async function generateReport(
     trigger: input.trigger,
     includeValues: settings.includeValues,
     includeActors: settings.includeActors,
-  })
+  }, await compareReportInventories(deps, tenant, body))
   const created = deps.records.create<ReportRecord>(DOMAINS.changeReports, tenant, {
     title: reportTitle(report),
     status: "ready",
@@ -284,6 +287,38 @@ export async function generateReport(
   }, { actor: input.actor, reason: `Change report generated (${input.trigger})` })
   deps.records.prune<ReportRecord>(DOMAINS.changeReports, tenant, MAX_REPORTS, (record) => record.id !== created.id)
   return created
+}
+
+/** Consume bounded index pages and retain only counts, never object snapshots or a growing change list. */
+async function compareReportInventories(deps: FeatureDeps, tenant: string, drift: DriftResult): Promise<ReportInventory[]> {
+  const results: ReportInventory[] = []
+  for (const folder of drift.largeFolders ?? []) {
+    const result: ReportInventory = { folder, status: "not-performed", added: 0, modified: 0, deleted: 0, unchanged: 0, examined: 0 }
+    results.push(result)
+    let cursor: [number, number] = [0, 0]
+    try {
+      // At most a million entries across the pair, with at least 200 consumed per nonterminal page.
+      for (let page = 0; page <= 5000; page++) {
+        const response = await deps.api("/api/large-backup-page", tenant, {
+          baseline: drift.inventoryBackups?.baseline ?? drift.baseline.id,
+          backupId: drift.inventoryBackups?.comparison ?? drift.comparison.id, folder, cursor,
+        })
+        if (!response.ok) break
+        const body = await response.json()
+        if (!Array.isArray(body.changes) || body.changes.length > 200 || !body.changes.every((entry: any) => ["added", "modified", "removed"].includes(entry.change))
+          || !Number.isSafeInteger(body.examined) || body.examined < 0 || body.examined > 1000 || !Number.isSafeInteger(body.unchanged) || body.unchanged < 0 || body.unchanged + body.changes.length !== body.examined) break
+        const next = body.next
+        if (next !== null && (!Array.isArray(next) || next.length !== 2 || !next.every((value: number, side: number) => Number.isSafeInteger(value) && value >= cursor[side]! && value <= 500000) || next[0] + next[1] <= cursor[0] + cursor[1])) break
+        result.status = "incomplete"
+        result.examined += body.examined
+        result.unchanged += body.unchanged
+        for (const entry of body.changes) result[entry.change === "removed" ? "deleted" : entry.change as "added" | "modified"]++
+        if (next === null) { result.status = "complete"; break }
+        cursor = next
+      }
+    } catch { /* The report keeps partial counts and states that comparison did not finish. */ }
+  }
+  return results
 }
 
 const CONDITIONAL_ACCESS_TYPES = /conditional access|named location|authentication strength/i
@@ -552,9 +587,8 @@ export async function afterScheduledBackup(deps: FeatureDeps, tenantId: string, 
       if (error instanceof FeatureError && (error.status === 404 || error.status === 409)) return void remember("skipped", error.message, null)
       throw error
     }
-    const total = record.report.items.length
     if (!settings.recipients.length) return void remember("skipped", "The report was saved. No recipients are set, so it was not sent.", record.id)
-    if (total === 0 && settings.skipEmpty) return void remember("skipped", "Nothing changed, so no report was sent.", record.id)
+    if (reportHasNoChanges(record.report) && settings.skipEmpty) return void remember("skipped", "Nothing changed, so no report was sent.", record.id)
     const sent = await sendReport(deps, tenant, record, settings.recipients, settings.attachment, { automatic: true, actor: null })
     remember(sent.ok ? "sent" : "failed", sent.ok ? `Sent to ${sent.recipients} ${sent.recipients === 1 ? "recipient" : "recipients"}.` : sent.error ?? "The report could not be sent.", record.id)
   } catch (error) {

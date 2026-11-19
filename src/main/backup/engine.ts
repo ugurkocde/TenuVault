@@ -1,21 +1,30 @@
+import { isBackupName, parseBackupName } from "../../shared/intune/backup-names"
+import { ownedRemnant, REMNANT_RECOVERY_DAYS, completeHalf, matchingCompanions } from "../../shared/backup-companion"
+import { isLargeBackup, LARGE_BACKUP_CONTAINER } from "../../shared/backup-storage"
+import { captureLarge } from "./large"
+import { LARGE_JOB_MS, LARGE_TYPE_MS, LARGE_TYPE_REQUESTS, type LargeIndexes } from "../../shared/large-backup"
+import { backupTypeUse } from "../../shared/services/backup-use"
 export { assertStorageAccountName } from "../../shared/storage-account"
 export { ProtectedBlobError, isImmutabilityRefusal } from "./request"
 import { createHash, randomUUID } from "node:crypto"
 import { BACKUP_CANCELLED_MESSAGE, BACKUP_OWNER_FILE } from "../../shared/constants"
 import { resolveBackupOwnership, type OwnershipFile } from "../../shared/backup-ownership"
 import { BlobWriter } from "./blob-writer"
-import { GraphSession, type GraphItem } from "./graph-session"
-import { GRAPH, BlobClaimError, GraphError, InventoryDamagedError, ProtectedBlobError, RequestTimeoutError, StorageError, TokenError, isUnreachable } from "./request"
+import { GraphSession, type GraphItem, type ReadControl } from "./graph-session"
+import { ReadBudgetError, typeReadBudget, withReadBudget } from "./read-budget"
+import { GRAPH, BlobClaimError, GraphError, GraphUnansweredError, InventoryDamagedError, ProtectedBlobError, RequestTimeoutError, StorageError, LargeStorageError, TokenError, isUnreachable, withAbort } from "./request"
+import { RetryDelayError } from "../graph-retry"
 import { isLocalAccount } from "../storage/blob-emulator"
 import { FetchApplicationError } from "../api/network-error"
-import { INTUNE_TYPES, itemName, typeForFolder, type IntuneType, type Item } from "../../shared/intune/registry"
-import { listSnapshot, readObject, withMaskedSecrets } from "../../shared/intune/read"
+import { INTUNE_TYPES, itemName, typeForFolder, type GraphVersion, type IntuneType, type Item } from "../../shared/intune/registry"
+import { readEntries, ScopeDiscoveryError, OrganizationResolutionError, organizationReader, graphVersion, listPath, listSnapshot, readObject, withMaskedSecrets, type GraphReader } from "../../shared/intune/read"
 import { comparableSnapshot } from "../../shared/intune/compare"
 import type { BackupItems } from "../../shared/intune/backup-changes"
 import { EVERYTHING, includedTypes, normalizeScope, restorableFolders, type BackupScope } from "../../shared/intune/scope"
-import { canBackUp, describeRequirement, disabledFolders, moduleForFolder, SERVICES_PAGE, type ModuleId } from "../../shared/services/modules"
+import { canBackUp, DEFAULT_SELECTION, describeRequirement, disabledFolders, MODULES, moduleForFolder, SERVICES_PAGE, signedInOnly, type ServiceSelection, type SignInMode } from "../../shared/services/modules"
 import { grantedPermissions } from "../../shared/services/token"
 import { MAX_ITEM_ERRORS, type BackupNotice, type BackupResults, type BackupTypeResult } from "../../shared/backup-results"
+import { classifyAnswer, coverageOf, manifestOutcomes, nothingRead, nothingReadReason, signInRefused, skipReason, type Coverage, type RunOutcomes, type SkipCause, type TypeOutcome } from "../../shared/backup-outcomes"
 
 /**
  * Runs Intune backups from the desktop app as the signed-in admin.
@@ -55,6 +64,10 @@ export interface BackupJob {
   log: string[]
   /** Per type results and notices for progress views, filled as the run goes; absent until the run starts. */
   results?: BackupResults
+  /** Whether every selected type was read. Set with the outcomes; the job's status does not follow it. */
+  coverage?: Coverage
+  /** How every selected type ended, once the run has ended after choosing what to read. */
+  outcomes?: RunOutcomes
 }
 
 export type BackupTrigger = "manual" | "scheduled" | "tray"
@@ -68,10 +81,14 @@ export type BackupAuthMode = "delegated" | "app-only"
 /** The tokens one backup run uses for Microsoft Graph and Azure Storage, chosen once when it starts. */
 export interface RunTokens {
   mode: BackupAuthMode
-  graph: () => Promise<string>
+  /** `fresh`: a token Microsoft issues now instead of a cached one, which proves that the sign-in still works. */
+  graph: (options?: { fresh?: boolean }) => Promise<string>
   storage: () => Promise<string>
-  /** Type folders these tokens have no permission for by design; the run leaves them out and records why. */
-  excludedTypes?: string[]
+  /**
+   * Type folders these tokens have no permission for by design; the run leaves them out and records
+   * why. Asked once when the run starts: a Backup Reader answers from the roles in its token.
+   */
+  excludedTypes?: () => Promise<string[]>
 }
 
 export interface BackupRequest {
@@ -89,37 +106,50 @@ export interface BackupRequest {
 export interface BackupEngineDeps {
   /** The main-process fetch (bridged, so local storage accounts are served from disk). */
   fetch: typeof fetch
-  getToken: (tenantId: string, clientId: string, scope: string) => Promise<string>
+  /** `fresh`: a token Microsoft issues now instead of a cached one. */
+  getToken: (tenantId: string, clientId: string, scope: string, fresh?: boolean) => Promise<string>
   /**
    * The tenant's Backup Reader tokens, or null when it has none. Asked only for scheduled backups:
    * manual and tray backups, where an admin is present, always use the admin's own sign-in.
    */
   unattendedTokens?: (request: BackupRequest) => RunTokens | null
   /**
-   * The opt-in service modules turned on for the tenant (see shared/services/modules). Types of opt-in
-   * modules that are off are never backed up, whatever the scope says. None when left out.
+   * The services and opt-in areas turned on for the tenant (see shared/services/modules). Types of a
+   * service or area that is off are never backed up, whatever the scope says. When left out, the
+   * services that are on by default.
    */
-  enabledModules?: (tenantId: string) => ModuleId[]
+  services?: (tenantId: string) => ServiceSelection
   /** Backups older than this many days are deleted after each backup; 0 keeps everything. */
   retentionDays?: (tenantId: string) => number
   now?: () => Date
   /** Items read at the same time. Graph throttling (429) pauses every reader. */
   concurrency?: number
+  /**
+   * Called once when a request got a job of its own, before the job reads anything. A request that
+   * joined a running job, or was refused because of one, started nothing and is not announced.
+   */
+  onStarted?: (job: BackupJob, request: BackupRequest) => void
   /** Called once when a job has ended, with the request that started it. */
   onFinished?: (job: BackupJob, request: BackupRequest) => void
+  /**
+   * Called once for a run that got as far as choosing what to read, before onFinished, with how each
+   * selected type ended. The same outcomes are in the backup's manifest when the run wrote one.
+   */
+  onOutcomes?: (outcomes: RunOutcomes, request: BackupRequest) => void
+  /** Permission names of a Graph token the run used, for health only; never changes its outcomes. */
+  onToken?: (runId: string, granted: ReturnType<typeof grantedPermissions>) => void
 }
 
-/** A Graph beta path, or an absolute nextLink that must be on the Graph origin. */
-function graphUrl(path: string): string {
-  if (!URL.canParse(path)) return `${GRAPH}/beta/${path}`
-  if (new URL(path).origin !== GRAPH) throw new Error("Invalid Graph continuation link")
+/** A Graph path in the primary version or an explicitly declared sub-resource version. Paging is validated by GraphSession.list. */
+function graphUrl(version: GraphVersion, path: string, additional: readonly GraphVersion[] = []): string {
+  if (!URL.canParse(path)) return `${GRAPH}/${version}/${path}`
+  const link = new URL(path)
+  if (link.origin !== GRAPH || ![version, ...additional].some(allowed => link.pathname.startsWith(`/${allowed}/`))) throw new Error("Invalid Graph continuation link")
   return path
 }
 
 /** Types covered by the original DeviceManagementConfiguration permission. */
 const ORIGINAL_FOLDERS = new Set(["DeviceConfigurations", "CompliancePolicies", "ConfigurationPolicies", "GroupPolicyConfigurations"])
-
-const listUrl = (type: IntuneType) => `${GRAPH}/beta/${type.path}${type.listQuery ? `?${type.listQuery}` : ""}`
 
 const MAX_JOBS = 25
 const CONCURRENCY = 8
@@ -142,10 +172,12 @@ class BackupCancelledError extends Error {}
  * `committing` is set when the real manifest write starts, after which nothing else may write one.
  */
 interface StoppedRun {
-  manifest?: (status: "Failed" | "Cancelled", error: string) => Record<string, unknown>
+  manifest?: (status: "Failed" | "Cancelled", error: string, outcomes: RunOutcomes) => Record<string, unknown>
   committing: boolean
   /** The service whose failures stopped the run, if one did. */
   stoppedBy?: () => NetworkService | null
+  /** Set once the run has chosen what to read: how each selected type ended if the run stopped now. */
+  outcomes?: (status: "Failed" | "Cancelled") => RunOutcomes
 }
 
 /**
@@ -198,11 +230,13 @@ export class NetworkCircuit {
   private readonly controller = new AbortController()
   private readonly combined: AbortSignal
   private readonly consecutiveFailures: Record<NetworkService, number> = { "Microsoft Graph": 0, "backup storage": 0 }
-  private readonly consecutiveAuthFailures: Record<NetworkService, { status: number; count: number } | null> = { "Microsoft Graph": null, "backup storage": null }
+  /** By scope: the storage, and each service read from Microsoft Graph, so one service's answers never count for another. */
+  private readonly consecutiveAuthFailures = new Map<string, { status: number; count: number }>()
   /** The service whose failures opened the circuit. */
   stoppedBy: NetworkService | null = null
 
-  constructor(private readonly threshold: number, signal?: AbortSignal, private readonly deadline?: number) {
+  /** `threshold`: the consecutive requests without an answer that stop the job. */
+  constructor(readonly threshold: number, signal?: AbortSignal, private readonly deadline?: number) {
     this.combined = signal ? AbortSignal.any([signal, this.controller.signal]) : this.controller.signal
   }
 
@@ -211,10 +245,11 @@ export class NetworkCircuit {
     return this.combined
   }
 
-  succeeded(service: NetworkService): void {
+  /** `scope` names whose auth failures the success ends: the network service itself, or one service read from it. */
+  succeeded(service: NetworkService, scope: string = service): void {
     this.signal.throwIfAborted()
     this.consecutiveFailures[service] = 0
-    this.consecutiveAuthFailures[service] = null
+    this.consecutiveAuthFailures.delete(scope)
   }
 
   /** `cause` is the failure that trips the circuit, kept so the job can tell an unreachable service apart. */
@@ -226,13 +261,13 @@ export class NetworkCircuit {
     this.signal.throwIfAborted()
   }
 
-  /** Counts consecutive responses with the same 401 or 403 status; a success or a different status starts over. */
-  authFailed(service: NetworkService, status: number, message: string): void {
+  /** Counts consecutive responses with the same 401 or 403 status within a scope; a success or a different status starts over. */
+  authFailed(service: NetworkService, status: number, message: string, scope: string = service): void {
     this.signal.throwIfAborted()
     if (status !== 401 && status !== 403) return
-    const previous = this.consecutiveAuthFailures[service]
+    const previous = this.consecutiveAuthFailures.get(scope)
     const count = previous?.status === status ? previous.count + 1 : 1
-    this.consecutiveAuthFailures[service] = { status, count }
+    this.consecutiveAuthFailures.set(scope, { status, count })
     if (count < CONSECUTIVE_AUTH_FAILURE_LIMIT) return
     this.stoppedBy = service
     this.controller.abort(new Error(message))
@@ -240,7 +275,7 @@ export class NetworkCircuit {
   }
 }
 
-async function tokenOrStop(get: () => Promise<string>, outcome: RunOutcome): Promise<string> {
+async function tokenOrStop<T>(get: () => Promise<T>, outcome: RunOutcome): Promise<T> {
   try {
     return await get()
   } catch (error) {
@@ -254,12 +289,18 @@ export class BackupEngine {
   private readonly jobs = new Map<string, BackupJob>()
   private readonly running = new Map<string, { job: BackupJob; key: string; mode: BackupAuthMode }>()
   private readonly executions = new Map<string, { controller: AbortController; done: Promise<BackupJob> }>()
-  /** Backups run one at a time, in start order, like the scheduler and the tray: each run reads with its own concurrency, so running tenants at once would multiply Graph requests and invite throttling. */
+  /** Existing capture runs FIFO, one tenant at a time. Streaming runs yield this turn before their large phase. */
   private queueTail: Promise<void> = Promise.resolve()
   /** Jobs started but not finished yet, the running one plus every queued one. */
   private pending = 0
 
   constructor(private readonly deps: BackupEngineDeps) {}
+
+  /** Whether the selected scope includes an enabled streaming type. */
+  hasLargeTypes(tenantId: string, scope: BackupScope = EVERYTHING): boolean {
+    const off = new Set(disabledFolders(this.deps.services?.(tenantId) ?? DEFAULT_SELECTION))
+    return includedTypes(normalizeScope(scope)).some(type => type.volume === "large" && !off.has(type.folder))
+  }
 
   get(jobId: string): BackupJob | undefined {
     return this.jobs.get(jobId)
@@ -341,10 +382,19 @@ export class BackupEngine {
     this.running.set(tenantKey, { job, key, mode: tokens.mode })
     this.prune()
     if (queued) this.write(job, "Queued behind another tenant's backup; backups run one at a time.")
+    // A failing listener must not keep the job from running.
+    try {
+      this.deps.onStarted?.(job, request)
+    } catch (error) {
+      console.warn("[backup] Could not announce the start of a backup:", error)
+    }
 
+    let releaseTurn: () => void = () => {}
+    const turnDone = new Promise<void>(resolve => { releaseTurn = resolve })
     const outcome: RunOutcome = { saved: 0, answered: false, otherFailures: 0 }
     const stopped: StoppedRun = { committing: false }
     let timer: ReturnType<typeof setTimeout> | undefined
+    let legacyTimer: ReturnType<typeof setTimeout> | undefined
     // The deadline and the start time count from when the run actually starts, not from when it was queued.
     const execute = async () => {
       if (controller.signal.aborted) throw controller.signal.reason
@@ -352,10 +402,16 @@ export class BackupEngine {
       job.progress = 5
       job.progressMessage = "Starting backup..."
       job.startTime = this.now().toISOString()
-      const deadline = Date.now() + JOB_DEADLINE_MS
-      timer = setTimeout(() => controller.abort(jobDeadlineError()), JOB_DEADLINE_MS)
+      const selection = this.deps.services?.(request.tenantId) ?? DEFAULT_SELECTION
+      const off = new Set(disabledFolders(selection))
+      const large = includedTypes(normalizeScope(request.scope ?? EVERYTHING)).some(type => type.volume === "large" && !off.has(type.folder))
+      const duration = large ? LARGE_JOB_MS : JOB_DEADLINE_MS
+      const deadline = Date.now() + duration
+      timer = setTimeout(() => controller.abort(jobDeadlineError(duration)), duration)
       timer.unref?.()
-      await this.run(job, request, tokens, controller.signal, deadline, outcome, stopped)
+      // The existing phase keeps its original deadline even in a mixed backup.
+      if (large) { legacyTimer = setTimeout(() => controller.abort(jobDeadlineError()), JOB_DEADLINE_MS); legacyTimer.unref?.() }
+      await this.run(job, request, tokens, controller.signal, deadline, outcome, stopped, () => { if (legacyTimer) clearTimeout(legacyTimer); releaseTurn() })
     }
     // A queued backup cancelled before its turn settles at once instead of holding its tenant
     // until every backup ahead of it has finished. Its place in the chain still waits for those
@@ -380,13 +436,18 @@ export class BackupEngine {
         if (job.status === "Failed" && tokens.mode === "app-only" && causedBy(error, "BackupReaderError")) job.credentialError = true
         job.progressMessage = job.status === "Cancelled" ? "Backup cancelled" : "Backup failed"
         this.write(job, `${job.progressMessage}: ${job.exception}`)
+        // A run that committed its manifest before it failed keeps the outcomes that manifest records.
+        if (stopped.outcomes && !job.outcomes) this.conclude(job, stopped.outcomes(job.status))
+        const outcomes = job.outcomes
         // A storage that stopped answering or refused access would not take the manifest either.
-        if (!stopped.manifest || stopped.committing || stopped.stoppedBy?.() === "backup storage") return
+        if (!stopped.manifest || !outcomes || stopped.committing || stopped.stoppedBy?.() === "backup storage") return
         // The run is over, so a backup started while the manifest is written gets its own job instead of joining this one.
         if (this.running.get(tenantKey)?.job === job) this.running.delete(tenantKey)
-        await this.recordStopped(job, request, tokens, stopped.manifest(job.status, job.exception))
+        await this.recordStopped(job, request, tokens, stopped.manifest(job.status, job.exception, outcomes))
       })
       .finally(() => {
+        releaseTurn()
+        if (legacyTimer) clearTimeout(legacyTimer)
         if (timer) clearTimeout(timer)
         controller.abort(new Error("Backup finished"))
         job.progress = 100
@@ -397,9 +458,9 @@ export class BackupEngine {
         this.finished(job, request)
       })
       .then(() => job)
-    // The next queued backup starts only once this one has fully settled, failed manifest
-    // included, and never before the backups ahead of a queued cancellation have finished.
-    this.queueTail = Promise.all([previous, done.then(() => undefined, () => undefined)]).then(() => undefined)
+    // Existing runs release their turn only when fully settled. Streaming runs release before
+    // their large phase; each page then waits for the tenants that have queued a turn.
+    this.queueTail = Promise.all([previous, turnDone]).then(() => undefined)
     this.executions.set(job.id, { controller, done })
     return job
   }
@@ -410,7 +471,7 @@ export class BackupEngine {
     if (unattended) return unattended
     return {
       mode: "delegated",
-      graph: () => this.deps.getToken(request.tenantId, request.clientId, `${GRAPH}/.default`),
+      graph: (options) => (options?.fresh ? this.deps.getToken(request.tenantId, request.clientId, `${GRAPH}/.default`, true) : this.deps.getToken(request.tenantId, request.clientId, `${GRAPH}/.default`)),
       storage: () => this.deps.getToken(request.tenantId, request.clientId, "https://storage.azure.com/.default"),
     }
   }
@@ -418,23 +479,51 @@ export class BackupEngine {
   /** A failing listener must not change how the job ended. */
   private finished(job: BackupJob, request: BackupRequest): void {
     try {
+      if (job.outcomes) this.deps.onOutcomes?.(job.outcomes, request)
+    } catch (error) {
+      console.warn("[backup] Could not hand over the outcomes of a backup:", error)
+    }
+    try {
       this.deps.onFinished?.(job, request)
     } catch (error) {
       console.warn("[backup] Could not record the end of a backup:", error)
     }
   }
 
-  private async run(job: BackupJob, request: BackupRequest, tokens: RunTokens, signal: AbortSignal, deadline: number, outcome: RunOutcome, stopped: StoppedRun): Promise<void> {
+  /** Puts the run's outcomes and its coverage on the job, where progress views and the listeners read them. */
+  private conclude(job: BackupJob, outcomes: RunOutcomes): void {
+    job.outcomes = outcomes
+    job.coverage = outcomes.coverage
+    if (job.results) job.results.coverage = outcomes.coverage
+  }
+
+  private async run(job: BackupJob, request: BackupRequest, tokens: RunTokens, signal: AbortSignal, deadline: number, outcome: RunOutcome, stopped: StoppedRun, releaseTurn: () => void): Promise<void> {
     const started = this.now()
     const local = isLocalAccount(request.storageAccountName)
     const fetchImpl = answeredFetch(this.deps.fetch, outcome, local ? `${request.storageAccountName.toLowerCase()}.blob.core.windows.net` : null)
-    const backupFolder = `backup-${folderTimestamp(started)}`
+    const streaming = this.hasLargeTypes(request.tenantId, request.scope ?? EVERYTHING)
+    let backupFolder = `backup-${folderTimestamp(started)}`
     job.backupFolder = backupFolder
     this.write(job, `Backing up tenant ${request.tenantId} to ${local ? "this device (encrypted)" : `storage account ${request.storageAccountName}`}.`)
-    this.write(job, `Backup folder: ${backupFolder}`)
+    if (!streaming) this.write(job, `Backup folder: ${backupFolder}`)
     if (tokens.mode === "app-only") this.write(job, "Reading as the tenant's Backup Reader (app-only, read-only).")
 
-    const graphToken = () => tokenOrStop(tokens.graph, outcome)
+    const observeToken = (granted: ReturnType<typeof grantedPermissions>) => {
+      try {
+        this.deps.onToken?.(job.id, granted)
+      } catch (error) {
+        console.warn("[backup] Could not hand over token permissions:", error)
+      }
+    }
+    let lastToken: string | undefined
+    const graphToken = async (options?: { fresh: true }) => {
+      const token = await tokenOrStop(() => (options ? tokens.graph(options) : tokens.graph()), outcome)
+      if (token !== lastToken) {
+        lastToken = token
+        observeToken(grantedPermissions(token))
+      }
+      return token
+    }
     const storageToken = local ? async () => "" : () => tokenOrStop(tokens.storage, outcome)
 
     const concurrency = this.deps.concurrency ?? CONCURRENCY
@@ -444,14 +533,31 @@ export class BackupEngine {
     if (local || tokens.mode === "delegated") await storage.ensureContainer()
 
     const scope = normalizeScope(request.scope ?? EVERYTHING)
-    const readerExcluded = new Set(tokens.excludedTypes ?? [])
-    const moduleOff = new Set(disabledFolders(this.deps.enabledModules?.(request.tenantId) ?? []))
+    // The answer needs the reader's token, so a reader Microsoft refuses stops the run here as it would at the first read.
+    const readerExcluded = new Set(tokens.excludedTypes ? await tokenOrStop(tokens.excludedTypes, outcome) : [])
+    const selection = this.deps.services?.(request.tenantId) ?? DEFAULT_SELECTION
+    const moduleOff = new Set(disabledFolders(selection))
     const notReadable = includedTypes(scope).filter((type) => readerExcluded.has(type.folder) && !moduleOff.has(type.folder)).map((type) => type.folder)
-    // An opt-in module that is on but whose read permission the token lacks is left out up front with the
-    // missing permission named, instead of failing on a refused read. Intune keeps its long-standing per-type handling.
-    const granted = await moduleGrants(tokens, includedTypes(scope).some((type) => !moduleOff.has(type.folder) && moduleForFolder(type.folder)?.module.optIn))
-    const unpermitted = includedTypes(scope).filter((type) => !moduleOff.has(type.folder) && !readerExcluded.has(type.folder) && moduleForFolder(type.folder)?.module.optIn && granted && !canBackUp(type.folder, granted))
+    // A service with a token pre-check that is on but whose read permission the token lacks is left out up front with
+    // the missing permission named, instead of failing on a refused read. Intune keeps its long-standing per-type handling.
+    const granted = await moduleGrants(tokens, includedTypes(scope).some((type) => !moduleOff.has(type.folder) && moduleForFolder(type.folder)?.module.precheck))
+    if (granted) observeToken(granted)
+    const signIn: SignInMode = tokens.mode === "app-only" ? "application" : "delegated"
+    // A type only a signed-in admin can read is left out of a Backup Reader run whatever its token says: no permission changes that.
+    const adminOnly = (type: IntuneType) => tokens.mode === "app-only" && signedInOnly(type.folder)
+    const applicationOnly = (type: IntuneType) => signIn === "delegated" && type.backupMode === "application"
+    const unpermitted = includedTypes(scope).filter((type) => !moduleOff.has(type.folder) && !readerExcluded.has(type.folder) && (adminOnly(type) || applicationOnly(type) || (moduleForFolder(type.folder)?.module.precheck && granted && !canBackUp(type.folder, granted))))
     const types = includedTypes(scope).filter((type) => !readerExcluded.has(type.folder) && !moduleOff.has(type.folder) && !unpermitted.includes(type))
+    const largeTypes = types.filter(type => type.volume === "large")
+    const mixed = largeTypes.length > 0 && types.some(type => type.volume !== "large")
+    const ordinaryFolder = backupFolder
+    const largeFolder = `backup-large-${folderTimestamp(started)}`
+    if (largeTypes.length && !mixed) backupFolder = largeFolder
+    job.backupFolder = backupFolder
+    // Large storage has its own circuit: a refusal there cannot poison ordinary writes.
+    const largeNetwork = new NetworkCircuit(3 * concurrency, signal, deadline)
+    const largeStorage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, largeNetwork)
+    if (streaming) this.write(job, `Backup folder: ${backupFolder}`)
     // Results list every type this run covers or leaves out for a permission, in registry order.
     const results: BackupResults = {
       types: includedTypes(scope)
@@ -461,30 +567,98 @@ export class BackupEngine {
     }
     job.results = results
     const result = (folder: string) => results.types.find((entry) => entry.folder === folder)!
+    // A failure takes precedence over a refusal, including one recorded after an optional sub-read.
+    const settled = new Map<string, TypeOutcome>()
+    const settle = (folder: string, ending: { outcome: "notConfigured" } | { outcome: "skipped"; cause: SkipCause; reason: string; reader?: true; status?: number; code?: string } | { outcome: "failed"; error: string; status?: number; code?: string }) => {
+      if (!settled.has(folder) || (ending.outcome === "failed" && settled.get(folder)?.outcome !== "failed")) settled.set(folder, { folder, service: moduleForFolder(folder)?.module.id ?? null, ...ending, ...(ending.outcome === "failed" ? { saved: 0 } : {}) } as TypeOutcome)
+    }
+    // Every selected type has an outcome at any moment: the settled one, or what its result says so far.
+    const typesNow = (stopped: boolean) =>
+      results.types.map((entry): TypeOutcome => {
+        const known = settled.get(entry.folder)
+        const base = { folder: entry.folder, service: moduleForFolder(entry.folder)?.module.id ?? null }
+        // A failed object takes precedence over an optional sub-read refusal on another object.
+        if (entry.failed > 0) return { ...base, outcome: "failed", error: `${entry.failed} of ${entry.found ?? entry.saved + entry.failed} could not be saved. ${entry.errors?.[0] ?? ""}`.trim(), saved: entry.saved }
+        // Objects saved before the type ended stay in the backup, so the outcome names how many.
+        if (known?.outcome === "failed") return { ...known, saved: entry.saved }
+        if (known?.outcome === "skipped") return entry.saved ? { ...known, saved: entry.saved } : known
+        if (known) return known
+        if (entry.state === "reading" && stopped) return { ...base, outcome: "failed", error: "The backup stopped before this type was read in full.", saved: entry.saved }
+        return { ...base, outcome: "saved", saved: entry.saved }
+      })
+    const outcomesNow = (status: string, ended: Date, stopped: boolean): RunOutcomes => {
+      const typeOutcomes = typesNow(stopped)
+      return {
+        runId: job.id,
+        tenantId: request.tenantId.toLowerCase(),
+        authMode: tokens.mode,
+        trigger: request.trigger ?? "manual",
+        startedAt: started.toISOString(),
+        endedAt: ended.toISOString(),
+        status,
+        coverage: coverageOf(typeOutcomes),
+        types: typeOutcomes,
+      }
+    }
+    stopped.outcomes = (status) => outcomesNow(status, this.now(), true)
     for (const type of unpermitted) {
       const entry = moduleForFolder(type.folder)!
-      const reason = `The ${tokens.mode === "app-only" ? "Backup Reader" : "TenuVault app registration"} has no ${describeRequirement(entry.area.backup, granted?.permissions)} permission for ${entry.module.label}. ${SERVICES_PAGE} in Settings shows how to add it.`
+      const needed = entry.part.backup[granted?.kind ?? signIn]
+      const reason = applicationOnly(type) ? skipReason("appOnly", { service: entry.module.label, mode: tokens.mode, settingsPage: SERVICES_PAGE }) : needed === "unsupported"
+        // No permission lets this sign-in read the type, so there is nothing to add.
+        ? skipReason("signedIn", { service: entry.module.label, mode: tokens.mode, settingsPage: SERVICES_PAGE })
+        : `The ${tokens.mode === "app-only" ? "Backup Reader" : "TenuVault app registration"} has no ${describeRequirement(needed, granted?.permissions)} permission for ${entry.module.label}. ${SERVICES_PAGE} in Settings shows how to add it.`
       Object.assign(result(type.folder), { state: "skipped", reason })
+      settle(type.folder, { outcome: "skipped", cause: applicationOnly(type) ? "appOnly" : needed === "unsupported" ? "signedIn" : "permission", reason })
       this.write(job, `Leaving out ${type.label}: ${reason.charAt(0).toLowerCase()}${reason.slice(1)}`)
+    }
+    // A service that is normally on but was turned off for the tenant is named, so a smaller or empty backup explains itself.
+    for (const module of MODULES) {
+      if (!module.defaultOn || selection.services.includes(module.id) || !includedTypes(scope).some((type) => moduleForFolder(type.folder)?.module === module)) continue
+      this.write(job, `${module.label} is turned off for this tenant, so its types are not backed up. ${SERVICES_PAGE} in Settings turns it on again.`, "warning")
     }
     if (scope.excluded.length) {
       this.write(job, `Leaving out ${scope.excluded.length} of ${INTUNE_TYPES.length} types: ${scope.excluded.join(", ")}.`)
       // The notice names the types as people read them; the log keeps the folder names.
       results.notices.push({ level: "info", message: `Left out by the backup scope: ${scope.excluded.map((folder) => typeForFolder(folder)?.label ?? folder).join(", ")}.` })
     }
-    for (const folder of notReadable) Object.assign(result(folder), { state: "skipped", reason: "The Backup Reader has no permission for this type. Manual backups include it." })
+    for (const folder of notReadable) {
+      const cause: SkipCause = signedInOnly(folder) ? "signedIn" : "permission"
+      const reason = cause === "signedIn" ? skipReason("signedIn", { service: "", mode: tokens.mode, settingsPage: SERVICES_PAGE }) : "The Backup Reader has no permission for this type. Manual backups include it."
+      Object.assign(result(folder), { state: "skipped", reason })
+      settle(folder, { outcome: "skipped", cause, reason, reader: true })
+    }
     if (notReadable.length) this.write(job, `Leaving out ${notReadable.length} type${notReadable.length === 1 ? "" : "s"} the Backup Reader has no permission for: ${notReadable.join(", ")}. Manual backups include them.`)
     // Only a Backup Reader run keeps a value Microsoft refuses to decrypt masked; with the admin's sign-in a refused read fails the object as before.
     const keepMasked = tokens.mode === "app-only" ? (error: unknown) => error instanceof GraphError && error.status === 403 : undefined
     const maskedItems: Array<{ Folder: string; Id: string; Name: string }> = []
-    const graph = new GraphSession(fetchImpl, graphToken, network)
-    const reader = {
-      get: (path: string) => graph.get<Item>(`${GRAPH}/beta/${path}`),
-      list: (path: string) => graph.list(graphUrl(path)) as Promise<Item[]>,
+    // Each service reads through its own session, so a pause or a refusal of one never holds up another.
+    const sessions = new Map<string, GraphSession>()
+    const serviceOf = (type: IntuneType) => {
+      const module = moduleForFolder(type.folder)?.module
+      const id = module?.id ?? "intune"
+      let session = sessions.get(id)
+      if (!session) sessions.set(id, (session = new GraphSession(fetchImpl, graphToken, network, { service: id, isolated: module?.isolated })))
+      return { id, module, isolated: module?.isolated === true, session }
+    }
+    const typeBudgets = new Map<string, ReturnType<typeof typeReadBudget>>()
+    const readerOf = (type: IntuneType, control: ReadControl = {}): GraphReader => {
+      const { session } = serviceOf(type)
+      const version = graphVersion(type)
+      let budget = typeBudgets.get(type.folder)
+      if (!budget && type.readBudget) {
+        budget = typeReadBudget(network.signal, type.readBudget)
+        typeBudgets.set(type.folder, budget)
+      }
+      const read = <T>(operation: (control: ReadControl) => Promise<T>) => budget ? budget(operation) : operation(control)
+      return organizationReader({
+        get: (path: string) => read(control => session.get<Item>(graphUrl(version, path, type.additionalReadVersions), type.headers, control)),
+        list: (path: string) => read(control => session.list(graphUrl(version, path, type.additionalReadVersions), { ...control, headers: type.headers, ...(path === listPath(type) ? { filter: type.filter } : {}) }) as Promise<Item[]>),
+      })
     }
 
     // List everything first so progress reflects the real amount of work.
-    job.progressMessage = "Reading Intune configuration..."
+    job.progressMessage = types.some((type) => moduleForFolder(type.folder)?.module.id === "intune") ? "Reading Intune configuration..." : "Reading configuration..."
     const counts: Record<string, number> = Object.fromEntries(types.map((type) => [type.folder, 0]))
     const lists: Array<{ type: IntuneType; items: GraphItem[] } | null> = Array.from({ length: types.length }, () => null)
     // Types left out for a missing permission count as skipped, like a type whose read was denied.
@@ -493,13 +667,78 @@ export class BackupEngine {
     let failures = 0
     // A type the app registration has no permission for is skipped below and does not count:
     // only failures that point at a removed role across the work list stop the backup.
-    const countAuthFailure = (error: unknown) => {
-      if (error instanceof GraphError && (error.status === 401 || error.status === 403)) network.authFailed("Microsoft Graph", error.status, error.message)
+    const countAuthFailure = (error: unknown, service: string) => {
+      if (error instanceof GraphError && (error.status === 401 || error.status === 403)) network.authFailed("Microsoft Graph", error.status, error.message, service)
     }
-    await pool(types.map((type, index) => ({ type, index })), concurrency, async ({ type, index }) => {
+    // Types of a service that isolates its failures which ended before every object was read; their remaining objects are not read.
+    const endedTypes = new Set<string>()
+    // Microsoft no longer accepts the sign-in. No type is at fault: every read after it fails the same way, for every service.
+    const signInEnded = (error: unknown) => error instanceof TokenError || (error instanceof GraphError && signInRefused({ status: error.status, ...error.answer }))
+    /**
+     * Whether a type's own read was answered the way the type declares for a tenant that never set it
+     * up. Only the read of the type itself can say so: an object that answers the same way after
+     * others were saved is a failed read.
+     */
+    const notSetUp = (type: IntuneType, error: unknown) =>
+      error instanceof GraphError && !!type.notConfigured && classifyAnswer({ status: error.status, ...error.answer }, { notConfigured: type.notConfigured, mode: tokens.mode }).outcome === "notConfigured"
+    /**
+     * Ends a type of a service that isolates its failures, by what the failed read means: the sign-in
+     * may not read it, or it could not be read. The backup goes on with the other types. A read that
+     * fails after an earlier one ended the type changes nothing.
+     */
+    const endType = (type: IntuneType, error: unknown, ownList = false): void => {
+      if (endedTypes.has(type.folder)) return
+      endedTypes.add(type.folder)
+      const { module } = serviceOf(type)
+      const answer = error instanceof GraphError ? { status: error.status, ...error.answer } : null
+      const verdict = answer ? classifyAnswer(answer, { held: granted ? canBackUp(type.folder, granted) : undefined, mode: tokens.mode, ...(type.unavailable !== undefined ? { unavailable: ownList ? type.unavailable : [] } : {}) }) : { outcome: "failed" as const }
+      const evidence = answer ? { status: answer.status, ...(answer.code ? { code: answer.code } : {}) } : {}
+      const entry = result(type.folder)
+      if (error instanceof LargeStorageError) {
+        const reason = error.message
+        skippedTypes.push(type.folder)
+        Object.assign(entry, { state: "skipped", reason })
+        settle(type.folder, { outcome: "skipped", cause: "storage", reason, ...(error.status ? { status: error.status } : {}) })
+        this.write(job, `Skipped ${type.label}: ${reason}`, "warning")
+        return
+      }
+      if (verdict.outcome === "skipped") {
+        const reason = skipReason(verdict.cause, { service: module?.label ?? "this service", roles: module?.roles, mode: tokens.mode, settingsPage: SERVICES_PAGE }, answer?.message)
+        skippedTypes.push(type.folder)
+        Object.assign(entry, { state: "skipped", reason })
+        settle(type.folder, { outcome: "skipped", cause: verdict.cause, reason, ...evidence })
+        this.write(job, `Skipped ${type.label}: ${reason.charAt(0).toLowerCase()}${reason.slice(1)}`)
+        return
+      }
+      recordFailure(outcome, error)
+      failures++
+      failedTypes.push(type.folder)
+      const reason = error instanceof Error ? error.message : String(error)
+      Object.assign(entry, { state: "unreadable", reason })
+      settle(type.folder, { outcome: "failed", error: reason, ...evidence })
+      this.write(job, `Could not read ${type.label}: ${reason}`)
+    }
+    const discoveries = new Map<string, Promise<Item[]>>()
+    await pool(types.map((type, index) => ({ type, index })).filter(({ type }) => type.volume !== "large"), concurrency, async ({ type, index }) => {
+      const service = serviceOf(type)
       try {
         // A tenant-wide object has no list; reading it here skips the type on a denied read, like a denied list.
-        const all = type.singleton ? [{ ...(await graph.get(listUrl(type))), id: type.singleton.id }] : await graph.list(listUrl(type))
+        const reader = readerOf(type)
+        const source = type.listSource
+        const budget = source?.budget
+        const discover = source ? (path: string) => {
+          // One discovery per run, with its own lifetime so ending one type cannot cancel another.
+          const key = `${graphVersion(type)}/${path}`
+          let scopes = discoveries.get(key)
+          if (!scopes) {
+            scopes = budget ? withReadBudget(network.signal, budget.durationMs, Infinity, control => readerOf(type, control).list(path)) : reader.list(path)
+            discoveries.set(key, scopes)
+          }
+          return scopes
+        } : undefined
+        const all = (budget
+          ? await withReadBudget(network.signal, budget.durationMs, budget.maxRequests, control => readEntries(type, readerOf(type, control), discover))
+          : await readEntries(type, reader, discover)) as GraphItem[]
         const filtered = all.filter((item) => !type.skip?.(item as never))
         // A list that repeats an ID (an item seen on two pages) keeps only its first copy:
         // saving both would inflate the counts past the per-ID manifest inventory.
@@ -516,7 +755,28 @@ export class BackupEngine {
         this.write(job, `Found ${items.length} ${type.label}${skipped ? ` (${skipped} built-in skipped)` : ""}.`)
         Object.assign(result(type.folder), { found: items.length, ...(skipped ? { builtInSkipped: skipped } : {}), ...(items.length === 0 ? { state: "empty" } : {}) })
         lists[index] = { type, items }
-      } catch (error) {
+      } catch (caught) {
+        const resolverFailed = caught instanceof OrganizationResolutionError || caught instanceof ScopeDiscoveryError
+        const error = caught instanceof OrganizationResolutionError || caught instanceof ScopeDiscoveryError ? caught.cause : caught
+        // The answer the type declares for a tenant that never set it up: nothing to save, and nothing missing.
+        // A sign-in Microsoft no longer accepts is never that answer, whatever status the type declares.
+        if (!network.signal.aborted && !signInEnded(error) && !resolverFailed && notSetUp(type, error)) {
+          result(type.folder).state = "notConfigured"
+          settle(type.folder, { outcome: "notConfigured" })
+          this.write(job, `${type.label.charAt(0).toUpperCase()}${type.label.slice(1)} is not set up in this tenant.`)
+          return
+        }
+        // A sign-in that failed fails every read of the run, and a run that was stopped is over: both still end the backup.
+        if (service.isolated && !signInEnded(error) && !network.signal.aborted) {
+          endType(type, error, !resolverFailed)
+          return
+        }
+        if (service.isolated) {
+          // Counted before the rethrow, so the job sees this cause whichever failure ends it.
+          recordFailure(outcome, error)
+          network.signal.throwIfAborted()
+          throw error
+        }
         // Access denied: the app registration lacks the permission or its admin consent (for example
         // one created before the type was supported), or the admin's Intune role does not cover the
         // type. It is left out and reported, without marking the backup incomplete for the rest.
@@ -529,18 +789,20 @@ export class BackupEngine {
         if (denied) {
           skippedTypes.push(type.folder)
           const module = moduleForFolder(type.folder)?.module
-          const reason = module?.optIn
-            ? `Access was denied. The app registration may lack the permission or admin consent, or your account may not have a role that can read ${module.label} (${module.roles.split(";")[0]}).`
-            : "Access was denied. The app registration may lack the permission or admin consent, or your Intune role may not allow it."
+          const reason = module?.precheck
+            ? `Access was denied. The app registration may lack the permission or admin consent, or your account may not have a role that can read ${module.label}${module.roles ? ` (${module.roles.split(";")[0]})` : ""}.`
+            : `Access was denied. The app registration may lack the permission or admin consent, or your ${module?.label ?? "Intune"} role may not allow it.`
           Object.assign(result(type.folder), { state: "skipped", reason })
+          settle(type.folder, { outcome: "skipped", cause: "permission", reason, status: 403, ...(error.answer.code ? { code: error.answer.code } : {}) })
           this.write(job, `Skipped ${type.label}: ${reason.charAt(0).toLowerCase()}${reason.slice(1)}`)
           return
         }
-        countAuthFailure(error)
+        countAuthFailure(error, service.id)
         failures++
         failedTypes.push(type.folder)
         const reason = error instanceof Error ? error.message : String(error)
         Object.assign(result(type.folder), { state: "unreadable", reason })
+        settle(type.folder, { outcome: "failed", error: reason, ...(error instanceof GraphError ? { status: error.status, ...(error.answer.code ? { code: error.answer.code } : {}) } : {}) })
         this.write(job, `Could not read ${type.label}: ${reason}`)
       }
     }, network.signal)
@@ -550,7 +812,7 @@ export class BackupEngine {
     // one folder: the loser fails here and writes nothing else.
     // The marker names this run, so the Dashboard can match a failed run to whatever folder storage holds for it.
     try {
-      await storage.put(`${backupFolder}/${BACKUP_OWNER_FILE}`, JSON.stringify({ Source: "TenuVault Desktop", TenantId: request.tenantId.toLowerCase(), RunId: job.id }), undefined, true)
+      if (!isLargeBackup(backupFolder)) await storage.put(`${backupFolder}/${BACKUP_OWNER_FILE}`, JSON.stringify({ Source: "TenuVault Desktop", TenantId: request.tenantId.toLowerCase(), RunId: job.id, ...(mixed ? { CompanionBackup: largeFolder } : {}) }), undefined, true)
     } catch (error) {
       if (error instanceof BlobClaimError) throw new BackupFolderTakenError(backupFolder)
       throw error
@@ -568,21 +830,30 @@ export class BackupEngine {
     }
     const remaining = new Map(lists.filter((list) => list !== null).map((list) => [list.type.folder, list.items.length]))
     const items: BackupItems = {}
+    const largeItems: LargeIndexes = {}
+    const largeSizes: Record<string, number> = {}
     let done = 0
     const itemTimeoutWarnings: string[] = []
     // Same shape as the runbook's metadata.json, describing what this run saved so far.
-    const manifest = (status: string, ended: Date, extra: Record<string, unknown> = {}) => {
+    const manifest = (status: string, ended: Date, outcomes: RunOutcomes, extra: Record<string, unknown> = {}, folder = backupFolder) => {
       const seconds = Math.round((ended.getTime() - started.getTime()) / 1000)
+      const large = isLargeBackup(folder)
+      const inFolder = (folder: string) => !mixed || (typeForFolder(folder)?.volume === "large") === large
+      const folderCounts = Object.fromEntries(Object.entries(counts).filter(([folder]) => inFolder(folder)))
+      const folderOutcomes = mixed ? outcomes.types.filter(type => inFolder(type.folder)) : outcomes.types
+      const folderFailures = mixed ? results.types.filter(type => inFolder(type.folder)).reduce((sum, type) => sum + type.failed + (failedTypes.includes(type.folder) ? 1 : 0), 0) : failures
+      const folderSaved = Object.values(folderCounts).reduce((sum, count) => sum + count, 0)
+      const folderStatus = mixed ? (folderFailures ? (folderSaved ? "CompletedWithWarnings" : "Failed") : nothingRead(folderOutcomes) ? "Failed" : "Success") : status
       return {
         BackupDate: folderTimestamp(started),
-        BackupFolder: backupFolder,
+        BackupFolder: folder,
         StartTime: displayTime(started),
         EndTime: displayTime(ended),
         Duration: seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`,
         DurationSeconds: seconds,
         // Inventory such as Autopilot devices is counted under its own folder, not as policies.
-        ItemCounts: { ...counts, TotalPolicies: policyCount(counts) },
-        Status: status,
+        ItemCounts: { ...folderCounts, TotalPolicies: policyCount(folderCounts) },
+        Status: folderStatus,
         RunbookVersion: "desktop",
         BackupFormat: "Individual policy files with Intune-compatible JSON",
         Source: "TenuVault Desktop",
@@ -591,29 +862,61 @@ export class BackupEngine {
         Trigger: request.trigger ?? "manual",
         RunId: job.id,
         // Included records the types this run attempted, so later app versions do not count types added since as covered.
-        Scope: { Excluded: scope.excluded, Included: types.map((type) => type.folder) },
-        Failures: failures,
-        SkippedTypes: skippedTypes,
-        FailedTypes: failedTypes,
+        Scope: { Excluded: scope.excluded, Included: types.filter(type => inFolder(type.folder)).map((type) => type.folder) },
+        Failures: folderFailures,
+        SkippedTypes: skippedTypes.filter(inFolder),
+        FailedTypes: failedTypes.filter(inFolder),
         AuthMode: tokens.mode,
         ...(notReadable.length ? { AppOnlyExcludedTypes: notReadable } : {}),
         ...(maskedItems.length ? { MaskedSecretItems: maskedItems } : {}),
+        // Whether every selected type was read, and how each ended. Status, Failures and the type lists above keep their meaning.
+        Coverage: coverageOf(folderOutcomes) === "complete" ? "Complete" : "Incomplete",
+        Outcomes: manifestOutcomes(folderOutcomes),
+        ...(mixed ? { CompanionBackup: large ? ordinaryFolder : largeFolder, ...(!large ? { LargeBackupOutcomes: manifestOutcomes(outcomes.types.filter(type => !inFolder(type.folder))) } : {}) } : {}),
         // Per item fingerprints (by type folder and Intune ID), so backups can be compared without reading every file.
-        Items: sortKeys(items),
+        Items: large ? {} : sortKeys(items),
+        ...(large ? { LargeItems: largeItems, LargeSizes: largeSizes } : {}),
         ...(itemTimeoutWarnings.length ? { Warnings: itemTimeoutWarnings } : {}),
         ...extra,
       }
     }
+    const commitManifest = async (folder: string, metadata: Record<string, unknown>, trackCommit = true) => {
+      // The dispatched manifest may land despite cancellation. Give it the existing commit grace
+      // and never follow an ambiguous commit with a failed manifest for the same folder.
+      network.signal.throwIfAborted()
+      const commitDeadline = deadline + MANIFEST_COMMIT_GRACE_MS
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(jobDeadlineError()), Math.max(0, commitDeadline - Date.now()))
+      timer.unref?.()
+      const commitNetwork = new NetworkCircuit(3 * concurrency, controller.signal, commitDeadline)
+      const writer = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, commitNetwork)
+      try {
+        await writer.put(`${folder}/metadata.json`, JSON.stringify(metadata, null, 2), network, false, () => { if (trackCommit) stopped.committing = true })
+      } finally { clearTimeout(timer) }
+    }
     // From here the folder is this run's, so a run that stops early records it as failed, or as cancelled when the user cancelled it.
-    stopped.manifest = (status, error) => manifest(status, this.now(), { Error: error })
+    if (!isLargeBackup(backupFolder)) stopped.manifest = (status, error, outcomes) => manifest(status, this.now(), outcomes, { Status: status, Error: error })
     stopped.stoppedBy = () => network.stoppedBy
 
     await pool(work, concurrency, async ({ type, item, displayName, fileName }) => {
+      const service = serviceOf(type)
+      // The rest of a type that ended is not read: its first refusal answers for every object of it.
+      if (endedTypes.has(type.folder)) {
+        done++
+        return
+      }
       job.progressMessage = `Backing up ${type.label}`
       try {
         let masked = false
+        const unreadExtras: Array<{ property: string; error: unknown }> = []
         // A list-only type's list entry already holds everything its snapshot keeps.
-        const detail = type.listOnly ? listSnapshot(type, item as Item) : await readObject(type, item.id, reader, keepMasked ? { keepMasked: (error) => (masked = keepMasked(error)) } : {})
+        const detail = type.listOnly ? listSnapshot(type, item as Item) : await readObject(type, item.id, readerOf(type), {
+          ...(keepMasked ? { keepMasked: (error: unknown) => (masked = keepMasked(error)) } : {}),
+          onUnreadExtra: (property, error) => {
+            if (signInEnded(error)) throw error
+            unreadExtras.push({ property, error })
+          },
+        })
         const body = JSON.stringify(detail, null, 2)
         await storage.put(`${backupFolder}/${type.folder}/${fileName}.json`, body)
         const maskedView = withMaskedSecrets(type, detail)
@@ -629,13 +932,40 @@ export class BackupEngine {
         counts[type.folder]!++
         result(type.folder).saved++
         outcome.saved++
-      } catch (error) {
+        // Only a committed snapshot can say that the parent configuration was kept.
+        for (const { property, error } of unreadExtras) {
+          const reason = `${type.label}: ${property} could not be read; the parent configuration was kept.`
+          const verdict = error instanceof GraphError ? classifyAnswer({ status: error.status, ...error.answer }, { mode: tokens.mode }) : { outcome: "failed" as const }
+          if (verdict.outcome === "skipped") {
+            if (!skippedTypes.includes(type.folder)) skippedTypes.push(type.folder)
+            settle(type.folder, { outcome: "skipped", cause: verdict.cause, reason })
+            Object.assign(result(type.folder), { state: "skipped", reason })
+          } else {
+            recordFailure(outcome, error)
+            failures++
+            const entry = result(type.folder)
+            entry.failed++
+            if ((entry.errors ??= []).length < MAX_ITEM_ERRORS) entry.errors.push(reason)
+          }
+          this.write(job, reason, "warning")
+        }
+      } catch (caught) {
+        const error = caught instanceof OrganizationResolutionError || caught instanceof ScopeDiscoveryError ? caught.cause : caught
+        if (service.isolated && !signInEnded(error) && !network.signal.aborted) {
+          // A refusal, a pause longer than the bound or a request without an answer holds for every object of the type: the type ends, the backup goes on.
+          const refused = error instanceof GraphError && classifyAnswer({ status: error.status, ...error.answer }, { mode: tokens.mode }).outcome === "skipped"
+          if (refused || error instanceof ReadBudgetError || error instanceof RetryDelayError || error instanceof GraphUnansweredError || endedTypes.has(type.folder)) {
+            endType(type, error)
+            done++
+            return
+          }
+        }
         // Counted before any rethrow, so the job sees this cause whichever failure ends it.
         recordFailure(outcome, error)
         network.signal.throwIfAborted()
-        countAuthFailure(error)
+        if (!service.isolated) countAuthFailure(error, service.id)
         // An expired sign-in fails every remaining item the same way, so it stops the backup once.
-        if (error instanceof TokenError || (error instanceof GraphError && error.status === 401)) throw error
+        if (signInEnded(error) || (!service.isolated && error instanceof GraphError && error.status === 401)) throw error
         failures++
         const warning = `Could not back up "${displayName}": ${error instanceof Error ? error.message : String(error)}`
         if (error instanceof RequestTimeoutError) itemTimeoutWarnings.push(warning)
@@ -648,33 +978,126 @@ export class BackupEngine {
       job.progress = Math.round(10 + (done / Math.max(work.length, 1)) * 85)
       const left = remaining.get(type.folder)! - 1
       remaining.set(type.folder, left)
-      if (left === 0) {
+      if (left === 0 && !endedTypes.has(type.folder) && !settled.has(type.folder)) {
         result(type.folder).state = "saved"
         this.write(job, `Backed up ${counts[type.folder]} ${type.label}.`)
       }
     }, network.signal)
 
+    // Fairness: legacy work remains FIFO and serial. A large run releases its whole-job turn
+    // before streaming, then yields to queued tenants before each Graph page. A throttle in
+    // this run cannot hold the legacy queue for the large type's two-hour allowance.
+    if (mixed) {
+      // Publish ordinary coverage before the large phase, even if that phase crashes or is cancelled.
+      await commitManifest(ordinaryFolder, manifest(failures ? "CompletedWithWarnings" : "Success", this.now(), outcomesNow("Success", this.now(), true)), false)
+    }
+    let largeClaimed = false
+    if (largeTypes.length) {
+      releaseTurn()
+      try {
+        if (local || tokens.mode === "delegated") await largeStorage.ensureContainer(LARGE_BACKUP_CONTAINER)
+        await largeStorage.put(`${largeFolder}/${BACKUP_OWNER_FILE}`, JSON.stringify({ Source: "TenuVault Desktop", TenantId: request.tenantId.toLowerCase(), RunId: job.id, LargeInventory: { version: 1 }, ...(mixed ? { CompanionBackup: ordinaryFolder } : {}) }), undefined, true)
+        largeClaimed = true
+      } catch (error) {
+        network.signal.throwIfAborted()
+        for (const type of largeTypes) endType(type, error instanceof LargeStorageError ? error : new LargeStorageError(undefined, { cause: error }))
+      }
+    }
+    if (largeClaimed) stopped.manifest = (status, error, outcomes) => manifest(status, this.now(), outcomes, { Status: status, Error: error }, largeFolder)
+    const waitForTenants = () => this.queueTail
+    for (const type of largeTypes.filter(() => largeClaimed)) {
+      const entry = result(type.folder)
+      largeItems[type.folder] = { version: 1, count: 0, shards: 0, complete: false }
+      const limits = type.readBudget ?? { durationMs: LARGE_TYPE_MS, maxRequests: LARGE_TYPE_REQUESTS }
+      const typeController = new AbortController()
+      const typeSignal = AbortSignal.any([network.signal, typeController.signal])
+      // The type deadline covers uploads and external sorting as well as Graph reads.
+      const typeTimer = setTimeout(() => typeController.abort(new ReadBudgetError("The large type time budget was reached. This type was not fully read.")), limits.durationMs)
+      typeTimer.unref?.()
+      const budget = typeReadBudget(typeSignal, limits)
+      const { session } = serviceOf(type)
+      const boundedPages = async function* (path: string) {
+        // Every concurrent relationship iterator owns its request controls. The allowance and
+        // type signal remain shared across all pages, retries and relationships.
+        const pageControl: { current: ReadControl } = { current: {} }
+        const controls = { get signal() { return pageControl.current.signal }, beforeRequest: () => pageControl.current.beforeRequest?.() }
+        const iterator = session.pages(graphUrl(graphVersion(type), path, type.additionalReadVersions), { get signal() { return controls.signal }, beforeRequest: controls.beforeRequest, headers: type.headers, ...(path === listPath(type) ? { filter: type.filter } : {}) })
+        try {
+          for (;;) {
+            const next = await budget(async control => {
+              await withAbort(waitForTenants, control.signal!)
+              control.signal?.throwIfAborted()
+              pageControl.current = control
+              return iterator.next()
+            })
+            if (next.done) break
+            yield next.value as Item[]
+          }
+        } finally { await iterator.return(undefined) }
+      }
+      try {
+        largeItems[type.folder] = await captureLarge({
+          type, reader: {
+            get: path => budget(control => session.get<Item>(graphUrl(graphVersion(type), path, type.additionalReadVersions), type.headers, control)),
+            list: async () => { throw new Error("Large types must stream sub-collections") },
+          },
+          pages: boundedPages,
+          put: async (path, body) => {
+            try { await largeStorage.put(`${largeFolder}/${path}`, body, undefined, false, undefined, typeSignal) }
+            catch (error) {
+              typeSignal.throwIfAborted()
+              throw error instanceof LargeStorageError ? error : new LargeStorageError(undefined, { cause: error })
+            }
+            largeSizes[type.folder] = (largeSizes[type.folder] ?? 0) + Buffer.byteLength(body)
+          },
+          signal: typeSignal,
+          saved: () => { counts[type.folder]!++; entry.saved++; outcome.saved++ },
+          unread: () => { entry.failed++; failures++; entry.errors = ["Directory relationships were not read in full."] },
+        })
+        if (!largeItems[type.folder]!.complete) {
+          failedTypes.push(type.folder)
+          settle(type.folder, { outcome: "failed", error: "Some directory relationships could not be read in full." })
+        }
+        Object.assign(entry, { found: entry.saved, state: entry.failed ? "unreadable" : entry.saved ? "saved" : "empty" })
+        this.write(job, `Backed up ${entry.saved} ${type.label}.`)
+      } catch (error) {
+        network.signal.throwIfAborted()
+        // Directory Graph errors can echo profile values. Keep status for classification, but never
+        // publish the response text or error code into job logs, outcomes or diagnostics.
+        if (signInEnded(error)) throw new TokenError("Microsoft Graph sign-in ended during the directory read.")
+        const safeError = error instanceof LargeStorageError || error instanceof ReadBudgetError ? error
+          : error instanceof GraphError ? new GraphError("The directory collection could not be read in full.", error.status)
+          : new Error("The directory collection could not be read in full.")
+        // Even a refused continuation is incomplete, never a saved prefix of the collection.
+        endType(type, safeError)
+      } finally { clearTimeout(typeTimer) }
+    }
+
+    if (largeClaimed) {
+      try {
+        const ending = typesNow(false)
+        const saved = Object.values(counts).reduce((sum, count) => sum + count, 0)
+        const status = failures ? (saved ? "CompletedWithWarnings" : "Failed") : nothingRead(ending) ? "Failed" : "Success"
+        await commitManifest(largeFolder, manifest(status, this.now(), outcomesNow(status, this.now(), false), {}, largeFolder))
+      } catch (error) {
+        network.signal.throwIfAborted()
+        for (const type of largeTypes) endType(type, error instanceof LargeStorageError ? error : new LargeStorageError(undefined, { cause: error }))
+      }
+    }
     const ended = this.now()
     const totalPolicies = policyCount(counts)
     const saved = Object.values(counts).reduce((sum, count) => sum + count, 0)
     const inventory = Object.entries(counts).filter(([folder, count]) => count > 0 && typeForFolder(folder)?.inventory)
-    const metadata = manifest(failures > 0 ? (saved === 0 ? "Failed" : "CompletedWithWarnings") : "Success", ended)
+    // Every selected type was left out, so the backup holds nothing: that is a failure, although no single read failed.
+    // A run with failures keeps its status and its message as they were.
+    const ending = typesNow(false)
+    const unread = failures === 0 && nothingRead(ending) ? nothingReadReason(ending, { mode: tokens.mode, settingsPage: SERVICES_PAGE }) : null
+    const status = failures > 0 ? (saved === 0 ? "Failed" : "CompletedWithWarnings") : unread ? "Failed" : "Success"
+    const outcomes = outcomesNow(status, ended, false)
+    const metadata = manifest(status, ended, outcomes, unread ? { Error: unread } : {})
 
-    // Detach cancellation at the first manifest PUT, after cancellable token acquisition.
-    // Retention reads cannot delay the manifest, and a saved backup must not burn a retry slot.
-    network.signal.throwIfAborted()
-    const commitDeadline = deadline + MANIFEST_COMMIT_GRACE_MS
-    const commitController = new AbortController()
-    const commitTimer = setTimeout(() => commitController.abort(jobDeadlineError()), Math.max(0, commitDeadline - Date.now()))
-    commitTimer.unref?.()
-    const commitNetwork = new NetworkCircuit(3 * concurrency, commitController.signal, commitDeadline)
-    const commitStorage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, commitNetwork)
-    try {
-      // Once the PUT is sent it may land even when it reports a failure, so no failed manifest may follow it.
-      await commitStorage.put(`${backupFolder}/metadata.json`, JSON.stringify(metadata, null, 2), network, false, () => { stopped.committing = true })
-    } finally {
-      clearTimeout(commitTimer)
-    }
+    if (!isLargeBackup(backupFolder)) await commitManifest(backupFolder, metadata)
+    this.conclude(job, outcomes)
 
     // Only a complete backup may replace older ones: if policies could not be read (for
     // example after a permission change), keep every existing backup.
@@ -682,14 +1105,22 @@ export class BackupEngine {
     // The Backup Reader cannot delete from Azure Storage. The next backup with an admin's sign-in applies
     // retention to every backup of the tenant, Backup Reader backups included, with the same protections.
     const deletesAllowed = local || tokens.mode === "delegated"
-    if (!deletesAllowed && failures === 0 && (this.deps.retentionDays?.(job.tenantId) ?? 0) > 0) {
+    const complete = mixed ? coverageOf(outcomes.types.filter(type => typeForFolder(type.folder)?.volume !== "large")) === "complete" : failures === 0 && !unread && Object.values(largeItems).every(index => index.complete)
+    if (!deletesAllowed && complete && (this.deps.retentionDays?.(job.tenantId) ?? 0) > 0) {
       this.write(job, "Older backups were kept: the Backup Reader cannot delete from Azure Storage. The next backup made with an admin's sign-in removes expired ones.", "info")
-    } else if (deletesAllowed && failures === 0 && (this.deps.retentionDays?.(job.tenantId) ?? 0) > 0) {
+    } else if (deletesAllowed && complete && (this.deps.retentionDays?.(job.tenantId) ?? 0) > 0) {
       const retentionNetwork = new NetworkCircuit(3 * concurrency, signal, deadline)
       const retentionStorage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, retentionNetwork)
       try {
-        const unreadableOlder = await this.applyRetention(job, retentionStorage, backupFolder, restorableFolders(metadata), retentionNetwork.signal)
+        const covered = restorableFolders(metadata)
+        if (mixed && largeClaimed && coverageOf(outcomes.types.filter(type => typeForFolder(type.folder)?.volume === "large")) === "complete") for (const type of largeTypes) covered.add(type.folder)
+        const unreadableOlder = await this.applyRetention(job, retentionStorage, backupFolder, covered, retentionNetwork.signal)
         if (unreadableOlder > 0) retentionWarnings++
+        if (mixed && largeClaimed) {
+          const largeMetadata = { ...metadata, Scope: { Included: largeTypes.map(type => type.folder) } }
+          try { await this.applyRetention(job, largeStorage, largeFolder, coverageOf(outcomes.types.filter(type => typeForFolder(type.folder)?.volume === "large")) === "complete" ? restorableFolders(largeMetadata) : new Set(), largeNetwork.signal) }
+          catch (error) { this.write(job, `Large backup retention was skipped. ${error instanceof Error ? error.message : String(error)}`, "warning"); retentionWarnings++ }
+        }
       } catch (error) {
         retentionWarnings++
         if (signal.aborted || Date.now() >= deadline) {
@@ -703,7 +1134,7 @@ export class BackupEngine {
           this.write(job, `Could not remove old backups: ${(error instanceof Error ? error.message : String(error)).replace(/\.$/, "")}. They will be reconsidered on the next run.`, "warning")
         }
       }
-    } else if (failures > 0) {
+    } else if (!complete) {
       this.write(job, "Older backups were kept because this backup is incomplete.", "info")
     }
 
@@ -711,13 +1142,21 @@ export class BackupEngine {
     job.totalPolicies = totalPolicies
     results.totalPolicies = totalPolicies
     job.failedTypes = [...failedTypes]
-    job.status = failures > 0 && saved === 0 ? "Failed" : "Completed"
-    if (job.status === "Failed" && !outcome.answered && !outcome.otherFailures) job.unreachable = true
+    job.status = status === "Failed" ? "Failed" : "Completed"
+    // Types that were left out are an answer, or were left out before any request: only failed reads can mean that Microsoft was out of reach.
+    if (job.status === "Failed" && failures > 0 && !outcome.answered && !outcome.otherFailures) job.unreachable = true
     if (maskedItems.length) {
       this.write(job, `Saved ${maskedItems.length} object${maskedItems.length === 1 ? "" : "s"} with encrypted OMA-URI values masked (****): Microsoft refused the plain-text read, so these copies cannot be restored. A manual backup with your sign-in captures them when Microsoft returns the values.`, "warning")
     }
     const warnings = failures + retentionWarnings + (maskedItems.length ? 1 : 0)
     results.warnings = warnings
+    if (unread) {
+      // The reason is the job's error, so the result, the schedule and the notification show it like any other failure's.
+      job.progressMessage = "Backup failed: nothing could be read"
+      job.exception = unread
+      this.write(job, `Backup failed: ${unread.charAt(0).toLowerCase()}${unread.slice(1)}`)
+      return
+    }
     job.progressMessage =
       job.status === "Failed" ? "Backup failed: no policies could be saved" : warnings > 0 ? `Backup completed with ${warnings} warning${warnings === 1 ? "" : "s"}` : "Backup completed successfully"
     const extra = inventory.map(([folder, count]) => ` and ${count} ${typeForFolder(folder)!.label}`).join("")
@@ -742,7 +1181,7 @@ export class BackupEngine {
     const storage = new BlobWriter(this.deps.fetch, request.storageAccountName, token, network)
     const recorded = metadata.Status === "Cancelled" ? "cancelled" : "failed"
     try {
-      await storage.put(`${job.backupFolder}/metadata.json`, JSON.stringify(metadata, null, 2), undefined, true)
+      await storage.put(`${metadata.BackupFolder ?? job.backupFolder}/metadata.json`, JSON.stringify(metadata, null, 2), undefined, true)
       this.write(job, `Recorded this backup as ${recorded}. The policies it saved stay in storage but are never offered as a complete backup.`)
     } catch (error) {
       if (error instanceof BlobClaimError) this.write(job, "This backup already has a manifest, so it was left as it is.")
@@ -759,8 +1198,9 @@ export class BackupEngine {
   /**
    * Deletes backup folders older than the retention period, never the one just written, and never the
    * newest backup that holds a type the current backup left out: a backup of fewer types must not
-   * age out the only copy of the others. Only this tenant's backups are considered: another
-   * tenant's backups and backups without readable metadata are never deleted. A manifest that
+   * age out the only copy of the others. Another tenant's backups are never deleted.
+   * Owned remnants expire after seven extra recovery days. Unverifiable remnants stay for manual
+   * review. Ordinary backups with no companion keep their existing retention rules. A manifest that
    * names no tenant is placed by the folder's ownership marker. Backups that record no tenant in
    * either count as this tenant's unless the container also holds a backup recorded as another
    * tenant's, or one whose metadata or marker cannot be read.
@@ -769,10 +1209,14 @@ export class BackupEngine {
     const days = this.deps.retentionDays?.(job.tenantId) ?? 0
     if (days <= 0) return 0
     const cutoff = this.now().getTime() - days * 24 * 60 * 60 * 1000
-    const { prefixes } = await storage.list("backup-", "/")
+    // Each storage class retains its own coverage, so large discovery cannot block ordinary deletion.
+    const ordinary = isLargeBackup(current) ? { prefixes: [] } : await storage.list("backup-", "/")
+    const large = isLargeBackup(current) ? await storage.list("backup-large-", "", LARGE_BACKUP_CONTAINER, true) : { blobs: [] }
+    const largePrefixes = [...new Set(large.blobs.map(name => `${name.split("/")[0]}/`))].filter(isLargeBackup)
+    const prefixes = [...ordinary.prefixes, ...largePrefixes]
     const backups = prefixes
       .map((prefix) => {
-        const match = /^backup-(\d{4})-(\d{2})-(\d{2})-(\d{2})(\d{2})(\d{2})\/$/.exec(prefix)
+        const match = /^backup-(?:large-)?(\d{4})-(\d{2})-(\d{2})-(\d{2})(\d{2})(\d{2})\/$/.exec(prefix)
         if (!match || prefix === `${current}/`) return null
         const [, y, mo, d, h, mi, se] = match.map(Number) as number[]
         return { prefix, time: Date.UTC(y!, mo! - 1, d!, h!, mi!, se!) }
@@ -783,7 +1227,7 @@ export class BackupEngine {
     // Who each backup belongs to. Every metadata file is read first, because backups from versions
     // that did not record the tenant count as this tenant's only while no backup names another one.
     const tenant = job.tenantId.toLowerCase()
-    const owners: Array<{ metadata: Record<string, unknown> | null; owner: "this" | "other" | "untagged" } | null> = Array.from({ length: backups.length }, () => null)
+    const owners: Array<{ metadata: Record<string, unknown> | null; owner: "this" | "other" | "untagged"; claim?: OwnershipFile } | null> = Array.from({ length: backups.length }, () => null)
     const unreadable = new Set<number>()
     let unreadableReason = ""
     // Metadata or a marker that cannot be opened (an Azure backup sealed by an earlier version with a
@@ -800,17 +1244,22 @@ export class BackupEngine {
       }
     }
     await pool(backups.map((backup, index) => ({ backup, index })), CONCURRENCY, async ({ backup, index }) => {
-      const { manifest, owner } = await resolveBackupOwnership((file) => readFile(`${backup.prefix}${file}`), tenant)
+      let claim: OwnershipFile | undefined
+      const { manifest, owner } = await resolveBackupOwnership(async (file) => {
+        const read = await readFile(`${backup.prefix}${file}`)
+        if (file === BACKUP_OWNER_FILE) claim = read
+        return read
+      }, tenant)
       const failure = manifest.kind === "unreadable" ? manifest.error : owner.kind === "unreadable" ? owner.error : null
       if (failure !== null) {
         unreadable.add(index)
         unreadableReason ||= failure instanceof Error ? failure.message : String(failure)
         return
       }
-      // A folder without a manifest (running, stopped or older) is never deleted, but its marker
-      // still says whether another tenant uses the container.
+      // The marker places unfinished folders too. Remnant cleanup requires a separate app claim check.
       owners[index] = {
         metadata: manifest.kind === "found" ? manifest.metadata : null,
+        claim,
         owner: owner.kind === "owned" ? "this" : owner.kind === "other" ? "other" : "untagged",
       }
     }, signal)
@@ -825,51 +1274,106 @@ export class BackupEngine {
     let unowned = 0
     let protectedKept = 0
     let partlyRemoved = 0
-    for (const [index, backup] of backups.entries()) {
-      const entry = owners[index]
-      if (!entry?.metadata || entry.owner === "other" || (entry.owner === "untagged" && shared)) {
-        if (backup.time < cutoff && !unreadable.has(index)) unowned++
-        continue
-      }
-      const metadata = entry.metadata
-      let holdsUncovered = false
-      // Only a backup that read everything may satisfy coverage: one that finished with
-      // warnings may miss items in any folder it appears to hold. Backups recorded before
-      // failures were counted carry no Failures value and count by their status alone.
-      const status = String(metadata.Status ?? "").toLowerCase()
-      const complete = (status === "success" || status === "succeeded") && (metadata.Failures === undefined || metadata.Failures === 0)
-      // A folder with masked values does not satisfy coverage, so the newest backup with the plain values stays.
-      for (const folder of complete ? restorableFolders(metadata) : []) {
-        if (uncovered.delete(folder)) holdsUncovered = true
-      }
-      if (backup.time >= cutoff) continue
-      if (holdsUncovered) {
-        kept++
-        continue
-      }
-      const { blobs } = await storage.list(backup.prefix)
-      // The manifest goes first: a delete that stops at a protected file must not leave a
-      // metadata.json that still reports the backup as complete. A protected manifest stops
-      // before any policy file is touched.
-      const manifest = `${backup.prefix}metadata.json`
-      const marker = `${backup.prefix}${BACKUP_OWNER_FILE}`
-      let deleted = 0
-      try {
-        // Keep ownership until every policy is gone, including when a protected policy stops deletion.
-        for (const blob of [...blobs.filter((name) => name === manifest), ...blobs.filter((name) => name !== manifest && name !== marker), ...blobs.filter((name) => name === marker)]) {
-          await storage.delete(blob)
-          deleted++
-        }
-      } catch (error) {
-        // Provider retention wins over local retention: the backup stays, and nothing here
-        // tries to shorten a policy or clear a hold to make the delete succeed.
-        if (!(error instanceof ProtectedBlobError)) throw error
-        protectedKept++
-        if (deleted > 0) partlyRemoved++
-        continue
-      }
-      removed++
+    const remnants = { deleted: 0, deletedBytes: 0, kept: 0, keptBytes: 0, unowned: 0, unownedBytes: 0 }
+    const reportRemnants = () => {
+      if (remnants.deleted || remnants.kept || remnants.unowned) this.write(job, `Remnant cleanup: deleted ${remnants.deleted} halves (${remnants.deletedBytes} bytes); kept ${remnants.kept} owned halves (${remnants.keptBytes} bytes) for recovery or storage protection; kept ${remnants.unowned} unverified halves (${remnants.unownedBytes} bytes) for manual review. Recovery grace is ${REMNANT_RECOVERY_DAYS} days after the ${days}-day retention period.`, remnants.unowned ? "warning" : "info")
     }
+    try {
+      for (const [index, backup] of backups.entries()) {
+        const entry = owners[index]
+        const metadata = entry?.metadata
+        let companion: Record<string, unknown> | null = null
+        const companionId = metadata?.CompanionBackup
+        const paired = companionId !== undefined || metadata?.LargeBackupOutcomes !== undefined
+        let validPair = false
+        if (paired && typeof companionId === "string" && isBackupName(companionId) && isLargeBackup(companionId) !== isLargeBackup(backup.prefix)) {
+          try { companion = await storage.readJson(`${companionId}/metadata.json`) }
+          catch { this.write(job, `Kept mixed backup ${backup.prefix}: its companion is unreadable.`, "warning"); continue }
+          validPair = matchingCompanions(backup.prefix.slice(0, -1), metadata!, companionId, companion) && completeHalf(metadata) && completeHalf(companion)
+        }
+        // Older standalone manifests did not record Coverage, but successful complete indexes
+        // still follow their original retention rule. Reciprocal pairs require the stricter check.
+        const standaloneComplete = metadata && ["success", "succeeded"].includes(String(metadata.Status).toLowerCase())
+          && (metadata.Failures === undefined || metadata.Failures === 0) && metadata.Coverage !== "Incomplete"
+          && Object.values(metadata.LargeItems ?? {}).every((index: any) => index.complete === true)
+        const remnant = !metadata || (paired && !validPair) || (isLargeBackup(backup.prefix) && !standaloneComplete)
+        if (remnant && !unreadable.has(index)) {
+          const marker = entry?.claim ?? await readFile(`${backup.prefix}${BACKUP_OWNER_FILE}`)
+          const claim = marker.kind === "found" ? marker.value as Record<string, unknown> : null
+          const owned = ownedRemnant(backup.prefix.slice(0, -1), tenant, claim, metadata)
+          const listing = await storage.listFolder(backup.prefix)
+          const bytes = [...listing.sizes.values()].reduce((sum, size) => sum + size, 0)
+          if (!owned) { remnants.unowned++; remnants.unownedBytes += bytes; if (backup.time < cutoff) unowned++; continue }
+          if (backup.time >= cutoff - REMNANT_RECOVERY_DAYS * 86400_000) { remnants.kept++; remnants.keptBytes += bytes; continue }
+          let remaining = bytes
+          try {
+            const markerName = `${backup.prefix}${BACKUP_OWNER_FILE}`, manifestName = `${backup.prefix}metadata.json`
+            // Keep the ownership claim until the last payload has gone, so a later pass can finish.
+            for (const name of [...listing.blobs.filter(name => name === manifestName), ...listing.blobs.filter(name => name !== manifestName && name !== markerName), ...listing.blobs.filter(name => name === markerName)]) {
+              await storage.delete(name)
+              const size = listing.sizes.get(name) ?? 0
+              remaining -= size
+              remnants.deletedBytes += size
+            }
+            remnants.deleted++
+          } catch (error) {
+            remnants.kept++; remnants.keptBytes += remaining
+            if (!(error instanceof ProtectedBlobError)) throw error
+          }
+          continue
+        }
+        if (!metadata || !entry || entry.owner === "other" || (entry.owner === "untagged" && shared)) {
+          if (backup.time < cutoff && !unreadable.has(index)) unowned++
+          continue
+        }
+        if (paired) {
+          // The ordinary half alone coordinates complete pairs. Coverage protects both halves.
+          if (!validPair || isLargeBackup(backup.prefix)) continue
+          if (Date.parse(parseBackupName(String(companionId))!.timestamp) >= cutoff) continue
+          if ([...restorableFolders(companion!)].some(folder => !covered.has(folder))) continue
+        }
+        let holdsUncovered = false
+        // Only a backup that read everything may satisfy coverage: one that finished with
+        // warnings may miss items in any folder it appears to hold. Backups recorded before
+        // failures were counted carry no Failures value and count by their status alone.
+        const status = String(metadata.Status ?? "").toLowerCase()
+        const complete = (status === "success" || status === "succeeded") && (metadata.Failures === undefined || metadata.Failures === 0)
+        // A folder with masked values does not satisfy coverage, so the newest backup with the plain values stays.
+        for (const folder of complete ? restorableFolders(metadata) : []) {
+          if (uncovered.delete(folder)) holdsUncovered = true
+        }
+        if (backup.time >= cutoff) continue
+        if (holdsUncovered) {
+          kept++
+          continue
+        }
+        const unitPrefixes = [backup.prefix, ...(companion ? [`${companionId}/`] : [])]
+        // Settle both inventories before the first delete, including large storage access.
+        const unitListings = await Promise.all(unitPrefixes.map(prefix => storage.listFolder(prefix)))
+        const blobs = unitListings.flatMap(listing => listing.blobs)
+        // The manifest goes first: a delete that stops at a protected file must not leave a
+        // metadata.json that still reports the backup as complete. A protected manifest stops
+        // before any policy file is touched.
+        const manifests = new Set(unitPrefixes.map(prefix => `${prefix}metadata.json`))
+        const markers = new Set(unitPrefixes.map(prefix => `${prefix}${BACKUP_OWNER_FILE}`))
+        let deleted = 0
+        try {
+          // Keep ownership until every policy is gone, including when a protected policy stops deletion.
+          for (const blob of [...blobs.filter((name) => manifests.has(name)), ...blobs.filter((name) => !manifests.has(name) && !markers.has(name)), ...blobs.filter((name) => markers.has(name))]) {
+            await storage.delete(blob)
+            deleted++
+          }
+        } catch (error) {
+          // Provider retention wins over local retention: the backup stays, and nothing here
+          // tries to shorten a policy or clear a hold to make the delete succeed.
+          if (!(error instanceof ProtectedBlobError)) throw error
+          protectedKept++
+          if (deleted > 0) partlyRemoved++
+          continue
+        }
+        removed++
+      }
+    } finally { reportRemnants() }
     if (removed > 0) this.write(job, `Removed ${removed} backup${removed === 1 ? "" : "s"} older than ${days} days.`, "info")
     if (kept > 0) this.write(job, `Kept ${kept} older backup${kept === 1 ? "" : "s"} because ${kept === 1 ? "it holds" : "they hold"} the newest copy of types this backup leaves out.`, "info")
     if (protectedKept > 0) {
@@ -877,7 +1381,7 @@ export class BackupEngine {
     }
     if (unowned > 0) this.write(job, `Kept ${unowned} older backup${unowned === 1 ? "" : "s"} not recorded as this tenant's (another tenant's, without readable metadata, or from an earlier version in a container another tenant also uses).`, "info")
     if (unreadable.size > 0) this.write(job, `Could not read the metadata of ${unreadable.size} older backup${unreadable.size === 1 ? "" : "s"}: ${unreadableReason.replace(/\.$/, "")}. ${unreadable.size === 1 ? "It was" : "They were"} left in place.`, "warning")
-    return unreadable.size
+    return unreadable.size + remnants.unowned
   }
 
   /** Adds a line to the log, in local time; a level also lists it among the run's notices. */
@@ -958,8 +1462,8 @@ export async function verifyStorageAccess(
   })
 }
 
-function jobDeadlineError(): Error {
-  return new Error("Backup timed out after the 30 minute job deadline. Retry the backup.")
+function jobDeadlineError(duration = JOB_DEADLINE_MS): Error {
+  return new Error(`Backup timed out after the ${duration === LARGE_JOB_MS ? "8 hour" : "30 minute"} job deadline. Retry the backup.`)
 }
 
 /** backup-yyyy-MM-dd-HHmmss in UTC, the runbook's folder format. */
@@ -1005,7 +1509,7 @@ function uniqueName(name: string, id: string, used: Set<string>): string {
 }
 
 
-/** The permissions in the run's Graph token, read only when an opt-in module needs checking. */
+/** The permissions in the run's Graph token, read only when a service with a token pre-check needs checking. */
 async function moduleGrants(tokens: RunTokens, needed: boolean) {
   if (!needed) return undefined
   try {
@@ -1018,5 +1522,5 @@ async function moduleGrants(tokens: RunTokens, needed: boolean) {
 
 /** Saved objects that are configuration, leaving out tenant inventory such as Autopilot devices. */
 function policyCount(counts: Record<string, number>): number {
-  return Object.entries(counts).reduce((sum, [folder, count]) => (typeForFolder(folder)?.inventory ? sum : sum + count), 0)
+  return Object.entries(counts).reduce((sum, [folder, count]) => (typeForFolder(folder) && !backupTypeUse(typeForFolder(folder)!).policyCount ? sum : sum + count), 0)
 }

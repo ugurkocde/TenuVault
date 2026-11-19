@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { accountStore } from "../src/main/auth/stores"
 import type { SecureStore } from "../src/main/storage/secure-store"
 
@@ -19,6 +19,21 @@ function fakeStore(initial: Record<string, string>) {
 const valid = (tenantId: string) => JSON.stringify({ tenantId, clientId: "33333333-3333-3333-3333-333333333333", username: "admin@contoso.com", homeAccountId: "home-oid.home-tid" })
 
 describe("accountStore with unreadable stored accounts", () => {
+  it("announces each identity mutation synchronously after writing it, including a change back", () => {
+    const { store } = fakeStore({})
+    const observed: Array<string | null> = []
+    const changed = vi.fn((tenant: string) => { observed.push(accounts.get(tenant)?.homeAccountId ?? null) })
+    const accounts = accountStore(store, changed)
+    const first = JSON.parse(valid(TENANT_A))
+    accounts.set(first)
+    accounts.set({ ...first, homeAccountId: "other-account" })
+    accounts.set(first)
+    accounts.delete(TENANT_A)
+    accounts.set(first)
+    expect(observed).toEqual(["home-oid.home-tid", "other-account", "home-oid.home-tid", null, "home-oid.home-tid"])
+    expect(changed).toHaveBeenCalledTimes(5)
+  })
+
   it("reads a corrupt account as not signed in instead of throwing, so it can still be deleted", () => {
     const { store, values } = fakeStore({ [`auth.account.${TENANT_A}`]: "{corrupt" })
     const accounts = accountStore(store)

@@ -1,5 +1,7 @@
+import { signInErrorRow } from "../../shared/sign-in-errors"
 import type { BackupReaderState, BackupReaderStatus } from "../../shared/ipc"
 import { typeForFolder } from "../../shared/intune/registry"
+import { readerScriptArguments } from "../../shared/services/manifest"
 
 export const READER_GUIDE_URL = "https://docs.tenuvault.com/backups/backup-reader/"
 export const READER_CA_GUIDE_URL = "https://docs.tenuvault.com/security/conditional-access/"
@@ -17,14 +19,30 @@ export function readerView(state: BackupReaderState | null, now = Date.now()) {
   // A waiting renewal does not silence the warning: until it is uploaded and verified, the old certificate still expires.
   const expiry = verified && daysLeft !== null && daysLeft <= RENEW_DAYS ? (daysLeft > 0 ? "soon" as const : "expired" as const) : null
   // A renewal or another computer's certificate goes onto the same app registration. The script sets
-  // exactly the permissions it is given, so a reader with the device inventory permission keeps it.
-  const inventory = reader?.verifiedRoles?.includes("DeviceManagementManagedDevices.Read.All") ? " -IncludeDeviceCategories" : ""
-  const conditionalAccess = reader?.verifiedRoles?.includes("Policy.Read.All") ? " -IncludeConditionalAccess" : ""
+  // exactly the permissions it is given, so the command asks for the ones the reader has. A first
+  // setup asks for the services the tenant backs up.
   const command = verified
-    ? `./New-TenuVaultBackupReader.ps1 -CertificatePath <exported .cer> -AppId ${reader.clientId}${inventory}${conditionalAccess}`
-    : "./New-TenuVaultBackupReader.ps1 -CertificatePath <exported .cer>"
+    ? `./New-TenuVaultBackupReader.ps1 -CertificatePath <exported .cer> -AppId ${reader.clientId}${readerScriptArguments(reader.verifiedRoles ?? [])}`
+    : `./New-TenuVaultBackupReader.ps1 -CertificatePath <exported .cer>${state?.setupArguments ?? ""}`
   const excluded = (reader?.excludedTypes ?? []).map((folder) => typeForFolder(folder)?.label ?? folder)
-  return { reader, verified, waiting, daysLeft, expiry, command, excluded, storageAccountName: state?.storageAccountName, canAct: !!state?.supported && !!state.available }
+  return { reader, verified, waiting, daysLeft, expiry, command, excluded, roleChange: roleChangeNotice(reader), storageAccountName: state?.storageAccountName, canAct: !!state?.supported && !!state.available }
+}
+
+/**
+ * What to tell the admin when the reader's permissions differ from the verified ones, or null. The
+ * wording matches readerErrorGuidance, which adds who to ask before verifying.
+ */
+export function roleChangeNotice(reader: BackupReaderStatus | null): string | null {
+  const change = reader?.roleChange
+  if (!change) return null
+  const parts = [change.added.length ? `added ${change.added.join(", ")}` : "", change.removed.length ? `removed ${change.removed.join(", ")}` : ""].filter(Boolean)
+  return `The Backup Reader's Microsoft Graph permissions changed since they were verified: ${parts.join("; ")}. Scheduled backups keep running and read only what the verified permissions still cover. Verify the Backup Reader again to use the change.`
+}
+
+/** The left-out types as part of a sentence; a long list names the first three and counts the rest. */
+export function excludedSummary(excluded: readonly string[]): string {
+  if (excluded.length <= 3) return excluded.join(" and ")
+  return `${excluded.slice(0, 3).join(", ")} and ${excluded.length - 3} more types`
 }
 
 /** The storage command an Azure administrator runs for the reader; values the app cannot know stay placeholders. */
@@ -37,10 +55,10 @@ export function readerEntraRequest(command: string, renewal: boolean): string {
   return [
     renewal
       ? "Please upload the renewal certificate for the TenuVault Backup Reader app registration."
-      : "Please create the TenuVault Backup Reader app registration for scheduled Intune backups.",
+      : "Please create the TenuVault Backup Reader app registration for scheduled backups.",
     "The attached .cer file is a public certificate only; the private key stays on my computer.",
     `Run: ${command} (add -IncludeDeviceCategories or -IncludeConditionalAccess only if we agreed on it).`,
-    "The script creates a single-tenant app registration with exactly five read-only Graph application permissions, uploads the certificate, removes any other permission on that app, and grants admin consent.",
+    "The script creates a single-tenant app registration with read-only Microsoft Graph application permissions only (five for Intune; the page below lists them for every service), uploads the certificate, removes any other permission on that app, and grants admin consent.",
     `Details and the permission list: ${READER_GUIDE_URL}`,
     "Please send me the application (client) ID and certificate thumbprint it prints.",
   ].join("\n")
@@ -59,13 +77,14 @@ export function readerAzureRequest(storageCommand: string, storageAccountName: s
 /** The next step and docs page for a Backup Reader error or warning, so a failure is actionable rather than just red. */
 export function readerErrorGuidance(message: string): { hint: string; url: string; label: string } {
   const text = message.toLowerCase()
-  if (text.includes("aadsts700027") || text.includes("does not know this certificate")) {
+  const guidance = new Set((message.toUpperCase().match(/AADSTS\d+/g) ?? []).map(code => signInErrorRow(code)?.readerGuidance))
+  if (guidance.has("certificate") || text.includes("does not know this certificate")) {
     return { hint: "The certificate is not on the app registration yet, or Microsoft has not applied it. Ask your Entra administrator to run the setup script, wait a few minutes, then verify again.", url: `${READER_GUIDE_URL}#troubleshooting`, label: "Open troubleshooting" }
   }
-  if (text.includes("aadsts7000222") || text.includes("certificate has expired")) {
+  if (guidance.has("renewal") || text.includes("certificate has expired")) {
     return { hint: "Renew the certificate above, have your Entra administrator upload it, then verify.", url: `${READER_GUIDE_URL}#renew-the-certificate`, label: "Open the renewal guide" }
   }
-  if (text.includes("aadsts53003") || text.includes("workload identities blocked")) {
+  if (guidance.has("conditionalAccess") || text.includes("workload identities blocked")) {
     return { hint: "Your Conditional Access administrator can see which workload identity policy blocked this computer's network.", url: READER_CA_GUIDE_URL, label: "Open the Conditional Access guide" }
   }
   if (text.includes("permissions changed since they were verified")) {
@@ -73,6 +92,9 @@ export function readerErrorGuidance(message: string): { hint: string; url: strin
   }
   if (text.includes("beyond read-only backup") || text.includes("missing permissions or their admin consent")) {
     return { hint: "Your Entra administrator resets the app to exactly the read-only list by running the setup script again. Then verify.", url: `${READER_GUIDE_URL}#set-it-up`, label: "Open the setup steps" }
+  }
+  if (text.includes("which is all this tenant backs up")) {
+    return { hint: "The reader was set up for other services than this tenant backs up. Your Entra administrator runs the setup script with the services named above. Then verify.", url: `${READER_GUIDE_URL}#permissions`, label: "See the permissions per service" }
   }
   if (text.includes("storage") || text.includes("container") || text.includes("write backups to")) {
     return { hint: "Your Azure administrator runs the storage script above (or checks the Backup Writer assignment and firewall), then you test again.", url: "https://docs.tenuvault.com/getting-started/create-storage-account/#optional-let-the-backup-reader-write-backups", label: "Open the storage steps" }
@@ -86,7 +108,7 @@ export function readerErrorGuidance(message: string): { hint: string; url: strin
  * Ordinary first sign-ins and consent prompts get no advertising.
  */
 export function suggestsBackupReader(message: string): boolean {
-  return /AADSTS70044|AADSTS50076|AADSTS50079/i.test(message)
+  return (message.toUpperCase().match(/AADSTS\d+/g) ?? []).some(code => signInErrorRow(code)?.suggestReader === true)
 }
 
 /**

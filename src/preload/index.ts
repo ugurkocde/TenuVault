@@ -48,6 +48,7 @@ const bridge: TenuVaultPreloadBridge = {
     signIn: (tenant, clientId, options) => invoke("auth:signIn", tenant, clientId, options),
     signOut: (tenantId) => invoke("auth:signOut", tenantId),
     accounts: () => invoke("auth:accounts"),
+    onAccountsChanged: (listener) => subscribe<string>("auth:accountsChanged", listener),
     reauthenticate: (tenantId, clientId, scope) => invoke("auth:reauthenticate", tenantId, clientId, scope),
     cancelSignIn: () => invoke("auth:cancelSignIn"),
     copySignInLink: (kind) => invoke("auth:copySignInLink", kind),
@@ -67,6 +68,8 @@ const bridge: TenuVaultPreloadBridge = {
     onSavedChanged: (listener) => subscribe<void>("proxy:savedChanged", () => listener()),
   },
   setup: {
+    checkPermissions: (tenantId, clientId, choice) => invoke("setup:checkPermissions", tenantId, clientId, choice),
+    saveServices: (tenantId, clientId, choice) => invoke("setup:saveServices", tenantId, clientId, choice),
     createRegistration: (options) => invoke("setup:createRegistration", options),
     cancelCreateRegistration: () => invoke("setup:cancelCreateRegistration"),
     cancelSignIn: () => invoke("setup:cancelSignIn"),
@@ -91,8 +94,19 @@ const bridge: TenuVaultPreloadBridge = {
     liveRuns: (tenantId) => invoke("backups:liveRuns", tenantId),
   },
   services: {
+    previewAddition: (tenantId, missing) => invoke("services:previewAddition", tenantId, missing),
+    confirmAddition: (tenantId, previewId) => invoke("services:confirmAddition", tenantId, previewId),
+    cancelAddition: (tenantId) => invoke("services:cancelAddition", tenantId),
     status: (tenantId, clientId, refresh) => invoke("services:status", tenantId, clientId, refresh === true),
-    setEnabled: (tenantId, clientId, id, enabled) => invoke("services:setEnabled", tenantId, clientId, id, enabled),
+    setEnabled: (tenantId, clientId, id, enabled, confirmation) => invoke("services:setEnabled", tenantId, clientId, id, enabled, confirmation),
+    setAccess: (tenantId, id, access) => invoke("services:setAccess", tenantId, id, access),
+    setArea: (tenantId, id, area, enabled) => invoke("services:setArea", tenantId, id, area, enabled),
+  },
+  health: {
+    report: (tenantId) => invoke("health:report", tenantId),
+    check: (tenantId, again) => invoke("health:check", tenantId, again === true),
+    acknowledge: (tenantId, receipt) => invoke("health:acknowledge", tenantId, receipt),
+    onChanged: (listener) => subscribe<string>("health:changed", listener),
   },
   license: {
     trialWorkflowsConfigured: (tenantId) => invoke("license:trialWorkflowsConfigured", tenantId),

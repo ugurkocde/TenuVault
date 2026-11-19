@@ -61,6 +61,8 @@ import { TenantAccessNotice } from "./TenantAccessNotice"
 import { CisBenchmarksNavigation } from "./CisBenchmarksNavigation"
 import { NAV_PLAN_FEATURES, NavPlanBadge } from "./NavPlanBadge"
 import { FrameworkNavigation } from "./FrameworkNavigation"
+import { ServicesNavigation } from "./ServicesNavigation"
+import { parseBackupService } from "../lib/backup-service"
 import { OibJobIndicator } from "./oib/JobIndicator"
 
 interface NavItem {
@@ -370,7 +372,8 @@ function useOverflowing(ref: RefObject<HTMLElement | null>): boolean {
 
 export function DesktopLayout() {
   const { status: licenseStatus } = useLicense()
-  const { pathname } = useLocation()
+  const { pathname, search } = useLocation()
+  const serviceFilter = parseBackupService(new URLSearchParams(search).get("service"))
   const appBackupPage = isAppBackupPath(pathname)
   const tenants = useTenants()
   useScoreInvalidation()
@@ -413,7 +416,7 @@ export function DesktopLayout() {
 
   const renderItem = (item: NavItem, depth = 0) => {
     const active = item.href
-      ? pathname.startsWith(item.href)
+      ? pathname.startsWith(item.href) && (item.href !== "/portal/backup" || serviceFilter === "all")
       : Boolean(item.children?.some((child) => child.href && pathname.startsWith(child.href)))
 
     if (item.children) {
@@ -487,7 +490,7 @@ export function DesktopLayout() {
 
         {/* min-h-0 lets the list shrink and scroll inside the panel instead of pushing past it. Only while it
             scrolls does it keep the wheel to itself; otherwise the wheel over the sidebar scrolls the page. */}
-        <nav ref={navRef} aria-label="Main navigation" className={cn("min-h-0 flex-1 space-y-0.5 overflow-y-auto px-3 py-2", navOverflowing && "overscroll-contain")}>{navigation.map((item) => renderItem(item))}<CisBenchmarksNavigation linkClass={(active) => linkClass(active)} /><FrameworkNavigation /></nav>
+        <nav ref={navRef} aria-label="Main navigation" className={cn("min-h-0 flex-1 space-y-0.5 overflow-y-auto px-3 py-2", navOverflowing && "overscroll-contain")}>{navigation.map((item) => <div key={item.name}>{renderItem(item)}{item.href === "/portal/backup" && <ServicesNavigation linkClass={linkClass} />}</div>)}<CisBenchmarksNavigation linkClass={(active) => linkClass(active)} /><FrameworkNavigation /></nav>
 
         <OibJobIndicator />
         <div className="space-y-1 p-3">

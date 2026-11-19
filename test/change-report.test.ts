@@ -1,3 +1,5 @@
+import { DEFENDER_TYPES } from "../src/shared/intune/defender"
+import { ENTRA_5C_TYPES } from "../src/shared/intune/entra"
 import { describe, expect, it } from "vitest"
 import { buildChangeReport, changeReportJson, changeReportMarkdown, describeAssignment, describeValue, publicAuditNote, reportFileName, reportTitle, summaryLine, type ReportAudit } from "../src/shared/reports/change-report"
 import { buildChangeReportDocument } from "../src/shared/reports/change-report-html"
@@ -10,7 +12,7 @@ import type { BackupSummary } from "../src/portal/components/backup/types"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
 
-const base = { tenant: "Current Tenant", tenantId: "current-tenant", detectedAt: "2026-11-06T07:00:00Z", fromBackup: "backup-2026-11-05-020000", toBackup: "backup-2026-11-06-020000", description: "", impact: "", affectedPolicies: 1, affectedDevices: 0 }
+const base = { tenant: "Current Tenant", tenantId: "current-tenant", detectedAt: "2026-11-06T07:00:00Z", fromBackup: "backup-2026-11-05-020000", toBackup: "backup-2026-11-06-020000", description: "", impact: "", affectedPolicies: 1, affectedDevices: 0, backupFile: "ConfigurationPolicies/Policy.json" }
 
 function drift(overrides: Partial<Drift>): Drift {
   return { id: `drift-${Math.random()}`, severity: "info", type: "Settings Catalog policy", configName: "Policy", configId: "id", changeType: "modified", ...base, ...overrides } as Drift
@@ -60,6 +62,49 @@ describe("change report model", () => {
     expect(report.otherActivity).toEqual([expect.objectContaining({ target: "Undone change", who: "admin@contoso.test" })])
     expect(report.summary).toEqual({ added: 1, modified: 1, deleted: 1, critical: 0, attributed: 2 })
     expect(summaryLine(report)).toBe("1 changed, 1 added, 1 deleted; 2 of 3 with matching audit events.")
+  })
+
+  for (const resourceId of [null, "shared-id"]) it(`attributes matching IDs and names only within the type's audit service (${resourceId ?? "name"})`, () => {
+    const intune = auditEvent("intune", "2026-11-05T10:00:00Z", resourceId, "Finance")
+    const conditionalAccess = { ...intune, auditId: "ca", source: "Conditional Access", actorUpn: "ca-admin@contoso.test" }
+    const report = buildChangeReport(result([
+      drift({ type: "Authentication contexts", configId: "shared-id", configName: "Finance", backupFile: "AuthenticationContexts/Finance.json" }),
+      drift({ configId: "shared-id", configName: "Finance", backupFile: "ConfigurationPolicies/Finance.json" }),
+      drift({ type: "Conditional Access policies", configId: "shared-id", configName: "Finance", backupFile: "ConditionalAccessPolicies/Finance.json" }),
+    ]), { changes: [intune, conditionalAccess] }, options)
+    expect(report.items.find(item => item.type === "Authentication contexts")?.activity).toEqual([])
+    expect(report.items.find(item => item.type === "Settings Catalog policy")?.activity).toEqual([expect.objectContaining({ source: "Intune", who: "admin@contoso.test" })])
+    expect(report.items.find(item => item.type === "Conditional Access policies")?.activity).toEqual([expect.objectContaining({ source: "Conditional Access", who: "ca-admin@contoso.test" })])
+    expect(report.summary.attributed).toBe(2)
+  })
+
+  it("keeps Governance attribution separate from matching Intune and Conditional Access events", () => {
+    const intune = auditEvent("intune", "2026-11-05T10:00:00Z", "shared-id", "Finance")
+    const report = buildChangeReport(result(ENTRA_5C_TYPES.map(type => drift({ type: type.label, configId: "shared-id", configName: "Finance", backupFile: `${type.folder}/Finance.json` }))), { changes: [intune, { ...intune, auditId: "ca", source: "Conditional Access" }] }, options)
+    expect(report.items).toHaveLength(11)
+    expect(report.items.every(item => item.activity.length === 0)).toBe(true)
+    expect(report.summary.attributed).toBe(0)
+    expect(report.otherActivity).toHaveLength(2)
+  })
+
+  it("never attributes matching Intune or Conditional Access audit actors to Defender", () => {
+    const intune = auditEvent("intune", "2026-11-05T10:00:00Z", "shared-id", "Finance")
+    for (const byName of [false, true]) {
+      const report = buildChangeReport(result(DEFENDER_TYPES.map(type => drift({ type: type.label, configId: "shared-id", configName: "Finance", backupFile: `${type.folder}/Finance.json` }))), { changes: [{ ...intune, resourceId: byName ? null : "shared-id" }, { ...intune, auditId: "ca", source: "Conditional Access", resourceId: byName ? null : "shared-id" }] }, options)
+      expect(report.items).toHaveLength(17)
+      expect(report.items.every(item => item.activity.length === 0)).toBe(true)
+      expect(report.summary.attributed).toBe(0)
+    }
+  })
+
+  it("leaves actors unknown for Entra configuration and unknown types without a backup path", () => {
+    const report = buildChangeReport(result([
+      drift({ type: "Authentication contexts", configId: "id", configName: "Finance", backupFile: undefined }),
+      drift({ type: "Unknown configuration", configId: "id", configName: "Finance", backupFile: undefined }),
+    ]), { changes: [auditEvent("intune", "2026-11-05T10:00:00Z", "id", "Finance")] }, options)
+    expect(report.items.every(item => item.activity.length === 0)).toBe(true)
+    expect(report.summary.attributed).toBe(0)
+    expect(report.otherActivity).toHaveLength(1)
   })
 
   it("shows readable setting names and values, and leaves the item name out of a documented item", () => {
@@ -247,4 +292,28 @@ describe("report periods", () => {
       { type: "address", address: "c@x.io" },
     ])
   })
+})
+
+
+it.each(["complete", "incomplete", "not-performed"] as const)("exports inventory coverage and counts through Markdown, JSON and the PDF document: %s", status => {
+  const input = { ...result([]), largeFolders: ["Users"] }
+  const report = buildChangeReport(input, { changes: [] }, options, [{ folder: "Users", status, added: 2, modified: 1, deleted: 3, unchanged: 4, examined: 10 }])
+  expect(report.summary).toMatchObject({ added: 0, modified: 0, deleted: 0 })
+  expect(summaryLine(report)).toContain("6 inventory changes")
+  for (const rendered of [changeReportMarkdown(report), buildChangeReportDocument(report).html]) {
+    expect(rendered).toContain("Users inventory:")
+    expect(rendered).toContain("2 added, 1 changed, 3 deleted, 4 unchanged")
+    expect(rendered).not.toContain("No changes between")
+    expect(rendered).not.toContain("No items were added")
+    if (status !== "complete") expect(rendered).toContain(status === "incomplete" ? "comparison was incomplete" : "comparison was not performed")
+  }
+  expect(JSON.parse(changeReportJson(report)).comparison.inventory[0]).toMatchObject({ folder: "Users", status, added: 2 })
+})
+it("never calls an unperformed or incomplete comparison unchanged", () => {
+  const report = buildChangeReport({ ...result([]), largeFolders: ["Groups"] }, { changes: [] }, options)
+  expect(summaryLine(report)).toContain("was not performed")
+  const incomplete = buildChangeReport({ ...result([]), warnings: [{ file: "policy.json", backup: "older", message: "unreadable" }] }, { changes: [] }, options)
+  expect(summaryLine(incomplete)).toContain("ordinary comparison was incomplete")
+  const { comparison: _comparison, ...legacy } = report
+  expect(summaryLine(legacy)).toContain("coverage was not recorded")
 })

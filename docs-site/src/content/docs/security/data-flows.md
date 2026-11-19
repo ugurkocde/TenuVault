@@ -37,7 +37,9 @@ TenuVault signs you in with the Microsoft Authentication Library (MSAL) as a pub
 * **Received:** an access token for the requested resource, a refresh token and an ID token for your account.
 * **Stored:** tokens are kept in an encrypted token cache on your machine, protected by Windows DPAPI or the macOS Keychain.
 
-With the optional [Backup Reader](/backups/backup-reader/), scheduled backups sign in differently, to the same host: TenuVault requests an app-only token for the separate Backup Reader app registration and proves the app's identity with a short-lived assertion signed on your machine with the reader's certificate private key. No browser opens, no person signs in, and Microsoft returns only an access token (no refresh token and no ID token). The private key itself is never sent; it stays in the same encrypted store. Only scheduled backups use these tokens, for the Graph and Azure Storage calls below. Each token is checked for the right tenant, app, audience and app-only type before use. On top of that, Graph tokens must carry exactly the reader's verified read permissions; storage tokens carry no Graph roles, and Azure instead authorizes them through the container-scoped **TenuVault Backup Writer** role. No new destination is added, so the firewall allow list below does not change.
+TenuVault also asks Microsoft for a new token to check a tenant's connection: once when the app starts, for the tenant you have open, after you sign in, and when a backup of the tenant starts and ends. A check uses the sign-in that is already stored and never opens your browser. Each one shows as a non-interactive sign-in of your account in the Entra sign-in logs. What a check found stays in the encrypted store on your machine: the permission names in the token, or Microsoft's error code when the request was refused, and the time.
+
+With the optional [Backup Reader](/backups/backup-reader/), scheduled backups sign in differently, to the same host: TenuVault requests an app-only token for the separate Backup Reader app registration and proves the app's identity with a short-lived assertion signed on your machine with the reader's certificate private key. No browser opens, no person signs in, and Microsoft returns only an access token (no refresh token and no ID token). The private key itself is never sent; it stays in the same encrypted store. Only scheduled backups use these tokens, for the Graph and Azure Storage calls below. A connection check also asks for a reader token, before a scheduled backup that runs with the reader and when you ask TenuVault to check the connection again; that token is only checked and is never used for a request. Each token is checked for the right tenant, app, audience and app-only type before use. On top of that, Graph tokens must carry exactly the reader's verified read permissions; storage tokens carry no Graph roles, and Azure instead authorizes them through the container-scoped **TenuVault Backup Writer** role. No new destination is added, so the firewall allow list below does not change.
 
 ### Intune: `graph.microsoft.com`
 
@@ -60,6 +62,7 @@ Used only when you store backups in your own Azure storage account. TenuVault us
 
 | Container | Contents | Encrypted by TenuVault |
 | --- | --- | --- |
+| `intune-backups-large` | Large backup claims and manifests under `backup-large-.../`; snapshots, indexes and relationships under `payload/backup-large-.../` | No. Plain JSON with Azure encryption at rest and your role assignments, like ordinary backups. |
 | `intune-backups` | Your backups | No. Stored as plain JSON, protected by Azure encryption at rest and your role assignments. Backups made by earlier TenuVault versions stay encrypted with the device key that made them. |
 | `audit-logs` | The TenuVault audit log for the tenant, including which admin started each action | No. Protected by your storage account's own encryption and access control. |
 | `tenant-metadata` | Tenant profile information TenuVault keeps for the tenant | No. Protected by your storage account's own encryption and access control. |
@@ -67,6 +70,8 @@ Used only when you store backups in your own Azure storage account. TenuVault us
 See [Encryption and recovery key](/security/encryption/) for how backups are protected and who is trusted to change them.
 
 When backups are stored on **This device, encrypted**, TenuVault makes no storage connection at all. Backups, the audit log and tenant metadata are all written encrypted to the folder you choose.
+
+Large-inventory preparation uses encrypted temporary merge files for sorted object indexes and sub-collections. Each sort has a random AES-256-GCM key held only in memory. The files are removed when the sort ends; after a process crash, any remaining ciphertext cannot be reopened because its key was not stored. Large captures use the separate `intune-backups-large` container on the same chosen storage account, or the same encrypted local store. History lists only its claim and manifest prefix, so opening history never enumerates large snapshots. This adds no outbound destination. Directory inventories remain off until their areas are enabled. A large backup export is an unencrypted tar archive in the destination you choose, written under a temporary `.partial` name until verification finishes. Protect exported archives like the configuration itself. See [Large tenants](/backups/storage/#large-tenants).
 
 ## tenuvault.com: license checks and CIS Benchmarks content
 
@@ -334,3 +339,318 @@ Capturing an installer also needs the [capture check](#capture-check) at `https:
 * [Encryption and recovery key](/security/encryption/)
 * [App Backup: Intune installers](/apps/app-backup/)
 * [Requirements](/getting-started/requirements/)
+
+## Directory property allowlists
+
+The opt-in Groups, Users and devices, and Applications areas store personal data in your chosen backup storage. These seven types are inventory and have no restore capability. File names contain only object IDs. Names, UPNs and mail values are never used in file names, logs, notifications or diagnostics. Directory content is never sent to TenuVault. Local backups are encrypted; Azure access follows the storage connection. Exports are unencrypted and need the same access controls as the backup. Settings and onboarding describe each area before it is enabled.
+
+Each list below is closed at every depth. Dotted names describe allowed nested fields, and arrays use the same schema for every entry. No other Graph property is stored. Empty and null values are preserved, and unordered arrays are sorted. Password and key credentials retain metadata only. Public certificate bytes, private keys, secretText, passwords, authentication methods and sign-in activity are excluded.
+
+### Users
+
+```text
+id
+displayName
+userPrincipalName
+givenName
+surname
+mail
+otherMails
+proxyAddresses
+userType
+accountEnabled
+createdDateTime
+creationType
+jobTitle
+department
+companyName
+employeeId
+employeeType
+employeeHireDate
+officeLocation
+usageLocation
+businessPhones
+mobilePhone
+streetAddress
+city
+state
+postalCode
+country
+preferredLanguage
+onPremisesImmutableId
+onPremisesSyncEnabled
+onPremisesSamAccountName
+onPremisesDomainName
+onPremisesSecurityIdentifier
+identities.signInType
+identities.issuer
+identities.issuerAssignedId
+assignedLicenses.skuId
+assignedLicenses.disabledPlans
+assignedPlans.assignedDateTime
+assignedPlans.capabilityStatus
+assignedPlans.service
+assignedPlans.servicePlanId
+licenseAssignmentStates.skuId
+licenseAssignmentStates.disabledPlans
+licenseAssignmentStates.assignedByGroup
+licenseAssignmentStates.state
+licenseAssignmentStates.error
+licenseAssignmentStates.lastUpdatedDateTime
+manager.id
+```
+
+### Groups
+
+```text
+id
+displayName
+description
+mail
+mailNickname
+mailEnabled
+securityEnabled
+groupTypes
+visibility
+membershipRule
+membershipRuleProcessingState
+isAssignableToRole
+createdDateTime
+classification
+preferredDataLocation
+onPremisesSyncEnabled
+proxyAddresses
+assignedLicenses.skuId
+assignedLicenses.disabledPlans
+```
+
+### Applications
+
+```text
+id
+appId
+displayName
+description
+signInAudience
+identifierUris
+groupMembershipClaims
+isFallbackPublicClient
+tags
+notes
+createdDateTime
+publisherDomain
+web.homePageUrl
+web.logoutUrl
+web.redirectUris
+web.implicitGrantSettings.enableAccessTokenIssuance
+web.implicitGrantSettings.enableIdTokenIssuance
+web.redirectUriSettings.uri
+web.redirectUriSettings.index
+spa.redirectUris
+publicClient.redirectUris
+api.acceptMappedClaims
+api.requestedAccessTokenVersion
+api.knownClientApplications
+api.oauth2PermissionScopes.id
+api.oauth2PermissionScopes.adminConsentDescription
+api.oauth2PermissionScopes.adminConsentDisplayName
+api.oauth2PermissionScopes.isEnabled
+api.oauth2PermissionScopes.type
+api.oauth2PermissionScopes.userConsentDescription
+api.oauth2PermissionScopes.userConsentDisplayName
+api.oauth2PermissionScopes.value
+api.preAuthorizedApplications.appId
+api.preAuthorizedApplications.delegatedPermissionIds
+appRoles.id
+appRoles.allowedMemberTypes
+appRoles.description
+appRoles.displayName
+appRoles.isEnabled
+appRoles.origin
+appRoles.value
+requiredResourceAccess.resourceAppId
+requiredResourceAccess.resourceAccess.id
+requiredResourceAccess.resourceAccess.type
+optionalClaims.idToken.name
+optionalClaims.idToken.source
+optionalClaims.idToken.essential
+optionalClaims.idToken.additionalProperties
+optionalClaims.accessToken.name
+optionalClaims.accessToken.source
+optionalClaims.accessToken.essential
+optionalClaims.accessToken.additionalProperties
+optionalClaims.saml2Token.name
+optionalClaims.saml2Token.source
+optionalClaims.saml2Token.essential
+optionalClaims.saml2Token.additionalProperties
+verifiedPublisher.displayName
+verifiedPublisher.verifiedPublisherId
+verifiedPublisher.addedDateTime
+passwordCredentials.hint
+passwordCredentials.keyId
+passwordCredentials.displayName
+passwordCredentials.startDateTime
+passwordCredentials.endDateTime
+keyCredentials.customKeyIdentifier
+keyCredentials.keyId
+keyCredentials.displayName
+keyCredentials.startDateTime
+keyCredentials.endDateTime
+keyCredentials.type
+keyCredentials.usage
+```
+
+### ServicePrincipals
+
+```text
+id
+appId
+displayName
+description
+accountEnabled
+servicePrincipalType
+appOwnerOrganizationId
+appRoleAssignmentRequired
+servicePrincipalNames
+replyUrls
+homepage
+loginUrl
+logoutUrl
+preferredSingleSignOnMode
+tags
+notes
+notificationEmailAddresses
+samlSingleSignOnSettings.relayState
+appRoles.id
+appRoles.allowedMemberTypes
+appRoles.description
+appRoles.displayName
+appRoles.isEnabled
+appRoles.origin
+appRoles.value
+oauth2PermissionScopes.id
+oauth2PermissionScopes.adminConsentDescription
+oauth2PermissionScopes.adminConsentDisplayName
+oauth2PermissionScopes.isEnabled
+oauth2PermissionScopes.type
+oauth2PermissionScopes.userConsentDescription
+oauth2PermissionScopes.userConsentDisplayName
+oauth2PermissionScopes.value
+passwordCredentials.hint
+passwordCredentials.keyId
+passwordCredentials.displayName
+passwordCredentials.startDateTime
+passwordCredentials.endDateTime
+keyCredentials.customKeyIdentifier
+keyCredentials.keyId
+keyCredentials.displayName
+keyCredentials.startDateTime
+keyCredentials.endDateTime
+keyCredentials.type
+keyCredentials.usage
+```
+
+### OAuth2PermissionGrants
+
+```text
+id
+clientId
+consentType
+principalId
+resourceId
+scope
+```
+
+### EntraDevices
+
+```text
+id
+deviceId
+displayName
+accountEnabled
+operatingSystem
+operatingSystemVersion
+trustType
+profileType
+isManaged
+isCompliant
+deviceOwnership
+enrollmentType
+registrationDateTime
+onPremisesSyncEnabled
+```
+
+### OrgContacts
+
+```text
+id
+displayName
+givenName
+surname
+mail
+mailNickname
+companyName
+department
+jobTitle
+proxyAddresses
+onPremisesSyncEnabled
+phones.number
+phones.type
+addresses.city
+addresses.countryOrRegion
+addresses.officeLocation
+addresses.postalCode
+addresses.state
+addresses.street
+```
+
+### settings
+
+```text
+id
+displayName
+templateId
+values.name
+values.value
+```
+
+### federatedIdentityCredentials
+
+```text
+id
+name
+issuer
+subject
+audiences
+description
+```
+
+### extensionProperties
+
+```text
+id
+name
+dataType
+isSyncedFromOnPremises
+targetObjects
+```
+
+### appRoleAssignments
+
+```text
+id
+appRoleId
+principalId
+resourceId
+```
+
+### appRoleAssignedTo
+
+```text
+id
+appRoleId
+principalId
+resourceId
+```
+
+Users also store the manager object ID, or null when no manager is configured, with a completeness marker. Group members and owners, application owners, enterprise app owners and assigned policy references are sorted ID shards. Group settings, federated identity credential definitions, extension property definitions, appRoleAssignments and appRoleAssignedTo use sorted definition shards with only the fields above. Shard references contain format, count, shard count, a completeness marker and a fingerprint. A refused relationship stores only `complete: false`, never a partial ID list presented as complete.

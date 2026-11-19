@@ -1,0 +1,21 @@
+{
+  "folder": "EntitlementManagementSettings",
+  "path": "identityGovernance/entitlementManagement/settings",
+  "apiVersion": "v1.0",
+  "shape": "singleton",
+  "signIn": "both",
+  "objectCount": 1,
+  "verified": "2026-11-16",
+  "source": "Live app-only read through GraphSession and readObject",
+  "outcome": "saved",
+  "responses": {
+    "/v1.0/identityGovernance/entitlementManagement/settings": {
+      "status": 200,
+      "body": {
+        "id": "singleton",
+        "externalUserLifecycleAction": "blockSignInAndDelete",
+        "durationUntilExternalUserDeletedAfterBlocked": "P30D"
+      }
+    }
+  }
+}

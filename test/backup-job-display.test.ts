@@ -1,3 +1,4 @@
+import { completedWithWarnings } from "../src/portal/lib/backup-job-display"
 import { expect, it } from "vitest"
 import { backupActivitySummary, backupButtonLabel, backupJobPhase, isBackupJobPollable, resolveBackupJobDisplay, toBackupJobDisplay } from "../src/portal/lib/backup-job-display"
 
@@ -38,4 +39,8 @@ it("does not poll a job that completed or recorded a poll error", () => {
   expect(isBackupJobPollable({ isComplete: false })).toBe(true)
   expect(isBackupJobPollable({ isComplete: true })).toBe(false)
   expect(isBackupJobPollable({ isComplete: false, pollError: "Failed to check job status" })).toBe(false)
+})
+
+it("keeps incomplete coverage visible even when no warning count was recorded", () => {
+  expect(completedWithWarnings({ isComplete: true, isSuccessful: true, progressMessage: "Backup completed", results: { types: [], notices: [], warnings: 0, coverage: "incomplete" } })).toBe(true)
 })

@@ -1,0 +1,137 @@
+{
+  "folder": "DefenderAttackSimulations",
+  "source": "Synthetic documented shape; not a nonempty live read",
+  "outcome": "saved",
+  "objectCount": 1,
+  "responses": {
+    "/v1.0/security/attackSimulation/simulations": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "example",
+            "displayName": "Example campaign",
+            "source": "tenant",
+            "createdBy": {
+              "id": "00000000-0000-4000-8000-000000000001",
+              "displayName": "Example person",
+              "email": "person@example.test",
+              "userPrincipalName": "person@example.test",
+              "mail": "person@example.test"
+            },
+            "lastModifiedBy": {
+              "id": "00000000-0000-4000-8000-000000000001",
+              "displayName": "Example person",
+              "email": "person@example.test",
+              "userPrincipalName": "person@example.test",
+              "mail": "person@example.test"
+            },
+            "status": "running",
+            "launchDateTime": "2026-11-01T00:00:00Z",
+            "includedAccountTarget": {
+              "type": "addressBook",
+              "accountTargetEmails": [
+                "person@example.test"
+              ]
+            },
+            "trainingSetting": {
+              "settingType": "noTraining"
+            },
+            "report": {
+              "count": 42
+            },
+            "nextRunDateTime": "2026-11-17T00:00:00Z"
+          }
+        ]
+      }
+    },
+    "/v1.0/security/attackSimulation/simulations/example": {
+      "status": 200,
+      "body": {
+        "id": "example",
+        "displayName": "Example campaign",
+        "source": "tenant",
+        "createdBy": {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "displayName": "Example person",
+          "email": "person@example.test",
+          "userPrincipalName": "person@example.test",
+          "mail": "person@example.test"
+        },
+        "lastModifiedBy": {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "displayName": "Example person",
+          "email": "person@example.test",
+          "userPrincipalName": "person@example.test",
+          "mail": "person@example.test"
+        },
+        "status": "running",
+        "launchDateTime": "2026-11-01T00:00:00Z",
+        "includedAccountTarget": {
+          "type": "addressBook",
+          "accountTargetEmails": [
+            "person@example.test"
+          ]
+        },
+        "trainingSetting": {
+          "settingType": "custom",
+          "assignedTo": [
+            "allUsers",
+            "clickedPayload"
+          ]
+        },
+        "report": {
+          "count": 42
+        },
+        "nextRunDateTime": "2026-11-17T00:00:00Z"
+      }
+    },
+    "/v1.0/security/attackSimulation/simulations/example/payload?$select=id": {
+      "status": 200,
+      "body": {
+        "id": "payload-id",
+        "displayName": "Reference label"
+      }
+    },
+    "/v1.0/security/attackSimulation/simulations/example/loginPage?$select=id": {
+      "status": 200,
+      "body": {
+        "id": "loginPage-id",
+        "displayName": "Reference label"
+      }
+    },
+    "/v1.0/security/attackSimulation/simulations/example/landingPage?$select=id": {
+      "status": 200,
+      "body": {
+        "id": "landingPage-id",
+        "displayName": "Reference label"
+      }
+    },
+    "/v1.0/security/attackSimulation/simulations/example/includedAccountTarget": {
+      "status": 200,
+      "body": {
+        "type": "addressBook",
+        "accountTargetEmails": [
+          "person@example.test"
+        ],
+        "accountTargetIds": [
+          "person-b",
+          "person-a"
+        ]
+      }
+    },
+    "/v1.0/security/attackSimulation/simulations/example/excludedAccountTarget": {
+      "status": 200,
+      "body": {
+        "type": "addressBook",
+        "accountTargetEmails": [
+          "person@example.test"
+        ],
+        "accountTargetIds": [
+          "person-b",
+          "person-a"
+        ]
+      }
+    }
+  }
+}

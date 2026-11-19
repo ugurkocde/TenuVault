@@ -37,7 +37,12 @@ TenuVault does not create a second app registration when the tenant already has 
 * Its name starts with `TenuVault` and it carries the internal note that starts with `Used by the TenuVault desktop app`.
 * It is single tenant and has the redirect URI `http://localhost` for mobile and desktop applications.
 * It is still the plain desktop registration TenuVault makes: no client secret, no certificate, and no web or single-page application redirect URI.
-* It has an enterprise application, and that already has tenant-wide admin consent for at least one of TenuVault's Intune permissions on Microsoft Graph.
+* It has an enterprise application, and that already has tenant-wide admin consent for TenuVault's work on Microsoft Graph. One of these counts:
+  * Intune: consent for at least one of the Intune permissions in the [default set](#delegated-permissions) below. Every setup that includes Intune asks for one of them.
+  * Entra ID or Defender: consent for more than half of the permissions that backing up the service asks for. The areas you turn on separately are not counted.
+  * Conditional Access: consent for everything a setup for Conditional Access alone asks for, which is `User.Read`, `Organization.Read.All` and `Policy.Read.All` together.
+
+  Consent for a single permission of Entra ID or Defender, for `Policy.Read.All` without the other two, or for the two permissions every sign-in has (`User.Read` and `Organization.Read.All`) does not count, because administrators grant such permissions to many apps.
 
 The last point is what TenuVault relies on. A name and a note can be set by anyone who may create app registrations, which in many tenants is every member. Tenant-wide admin consent can only come from an administrator, so it shows that an administrator trusted this app registration before. An app registration that does not meet every point is left exactly as it is, and TenuVault creates its own next to it.
 
@@ -60,7 +65,7 @@ If your tenant does not list Azure Service Management or Azure Storage among its
 * If the last sign-in fails or you cancel it, the **Sign in** step opens with the tenant ID and the client ID filled in. Select **Sign in with Microsoft** to try again. Nothing is created twice.
 * If Microsoft takes longer than a minute and a half to accept sign-ins to the new app registration, the browser does not open again. The **Sign in** step says so. Wait a moment, then select **Sign in with Microsoft**.
 * If the browser says that Microsoft cannot find the application, Microsoft has not finished publishing the new app registration. Wait a minute, select **Cancel sign-in** in TenuVault and sign in again.
-* If the tenant already has a TenuVault app registration whose enterprise application has sign-in turned off, the setup stops and changes nothing. Turn sign-in on again under **Entra admin center** > **Enterprise applications** > the application the message names > **Properties**, or delete the app registration, then run the setup again.
+* If the tenant already has a TenuVault app registration whose enterprise application has sign-in turned off, the setup stops and changes nothing, whichever services you chose and whichever service that app registration was made for. Turn sign-in on again under **Entra admin center** > **Enterprise applications** > the application the message names > **Properties**, or delete the app registration, then run the setup again.
 
 When the setup stops with an error, the message also offers **Stuck here? Book a free setup call**, which opens the [free setup call](/getting-started/#free-setup-call) page in your browser.
 
@@ -90,6 +95,7 @@ Delete **TenuVault Desktop** under **Entra admin center** > **App registrations*
 | Enterprise application | Hidden from users' My Apps portal |
 | Sign-in restriction | Optional, with the script: only members of one group can sign in (`-AllowedGroupId`) |
 | Group read | Optional, with the script: also request `Group.Read.All` (`-IncludeGroupRead`), off by default |
+| Services | Optional, with the script: request the permissions of other services (`-Services`, `-RestoreAccess`, `-Areas`). Without them, the permissions below |
 
 Because the app is a public client with delegated permissions, every call runs as the signed-in admin. MFA, Conditional Access and your Intune role apply, and changes are attributed to that admin in the Entra and Intune audit logs.
 
@@ -114,6 +120,8 @@ This page is only about the app registration you sign in with. It never gets app
 The two Azure permissions are only used when backups go to your Azure storage account: Azure Service Management lists your subscriptions and storage accounts in the storage picker, and Azure Storage reads and writes the backup files. For what each permission is used for, see [App registration and delegated permissions](/security/permissions/).
 
 The table above is the default permission set. It does not change unless you opt in. With `-IncludeGroupRead` the script adds one more delegated Microsoft Graph permission, `Group.Read.All`. The hygiene unresolved groups check uses it to tell whether a referenced group exists; App Backup can also use it to name groups referenced by app assignments. Without it the hygiene check stays unknown and no group is reported as missing. App Backup's optional device-group membership check additionally needs delegated `Device.Read.All`, added manually to the existing registration; see [App Backup](/apps/app-backup/#understand-the-assignment-check). With `-IncludeConditionalAccessRestore` it adds `Policy.ReadWrite.ConditionalAccess`, which restoring [Conditional Access](/backups/conditional-access/) needs; backing Conditional Access up only needs the default `Policy.Read.All`.
+
+With `-Services` the script requests the permissions of the services you name in place of the default set, for example Entra ID or Defender. [App registration and delegated permissions](/security/permissions/#entra-id-and-defender) lists them per service and area.
 
 ## Use the setup script instead
 
@@ -177,6 +185,12 @@ Select **Next: sign in** under the card when you have the two values. If the app
    ./New-TenuVaultDesktopApp.ps1 -TenantId contoso.onmicrosoft.com -IncludeGroupRead
    ```
 
+   To request the permissions of other services, name them. This asks for Intune with restore access, as always, and for Entra ID to back up:
+
+   ```powershell
+   ./New-TenuVaultDesktopApp.ps1 -TenantId contoso.onmicrosoft.com -Services Intune,Entra -RestoreAccess Intune
+   ```
+
 3. Sign in with your admin account in the browser the script opens. It asks you to choose an account, so a browser that is already signed in with another account does not pick that one.
 
    * The script signs in through **Microsoft Graph Command Line Tools**, the Microsoft app that Microsoft Graph PowerShell also signs in through. If Microsoft asks you to consent to it, accept. It requests `Application.ReadWrite.All` and `DelegatedPermissionGrant.ReadWrite.All` to create the app and grant consent, and `AppRoleAssignment.ReadWrite.All` only with `-AllowedGroupId`.
@@ -208,6 +222,9 @@ If an app registration with the same name already exists, the script prints a no
 | `-TenantId` | No | Tenant ID or domain to create the app registration in. Defaults to the tenant of the account you sign in with. |
 | `-DisplayName` | No | Name of the app registration. Default: `TenuVault Desktop`. |
 | `-AllowedGroupId` | No | Object ID of a security group. When set, user assignment is required on the enterprise application and only members of this group can sign in to TenuVault. |
+| `-Services` | No | The services the app registration can back up: `Intune`, `ConditionalAccess`, `Entra`, `Defender`. Default: `Intune` and `ConditionalAccess`, which is the permission set in the table above. Each service brings its own read permissions, and a service you leave out brings none. The script refuses an empty list, such as `-Services @()`; leave the parameter out to get the default. |
+| `-RestoreAccess` | No | The services TenuVault may also restore, which adds their write permissions. Default: `Intune`, when Intune is one of the services. When you pass it, name every service that gets write permissions, or `None` to request read permissions only. |
+| `-Areas` | No | Areas of Entra ID that are backed up only on request: `Groups`, `UsersAndDevices`, `Applications`. Groups and users and devices hold personal data. Needs `Entra` in `-Services`. The script refuses an empty list; leave the parameter out to back up none of these areas. |
 | `-IncludeGroupRead` | No | Switch. When set, also requests the delegated `Group.Read.All` permission so the hygiene unresolved groups check can run. Off by default, so the default permission set is unchanged. Because each run creates a new app registration, use this on a fresh run and sign in with the new client ID, or add `Group.Read.All` to an existing registration manually and grant admin consent. |
 | `-UseDeviceCode` | No | Switch. Signs in with a device code instead of opening a browser on this computer, for remote shells without a browser. Conditional Access often blocks device code flow, so only use it when the browser sign-in is not possible. |
 
@@ -271,3 +288,38 @@ Assigning a group to an enterprise application requires Microsoft Entra ID P1 or
 ## Next step
 
 [Sign in to your tenant](/getting-started/connect-tenant/) with the two values the script printed.
+
+## Permissions for a service choice
+
+During setup, choose services before Connect. The permission list in the app and the command under **Use the setup script instead** follow that choice. For example, an Entra ID setup with no restore access uses:
+
+```powershell
+./New-TenuVaultDesktopApp.ps1 -Services Entra -RestoreAccess None
+```
+
+Use the permission list shown in TenuVault when following the manual guide. The handoff message also contains this list and the generated command. Do not use the Intune default list for an Entra-only registration. Existing registrations are left unchanged by quick setup; missing chosen permissions are reported after sign-in.
+
+
+## Add a service, an area or restore access
+
+Open **Settings > Services and permissions** for the tenant. Turn on the service or opt-in area, or choose **Backup and restore** under **Areas and access** where restore is available. These choices describe the permissions to request; they grant no access by themselves.
+
+Expand **Add the missing permissions**. You can use **Add in the app**, **Azure CLI commands**, **Registration in Entra**, or **Text for your administrator**. All routes name the exact missing permissions. The Entra portal's Grant admin consent action can also approve other pending permissions, so review them first.
+
+Microsoft Graph replaces permission lists and consent scopes as a whole and offers no documented conditional update for these resources. A change by someone else in the same second can be lost. The app reads the exact value again immediately before each write to make this unlikely. Avoid simultaneous edits in Entra or another application. See the [permission safety details](/security/permissions/).
+
+For **Add in the app**:
+
+1. Use the account connected to this tenant, with an active **Application Administrator**, **Cloud Application Administrator**, **Privileged Role Administrator** or **Global Administrator** role. Your tenant's consent policy may require a higher role. Read the setup-only access explanation, then select **Sign in to preview**. Microsoft Graph Command Line Tools requests `Application.ReadWrite.All` and `DelegatedPermissionGrant.ReadWrite.All`, as in quick setup. That privileged access is kept only for this flow.
+2. Review the registration name, tenant and client ID, **Permissions to declare**, and **Scopes to add to tenant-wide consent**. The flow uses only the exact registration your tenant is connected with. Select **Add approved permissions** to approve that difference. The preview expires after ten minutes.
+3. The app reads the registration and consent again before writing. **Changed since the preview** stops the next write and shows the current declarations and consent. The result says whether declarations had already been saved before the consent check stopped. Review the current state and close the dialog, then start a new preview.
+4. Read the result. It lists the verified declaration and consent additions separately. **Permissions partly added** also lists missing or unverified permissions. If another change is observed after a write, the result stays partial and asks you to check in Entra, even when the requested additions are present. No rollback is attempted. An unanswered write may already have been applied; the app reads back before reporting and does not resend it automatically. Start a fresh preview to reconcile before retrying.
+5. The app refreshes the tenant token and checks connection health. Close the dialog and select **Check again**, then run a backup to verify access. If the token needs an interactive sign-in, use **Settings > Sign in**. The Backup Reader needs its own permissions for scheduled backups and is not changed here.
+
+![Review the exact permission additions before approving them](/images/add-permissions/preview-light.png)
+
+![A partial result names what was verified and what remains missing](/images/add-permissions/partial-result-light.png)
+
+The in-app route refuses a registration that is not a single-tenant public client with only root-path `http://localhost` or `http://127.0.0.1` redirects (with or without a port), has credentials (including federated credentials or credentials on its enterprise application), lacks tenant-wide consent for the connected scopes, or has individual Graph consent. A missing administrator role is shown as a refusal from Microsoft. Close the dialog to use the other routes or ask your administrator to review the registration. Quick setup still never changes a registration it did not create.
+
+Consent is checked against the delegated permissions in your connected access token, including after the final refresh. If those permissions cannot be read or the token is app-only, sign in again with a delegated account. Case-only differences in scope names or registration GUIDs do not count as a change since the preview. Existing consented scope names keep their spelling.

@@ -1,5 +1,5 @@
 // Built-renderer interaction proof. Capture/catalog data are synthetic; no helper or Graph call.
-export async function checkAppBackupCompletion({ check, evaluate, waitForCondition, screenshot, assert, send }) {
+export async function checkAppBackupCompletion({ check, evaluate, waitForCondition, screenshot, captureState, assert, send }) {
   await check("App Backup completion opens its exact backup and requests its local folder", async () => {
     const doc = "window.__appCompletionFrame.contentDocument"
     const control = label => `[...${doc}.querySelectorAll('button,a')].find(element => element.textContent.trim() === ${JSON.stringify(label)})`
@@ -62,7 +62,9 @@ export async function checkAppBackupCompletion({ check, evaluate, waitForConditi
       assert(await waitForCondition(`${doc}.documentElement.scrollWidth <= window.__appCompletionFrame.contentWindow.innerWidth + 1`), "selected backup overflows at minimum width")
       await screenshot("09e-app-backup-selected-narrow")
       await evaluate(`${control("View all backups")}.click()`)
-      assert(await waitForCondition(`${catalog}.innerText.includes('PowerShell-older-capture.zip')`), "view all did not restore other backups")
+      // Offscreen rows use content-visibility:auto. Their text is in the catalog before
+      // Chromium paints them, so innerText can omit a correctly restored older backup.
+      assert(await waitForCondition(`${catalog}.textContent.includes('PowerShell-older-capture.zip') && ${catalog}.querySelectorAll('li').length === 2`), "view all did not restore other backups")
       await send("Emulation.clearDeviceMetricsOverride")
       await evaluate(`${control("Restore to tenant…")}.click()`)
       assert(await waitForCondition(`Boolean(${doc}.getElementById('restore-target'))`), "restore review did not load")
@@ -91,6 +93,9 @@ export async function checkAppBackupCompletion({ check, evaluate, waitForConditi
       assert(await waitForCondition(`Boolean(${control("Open restored app")})`), "restore completion action missing")
       assert(await evaluate(`window.__appCompletion.restored.sourceTenant === window.__appCompletion.source.tenantId && window.__appCompletion.restored.targetTenant === window.__appCompletion.source.tenantId`), "restore used the wrong tenant")
       await screenshot("09h-app-restore-complete")
+    } catch (error) {
+      await captureState("app-completion-before-cleanup").catch(() => {})
+      throw error
     } finally {
       await send("Emulation.clearDeviceMetricsOverride")
       await evaluate("window.__appCompletionFrame?.remove(); delete window.__appCompletionFrame; delete window.__appCompletion")

@@ -7,6 +7,7 @@ function fixture(metadata: () => Response, listingStatus = 200) {
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     const url = new URL(String(input))
     if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
+    if (url.pathname.endsWith('.tenuvault-owner.json')) return new Response(null, { status: 404 })
     if (url.pathname.endsWith('metadata.json')) return metadata()
     if (url.searchParams.get('delimiter')) return new Response('<Blobs><BlobPrefix><Name>2026-09-20/</Name></BlobPrefix><BlobPrefix><Name>backup-2026-09-21-020000/</Name></BlobPrefix></Blobs>')
     if (listingStatus !== 200) return new Response('', { status: listingStatus })
@@ -38,6 +39,7 @@ it('preserves the historical app-protection and conditional-access folder counts
   vi.stubGlobal('fetch', vi.fn(async (input) => {
     const url = new URL(String(input))
     if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
+    if (url.pathname.endsWith('.tenuvault-owner.json')) return new Response(null, { status: 404 })
     if (url.pathname.endsWith('metadata.json')) return new Response(null, { status: 404 })
     if (url.searchParams.get('delimiter')) return new Response('<BlobPrefix><Name>2026-09-20/</Name></BlobPrefix>')
     return new Response(['AppProtectionPolicies', 'ConditionalAccess'].map((folder) => `<Blob><Name>2026-09-20/${folder}/a.json</Name><Content-Length>10</Content-Length></Blob>`).join(''))

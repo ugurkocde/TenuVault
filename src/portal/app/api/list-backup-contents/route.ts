@@ -1,7 +1,10 @@
+import { backupStoragePath, isLargeBackup } from "../../../../shared/backup-storage"
+import { largeContents } from "../../../../main/backup/large-page"
+import { readJsonCapped } from "../../../../shared/capped-body"
 import { decodeXml, listBlobPages } from "~/lib/storage/list"
-import { INTUNE_TYPES, typeForFolder } from "../../../../shared/intune/registry"
+import { INTUNE_TYPES, restoreCapability, typeForFolder } from "../../../../shared/intune/registry"
+import { writeBlocker } from "../../../../shared/intune/restore-plan"
 import { isBackupName } from "../../../../shared/intune/backup-names"
-import { blobPath } from "../../../../shared/security"
 import { type NextRequest, NextResponse } from "next/server"
 import { readOwnedBackup } from "~/lib/policies/backup-owner"
 
@@ -76,6 +79,23 @@ export async function POST(request: NextRequest) {
     const tokenData = await tokenResponse.json()
     const accessToken = tokenData.access_token
 
+    const owner = await readOwnedBackup(name => fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(name)}`, {
+      headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${accessToken}` },
+    }), backupId, tenantId, storageAccountName)
+    if (!owner.ok) return NextResponse.json({ error: owner.error }, { status: owner.status })
+    if (owner.metadata?.LargeItems) {
+      const read = async (name: string) => {
+        const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(`${backupId}/${name}`)}`, { headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${accessToken}` } })
+        if (!response.ok) throw new Error("Inventory page could not be read")
+        const json = await readJsonCapped(response, 1024 * 1024)
+        if (json.kind !== "json") throw new Error("Invalid inventory page")
+        return json.value
+      }
+      return NextResponse.json(await largeContents(owner.metadata, backupId, body.largePage ?? 0, read))
+    }
+
+    if (isLargeBackup(backupId)) return NextResponse.json({ error: "This large backup has no readable inventory yet" }, { status: 409 })
+
     // List all files in the backup folder
     const listUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(`${backupId}/`)}`
 
@@ -89,13 +109,13 @@ export async function POST(request: NextRequest) {
       // Backups from older app versions stored compliance policies under this name.
       const type = typeForFolder(folder === "DeviceCompliancePolicies" ? "CompliancePolicies" : folder)
       if (!type || !fileName.endsWith(".json") || blobName.split("/").length !== 3) continue
-      const group = groups.get(type.folder) ?? { folder: type.folder, label: type.label, area: type.area, ...(type.restore === "metadata" ? { limitation: type.limitation } : {}), policies: [] }
+      const group = groups.get(type.folder) ?? { folder: type.folder, label: type.label, area: type.area, ...(type.restore === "metadata" ? { limitation: type.limitation } : restoreCapability(type) === "none" ? { limitation: writeBlocker(type, "create") } : {}), policies: [] }
       group.policies.push({ name: fileName, path: blobName, size: parseInt(match[2]!), type: type.folder, displayName: fileName.replace(/\.json$/, "") })
       groups.set(type.folder, group)
     }
 
     // The backup's metadata, refused when the backup belongs to another tenant.
-    const owned = await readOwnedBackup((name) => fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(name)}`, {
+    const owned = await readOwnedBackup((name) => fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(name)}`, {
       headers: { 'x-ms-version': '2021-12-02', 'Authorization': `Bearer ${accessToken}` },
     }), backupId, tenantId)
     if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })

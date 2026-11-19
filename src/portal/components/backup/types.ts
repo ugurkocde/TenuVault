@@ -8,12 +8,21 @@ export interface BackupSummary {
   totalPolicies: number
   /** Items per registry folder. */
   counts?: Record<string, number>
+  largeInventory?: boolean
+  companionId?: string
+  ordinaryOnlyExport?: boolean
+  warning?: string
+  largeProblems?: Array<{ folder: string; reason: string }>
   /** Stored bytes per registry folder, from the same listing as `counts`. */
   sizes?: Record<string, number>
   scope: { excluded: string[]; description: string } | null
   failures?: number
   skippedTypes?: string[]
   failedTypes?: string[]
+  /** Whether every type the backup was asked to cover was read; null for backups made before this was recorded. */
+  coverage?: "complete" | "incomplete" | null
+  /** Folders of the selected types that were not read in full. */
+  notRead?: string[]
   size: number
   /** Seconds, or a preformatted string from older backups; null when unknown. */
   duration: number | string | null

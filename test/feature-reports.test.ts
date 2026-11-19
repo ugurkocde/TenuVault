@@ -11,7 +11,7 @@ function driftResult(comparison = "backup-2026-11-06-020000"): DriftResult {
   const drift = {
     id: "d1", tenant: "", tenantId: "", severity: "warning", type: "Settings Catalog policy", configName: "Defender", configId: "p-1", changeType: "modified",
     detectedAt: "", fromBackup: "backup-2026-11-05-020000", toBackup: comparison, description: "", impact: "", affectedPolicies: 1, affectedDevices: 0,
-    changes: [{ field: "passwordMinimumLength", oldValue: 8, newValue: 12 }],
+    backupFile: "ConfigurationPolicies/Defender.json", changes: [{ field: "passwordMinimumLength", oldValue: 8, newValue: 12 }],
   } as Drift
   return {
     drifts: [drift],
@@ -25,7 +25,7 @@ function driftResult(comparison = "backup-2026-11-06-020000"): DriftResult {
   }
 }
 
-function world(options: { drift?: DriftResult | { status: number; error: string }; auditStatus?: number; pdf?: Buffer; mailStatus?: number } = {}) {
+function world(options: { drift?: DriftResult | { status: number; error: string }; auditStatus?: number; pdf?: Buffer; mailStatus?: number; inventoryPages?: unknown[] } = {}) {
   const apiCalls: Array<{ path: string; body: Record<string, unknown> | undefined }> = []
   const graphCalls: Array<{ method: string; path: string; body: any }> = []
   const deps = fakeDeps({
@@ -33,6 +33,10 @@ function world(options: { drift?: DriftResult | { status: number; error: string 
     now: () => new Date("2026-11-06T07:05:00Z"),
     api: async (path, _tenant, body) => {
       apiCalls.push({ path, body })
+      if (path === "/api/large-backup-page" && options.inventoryPages) {
+        const page = options.inventoryPages.shift()
+        return page instanceof Error ? Response.json({ error: page.message }, { status: 400 }) : Response.json(page)
+      }
       const drift = options.drift ?? driftResult()
       if ("error" in drift) return Response.json({ error: drift.error }, { status: drift.status })
       return Response.json(drift)
@@ -303,5 +307,41 @@ describe("reports after scheduled backups", () => {
     await expect(afterScheduledBackup(w.deps, TENANT_A, "backup-2026-11-06-020000")).resolves.toBeUndefined()
     const status = await call(w.routes, PATH, { tenantId: TENANT_A, action: "get-status" })
     expect(status.body.settings.lastAutomatic).toMatchObject({ outcome: "failed", message: "Storage unreachable" })
+  })
+})
+
+
+describe("inventory change reports after scheduled backups", () => {
+  const recipients = [{ type: "address", address: "admin@contoso.test" }]
+  it.each([false, true])("counts bounded inventory changes separately with ordinary changes: %s", async mixed => {
+    const drift = { ...driftResult(), drifts: mixed ? driftResult().drifts : [], largeFolders: ["Users"], inventoryBackups: { baseline: "backup-large-2026-11-05-020000", comparison: "backup-large-2026-11-06-020000" } }
+    const w = world({ drift, inventoryPages: [
+      { changes: [{ id: "a", change: "added" }, { id: "b", change: "removed" }], examined: 3, unchanged: 1, next: [2, 2] },
+      { changes: [{ id: "c", change: "modified" }], examined: 1, unchanged: 0, next: null },
+    ] })
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "save-settings", afterScheduledBackup: true, recipients })
+    await afterScheduledBackup(w.deps, TENANT_A, drift.comparison.id)
+    const status = await call(w.routes, PATH, { tenantId: TENANT_A, action: "get-status" })
+    expect(status.body.settings.lastAutomatic.outcome).toBe("sent")
+    const full = await call(w.routes, PATH, { tenantId: TENANT_A, action: "get-report", reportId: status.body.reports[0].id })
+    expect(full.body.report.comparison.inventory).toEqual([{ folder: "Users", status: "complete", added: 1, deleted: 1, modified: 1, unchanged: 1, examined: 4 }])
+    expect(full.body.report.items).toHaveLength(mixed ? 1 : 0)
+    expect(w.apiCalls.filter(call => call.path === "/api/large-backup-page").map(call => call.body)).toEqual([
+      { baseline: drift.inventoryBackups.baseline, backupId: drift.inventoryBackups.comparison, folder: "Users", cursor: [0, 0] },
+      { baseline: drift.inventoryBackups.baseline, backupId: drift.inventoryBackups.comparison, folder: "Users", cursor: [2, 2] },
+    ])
+  })
+  it.each(["not-performed", "incomplete", "complete"])("skips empty scheduled reports only after a complete inventory comparison: %s", async state => {
+    const drift = { ...driftResult(), drifts: [], largeFolders: ["Groups"] }
+    const w = world({ drift, inventoryPages: state === "not-performed" ? [new Error("No coverage")] : [
+      { changes: [], examined: 1, unchanged: 1, next: state === "complete" ? null : [1, 1] }, new Error("Shard unreadable"),
+    ] })
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "save-settings", afterScheduledBackup: true, recipients })
+    await afterScheduledBackup(w.deps, TENANT_A, drift.comparison.id)
+    const status = await call(w.routes, PATH, { tenantId: TENANT_A, action: "get-status" })
+    expect(status.body.settings.lastAutomatic.outcome).toBe(state === "complete" ? "skipped" : "sent")
+    const full = await call(w.routes, PATH, { tenantId: TENANT_A, action: "get-report", reportId: status.body.reports[0].id })
+    expect(full.body.report.comparison.inventory[0].status).toBe(state)
+    expect(status.body.reports[0].unchanged).toBe(state === "complete")
   })
 })

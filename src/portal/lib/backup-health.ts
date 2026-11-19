@@ -42,26 +42,32 @@ export function backupHealth(backups: Backup[], now: Date, unavailable = false):
  * jobs and the other running folders, once per run, and `latestStatus` (the Last backup chip) is
  * running whenever that count is above zero, so the two always agree.
  */
-export function backupSummary(backups: Array<Backup & { runId?: string | null }>, failedAttempts: Array<{ timestamp: Date; runId?: string }>, period: { since: Date; until?: Date; live?: string[] }) {
+export interface BackupRun { runId?: string | null; tenantId?: string | number }
+export type LiveBackupRun = string | (BackupRun & { runId: string })
+const runKey = (item: BackupRun) => item.runId ? JSON.stringify([String(item.tenantId ?? "").toLowerCase(), item.runId]) : null
+
+export function backupSummary(backups: Array<Backup & BackupRun>, failedAttempts: Array<{ timestamp: Date } & BackupRun>, period: { since: Date; until?: Date; live?: LiveBackupRun[] }) {
+  // History already joins reciprocal companions. A copied run ID is never evidence for another join.
+  const runBackups = backups
   const inPeriod = <T extends { timestamp: Date }>(item: T) => item.timestamp >= period.since && (!period.until || item.timestamp < period.until)
-  const stored = new Set(backups.map((item) => item.runId).filter((id) => !!id))
-  const failedRuns = new Set(failedAttempts.map((attempt) => attempt.runId).filter((id) => !!id))
+  const stored = new Set(backups.map(runKey).filter((id) => !!id))
+  const failedRuns = new Set(failedAttempts.map(runKey).filter((id) => !!id))
   // A run that already wrote its manifest or its failure record has finished, even while the engine still reports it.
-  const finishedRuns = new Set([...backups.filter((item) => item.runId && ['success', 'failed', 'cancelled', 'partial'].includes(item.status)).map((item) => item.runId), ...failedRuns])
-  const live = new Set((period.live ?? []).filter((id) => !finishedRuns.has(id)))
+  const finishedRuns = new Set([...runBackups.filter((item) => item.runId && ['success', 'failed', 'cancelled', 'partial'].includes(item.status)).map(runKey), ...failedRuns])
+  const live = new Set((period.live ?? []).map(item => runKey(typeof item === "string" ? { runId: item } : item)!).filter((id) => !finishedRuns.has(id)))
   // The list says running for a folder without a manifest that started less than six hours ago, and incomplete after that.
-  const statusOf = (item: Backup & { runId?: string | null }): BackupState => {
+  const statusOf = (item: Backup & BackupRun): BackupState => {
     if ((item.status !== 'running' && item.status !== 'incomplete') || !item.runId) return item.status
-    return failedRuns.has(item.runId) ? 'failed' : live.has(item.runId) ? 'running' : item.status
+    return failedRuns.has(runKey(item)) ? 'failed' : live.has(runKey(item)!) ? 'running' : item.status
   }
-  const recent = backups.filter(inPeriod).map(statusOf)
-  const unsaved = failedAttempts.filter((attempt) => !attempt.runId || !stored.has(attempt.runId))
+  const recent = runBackups.filter(inPeriod).map(statusOf)
+  const unsaved = failedAttempts.filter((attempt) => !attempt.runId || !stored.has(runKey(attempt)))
   const successful = recent.filter((status) => status === 'success').length
   const failed = recent.filter((status) => ['failed', 'partial', 'incomplete'].includes(status)).length + unsaved.filter(inPeriod).length
   const finished = successful + failed
-  const elsewhere = backups.filter((item) => statusOf(item) === 'running' && !(item.runId && live.has(item.runId))).length
+  const elsewhere = runBackups.filter((item) => statusOf(item) === 'running' && !(item.runId && live.has(runKey(item)!))).length
   const inProgress = live.size + elsewhere
-  const newest = backups.reduce<(typeof backups)[number] | null>((best, item) => !best || item.timestamp > best.timestamp ? item : best, null)
+  const newest = runBackups.reduce<(typeof backups)[number] | null>((best, item) => !best || item.timestamp > best.timestamp ? item : best, null)
   return { stored: backups.length, successful, failed, finished, inProgress,
     successRate: finished ? successful / finished * 100 : null,
     latestStatus: inProgress > 0 ? 'running' as const : newest ? statusOf(newest) : null }

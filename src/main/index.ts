@@ -1,3 +1,14 @@
+import { DirectoryRestoreStore } from "./storage/directory-restore-store"
+import { DirectoryRestoreService } from "./restore/directory-service"
+import { setDirectoryRestoreService } from "./restore/directory-dispatch"
+import { IdentityRestoreService } from "./restore/service"
+import { RecoveryAccounts } from "./restore/safety-resolvers"
+import { restoreSafetyRoutes } from "./restore/routes"
+import { setIdentityRestorePreviews, setIdentityRestoreDispatch } from "./restore/dispatch"
+import { importLargeArchive, reviewLargeArchive, saveLargeDownload } from "./backup/large-archive"
+import { AddPermissionsFlow, permissionAdditionScopes, signInForPermissionAddition, verifyPermissionAdditionToken } from "./auth/add-permissions-flow"
+import { additionPermissions } from "./services/addition-permissions"
+import { checkOnboardingPermissions, saveOnboardingServices } from "./services/onboarding"
 import { requestWindowsContent } from "./app-backup/windows-helper"
 import { requireCaptureEnabled } from "./app-backup/capture-policy"
 import { checkCaptureMetadata } from "./app-backup/capture-preflight"
@@ -48,7 +59,7 @@ import { ApiHost } from "./api/host"
 import { routes } from "./api/routes"
 import { AuthManager, SignInRequiredError } from "./auth/msal"
 import { BackupEngine, verifyStorageAccess, type BackupJob } from "./backup/engine"
-import { BackupScheduler, reportsResult, runUnattended, scheduledResult } from "./backup/scheduler"
+import { BackupScheduler, notifiedStatus, reportsResult, runUnattended, scheduledResult } from "./backup/scheduler"
 import { runTrayBackups } from "./backup/tray-backup"
 import { announceCommunityChoice, prepareScheduledCoverage, scheduledCoverage } from "./backup/schedule-prepare"
 import { prepareScheduleInput } from "./backup/schedule-input"
@@ -63,7 +74,8 @@ import { readBackupSettings } from "./backup/settings"
 import { folderToOpen, localInventoryProblem } from "./backup/local-inventory"
 import { legacyAzureReader, registerStorageToken } from "./storage/azure-seal"
 import { createArmCaller } from "./azure/arm"
-import { BackupReaderService } from "./auth/backup-reader"
+import { BackupReaderService, readerConfidenceRead } from "./auth/backup-reader"
+import { readerSetupArguments } from "../shared/services/manifest"
 // The same setup script the docs site downloads and the card copies, bundled so Save writes it exactly.
 import readerSetupScript from "../../resources/New-TenuVaultBackupReader.ps1?raw"
 import desktopSetupScript from "../../resources/New-TenuVaultDesktopApp.ps1?raw"
@@ -74,7 +86,7 @@ import { hostname } from "node:os"
 import { handleLocalBlobRequest, isLocalAccount, localRoutesRunning } from "./storage/blob-emulator"
 import { LocalBlobStore } from "./storage/local-blob-store"
 import { setRestoreApprovalStore } from "./storage/restore-approvals"
-import { setRestoreJournalStore, setRestoreJournalAuthorization } from "./storage/restore-journal"
+import { setRestoreJournalStore, setRestoreJournalAuthorization, guardedRestoreJournal } from "./storage/restore-journal"
 import { accountStore, secureCachePlugin } from "./auth/stores"
 import {
   LICENSE_API_BASE,
@@ -117,9 +129,11 @@ import { backupAuthorization, featureAccess, withRecoveryBackups } from "./featu
 import { TenantRecords } from "./features/records"
 import { DriftJobs, driftScanRoutes } from "./drift/jobs"
 import { afterScheduledBackup } from "./features/reports"
+import { MODULES } from "../shared/services/modules"
 import { ModuleSettings } from "./services/settings"
-import { disabledFolders } from "../shared/services/modules"
 import { servicesStatus } from "./services/status"
+import { requireServiceAccess } from "./services/access"
+import { ConnectionHealth, selectedTenant } from "./connection-health/service"
 
 const RENDERER_STORAGE_PREFIX = "renderer."
 const LOCAL_FOLDER_KEY = "backup.localFolder"
@@ -255,7 +269,13 @@ async function bootstrap(): Promise<void> {
     return savedProxyAuth.list()
   })
 
-  const accounts = accountStore(appStore)
+  const accounts = accountStore(appStore, (tenantId) => {
+    // Sign-out removes the account before MSAL finishes clearing its cache. Invalidate all pending
+    // observations now, including the reader's, even when that later cache operation fails.
+    if (!accounts.get(tenantId)) health.signedOut(tenantId)
+    else health.connectionsChanged(tenantId)
+    mainWindow?.webContents.send("auth:accountsChanged", tenantId)
+  })
   // MSAL token traffic goes through the bridged fetch, which is only created below (it needs
   // the license and token plumbing that auth feeds). AuthManager is handed this late-bound
   // delegate instead: it is first used for a sign-in, long after bootstrap assigns the bridge.
@@ -322,7 +342,7 @@ async function bootstrap(): Promise<void> {
   // tokenFor and preferences are declared below; they are only called once the app runs.
   const backupAccess = backupAuthorization({
     license,
-    tokenFor: (tenantId, clientId, scope) => tokenFor(tenantId, clientId, scope),
+    tokenFor: (tenantId, clientId, scope, forceRefresh) => tokenFor(tenantId, clientId, scope, forceRefresh),
     // Community keeps 30 days of history; Pro and MSP keep what the admin chooses (0 keeps everything).
     retentionDays: (tenantId) => effectiveRetentionDays(preferences.get().retentionDays, license.plan(tenantId)),
   })
@@ -379,16 +399,32 @@ async function bootstrap(): Promise<void> {
     if (!accounts.get(tenantId)) throw new Error("Sign in to this tenant before opening framework history.")
     return license.requireEntitlement(tenantId)
   })
+  const moduleSettings = new ModuleSettings(appStore)
   setRestoreJournalAuthorization(async (tenantId) => {
     const account = accounts.get(tenantId)
     if (!account) throw new Error("Sign in to this tenant before opening restore history.")
     await license.requireEntitlement(tenantId)
     const token = await tokenFor(tenantId, account.clientId, "https://graph.microsoft.com/.default", true)
-    const response = await bridgedFetch("https://graph.microsoft.com/beta/deviceManagement/deviceCategories?$top=1&$select=id", {
+    // One small read of a service the tenant backs up: Intune when it is on, as before.
+    await requireServiceAccess(moduleSettings.selection(tenantId), (path) => bridgedFetch(`https://graph.microsoft.com/beta/${path}`, {
       headers: { Authorization: `Bearer ${token.accessToken}` }, signal: AbortSignal.timeout(15_000),
-    })
-    if (!response.ok || !Array.isArray((await response.json()).value)) throw new Error("Intune management access is required for this tenant's restore history.")
+    }), "this tenant's restore history")
   })
+
+  const recoveryAccounts = new RecoveryAccounts(appStore)
+  const restoreConnection = async (tenant: string) => {
+    const account = accounts.get(tenant)
+    if (!account) throw new Error("Sign in to this tenant before restoring identity policies.")
+    await license.requireEntitlement(tenant)
+    const token = await tokenFor(tenant, account.clientId, "https://graph.microsoft.com/.default", true)
+    const claims = JSON.parse(Buffer.from(token.accessToken.split(".")[1] ?? "", "base64url").toString("utf8")) as { oid?: string }
+    if (!claims.oid) throw new Error("A signed-in admin is required.")
+    return { tenantId: tenant, clientId: account.clientId, userId: claims.oid, token: token.accessToken }
+  }
+  const identityRestore = new IdentityRestoreService(guardedRestoreJournal(), recoveryAccounts, restoreConnection, bridgedFetch)
+  setDirectoryRestoreService(new DirectoryRestoreService(new DirectoryRestoreStore(join(userData, "directory-restore"), cipher), recoveryAccounts, restoreConnection, bridgedFetch))
+  setIdentityRestorePreviews(identityRestore)
+  setIdentityRestoreDispatch((tenant, request) => identityRestore.restore(tenant, request))
 
   // Every PDF export resolves branding per tenant here: saved branding applies only on a plan with pdfBranding.
   const pdfBranding = new PdfBrandingPolicy(
@@ -431,12 +467,39 @@ async function bootstrap(): Promise<void> {
   const failedAttempts = new FailedAttemptLog(appStore)
   // The Backup Reader's tokens reach only the backup engine: never the fetch bridge, tokenFor or a
   // portal route, so no restore, revert or other change can ever run with them.
-  const backupReader = new BackupReaderService(tokenStore, { fetch: bridgedFetch })
-  const moduleSettings = new ModuleSettings(appStore)
+  const backupReader = new BackupReaderService(tokenStore, { fetch: bridgedFetch, services: (tenantId) => moduleSettings.selection(tenantId), connectionChanged: (tenantId) => health.connectionsChanged(tenantId) })
+  // Connection health: what the token checks and the backup runs of each tenant observed, and what
+  // that adds up to. A check asks Microsoft for a new token without any window, so it goes straight
+  // to the sign-in and not through tokenFor: a check that fails must never ask the window for a sign-in.
+  const health = new ConnectionHealth({
+    store: appStore,
+    tenant: (tenantId) => {
+      const profile = tenantProfile(tenantId)
+      return profile && { clientId: profile.clientId, storage: isLocalAccount(profile.storageAccountName) ? "local" : "azure", storageId: profile.storageAccountName }
+    },
+    account: (tenantId) => accounts.get(tenantId)?.homeAccountId ?? null,
+    settings: (tenantId) => moduleSettings.get(tenantId),
+    token: (tenantId, clientId, resource) => auth.getAccessToken(tenantId, clientId, RESOURCE_SCOPES[resource], true),
+    reader: (tenantId) => {
+      const reader = backupReader.status(tenantId)
+      return reader && { clientId: reader.clientId, credential: backupReader.connectionIdentity(tenantId)!, facts: { state: reader.state, notAfter: reader.notAfter, verifiedAt: reader.verifiedAt, verifiedRoles: reader.verifiedRoles, roleChange: reader.roleChange } }
+    },
+    // A new token of the Backup Reader, asked for the way a scheduled backup does: only on a plan
+    // that includes the reader, and after the license check. A tenant without either is not asked.
+    readerToken: async (tenantId) => {
+      const profile = tenantProfile(tenantId)
+      const plan = license.plan(tenantId)
+      if (!profile || !plan || !allows(plan, "backupReader")) return null
+      const reader = backupReader.tokens({ tenantId, clientId: profile.clientId, storageAccountName: profile.storageAccountName, trigger: "scheduled" })
+      if (!reader || !(await license.requireEntitlement(tenantId).then(() => true, () => false))) return null
+      return reader.graph({ fresh: true })
+    },
+    changed: (tenantId) => mainWindow?.webContents.send("health:changed", tenantId),
+  })
   const engine = new BackupEngine({
     fetch: bridgedFetch,
     getToken: backupAccess.getToken,
-    enabledModules: (tenantId) => moduleSettings.enabled(tenantId),
+    services: (tenantId) => moduleSettings.selection(tenantId),
     unattendedTokens: (request) => {
       const plan = license.plan(request.tenantId)
       if (!plan || !allows(plan, "backupReader")) return null
@@ -444,9 +507,9 @@ async function bootstrap(): Promise<void> {
       if (!reader) return null
       return {
         ...reader,
-        graph: async () => {
+        graph: async (options) => {
           await license.requireEntitlement(request.tenantId)
-          return reader.graph()
+          return reader.graph(options)
         },
         storage: async () => {
           await license.requireEntitlement(request.tenantId)
@@ -455,9 +518,23 @@ async function bootstrap(): Promise<void> {
           registerStorageToken(token, request.tenantId)
           return token
         },
+        // Answered from the reader's Graph token, so it is the run's first token request and gets the same check.
+        excludedTypes: async () => {
+          await license.requireEntitlement(request.tenantId)
+          return (await reader.excludedTypes?.()) ?? []
+        },
       }
     },
     retentionDays: backupAccess.retentionDays,
+    // The connection is checked as a backup starts and after it ended. Neither waits for the other:
+    // the backup runs whatever the check finds, and a check that fails is only an observation.
+    // Whose sign-in the run reads with is noted as it starts, so its outcomes are credited to that sign-in.
+    onStarted: (job, request) => {
+      health.runStarted(job, request)
+      void health.check(request.tenantId, "beforeBackup", { reader: job.authMode === "app-only" }).catch(() => undefined)
+    },
+    onOutcomes: (outcomes, request) => health.recordRun(outcomes, request),
+    onToken: (runId, granted) => health.runToken(runId, granted),
     onFinished: (job, request) => {
       failedAttempts.finished(job, request)
       // Manual backup outcomes notify here; scheduled and tray outcomes notify from the
@@ -466,6 +543,8 @@ async function bootstrap(): Promise<void> {
       // Every trigger counts, until the first backup that works.
       diagnostics.record(firstBackupEvent(job))
       tallyBackup(job, request)
+      health.runEnded(job.id)
+      void health.check(request.tenantId, "afterBackup", { reader: job.authMode === "app-only", failed: job.status === "Failed" }).catch(() => undefined)
     },
   })
 
@@ -642,7 +721,15 @@ async function bootstrap(): Promise<void> {
     },
   })
   const host: ApiHost = new ApiHost({
-    routes: { ...routes, ...backupRoutes(engine, (tenantId) => scopes.get(tenantId).scope), ...featureRoutes(featureDeps), ...driftScanRoutes(driftJobs) },
+    saveDownload: async response => {
+      const name = /filename="([A-Za-z0-9-]+\.tar)"/.exec(response.headers.get("content-disposition") ?? "")?.[1] ?? "backup.tar"
+      const chosen = await dialog.showSaveDialog(mainWindow!, { title: "Export backup", defaultPath: name, filters: [{ name: "Large backup archive", extensions: ["tar"] }] })
+      if (chosen.canceled || !chosen.filePath) { await response.body?.cancel(); return Response.json({ saved: false }) }
+      if (!response.body) throw new Error("The archive download has no content")
+      await saveLargeDownload(response.body, chosen.filePath)
+      return Response.json({ saved: true })
+    },
+    routes: { ...routes, ...backupRoutes(engine, (tenantId) => scopes.get(tenantId).scope), ...featureRoutes(featureDeps), ...driftScanRoutes(driftJobs), ...restoreSafetyRoutes(guardedRestoreJournal(), recoveryAccounts, restoreConnection, async tenant => { await restoreConnection(tenant) }, identityRestore) },
     transform: surfaceTokenErrors,
     // Disabled CIS routes refuse before any licensing work. The plan comes next, so the
     // disclaimer is never accepted for a change the plan refuses anyway.
@@ -748,7 +835,7 @@ async function bootstrap(): Promise<void> {
   const notifyBackupOutcome = async (job: BackupJob, trigger: string, key?: string): Promise<boolean> => {
     if (job.status === "Cancelled") return false
     const result = await emitBackupOutcome(featureDeps, job.tenantId, {
-      status: job.status === "Failed" ? "Failed" : job.failures || /completed with \d+ warnings?/i.test(job.progressMessage) ? "CompletedWithWarnings" : "Success",
+      status: notifiedStatus(job),
       backupFolder: job.backupFolder ?? null,
       naturalKey: key ?? job.backupFolder ?? `job:${job.id}`,
       finishedAt: job.endTime ?? new Date().toISOString(),
@@ -886,7 +973,7 @@ async function bootstrap(): Promise<void> {
   }, (tenantId, reason) => {
     if (reason === "choice") { pushLicense(); return }
     if (Notification.isSupported()) new Notification({ title: "Paused: Azure storage needs Pro", body: `${tenantProfile(tenantId)?.name ?? "This tenant"}: Open TenuVault to switch to local backups. Existing Azure backups are kept.` }).show()
-  })
+  }, tenantId => engine.hasLargeTypes(tenantId, scopes.get(tenantId).scope))
 
   const tray = new AppTray({
     open: showWindow,
@@ -973,13 +1060,11 @@ async function bootstrap(): Promise<void> {
     const plan = license.plan(tenantId)
     const profile = tenantProfile(tenantId)
     const azureStorage = profile && !isLocalAccount(profile.storageAccountName) ? profile.storageAccountName : undefined
-    const reader = backupReader.status(tenantId)
-    // Types of services turned off for the tenant are left out of every backup, so the reader does not miss them.
-    const off = new Set(disabledFolders(moduleSettings.enabled(tenantId)))
     return {
       supported: readerSupported,
       available: !!plan && allows(plan, "backupReader"),
-      reader: reader && { ...reader, excludedTypes: reader.excludedTypes.filter((folder) => !off.has(folder)) },
+      reader: backupReader.status(tenantId),
+      setupArguments: readerSetupArguments(moduleSettings.selection(tenantId)),
       ...(azureStorage ? { storageAccountName: azureStorage } : {}),
     }
   }
@@ -987,8 +1072,9 @@ async function bootstrap(): Promise<void> {
     if (typeof tenantId !== "string" || !tenantProfile(tenantId)) throw new Error("Connect this tenant first.")
     return tenantId
   }
-  // The confidence test behind Verify and the card's Test button: one small Intune read with the
-  // reader's token (so a green verification is not just token claims), and for Azure tenants the
+  // The confidence test behind Verify and the card's Test button: one small read of a service the
+  // tenant backs up, with the reader's token (so a green verification is not just token claims). A
+  // tenant without Intune is never asked for an Intune read. For Azure tenants it also runs the
   // container check scheduled backups need (the TenuVault Backup Writer role from
   // New-TenuVaultStorage.ps1 -BackupReaderAppId). The result is recorded for the card's checklist;
   // a storage problem stays a warning, since the Graph part can still work.
@@ -1004,14 +1090,17 @@ async function bootstrap(): Promise<void> {
     }
     let graph = false
     let graphMessage: string | undefined
+    const read = readerConfidenceRead(moduleSettings.selection(tenantId), backupReader.status(tenantId)?.verifiedRoles ?? [])
     try {
-      const response = await chromiumFetch("https://graph.microsoft.com/beta/deviceManagement/deviceCompliancePolicies?$top=1&$select=id", {
-        headers: { Authorization: `Bearer ${await tokens.graph()}` },
-        signal: AbortSignal.timeout(15_000),
-      })
-      void response.body?.cancel().catch(() => undefined)
-      graph = response.ok
-      if (!graph) graphMessage = `Microsoft Graph answered ${response.status} for a Backup Reader read.`
+      // The token is asked for first, so a reader Microsoft refuses says so whatever it could read.
+      const token = await tokens.graph()
+      if (!read) graphMessage = "The Backup Reader has no permission for the test read of a service this tenant backs up, so its Microsoft Graph access was not tested."
+      else {
+        const response = await chromiumFetch(`https://graph.microsoft.com/beta/${read.path}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15_000) })
+        void response.body?.cancel().catch(() => undefined)
+        graph = response.ok
+        if (!graph) graphMessage = `Microsoft Graph answered ${response.status} for a Backup Reader read of ${read.label}.`
+      }
     } catch (error) {
       graphMessage = error instanceof Error ? error.message : String(error)
     }
@@ -1174,11 +1263,24 @@ async function bootstrap(): Promise<void> {
   // The sign-in that follows may skip the account picker once, for exactly this registration and
   // the account that just set it up; any other request for that is ignored.
   let setupSignIn: { tenantId: string; clientId: string; username: string } | null = null
-  handleTrusted("setup:createRegistration", async (_event, options?: { tenant?: string }) => {
+  handleTrusted("setup:createRegistration", async (_event, options?: { tenant?: string; choice?: unknown }) => {
     setupSignIn = null
     const result = await registrationSetup.create(options)
     setupSignIn = { tenantId: result.tenantId, clientId: result.clientId, username: result.username }
     return result
+  })
+  const onboardingAccount = (tenantId: unknown, clientId: unknown): { tenantId: string; clientId: string } => {
+    if (typeof tenantId !== "string" || typeof clientId !== "string" || !auth.accounts().some(account => account.tenantId.toLowerCase() === tenantId.toLowerCase() && account.clientId.toLowerCase() === clientId.toLowerCase())) throw new Error("Sign in to this tenant first.")
+    return { tenantId, clientId }
+  }
+  handleTrusted("setup:checkPermissions", (_event, tenantId: unknown, clientId: unknown, choice: unknown) => {
+    const account = onboardingAccount(tenantId, clientId)
+    return checkOnboardingPermissions(choice, () => tokenFor(account.tenantId, account.clientId, RESOURCE_SCOPES.graph, true))
+  })
+  handleTrusted("setup:saveServices", (_event, tenantId: unknown, clientId: unknown, choice: unknown) => {
+    const account = onboardingAccount(tenantId, clientId)
+    if (tenantProfile(account.tenantId)) throw new Error("This tenant is already connected to TenuVault.")
+    saveOnboardingServices(moduleSettings, account.tenantId, choice)
   })
   handleTrusted("setup:cancelCreateRegistration", () => registrationSetup.cancel())
   // Try again on the setup sign-in: stops only a sign-in that still waits for the browser.
@@ -1198,11 +1300,14 @@ async function bootstrap(): Promise<void> {
     diagnostics.record({ name: "signin", props: { result: "ok" } })
     phase("license")
     await requireForNewTenant(account.tenantId)
+    // A tenant that is signed in to for the first time is not connected yet; its first check comes with its first backup.
+    void health.check(account.tenantId, "signIn").catch(() => undefined)
     return account
   }))
   // Signing in again also renews the ID token an organization license is checked with.
   handleTrusted("auth:reauthenticate", async (_event, tenantId: string, clientId: string, scope?: unknown) => {
     const account = await auth.reauthenticate(tenantId, clientId, scope === undefined ? undefined : String(scope)).finally(returnToApp)
+    void health.check(tenantId, "signIn").catch(() => undefined)
     try {
       await license.requireEntitlement(tenantId, { retry: true })
     } finally {
@@ -1214,6 +1319,7 @@ async function bootstrap(): Promise<void> {
     await auth.signOut(tenantId)
     // The Backup Reader's private key goes with the tenant's sign-in on this computer.
     backupReader.remove(tenantId)
+    health.signedOut(tenantId)
     pushLicense()
   })
   handleTrusted("auth:accounts", () => auth.accounts())
@@ -1306,6 +1412,7 @@ async function bootstrap(): Promise<void> {
         .catch((error: unknown) => console.warn(`[license] Could not release ${tenantId}:`, error))
       await auth.signOut(tenantId)
       backupReader.remove(tenantId)
+      health.forget(tenantId)
     })
   })
   handleTrusted("license:open", async (_event, target: unknown, options?: { source?: unknown; plan?: unknown; interval?: unknown }) => {
@@ -1343,23 +1450,35 @@ async function bootstrap(): Promise<void> {
     const text = rendererStorageValue(value)
     // The first tenant saved on this computer is the end of the setup.
     const firstTenant = name === "tenuvault_tenants" && connectedTenantIds().length === 0
+    const previousTenants = name === "tenuvault_tenants" ? connectedTenantIds() : []
     appStore.set(RENDERER_STORAGE_PREFIX + name, text)
+    if (name === "tenuvault_tenants") for (const tenant of new Set([...previousTenants, ...connectedTenantIds()])) health.connectionsChanged(tenant)
     if (firstTenant && connectedTenantIds().length > 0) diagnostics.record({ name: "tenant_added" })
   })
-  handleTrusted("storage:remove", (_event, key: unknown) => appStore.delete(RENDERER_STORAGE_PREFIX + rendererStorageKey(key)))
+  handleTrusted("storage:remove", (_event, key: unknown) => {
+    const name = rendererStorageKey(key)
+    const previousTenants = name === "tenuvault_tenants" ? connectedTenantIds() : []
+    appStore.delete(RENDERER_STORAGE_PREFIX + name)
+    for (const tenant of previousTenants) health.connectionsChanged(tenant)
+  })
 
   let importingArchive = false
   handleTrusted("backups:importArchive", async () => {
     if (importingArchive) throw new Error("An archive import is already open")
     importingArchive = true
     try {
-      const selected = await dialog.showOpenDialog(mainWindow!, { title: "Review backup archive", properties: ["openFile"], filters: [{ name: "TenuVault backup", extensions: ["zip"] }] })
+      const selected = await dialog.showOpenDialog(mainWindow!, { title: "Review backup archive", properties: ["openFile"], filters: [{ name: "TenuVault backup", extensions: ["zip", "tar"] }] })
       if (selected.canceled || !selected.filePaths[0]) return { imported: false }
-      assertArchiveFileSize((await stat(selected.filePaths[0])).size)
-      const archive = await reviewArchive(await readFile(selected.filePaths[0]))
+      const large = selected.filePaths[0].toLowerCase().endsWith(".tar")
+      if (!large) assertArchiveFileSize((await stat(selected.filePaths[0])).size)
+      const archive = large ? await reviewLargeArchive(selected.filePaths[0]) : await reviewArchive(await readFile(selected.filePaths[0]))
       const confirm = async () => (await dialog.showMessageBox(mainWindow!, { type: "warning", title: "Review backup archive", message: `Import ${archive.count} policy snapshots?`, detail: `Source tenant: ${archive.tenantId}\nBackup: ${archive.backupId}\nSHA-256: ${archive.digest}\n\nThe archive declares its source identity; it is not signed. Use files supplied by a source you trust. Snapshots will be encrypted on this device. Import does not change Intune. Use the tenant's local backup storage and the existing restore preview to restore later.`, buttons: ["Cancel", "Import locally"], defaultId: 0, cancelId: 0 })).response === 1
       // The license check can claim a slot for the archive's tenant, so it runs only once the import is confirmed.
-      if (!(await importConfirmedArchive(getLocalStore(), archive, confirm, (tenantId) => license.checkNewTenant(tenantId, { retry: false })))) return { imported: false }
+      if ("path" in archive) {
+        if (!(await confirm())) return { imported: false }
+        await license.checkNewTenant(archive.tenantId, { retry: false })
+        await importLargeArchive(getLocalStore(), archive)
+      } else if (!(await importConfirmedArchive(getLocalStore(), archive, confirm, (tenantId) => license.checkNewTenant(tenantId, { retry: false })))) return { imported: false }
       return { imported: true, tenantId: archive.tenantId, backupId: archive.backupId }
     } finally { importingArchive = false }
   })
@@ -1376,19 +1495,65 @@ async function bootstrap(): Promise<void> {
   })
   handleTrusted("backups:scope", (_event, tenantId: unknown) => {
     if (typeof tenantId !== "string") throw new Error("Choose a tenant.")
-    return scopes.get(tenantId)
+    return { ...scopes.get(tenantId), selection: moduleSettings.selection(tenantId) }
   })
   const servicesFor = (tenantId: unknown, clientId: unknown, refresh: boolean) => {
     if (typeof tenantId !== "string" || typeof clientId !== "string") throw new Error("Choose a tenant.")
     return servicesStatus(tenantId, moduleSettings, (force) => tokenFor(tenantId, clientId, RESOURCE_SCOPES.graph, force), refresh)
   }
   handleTrusted("services:status", (_event, tenantId: unknown, clientId: unknown, refresh: unknown) => servicesFor(tenantId, clientId, refresh === true))
-  handleTrusted("services:setEnabled", (_event, tenantId: unknown, clientId: unknown, id: unknown, enabled: unknown) => {
+  handleTrusted("services:setEnabled", (_event, tenantId: unknown, clientId: unknown, id: unknown, enabled: unknown, confirmation: unknown) => {
     // Both IDs are checked before saving, so a refused request never changes what backups include.
     if (typeof tenantId !== "string" || typeof clientId !== "string") throw new Error("Choose a tenant.")
+    const module = MODULES.find(service => service.id === id)
+    if (enabled === false && module?.defaultOn && (!confirmation || typeof confirmation !== "object" || !("confirmed" in confirmation) || confirmation.confirmed !== true)) {
+      throw new Error(`Confirm turning off ${module.label}: new manual and scheduled backups will leave out this service.`)
+    }
     moduleSettings.set(tenantId, id, enabled)
+    mainWindow?.webContents.send("health:changed", tenantId)
     return servicesFor(tenantId, clientId, false)
   })
+  // What TenuVault asks for at setup, and the opt-in areas, per service. Both answer with the
+  // tenant's connection health, which says what each service and area may do with the choice.
+  const connectedTenant = (tenantId: unknown) => {
+    if (typeof tenantId !== "string" || !tenantProfile(tenantId)) throw new Error("Connect this tenant first.")
+    return tenantId
+  }
+  const permissionAdditions = new AddPermissionsFlow({
+    fetch: chromiumFetch,
+    connection: async tenantId => {
+      connectedTenant(tenantId)
+      const account = accounts.get(tenantId.toLowerCase())
+      const profile = tenantProfile(tenantId)
+      if (!account || !profile || account.clientId.toLowerCase() !== profile.clientId.toLowerCase()) throw new Error("Sign in to the connected registration first.")
+      const settings = moduleSettings.get(tenantId)
+      const token = await auth.getAccessToken(tenantId, account.clientId, RESOURCE_SCOPES.graph)
+      return { tenantId, clientId: account.clientId, username: account.username, homeAccountId: account.homeAccountId, scopes: permissionAdditionScopes(token), allowed: additionPermissions(settings) }
+    },
+    signIn: (connection, signal) => signInForPermissionAddition(connection, chromiumFetch, url => shell.openExternal(url), signal),
+    refresh: async (connection, approved) => {
+      const token = await auth.getAccessToken(connection.tenantId, connection.clientId, RESOURCE_SCOPES.graph, true)
+      await health.check(connection.tenantId, "again")
+      verifyPermissionAdditionToken(token, approved)
+    },
+  })
+  handleTrusted("services:previewAddition", (_event, tenantId: unknown, missing: unknown) => permissionAdditions.preview(tenantId, missing))
+  handleTrusted("services:confirmAddition", (_event, tenantId: unknown, id: unknown) => permissionAdditions.confirm(tenantId, id))
+  handleTrusted("services:cancelAddition", (_event, tenantId: unknown) => { if (typeof tenantId === "string") permissionAdditions.cancel(tenantId) })
+  handleTrusted("services:setAccess", (_event, tenantId: unknown, id: unknown, access: unknown) => {
+    const tenant = connectedTenant(tenantId)
+    moduleSettings.setAccess(tenant, id, access)
+    return health.report(tenant)
+  })
+  handleTrusted("services:setArea", (_event, tenantId: unknown, id: unknown, area: unknown, enabled: unknown) => {
+    const tenant = connectedTenant(tenantId)
+    moduleSettings.setArea(tenant, id, area, enabled)
+    return health.report(tenant)
+  })
+  handleTrusted("health:report", (_event, tenantId: unknown) => health.report(connectedTenant(tenantId)))
+  // `again` is the admin asking to check again, which always asks Microsoft; without it a page that opens gets a recent check's answer.
+  handleTrusted("health:check", (_event, tenantId: unknown, again: unknown) => health.check(connectedTenant(tenantId), again === true ? "again" : "opened"))
+  handleTrusted("health:acknowledge", (_event, tenantId: unknown, receipt: unknown) => health.acknowledge(connectedTenant(tenantId), receipt))
   handleTrusted("backups:failedAttempts", (_event, tenantId: unknown) => (typeof tenantId === "string" ? failedAttempts.list(tenantId) : []))
   handleTrusted("backups:liveRuns", (_event, tenantId: unknown) => (typeof tenantId === "string" ? engine.liveRuns(tenantId) : []))
   handleTrusted("backups:setScope", (_event, tenantId: unknown, scope: unknown) => {
@@ -1543,6 +1708,7 @@ async function bootstrap(): Promise<void> {
     signIn: async (tenant) => {
       const clientId = appBackupClientId(tenant, appStore.get(`${RENDERER_STORAGE_PREFIX}tenuvault_tenants`))
       await auth.reauthenticate(tenant, clientId, RESOURCE_SCOPES.graph).finally(returnToApp)
+      void health.check(tenant, "signIn").catch(() => undefined)
       pushLicense()
     },
   })
@@ -1612,6 +1778,11 @@ async function bootstrap(): Promise<void> {
   handleTrusted("reports:saveFile", (_event, data: unknown, fileName: unknown, encoding: unknown) => saveExportFile(data, fileName, encoding))
 
   createWindow()
+
+  // At launch only the tenant the admin has open is checked. Every other tenant is checked when
+  // it is opened, backed up or signed in to, so starting the app never asks Microsoft about them all.
+  const open = selectedTenant(appStore.get(`${RENDERER_STORAGE_PREFIX}tenuvault_tenants`), appStore.get(`${RENDERER_STORAGE_PREFIX}tenuvault_selected_tenant`))
+  if (open) void health.check(open, "launch").catch(() => undefined)
 }
 
 /** Whether closing the window keeps TenuVault running in the tray (set once preferences load). */

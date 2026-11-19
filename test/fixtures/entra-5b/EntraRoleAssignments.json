@@ -1,0 +1,275 @@
+{
+  "folder": "EntraRoleAssignments",
+  "path": "roleManagement/directory/roleAssignments",
+  "apiVersion": "v1.0",
+  "shape": "list",
+  "signIn": "both",
+  "objectCount": 15,
+  "verified": "2026-11-16",
+  "source": "Live app-only read through GraphSession and readObject",
+  "outcome": "saved",
+  "responses": {
+    "/v1.0/roleManagement/directory/roleAssignments": {
+      "status": 200,
+      "body": {
+        "value": [
+          {
+            "id": "lAPpYvVpN0KRkAEhdxReENWRf0KvU_ZDpH2ACqe_hA0-1",
+            "principalId": "00000000-0000-4000-8000-2fec139f6195",
+            "principalOrganizationId": "00000000-0000-4000-8000-836b20d0164d",
+            "directoryScopeId": "/",
+            "roleDefinitionId": "00000000-0000-4000-8000-10be62c63054"
+          },
+          {
+            "id": "lAPpYvVpN0KRkAEhdxReEMFtiYF4ax5OssOr0hSRjww-1",
+            "principalId": "00000000-0000-4000-8000-41b30a434401",
+            "principalOrganizationId": "00000000-0000-4000-8000-836b20d0164d",
+            "directoryScopeId": "/",
+            "roleDefinitionId": "00000000-0000-4000-8000-10be62c63054"
+          },
+          {
+            "id": "NIwd6_WsDUaEJMHxpvvbhc551UFkUrJMs_mWIwJFqiA-1",
+            "principalId": "00000000-0000-4000-8000-1f4774ef67eb",
+            "principalOrganizationId": "00000000-0000-4000-8000-836b20d0164d",
+            "directoryScopeId": "/",
+            "roleDefinitionId": "00000000-0000-4000-8000-c9021d0390c4"
+          },
+          {
+            "id": "4-PYiFWPHkqVOpuYmLiHa_UrVG09ihpDoGirlQz6zlo-1",
+            "principalId": "00000000-0000-4000-8000-beb86f65cc26",
+            "principalOrganizationId": "00000000-0000-4000-8000-836b20d0164d",
+            "directoryScopeId": "/",
+            "roleDefinitionId": "00000000-0000-4000-8000-2116e5c9607e"
+          },
+          {
+            "id": "22IsOhhTDUKNdCOv_uXZ1cFtiYF4ax5OssOr0hSRjww-1",
+            "principalId": "00000000-0000-4000-8000-41b30a434401",
+            "principalOrganizationId": "00000000-0000-4000-8000-836b20d0164d",
+            "directoryScopeId": "/",
+            "roleDefinitionId": "00000000-0000-4000-8000-1b248b90e7f2"
+          },
+          {
+            "id": "22IsOhhTDUKNdCOv_uXZ1RomoLB17wtHv8h3zHgQ6RY-1",
+            "principalId": "00000000-0000-4000-8000-0fc48f533c5a",
+            "principalOrganizationId": "00000000-0000-4000-8000-836b20d0164d",
+            "directoryScopeId": "/",
+            "roleDefinitionId": "00000000-0000-4000-8000-1b248b90e7f2"
+          },
+          {
+            "id": "kl2Jm9Msx0SdAqasLV6lw9WRf0KvU_ZDpH2ACqe_hA0-1",
+            "principalId": "00000000-0000-4000-8000-2fec139f6195",
+            "principalOrganizationId": "00000000-0000-4000-8000-836b20d0164d",
+            "directoryScopeId": "/",
+            "roleDefinitionId": "00000000-0000-4000-8000-f6aa865a8464"
+          },
+          {
+            "id": "5wuT_mJe20eRr5jDpJo4sftrij1jqOdKvvEaBohtITE-1",
+            "principalId": "00000000-0000-4000-8000-d27b9dcbe628",
+            "principalOrganizationId": "00000000-0000-4000-8000-836b20d0164d",
+            "directoryScopeId": "/",
+            "roleDefinitionId": "00000000-0000-4000-8000-3b867241546f"
+          },
+          {
+            "id": "5wuT_mJe20eRr5jDpJo4sdWRf0KvU_ZDpH2ACqe_hA0-1",
+            "principalId": "00000000-0000-4000-8000-2fec139f6195",
+            "principalOrganizationId": "00000000-0000-4000-8000-836b20d0164d",
+            "directoryScopeId": "/",
+            "roleDefinitionId": "00000000-0000-4000-8000-3b867241546f"
+          },
+          {
+            "id": "3ywjKSOT_UKt4h0JevPk3vtrij1jqOdKvvEaBohtITE-1",
+            "principalId": "00000000-0000-4000-8000-d27b9dcbe628",
+            "principalOrganizationId": "00000000-0000-4000-8000-836b20d0164d",
+            "directoryScopeId": "/",
+            "roleDefinitionId": "00000000-0000-4000-8000-f3d65b5eb86e"
+          },
+          {
+            "id": "RhIJaeggVkqqTQZgdbKnqPtrij1jqOdKvvEaBohtITE-1",
+            "principalId": "00000000-0000-4000-8000-d27b9dcbe628",
+            "principalOrganizationId": "00000000-0000-4000-8000-836b20d0164d",
+            "directoryScopeId": "/",
+            "roleDefinitionId": "00000000-0000-4000-8000-6710cf4e30fe"
+          },
+          {
+            "id": "cqeYdnt4yEqQH2DWsIr_0vtrij1jqOdKvvEaBohtITE-1",
+            "principalId": "00000000-0000-4000-8000-d27b9dcbe628",
+            "principalOrganizationId": "00000000-0000-4000-8000-836b20d0164d",
+            "directoryScopeId": "/",
+            "roleDefinitionId": "00000000-0000-4000-8000-312798df47f2"
+          },
+          {
+            "id": "sSIiX8NXukiK1dR1nx_eb9WRf0KvU_ZDpH2ACqe_hA0-1",
+            "principalId": "00000000-0000-4000-8000-2fec139f6195",
+            "principalOrganizationId": "00000000-0000-4000-8000-836b20d0164d",
+            "directoryScopeId": "/",
+            "roleDefinitionId": "00000000-0000-4000-8000-48474d14cf9d"
+          },
+          {
+            "id": "y-RKGSaxskC9W2CRs4CXfdWRf0KvU_ZDpH2ACqe_hA0-1",
+            "principalId": "00000000-0000-4000-8000-2fec139f6195",
+            "principalOrganizationId": "00000000-0000-4000-8000-836b20d0164d",
+            "directoryScopeId": "/",
+            "roleDefinitionId": "00000000-0000-4000-8000-552ef8c923d4"
+          },
+          {
+            "id": "l4VkEWyS80ycNrzrsLqNzNWRf0KvU_ZDpH2ACqe_hA0-1",
+            "principalId": "00000000-0000-4000-8000-2fec139f6195",
+            "principalOrganizationId": "00000000-0000-4000-8000-836b20d0164d",
+            "directoryScopeId": "/",
+            "roleDefinitionId": "00000000-0000-4000-8000-4fa6e52ac4d4"
+          }
+        ]
+      }
+    },
+    "/v1.0/roleManagement/directory/roleAssignments/NIwd6_WsDUaEJMHxpvvbhc551UFkUrJMs_mWIwJFqiA-1": {
+      "status": 200,
+      "body": {
+        "id": "NIwd6_WsDUaEJMHxpvvbhc551UFkUrJMs_mWIwJFqiA-1",
+        "principalId": "00000000-0000-4000-8000-1f4774ef67eb",
+        "principalOrganizationId": "00000000-0000-4000-8000-836b20d0164d",
+        "directoryScopeId": "/",
+        "roleDefinitionId": "00000000-0000-4000-8000-c9021d0390c4"
+      }
+    },
+    "/v1.0/roleManagement/directory/roleAssignments/5wuT_mJe20eRr5jDpJo4sftrij1jqOdKvvEaBohtITE-1": {
+      "status": 200,
+      "body": {
+        "id": "5wuT_mJe20eRr5jDpJo4sftrij1jqOdKvvEaBohtITE-1",
+        "principalId": "00000000-0000-4000-8000-d27b9dcbe628",
+        "principalOrganizationId": "00000000-0000-4000-8000-836b20d0164d",
+        "directoryScopeId": "/",
+        "roleDefinitionId": "00000000-0000-4000-8000-3b867241546f"
+      }
+    },
+    "/v1.0/roleManagement/directory/roleAssignments/lAPpYvVpN0KRkAEhdxReEMFtiYF4ax5OssOr0hSRjww-1": {
+      "status": 200,
+      "body": {
+        "id": "lAPpYvVpN0KRkAEhdxReEMFtiYF4ax5OssOr0hSRjww-1",
+        "principalId": "00000000-0000-4000-8000-41b30a434401",
+        "principalOrganizationId": "00000000-0000-4000-8000-836b20d0164d",
+        "directoryScopeId": "/",
+        "roleDefinitionId": "00000000-0000-4000-8000-10be62c63054"
+      }
+    },
+    "/v1.0/roleManagement/directory/roleAssignments/lAPpYvVpN0KRkAEhdxReENWRf0KvU_ZDpH2ACqe_hA0-1": {
+      "status": 200,
+      "body": {
+        "id": "lAPpYvVpN0KRkAEhdxReENWRf0KvU_ZDpH2ACqe_hA0-1",
+        "principalId": "00000000-0000-4000-8000-2fec139f6195",
+        "principalOrganizationId": "00000000-0000-4000-8000-836b20d0164d",
+        "directoryScopeId": "/",
+        "roleDefinitionId": "00000000-0000-4000-8000-10be62c63054"
+      }
+    },
+    "/v1.0/roleManagement/directory/roleAssignments/22IsOhhTDUKNdCOv_uXZ1RomoLB17wtHv8h3zHgQ6RY-1": {
+      "status": 200,
+      "body": {
+        "id": "22IsOhhTDUKNdCOv_uXZ1RomoLB17wtHv8h3zHgQ6RY-1",
+        "principalId": "00000000-0000-4000-8000-0fc48f533c5a",
+        "principalOrganizationId": "00000000-0000-4000-8000-836b20d0164d",
+        "directoryScopeId": "/",
+        "roleDefinitionId": "00000000-0000-4000-8000-1b248b90e7f2"
+      }
+    },
+    "/v1.0/roleManagement/directory/roleAssignments/4-PYiFWPHkqVOpuYmLiHa_UrVG09ihpDoGirlQz6zlo-1": {
+      "status": 200,
+      "body": {
+        "id": "4-PYiFWPHkqVOpuYmLiHa_UrVG09ihpDoGirlQz6zlo-1",
+        "principalId": "00000000-0000-4000-8000-beb86f65cc26",
+        "principalOrganizationId": "00000000-0000-4000-8000-836b20d0164d",
+        "directoryScopeId": "/",
+        "roleDefinitionId": "00000000-0000-4000-8000-2116e5c9607e"
+      }
+    },
+    "/v1.0/roleManagement/directory/roleAssignments/22IsOhhTDUKNdCOv_uXZ1cFtiYF4ax5OssOr0hSRjww-1": {
+      "status": 200,
+      "body": {
+        "id": "22IsOhhTDUKNdCOv_uXZ1cFtiYF4ax5OssOr0hSRjww-1",
+        "principalId": "00000000-0000-4000-8000-41b30a434401",
+        "principalOrganizationId": "00000000-0000-4000-8000-836b20d0164d",
+        "directoryScopeId": "/",
+        "roleDefinitionId": "00000000-0000-4000-8000-1b248b90e7f2"
+      }
+    },
+    "/v1.0/roleManagement/directory/roleAssignments/kl2Jm9Msx0SdAqasLV6lw9WRf0KvU_ZDpH2ACqe_hA0-1": {
+      "status": 200,
+      "body": {
+        "id": "kl2Jm9Msx0SdAqasLV6lw9WRf0KvU_ZDpH2ACqe_hA0-1",
+        "principalId": "00000000-0000-4000-8000-2fec139f6195",
+        "principalOrganizationId": "00000000-0000-4000-8000-836b20d0164d",
+        "directoryScopeId": "/",
+        "roleDefinitionId": "00000000-0000-4000-8000-f6aa865a8464"
+      }
+    },
+    "/v1.0/roleManagement/directory/roleAssignments/y-RKGSaxskC9W2CRs4CXfdWRf0KvU_ZDpH2ACqe_hA0-1": {
+      "status": 200,
+      "body": {
+        "id": "y-RKGSaxskC9W2CRs4CXfdWRf0KvU_ZDpH2ACqe_hA0-1",
+        "principalId": "00000000-0000-4000-8000-2fec139f6195",
+        "principalOrganizationId": "00000000-0000-4000-8000-836b20d0164d",
+        "directoryScopeId": "/",
+        "roleDefinitionId": "00000000-0000-4000-8000-552ef8c923d4"
+      }
+    },
+    "/v1.0/roleManagement/directory/roleAssignments/3ywjKSOT_UKt4h0JevPk3vtrij1jqOdKvvEaBohtITE-1": {
+      "status": 200,
+      "body": {
+        "id": "3ywjKSOT_UKt4h0JevPk3vtrij1jqOdKvvEaBohtITE-1",
+        "principalId": "00000000-0000-4000-8000-d27b9dcbe628",
+        "principalOrganizationId": "00000000-0000-4000-8000-836b20d0164d",
+        "directoryScopeId": "/",
+        "roleDefinitionId": "00000000-0000-4000-8000-f3d65b5eb86e"
+      }
+    },
+    "/v1.0/roleManagement/directory/roleAssignments/cqeYdnt4yEqQH2DWsIr_0vtrij1jqOdKvvEaBohtITE-1": {
+      "status": 200,
+      "body": {
+        "id": "cqeYdnt4yEqQH2DWsIr_0vtrij1jqOdKvvEaBohtITE-1",
+        "principalId": "00000000-0000-4000-8000-d27b9dcbe628",
+        "principalOrganizationId": "00000000-0000-4000-8000-836b20d0164d",
+        "directoryScopeId": "/",
+        "roleDefinitionId": "00000000-0000-4000-8000-312798df47f2"
+      }
+    },
+    "/v1.0/roleManagement/directory/roleAssignments/5wuT_mJe20eRr5jDpJo4sdWRf0KvU_ZDpH2ACqe_hA0-1": {
+      "status": 200,
+      "body": {
+        "id": "5wuT_mJe20eRr5jDpJo4sdWRf0KvU_ZDpH2ACqe_hA0-1",
+        "principalId": "00000000-0000-4000-8000-2fec139f6195",
+        "principalOrganizationId": "00000000-0000-4000-8000-836b20d0164d",
+        "directoryScopeId": "/",
+        "roleDefinitionId": "00000000-0000-4000-8000-3b867241546f"
+      }
+    },
+    "/v1.0/roleManagement/directory/roleAssignments/RhIJaeggVkqqTQZgdbKnqPtrij1jqOdKvvEaBohtITE-1": {
+      "status": 200,
+      "body": {
+        "id": "RhIJaeggVkqqTQZgdbKnqPtrij1jqOdKvvEaBohtITE-1",
+        "principalId": "00000000-0000-4000-8000-d27b9dcbe628",
+        "principalOrganizationId": "00000000-0000-4000-8000-836b20d0164d",
+        "directoryScopeId": "/",
+        "roleDefinitionId": "00000000-0000-4000-8000-6710cf4e30fe"
+      }
+    },
+    "/v1.0/roleManagement/directory/roleAssignments/sSIiX8NXukiK1dR1nx_eb9WRf0KvU_ZDpH2ACqe_hA0-1": {
+      "status": 200,
+      "body": {
+        "id": "sSIiX8NXukiK1dR1nx_eb9WRf0KvU_ZDpH2ACqe_hA0-1",
+        "principalId": "00000000-0000-4000-8000-2fec139f6195",
+        "principalOrganizationId": "00000000-0000-4000-8000-836b20d0164d",
+        "directoryScopeId": "/",
+        "roleDefinitionId": "00000000-0000-4000-8000-48474d14cf9d"
+      }
+    },
+    "/v1.0/roleManagement/directory/roleAssignments/l4VkEWyS80ycNrzrsLqNzNWRf0KvU_ZDpH2ACqe_hA0-1": {
+      "status": 200,
+      "body": {
+        "id": "l4VkEWyS80ycNrzrsLqNzNWRf0KvU_ZDpH2ACqe_hA0-1",
+        "principalId": "00000000-0000-4000-8000-2fec139f6195",
+        "principalOrganizationId": "00000000-0000-4000-8000-836b20d0164d",
+        "directoryScopeId": "/",
+        "roleDefinitionId": "00000000-0000-4000-8000-4fa6e52ac4d4"
+      }
+    }
+  }
+}

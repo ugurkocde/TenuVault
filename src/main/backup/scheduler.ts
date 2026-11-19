@@ -33,6 +33,15 @@ export function scheduledResult(job: BackupJob): ScheduledRunResult {
 }
 
 /**
+ * The status a finished backup is notified with. Like the scheduled result, it follows the job's
+ * status, its failures and its warnings, never its coverage: a type the sign-in may not read is
+ * left out of a backup that still completed.
+ */
+export function notifiedStatus(job: Pick<BackupJob, "status" | "failures" | "progressMessage">): "Success" | "CompletedWithWarnings" | "Failed" {
+  return job.status === "Failed" ? "Failed" : job.failures || /completed with \d+ warnings?/i.test(job.progressMessage) ? "CompletedWithWarnings" : "Success"
+}
+
+/**
  * Starts an unattended (scheduled or tray) backup and waits for it to end. A run that joins a
  * backup already running for the tenant adopts its outcome, but a cancellation of that backup was
  * not a cancellation of this run, so the run then starts a backup of its own. `wait` sees every
@@ -76,6 +85,7 @@ export class BackupScheduler {
   private startupTimer: NodeJS.Timeout | null = null
   private running: Promise<void> | null = null
   private reconciliationFailed = false
+  private readonly largeRuns = new Set<string>()
 
   constructor(
     private readonly store: KeyValueStore,
@@ -90,6 +100,8 @@ export class BackupScheduler {
     private readonly prepare: (() => Promise<void>) | undefined = undefined,
     private readonly onFallback: (tenantId: string) => void = () => undefined,
     private readonly onPaused: (tenantId: string, reason: "azure" | "choice") => void = () => undefined,
+    /** Streaming tenants release the scheduler tick while their engine job yields between pages. */
+    private readonly largeTenant: (tenantId: string) => boolean = () => false,
   ) {}
 
   list(): BackupSchedule[] {
@@ -177,7 +189,7 @@ export class BackupScheduler {
       if (this.reconciliationFailed) return
       for (const tenantId of Object.keys(reconciled)) {
         const schedule = this.read()[tenantId]
-        if (!schedule || !this.isDue(schedule)) continue
+        if (!schedule || this.largeRuns.has(tenantId) || !this.isDue(schedule)) continue
         const slot = this.lastSlot(schedule)
         const attempts = this.slotAttempts(schedule, slot) + 1
         const afterFailure = this.attempted(schedule, slot) && schedule.lastStatus === "Failed"
@@ -196,6 +208,7 @@ export class BackupScheduler {
             lastMessage: keepStatus ? schedule.lastMessage : undefined,
           },
         })
+        const finish = async () => {
         const result: ScheduledRunResult | null = await this.run(schedule.tenantId, afterFailure, slot.toISOString()).catch((error: unknown) => error instanceof CommunityChoicePendingError ? null : ({
           status: "Failed" as const,
           message: error instanceof Error ? error.message : String(error),
@@ -204,7 +217,7 @@ export class BackupScheduler {
         const current = all[schedule.tenantId]
         if (!result) {
           if (current && current.since === schedule.since) this.write({ ...all, [tenantId]: { ...current, lastAttemptAt: schedule.lastAttemptAt, attemptSlot: schedule.attemptSlot, attempts: schedule.attempts, lastStatus: schedule.lastStatus, lastMessage: schedule.lastMessage } })
-          continue
+          return
         }
         if (current) {
           const at = this.now().toISOString()
@@ -223,6 +236,11 @@ export class BackupScheduler {
           }
           this.write(all)
         }
+        }
+        if (this.largeTenant(tenantId)) {
+          this.largeRuns.add(tenantId)
+          void finish().catch(error => console.warn("[backup-scheduler] Could not record a large run:", error)).finally(() => this.largeRuns.delete(tenantId))
+        } else await finish()
       }
     })().finally(() => {
       this.running = null

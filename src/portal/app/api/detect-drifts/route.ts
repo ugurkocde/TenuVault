@@ -1,4 +1,7 @@
-import { decodeXml, listBlobPages } from "~/lib/storage/list"
+import { backupStoragePath, isLargeBackup, LARGE_BACKUP_CONTAINER, LARGE_STORAGE_UNAVAILABLE } from "../../../../shared/backup-storage"
+import { matchingCompanions, completeHalf } from "../../../../shared/backup-companion"
+import { largeIndexes } from "../../../../shared/large-backup"
+import { decodeXml, listBlobPages, listLargeBackupPages, listOrdinaryBackupPages } from "~/lib/storage/list"
 import { typeForFolder, type Item } from "../../../../shared/intune/registry"
 import { restoreCapabilities } from "../../../../shared/intune/restore-plan"
 import { complianceSettingLabel, complianceSettingValue } from "../../../../shared/intune/compliance-settings"
@@ -13,7 +16,7 @@ import { backupRef, DriftPairError, selectBackupPair, summarizeDrifts, type Back
 import { CANCELLED_HEADER, driftScanHooks, type DriftScanHooks } from "~/lib/drift/scan-hooks"
 import { mapLimit } from "../../../../shared/map-limit"
 import { REDACTED, redactSecrets } from "../../../../shared/compliance/export"
-import { backupFoldersIn } from "../../../../shared/intune/backup-names"
+import { backupFoldersIn, isBackupName } from "../../../../shared/intune/backup-names"
 import { definitionIdsIn } from "../../../../shared/intune/drift-format"
 import { graphCaller } from "~/lib/policies/graph-restore"
 import { readSettingNames } from "~/lib/drift/setting-names"
@@ -93,7 +96,10 @@ export async function POST(request: NextRequest) {
 
     // Using delimiter=/ to get folder prefixes instead of all blobs
     const listUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&delimiter=/`
-    const listText = await listBlobPages(listUrl, accessToken, signal)
+    const discoveryWarnings: string[] = []
+    const ordinaryText = await listOrdinaryBackupPages(listUrl, accessToken, signal)
+    const largeText = baseline && comparison && !isLargeBackup(baseline) && !isLargeBackup(comparison) ? "" : await listLargeBackupPages(`https://${storageAccountName}.blob.core.windows.net/${LARGE_BACKUP_CONTAINER}?restype=container&comp=list&prefix=backup-large-&delimiter=/`, accessToken, discoveryWarnings, signal)
+    const listText = ordinaryText + largeText
     const backupFolders = parseBackupFolders(listText)
       .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
     // done counts the steps taken: the backups listed, then each metadata.json read.
@@ -105,7 +111,7 @@ export async function POST(request: NextRequest) {
     const readFile = async (name: string, file: string): Promise<OwnershipFile> => {
       let response: Response
       try {
-        response = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${encodeURIComponent(name)}/${file}`, { headers: { 'x-ms-version': '2021-12-02', Authorization: `Bearer ${accessToken}` }, signal })
+        response = await fetch(`https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(`${name}/${file}`)}`, { headers: { 'x-ms-version': '2021-12-02', Authorization: `Bearer ${accessToken}` }, signal })
       } catch (error) {
         // An older encrypted backup without its key, or another tenant's, cannot be opened here.
         if (error instanceof Error && error.name === 'FetchApplicationError') return { kind: 'unreadable', error }
@@ -114,7 +120,14 @@ export async function POST(request: NextRequest) {
       if (response.status === 404) return { kind: 'missing' }
       // A backup on this device that damaged files made unavailable is skipped like one without a manifest.
       if (file === 'metadata.json' && response.status === 409 && ['BackupUnavailable', 'InventoryIncomplete'].includes(response.headers.get('x-ms-error-code') ?? '')) return { kind: 'missing' }
-      if (!response.ok) throw new Error(`Cannot verify that the backups are complete (${response.status}). Check storage access and retry.`)
+      if (!response.ok) {
+        if (isLargeBackup(name)) {
+          const message = `${LARGE_STORAGE_UNAVAILABLE} Storage returned ${response.status}.`
+          if (!discoveryWarnings.includes(message)) discoveryWarnings.push(message)
+          return { kind: 'unreadable', error: new Error(message) }
+        }
+        throw new Error(`Cannot verify that the backups are complete (${response.status}). Check storage access and retry.`)
+      }
       const body = await readJsonCapped(response, MAX_BACKUP_ARCHIVE_BYTES)
       if (body.kind === 'oversized') return { kind: 'unreadable', error: new Error(oversizedOwnershipFile(file)) }
       return body.kind === 'json' ? { kind: 'found', value: body.value } : { kind: 'unreadable', error: new Error(`${file} is not valid JSON`) }
@@ -150,12 +163,13 @@ export async function POST(request: NextRequest) {
 
     // Only types both backups hold are compared: a backup that left apps out has not seen them deleted.
     const olderFolders = coveredFolders(olderBackup.metadata as ScopeMetadata)
-    const shared = [...coveredFolders(newerBackup.metadata as ScopeMetadata)].filter(folder => olderFolders.has(folder))
+    const largeFolders = [...new Set([...Object.keys(largeIndexes(olderBackup.metadata)), ...Object.keys(largeIndexes(newerBackup.metadata))])]
+    const shared = [...coveredFolders(newerBackup.metadata as ScopeMetadata)].filter(folder => olderFolders.has(folder) && !largeFolders.includes(folder))
     let listed = 0
     const listing = () => report({ phase: "listing", detail: `Listing the backed-up policies: ${listed} of 2 backups`, done: listed, total: 2 })
     listing()
     const list = async (backup: string) => {
-      const files = await fetchPolicyFiles(storageAccountName, backup, accessToken, shared, signal)
+      const files = largeFolders.length ? (await Promise.all(shared.map(folder => fetchPolicyFiles(storageAccountName, backup, accessToken, [folder], signal, folder)))).flat() : await fetchPolicyFiles(storageAccountName, backup, accessToken, shared, signal)
       listed++
       listing()
       return files
@@ -163,6 +177,7 @@ export async function POST(request: NextRequest) {
     const [newerPolicies, olderPolicies] = await Promise.all([list(newerBackup.name), list(olderBackup.name)])
     
     const { drifts, warnings, stats } = await detectDrifts(newerPolicies, olderPolicies, newerBackup, olderBackup, accessToken, { signal, report, folders: new Set(shared), documentItems })
+    warnings.push(...discoveryWarnings.map(message => ({ file: "", backup: "", message })))
     signal?.throwIfAborted()
     
     // Fetch revert metadata for all drift policy IDs
@@ -252,8 +267,33 @@ export async function POST(request: NextRequest) {
     }
     signal?.throwIfAborted()
 
+    // Reports include the inventory half of mixed runs without changing interactive drift scans.
+    let inventoryBackups: DriftResult["inventoryBackups"]
+    if (documentItems && !isLargeBackup(olderBackup.name) && !isLargeBackup(newerBackup.name)) {
+      const halves = await Promise.all([olderBackup, newerBackup].map(async backup => {
+        const metadata = backup.metadata as Record<string, any>
+        for (const outcome of metadata.LargeBackupOutcomes ?? []) if (typeof outcome.Folder === "string" && !largeFolders.includes(outcome.Folder)) largeFolders.push(outcome.Folder)
+        const id = metadata.CompanionBackup
+        if (typeof id !== "string" || !isBackupName(id) || !isLargeBackup(id)) return null
+        try {
+          const other = await loadMetadata(id)
+          if (!matchingCompanions(backup.name, metadata, id, other) || !other) return null
+          for (const folder of Object.keys(largeIndexes(other))) if (!largeFolders.includes(folder)) largeFolders.push(folder)
+          return completeHalf(other) ? id : null
+        } catch {
+          signal?.throwIfAborted()
+          return null
+        }
+      }))
+      if (halves[0] && halves[1]) inventoryBackups = { baseline: halves[0], comparison: halves[1] }
+      // Even a lost companion with no readable folder declarations cannot certify an unchanged run.
+      if (!inventoryBackups && [olderBackup, newerBackup].some(backup => (backup.metadata as any).CompanionBackup) && !largeFolders.length) largeFolders.push("Large inventory")
+    }
+
     const result: DriftResult = {
       drifts,
+      ...(inventoryBackups ? { inventoryBackups } : {}),
+      ...(largeFolders.length ? { largeFolders } : {}),
       summary: summarizeDrifts(drifts),
       lastScan: new Date().toISOString(),
       backupsAnalyzed: 2,
@@ -302,15 +342,17 @@ async function fetchPolicyFiles(
   backupFolder: string,
   accessToken: string,
   folders: string[],
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  prefixFolder?: string
 ): Promise<PolicyFile[]> {
   // The compared types, plus the folder older backups used for compliance policies.
-  const policyTypes = folders.includes('CompliancePolicies') ? [...folders, 'DeviceCompliancePolicies'] : folders
+  const aliases = (folder: string) => folder === 'CompliancePolicies' ? [folder, 'DeviceCompliancePolicies'] : [folder]
+  const policyTypes = folders.flatMap(aliases)
   const byFolder = new Map<string, PolicyFile[]>(policyTypes.map(folder => [folder, []]))
 
   signal?.throwIfAborted()
-  const listUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(`${backupFolder}/`)}`
-  const text = await listBlobPages(listUrl, accessToken, signal)
+  const prefixes = prefixFolder ? aliases(prefixFolder).map(folder => `${backupFolder}/${folder}/`) : [`${backupFolder}/`]
+  const text = (await Promise.all(prefixes.map(prefix => listBlobPages(`https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(prefix)}`, accessToken, signal)))).join("")
   for (const blob of text.match(/<Blob>[\s\S]*?<\/Blob>/g) || []) {
     const nameMatch = blob.match(/<Name>([^<]+)<\/Name>/)
     const lastModifiedMatch = blob.match(/<Last-Modified>([^<]+)<\/Last-Modified>/)
@@ -322,7 +364,7 @@ async function fetchPolicyFiles(
     const files = rest.includes('/') ? byFolder.get(rest.slice(0, rest.indexOf('/'))) : undefined
     files?.push({
       name,
-      url: `https://${storageAccountName}.blob.core.windows.net/intune-backups/${name.split("/").map(encodeURIComponent).join("/")}`,
+      url: `https://${storageAccountName}.blob.core.windows.net/${backupStoragePath(name)}`,
       lastModified: lastModifiedMatch?.[1] || '',
       size: parseInt(sizeMatch?.[1] || '0')
     })

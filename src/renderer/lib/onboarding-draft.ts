@@ -1,3 +1,5 @@
+import { checkedOnboardingChoice, DEFAULT_ONBOARDING_CHOICE } from "../../shared/services/onboarding"
+import type { PermissionChoice } from "../../shared/services/manifest"
 import type { SignedInAccount } from "../../shared/ipc"
 import { bridge } from "./bridge"
 
@@ -7,8 +9,9 @@ import { bridge } from "./bridge"
  * another administrator. Only identifiers are kept, never a token.
  */
 export interface OnboardingDraft {
-  /** 0 Connect, 1 Sign in, 2 Storage. The first backup step is never resumed. */
-  step: 0 | 1 | 2
+  /** -1 Services, 0 Connect, 1 Sign in, 2 Storage. The first backup step is never resumed. */
+  step: -1 | 0 | 1 | 2
+  services?: PermissionChoice
   tenant: string
   clientId: string
   displayName: string
@@ -18,7 +21,7 @@ export interface OnboardingDraft {
 
 const KEY = "tenuvault.onboarding.draft"
 
-export const EMPTY_DRAFT: OnboardingDraft = { step: 0, tenant: "", clientId: "", displayName: "", account: null }
+export const EMPTY_DRAFT: OnboardingDraft = { step: -1, tenant: "", clientId: "", displayName: "", account: null }
 
 const text = (value: unknown, max = 256) => (typeof value === "string" ? value.slice(0, max) : "")
 
@@ -53,7 +56,15 @@ export function loadOnboardingDraft(): OnboardingDraft | null {
     const raw = bridge.storage.getItemSync(KEY)
     if (!raw) return null
     const value = JSON.parse(raw) as Record<string, unknown>
-    const step = value.step === 1 || value.step === 2 ? value.step : 0
+    let step: OnboardingDraft["step"] = value.step === -1 || value.step === 1 || value.step === 2 ? value.step : 0
+    let services = DEFAULT_ONBOARDING_CHOICE
+    if (Object.hasOwn(value, "services")) {
+      try { services = checkedOnboardingChoice(value.services) } catch {
+        // A broken choice must never silently approve the default write permissions.
+        services = {}
+        step = -1
+      }
+    }
     const account = recentAccount(value)
     const draft: OnboardingDraft = {
       step: step === 2 && !account ? 1 : step,
@@ -61,6 +72,7 @@ export function loadOnboardingDraft(): OnboardingDraft | null {
       clientId: text(value.clientId),
       displayName: text(value.displayName),
       account,
+      services,
     }
     return isEmptyDraft(draft) ? null : draft
   } catch {
@@ -84,7 +96,7 @@ export function pendingSignInTenant(now = Date.now()): string | null {
 
 /** Whether a draft holds nothing worth resuming: the Connect step with no input. */
 export function isEmptyDraft(draft: OnboardingDraft): boolean {
-  return draft.step === 0 && !draft.tenant && !draft.clientId && !draft.displayName && !draft.account
+  return draft.step === -1 && !draft.services && !draft.tenant && !draft.clientId && !draft.displayName && !draft.account
 }
 
 let pending: Promise<void> = Promise.resolve()

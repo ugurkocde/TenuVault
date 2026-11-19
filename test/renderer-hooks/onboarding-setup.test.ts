@@ -1,4 +1,4 @@
-import { act, createElement, useEffect, type ReactElement } from "react"
+import { act, createElement, Profiler, useEffect, type ReactElement } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -8,6 +8,8 @@ import type { SignedInAccount } from "../../src/shared/ipc"
 
 const state = vi.hoisted(() => ({
   createRegistration: vi.fn(),
+  checkPermissions: vi.fn(async () => ({ missing: [] as string[] })),
+  saveServices: vi.fn(async () => undefined),
   cancelCreateRegistration: vi.fn(async () => undefined),
   progress: null as null | ((value: import("../../src/shared/ipc").SetupProgress) => void),
   clipboardIds: vi.fn(async (): Promise<{ tenantId: string; clientId: string } | null> => null),
@@ -30,6 +32,7 @@ const state = vi.hoisted(() => ({
   diagnostics: { state: "ineligible", policy: false, reminder: { setup: false, signin: false } } as import("../../src/shared/ipc").SetupDiagnosticsStatus,
 }))
 
+vi.mock("../../src/renderer/lib/appearance", () => ({}))
 vi.mock("../../src/renderer/lib/bridge", () => ({
   bridge: {
     storage: {
@@ -39,7 +42,7 @@ vi.mock("../../src/renderer/lib/bridge", () => ({
     },
     auth: { signIn: state.signIn, cancelSignIn: state.cancelSignIn, accounts: state.accounts },
     license: { releaseTenant: state.releaseTenant, clipboardKey: async () => null, checkNewTenant: state.checkNewTenant, tenantTrialAction: state.trialAction },
-    setup: { createRegistration: state.createRegistration, cancelCreateRegistration: state.cancelCreateRegistration, onProgress: (listener: typeof state.progress) => { state.progress = listener; return () => { state.progress = null } }, clipboardIds: state.clipboardIds, saveScript: async () => ({ saved: false }) },
+    setup: { checkPermissions: state.checkPermissions, saveServices: state.saveServices, createRegistration: state.createRegistration, cancelCreateRegistration: state.cancelCreateRegistration, onProgress: (listener: typeof state.progress) => { state.progress = listener; return () => { state.progress = null } }, clipboardIds: state.clipboardIds, saveScript: async () => ({ saved: false }) },
     preferences: { get: async () => ({ firstBackupNoteSeen: true }) },
     schedules: { list: async () => [] },
     backups: { settings: async () => ({ recoveryExported: true }) },
@@ -47,7 +50,8 @@ vi.mock("../../src/renderer/lib/bridge", () => ({
     diagnostics: { record: state.record, status: async () => state.diagnostics, reminderShown: async () => undefined, consent: async () => state.diagnostics, decline: async () => state.diagnostics },
   },
 }))
-vi.mock("../../src/renderer/lib/license", () => ({
+vi.mock("../../src/renderer/lib/license", async original => ({
+  ...(await original<typeof import("../../src/renderer/lib/license")>()),
   useTenantPlan: () => "community",
   useLicense: () => ({ status: state.license, error: null, refresh: async () => undefined }),
   tenantLicense: (status: { tenants?: unknown[] } | undefined) => status?.tenants?.[0],
@@ -69,6 +73,8 @@ vi.mock("../../src/renderer/components/StorageChooser", () => ({
   },
 }))
 
+import { DEFAULT_SETUP_CHOICE } from "../../src/shared/services/manifest"
+import { LicenseGate } from "../../src/renderer/App"
 import OnboardingPage from "../../src/renderer/pages/OnboardingPage"
 import { setupCommand, TenantSignInForm } from "../../src/renderer/components/TenantSignInForm"
 import { loadOnboardingDraft, pendingSignInTenant, PENDING_SIGN_IN_MAX_AGE_MS, saveOnboardingDraft } from "../../src/renderer/lib/onboarding-draft"
@@ -84,6 +90,8 @@ const roots: Root[] = []
 beforeEach(() => {
   state.accounts.mockReset()
   state.accounts.mockResolvedValue([])
+  state.checkPermissions.mockReset()
+  state.checkPermissions.mockResolvedValue({ missing: [] })
   state.signIn.mockReset()
   state.createRegistration.mockReset()
   state.clipboardIds.mockReset()
@@ -109,13 +117,14 @@ async function flush() {
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
 }
 
-async function render(element: ReactElement) {
+async function render(element: ReactElement, continueDefault = true) {
   const container = document.createElement("div")
   document.body.appendChild(container)
   const root = createRoot(container)
   roots.push(root)
   act(() => root.render(createElement(MemoryRouter, { initialEntries: ["/portal/onboarding"] }, element)))
   await flush()
+  if (continueDefault && button(container, "Continue with Intune")) await act(async () => button(container, "Continue with Intune")!.click())
   return container
 }
 
@@ -183,8 +192,8 @@ describe("onboarding draft", () => {
   it("keeps progress and drops an empty or broken draft", async () => {
     saveOnboardingDraft({ step: 1, tenant: TENANT, clientId: CLIENT, displayName: "Contoso", account: null })
     await flush()
-    expect(loadOnboardingDraft()).toEqual({ step: 1, tenant: TENANT, clientId: CLIENT, displayName: "Contoso", account: null })
-    saveOnboardingDraft({ step: 0, tenant: "", clientId: "", displayName: "", account: null })
+    expect(loadOnboardingDraft()).toMatchObject({ step: 1, tenant: TENANT, clientId: CLIENT, displayName: "Contoso", account: null })
+    saveOnboardingDraft({ step: -1, tenant: "", clientId: "", displayName: "", account: null })
     await flush()
     expect(state.store.has(DRAFT_KEY)).toBe(false)
     state.store.set(DRAFT_KEY, "{not json")
@@ -453,7 +462,7 @@ describe("in-app tenant setup", () => {
 
   it("explains the setup before it starts", async () => {
     const container = await render(createElement(OnboardingPage))
-    for (const text of ["One Microsoft sign-in.", "It lives in your tenant", "It acts only as you", "No secret to protect", "Backups stay with you", "Microsoft will ask you to approve Microsoft Graph Command Line Tools", "because the setup creates an app registration and grants admin consent", "Your administrator approves once", "Application.ReadWrite.All", "kept in memory only"]) expect(container.textContent).toContain(text)
+    for (const text of ["TenuVault creates its app registration for your chosen services", "It lives in your tenant", "It acts only as you", "No secret to protect", "Backups stay with you", "Microsoft will ask you to approve Microsoft Graph Command Line Tools", "because the setup creates an app registration and grants admin consent", "Your administrator approves once", "Application.ReadWrite.All", "kept in memory only"]) expect(container.textContent).toContain(text)
     // Claims the app cannot stand behind are not made: no time promise, and no "everything stays in your tenant".
     expect(container.textContent).not.toMatch(/about (a|one|two) minutes?|stays in your tenant|no background access/i)
     expect(container.querySelector("#setup-tenant")).not.toBeNull()
@@ -473,7 +482,7 @@ describe("in-app tenant setup", () => {
     expect(container.textContent).toContain("Use the app registration this tenant already has")
     expect(button(container, "Cancel")).toBeDefined()
     await act(async () => { finish(result); await settle() })
-    expect(state.createRegistration).toHaveBeenCalledWith(undefined)
+    expect(state.createRegistration).toHaveBeenCalledWith({ choice: DEFAULT_SETUP_CHOICE })
     expect(state.signIn).toHaveBeenCalledTimes(1)
     expect(state.signIn).toHaveBeenLastCalledWith(TENANT, CLIENT, { loginHint: "admin@contoso.test" })
     expect(container.textContent).toContain("Choose where backups are stored")
@@ -525,7 +534,7 @@ describe("in-app tenant setup", () => {
     const container = await render(createElement(OnboardingPage))
     type(container.querySelector<HTMLInputElement>("#setup-tenant")!, " fabrikam.onmicrosoft.com ")
     await act(async () => { button(container, "Set up with Microsoft sign-in")!.click(); await settle() })
-    expect(state.createRegistration).toHaveBeenCalledWith({ tenant: "fabrikam.onmicrosoft.com" })
+    expect(state.createRegistration).toHaveBeenCalledWith({ tenant: "fabrikam.onmicrosoft.com", choice: DEFAULT_SETUP_CHOICE })
   })
 
   it("keeps the IDs on the Sign in step when the last sign-in fails, and a retry asks for the account again", async () => {
@@ -547,7 +556,6 @@ describe("in-app tenant setup", () => {
     expect(container.textContent).toContain("Choose where backups are stored")
   })
 
-  const MANUAL = "https://docs.tenuvault.com/getting-started/app-registration/#create-the-app-registration-manually"
 
   it("offers the manual route next to an error that needs it, because the setup script is blocked too", async () => {
     state.createRegistration.mockRejectedValueOnce(new Error("This tenant does not let your account sign in to Microsoft Graph Command Line Tools, the Microsoft app that the setup and the setup script sign in through (AADSTS7000112). Ask your Entra administrator to allow it for your account, or create the app registration by hand in the Entra admin center. Nothing was changed."))
@@ -556,7 +564,7 @@ describe("in-app tenant setup", () => {
     const alert = container.querySelector<HTMLElement>('[role="alert"]')!
     expect(alert.textContent).toContain("AADSTS7000112")
     await act(async () => button(alert, "Create it by hand")!.click())
-    expect(state.openExternal).toHaveBeenCalledWith(MANUAL)
+    expect(container.textContent).toContain("Create the app registration manually")
     // Once it exists, the admin goes on from the same place to enter its IDs.
     await act(async () => { button(alert, "I already have an app registration")!.click(); await settle() })
     expect(container.textContent).toContain("Sign in to your tenant")
@@ -595,7 +603,7 @@ describe("in-app tenant setup", () => {
     expect(container.textContent).toContain('If Microsoft says that you need admin approval, this account cannot approve the setup. Select Cancel and use "Someone else is the admin?" below.')
     expect(container.textContent).toContain("the setup script is blocked too")
     await act(async () => button(container, "create the app registration by hand")!.click())
-    expect(state.openExternal).toHaveBeenCalledWith(MANUAL)
+    expect(container.textContent).toContain("Create the app registration manually")
   })
 
   it("does not report a cancelled last sign-in as an error", async () => {
@@ -882,5 +890,272 @@ describe("setup diagnostics hooks", () => {
     expect(order).toEqual(["record", "addTenant"])
     state.record.mockImplementation(async () => undefined)
     state.addTenant.mockImplementation(() => undefined)
+  })
+})
+
+
+describe("onboarding service choices", () => {
+  it("adds exactly one click to the Intune-only quick setup path from Welcome", async () => {
+    // origin/main 8b9f77c8: Welcome > Connect your tenant (1) > Set up with Microsoft sign-in (2), Microsoft opens.
+    // Now: Welcome > Connect your tenant (1) > Continue with Intune (2) > Set up with Microsoft sign-in (3), Microsoft opens.
+    state.license = { hasKey: false, tenants: [] }
+    const container = await render(createElement(LicenseGate, { children: createElement(OnboardingPage) }), false)
+    expect(container.textContent).toContain("Welcome to TenuVault")
+    await act(async () => button(container, "Connect your tenant")!.click())
+    expect(container.textContent).toContain("What do you want to back up?")
+    expect(container.querySelector<HTMLInputElement>('[aria-label="Back up Intune"]')!.checked).toBe(true)
+    await act(async () => button(container, "Continue with Intune")!.click())
+    state.createRegistration.mockImplementationOnce(() => new Promise(() => {}))
+    await act(async () => button(container, "Set up with Microsoft sign-in")!.click())
+    expect(state.createRegistration).toHaveBeenCalledWith({ choice: DEFAULT_SETUP_CHOICE })
+  })
+
+  it.each([null, {}, "entra", { defender: { access: "restore" } }, { intune: { access: "everything" } }])("requires confirmation of a corrupt saved service choice before setup or saving: %j", async services => {
+    const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, account, signedInAt: Date.now(), services }))
+    state.accounts.mockResolvedValue([account])
+    expect(loadOnboardingDraft()).toMatchObject({ step: -1, services: {} })
+    const container = await render(createElement(OnboardingPage), false)
+    expect(container.textContent).toContain("What do you want to back up?")
+    expect(container.querySelector<HTMLInputElement>('[aria-label="Back up Intune"]')!.checked).toBe(false)
+    expect(button(container, "Continue with a service")!.disabled).toBe(true)
+    expect(state.createRegistration).not.toHaveBeenCalled()
+    expect(state.saveServices).not.toHaveBeenCalled()
+    expect(state.checkPermissions).not.toHaveBeenCalled()
+    await act(async () => container.querySelector<HTMLInputElement>('[aria-label="Back up Entra ID"]')!.click())
+    await act(async () => button(container, "Continue with Entra ID")!.click())
+    expect(container.textContent).toContain("Connect your tenant")
+  })
+
+  it("keeps the legacy default only when a draft has no services field", () => {
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: TENANT, clientId: CLIENT }))
+    expect(loadOnboardingDraft()).toMatchObject({ step: 1, services: { intune: { access: "restore" } } })
+  })
+
+  it("keeps Previous disabled while a deferred quick setup completes with the confirmed choice", async () => {
+    let finish!: (value: unknown) => void
+    state.createRegistration.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const container = await render(createElement(OnboardingPage))
+    await act(async () => button(container, "Set up with Microsoft sign-in")!.click())
+    expect(button(container, "Previous")!.disabled).toBe(true)
+    await act(async () => button(container, "Previous")!.click())
+    expect(container.textContent).not.toContain("What do you want to back up?")
+    await act(async () => { finish({ tenantId: TENANT, clientId: CLIENT, username: "admin", reused: true, candidateCount: 2, ready: true, missingConsent: [] }) })
+    expect(container.textContent).toContain("Sign in to your tenant")
+    expect(state.createRegistration).toHaveBeenCalledWith({ choice: DEFAULT_SETUP_CHOICE })
+    expect(loadOnboardingDraft()?.services).toEqual({ intune: { access: "restore" } })
+    expect(button(container, "Previous")!.disabled).toBe(false)
+  })
+
+  it("summarizes coverage and read or write counts in cards and groups exact permissions below them", async () => {
+    const container = await render(createElement(OnboardingPage), false)
+    await act(async () => container.querySelector<HTMLInputElement>('[aria-label="Back up Entra ID"]')!.click())
+    const card = container.querySelector('[data-onboarding-service="entra"]')!
+    expect(card.querySelector('[data-permission-count]')?.textContent).toMatch(/\d+ read, 0 write permissions/)
+    expect(card.querySelector('[data-area-coverage]')?.textContent).toContain("Tenant settings")
+    expect(card.textContent).not.toContain("RoleManagement.Read.Directory")
+    const exact = container.querySelector('[data-exact-permissions]')!
+    expect(exact.querySelector('summary')?.textContent).toBe("Show the exact permissions")
+    expect(exact.textContent).toContain("Entra ID: Roles and PIM")
+    expect(exact.textContent).toContain("Read: RoleManagement.Read.Directory")
+    expect(exact.textContent).toContain("Write: DeviceManagementApps.ReadWrite.All")
+    expect(card.contains(exact)).toBe(false)
+  })
+
+  it("keeps an Entra-only choice through restart and follows it in every connect route", async () => {
+    let container = await render(createElement(OnboardingPage), false)
+    await act(async () => container.querySelector<HTMLInputElement>('[aria-label="Back up Intune"]')!.click())
+    await act(async () => container.querySelector<HTMLInputElement>('[aria-label="Back up Entra ID"]')!.click())
+    await act(async () => container.querySelector<HTMLInputElement>('[aria-label="Include Groups"]')!.click())
+    await flush()
+    expect(loadOnboardingDraft()?.services).toEqual({ entra: { access: "backup", areas: ["groups"] } })
+    for (const root of roots.splice(0)) act(() => root.unmount())
+    container = await render(createElement(OnboardingPage), false)
+    await act(async () => button(container, "Continue with Entra ID")!.click())
+    expect(container.textContent).toContain("broader, setup-only access")
+    expect(container.textContent).toContain("A second sign-in follows")
+    await act(async () => button(container, "Use the setup script instead")!.click())
+    expect(container.textContent).toContain("-Services Entra -RestoreAccess None -Areas Groups")
+    const writeText = vi.fn(async (_text: string) => undefined)
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } })
+    await act(async () => button(container, "Someone else is the admin? Copy instructions")!.click())
+    expect(writeText.mock.calls[0]?.[0]).toContain("-Services Entra -RestoreAccess None -Areas Groups")
+    expect(writeText.mock.calls[0]?.[0]).not.toContain("DeviceManagement")
+    await act(async () => button(container, "Create it by hand")!.click())
+    expect(container.textContent).toContain("Create the app registration manually")
+    expect(container.textContent).not.toContain("DeviceManagementApps.ReadWrite.All")
+    state.createRegistration.mockImplementationOnce(() => new Promise(() => {}))
+    await act(async () => button(container, "Set up with Microsoft sign-in")!.click())
+    expect(state.createRegistration).toHaveBeenCalledWith({ choice: { entra: { access: "backup", areas: ["groups"] } } })
+  })
+
+  it("waits for a deferred missing-permission answer before Continue can save the signed-in tenant", async () => {
+    const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: TENANT, clientId: CLIENT, account: null }))
+    state.signIn.mockResolvedValueOnce(account)
+    let answer!: (result: { missing: string[] }) => void
+    state.checkPermissions.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    state.storageChoice = { kind: "local" }
+    const container = await render(createElement(OnboardingPage))
+    await act(async () => button(container, "Sign in with Microsoft")!.click())
+    await act(async () => button(container, "Continue")?.click())
+    expect(state.checkNewTenant).not.toHaveBeenCalled()
+    expect(state.saveServices).not.toHaveBeenCalled()
+    expect(state.addTenant).not.toHaveBeenCalled()
+    expect(container.textContent).toContain("Checking permissions")
+    expect(container.textContent).not.toContain("Storage chooser")
+    await act(async () => answer({ missing: ["Policy.Read.All"] }))
+    expect(container.textContent).toContain("Some chosen permissions are missing")
+    expect(container.textContent).toContain("Policy.Read.All")
+    expect(container.textContent).not.toContain("Storage chooser")
+    await act(async () => button(container, "Continue to storage")!.click())
+    expect(container.textContent).toContain("Storage chooser")
+    await act(async () => button(container, "Continue")!.click())
+    expect(state.addTenant).toHaveBeenCalledOnce()
+  })
+
+  it("releases a stalled permission check after 20 seconds and ignores its late answer", async () => {
+    const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: TENANT, clientId: CLIENT, account: null }))
+    state.signIn.mockResolvedValueOnce(account)
+    let answer!: (result: { missing: string[] }) => void
+    state.checkPermissions.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    state.storageChoice = { kind: "local" }
+    const container = await render(createElement(OnboardingPage))
+    vi.useFakeTimers()
+    try {
+      await act(async () => button(container, "Sign in with Microsoft")!.click())
+      expect(container.textContent).not.toContain("Storage chooser")
+      await act(async () => vi.advanceTimersByTime(19_999))
+      expect(container.textContent).toContain("Checking permissions")
+      expect(button(container, "Continue")).toBeUndefined()
+      await act(async () => vi.advanceTimersByTime(1))
+      expect(container.textContent).toContain("Permissions could not be checked")
+      expect(container.textContent).toContain("You can continue")
+      expect(container.textContent).toContain("Storage chooser")
+      expect(button(container, "Continue")!.disabled).toBe(false)
+      await act(async () => answer({ missing: ["Policy.Read.All"] }))
+      expect(container.textContent).not.toContain("Some chosen permissions are missing")
+      await act(async () => button(container, "Continue")!.click())
+      expect(state.addTenant).toHaveBeenCalledOnce()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("clears the 20-second permission timer on unmount", async () => {
+    const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: TENANT, clientId: CLIENT, account: null }))
+    state.signIn.mockResolvedValueOnce(account)
+    state.checkPermissions.mockImplementationOnce(() => new Promise(() => {}))
+    const container = await render(createElement(OnboardingPage))
+    vi.useFakeTimers()
+    try {
+      await act(async () => button(container, "Sign in with Microsoft")!.click())
+      await act(async () => vi.advanceTimersByTime(0))
+      expect(container.textContent).toContain("Checking permissions")
+      expect(vi.getTimerCount()).toBe(1)
+      act(() => roots.pop()!.unmount())
+      expect(vi.getTimerCount()).toBe(0)
+      await act(async () => vi.advanceTimersByTime(20_000))
+      expect(container.textContent).toBe("")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("clears permission timers when leaving a step and ignores answers after leaving", async () => {
+    const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 1, tenant: TENANT, clientId: CLIENT, account: null }))
+    state.signIn.mockResolvedValueOnce(account)
+    const answers: ((result: { missing: string[] }) => void)[] = []
+    state.checkPermissions.mockImplementation(() => new Promise(resolve => { answers.push(resolve) }))
+    const onRender = vi.fn()
+    const container = await render(createElement(Profiler, { id: "permission-wait", onRender }, createElement(OnboardingPage)))
+    vi.useFakeTimers()
+    try {
+      await act(async () => button(container, "Sign in with Microsoft")!.click())
+      await act(async () => vi.advanceTimersByTime(0))
+      expect(container.textContent).toContain("Checking permissions")
+      expect(vi.getTimerCount()).toBe(1)
+      await act(async () => vi.advanceTimersByTime(5000))
+      await act(async () => button(container, "Previous")!.click())
+      await act(async () => vi.advanceTimersByTime(0))
+      expect(state.checkPermissions).toHaveBeenCalledTimes(2)
+      expect(vi.getTimerCount()).toBe(1)
+      await act(async () => vi.advanceTimersByTime(15_000))
+      expect(vi.getTimerCount()).toBe(1)
+      await act(async () => button(container, "Previous")!.click())
+      expect(container.querySelector("#setup-step-0")).not.toBeNull()
+      await act(async () => vi.advanceTimersByTime(0))
+      expect(vi.getTimerCount()).toBe(0)
+      const content = container.textContent
+      const commits = onRender.mock.calls.length
+      await act(async () => { for (const answer of answers) answer({ missing: ["Policy.Read.All"] }) })
+      await act(async () => vi.advanceTimersByTime(20_000))
+      expect(onRender).toHaveBeenCalledTimes(commits)
+      expect(container.textContent).toBe(content)
+      expect(container.querySelector('[aria-label="Permission result"]')).toBeNull()
+      expect(state.addTenant).not.toHaveBeenCalled()
+      expect(state.saveServices).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("holds an existing storage choice while checking permissions again", async () => {
+    const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, account, signedInAt: Date.now() }))
+    state.accounts.mockResolvedValueOnce([account])
+    state.checkPermissions.mockResolvedValue({ missing: ["Policy.Read.All"] })
+    state.storageChoice = { kind: "local" }
+    const container = await render(createElement(OnboardingPage))
+    await act(async () => button(container, "Continue to storage")!.click())
+    expect(container.textContent).toContain("Storage chooser")
+    let answer!: (result: { missing: string[] }) => void
+    state.checkPermissions.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    await act(async () => button(container, "Check again")!.click())
+    await act(async () => button(container, "Continue")?.click())
+    expect(container.textContent).toContain("Checking permissions")
+    expect(container.textContent).not.toContain("Storage chooser")
+    expect(state.addTenant).not.toHaveBeenCalled()
+    await act(async () => answer({ missing: ["Policy.Read.All"] }))
+    expect(container.textContent).toContain("Some chosen permissions are missing")
+    expect(container.textContent).not.toContain("Storage chooser")
+    await act(async () => button(container, "Continue to storage")!.click())
+    await act(async () => button(container, "Continue")!.click())
+    expect(state.addTenant).toHaveBeenCalledOnce()
+  })
+
+  it("lets the admin continue after the permission check fails", async () => {
+    const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, account, signedInAt: Date.now() }))
+    state.accounts.mockResolvedValueOnce([account])
+    state.checkPermissions.mockRejectedValue(new Error("Microsoft could not be reached."))
+    state.storageChoice = { kind: "local" }
+    const container = await render(createElement(OnboardingPage))
+    expect(container.textContent).toContain("Permissions could not be checked")
+    expect(container.textContent).toContain("Microsoft could not be reached.")
+    expect(container.textContent).toContain("You can continue")
+    await act(async () => button(container, "Continue")!.click())
+    expect(state.addTenant).toHaveBeenCalledOnce()
+  })
+
+  it("saves an Entra-only choice before adding the tenant and explains missing permissions without blocking", async () => {
+    const account = { tenantId: TENANT, clientId: CLIENT, username: "admin" }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "", account, services: { entra: { access: "backup" } }, signedInAt: Date.now() }))
+    state.accounts.mockResolvedValueOnce([account])
+    state.checkPermissions.mockResolvedValue({ missing: ["Policy.Read.All"] })
+    state.storageChoice = { kind: "local" }
+    const container = await render(createElement(OnboardingPage))
+    expect(container.textContent).toContain("Some chosen permissions are missing")
+    expect(container.textContent).toContain("Azure CLI commands")
+    await act(async () => button(container, "Continue to storage")!.click())
+    await act(async () => button(container, "Continue")!.click())
+    expect(state.saveServices).toHaveBeenCalledWith(TENANT, CLIENT, { entra: { access: "backup" } })
+    expect(state.saveServices.mock.invocationCallOrder[0]).toBeLessThan(state.addTenant.mock.invocationCallOrder[0]!)
+    expect(container.textContent).toContain("Entra ID backs up the supported types")
+    expect(button(container, "Run first backup")).toBeDefined()
+    expect(container.textContent).not.toContain("It reads your Intune")
   })
 })

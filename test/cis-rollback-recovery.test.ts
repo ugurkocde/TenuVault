@@ -260,6 +260,15 @@ describe("the recovery backup in the real backup engine and API host", () => {
     return { engine, deps, scope: { changeSetId: applied.id }, folders, start }
   }
 
+  it("hands the backup engine a new token instead of a cached one only when it asks for one", async () => {
+    const { license } = await mspLicense()
+    const asked: unknown[][] = []
+    const access = backupAuthorization({ license, tokenFor: async (...request) => (asked.push(request), { accessToken: request[3] ? "fresh" : "cached" }), retentionDays: () => 30 })
+    expect(await access.getToken(TENANT_A, "client", "scope")).toBe("cached")
+    expect(await access.getToken(TENANT_A, "client", "scope", true)).toBe("fresh")
+    expect(asked).toEqual([[TENANT_A, "client", "scope"], [TENANT_A, "client", "scope", true]])
+  })
+
   it("runs a rollback's backup for a tenant outside Community without deleting older backups, queued or not", async () => {
     const context = await engineSetup()
     // Tenant A's backup runs first, so the recovery backup of tenant B is queued behind it.
