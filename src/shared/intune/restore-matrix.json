@@ -14566,7 +14566,8 @@
         "create",
         "update",
         "recycle",
-        "owner"
+        "owner",
+        "policy"
       ],
       "builder": "src/main/restore/directory-9b-io.ts",
       "contracts": [
@@ -14623,6 +14624,15 @@
           ],
           "documentation": "https://learn.microsoft.com/en-us/graph/api/application-post-owners?view=graph-rest-1.0",
           "blocker": "Phase 2 live lifecycle, delegated safety and cleanup evidence are required. Each privileged owner addition requires individual and security-response approvals. Owners are adds only."
+        },
+        {
+          "action": "policy",
+          "method": "POST",
+          "path": "applications/{id}/{layer8Policy}/$ref",
+          "delegated": [],
+          "application": [],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/application-post-tokenlifetimepolicies?view=graph-rest-1.0",
+          "blocker": "Application policy-binding inventory is absent from current backups. Bindings require typed layer 8 configuration references and a separately verified binding permission contract. No binding permission is certified or requested."
         }
       ]
     }
@@ -16113,14 +16123,10 @@
           "action": "policy",
           "method": "POST",
           "path": "servicePrincipals/{id}/{layer8Policy}/$ref",
-          "delegated": [
-            "Policy.ReadWrite.ApplicationConfiguration"
-          ],
-          "application": [
-            "Policy.ReadWrite.ApplicationConfiguration"
-          ],
+          "delegated": [],
+          "application": [],
           "documentation": "https://learn.microsoft.com/en-us/graph/api/serviceprincipal-post-claimsmappingpolicies?view=graph-rest-1.0",
-          "blocker": "Policy bindings require typed layer 8 configuration references and a separately verified binding permission contract."
+          "blocker": "Policy bindings require typed layer 8 configuration references and a separately verified binding permission contract. No binding permission is certified or requested."
         },
         {
           "action": "recycle",
@@ -16301,7 +16307,7 @@
             "DelegatedPermissionGrant.ReadWrite.All"
           ],
           "documentation": "https://learn.microsoft.com/en-us/graph/api/oauth2permissiongrant-post?view=graph-rest-1.0",
-          "blocker": "Phase 2 live lifecycle, delegated safety and cleanup evidence are required. Same-tenant owned backups only. Map through appId, merge scopes and approve each grant separately."
+          "blocker": "Phase 2 live lifecycle, delegated safety and cleanup evidence are required. Same-tenant owned backups only. Map through appId, merge scopes and approve each grant separately. Principal-specific grants remain blocked pending verified typed user mappings; raw saved principal IDs are never replayed."
         }
       ]
     }

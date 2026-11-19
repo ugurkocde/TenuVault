@@ -253,6 +253,8 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 ## Compatibility notes for the next release
 
+- Application, enterprise app and consent restore previews are staged only. All writes remain blocked pending phase 2 evidence. Recreation changes the app ID and breaks clients using the old ID; recycle recovery requires complete credential and access verification. SSO and provisioning must be configured again.
+
 - Directory exact membership preserves at least one member in Conditional Access target groups and refuses unreadable policy dependencies. Synced and formerly synced users and groups remain blocked. Throttle waits can be cancelled and safely resumed, relationship previews reuse a saved bounded difference, and Windows startup keeps file flushes without requiring directory handles.
 
 - Directory restore now has separate per-object review and 50-row relationship pages, with individual approvals, per-group exact choices and 20-step durable batches. Only disabled cloud member creation, user display names, static security-group creation/nonempty descriptions, managers and ordinary user links are admitted. Saved page IDs resume in this directory flow. Directory state is encrypted in a separate directory-restore folder under app data.

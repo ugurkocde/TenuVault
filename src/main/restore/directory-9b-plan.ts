@@ -30,9 +30,9 @@ async function consentStep(snapshot: Item, io: IO, readSource: (folder: string, 
   const client = await appRef(snapshot.clientId, io, readSource), resource = await appRef(snapshot.resourceId, io, readSource)
   if (!["Principal", "AllPrincipals"].includes(String(snapshot.consentType)) || typeof snapshot.scope !== "string" || !snapshot.scope.trim()) throw new RestoreSafetyError("Consent type and scopes must be explicit.")
   if (snapshot.consentType === "AllPrincipals" && snapshot.principalId !== null) throw new RestoreSafetyError("Tenant-wide consent must not have a principal ID.")
-  const principal = snapshot.consentType === "Principal" ? await io.resolveUser(appIdentity(snapshot.principalId)) : null
-  const desired = { clientId: client.id!, resourceId: resource.id!, principalId: principal?.id ?? null, consentType: snapshot.consentType!, scope: snapshot.scope }
-  const step: GuardedStep = { key: `OAuth2PermissionGrants:${snapshot.id}:consent`, folder: "OAuth2PermissionGrants", sourceId: snapshot.id as string, operation: "create", directory: { action: "consent", clientAppId: appIdentity(client.appId), resourceAppId: appIdentity(resource.appId), ...(principal ? { principalId: appIdentity(principal.id) } : {}) }, desired, properties: Object.keys(desired), preview: "", requires: [] }
+  if (snapshot.consentType === "Principal") throw new RestoreSafetyError("Principal-specific consent needs a verified typed user mapping. Raw saved principal IDs are never replayed.")
+  const desired = { clientId: client.id!, resourceId: resource.id!, principalId: null, consentType: snapshot.consentType!, scope: snapshot.scope }
+  const step: GuardedStep = { key: `OAuth2PermissionGrants:${snapshot.id}:consent`, folder: "OAuth2PermissionGrants", sourceId: snapshot.id as string, operation: "create", directory: { action: "consent", clientAppId: appIdentity(client.appId), resourceAppId: appIdentity(resource.appId) }, desired, properties: Object.keys(desired), preview: "", requires: [] }
   const current = await io.read(step)
   if (current) { step.operation = "update"; step.targetId = current.id as string }
   step.preview = restoreFingerprint(current)

@@ -335,3 +335,19 @@ The lab soft-deletes every test group. Microsoft's [permanent-delete table](http
 Group link restore also refuses a resource with any current directory membership, including parent groups, directory roles and administrative units. This avoids granting inherited privilege through an unverified ancestor. The lookup uses existing group read access.
 
 User display-name and manager changes are blocked when Conditional Access group targeting or exclusions exist or cannot be completely read. Their dynamic-membership effects need a separate verified review. Every access addition and manager change also has separate privilege and security-response approvals.
+
+### Staged application restore permissions
+
+Phase 1 requests **no additional permissions** for Applications restore. Every 9b operation is blocked in production. The following are documented candidate contracts, not permissions added to setup, the Backup Reader or renewal. The no-parameter setup request is unchanged. Restore adds no Directory.Read.All beyond the same Applications backup choice.
+
+| Staged operation | Least-privileged documented permission and limitation |
+| --- | --- |
+| App registration create | The current [create table](https://learn.microsoft.com/en-us/graph/api/application-post-applications?view=graph-rest-1.0) lists `AppRegistration.Create`. It is absent from the fetched permissions reference and needs availability verification. No broader fallback is requested. Creation also lacks a unique lost-response reconciler and delegated ownership proof. |
+| App or enterprise-app metadata; enterprise-app create; gallery instantiate | `Application.ReadWrite.All` for delegated access. `Application.ReadWrite.OwnedBy` is an application-mode alternative for owned objects, not a delegated desktop restore scope. Gallery template provenance remains unresolved. |
+| Recycle recovery | [Applications and service principals](https://learn.microsoft.com/en-us/graph/api/directory-deleteditems-restore?view=graph-rest-1.0) use delegated `Application.ReadWrite.All` or application `Application.ReadWrite.OwnedBy`. Recovery remains blocked because inherited credentials and access cannot be completely verified. |
+| Owner add | `Application.ReadWrite.All` plus `Directory.Read.All` in delegated mode. Application mode uses `Application.ReadWrite.OwnedBy` plus `Directory.Read.All`. The latter read is already part of Applications backup. Owners require their own privileged approval; no owner removal contract is admitted. |
+| Delegated consent create or scope merge | `DelegatedPermissionGrant.ReadWrite.All`, with each same-tenant owned grant approved separately. |
+| App role assignment | `AppRoleAssignment.ReadWrite.All` plus `Application.Read.All`, with app-ID-based endpoint resolution and individual approval. User/group assignments and Microsoft API lab grants are excluded. |
+| Policy binding | References layer 8 configuration types. No executable permission request until a binding-specific contract and mapping are verified. |
+
+The isolated phase 2 lab candidate uses application `Application.ReadWrite.OwnedBy` for the fixture lifecycle, including [permanent deletion of applications and service principals](https://learn.microsoft.com/en-us/graph/api/directory-deleteditems-delete?view=graph-rest-1.0). It does not establish delegated restore safety. `AppRegistration.Create` alone cannot support fixture update and permanent cleanup. Organization.ReadWrite.All and Directory.ReadWrite.All are never requested.

@@ -190,3 +190,10 @@ it("persists bounded application relationship pages and advances beyond unresolv
   expect(first.rows.map(row => row.key)).not.toContain(last.rows[0]!.key)
   expect(env.writes).toEqual([])
 })
+it("refuses principal-specific consent instead of replaying a raw saved user ID", async () => {
+  const env = world()
+  await expect(applicationObjectStep("OAuth2PermissionGrants", { id: "A".repeat(43), clientId: id(50), resourceId: id(51), consentType: "Principal", principalId: id(2), scope: "Test.Read" }, env.io, async (_folder, sourceId) => ({ id: sourceId, appId: sourceId === id(50) ? client.appId : app.appId }))).rejects.toThrow("Raw saved principal IDs")
+  const candidate = step("consent", "OAuth2PermissionGrants"); candidate.desired.consentType = "Principal"
+  expect(applicationAdmission(candidate)).toContain("typed user mapping")
+  expect(env.writes).toEqual([])
+})

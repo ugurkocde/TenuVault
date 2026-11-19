@@ -35,6 +35,7 @@ export function applicationAdmission(step: GuardedStep): string | undefined {
   const action = step.directory?.action
   // Recycle recovery can revive credentials and access without individual approvals.
   if (action === "recycle") return "Recycle-bin recovery is blocked until credentials, inherited access and every recovered relationship can be completely verified. Recreation cannot bypass the recycle bin."
+  if (action === "consent" && step.desired.consentType === "Principal") return "Principal-specific consent needs a verified typed user mapping. Raw saved principal IDs are never replayed."
   if (action === "policy") return "App policy bindings require a verified layer 8 configuration mapping and a separately admitted binding contract."
   if (contract?.phase !== "enabled" || !action || contract.evidence?.[action]?.result !== "round-trip-matched") return contract?.contracts?.find(row => row.action === action)?.blocker ?? DIRECTORY_9B_BLOCKER
 }
