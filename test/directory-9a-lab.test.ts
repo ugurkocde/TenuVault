@@ -93,6 +93,7 @@ it("verifies the prepared group lifecycle, membership and owner round trip under
   const fetcher = vi.fn(async (input: RequestInfo | URL, options?: RequestInit) => {
     const path = new URL(String(input)).pathname.replace("/v1.0/", ""), parts = path.split("/"), method = options?.method ?? "GET", body = options?.body ? JSON.parse(String(options.body)) : undefined
     if (method === "GET") {
+      if (parts[2] === "memberOf") return Response.json({ value: [] })
       if (parts.length === 1) return Response.json({ value: [...active.values()].filter(value => value.fixtureFolder === path) })
       if (path.endsWith("microsoft.graph.user") || path.endsWith("microsoft.graph.group")) return Response.json({ value: [...deleted.values()].filter(value => value.fixtureFolder === (path.endsWith(".user") ? "users" : "groups")) })
       if (parts.length === 4) return links.has(path) ? Response.json({ id: parts[3] }) : new Response(null, { status: 404 })
@@ -101,7 +102,7 @@ it("verifies the prepared group lifecycle, membership and owner round trip under
     if (method === "POST" && ["users", "groups"].includes(path)) {
       const objectId = `00000000-0000-4000-8000-${String(next++).padStart(12, "0")}`
       if (body.passwordProfile) delete body.passwordProfile
-      active.set(objectId, { ...body, id: objectId, fixtureFolder: path }); return Response.json({ id: objectId })
+      active.set(objectId, { ...(path === "groups" ? { description: null } : {}), ...body, id: objectId, fixtureFolder: path }); return Response.json({ id: objectId })
     }
     if (method === "PATCH") { Object.assign(active.get(parts[1]!)!, body); return new Response(null, { status: 204 }) }
     if (parts[2] === "members" || parts[2] === "owners") {

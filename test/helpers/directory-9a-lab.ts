@@ -33,6 +33,7 @@ export function directory9aLab(token: string, tenant: string, app: string, recov
       const response = await fetchImpl(url.href, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(60_000) })
       recovery.evidence({ method, path: url.pathname, status: response.status })
       if (response.status === 429 && ["GET", "DELETE"].includes(method) && attempt < 4) { await pause(Math.min(60_000, Math.max(1000, Number(response.headers.get("Retry-After")) * 1000 || 1000))); continue }
+      if (response.status === 404 && method === "DELETE" && attempt < 12) { await pause(1000); continue }
       if (response.status === 404 && ["PATCH", "PUT", "POST"].includes(method) && path !== "users" && path !== "groups" && attempt < 4) { await pause(3000); continue }
       if (response.status === 404 && ["GET", "DELETE"].includes(method)) return null
       if (!response.ok) {
@@ -65,7 +66,7 @@ export function directory9aLab(token: string, tenant: string, app: string, recov
     const fixture = created.get(id)
     if (!fixture) throw new Error("Existing objects cannot be changed by this run")
     for (let attempt = 0; attempt < 60; attempt++) {
-      const item = await request(`${fixture.folder}/${id}?$select=${fixture.folder === "users" ? "id,displayName,userPrincipalName,mailNickname,accountEnabled" : "id,displayName,mailNickname,groupTypes,mailEnabled,securityEnabled,isAssignableToRole,membershipRule,membershipRuleProcessingState"}`)
+      const item = await request(`${fixture.folder}/${id}?$select=${fixture.folder === "users" ? "id,displayName,userPrincipalName,mailNickname,accountEnabled" : "id,displayName,mailNickname,description,groupTypes,mailEnabled,securityEnabled,isAssignableToRole,membershipRule,membershipRuleProcessingState"}`)
       if (item && assertFixture(item, fixture.folder) === id) return { fixture, item }
       await pause(1000)
     }
@@ -95,7 +96,7 @@ export function directory9aLab(token: string, tenant: string, app: string, recov
               // Cleanup is the only operation allowed on a fixture left by an earlier failed run.
               if (!isGuid(item.id)) throw new Error("Invalid cleanup identity")
               if (folder === "groups" && deleted) { recovery.save({ name: String(item.mailNickname), folder, id: item.id, state: "removed" }); continue }
-              await request(deleted ? `directory/deletedItems/${item.id}` : `${folder}/${item.id}`, "DELETE")
+              if (await request(deleted ? `directory/deletedItems/${item.id}` : `${folder}/${item.id}`, "DELETE") === null) continue
               if (deleted || folder === "groups") recovery.save({ name: String(item.mailNickname ?? item.userPrincipalName).split("@")[0]!, folder, id: item.id, state: "removed" })
             }
           } catch { failures.push(`${folder}/${deleted ? "deleted" : "active"}`) }
@@ -109,16 +110,26 @@ export function directory9aLab(token: string, tenant: string, app: string, recov
     throw new Error(`Cleanup remains unresolved (${[...new Set(failures)].join(", ")}). Recovery intent is retained. No non-prefixed object was removed.`)
   }
   const verify = async (folder: "users" | "groups", id: string, expected: Item) => {
+    let stable = 0
     for (let attempt = 0; attempt < 60; attempt++) {
       const item = await request(`${folder}/${id}?$select=${["id", ...Object.keys(expected), ...(folder === "users" ? ["displayName", "userPrincipalName", "accountEnabled"] : ["displayName", "mailNickname"])].filter((key, index, keys) => keys.indexOf(key) === index).join(",")}`)
-      if (item && assertFixture(item, folder) === id && Object.entries(expected).every(([key, value]) => JSON.stringify(item[key]) === JSON.stringify(value))) { recovery.evidence({ kind: "read-back-matched", folder, id, expected }); return item }
+      const matched = item && assertFixture(item, folder) === id && Object.entries(expected).every(([key, value]) => JSON.stringify(item[key]) === JSON.stringify(value))
+      stable = matched ? stable + 1 : 0
+      if (stable >= 3) { recovery.evidence({ kind: "read-back-matched", folder, id, expected }); return item! }
       await pause(1000)
     }
     throw new Error("Fixture read-back did not match")
   }
+  const deleteFixture = async (path: string) => {
+    if (await request(path, "DELETE") === null) throw new Error("Fixture deletion was not confirmed")
+  }
   const waitDeleted = async (id: string) => {
     for (let attempt = 0; attempt < 60; attempt++) {
       if (await request(`directory/deletedItems/${id}`)) return
+      const kind = created.get(id)?.folder === "users" ? "user" : "group"
+      const page = await request(`directory/deletedItems/microsoft.graph.${kind}?$filter=${encodeURIComponent(`id eq '${id}'`)}`)
+      if (page && !Array.isArray(page.value)) throw new Error("Incomplete deleted fixture read")
+      if ((page?.value as Item[] | undefined)?.some(item => item.id === id)) return
       await pause(1000)
     }
     throw new Error("Deleted fixture did not become readable")
@@ -146,7 +157,7 @@ export function directory9aLab(token: string, tenant: string, app: string, recov
       if (!LAB_9A_GROUP_CLEANUP.admitted) throw new Error(LAB_9A_GROUP_BLOCKER)
       for (const permission of ["Group.Create", "Group.Read.All", "Group.ReadWrite.All", "GroupMember.ReadWrite.All"]) if (!claims.roles?.includes(permission)) throw new Error(`Missing lab application permission: ${permission}`)
       const name = LAB_9A_PREFIX + crypto.randomUUID()
-      const expected = directoryPayload("Groups", "create", { displayName: name, mailNickname: name, groupTypes: dynamic ? ["DynamicMembership"] : microsoft365 ? ["Unified"] : [], ...(dynamic ? { membershipRule: `(user.displayName -eq "${name}")`, membershipRuleProcessingState: "Paused" } : {}), securityEnabled: true, mailEnabled: microsoft365, isAssignableToRole: roleAssignable })
+      const expected = directoryPayload("Groups", "create", { displayName: name, mailNickname: name, description: "TV06-TEST-original", groupTypes: dynamic ? ["DynamicMembership"] : microsoft365 ? ["Unified"] : [], ...(dynamic ? { membershipRule: `(user.displayName -eq "${name}")`, membershipRuleProcessingState: "Paused" } : {}), securityEnabled: true, mailEnabled: microsoft365, isAssignableToRole: roleAssignable })
       recovery.save({ name, folder: "groups", state: "intent" })
       let item: Item | null
       try { item = await request("groups", "POST", expected) } catch (error) {
@@ -161,8 +172,8 @@ export function directory9aLab(token: string, tenant: string, app: string, recov
     async recreateUser(id: string) {
       const { fixture, item } = await currentFixture(id)
       if (fixture.folder !== "users") throw new Error("Not a user fixture")
-      await request(`users/${id}`, "DELETE"); await waitDeleted(id)
-      await request(`directory/deletedItems/${id}`, "DELETE"); await pause(3000)
+      await deleteFixture(`users/${id}`); await waitDeleted(id)
+      await deleteFixture(`directory/deletedItems/${id}`); await pause(3000)
       const expected = { displayName: item.displayName!, userPrincipalName: item.userPrincipalName!, mailNickname: item.mailNickname!, accountEnabled: false }
       let result: Item | null = null
       // A definite 400 after confirmed permanent deletion can be a stale UPN index.
@@ -188,13 +199,21 @@ export function directory9aLab(token: string, tenant: string, app: string, recov
       await request(`groups/${id}`, "PATCH", { membershipRule: original, membershipRuleProcessingState: "Paused" })
       await verify("groups", id, { membershipRule: original, membershipRuleProcessingState: "Paused" })
     },
-    async lifecycleGroup(id: string) {
-      const { fixture } = await currentFixture(id)
+    async profileGroup(id: string) {
+      const { fixture, item } = await currentFixture(id)
       if (fixture.folder !== "groups") throw new Error("Not a group fixture")
+      const original = item.description ?? null
       await request(`groups/${id}`, "PATCH", { description: "TV06-TEST-changed" }); await verify("groups", id, { description: "TV06-TEST-changed" })
-      await request(`groups/${id}`, "PATCH", { description: "TV06-TEST-original" }); await verify("groups", id, { description: "TV06-TEST-original" })
-      await request(`groups/${id}`, "DELETE"); await waitDeleted(id); await request(`directory/deletedItems/${id}/restore`, "POST", {})
-      await verify("groups", id, { displayName: fixture.name, description: "TV06-TEST-original" })
+      await request(`groups/${id}`, "PATCH", { description: original }); await verify("groups", id, { description: original })
+    },
+    async lifecycleGroup(id: string) {
+      const { fixture, item } = await currentFixture(id)
+      if (fixture.folder !== "groups") throw new Error("Not a group fixture")
+      const original = item.description ?? null
+      await request(`groups/${id}`, "PATCH", { description: "TV06-TEST-changed" }); await verify("groups", id, { description: "TV06-TEST-changed" })
+      await request(`groups/${id}`, "PATCH", { description: original }); await verify("groups", id, { description: original })
+      await deleteFixture(`groups/${id}`); await waitDeleted(id); await request(`directory/deletedItems/${id}/restore`, "POST", {})
+      await verify("groups", id, { displayName: fixture.name, description: original })
     },
     async profileUser(id: string) {
       const { fixture, item } = await currentFixture(id)
@@ -209,15 +228,22 @@ export function directory9aLab(token: string, tenant: string, app: string, recov
       const original = String(item.displayName), changed = fixture.name + "-changed"
       await request(`users/${id}`, "PATCH", { displayName: changed }); await verify("users", id, { displayName: changed, accountEnabled: false })
       await request(`users/${id}`, "PATCH", { displayName: original }); await verify("users", id, { displayName: original, accountEnabled: false })
-      await request(`users/${id}`, "DELETE"); await waitDeleted(id)
+      await deleteFixture(`users/${id}`); await waitDeleted(id)
       await request(`directory/deletedItems/${id}/restore`, "POST", {})
-      await verify("users", id, { displayName: original, accountEnabled: false })
+      await verify("users", id, { displayName: original, userPrincipalName: item.userPrincipalName!, mailNickname: item.mailNickname!, accountEnabled: false })
     },
     async relationship(groupId: string, principalId: string, kind: "members" | "owners", present: boolean) {
       if (!["members", "owners"].includes(kind) || typeof present !== "boolean") throw new Error("Outside the approved relationship kind")
       const resource = await currentFixture(groupId), principal = await currentFixture(principalId)
       if (resource.fixture.folder !== "groups" || !["users", "groups"].includes(principal.fixture.folder)) throw new Error("Relationships must be between fixtures created in this run")
       if (resource.item.isAssignableToRole === true && !claims.roles?.includes("RoleManagement.ReadWrite.Directory")) throw new Error("Missing role-assignable group grant")
+      let flat = false
+      for (let attempt = 0; attempt < 60; attempt++) {
+        const parents = await request(`groups/${groupId}/memberOf?$select=id`)
+        if (Array.isArray(parents?.value)) { if (parents.value.length || parents["@odata.nextLink"]) throw new Error("Only flat fixture groups are allowed"); flat = true; break }
+        await pause(1000)
+      }
+      if (!flat) throw new Error("Fixture group membership could not be verified")
       await request(`groups/${groupId}/${kind}/${present ? "" : principalId + "/"}$ref`, present ? "POST" : "DELETE", present ? { "@odata.id": root + "directoryObjects/" + principalId } : undefined)
       for (let attempt = 0; attempt < 60; attempt++) {
         const actual = await request(`groups/${groupId}/${kind}/${principalId}`)
@@ -229,6 +255,7 @@ export function directory9aLab(token: string, tenant: string, app: string, recov
     async manager(userId: string, managerId: string) {
       const user = await currentFixture(userId), manager = await currentFixture(managerId)
       if (user.fixture.folder !== "users" || manager.fixture.folder !== "users" || !claims.roles?.includes("User.ReadWrite.All")) throw new Error("Manager tests require two created user fixtures and User.ReadWrite.All")
+      if (await request(`users/${userId}/manager`)) throw new Error("The created fixture has an unexpected original manager")
       await request(`users/${userId}/manager/$ref`, "PUT", { "@odata.id": root + "users/" + managerId })
       let matched = false
       for (let attempt = 0; attempt < 60; attempt++) {

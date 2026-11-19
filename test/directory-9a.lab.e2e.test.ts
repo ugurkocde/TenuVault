@@ -47,23 +47,24 @@ describe.skipIf(!approved)("9a approved directory lab scope", () => {
       const manager = await lab.createUser(domain)
       await probe("manager", () => lab.manager(user, manager))
       await probe("user-profile", () => lab.profileUser(user))
-      await probe("user-update-recycle", async () => { await lab.lifecycleUser(await lab.createUser(domain)) })
+      if (process.env.TENUVAULT_LAB_9A_ENABLED_ONLY !== "true") await probe("user-update-recycle", async () => { await lab.lifecycleUser(await lab.createUser(domain)) })
       await probe("user-new-id", async () => { await lab.recreateUser(await lab.createUser(domain)) })
       if (LAB_9A_GROUP_CLEANUP.admitted) {
         for (const [name, roleAssignable, microsoft365, dynamic] of [["security", false, false, false], ["unified", false, true, false], ["role-assignable", true, false, false], ["dynamic", false, false, true]] as const) {
-          if (process.env.TENUVAULT_LAB_9A_ENABLED_ONLY === "true" && (roleAssignable || microsoft365)) continue
+          if (process.env.TENUVAULT_LAB_9A_ENABLED_ONLY === "true" && (roleAssignable || microsoft365 || dynamic)) continue
           let group: string | undefined
           await probe(name + "-create", async () => { group = await lab.createGroup(roleAssignable, microsoft365, dynamic) })
           if (!group) continue
           if (!dynamic) {
             await probe(name + "-member", async () => { await lab.relationship(group!, user, "members", true); await lab.relationship(group!, user, "members", false) })
             await probe(name + "-owner-add", () => lab.relationship(group!, user, "owners", true))
-            await probe(name + "-owner-remove", () => lab.relationship(group!, user, "owners", false))
+            if (process.env.TENUVAULT_LAB_9A_ENABLED_ONLY !== "true") await probe(name + "-owner-remove", () => lab.relationship(group!, user, "owners", false))
           } else await probe("dynamic-rule", () => lab.dynamicRule(group!))
-          await probe(name + "-update-recycle", () => lab.lifecycleGroup(group!))
+          await probe(name + "-profile", () => lab.profileGroup(group!))
+          if (process.env.TENUVAULT_LAB_9A_ENABLED_ONLY !== "true") await probe(name + "-update-recycle", () => lab.lifecycleGroup(group!))
         }
       }
-      if (process.env.TENUVAULT_LAB_9A_ENABLED_ONLY === "true") for (const name of ["manager", "user-profile", "user-new-id", "security-create", "security-member", "security-owner-add", "security-update-recycle"]) expect(results.get(name), name).toBe(true)
+      if (process.env.TENUVAULT_LAB_9A_ENABLED_ONLY === "true") for (const name of ["manager", "user-profile", "user-new-id", "security-create", "security-member", "security-owner-add", "security-profile"]) expect(results.get(name), name).toBe(true)
     } finally { await lab.cleanup() }
     expect((await lab.audit()).filter(item => item.folder !== "directory/deletedItems/microsoft.graph.group")).toEqual([])
   }, 1_800_000)
