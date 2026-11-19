@@ -1,8 +1,10 @@
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
+vi.mock("node:fs", { spy: true })
+import * as fs from "node:fs"
+import { fstatSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto"
-import { it, expect } from "vitest"
+import { it, expect, vi } from "vitest"
 import { DirectoryRestoreStore } from "../src/main/storage/directory-restore-store"
 it("persists encrypted journal partitions across restarts without loading unrelated history", () => {
   const directory = mkdtempSync(join(tmpdir(), "tv-directory-store-")), key = randomBytes(32)
@@ -34,4 +36,25 @@ it("persists encrypted journal partitions across restarts without loading unrela
     for (let i = 0; i < 100; i++) { try { store.get(`restore.directory.batch.${i}`) } catch { refused++ } }
     expect(refused).toBe(1)
   } finally { rmSync(directory, { recursive: true, force: true }) }
+})
+
+it("starts and atomically saves on win32 without opening directory handles", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tv-directory-win32-"))
+  const { openSync: open } = await vi.importActual<typeof import("node:fs")>("node:fs")
+  vi.spyOn(process, "platform", "get").mockReturnValue("win32")
+  const opened = vi.spyOn(fs, "openSync").mockImplementation((...args) => {
+    if (args[1] === "r" && statSync(String(args[0])).isDirectory()) throw Object.assign(new Error("Windows directory access denied"), { code: "EPERM" })
+    return open(...args)
+  })
+  const flush = vi.spyOn(fs, "fsyncSync").mockImplementation(handle => { expect(fstatSync(handle).isFile()).toBe(true) })
+  const rename = vi.spyOn(fs, "renameSync")
+  try {
+    const store = new DirectoryRestoreStore(join(root, "nested", "history"), { encrypt: value => Buffer.from(value), decrypt: value => value.toString() })
+    store.set("restore.directory.test", "first"); store.set("restore.directory.test", "second")
+    expect(store.get("restore.directory.test")).toBe("second")
+    store.delete("restore.directory.test")
+    expect(flush).toHaveBeenCalledTimes(2)
+    expect(rename).toHaveBeenCalledTimes(2)
+    expect(opened.mock.calls.filter(call => call[1] === "wx")).toHaveLength(2)
+  } finally { vi.restoreAllMocks(); rmSync(root, { recursive: true, force: true }) }
 })

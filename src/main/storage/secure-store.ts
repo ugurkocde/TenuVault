@@ -6,7 +6,8 @@ export const APP_STATE_START_OVER_DETAIL = "Your saved data is kept as an unread
 export const APP_STATE_START_OVER_BUTTON = "Delete backup key and start over"
 
 /** Syncs a directory so its entries survive a crash; a failure is logged, since the data itself is already written. */
-function syncDirectorySync(dir: string): void {
+export function syncDirectorySync(dir: string): void {
+  if (process.platform === "win32") return
   try {
     const directory = openSync(dir, "r")
     try {

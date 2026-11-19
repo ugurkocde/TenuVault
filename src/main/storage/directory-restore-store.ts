@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto"
 import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
-import type { Cipher, KeyValueStore } from "./secure-store"
+import { syncDirectorySync, type Cipher, type KeyValueStore } from "./secure-store"
 import { RestoreSafetyError } from "../../shared/intune/restore-guards"
 
 export interface PartitionedRestoreStore extends KeyValueStore { readonly partitioned: true }
@@ -11,8 +11,7 @@ export class DirectoryRestoreStore implements PartitionedRestoreStore {
   constructor(private readonly directory: string, private readonly cipher: Cipher) {
     const first = mkdirSync(directory, { recursive: true, mode: 0o700 })
     if (first) for (let current = directory; ; current = dirname(current)) {
-      const handle = openSync(current, "r")
-      try { fsyncSync(handle) } finally { closeSync(handle) }
+      syncDirectorySync(current)
       if (current === dirname(first) || current === dirname(current)) break
     }
   }
@@ -21,8 +20,7 @@ export class DirectoryRestoreStore implements PartitionedRestoreStore {
     return join(this.directory, createHash("sha256").update(key).digest("hex") + ".bin")
   }
   private syncDirectory(): void {
-    const handle = openSync(this.directory, "r")
-    try { fsyncSync(handle) } finally { closeSync(handle) }
+    syncDirectorySync(this.directory)
   }
   get(key: string): string | null {
     let encrypted: Buffer
