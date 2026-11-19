@@ -148,7 +148,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
     const principal = intent.principalId ? await resolvePrincipal(intent.principalId) : null
     let excluded = false
     if (step.folder === "Groups" && (["member", "owner"].includes(intent.action) || (intent.action === "update" && (step.desired.membershipRule !== undefined || step.desired.membershipRuleProcessingState !== undefined)))) {
-      if (!resource || typeof resource.isAssignableToRole !== "boolean") throw new RestoreSafetyError("The group's privilege could not be resolved.")
+      if (!resource || (typeof resource.isAssignableToRole !== "boolean" && resource.isAssignableToRole !== null)) throw new RestoreSafetyError("The group's privilege could not be resolved.")
       for await (const policy of list("identity/conditionalAccess/policies?$select=id,conditions")) {
         const users = (policy.conditions as Item | undefined)?.users as Item | undefined
         if (!users || !Array.isArray(users.excludeGroups)) throw new RestoreSafetyError("Conditional Access exclusions could not be resolved.")
@@ -156,7 +156,9 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       }
     }
     const result = directoryReview(step, resource, principal, actor, excluded)
-    if (resource && step.folder === "Groups" && typeof resource.isAssignableToRole !== "boolean") result.blocker ??= "The group's role-assignable state could not be resolved."
+    // The optional flag is explicitly null on ordinary lab groups, and true on role-assignable fixtures.
+    // An omitted or malformed selected field still fails closed.
+    if (resource && step.folder === "Groups" && (typeof resource.isAssignableToRole !== "boolean" && resource.isAssignableToRole !== null)) result.blocker ??= "The group's role-assignable state could not be resolved."
     if (principal && ["member", "owner", "manager"].includes(intent.action) && principal["@odata.type"] !== "#microsoft.graph.user") result.blocker ??= "Only user principals have an admitted relationship contract."
     const evidence = restoreMatrixRow(step.folder)?.directoryRestore?.evidence ?? {}
     const requireEvidence = (kind: string, reason: string) => { if (!evidence[kind]) result.blocker ??= reason }

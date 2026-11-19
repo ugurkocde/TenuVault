@@ -125,3 +125,13 @@ it("cancels between writes and resumes the persisted batch after a service resta
   expect(await env.service().execute(tenant, request, page.fingerprint, approvals)).toMatchObject({ status: "complete" })
   expect(env.writes).toHaveLength(25)
 })
+
+it("accepts the lab's explicit null role flag and refuses an omitted role classification", async () => {
+  const env = world(1), service = env.service(); env.group.isAssignableToRole = null
+  const page = await service.prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
+  expect(page.rows[0]!.review.blocker).toBeUndefined()
+  expect(await service.execute(tenant, { ...env.request, runId: page.runId }, page.fingerprint, { [page.rows[0]!.key]: page.rows[0]!.review.approvals })).toMatchObject({ status: "complete" })
+  delete env.group.isAssignableToRole; env.members.clear()
+  await expect(service.prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)).rejects.toThrow("privilege could not be resolved")
+  expect(env.writes).toHaveLength(1)
+})
