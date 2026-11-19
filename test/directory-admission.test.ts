@@ -22,5 +22,6 @@ it("keeps every unsupported directory action blocked at the final transport", ()
     for (const action of actions) expect(directoryAdmission({ folder, directory: { action }, desired: {} } as GuardedStep)).toBeTruthy()
   }
   expect(directoryAdmission({ folder: "Users", directory: { action: "update" }, desired: { accountEnabled: true } } as unknown as GuardedStep)).toContain("Account activation")
+  expect(directoryAdmission({ folder: "Groups", directory: { action: "update" }, desired: { description: null } } as unknown as GuardedStep)).toContain("Clearing a group description")
   expect(restoreMatrixRow("Groups")!.directoryRestore!.evidence).not.toHaveProperty("dynamic rule")
 })

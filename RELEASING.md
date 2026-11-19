@@ -253,7 +253,7 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 ## Compatibility notes for the next release
 
-- Directory restore now has separate per-object review and 50-row relationship pages, with individual approvals, per-group exact choices and 20-step durable batches. Only disabled cloud member creation, user display names, static security-group creation/descriptions, managers and ordinary user links are admitted. Saved page IDs resume in this directory flow. Directory state is encrypted in a separate directory-restore folder under app data.
+- Directory restore now has separate per-object review and 50-row relationship pages, with individual approvals, per-group exact choices and 20-step durable batches. Only disabled cloud member creation, user display names, static security-group creation/nonempty descriptions, managers and ordinary user links are admitted. Saved page IDs resume in this directory flow. Directory state is encrypted in a separate directory-restore folder under app data.
 - Directory restore opt-in adds only the admitted operation scopes and the read scopes needed for protection. Backup, Backup Reader provisioning, allowlist and renewal remain unchanged. Account state, recycle recovery, invitations, licenses, Microsoft 365 groups, dynamic rules, privileged groups and nested principals remain blocked. Recreated identities get new IDs and need reference review; recreated users need sign-in setup in Entra.
 - Approved lab cleanup soft-deletes test groups and leaves them in deleted items for Entra's 30-day expiration. Every run permanently removes test users and audits deletion dates for retained groups. Later runs never restore an earlier run's groups.
 

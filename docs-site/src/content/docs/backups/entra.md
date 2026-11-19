@@ -190,7 +190,7 @@ The exact [property allowlists](/security/data-flows/#directory-property-allowli
 
 ### Directory restore availability
 
-**Review directory restore** restores disabled cloud member creation, user display names, static security-group creation/descriptions, saved managers, ordinary user member adds/removals and owner additions. Security-group creation needs fresh readable proof of a tenant-wide Groups Administrator or Global Administrator assignment, preventing implicit caller ownership. Each row needs its own approval. Exact membership is a choice for that group; owner removal remains blocked after live refusals. Saved pages resume through the same directory flow.
+**Review directory restore** restores disabled cloud member creation, user display names, static security-group creation/nonempty descriptions, saved managers, ordinary user member adds/removals and owner additions. Security-group creation needs fresh readable proof of a tenant-wide Groups Administrator or Global Administrator assignment, preventing implicit caller ownership. Each row needs its own approval. Exact membership is a choice for that group; owner removal remains blocked after live refusals. Saved pages resume through the same directory flow.
 
 Account state, recycle recovery, guests, licenses, Microsoft 365 groups, dynamic rules, privileged group relationships and nested principals remain blocked with specific reasons. A recreated object gets a new ID and needs reference review. [Directory restore](/restore/identity/#users-and-groups) describes the closed subsets, approvals and limitations. Backup capture and Backup Reader provisioning and renewal are unchanged.
 
@@ -211,3 +211,7 @@ External identities restore writes only the parent cross-tenant policy display n
 Custom attributes remain blocked after a live HTTP 400 AADB2C99039 create refusal. The external-identities leave flag was verified with identical values only. Lifecycle settings returned HTTP 403 before any write; workflow writes were outside the approved lab scope. The required permissions do not establish licensing or onboarding.
 
 Directory.Read.All is requested only as a backup read in the opt-in Groups and Applications areas, for group lifecycle policies and delegated permission grants. Microsoft offers no narrower read permission for these types. Both signed-in admin and Backup Reader setups retain this coverage. Directory.Read.All is never a restore permission. Directory.ReadWrite.All and Organization.ReadWrite.All are never requested.
+
+Group link restore also refuses a resource with any current directory membership, including parent groups, directory roles and administrative units. This avoids granting inherited privilege through an unverified ancestor. The lookup uses existing group read access.
+
+User display-name and manager changes are blocked when Conditional Access group targeting or exclusions exist or cannot be completely read. Their dynamic-membership effects need a separate verified review. Every access addition and manager change also has separate privilege and security-response approvals.

@@ -167,8 +167,14 @@ Mail-enabled security groups and distribution groups cannot be recreated through
 
 ## Directory restore boundaries
 
-Directory restore supports disabled cloud member creation, existing cloud member display names, static security-group creation/descriptions, manager assignment and ordinary user member/owner relationships. See [the per-operation boundaries](/restore/identity/#users-and-groups). Each removal needs the group's exact choice and an individual approval. Account state, recycle recovery, guests, licenses, Microsoft 365 groups, dynamic rules, role-assignable or Conditional Access excluded groups, nested principals and other unverified fields remain blocked with reasons.
+Directory restore supports disabled cloud member creation, existing cloud member display names, static security-group creation/nonempty descriptions, manager assignment and ordinary user member/owner relationships. See [the per-operation boundaries](/restore/identity/#users-and-groups). Each removal needs the group's exact choice and an individual approval. Account state, recycle recovery, guests, licenses, Microsoft 365 groups, dynamic rules, role-assignable or Conditional Access excluded groups, nested principals and other unverified fields remain blocked with reasons.
 
 Passwords and authentication methods, application secrets/private keys, federated identity credentials, dynamic members, Microsoft first-party service principals, activated PIM instances, synced objects, devices and domains are never restored. Recreation gets a new ID; review policy targets and external integrations before activation. Application recreation would also get a new app ID, but is not enabled here.
 
 The lab leaves only soft-deleted test groups, which Entra permanently removes after 30 days. They are audited by ID and deletion date. Test users are permanently removed; earlier runs' deleted groups are never restored by a later run.
+
+Clearing a group description is blocked because a live null restore did not consistently match read-back.
+
+Group link restore also refuses a resource with any current directory membership, including parent groups, directory roles and administrative units. This avoids granting inherited privilege through an unverified ancestor. The lookup uses existing group read access.
+
+User display-name and manager changes are blocked when Conditional Access group targeting or exclusions exist or cannot be completely read. Their dynamic-membership effects need a separate verified review. Every access addition and manager change also has separate privilege and security-response approvals.

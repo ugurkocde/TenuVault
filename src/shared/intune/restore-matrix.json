@@ -13688,6 +13688,19 @@
           ],
           "documentation": "https://learn.microsoft.com/en-us/graph/api/group-update?view=graph-rest-1.0",
           "blocker": "Paused fixture rules do not establish safe future beneficiaries. Dynamic restore stays blocked."
+        },
+        {
+          "action": "clear description",
+          "method": "PATCH",
+          "path": "groups/{id}",
+          "delegated": [
+            "Group.ReadWrite.All"
+          ],
+          "application": [
+            "Group.ReadWrite.All"
+          ],
+          "documentation": "https://learn.microsoft.com/en-us/graph/api/group-update?view=graph-rest-1.0",
+          "blocker": "Clearing a group description remains blocked: the live null restore did not consistently match read-back. Only nonempty saved descriptions are admitted."
         }
       ],
       "evidence": {

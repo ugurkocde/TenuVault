@@ -39,8 +39,8 @@ export function DirectoryRestore({ tenant, backupId, path }: { tenant: BackupTen
     <Button size="sm" variant="outline" disabled={busy} aria-expanded={open} onClick={() => { setOpen(!open); invalidate() }}>Review directory restore</Button>
     {open && <div className="mt-2 space-y-3 rounded-lg border border-blue-200 bg-blue-50 p-3 text-gray-900">
       <p>Review who receives access. Each change needs its own approval and is never part of restore all. Recreated objects get a new ID. Restore the object before reviewing relationships.</p>
-      <p>Object updates restore a user's display name or a security group's description. Other profile and group properties have no admitted restore round trip.</p>
-      <p>Account activation, recycle recovery, invitations, licenses, dynamic rules, role-assignable groups and nested group principals remain blocked. Their live evidence or privileged safety integration is incomplete.</p>
+      <p>Object updates restore a user's display name or a security group's nonempty description. Clearing descriptions remains blocked after inconsistent live read-back. Other profile and group properties have no admitted restore round trip.</p>
+      <p>Account activation, recycle recovery, invitations, licenses, dynamic rules, role-assignable groups and nested group relationships remain blocked. Their live evidence or privileged safety integration is incomplete.</p>
       <label className="block">Review <select className="ml-2 rounded border bg-white p-1 text-gray-900" disabled={busy} value={stage} onChange={event => { setStage(event.target.value); invalidate() }}><option value="object">Directory object</option><option value="relationships">Relationships</option></select></label>
       {path.split("/")[1] === "Groups" && stage === "relationships" && <>
         <label className="flex items-start gap-2"><input type="checkbox" disabled={busy} checked={exactMembers} onChange={event => { setExactMembers(event.target.checked); invalidate() }} />Exact membership for this group, remove members absent from the backup</label>

@@ -111,9 +111,9 @@ export function directoryReview(step: GuardedStep, live: Item | null, principal:
   const privileged = roleAssignable || excludedFromCA
   if (roleAssignable) notices.push("This group can confer a directory role.")
   if (excludedFromCA) notices.push("This group is excluded from Conditional Access policies.")
-  if ((["member", "owner"].includes(intent.action) && privileged) || step.desired.isAssignableToRole === true) approvals.push("privileged-relationship")
+  if ((["member", "owner", "manager"].includes(intent.action) && (privileged || step.desired.present === true || intent.action === "manager")) || step.desired.isAssignableToRole === true) approvals.push("privileged-relationship")
   if (excludedFromCA && intent.action === "update" && (step.desired.membershipRule !== undefined || step.desired.membershipRuleProcessingState !== undefined)) blocker = "Changing a Conditional Access excluded dynamic group cannot resolve its future beneficiaries. This rule restore is blocked."
-  if ((intent.action === "update" && live?.membershipRuleProcessingState === "Paused" && step.desired.membershipRuleProcessingState === "On") || (intent.action === "update" && live?.accountEnabled === false && step.desired.accountEnabled === true) || (["member", "owner"].includes(intent.action) && privileged && step.desired.present === true)) {
+  if ((intent.action === "update" && live?.membershipRuleProcessingState === "Paused" && step.desired.membershipRuleProcessingState === "On") || (intent.action === "update" && live?.accountEnabled === false && step.desired.accountEnabled === true) || (["member", "owner"].includes(intent.action) && step.desired.present === true) || (intent.action === "manager" && live?.principalId !== step.desired.principalId)) {
     approvals.push("security-response"); notices.push("The current state looks deliberate. This restore may undo a security response.")
   }
   if (["member", "owner"].includes(intent.action) && step.desired.present === false) {

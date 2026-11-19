@@ -17,7 +17,7 @@ const identity = (id: unknown): string => {
 export function directoryAdmission(step: GuardedStep): string | undefined {
   const contract = restoreMatrixRow(step.folder)?.directoryRestore
   const action = step.directory?.action
-  const kinds = [action ?? "missing", ...(step.folder === "Users" && step.desired.accountEnabled !== undefined && action === "update" ? ["account state"] : []), ...(action === "owner" && step.desired.present === false ? ["owner remove"] : []), ...(step.desired.membershipRule !== undefined ? ["dynamic rule"] : []), ...(step.desired.isAssignableToRole === true ? ["role-assignable creation"] : [])]
+  const kinds = [action ?? "missing", ...(step.folder === "Groups" && action === "update" && (step.desired.description === null || step.desired.description === "") ? ["clear description"] : []), ...(step.folder === "Users" && step.desired.accountEnabled !== undefined && action === "update" ? ["account state"] : []), ...(action === "owner" && step.desired.present === false ? ["owner remove"] : []), ...(step.desired.membershipRule !== undefined ? ["dynamic rule"] : []), ...(step.desired.isAssignableToRole === true ? ["role-assignable creation"] : [])]
   if (contract?.phase !== "enabled" || kinds.some(kind => contract.evidence?.[kind]?.result !== "round-trip-matched")) return contract?.contracts?.find(row => row.action === kinds.find(kind => !contract.evidence?.[kind]))?.blocker || DIRECTORY_9A_BLOCKER
 }
 export function directoryPermissions(step: GuardedStep): string[] {
@@ -37,7 +37,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
   const request = async (path: string, method = "GET", body?: Item, beforeRetry?: () => Promise<void>): Promise<Item | null> => {
     for (let attempt = 0; ; attempt++) {
       const url = new URL(root + path)
-      if (method === "GET" && /^(users|groups)\/[0-9a-f-]+$/i.test(path)) url.searchParams.set("$select", path.startsWith("users/") ? "id,displayName,userPrincipalName,userType,accountEnabled,givenName,surname,jobTitle,department,officeLocation,usageLocation,assignedLicenses,onPremisesSyncEnabled,onPremisesImmutableId,onPremisesLastSyncDateTime" : "id,displayName,description,mailNickname,groupTypes,mailEnabled,securityEnabled,isAssignableToRole,membershipRule,membershipRuleProcessingState,onPremisesSyncEnabled")
+      if (method === "GET" && /^(users|groups)\/[0-9a-f-]+$/i.test(path)) url.searchParams.set("$select", path.startsWith("users/") ? "id,displayName,userPrincipalName,mailNickname,userType,accountEnabled,givenName,surname,jobTitle,department,officeLocation,usageLocation,assignedLicenses,onPremisesSyncEnabled,onPremisesImmutableId,onPremisesLastSyncDateTime" : "id,displayName,description,mailNickname,groupTypes,mailEnabled,securityEnabled,isAssignableToRole,membershipRule,membershipRuleProcessingState,onPremisesSyncEnabled")
       const response = await fetchImpl(url.href, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(60_000) })
       if (response.status === 429 && attempt < 4) {
         await wait(Math.min(60_000, Math.max(1000, Number(response.headers.get("Retry-After")) * 1000 || 1000)))
@@ -76,7 +76,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
     const value = step.directory?.action === "invite" ? body.invitedUserEmailAddress : body.userPrincipalName
     if (typeof value !== "string") throw new RestoreSafetyError("A unique user create key is required.")
     const matches: Item[] = []
-    for await (const user of list(`users?$filter=${encodeURIComponent(`${field} eq '${value.replaceAll("'", "''")}'`)}`)) { matches.push(user); if (matches.length > 1) break }
+    for await (const user of list(`users?$select=id,displayName,userPrincipalName,mailNickname,accountEnabled&$filter=${encodeURIComponent(`${field} eq '${value.replaceAll("'", "''")}'`)}`)) { matches.push(user); if (matches.length > 1) break }
     return matches
   }
   const resolvePrincipal = async (id: string): Promise<Item | null> => {
@@ -146,9 +146,16 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
       if (!admin) throw new RestoreSafetyError("Security-group creation requires a current tenant-wide Groups Administrator or Global Administrator assignment. Non-admin creation can implicitly make the restoring account an owner.")
     }
     const principal = intent.principalId ? await resolvePrincipal(intent.principalId) : null
-    let excluded = false
+    let excluded = false, inherited = false, indirectUserChange = false
+    if (step.folder === "Users" && (intent.action === "manager" || (intent.action === "update" && step.desired.displayName !== undefined && step.desired.displayName !== resource?.displayName))) {
+      for await (const policy of list("identity/conditionalAccess/policies?$select=id,conditions")) {
+        const users = (policy.conditions as Item | undefined)?.users as Item | undefined
+        if (!users || !Array.isArray(users.includeGroups) || !Array.isArray(users.excludeGroups) || users.includeGroups.length || users.excludeGroups.length) indirectUserChange = true
+      }
+    }
     if (step.folder === "Groups" && (["member", "owner"].includes(intent.action) || (intent.action === "update" && (step.desired.membershipRule !== undefined || step.desired.membershipRuleProcessingState !== undefined)))) {
       if (!resource || (typeof resource.isAssignableToRole !== "boolean" && resource.isAssignableToRole !== null)) throw new RestoreSafetyError("The group's privilege could not be resolved.")
+      if (["member", "owner"].includes(intent.action)) for await (const parent of list(`groups/${identity(step.targetId ?? step.sourceId)}/memberOf?$select=id`)) { if (parent) { inherited = true; break } }
       for await (const policy of list("identity/conditionalAccess/policies?$select=id,conditions")) {
         const users = (policy.conditions as Item | undefined)?.users as Item | undefined
         if (!users || !Array.isArray(users.excludeGroups)) throw new RestoreSafetyError("Conditional Access exclusions could not be resolved.")
@@ -161,6 +168,8 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
     // An omitted or malformed selected field still fails closed.
     if (resource && step.folder === "Groups" && (typeof resource.isAssignableToRole !== "boolean" && resource.isAssignableToRole !== null)) result.blocker ??= "The group's role-assignable state could not be resolved."
     if (principal && ["member", "owner", "manager"].includes(intent.action) && principal["@odata.type"] !== "#microsoft.graph.user") result.blocker ??= "Only user principals have an admitted relationship contract."
+    if (indirectUserChange) result.blocker ??= "User name and manager changes need a verified dynamic-membership review while Conditional Access group targeting or exclusions are present or unreadable."
+    if (inherited) result.blocker ??= "This group has directory memberships. Its inherited beneficiaries and scoped access need a verified review before restoring links."
     const evidence = restoreMatrixRow(step.folder)?.directoryRestore?.evidence ?? {}
     const requireEvidence = (kind: string, reason: string) => { if (!evidence[kind]) result.blocker ??= reason }
     if (resource?.isAssignableToRole === true || step.desired.isAssignableToRole === true) requireEvidence("role-assignable", "Role-assignable groups remain blocked: privileged restore and delegated safety resolution are not admitted.")

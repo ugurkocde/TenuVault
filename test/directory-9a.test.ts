@@ -93,6 +93,7 @@ for (const action of ["create", "update", "recycle", "invite", "member", "owner"
         if (outcome === "timeout") throw new Error("The answer was lost after commit")
         return Response.json(action === "invite" ? { invitedUser: { id: user.id } } : { id: base.id })
       }
+      if (path.endsWith("/memberOf")) return Response.json({ value: [] })
       if (path.startsWith("identity/conditionalAccess/")) return Response.json({ value: [] })
       if (path === `users/${principal.id}`) return Response.json(principal)
       if (path.startsWith("directory/deletedItems/")) return deleted ? Response.json(base) : new Response(null, { status: 404 })
@@ -233,6 +234,7 @@ it("does not widen a Conditional Access excluded group's membership permission t
   const step = stepFor("member"); step.directory!.principalId = principal.id; step.desired = { principalId: principal.id, present: true }; step.properties = Object.keys(step.desired)
   const fetcher = vi.fn(async (input: RequestInfo | URL, options?: RequestInit) => {
     if (options?.method !== "GET") return Response.json({ id: group.id })
+    if (String(input).includes("/memberOf")) return Response.json({ value: [] })
     if (String(input).includes("conditionalAccess")) return Response.json({ value: [{ conditions: { users: { excludeGroups: [group.id] } } }] })
     if (new URL(String(input)).pathname.endsWith("users/" + principal.id)) return Response.json(principal)
     return Response.json(group)
@@ -261,4 +263,15 @@ it("refuses non-admin group creation before Graph can implicitly add the caller 
   const io = directory9aIO(token(), actor, refs, fetcher)
   await expect(io.review(step)).rejects.toThrow("Non-admin creation")
   expect(fetcher).toHaveBeenCalledTimes(1)
+})
+
+it("selects the optional user fields needed to reconcile an unanswered create", async () => {
+  const step = stepFor("create", "Users"); delete step.targetId
+  step.desired = directoryPayload("Users", "create", user)
+  const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+    const selected = new URL(String(input)).searchParams.get("$select")?.split(",") ?? ["id", "displayName", "userPrincipalName"]
+    return Response.json({ value: [Object.fromEntries(Object.entries({ ...user, id: uuid(90) }).filter(([key]) => selected.includes(key)))] })
+  })
+  const io = directory9aIO(token(), actor, refs, fetcher)
+  expect(await io.findCreated(step, step.desired)).toEqual([expect.objectContaining({ ...step.desired, id: uuid(90) })])
 })

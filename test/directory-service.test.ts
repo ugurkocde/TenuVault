@@ -27,6 +27,7 @@ function world(count = 0, missing = false) {
       return new Response(null, { status: 204 })
     }
     if (path === "applications" || path === "servicePrincipals") return Response.json({ value: [{ id: id(path === "applications" ? 4 : 5), appId: app }] })
+    if (path.endsWith("/memberOf")) return Response.json({ value: [] })
     if (path.startsWith("identity/conditionalAccess/")) return Response.json({ value: [] })
     if (path === "roleManagement/directory/roleAssignments") return Response.json({ value: [{ principalId: admin, directoryScopeId: "/", roleDefinitionId: id(50) }] })
     if (path === `roleManagement/directory/roleDefinitions/${id(50)}`) return Response.json({ templateId: "fdd7a751-b60b-444a-984c-02652fe8fa1c" })
@@ -152,4 +153,21 @@ it("publishes recreated IDs and an advisory reference warning without probing un
   const replacement = await env.service().prepare(tenant, env.request, options, env.read)
   expect(replacement.rows[0]!.review.resource.id).toBe(id(900))
   expect(env.writes.filter(write => write === "POST groups")).toHaveLength(1)
+})
+
+it("blocks inherited group beneficiaries before a link can be approved", async () => {
+  const env = world(1), original = env.fetcher.getMockImplementation()!
+  env.fetcher.mockImplementation(async (input, init) => String(input).includes("/memberOf") ? Response.json({ value: [{ id: id(500) }] }) : original(input, init))
+  const page = await env.service().prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
+  expect(page.rows[0]!.review.blocker).toContain("inherited beneficiaries")
+  expect(env.writes).toEqual([])
+})
+
+it("blocks user name changes when Conditional Access groups could inherit the result", async () => {
+  const env = world(), original = env.fetcher.getMockImplementation()!
+  env.fetcher.mockImplementation(async (input, init) => String(input).includes("conditionalAccess") ? Response.json({ value: [{ conditions: { users: { includeGroups: [], excludeGroups: [id(500)] } } }] }) : original(input, init))
+  const request = { path: `backup/Users/${id(100)}.json`, origin: "restore" as const, snapshot: { id: id(100), displayName: "Saved name", userType: "Member" } }
+  const page = await env.service().prepare(tenant, request, options, env.read)
+  expect(page.rows[0]!.review.blocker).toContain("dynamic-membership review")
+  expect(env.writes).toEqual([])
 })
