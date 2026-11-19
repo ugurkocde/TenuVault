@@ -47,6 +47,7 @@ it("executes a real 50-row relationship preview in bounded batches and resumes w
   const env = world(65), service = env.service()
   const page = await service.prepare(tenant, env.request, { ...options, stage: "relationships" }, env.read)
   expect(page.rows).toHaveLength(50); expect(page.more).toBe(true)
+  expect(page.rows[0]!.review.changes).toEqual([{ property: "present", before: false, after: true }])
   expect(env.writes).toEqual([])
   const approvals = Object.fromEntries(page.rows.map(row => [row.key, row.review.approvals]))
   const request = { ...env.request, runId: page.runId }
@@ -78,6 +79,7 @@ it("requires exact choice and a separate removal approval for each extra member"
   expect(adds.rows).toEqual([])
   const exact = await service.prepare(tenant, env.request, { ...options, stage: "relationships", exactMembers: true }, env.read)
   expect(exact.rows[0]!.review.approvals).toContain("exact-group")
+  expect(exact.rows[0]!.review.changes).toEqual([{ property: "present", before: true, after: false }])
   await service.execute(tenant, { ...env.request, runId: exact.runId }, exact.fingerprint, { [exact.rows[0]!.key]: exact.rows[0]!.review.approvals })
   expect(env.members.size).toBe(0)
   expect(env.writes[0]).toBe(`DELETE groups/${resource}/members/${id(100)}/$ref`)

@@ -37,7 +37,7 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
   const request = async (path: string, method = "GET", body?: Item, beforeRetry?: () => Promise<void>): Promise<Item | null> => {
     for (let attempt = 0; ; attempt++) {
       const url = new URL(root + path)
-      if (method === "GET" && /^(users|groups)\/[0-9a-f-]+$/i.test(path)) url.searchParams.set("$select", path.startsWith("users/") ? "id,displayName,userPrincipalName,userType,accountEnabled,givenName,surname,jobTitle,department,officeLocation,usageLocation,onPremisesSyncEnabled,onPremisesImmutableId,onPremisesLastSyncDateTime" : "id,displayName,description,mailNickname,groupTypes,mailEnabled,securityEnabled,isAssignableToRole,membershipRule,membershipRuleProcessingState,onPremisesSyncEnabled")
+      if (method === "GET" && /^(users|groups)\/[0-9a-f-]+$/i.test(path)) url.searchParams.set("$select", path.startsWith("users/") ? "id,displayName,userPrincipalName,userType,accountEnabled,givenName,surname,jobTitle,department,officeLocation,usageLocation,assignedLicenses,onPremisesSyncEnabled,onPremisesImmutableId,onPremisesLastSyncDateTime" : "id,displayName,description,mailNickname,groupTypes,mailEnabled,securityEnabled,isAssignableToRole,membershipRule,membershipRuleProcessingState,onPremisesSyncEnabled")
       const response = await fetchImpl(url.href, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(60_000) })
       if (response.status === 429 && attempt < 4) {
         await wait(Math.min(60_000, Math.max(1000, Number(response.headers.get("Retry-After")) * 1000 || 1000)))
@@ -155,7 +155,8 @@ export function directory9aIO(token: string, actor: RestoreActor, safety: Guarde
         if (users.excludeGroups.includes(step.targetId ?? step.sourceId)) excluded = true
       }
     }
-    const result = directoryReview(step, resource, principal, actor, excluded)
+    const compared = ["member", "owner", "manager", "license"].includes(intent.action) ? { ...resource, ...await read(step, step.targetId) } : resource
+    const result = directoryReview(step, compared, principal, actor, excluded)
     // The optional flag is explicitly null on ordinary lab groups, and true on role-assignable fixtures.
     // An omitted or malformed selected field still fails closed.
     if (resource && step.folder === "Groups" && (typeof resource.isAssignableToRole !== "boolean" && resource.isAssignableToRole !== null)) result.blocker ??= "The group's role-assignable state could not be resolved."
