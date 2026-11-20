@@ -29,7 +29,7 @@ const key = (tenant: string, id: string) => `restore.directory.review.${tenant.t
 /** Owned backup readers are supplied by the authenticated route, never by the renderer. */
 export class DirectoryRestoreService {
   private readonly running = new Map<string, AbortController>()
-  constructor(private readonly store: PartitionedRestoreStore, private readonly recovery: RecoveryAccounts, private readonly connection: (tenant: string) => Promise<RestoreConnection>, private readonly fetchImpl: typeof fetch = fetch) {}
+  constructor(private readonly store: PartitionedRestoreStore, private readonly recovery: RecoveryAccounts, private readonly connection: (tenant: string) => Promise<RestoreConnection>, private readonly fetchImpl: typeof fetch = fetch, private readonly protectedAppIds: (tenant: string) => readonly string[] = () => []) {}
   private async context(tenant: string) {
     const connection = await this.connection(tenant)
     if (connection.tenantId.toLowerCase() !== tenant.toLowerCase()) fail("The connection belongs to another tenant.")
@@ -47,7 +47,7 @@ export class DirectoryRestoreService {
       if (!granted || INTUNE_TYPES.some(type => type.restoreSafety !== "identity" && !type.singleton && !type.staticIds && !REFERENCE_SCAN_EXCLUDED.has(type.folder) && !canBackUp(type.folder, granted))) throw new Error("Reference scan read access is unavailable")
       return referenceMatches(connection.token, mappings, this.fetchImpl, { signal })
     })
-    return { actor, io, applicationIO: directory9bIO(connection.token, actor, this.fetchImpl) }
+    return { actor, io, applicationIO: directory9bIO(connection.token, actor, this.fetchImpl, () => this.protectedAppIds(tenant)) }
   }
   private load(tenant: string, id: string): DirectoryPage {
     if (!isGuid(id)) fail("Select a saved directory preview.")
@@ -192,7 +192,7 @@ export class DirectoryRestoreService {
     }
     for (const step of steps) {
       let review: DirectoryReview
-      try { await io.hydrate(step); step.preview = restoreFingerprint(await io.read(step, step.targetId)); review = await io.review(step) }
+      try { await io.hydrate(step); review = await io.preview(step) }
       catch (error) {
         review = applicationReview(step, null, { id: snapshot.id!, displayName: snapshot.displayName ?? "Unresolved application" }, null, actor)
         review.blocker = error instanceof RestoreSafetyError ? error.message : "A reference could not be resolved. This item is blocked."

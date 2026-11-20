@@ -1,3 +1,4 @@
+import { ApplicationRestoreDisclosure } from "./ApplicationRestoreDisclosure"
 import { AddPermissions } from "./AddPermissions"
 import { useEffect, useId, useRef, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
@@ -79,6 +80,7 @@ function Area({ area, service, report, busy, run }: { area: AreaHealth; service:
     </div>
     {service.id === "entra" && area.id === "externalIdentities" && area.hasTypes && <p className="text-xs text-gray-600">API connectors require the Backup Reader. Their delegated read permission has not been verified.</p>}
     {service.id === "entra" && area.id === "governance" && area.hasTypes && <p className="text-xs text-gray-600">Access packages, review definitions, lifecycle workflows and terms of use. Some features need Entra ID P2 or ID Governance. PDFs, review decisions and workflow history are excluded.</p>}
+    {service.id === "entra" && area.id === "applications" && <ApplicationRestoreDisclosure />}
     {area.personalData && <p className="text-xs text-gray-600">{PERSONAL_DATA[area.id] ?? "Stores personal data in backup files. Review who can access your backup storage before turning this area on."}</p>}
     <p className="text-xs text-gray-600">Backup: <PermissionState state={area.permissions} />. Restore: <PermissionState state={area.restore} />.</p>
     {area.enabled && area.permissions === "present" && area.restore === "missing" && service.access === "restore" && <p className="text-xs text-gray-600">Backup permissions are present. Restore needs: {area.missing.join(", ")}. The Backup and restore access level asks for these permissions. Choose Backup under Areas and access to request only backup permissions.</p>}

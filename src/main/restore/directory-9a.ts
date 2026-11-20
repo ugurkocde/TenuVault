@@ -5,6 +5,7 @@ import { restoreFingerprint, type GuardedRun, type GuardedStep } from "./guarded
 
 export type DirectoryAction = "create" | "update" | "recycle" | "invite" | "member" | "owner" | "manager" | "license" | "gallery" | "consent" | "app-role" | "policy"
 export interface DirectoryIntent {
+  metadataNotices?: string[]
   action: DirectoryAction
   clientAppId?: string
   resourceAppId?: string

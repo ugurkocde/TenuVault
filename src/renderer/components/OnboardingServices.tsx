@@ -1,3 +1,4 @@
+import { ApplicationRestoreDisclosure } from "./ApplicationRestoreDisclosure"
 import { INTUNE_TYPES } from "../../shared/intune/registry"
 import { Button } from "~/components/ui/button"
 import { MODULE_BY_ID, type ModuleId } from "../../shared/services/modules"
@@ -63,6 +64,7 @@ export function OnboardingServices({ choice, onChange, onContinue }: { choice: P
               {module.areas.filter(area => area.optIn).map(area => <div key={area.id} className="space-y-1 border-t border-border pt-2">
                 <label data-no-select className="flex items-center gap-2"><input type="checkbox" role="switch" aria-label={`Include ${area.label}`} disabled={!picked || !area.folders.some(folder => INTUNE_TYPES.some(type => type.folder === folder))} checked={picked?.areas?.includes(area.id) ?? false} onChange={event => onChange({ ...choice, [id]: { ...picked!, areas: event.target.checked ? [...(picked?.areas ?? []), area.id] : picked?.areas?.filter(value => value !== area.id) } })} className="accent-primary" />{area.label} (opt-in)</label>
                 <p>{area.folders.some(folder => INTUNE_TYPES.some(type => type.folder === folder)) ? "Backups are available for the supported types in this area." : "This version has no backup types for this area yet."}</p>
+                {id === "entra" && area.id === "applications" && <ApplicationRestoreDisclosure />}
                 {area.personalData && <p>{PERSONAL_DATA[area.id]}</p>}
               </div>)}
               {id === "intune" && <p>Includes the read access to Conditional Access from earlier Intune setups. Its backups stay off unless you turn them on inside Entra ID.</p>}

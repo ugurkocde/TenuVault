@@ -1,11 +1,10 @@
 import { typeForFolder, type Item } from "../../shared/intune/registry"
-import { directoryObjectId } from "../../shared/intune/entra-directory"
 import { graphContinuation } from "../../shared/graph-continuation"
 import { grantedPermissions } from "../../shared/services/token"
-import { RestoreSafetyError, RestoreWriteDeferredError, RestoreWriteRefusedError, guardRestoreItem, mergeConsentScopes, type RestoreActor } from "../../shared/intune/restore-guards"
+import { RestoreSafetyError, RestoreWriteDeferredError, RestoreWriteRefusedError, guardRestoreItem, type RestoreActor } from "../../shared/intune/restore-guards"
 import { requireRestoreActor } from "./restore-actor"
 import { requireDirectoryApprovals } from "./directory-9a"
-import { appIdentity, appPayload, applicationAdmission, applicationPermissions, applicationReview, restorableApp } from "./directory-9b"
+import { appIdentity, applicationAdmission, applicationPermissions, applicationReview, restorableApp } from "./directory-9b"
 import { restoreFingerprint, type GuardedIO, type GuardedStep } from "./guarded-run"
 
 const root = "https://graph.microsoft.com/v1.0/"
@@ -15,18 +14,19 @@ const collection = (folder: string) => {
   if (folder === "OAuth2PermissionGrants") return "oauth2PermissionGrants"
   throw new RestoreSafetyError("Outside application restore scope.")
 }
-const grantId = (value: unknown) => {
-  if (!directoryObjectId("OAuth2PermissionGrants", value)) throw new RestoreSafetyError("Invalid consent grant identity.")
-  return value as string
-}
 /** Application operations plug into the existing directory journal, batching and approval service. */
-export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typeof fetch = fetch) {
+export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typeof fetch = fetch, protectedAppIds: () => readonly string[] = () => []) {
   requireRestoreActor(token, actor)
   const request = async (path: string, method = "GET", body?: Item, signal?: AbortSignal): Promise<Item | null> => {
     signal?.throwIfAborted()
     const response = await fetchImpl(root + path, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000) })
     if (response.status === 404 && method === "GET") return null
-    if (!response.ok) throw new RestoreWriteRefusedError(response.status)
+    if (!response.ok) {
+      // A dispatched PATCH may have committed before a timeout, throttle or gateway failure.
+      // Keep the durable send marker uncertain so restart reconciles by read-back only.
+      if (method === "PATCH" && (response.status === 408 || response.status === 429 || response.status >= 500)) throw new Error("The application write has an unconfirmed result.")
+      throw new RestoreWriteRefusedError(response.status)
+    }
     return response.status === 204 ? {} : await response.json() as Item
   }
   async function* list(path: string): AsyncGenerator<Item> {
@@ -43,7 +43,21 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
       next = page["@odata.nextLink"] as string | undefined
     }
   }
-  const object = (folder: string, id: string, deleted = false) => request(`${deleted ? "directory/deletedItems" : collection(folder)}/${appIdentity(id)}?$select=id,appId,displayName,description${folder === "ServicePrincipals" ? ",appOwnerOrganizationId,servicePrincipalType,tags" : ""}`)
+  const object = async (folder: string, id: string, deleted = false): Promise<Item | null> => {
+    const item = await request(`${deleted ? "directory/deletedItems" : collection(folder)}/${appIdentity(id)}?$select=id,appId,displayName,description,notes${folder === "ServicePrincipals" ? ",appOwnerOrganizationId,servicePrincipalType,tags" : ""}`)
+    if (!item) return null
+    if (appIdentity(item.id) !== appIdentity(id)) throw new RestoreSafetyError("The application target identity changed.")
+    restorableApp(item, folder, false, protectedAppIds())
+    if (folder !== "Applications" || deleted) return item
+    // appOwnerOrganizationId is documented on servicePrincipal, not application.
+    // Resolve the same appId and apply the established first-party check to its owner.
+    const principal = await resolveApp(appIdentity(item.appId))
+    restorableApp(principal, "ServicePrincipals", true, protectedAppIds())
+    const live = await request(`applications/${appIdentity(id)}?$select=id,appId,displayName,description,notes`)
+    if (!live || appIdentity(live.id) !== appIdentity(id) || appIdentity(live.appId) !== appIdentity(item.appId)) throw new RestoreSafetyError("The application target identity changed.")
+    restorableApp(live, folder, false, protectedAppIds())
+    return { ...live, appOwnerOrganizationId: principal.appOwnerOrganizationId!, servicePrincipalType: principal.servicePrincipalType!, servicePrincipalId: principal.id! }
+  }
   const resolveApp = async (appId: string): Promise<Item> => {
     const matches: Item[] = []
     for await (const item of list(`servicePrincipals?$filter=${encodeURIComponent(`appId eq '${appIdentity(appId)}'`)}&$select=id,appId,displayName,appOwnerOrganizationId,servicePrincipalType,appRoles,oauth2PermissionScopes`)) {
@@ -98,17 +112,27 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
     }
     return object(step.folder, targetId ?? step.targetId ?? step.sourceId)
   }
-  const review = async (step: GuardedStep) => {
+  const review = async (step: GuardedStep, preimage?: Item | null) => {
     const action = step.directory!.action
     if (step.directory?.unresolved || action === "policy") return applicationReview(step, null, { id: step.targetId ?? step.sourceId, displayName: "Application reference" }, null, actor)
+    const current = preimage === undefined ? await read(step, step.targetId) : preimage
     let resource: Item, principal: Item | null = null
     if (action === "consent" || action === "app-role") {
       const resolved = await endpoints(step); resource = resolved.resource; principal = resolved.principal
     } else {
-      resource = (await object(step.folder, step.targetId ?? step.sourceId, action === "recycle")) ?? { ...step.desired, id: step.sourceId }
-      if (action === "owner") principal = await resolveUser(step.directory!.principalId!)
+      resource = action === "owner" ? current?.resource as Item : current ?? { ...step.desired, id: step.sourceId }
+      if (action === "owner") principal = current?.principal as Item
     }
-    return applicationReview(step, await read(step, step.targetId), resource, principal, actor)
+    return applicationReview(step, current, resource, principal, actor)
+  }
+  const preview = async (step: GuardedStep) => {
+    const current = await read(step, step.targetId)
+    step.preview = restoreFingerprint(current)
+    if (step.folder === "Applications" && step.directory?.action === "update") {
+      step.desired = Object.fromEntries(Object.entries(step.desired).filter(([key, value]) => JSON.stringify(current?.[key]) !== JSON.stringify(value)))
+      step.properties = Object.keys(step.desired)
+    }
+    return review(step, current)
   }
   const references: GuardedIO["references"] = async step => {
     const result = await review(step)
@@ -135,58 +159,26 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
       const blocker = applicationAdmission(step)
       if (blocker) throw new RestoreSafetyError(blocker)
       if (!run || run.origin !== "restore" || run.tenant !== actor.tenantId || !run.source) throw new RestoreSafetyError("Application access can only be restored from an owned same-tenant backup.")
-      const result = await review(step)
-      if (result.blocker) throw new RestoreSafetyError(result.blocker)
-      requireDirectoryApprovals(step, run, result.approvals)
+      requireDirectoryApprovals(step, run, ["directory-item"])
       const granted = grantedPermissions(token)
       if (granted?.kind !== "delegated" || applicationPermissions(step).some(permission => !granted.permissions.has(permission))) throw new RestoreSafetyError("The signed-in connection lacks this operation's least-privileged permission.")
+      const path = `applications/${appIdentity(targetId)}`
+      // Build only the exact reviewed changes. No live field is copied into the PATCH.
+      const payload = Object.fromEntries(Object.entries(body).filter(([key, value]) => ["displayName", "description"].includes(key) && typeof value === "string" && value.trim()))
+      if (!Object.keys(payload).length || restoreFingerprint(payload) !== restoreFingerprint(body) || restoreFingerprint(body) !== restoreFingerprint(step.desired) || JSON.stringify(Object.keys(body).sort()) !== JSON.stringify([...step.properties].sort())) throw new RestoreSafetyError("Unsupported application write properties.")
       const current = await read(step, targetId)
       if (restoreFingerprint(current) !== step.preview) throw new RestoreSafetyError("The tenant changed. Preview this application again.")
-      const refs = await references(step, current, body)
-      guardRestoreItem(actor, step.folder, targetId, refs, false, ["identity-references"])
-      const action = step.directory!.action
-      let path = collection(step.folder), method = "POST", payload: Item
-      if (action === "create" || action === "update") {
-        let source = action === "update" ? { ...await object(step.folder, appIdentity(targetId)), ...body } : body
-        if (action === "create" && step.folder === "ServicePrincipals") {
-          const matches: Item[] = []
-          for await (const app of list(`applications?$filter=${encodeURIComponent(`appId eq '${appIdentity(body.appId)}'`)}&$select=id,appId,displayName`)) matches.push(app)
-          if (matches.length !== 1 || matches[0]!.appId !== body.appId) throw new RestoreSafetyError("The backing local app registration must resolve uniquely before enterprise app creation.")
-          source = { ...matches[0]!, servicePrincipalType: "Application", appOwnerOrganizationId: actor.tenantId }
-        }
-        const selected = { ...source, ...body }
-        for (const field of ["displayName", "description"]) if (!(field in body)) delete selected[field]
-        payload = appPayload(step.folder, action, selected)
-        if (restoreFingerprint(payload) !== restoreFingerprint(body) || restoreFingerprint(body) !== restoreFingerprint(step.desired)) throw new RestoreSafetyError("Unsupported application write properties.")
-        if (action === "update") { path += "/" + appIdentity(targetId); method = "PATCH" }
-      } else if (action === "gallery") {
-        path = `applicationTemplates/${appIdentity(step.directory!.templateId)}/instantiate`; payload = appPayload(step.folder, "gallery", body)
-        if (restoreFingerprint(payload) !== restoreFingerprint(body)) throw new RestoreSafetyError("Unsupported gallery properties.")
-      } else if (action === "owner") {
-        if (body.present !== true || body.principalId !== step.directory!.principalId || Object.keys(body).length !== 2) throw new RestoreSafetyError("Owners are adds only.")
-        path += `/${appIdentity(targetId)}/owners/$ref`; payload = { "@odata.id": root + "directoryObjects/" + appIdentity(body.principalId) }
-      } else if (action === "consent" || action === "app-role") {
-        const { resource, client, principal } = await endpoints(step)
-        if (step.desired.resourceId !== resource.id || (action === "consent" ? step.desired.clientId !== client?.id : step.desired.principalId !== principal.id)) throw new RestoreSafetyError("An app ID now resolves to a different object. Preview this relationship again.")
-        if (action === "consent") {
-          const names = String(step.desired.scope).split(/\s+/).filter(Boolean)
-          if (!names.length || !Array.isArray(resource.oauth2PermissionScopes) || names.some(name => !(resource.oauth2PermissionScopes as Item[]).some(scope => scope.value === name && scope.isEnabled === true))) throw new RestoreSafetyError("A delegated scope no longer resolves on the resource app.")
-          payload = { clientId: client!.id!, resourceId: resource.id!, principalId: step.desired.consentType === "Principal" ? principal.id! : null, consentType: step.desired.consentType!, scope: mergeConsentScopes(String(current?.scope ?? ""), String(step.desired.scope)) }
-          if (current) { path += "/" + grantId(current.id); method = "PATCH"; payload = { scope: payload.scope! } }
-        } else {
-          if (!Array.isArray(resource.appRoles) || !(resource.appRoles as Item[]).some(role => role.id === step.desired.appRoleId && role.isEnabled === true && Array.isArray(role.allowedMemberTypes) && role.allowedMemberTypes.includes("Application"))) throw new RestoreSafetyError("The app role no longer resolves for this principal type.")
-          path = `servicePrincipals/${appIdentity(principal.id)}/appRoleAssignments`; payload = { principalId: principal.id!, resourceId: resource.id!, appRoleId: step.desired.appRoleId! }
-        }
-        const expected = action === "consent" ? { ...step.desired, scope: mergeConsentScopes(String(current?.scope ?? ""), String(step.desired.scope)) } : step.desired
-        if (restoreFingerprint(body) !== restoreFingerprint(expected)) throw new RestoreSafetyError("The grant differs from its approved mapping.")
-      } else throw new RestoreSafetyError("This application operation has no admitted write contract.")
+      if (Object.entries(payload).some(([key, value]) => JSON.stringify(current?.[key]) === JSON.stringify(value))) throw new RestoreSafetyError("Send only the changed metadata keys shown in review.")
+      const result = await review(step, current)
+      if (result.blocker) throw new RestoreSafetyError(result.blocker)
+      requireDirectoryApprovals(step, run, result.approvals)
+      guardRestoreItem(actor, step.folder, targetId, { complete: true, principals: [], applications: [String(current?.id), String(current?.appId)] }, false, ["identity-references"])
       signal?.throwIfAborted(); beforeSend()
-      // A throttle is a definite refusal. A new preview rechecks all mappings; no blind replay.
-      const answer = await request(path, method, payload, signal)
-      return { id: String((action === "gallery" ? (answer?.servicePrincipal as Item | undefined)?.id : answer?.id) ?? targetId ?? "") }
+      await request(path, "PATCH", payload, signal)
+      return { id: targetId }
     },
   }
-  return { ...io, review, hydrate, list, object, resolveApp, resolveUser, async locate(folder: string, sourceId: string) {
+  return { ...io, review, preview, hydrate, list, object, resolveApp, resolveUser, async locate(folder: string, sourceId: string) {
     const live = await object(folder, sourceId)
     if (live) { restorableApp(live, folder); return { action: "update" as const, current: live } }
     const deleted = await object(folder, sourceId, true)

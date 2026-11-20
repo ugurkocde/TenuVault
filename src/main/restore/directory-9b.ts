@@ -13,8 +13,14 @@ export const appIdentity = (value: unknown): string => {
   if (!isGuid(value)) throw new RestoreSafetyError("An application reference could not be resolved.")
   return value.toLowerCase()
 }
-export function restorableApp(item: Item, folder: string) {
+export const TENUVAULT_DESKTOP_APP_ID = "d390dc50-d001-4127-859b-828e39bd71e0"
+export function restorableApp(item: Item, folder: string, requireOwner = false, protectedAppIds: readonly string[] = []) {
   cloudObject(item)
+  const appId = appIdentity(item.appId)
+  if ([TENUVAULT_DESKTOP_APP_ID, ...protectedAppIds].some(id => id.toLowerCase() === appId)
+    || typeof item.notes === "string" && /^(?:Used by the TenuVault desktop app|TenuVault Backup Reader:)/i.test(item.notes)
+    || typeof item.displayName === "string" && /^TenuVault (?:Desktop|Backup Reader)$/i.test(item.displayName)) throw new RestoreSafetyError("TenuVault-owned app registrations are protected.")
+  if (folder === "Applications" && (item.appOwnerOrganizationId === MICROSOFT_ORGANIZATION_ID || requireOwner && (!isGuid(item.appOwnerOrganizationId) || item.servicePrincipalType !== "Application"))) throw new RestoreSafetyError("Microsoft first-party or unresolved app registrations are never restorable.")
   if (folder === "ServicePrincipals" && (item.appOwnerOrganizationId === MICROSOFT_ORGANIZATION_ID || item.servicePrincipalType !== "Application" || !isGuid(item.appOwnerOrganizationId))) throw new RestoreSafetyError("Microsoft first-party or unresolved enterprise apps are never restorable.")
 }
 export function appPayload(folder: string, action: string, source: Item): Item {
@@ -24,31 +30,31 @@ export function appPayload(folder: string, action: string, source: Item): Item {
   if (!["create", "update"].includes(action)) throw new RestoreSafetyError("Unsupported application metadata action.")
   const result: Item = {}
   for (const field of ["displayName", "description"]) if (source[field] !== undefined) {
-    if (typeof source[field] !== "string" || !source[field].trim()) throw new RestoreSafetyError("Only nonempty application names and descriptions have a verified metadata restore contract. Clearing these properties remains blocked.")
+    if (typeof source[field] !== "string" || !source[field].trim()) continue
     result[field] = source[field]!
   }
   if (action === "create" && !result.displayName) throw new RestoreSafetyError("App creation requires a display name.")
   return result
 }
 export function applicationAdmission(step: GuardedStep): string | undefined {
+  if (step.folder !== "Applications" || step.directory?.action !== "update") {
+    // Evidence cannot open another production writer or permission request.
+    const reason = restoreMatrixRow(step.folder)?.directoryRestore?.contracts?.find(row => row.action === step.directory?.action)?.blocker
+    if (step.directory?.action === "recycle") return "Recycle-bin recovery is blocked until credentials, inherited access and every recovered relationship can be completely verified. Recreation cannot bypass the recycle bin."
+    if (step.directory?.action === "consent" && step.desired.consentType === "Principal") return "Principal-specific consent needs a verified typed user mapping. Raw saved principal IDs are never replayed."
+    if (step.directory?.action === "policy") return "App policy bindings require a verified layer 8 configuration mapping and a separately admitted binding contract."
+    return reason ?? DIRECTORY_9B_BLOCKER
+  }
   const contract = restoreMatrixRow(step.folder)?.directoryRestore
   const action = step.directory?.action
-  // Recycle recovery can revive credentials and access without individual approvals.
-  if (action === "recycle") return "Recycle-bin recovery is blocked until credentials, inherited access and every recovered relationship can be completely verified. Recreation cannot bypass the recycle bin."
-  if (action === "consent" && step.desired.consentType === "Principal") return "Principal-specific consent needs a verified typed user mapping. Raw saved principal IDs are never replayed."
-  if (action === "policy") return "App policy bindings require a verified layer 8 configuration mapping and a separately admitted binding contract."
   if (contract?.phase !== "enabled" || !action || contract.evidence?.[action]?.result !== "round-trip-matched") return contract?.contracts?.find(row => row.action === action)?.blocker ?? DIRECTORY_9B_BLOCKER
 }
 export function applicationPermissions(step: GuardedStep): string[] {
-  if (step.directory?.action === "consent") return ["DelegatedPermissionGrant.ReadWrite.All"]
-  if (step.directory?.action === "app-role") return ["AppRoleAssignment.ReadWrite.All", "Application.Read.All"]
-  if (step.directory?.action === "owner") return ["Application.ReadWrite.All", "Directory.Read.All"]
-  if (step.folder === "Applications" && step.directory?.action === "create") return ["AppRegistration.Create"]
-  return ["Application.ReadWrite.All"]
+  return step.folder === "Applications" && step.directory?.action === "update" && !applicationAdmission(step) ? ["Application.ReadWrite.All"] : []
 }
 export function applicationReview(step: GuardedStep, current: Item | null, resource: Item, principal: Item | null, actor: RestoreActor): DirectoryReview {
   const action = step.directory!.action
-  const approvals = ["directory-item"], notices: string[] = []
+  const approvals = ["directory-item"], notices: string[] = [...(step.directory?.metadataNotices ?? [])]
   const person = principal && typeof principal.displayName === "string" && typeof principal["@odata.type"] === "string" ? { id: appIdentity(principal.id), name: principal.displayName, type: String(principal["@odata.type"]).replace("#microsoft.graph.", "") } : null
   const relationship = ["owner", "consent", "app-role"].includes(action)
   const privileged = action === "owner" || (action === "consent" && step.desired.consentType === "AllPrincipals") || action === "app-role"
@@ -60,12 +66,13 @@ export function applicationReview(step: GuardedStep, current: Item | null, resou
   let blocker: string | undefined
   if (relationship && !person) blocker = "The principal no longer resolves to a current name and type. This item is blocked."
   try {
-    restorableApp(resource, step.folder === "Applications" ? "Applications" : "ServicePrincipals")
+    restorableApp(resource, step.folder === "Applications" ? "Applications" : "ServicePrincipals", true)
     guardRestoreItem(actor, step.folder, step.targetId, { complete: true, principals: person ? [person.id] : [], applications: [String(resource.id ?? ""), String(resource.appId ?? ""), String(step.directory?.clientAppId ?? "")] }, false, ["identity-references"])
   } catch (error) { blocker = (error as Error).message }
   if (step.directory?.unresolved) blocker = step.directory.unresolved
   blocker ??= applicationAdmission(step)
   const desired = action === "consent" ? { ...step.desired, scope: mergeConsentScopes(String(current?.scope ?? ""), String(step.desired.scope)) } : step.desired
+  if (action === "update" && !relationship && !Object.entries(desired).some(([key, value]) => JSON.stringify(current?.[key]) !== JSON.stringify(value))) blocker ??= "No nonempty metadata changes are available. Clearing names or descriptions remains blocked."
   if (relationship && current && Object.entries(desired).every(([key, value]) => JSON.stringify(current[key]) === JSON.stringify(value))) blocker = "This relationship already matches. No addition is needed."
   return { principal: person, resource: { id: String(resource.id ?? step.sourceId), name: String(resource.displayName ?? "Unresolved resource"), type: step.folder === "Applications" ? "application" : "servicePrincipal" }, privilege: action === "consent" ? `Delegated scopes: ${desired.scope}` : action === "app-role" ? `App role: ${step.directory?.roleName ?? "Unresolved role"}` : action, scope: `${actor.tenantId}/${action === "consent" ? step.desired.consentType : "application"}/${resource.id ?? step.sourceId}`, approvals, notices, ...(blocker ? { blocker } : {}), roleAssignable: false, changes: Object.entries(desired).filter(([key, value]) => JSON.stringify(current?.[key]) !== JSON.stringify(value)).map(([property, after]) => ({ property, before: current?.[property] ?? null, after })) }
 }
