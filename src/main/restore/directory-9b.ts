@@ -7,7 +7,7 @@ import { cloudObject, type DirectoryReview } from "./directory-9a"
 import type { GuardedStep } from "./guarded-run"
 
 export const DIRECTORY_9B_FOLDERS = ["Applications", "ServicePrincipals", "OAuth2PermissionGrants"]
-export const DIRECTORY_9B_BLOCKER = "Application restore is staged. Phase 2 live lifecycle, delegated safety and cleanup evidence are required."
+export const DIRECTORY_9B_BLOCKER = "This application operation has no verified live restore contract and remains blocked."
 export const APP_POLICY_REFERENCES: Record<string, string> = { tokenLifetimePolicies: "TokenLifetimePolicies", claimsMappingPolicies: "ClaimsMappingPolicies", homeRealmDiscoveryPolicies: "HomeRealmDiscoveryPolicies", appManagementPolicies: "AppManagementPolicies", tokenIssuancePolicies: "TokenIssuancePolicies" }
 export const appIdentity = (value: unknown): string => {
   if (!isGuid(value)) throw new RestoreSafetyError("An application reference could not be resolved.")
@@ -24,7 +24,7 @@ export function appPayload(folder: string, action: string, source: Item): Item {
   if (!["create", "update"].includes(action)) throw new RestoreSafetyError("Unsupported application metadata action.")
   const result: Item = {}
   for (const field of ["displayName", "description"]) if (source[field] !== undefined) {
-    if (typeof source[field] !== "string" && source[field] !== null) throw new RestoreSafetyError("Unsupported application metadata.")
+    if (typeof source[field] !== "string" || !source[field].trim()) throw new RestoreSafetyError("Only nonempty application names and descriptions have a verified metadata restore contract. Clearing these properties remains blocked.")
     result[field] = source[field]!
   }
   if (action === "create" && !result.displayName) throw new RestoreSafetyError("App creation requires a display name.")
@@ -60,12 +60,12 @@ export function applicationReview(step: GuardedStep, current: Item | null, resou
   let blocker: string | undefined
   if (relationship && !person) blocker = "The principal no longer resolves to a current name and type. This item is blocked."
   try {
-    if (action !== "app-role") restorableApp(resource, step.folder === "Applications" ? "Applications" : "ServicePrincipals")
+    restorableApp(resource, step.folder === "Applications" ? "Applications" : "ServicePrincipals")
     guardRestoreItem(actor, step.folder, step.targetId, { complete: true, principals: person ? [person.id] : [], applications: [String(resource.id ?? ""), String(resource.appId ?? ""), String(step.directory?.clientAppId ?? "")] }, false, ["identity-references"])
   } catch (error) { blocker = (error as Error).message }
   if (step.directory?.unresolved) blocker = step.directory.unresolved
   blocker ??= applicationAdmission(step)
   const desired = action === "consent" ? { ...step.desired, scope: mergeConsentScopes(String(current?.scope ?? ""), String(step.desired.scope)) } : step.desired
   if (relationship && current && Object.entries(desired).every(([key, value]) => JSON.stringify(current[key]) === JSON.stringify(value))) blocker = "This relationship already matches. No addition is needed."
-  return { principal: person, resource: { id: String(resource.id ?? step.sourceId), name: String(resource.displayName ?? "Unresolved resource"), type: step.folder === "Applications" ? "application" : "servicePrincipal" }, privilege: action === "consent" ? `Delegated scopes: ${desired.scope}` : action === "app-role" ? `App role: ${step.directory?.roleName ?? "Unresolved role"}` : action, scope: `${actor.tenantId}/${action === "consent" ? step.desired.consentType : "application"}/${resource.id ?? step.sourceId}`, approvals, notices, blocker, roleAssignable: false, changes: Object.entries(desired).filter(([key, value]) => JSON.stringify(current?.[key]) !== JSON.stringify(value)).map(([property, after]) => ({ property, before: current?.[property] ?? null, after })) }
+  return { principal: person, resource: { id: String(resource.id ?? step.sourceId), name: String(resource.displayName ?? "Unresolved resource"), type: step.folder === "Applications" ? "application" : "servicePrincipal" }, privilege: action === "consent" ? `Delegated scopes: ${desired.scope}` : action === "app-role" ? `App role: ${step.directory?.roleName ?? "Unresolved role"}` : action, scope: `${actor.tenantId}/${action === "consent" ? step.desired.consentType : "application"}/${resource.id ?? step.sourceId}`, approvals, notices, ...(blocker ? { blocker } : {}), roleAssignable: false, changes: Object.entries(desired).filter(([key, value]) => JSON.stringify(current?.[key]) !== JSON.stringify(value)).map(([property, after]) => ({ property, before: current?.[property] ?? null, after })) }
 }

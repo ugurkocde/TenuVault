@@ -154,7 +154,9 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
           if (matches.length !== 1 || matches[0]!.appId !== body.appId) throw new RestoreSafetyError("The backing local app registration must resolve uniquely before enterprise app creation.")
           source = { ...matches[0]!, servicePrincipalType: "Application", appOwnerOrganizationId: actor.tenantId }
         }
-        payload = appPayload(step.folder, action, { ...source, ...body })
+        const selected = { ...source, ...body }
+        for (const field of ["displayName", "description"]) if (!(field in body)) delete selected[field]
+        payload = appPayload(step.folder, action, selected)
         if (restoreFingerprint(payload) !== restoreFingerprint(body) || restoreFingerprint(body) !== restoreFingerprint(step.desired)) throw new RestoreSafetyError("Unsupported application write properties.")
         if (action === "update") { path += "/" + appIdentity(targetId); method = "PATCH" }
       } else if (action === "gallery") {

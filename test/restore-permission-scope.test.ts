@@ -11,7 +11,7 @@ it("requests restore permissions only for enabled types, with exactly their leas
     AccessReviewPolicy: "Policy.ReadWrite.AccessReview", CrossTenantAccessPolicy: "Policy.ReadWrite.CrossTenantAccess", AccessPackageCatalogs: "EntitlementManagement.ReadWrite.All",
     EntraCompanyBranding: "OrganizationalBranding.ReadWrite.All", AuthenticationFlowsPolicy: "Policy.ReadWrite.AuthenticationFlows",
   }
-  const directory: Record<string, string[][]> = { Users: [["User.Create"], ["User.ReadUpdate.All"], ["User.ReadWrite.All"], ["Application.Read.All"]], Groups: [["Group.ReadWrite.All"], ["GroupMember.ReadWrite.All"], ["User.Read.All"], ["Application.Read.All"], ["Policy.Read.All"], ["RoleManagement.Read.Directory"]] }
+  const directory: Record<string, string[][]> = { Applications: [["Application.ReadWrite.All"]], Users: [["User.Create"], ["User.ReadUpdate.All"], ["User.ReadWrite.All"], ["Application.Read.All"]], Groups: [["Group.ReadWrite.All"], ["GroupMember.ReadWrite.All"], ["User.Read.All"], ["Application.Read.All"], ["Policy.Read.All"], ["RoleManagement.Read.Directory"]] }
   const found: string[] = []
   for (const module of MODULES.filter(module => ["entra", "defender"].includes(module.id))) for (const area of module.areas) for (const part of area.parts) {
     for (const folder of part.folders) {
@@ -81,4 +81,31 @@ it("preserves Directory.Read.All during renewal while never repeating the exclud
   expect(readerScriptArguments(["Directory.Read.All"])).toBe(" -Permissions Directory.Read.All")
   expect(readerScriptArguments([...roles, ...writes])).toBe(readerScriptArguments(roles))
   expect(readerScriptArguments(writes)).toBe(" -Permissions None")
+})
+
+it("already requests the documented owner read permission for the same Applications backup choice", () => {
+  const applications = MODULES.find(module => module.id === "entra")!.areas.find(area => area.id === "applications")!
+  for (const mode of ["delegated", "application"] as const) {
+    expect(areaPermissions(applications, "backup", mode)).toContain("Directory.Read.All")
+    const backup = graphPermissions({ entra: { access: "backup", areas: ["applications"] } }, mode)
+    const restore = graphPermissions({ entra: { access: "restore", areas: ["applications"] } }, mode)
+    expect(restore.filter(scope => !backup.includes(scope))).not.toContain("Directory.Read.All")
+    expect(graphPermissions({ entra: { access: "restore" } }, mode)).not.toContain("Application.ReadWrite.All")
+  }
+  for (const folder of ["Applications", "ServicePrincipals"]) expect(restoreMatrixRow(folder)!.directoryRestore!.contracts!.find(row => row.action === "owner")!.delegated).toEqual(["Application.ReadWrite.All", "Directory.Read.All"])
+})
+it("adds only the admitted application write permission after delegated restore opt-in", () => {
+  const added = ["Application.ReadWrite.All"]
+  const backup = graphPermissions({ entra: { access: "backup", areas: ["applications"] } }, "delegated")
+  const restore = graphPermissions({ entra: { access: "restore", areas: ["applications"] } }, "delegated")
+  const applications = MODULES.find(module => module.id === "entra")!.areas.find(area => area.id === "applications")!
+  const backupArea = areaPermissions(applications, "backup", "delegated")
+  expect(areaPermissions(applications, "restore", "delegated").filter(scope => !backupArea.includes(scope)).sort()).toEqual(added.sort())
+  for (const scope of added) {
+    expect(backup).not.toContain(scope)
+    expect(graphPermissions({ entra: { access: "restore" } }, "delegated")).not.toContain(scope)
+    expect(graphPermissions({ entra: { access: "restore", areas: ["applications"] } }, "application")).not.toContain(scope)
+    expect(readerRoles({ entra: { access: "backup", areas: ["applications"] } })).not.toContain(scope)
+  }
+  for (const scope of ["AppRegistration.Create", "Application.ReadWrite.OwnedBy", "AppRoleAssignment.ReadWrite.All", "DelegatedPermissionGrant.ReadWrite.All"]) expect(restore).not.toContain(scope)
 })

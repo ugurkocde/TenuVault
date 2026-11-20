@@ -1,3 +1,4 @@
+import { applicationAdmission } from "../src/main/restore/directory-9b"
 import { configurationApproval, configurationConfirmation, isEntraConfiguration } from "../src/main/restore/entra-configuration"
 import { describe, expect, it } from "vitest"
 import { findCreatedByDescriptor } from "../src/main/restore/create-detection"
@@ -16,12 +17,15 @@ describe("every matrix create detection contract", () => {
     for (const row of blocked) {
       expect(row.detection.reason).toBeTruthy()
       expect(row.create!.blockedReason).toContain("reconciliation key")
-      expect(restoreCapability(typeForFolder(row.folder)!)).toBe("none")
+      if (row.folder === "Applications") {
+        expect(restoreCapability(typeForFolder(row.folder)!)).toBe("create")
+        expect(applicationAdmission({ key: "blocked-create", folder: row.folder, sourceId: "source-id", operation: "create", directory: { action: "create" }, desired: { displayName: "Fixture" }, properties: ["displayName"], preview: restoreFingerprint(null), requires: [] })).toContain("reconciler")
+      } else expect(restoreCapability(typeForFolder(row.folder)!)).toBe("none")
     }
   })
   for (const row of creates.filter(row => row.detection.properties?.length)) for (const lost of [false, true]) it(`${row.folder}: ${lost ? "reconciles a lost response" : "creates successfully"} and restarts with exactly one object`, async () => {
     const write = row.create!, type = typeForFolder(row.folder)!
-    expect(restoreCapability(type)).toBe(["TokenLifetimePolicies", "ActivityBasedTimeoutPolicies", "AccessPackageCatalogs", "Users", "Groups"].includes(type.folder) ? "create" : "none")
+    expect(restoreCapability(type)).toBe(["TokenLifetimePolicies", "ActivityBasedTimeoutPolicies", "AccessPackageCatalogs", "Users", "Groups", "Applications"].includes(type.folder) ? "create" : "none")
     const keys = row.detection.properties!
     // Each fixture contains the complete declared detection tuple. Values are opaque to the
     // generic transport; nested builders and live schema verification belong to later layers.
@@ -79,6 +83,6 @@ describe("every matrix create detection contract", () => {
     expect(sends).toBe(1)
     expect(objects).toHaveLength(1)
     expect(lookups).toBeGreaterThanOrEqual(lost ? 4 : 2)
-    expect(restoreCapability(type)).toBe(["TokenLifetimePolicies", "ActivityBasedTimeoutPolicies", "AccessPackageCatalogs", "Users", "Groups"].includes(type.folder) ? "create" : "none")
+    expect(restoreCapability(type)).toBe(["TokenLifetimePolicies", "ActivityBasedTimeoutPolicies", "AccessPackageCatalogs", "Users", "Groups", "Applications"].includes(type.folder) ? "create" : "none")
   })
 })

@@ -2013,7 +2013,7 @@
       "area": "applications",
       "folders": ["Applications"],
       "read": ["GET /applications"],
-      "write": [],
+      "write": ["PATCH /applications/{id}"],
       "live": "200",
       "backup": {
         "delegated": [
@@ -2027,9 +2027,13 @@
         ]
       },
       "restore": {
-        "delegated": "unsupported",
+        "delegated": [
+          {"permission": "Application.ReadWrite.All", "asked": true, "model": "listed", "index": "listed", "status": "confirmed"}
+        ],
         "application": "unsupported"
-      }
+      },
+      "restoreDocumentation": ["https://learn.microsoft.com/en-us/graph/api/application-update?view=graph-rest-1.0"],
+      "restoreEvidence": "2026-11-19: current Microsoft operation table names Application.ReadWrite.All as least privileged for delegated metadata updates. Closed nonempty displayName/description change and restore matched repeated fixture GETs. Lab token holds a union of application roles; delegated minimum-scope isolation is not inferred. Production scope, approval and identity gates are integration tested."
     },
     {
       "service": "entra",

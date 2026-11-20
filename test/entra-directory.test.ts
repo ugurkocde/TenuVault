@@ -56,7 +56,7 @@ describe("Directory inventory", () => {
       expect(snapshot).not.toHaveProperty("unexpected")
       expect(source.secretText).toBe("client-secret")
       for (const [property, sample] of Object.entries(data.samples)) if (property !== "object" && property in DIRECTORY_EXTRA_SCHEMAS) scan(directoryExtraSnapshot(property, { ...(sample as Item), ...secrets }))
-      expect(restoreCapability(type)).toBe(["Users", "Groups"].includes(type.folder) ? "create" : "none")
+      expect(restoreCapability(type)).toBe(["Users", "Groups", "Applications"].includes(type.folder) ? "create" : "none")
       expect(() => buildRestorePlan(type, snapshot)).toThrow()
       expect(() => buildUpdatePlan(type, snapshot, id)).toThrow()
       expect(adminCenterLink(type.folder, id)?.center).toBe("Entra")

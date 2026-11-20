@@ -76,7 +76,7 @@ describe("The record of checked permissions", () => {
     // A permission that is only implied is never the one asked for, and one confirmed live is always a read.
     for (const entry of entries.filter((candidate) => candidate.status === "implied")) expect(entry.asked, entry.where).toBe(false)
     for (const entry of entries.filter((candidate) => candidate.status === "confirmed live")) expect(entry.where).toContain(" backup ")
-    // No restore permission was tried live, so each one is confirmed by Microsoft's own listing.
+    // Restore entries use Microsoft's listing; union lab tokens do not isolate delegated minimum permissions.
     for (const entry of entries.filter((candidate) => candidate.where.includes(" restore "))) expect(entry.status, `${entry.where} ${entry.permission}`).toBe("confirmed")
   })
 

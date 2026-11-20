@@ -13828,7 +13828,7 @@
     },
     "builtIn": "TenuVault connected registration, credentials and federated identity credentials.",
     "dependsOn": [],
-    "reason": "Application restore is staged for layer 9b phase 1. Every operation remains blocked in production.",
+    "reason": "Use the separate directory review. Only nonempty displayName and description updates are admitted.",
     "indexWrites": {
       "POST": [
         {
@@ -14069,12 +14069,12 @@
       ]
     },
     "verification": {
-      "date": "2026-11-17",
-      "method": "local-graph-index-and-microsoft-documentation",
+      "date": "2026-11-19",
+      "method": "microsoft-learn-live-fixture-readback-and-production-service-tests",
       "resourceFound": true,
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/application?view=graph-rest-1.0",
-      "live": "not-run",
-      "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
+      "live": "Metadata change and restore matched. Fixture recycle matched IDs only and remains blocked.",
+      "notes": "Admitted only through the separate same-tenant owned-backup review with individual approvals and exact delegated scope checks. No app-only desktop writes or generic restore admission."
     },
     "disposition": "directory-deferred",
     "supplementalWrites": [
@@ -14560,8 +14560,8 @@
       }
     ],
     "directoryRestore": {
-      "phase": "staged",
-      "blocker": "Phase 2 live lifecycle, delegated safety and cleanup evidence are required.",
+      "phase": "enabled",
+      "blocker": "Use the separate directory review. Only nonempty displayName and description updates are admitted.",
       "actions": [
         "create",
         "update",
@@ -14595,7 +14595,7 @@
             "Application.ReadWrite.OwnedBy"
           ],
           "documentation": "https://learn.microsoft.com/en-us/graph/api/application-update?view=graph-rest-1.0",
-          "blocker": "Phase 2 live lifecycle, delegated safety and cleanup evidence are required. Only displayName and description are staged."
+          "blocker": ""
         },
         {
           "action": "recycle",
@@ -14623,7 +14623,7 @@
             "Directory.Read.All"
           ],
           "documentation": "https://learn.microsoft.com/en-us/graph/api/application-post-owners?view=graph-rest-1.0",
-          "blocker": "Phase 2 live lifecycle, delegated safety and cleanup evidence are required. Each privileged owner addition requires individual and security-response approvals. Owners are adds only."
+          "blocker": "Owner restore remains blocked. Live fixtures verify service-principal owners only; the production user-owner resolver and typed service-principal owner mappings do not have matching live evidence. Applications backup already requests Directory.Read.All, so no new broad read permission is needed."
         },
         {
           "action": "policy",
@@ -14634,7 +14634,13 @@
           "documentation": "https://learn.microsoft.com/en-us/graph/api/application-post-tokenlifetimepolicies?view=graph-rest-1.0",
           "blocker": "Application policy-binding inventory is absent from current backups. Bindings require typed layer 8 configuration references and a separately verified binding permission contract. No binding permission is certified or requested."
         }
-      ]
+      ],
+      "evidence": {
+        "update": {
+          "date": "2026-11-19",
+          "result": "round-trip-matched"
+        }
+      }
     }
   },
   {
@@ -14737,7 +14743,7 @@
     "dependsOn": [
       "Applications"
     ],
-    "reason": "Application restore is staged for layer 9b phase 1. Every operation remains blocked in production.",
+    "reason": "Enterprise app creation, metadata, owners, recycle recovery, app roles and policy bindings remain blocked. See each operation reason.",
     "indexWrites": {
       "POST": [
         {
@@ -15038,11 +15044,11 @@
       ]
     },
     "verification": {
-      "date": "2026-11-17",
+      "date": "2026-11-19",
       "method": "local-graph-index-and-microsoft-documentation",
       "resourceFound": true,
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/serviceprincipal?view=graph-rest-1.0",
-      "live": "not-run",
+      "live": "Fixture creation and service-principal owners matched. Metadata change and assignment recreation returned HTTP 400; production remains blocked.",
       "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
     },
     "disposition": "directory-deferred",
@@ -16053,7 +16059,7 @@
     ],
     "directoryRestore": {
       "phase": "staged",
-      "blocker": "Phase 2 live lifecycle, delegated safety and cleanup evidence are required.",
+      "blocker": "Enterprise app creation, metadata, owners, recycle recovery, app roles and policy bindings remain blocked. See each operation reason.",
       "actions": [
         "create",
         "gallery",
@@ -16076,7 +16082,7 @@
             "Application.ReadWrite.OwnedBy"
           ],
           "documentation": "https://learn.microsoft.com/en-us/graph/api/serviceprincipal-post-serviceprincipals?view=graph-rest-1.0",
-          "blocker": "Phase 2 live lifecycle, delegated safety and cleanup evidence are required. Resolve appId and Microsoft ownership before recreation."
+          "blocker": "Non-gallery creation worked in the fixture lab, but implicit delegated ownership and inherited backing-app access are not verified. Creation remains blocked."
         },
         {
           "action": "gallery",
@@ -16102,7 +16108,7 @@
             "Application.ReadWrite.OwnedBy"
           ],
           "documentation": "https://learn.microsoft.com/en-us/graph/api/serviceprincipal-update?view=graph-rest-1.0",
-          "blocker": "Phase 2 live lifecycle, delegated safety and cleanup evidence are required. SSO, provisioning and credential properties are excluded."
+          "blocker": "Enterprise app metadata restore remains blocked. Initial fixture metadata writes matched, but changing and restoring displayName and description returned HTTP 400. No complete stable metadata round trip is verified."
         },
         {
           "action": "app-role",
@@ -16117,7 +16123,7 @@
             "Application.Read.All"
           ],
           "documentation": "https://learn.microsoft.com/en-us/graph/api/serviceprincipal-post-approleassignments?view=graph-rest-1.0",
-          "blocker": "Phase 2 live lifecycle, delegated safety and cleanup evidence are required. Each assignment needs its own approval and appId-based mapping. User and group assignments need their own verified principal mapping contracts."
+          "blocker": "App role restore remains blocked. Fixture creation and deletion matched, but recreating the assignment after confirmed absence returned HTTP 400. User/group principals also lack typed mappings. No app-role permission is requested."
         },
         {
           "action": "policy",
@@ -16154,7 +16160,7 @@
             "Directory.Read.All"
           ],
           "documentation": "https://learn.microsoft.com/en-us/graph/api/serviceprincipal-post-owners?view=graph-rest-1.0",
-          "blocker": "Phase 2 live lifecycle, delegated safety and cleanup evidence are required. Each privileged owner addition requires individual and security-response approvals. Owners are adds only."
+          "blocker": "Owner restore remains blocked. Live fixtures verify service-principal owners only; the production user-owner resolver and typed service-principal owner mappings do not have matching live evidence. Applications backup already requests Directory.Read.All, so no new broad read permission is needed."
         }
       ]
     }
@@ -16242,7 +16248,7 @@
     "dependsOn": [
       "ServicePrincipals"
     ],
-    "reason": "Application restore is staged for layer 9b phase 1. Every operation remains blocked in production.",
+    "reason": "Delegated consent remains blocked after inconsistent live lifecycle results. One complete round trip matched, but a later deletion returned HTTP 400. No consent write permission is requested.",
     "indexWrites": {
       "POST": [
         {
@@ -16262,12 +16268,12 @@
       ]
     },
     "verification": {
-      "date": "2026-11-17",
-      "method": "local-graph-index-and-microsoft-documentation",
+      "date": "2026-11-19",
+      "method": "microsoft-learn-live-fixture-readback-and-production-service-tests",
       "resourceFound": true,
       "resourceDocumentation": "https://learn.microsoft.com/en-us/graph/api/resources/oauth2permissiongrant?view=graph-rest-1.0",
-      "live": "not-run",
-      "notes": "Rechecked current Microsoft resource methods, operation request-body tables and public delegated permission includes. Supplemental actions and sub-resources are evidence only and remain blocked. Nested schemas and required-only property tables have explicit blockers. No write support is inferred from the backup path."
+      "live": "Create and merge read-backs matched, including one complete recreation cycle. A later deletion returned HTTP 400; admission withheld.",
+      "notes": "No production admission. Candidate grant transport remains covered by isolated integration tests."
     },
     "disposition": "directory-deferred",
     "supplementalWrites": [
@@ -16290,7 +16296,7 @@
     ],
     "directoryRestore": {
       "phase": "staged",
-      "blocker": "Phase 2 live lifecycle, delegated safety and cleanup evidence are required.",
+      "blocker": "Delegated consent remains blocked after inconsistent live lifecycle results. One complete round trip matched, but a later deletion returned HTTP 400. No consent write permission is requested.",
       "actions": [
         "consent"
       ],
@@ -16307,7 +16313,7 @@
             "DelegatedPermissionGrant.ReadWrite.All"
           ],
           "documentation": "https://learn.microsoft.com/en-us/graph/api/oauth2permissiongrant-post?view=graph-rest-1.0",
-          "blocker": "Phase 2 live lifecycle, delegated safety and cleanup evidence are required. Same-tenant owned backups only. Map through appId, merge scopes and approve each grant separately. Principal-specific grants remain blocked pending verified typed user mappings; raw saved principal IDs are never replayed."
+          "blocker": "Delegated consent remains blocked after inconsistent live lifecycle results. One complete round trip matched, but a later deletion returned HTTP 400. No consent write permission is requested."
         }
       ]
     }

@@ -197,7 +197,8 @@ export class DirectoryRestoreService {
         review = applicationReview(step, null, { id: snapshot.id!, displayName: snapshot.displayName ?? "Unresolved application" }, null, actor)
         review.blocker = error instanceof RestoreSafetyError ? error.message : "A reference could not be resolved. This item is blocked."
       }
-      review.blocker ??= applicationAdmission(step)
+      const admission = applicationAdmission(step)
+      if (!review.blocker && admission) review.blocker = admission
       page.rows.push({ key: step.key, review }); run.entries.push({ step, state: "pending" })
     }
     this.save(page)
