@@ -16,7 +16,7 @@ const tone = (status: Promotion["status"]) => (status === "blocked" ? "danger" :
  * Dev to Prod settings promotion (#145). The selected tenant is the production destination.
  * One-way, started by the admin, never continuous: select, review the destination diff and
  * dependencies, approve, back up production and apply with read-back, then read results and
- * review, approve and apply a rollback. On Pro the source must be the other tenant of the same license; the
+ * review, approve and apply a rollback. On Pro the source must be the other tenant of the same license or another Pro trial tenant; the
  * main process enforces it. Without the plan it lists stored promotions read-only.
  */
 export default function PromotionTab({ tenant, allowed }: FeatureTabProps) {

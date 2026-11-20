@@ -51,7 +51,7 @@ const LISTS: Record<Exclude<ReferenceKind, "group">, { path: string; select: str
 /**
  * Checks the source tenant of a two-tenant action. The source must be passed in
  * `targetTenants` so the route checked its license; on Pro both tenants must be covered by
- * the same license. MSP bulk or portfolio endpoints are not involved.
+ * the same license, or each by a Pro trial. MSP bulk or portfolio endpoints are not involved.
  */
 export function requireSourceTenant(context: { tenantId: string; plan: Plan; deps: FeatureDeps; targetTenants: string[] }, sourceTenantId: unknown, options: { distinct?: boolean } = {}): string {
   if (!isGuid(sourceTenantId)) throw new FeatureError("Choose the source tenant.")

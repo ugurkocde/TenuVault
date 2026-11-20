@@ -215,7 +215,7 @@ export function ChooseTargets({ sourceName, options, loading, error, tenantOf, l
                   <span className="mt-3 block truncate text-sm font-semibold text-gray-900">{name}</span>
                   <span className="block truncate text-xs text-gray-500">{tenant?.domain || option.tenantId}</span>
                   <span className="mt-3 flex min-h-6 flex-wrap gap-1.5">
-                    {option.eligible && !option.multiple && <Chip>On your Pro license</Chip>}
+                    {option.eligible && !option.multiple && <Chip>Available on Pro</Chip>}
                     {reason && <Chip>{reason.chip}</Chip>}
                     {count > 0 && <Chip tone="success">{plural(count, "policy", "policies")} linked</Chip>}
                   </span>

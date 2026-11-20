@@ -104,7 +104,16 @@ function SyncWorkspace({ selected }: { selected: Tenant }) {
   const policies = useQuery({ queryKey: ["sync", "policies", sourceId, folder], queryFn: () => syncPolicies(source, folder), refetchOnWindowFocus: true })
   const options = useQuery({ queryKey: ["sync", "targets", sourceId], queryFn: () => syncTargets(source) })
   const eligible = (options.data?.targets ?? []).filter((option) => option.eligible).map((option) => option.tenantId).slice(0, 25)
-  const status = useQuery({ queryKey: ["sync", "status", sourceId, eligible.join()], queryFn: () => syncStatus(source, eligible), enabled: eligible.length > 0, staleTime: 10_000, refetchOnWindowFocus: true })
+  // A run may name more than one target only on MSP; otherwise every eligible target (several
+  // when the source and more than one other tenant run a Pro trial) is read on its own.
+  const multiple = options.data?.multiple === true
+  const status = useQuery({
+    queryKey: ["sync", "status", sourceId, eligible.join(), multiple],
+    queryFn: async () => multiple ? syncStatus(source, eligible) : { targets: (await Promise.all(eligible.map((id) => syncStatus(source, [id]).catch((error: unknown) => ({ targets: [{ targetTenantId: id, links: [], error: error instanceof Error ? error.message : String(error) }] }))))).flatMap((answer) => answer.targets) },
+    enabled: eligible.length > 0,
+    staleTime: 10_000,
+    refetchOnWindowFocus: true,
+  })
   const refreshStatus = () => {
     void queryClient.invalidateQueries({ queryKey: ["sync", "status", sourceId] })
     void queryClient.invalidateQueries({ queryKey: ["sync", "policies", sourceId] })

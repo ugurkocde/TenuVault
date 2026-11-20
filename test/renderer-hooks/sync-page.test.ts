@@ -269,7 +269,7 @@ describe("Sync page plans", () => {
     await click(container.querySelector<HTMLInputElement>('section[aria-label="Choose settings"] input[type="checkbox"]')!)
     await click(button(container, "Sync 1 policy"))
     await until(() => !!container.querySelector('section[aria-label="Choose targets"] button[aria-pressed]'), "target cards")
-    expect(card(container, "Contoso Germany").textContent).toContain("On your Pro license")
+    expect(card(container, "Contoso Germany").textContent).toContain("Available on Pro")
     expect(card(container, "Contoso Germany").textContent).toContain("1 policy linked")
     for (const name of ["Contoso France", "Contoso Japan"]) {
       expect(card(container, name).textContent).toContain("MSP")
@@ -284,6 +284,26 @@ describe("Sync page plans", () => {
     await click(button(container, "See plans"))
     expect(opened).toEqual([["buy", { source: "sync-targets" }]])
     expect(button(container, "Review 1 tenant")?.disabled).toBe(false)
+  })
+
+  it("B4: on Pro with two other trial tenants, reads each target's status on its own and lets only one be chosen", async () => {
+    plan.current = "pro"
+    scenario.targets = [{ tenantId: B, eligible: true, multiple: false, reason: null }, { tenantId: C, eligible: true, multiple: false, reason: null }, { tenantId: D, eligible: false, multiple: false, reason: "msp" }]
+    const container = await render()
+    await until(() => !!container.querySelector('section[aria-label="Choose settings"] input[type="checkbox"]'), "policies")
+    await until(() => calls.filter((call) => call.action === "status").length === 2, "status reads")
+    const reads = calls.filter((call) => call.action === "status").map((call) => (call.body.targetTenants as Array<{ tenantId: string }>).map((target) => target.tenantId))
+    expect(reads.every((targets) => targets.length === 1)).toBe(true)
+    expect(reads.flat().sort()).toEqual([B, C].sort())
+    await click(container.querySelector<HTMLInputElement>('section[aria-label="Choose settings"] input[type="checkbox"]')!)
+    await click(button(container, "Sync 1 policy"))
+    await until(() => !!container.querySelector('section[aria-label="Choose targets"] button[aria-pressed]'), "target cards")
+    expect(card(container, "Contoso Germany").textContent).toContain("1 policy linked")
+    expect(card(container, "Contoso France").textContent).toContain("Available on Pro")
+    await click(card(container, "Contoso Germany"))
+    await click(card(container, "Contoso France"))
+    expect(card(container, "Contoso France").getAttribute("aria-pressed")).toBe("true")
+    expect(card(container, "Contoso Germany").getAttribute("aria-pressed")).toBe("false")
   })
 })
 
