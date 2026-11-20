@@ -1,6 +1,7 @@
 import { directory9bIO } from "./directory-9b-io"
 import { applicationObjectStep, applicationRelationshipSteps } from "./directory-9b-plan"
-import { DIRECTORY_9B_FOLDERS, applicationAdmission, applicationReview } from "./directory-9b"
+import { DIRECTORY_9B_FOLDERS, applicationAdmission, applicationReview, requireApplicationRestoreAccess } from "./directory-9b"
+import type { ModuleSettings } from "../services/settings"
 import type { GuardedStep } from "./guarded-run"
 import { randomUUID, createHash } from "node:crypto"
 import { INTUNE_TYPES, type Item } from "../../shared/intune/registry"
@@ -29,7 +30,7 @@ const key = (tenant: string, id: string) => `restore.directory.review.${tenant.t
 /** Owned backup readers are supplied by the authenticated route, never by the renderer. */
 export class DirectoryRestoreService {
   private readonly running = new Map<string, AbortController>()
-  constructor(private readonly store: PartitionedRestoreStore, private readonly recovery: RecoveryAccounts, private readonly connection: (tenant: string) => Promise<RestoreConnection>, private readonly fetchImpl: typeof fetch = fetch, private readonly protectedAppIds: (tenant: string) => readonly string[] = () => []) {}
+  constructor(private readonly store: PartitionedRestoreStore, private readonly recovery: RecoveryAccounts, private readonly connection: (tenant: string) => Promise<RestoreConnection>, private readonly fetchImpl: typeof fetch = fetch, private readonly protectedAppIds: (tenant: string) => readonly string[] = () => [], private readonly settings?: Pick<ModuleSettings, "get">) {}
   private async context(tenant: string) {
     const connection = await this.connection(tenant)
     if (connection.tenantId.toLowerCase() !== tenant.toLowerCase()) fail("The connection belongs to another tenant.")
@@ -47,7 +48,7 @@ export class DirectoryRestoreService {
       if (!granted || INTUNE_TYPES.some(type => type.restoreSafety !== "identity" && !type.singleton && !type.staticIds && !REFERENCE_SCAN_EXCLUDED.has(type.folder) && !canBackUp(type.folder, granted))) throw new Error("Reference scan read access is unavailable")
       return referenceMatches(connection.token, mappings, this.fetchImpl, { signal })
     })
-    return { actor, io, applicationIO: directory9bIO(connection.token, actor, this.fetchImpl, () => this.protectedAppIds(tenant)) }
+    return { actor, io, applicationIO: directory9bIO(connection.token, actor, this.fetchImpl, () => this.protectedAppIds(tenant), () => this.settings?.get(tenant).entra) }
   }
   private load(tenant: string, id: string): DirectoryPage {
     if (!isGuid(id)) fail("Select a saved directory preview.")
@@ -149,6 +150,7 @@ export class DirectoryRestoreService {
   }
   private async prepareApplications(tenant: string, request: IdentityRestoreRequest, options: DirectoryOptions, read: (path: string) => Promise<unknown>) {
     if (request.origin !== "restore") fail("Application access requires an owned same-tenant backup. Imported grants and cross-tenant restores are refused.")
+    requireApplicationRestoreAccess(this.settings?.get(tenant).entra)
     const folder = request.path.split("/")[1]!, snapshot = request.snapshot
     const { actor, applicationIO: io } = await this.context(tenant)
     const readSource = async (sourceFolder: string, id: string): Promise<Item> => {

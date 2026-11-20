@@ -8,6 +8,7 @@ import { directory9bIO } from "../src/main/restore/directory-9b-io"
 import { appPayload, applicationAdmission, applicationPermissions, TENUVAULT_DESKTOP_APP_ID, applicationReview, DIRECTORY_9B_FOLDERS } from "../src/main/restore/directory-9b"
 import { applicationObjectStep, applicationRelationshipSteps } from "../src/main/restore/directory-9b-plan"
 import { DirectoryRestoreService } from "../src/main/restore/directory-service"
+import { ModuleSettings } from "../src/main/services/settings"
 import { RecoveryAccounts } from "../src/main/restore/safety-resolvers"
 import { MICROSOFT_ORGANIZATION_ID } from "../src/shared/intune/entra-directory"
 import { graphPermissions } from "../src/shared/services/manifest"
@@ -46,8 +47,11 @@ function world() {
     if (objects.has(path)) return Response.json(objects.get(path))
     return new Response(null, { status: 404 })
   })
-  const io = directory9bIO(token, actor, fetcher)
-  return { io, writes, objects, grants, roles, fetcher }
+  const data = new Map<string, string>()
+  const settings = new ModuleSettings({ get: key => data.get(key) ?? null, set: (key, value) => { data.set(key, value) }, delete: key => { data.delete(key) } })
+  settings.setChoice(actor.tenantId, { entra: { access: "restore", areas: ["applications"] } })
+  const io = directory9bIO(token, actor, fetcher, () => [], () => settings.get(actor.tenantId).entra)
+  return { io, writes, objects, grants, roles, fetcher, settings }
 }
 const step = (action: NonNullable<GuardedStep["directory"]>["action"], folder = "Applications"): GuardedStep => ({ folder, key: "test", sourceId: id(10), targetId: id(10), operation: "update", directory: { action }, desired: { displayName: "Saved" }, properties: ["displayName"], preview: restoreFingerprint(null), requires: [] })
 it("admits only metadata and refuses every other transport with a valid run and all approvals", async () => {
@@ -127,7 +131,7 @@ it("refuses gallery guessing and ambiguous app ID lookups", async () => {
 it("uses saved page resume while refusing unapproved execution and imported origins", async () => {
   const env = world(), data = new Map<string, string>()
   const store = { partitioned: true as const, get: (key: string) => data.get(key) ?? null, set: (key: string, value: string) => { data.set(key, value) }, delete: (key: string) => { data.delete(key) } }
-  const service = () => new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, ...actor }), env.fetcher)
+  const service = () => new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, ...actor }), env.fetcher, () => [], env.settings)
   const request = { path: `backup/Applications/${app.id}.json`, snapshot: { ...app, displayName: "Saved" }, origin: "restore" as const }
   const options = { stage: "object" as const, exactMembers: false, exactOwners: false }
   const page = await service().prepare(actor.tenantId, request, options, async () => app)
@@ -184,7 +188,7 @@ it("persists bounded application relationship pages and advances beyond unresolv
   const env = world(), ids = Array.from({ length: 65 }, (_, n) => id(100+n)), data = new Map<string, string>()
   const snapshot = { ...app, owners: { format: "sorted-id-shards-v1", complete: true, count: ids.length, shards: 1, hash: createHash("sha256").update(ids.map(value => JSON.stringify(value)+"\n").join("")).digest("hex") } }
   const store = { partitioned: true as const, get: (key: string) => data.get(key) ?? null, set: (key: string, value: string) => { data.set(key, value) }, delete: (key: string) => { data.delete(key) } }
-  const service = () => new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, ...actor }), env.fetcher)
+  const service = () => new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, ...actor }), env.fetcher, () => [], env.settings)
   const request = { path: `backup/Applications/${app.id}.json`, snapshot, origin: "restore" as const }
   const options = { stage: "relationships" as const, exactMembers: false, exactOwners: false }
   const first = await service().prepare(actor.tenantId, request, options, async () => ids)
@@ -206,7 +210,7 @@ it("refuses principal-specific consent instead of replaying a raw saved user ID"
 it.each(["Applications"])("executes admitted %s metadata through the durable production service", async folder => {
   const env = world(), data = new Map<string, string>()
   const store = { partitioned: true as const, get: (key: string) => data.get(key) ?? null, set: (key: string, value: string) => { data.set(key, value) }, delete: (key: string) => { data.delete(key) } }
-  const service = () => new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, ...actor }), env.fetcher)
+  const service = () => new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, ...actor }), env.fetcher, () => [], env.settings)
   const saved = { ...app, displayName: "Saved", description: "Saved description" }
   const request = { path: `backup/${folder}/${app.id}.json`, snapshot: saved, origin: "restore" as const }
   const page = await service().prepare(actor.tenantId, request, { stage: "object", exactMembers: false, exactOwners: false }, async () => saved)
@@ -223,7 +227,7 @@ it.each(["Applications"])("executes admitted %s metadata through the durable pro
 it.each([false, true])("keeps tenant-wide consent blocked through the production service, existing grant %s", async existing => {
   const env = world(), data = new Map<string, string>()
   const store = { partitioned: true as const, get: (key: string) => data.get(key) ?? null, set: (key: string, value: string) => { data.set(key, value) }, delete: (key: string) => { data.delete(key) } }
-  const service = new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, ...actor }), env.fetcher)
+  const service = new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, ...actor }), env.fetcher, () => [], env.settings)
   const saved = { id: "A".repeat(43), clientId: client.id, resourceId: app.id, consentType: "AllPrincipals", principalId: null, scope: "Test.Read" }
   if (existing) env.grants.push({ ...saved, scope: "Existing.Read" })
   const request = { path: `backup/OAuth2PermissionGrants/${saved.id}.json`, snapshot: saved, origin: "restore" as const }
@@ -247,7 +251,7 @@ it("refuses null metadata clearing and a synchronized or protected enterprise ap
 it("keeps saved app roles blocked after the lab recreation refusal despite all approvals", async () => {
   const env = world(), data = new Map<string, string>()
   const store = { partitioned: true as const, get: (key: string) => data.get(key) ?? null, set: (key: string, value: string) => { data.set(key, value) }, delete: (key: string) => { data.delete(key) } }
-  const service = new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, ...actor }), env.fetcher)
+  const service = new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, ...actor }), env.fetcher, () => [], env.settings)
   const assignment = { id: "A".repeat(43), principalId: client.id, resourceId: app.id, appRoleId: id(90) }
   const declare = (rows: unknown[], ids = false) => ({ format: ids ? "sorted-id-shards-v1" : "sorted-object-shards-v1", count: rows.length, shards: rows.length ? 1 : 0, complete: true, hash: createHash("sha256").update(rows.map(row => JSON.stringify(row)+"\n").join("")).digest("hex") })
   const saved = { ...client, owners: declare([], true), appRoleAssignments: declare([assignment]), appRoleAssignedTo: declare([]) }
@@ -263,7 +267,7 @@ it("keeps saved app roles blocked after the lab recreation refusal despite all a
 it.each(["update"] as const)("requires the exact delegated %s permission at final send", async action => {
   const { approveDirectory } = await import("../src/main/restore/directory-9a")
   const env = world(), narrow = `h.${Buffer.from(JSON.stringify({ tid: actor.tenantId, oid: actor.userId, appid: actor.clientId, scp: "Application.Read.All Directory.Read.All" })).toString("base64url")}.s`
-  const io = directory9bIO(narrow, actor, env.fetcher)
+  const io = directory9bIO(narrow, actor, env.fetcher, () => [], () => env.settings.get(actor.tenantId).entra)
   const candidate = action === "update" ? await applicationObjectStep("Applications", { ...app, displayName: "Saved" }, io, async () => app) : await applicationObjectStep("OAuth2PermissionGrants", { id: "A".repeat(43), clientId: client.id, resourceId: app.id, consentType: "AllPrincipals", principalId: null, scope: "Test.Read" }, io, async (_folder, sourceId) => sourceId === client.id ? client : app)
   const run = { version: 1 as const, id: id(99), tenant: actor.tenantId, actor, origin: "restore" as const, source: { path: "owned/path", fingerprint: "source" }, entries: [], mappings: [] }
   for (const kind of (await io.review(candidate)).approvals) approveDirectory(candidate, run, kind)
@@ -279,11 +283,66 @@ function runFor(candidate: GuardedStep): GuardedRun {
 function persisted(env = world(), protectedIds: string[] = []) {
   const data = new Map<string, string>()
   const store = { partitioned: true as const, get: (key: string) => data.get(key) ?? null, set: (key: string, value: string) => { data.set(key, value) }, delete: (key: string) => { data.delete(key) } }
-  const service = () => new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, ...actor }), env.fetcher, () => protectedIds)
+  const service = () => new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, ...actor }), env.fetcher, () => protectedIds, env.settings)
   return { ...env, store, data, service }
 }
 const options = { stage: "object" as const, exactMembers: false, exactOwners: false }
 const metadataRequest = (saved: Item = { ...app, displayName: "Saved", description: "Saved description" }) => ({ path: `backup/Applications/${app.id}.json`, snapshot: saved, origin: "restore" as const })
+const optOutVariants = ["area", "service", "backup"] as const
+function optOut(settings: ModuleSettings, variant: typeof optOutVariants[number]) {
+  if (variant === "area") settings.setArea(actor.tenantId, "entra", "applications", false)
+  if (variant === "service") settings.set(actor.tenantId, "entra", false)
+  if (variant === "backup") settings.setAccess(actor.tenantId, "entra", "backup")
+}
+it.each(optOutVariants)("refuses application preview and final send after %s opt-out with a still-consented token", async variant => {
+  const env = persisted(), request = metadataRequest()
+  const page = await env.service().prepare(actor.tenantId, request, options, async () => request.snapshot)
+  expect(page.rows[0]!.review.blocker).toBeUndefined()
+  optOut(env.settings, variant)
+  await expect(env.service().prepare(actor.tenantId, request, options, async () => request.snapshot)).rejects.toThrow("Backup and restore access")
+  await expect(env.io.preview(step("update"))).rejects.toThrow("Backup and restore access")
+  const result = await env.service().execute(actor.tenantId, { ...request, runId: page.runId }, page.fingerprint, { [page.rows[0]!.key]: page.rows[0]!.review.approvals })
+  expect(result).toMatchObject({ status: "partial", outcomes: [{ state: "failed-before-send" }] })
+  expect(env.writes).toEqual([])
+})
+it("refuses preview and send when no saved settings provider is supplied", async () => {
+  const env = world(), io = directory9bIO(token, actor, env.fetcher)
+  const candidate = await applicationObjectStep("Applications", { ...app, displayName: "Saved" }, io, async () => app)
+  await expect(io.preview(candidate)).rejects.toThrow("Backup and restore access")
+  await expect(io.write(candidate, candidate.desired, candidate.targetId, () => {}, runFor(candidate))).rejects.toThrow("Backup and restore access")
+  const data = new Map<string, string>()
+  const store = { partitioned: true as const, get: (key: string) => data.get(key) ?? null, set: (key: string, value: string) => { data.set(key, value) }, delete: (key: string) => { data.delete(key) } }
+  const service = new DirectoryRestoreService(store, new RecoveryAccounts(store), async () => ({ token, ...actor }), env.fetcher)
+  await expect(service.prepare(actor.tenantId, metadataRequest(), options, async () => app)).rejects.toThrow("Backup and restore access")
+  expect(env.writes).toEqual([])
+})
+it.each(optOutVariants)("rechecks saved %s opt-out during the final GET before recording a send", async variant => {
+  const env = world(), candidate = await applicationObjectStep("Applications", { ...app, displayName: "Saved" }, env.io, async () => app)
+  await env.io.preview(candidate)
+  const run = runFor(candidate), original = env.fetcher.getMockImplementation()!, before = vi.fn()
+  let reads = 0
+  env.fetcher.mockImplementation((url, init) => {
+    if (new URL(String(url)).pathname === `/v1.0/applications/${app.id}` && (!init?.method || init.method === "GET") && ++reads === 2) optOut(env.settings, variant)
+    return original(url, init)
+  })
+  await expect(env.io.write(candidate, candidate.desired, candidate.targetId, before, run)).rejects.toThrow("Backup and restore access")
+  expect(before).not.toHaveBeenCalled()
+  expect(env.writes).toEqual([])
+})
+it.each(optOutVariants)("reconciles a sent but uncertain write after %s opt-out without resending", async variant => {
+  const env = persisted(), original = env.fetcher.getMockImplementation()!
+  env.fetcher.mockImplementation(async (url, init) => {
+    const response = await original(url, init)
+    return init?.method === "PATCH" ? new Response(null, { status: 504 }) : response
+  })
+  const request = metadataRequest(), page = await env.service().prepare(actor.tenantId, request, options, async () => request.snapshot)
+  const approvals = { [page.rows[0]!.key]: page.rows[0]!.review.approvals }
+  expect(await env.service().execute(actor.tenantId, { ...request, runId: page.runId }, page.fingerprint, approvals)).toMatchObject({ status: "partial", outcomes: [{ state: "uncertain" }] })
+  optOut(env.settings, variant)
+  expect(await env.service().resume(actor.tenantId, { ...request, runId: page.runId })).toEqual(page)
+  expect(await env.service().execute(actor.tenantId, { ...request, runId: page.runId }, page.fingerprint, approvals)).toMatchObject({ status: "complete", outcomes: [{ state: "applied" }] })
+  expect(env.writes).toHaveLength(1)
+})
 it.each([408, 429, 500, 502, 504])("reconciles a committed PATCH followed by HTTP %s after restart with exactly one send", async status => {
   const env = persisted(), original = env.fetcher.getMockImplementation()!
   env.fetcher.mockImplementation(async (url, init) => {
@@ -388,13 +447,33 @@ it.each([
 it("protects the configured Backup Reader by app ID even after a rename or marker removal", async () => {
   const env = persisted(world(), [String(app.appId)])
   await expect(env.service().prepare(actor.tenantId, metadataRequest(), options, async () => app)).rejects.toThrow("protected")
-  const plain = directory9bIO(token, actor, env.fetcher), candidate = await applicationObjectStep("Applications", { ...app, displayName: "Saved" }, plain, async () => app)
+  const plain = directory9bIO(token, actor, env.fetcher, () => [], () => env.settings.get(actor.tenantId).entra), candidate = await applicationObjectStep("Applications", { ...app, displayName: "Saved" }, plain, async () => app)
   await plain.preview(candidate)
-  const run = runFor(candidate), protectedIO = directory9bIO(token, actor, env.fetcher, () => [String(app.appId)])
+  const run = runFor(candidate), protectedIO = directory9bIO(token, actor, env.fetcher, () => [String(app.appId)], () => env.settings.get(actor.tenantId).entra)
   await expect(protectedIO.write(candidate, candidate.desired, candidate.targetId, () => {}, run)).rejects.toThrow("protected")
   expect(env.writes).toEqual([])
 })
-it.each(["microsoft", "unresolved", "ambiguous", "missing-owner", "wrong-type", "wrong-appId"])("refuses an Application with %s identity at preview and final send", async variant => {
+it.each(["lowercase", "uppercase"])("protects a configured %s app ID against mixed-case live app IDs at preview and send", async variant => {
+  const protectedId = "abcdefab-cdef-4abc-8def-abcdefabcdef"
+  const env = world(), candidate = await applicationObjectStep("Applications", { ...app, displayName: "Saved" }, env.io, async () => app)
+  await env.io.preview(candidate)
+  const run = runFor(candidate)
+  const protectedIO = directory9bIO(token, actor, env.fetcher, () => [variant === "uppercase" ? protectedId.toUpperCase() : protectedId], () => env.settings.get(actor.tenantId).entra)
+  env.objects.get(`applications/${app.id}`)!.appId = variant === "uppercase" ? protectedId : protectedId.toUpperCase()
+  await expect(protectedIO.preview(candidate)).rejects.toThrow("protected")
+  await expect(protectedIO.write(candidate, candidate.desired, candidate.targetId, () => {}, run)).rejects.toThrow("protected")
+  expect(env.writes).toEqual([])
+})
+it("refuses an uppercase Microsoft owner tenant on an application at preview and send", async () => {
+  const env = world(), candidate = await applicationObjectStep("Applications", { ...app, displayName: "Saved" }, env.io, async () => app)
+  await env.io.preview(candidate)
+  const run = runFor(candidate)
+  env.objects.get(`applications/${app.id}`)!.appOwnerOrganizationId = MICROSOFT_ORGANIZATION_ID.toUpperCase()
+  await expect(env.io.preview(candidate)).rejects.toThrow("Microsoft first-party")
+  await expect(env.io.write(candidate, candidate.desired, candidate.targetId, () => {}, run)).rejects.toThrow("Microsoft first-party")
+  expect(env.writes).toEqual([])
+})
+it.each(["microsoft", "microsoft-uppercase", "unresolved", "ambiguous", "missing-owner", "wrong-type", "wrong-appId"])("refuses an Application with %s identity at preview and final send", async variant => {
   const env = world(), candidate = await applicationObjectStep("Applications", { ...app, displayName: "Saved" }, env.io, async () => app)
   await env.io.preview(candidate)
   const run = runFor(candidate), original = env.fetcher.getMockImplementation()!
@@ -402,6 +481,7 @@ it.each(["microsoft", "unresolved", "ambiguous", "missing-owner", "wrong-type", 
     if (new URL(String(url)).pathname === "/v1.0/servicePrincipals") {
       const principal = { ...app }
       if (variant === "microsoft") principal.appOwnerOrganizationId = MICROSOFT_ORGANIZATION_ID
+      if (variant === "microsoft-uppercase") principal.appOwnerOrganizationId = MICROSOFT_ORGANIZATION_ID.toUpperCase()
       if (variant === "missing-owner") delete (principal as Item).appOwnerOrganizationId
       if (variant === "wrong-type") principal.servicePrincipalType = "ManagedIdentity"
       if (variant === "wrong-appId") principal.appId = id(88)

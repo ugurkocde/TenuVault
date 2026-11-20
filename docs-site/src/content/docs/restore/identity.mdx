@@ -98,7 +98,7 @@ Open an owned backup, expand Users or Groups and select **Review directory resto
 
 Choose **Directory object** first. Missing objects are checked against deleted items before recreation. Recycle recovery remains blocked until recovered relationships and account state can be inspected safely. TenuVault never skips the recycle bin to create a second identity. A missing object outside deleted items can be recreated. A recreated user starts disabled with a fresh random password that is never retained, logged or shown. Set up sign-in and enable the account separately in Entra.
 
-A new object ID breaks references that still target the old ID, such as policy targets and external integrations. Confirmed mappings are saved for later directory relationship previews on this device. Review Intune and Conditional Access references separately. If reference reporting is unavailable, the result is partial, not an assurance that no references exist. Recreating an application also changes its app ID and breaks clients using that app ID; application restore remains blocked in this release.
+A new object ID breaks references that still target the old ID, such as policy targets and external integrations. Confirmed mappings are saved for later directory relationship previews on this device. Review Intune and Conditional Access references separately. If reference reporting is unavailable, the result is partial, not an assurance that no references exist. Recreating an application also changes its app ID and breaks clients using that app ID; application registration name and description restore is available for nonempty changes, while creation and all other application operations remain blocked in this release.
 
 | Operation | Available subset or reason it stays blocked |
 | --- | --- |
@@ -130,6 +130,8 @@ User display-name and manager changes are blocked when Conditional Access group 
 ## App registrations, enterprise apps and consent
 
 Open an owned backup and choose **Review directory restore** under Applications, ServicePrincipals or OAuth2PermissionGrants. The separate review admits only operations with matching documentation, fixture read-back and production integration tests. Application registrations support nonempty displayName and description updates. Other metadata fields and clearing names or descriptions remain blocked. These operations are never included in restore all.
+
+TenuVault checks for changes in a final read, but another admin's edit to the same field in the moment between that read and TenuVault's write can be overwritten.
 
 Recreating an app registration generates a **new app ID**. This breaks every client that uses the old app ID, including sign-in configuration, scripts and dependent applications. The preview checks the recycle bin first. Recycle recovery can preserve the original object ID and app ID, but can also revive credentials and access. It remains blocked until all recovered state and relationships can be completely verified. A deleted identity is never bypassed by recreation. Restoring an application does not automatically restore its enterprise app.
 

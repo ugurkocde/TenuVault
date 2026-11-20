@@ -425,7 +425,7 @@ async function bootstrap(): Promise<void> {
   setDirectoryRestoreService(new DirectoryRestoreService(new DirectoryRestoreStore(join(userData, "directory-restore"), cipher), recoveryAccounts, restoreConnection, bridgedFetch, tenant => {
     const id = backupReader.status(tenant)?.clientId
     return id ? [id] : []
-  }))
+  }, moduleSettings))
   setIdentityRestorePreviews(identityRestore)
   setIdentityRestoreDispatch((tenant, request) => identityRestore.restore(tenant, request))
 

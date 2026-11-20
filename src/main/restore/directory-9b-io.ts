@@ -4,8 +4,9 @@ import { grantedPermissions } from "../../shared/services/token"
 import { RestoreSafetyError, RestoreWriteDeferredError, RestoreWriteRefusedError, guardRestoreItem, type RestoreActor } from "../../shared/intune/restore-guards"
 import { requireRestoreActor } from "./restore-actor"
 import { requireDirectoryApprovals } from "./directory-9a"
-import { appIdentity, applicationAdmission, applicationPermissions, applicationReview, restorableApp } from "./directory-9b"
+import { appIdentity, applicationAdmission, applicationPermissions, applicationReview, restorableApp, requireApplicationRestoreAccess } from "./directory-9b"
 import { restoreFingerprint, type GuardedIO, type GuardedStep } from "./guarded-run"
+import type { ModuleSetting } from "../services/settings"
 
 const root = "https://graph.microsoft.com/v1.0/"
 const collection = (folder: string) => {
@@ -15,7 +16,7 @@ const collection = (folder: string) => {
   throw new RestoreSafetyError("Outside application restore scope.")
 }
 /** Application operations plug into the existing directory journal, batching and approval service. */
-export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typeof fetch = fetch, protectedAppIds: () => readonly string[] = () => []) {
+export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typeof fetch = fetch, protectedAppIds: () => readonly string[] = () => [], settings: () => ModuleSetting | undefined = () => undefined) {
   requireRestoreActor(token, actor)
   const request = async (path: string, method = "GET", body?: Item, signal?: AbortSignal): Promise<Item | null> => {
     signal?.throwIfAborted()
@@ -126,6 +127,7 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
     return applicationReview(step, current, resource, principal, actor)
   }
   const preview = async (step: GuardedStep) => {
+    requireApplicationRestoreAccess(settings())
     const current = await read(step, step.targetId)
     step.preview = restoreFingerprint(current)
     if (step.folder === "Applications" && step.directory?.action === "update") {
@@ -173,6 +175,9 @@ export function directory9bIO(token: string, actor: RestoreActor, fetchImpl: typ
       if (result.blocker) throw new RestoreSafetyError(result.blocker)
       requireDirectoryApprovals(step, run, result.approvals)
       guardRestoreItem(actor, step.folder, targetId, { complete: true, principals: [], applications: [String(current?.id), String(current?.appId)] }, false, ["identity-references"])
+      // Read saved opt-in again after all asynchronous checks, before recording a send.
+      // Reads stay available so already-sent writes can reconcile after opt-out.
+      requireApplicationRestoreAccess(settings())
       signal?.throwIfAborted(); beforeSend()
       await request(path, "PATCH", payload, signal)
       return { id: targetId }

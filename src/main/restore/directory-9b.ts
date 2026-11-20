@@ -5,6 +5,11 @@ import { restoreMatrixRow } from "../../shared/intune/restore-matrix"
 import { isGuid } from "../../shared/security"
 import { cloudObject, type DirectoryReview } from "./directory-9a"
 import type { GuardedStep } from "./guarded-run"
+import type { ModuleSetting } from "../services/settings"
+
+export function requireApplicationRestoreAccess(setting: ModuleSetting | undefined) {
+  if (!setting?.enabled || setting.access !== "restore" || setting.areas.applications !== true) throw new RestoreSafetyError("Enable Entra ID and the Applications area with Backup and restore access before restoring application metadata.")
+}
 
 export const DIRECTORY_9B_FOLDERS = ["Applications", "ServicePrincipals", "OAuth2PermissionGrants"]
 export const DIRECTORY_9B_BLOCKER = "This application operation has no verified live restore contract and remains blocked."
@@ -17,11 +22,12 @@ export const TENUVAULT_DESKTOP_APP_ID = "d390dc50-d001-4127-859b-828e39bd71e0"
 export function restorableApp(item: Item, folder: string, requireOwner = false, protectedAppIds: readonly string[] = []) {
   cloudObject(item)
   const appId = appIdentity(item.appId)
-  if ([TENUVAULT_DESKTOP_APP_ID, ...protectedAppIds].some(id => id.toLowerCase() === appId)
+  const ownerTenant = isGuid(item.appOwnerOrganizationId) ? appIdentity(item.appOwnerOrganizationId) : undefined
+  if ([TENUVAULT_DESKTOP_APP_ID, ...protectedAppIds].some(id => appIdentity(id) === appId)
     || typeof item.notes === "string" && /^(?:Used by the TenuVault desktop app|TenuVault Backup Reader:)/i.test(item.notes)
     || typeof item.displayName === "string" && /^TenuVault (?:Desktop|Backup Reader)$/i.test(item.displayName)) throw new RestoreSafetyError("TenuVault-owned app registrations are protected.")
-  if (folder === "Applications" && (item.appOwnerOrganizationId === MICROSOFT_ORGANIZATION_ID || requireOwner && (!isGuid(item.appOwnerOrganizationId) || item.servicePrincipalType !== "Application"))) throw new RestoreSafetyError("Microsoft first-party or unresolved app registrations are never restorable.")
-  if (folder === "ServicePrincipals" && (item.appOwnerOrganizationId === MICROSOFT_ORGANIZATION_ID || item.servicePrincipalType !== "Application" || !isGuid(item.appOwnerOrganizationId))) throw new RestoreSafetyError("Microsoft first-party or unresolved enterprise apps are never restorable.")
+  if (folder === "Applications" && (ownerTenant === MICROSOFT_ORGANIZATION_ID || requireOwner && (!ownerTenant || item.servicePrincipalType !== "Application"))) throw new RestoreSafetyError("Microsoft first-party or unresolved app registrations are never restorable.")
+  if (folder === "ServicePrincipals" && (ownerTenant === MICROSOFT_ORGANIZATION_ID || item.servicePrincipalType !== "Application" || !ownerTenant)) throw new RestoreSafetyError("Microsoft first-party or unresolved enterprise apps are never restorable.")
 }
 export function appPayload(folder: string, action: string, source: Item): Item {
   restorableApp(source, folder)
