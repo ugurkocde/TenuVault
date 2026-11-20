@@ -254,7 +254,7 @@ describe("Sync page plans", () => {
     plan.current = "community"
     const container = await render()
     expect(container.querySelector('section[aria-label="Sync preview"]')).not.toBeNull()
-    expect(container.textContent).toContain("Pro syncs between the two tenants of your license. Syncing to more tenants is part of MSP.")
+    expect(container.textContent).toContain("Pro syncs between the two tenants of your license, or between two tenants that each run a Pro trial. Syncing to more tenants is part of MSP.")
     expect(container.querySelector('ol[aria-label="Steps"]')).toBeNull()
     expect(container.querySelector('section[aria-label="Recent syncs"]')).toBeNull()
     expect(container.querySelector('section[aria-label="Choose settings"]')).toBeNull()
@@ -279,7 +279,7 @@ describe("Sync page plans", () => {
     }
     await click(card(container, "Contoso Germany"))
     expect(card(container, "Contoso Germany").getAttribute("aria-pressed")).toBe("true")
-    expect(container.textContent).toContain("Pro syncs between the two tenants of your license. Syncing to more tenants is part of MSP.")
+    expect(container.textContent).toContain("Pro syncs between the two tenants of your license, or between two tenants that each run a Pro trial. Syncing to more tenants is part of MSP.")
     expect(container.textContent).not.toMatch(/upsell|upgrade now|unlock/i)
     await click(button(container, "See plans"))
     expect(opened).toEqual([["buy", { source: "sync-targets" }]])

@@ -73,7 +73,7 @@ Eligible nonprofits can use Pro at no cost. Email [support@tenuvault.com](mailto
 | Policy conflict and hygiene explorer | | Yes | Yes |
 | Baseline upgrades that keep your customizations | | Yes | Yes |
 | Dev to Prod settings promotion | | Yes | Yes |
-| [Sync](/sync/) settings to other tenants | | Yes (the two tenants of your license) | Yes |
+| [Sync](/sync/) settings to other tenants | | Yes (the two tenants of your license, or two tenants on a Pro trial) | Yes |
 | Scheduled health review and notifications | | Yes | Yes |
 | [Change reports](/reports/): what changed and who changed it, as PDF, Markdown or JSON, and by email after every scheduled backup | | Yes | Yes |
 | Organization baseline customizations | | Yes | Yes |

@@ -228,7 +228,7 @@ export function ChooseTargets({ sourceName, options, loading, error, tenantOf, l
           <p className="mt-3 flex items-center gap-2.5 rounded-2xl bg-secondary px-4 py-3 text-sm text-gray-700">
             <Info className="h-4 w-4 shrink-0" aria-hidden="true" />
             <span>
-              Pro syncs between the two tenants of your license. Syncing to more tenants is part of MSP.{" "}
+              Pro syncs between the two tenants of your license, or between two tenants that each run a Pro trial. Syncing to more tenants is part of MSP.{" "}
               <button type="button" className="font-semibold underline underline-offset-2" onClick={() => void bridge.license.open("buy", { source: "sync-targets" })}>See plans</button>
             </span>
           </p>

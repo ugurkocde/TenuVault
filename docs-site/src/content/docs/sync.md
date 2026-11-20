@@ -23,9 +23,9 @@ Sync works like [Dev to Prod](/changes/#dev-to-prod), with more than one target 
 
 | | Community | Pro | MSP |
 | --- | --- | --- | --- |
-| Sync settings to other tenants | | Yes (the two tenants of your license) | Yes |
+| Sync settings to other tenants | | Yes (the two tenants of your license, or two tenants on a Pro trial) | Yes |
 
-* **Pro** syncs between the two tenants of your license, in either direction.
+* **Pro** syncs between the two tenants of your license, in either direction. During a Pro trial, two tenants that each run a Pro trial on this computer can sync with each other the same way, one target per sync.
 * **MSP** syncs from one tenant to several tenants at once. Every tenant in the sync needs MSP.
 * **Community** sees a preview of what Sync does, with **See plans**.
 
@@ -61,7 +61,7 @@ The status is read again when you start a new sync, after a sync or rollback fin
 Every other connected tenant shows as a card with its name and domain.
 
 * Click a card to choose it. A card shows **N policies linked** when earlier syncs from this source wrote policies to it.
-* On Pro, only the other tenant of your license can be chosen. It shows **On your Pro license**. The other tenants show **MSP** and the note "Pro syncs between the two tenants of your license. Syncing to more tenants is part of MSP."
+* On Pro, only the other tenant of your license can be chosen. It shows **On your Pro license**. When the source runs a Pro trial, every other tenant that runs a Pro trial can be chosen in the same way. The other tenants show **MSP** and the note "Pro syncs between the two tenants of your license, or between two tenants that each run a Pro trial. Syncing to more tenants is part of MSP."
 * A tenant whose plan does not include Sync, or that you are not signed in to, cannot be chosen.
 
 Click **Review N tenants**. TenuVault plans the sync and reads every target tenant. Nothing is written.

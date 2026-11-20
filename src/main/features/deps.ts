@@ -32,7 +32,7 @@ export interface FeatureDeps {
   records: TenantRecords
   /** The tenant's plan; throws when the tenant is not signed in or not licensed. */
   plan: (tenantId: string) => Promise<Plan>
-  /** Whether two tenants are covered by the same license (Pro promotion stays inside it). */
+  /** Whether two tenants form a Pro pair: covered by the same license, or each by a Pro trial (Pro promotion stays inside it). */
   sameLicense: (a: string, b: string) => boolean
   /** A connected tenant, or null. */
   tenant: (tenantId: string) => TenantProfile | null

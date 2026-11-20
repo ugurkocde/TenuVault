@@ -15,7 +15,8 @@ export function targetIds(value: unknown): unknown[] {
 /**
  * The tenants of a Sync action. Every involved tenant needs a plan with Sync. More than one
  * target, or one target outside the license, needs MSP on every involved tenant; on Pro the
- * source and its one target must be the two tenants of the same license, as for Dev to Prod.
+ * source and its one target must be the two tenants of the same license, or two tenants that
+ * each run a Pro trial, as for Dev to Prod.
  * Checked on every gated action, also when a run's target is acted on alone.
  */
 export async function requireSyncTenants(deps: FeatureDeps, sourceTenantId: unknown, targetTenantIds: unknown[]): Promise<{ source: string; targets: string[] }> {

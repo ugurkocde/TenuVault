@@ -61,7 +61,7 @@ export function requireSourceTenant(context: { tenantId: string; plan: Plan; dep
     return source
   }
   if (!context.targetTenants.includes(source)) throw new FeatureError("The source tenant must be named in targetTenants so its license is checked.")
-  if (context.plan === "pro" && !context.deps.sameLicense(source, context.tenantId)) throw new FeatureError("On Pro, both tenants must be the two tenants covered by the same license.", 403)
+  if (context.plan === "pro" && !context.deps.sameLicense(source, context.tenantId)) throw new FeatureError("On Pro, both tenants must be the two tenants covered by the same license, or two tenants that each run a Pro trial.", 403)
   return source
 }
 

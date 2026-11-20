@@ -62,7 +62,7 @@ export default function SyncPage() {
             "Pick policies in one tenant and copy them to another, for example from a lab tenant to production.",
             "Every target is reviewed against its live state before anything is written, with a backup first unless you skip it.",
             "The next sync updates the policies it created, so nothing is duplicated. Sync never runs on its own.",
-            "Pro syncs between the two tenants of your license. Syncing to more tenants is part of MSP.",
+            "Pro syncs between the two tenants of your license, or between two tenants that each run a Pro trial. Syncing to more tenants is part of MSP.",
           ]}
         />
       ) : (
