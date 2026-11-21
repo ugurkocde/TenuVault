@@ -100,7 +100,6 @@ export async function POST(request: NextRequest) {
     // under the original names, without assignments.
     const guid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
     if (targetTenants !== undefined && (!Array.isArray(targetTenants) || !targetTenants.length || targetTenants.length > 50 || mode !== 'copy' || assignments ||
-      new Set(targetTenants.map((t: any) => String(t?.tenantId).toLowerCase())).size !== targetTenants.length ||
       targetTenants.some((t: any) => !guid.test(t?.tenantId ?? '') || !guid.test(t?.appId ?? '') || String(t.tenantId).toLowerCase() === String(tenantId).toLowerCase()))) {
       return NextResponse.json({ error: 'Choose other connected tenants to copy to. Copies are created without assignments.' }, { status: 400 })
     }
@@ -118,12 +117,12 @@ export async function POST(request: NextRequest) {
     const jobId = randomUUID()
     const destinations: string[] = targetTenants?.map((target: { tenantId: string }) => target.tenantId.toLowerCase()) ?? [tenantId.toLowerCase()]
     const action = mode === 'replace' ? 'Restore backup in place' : 'Restore backup as policy copies'
-    const destinationTokens = new Map<string, string>()
+    const destinationTokens: string[] = []
     let correlated: string = jobId
     preparationFailed = () => {
-      for (const destination of destinations) {
+      for (const [index, destination] of destinations.entries()) {
         void recordRestorePreparationFailure({
-          destination, sourceTenantId: tenantId, graphToken: destinationTokens.get(destination), sourceBackupId: backupId, operationId: correlated, runId: jobId, action,
+          destination, sourceTenantId: tenantId, graphToken: destinationTokens[index], sourceBackupId: backupId, operationId: correlated, runId: jobId, action,
         }).catch(() => console.warn('[audit] Restore preparation failure could not be recorded'))
       }
     }
@@ -133,7 +132,7 @@ export async function POST(request: NextRequest) {
       getAccessToken(tenantId, appId, clientSecret, "https://storage.azure.com/.default"),
       getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default")
     ])
-    if (!targetTenants) destinationTokens.set(destinations[0]!, graphToken)
+    if (!targetTenants) destinationTokens[0] = graphToken
 
     // A shared container can hold other tenants' backups; never restore one of those. Everyone who
     // can write to the backup container is trusted like an Intune admin, so every backup that names
@@ -192,9 +191,9 @@ export async function POST(request: NextRequest) {
     const onProgress = (result: RestoreOutcome) => auditProgress.save?.(result)
     const onSubmitted = (result: RestoreOutcome) => auditProgress.submitted?.(result)
     const targets: Array<{ restorer: Restorer; graphToken: string; targetTenantId?: string }> = targetTenants
-      ? await Promise.all((targetTenants as Array<{ tenantId: string; appId: string }>).map(async (target) => {
+      ? await Promise.all((targetTenants as Array<{ tenantId: string; appId: string }>).map(async (target, index) => {
           const targetToken = await getAccessToken(target.tenantId, target.appId, clientSecret, "https://graph.microsoft.com/.default")
-          destinationTokens.set(target.tenantId.toLowerCase(), targetToken)
+          destinationTokens[index] = targetToken
           return {
             targetTenantId: target.tenantId.toLowerCase(), graphToken: targetToken,
             restorer: new Restorer(graphCaller(targetToken, fetch, { tenant: target.tenantId, refreshToken: () => getAccessToken(target.tenantId, target.appId, clientSecret, "https://graph.microsoft.com/.default", true) }),
@@ -245,7 +244,9 @@ export async function POST(request: NextRequest) {
             auditProgress.save(result)
             auditProgress.save = undefined
             auditProgress.submitted = undefined
-            const entry = { ...result, targetTenantId, retryJobId: jobId }
+            const { auditSourceId: _sourceId, auditPlanned: _planned, auditApplied: _applied,
+              auditApprover: _approver, auditUncertain: _uncertain, auditSteps: _steps, ...outcome } = result
+            const entry = targetTenantId ? { ...outcome, targetTenantId } : { ...result, retryJobId: jobId }
             results.push(entry)
             if (result.partial) partialCount++
             if (result.action === 'unchanged') unchangedCount++

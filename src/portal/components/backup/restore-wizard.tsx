@@ -566,7 +566,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
             ? { targetTenants: targets.map((target) => ({ tenantId: target.tenantId, appId: target.appId })) }
             : {}),
         })
-        completed.push(...(data.details?.results ?? []))
+        completed.push(...(data.details?.results ?? []).map(outcome => ({ ...outcome, retryJobId: data.jobId })))
       }
       const outcomes = mergeOutcomes(previous, completed)
       const handled = outcomes.filter((outcome) => outcome.success).length

@@ -389,6 +389,15 @@ describe("Cloud audit contract", () => {
     }
     const existingDependencies = resources.filter(resource => !audit.includes(resource)).flatMap(resource => resource.dependsOn ?? [])
     expect(existingDependencies.filter(dependency => /audit/i.test(dependency))).toEqual([])
+    const requiredGrants = [
+      "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', variables('container')), 'Microsoft.Authorization/roleAssignments', guid(variables('containerScope'), parameters('automationAccountName'), variables('writerRoleName')))]",
+      "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', variables('outcomeContainer')), 'Microsoft.Authorization/roleAssignments', guid(variables('outcomeContainerScope'), parameters('automationAccountName'), variables('writerRoleName')))]",
+    ]
+    const jobSchedule = "[resourceId('Microsoft.Automation/automationAccounts/jobSchedules', parameters('automationAccountName'), guid(variables('scheduleName'), variables('runbookName')))]"
+    for (const resource of audit) {
+      expect(resource.dependsOn).toEqual(expect.arrayContaining([...requiredGrants, jobSchedule]))
+      if (resource.type !== "Microsoft.Authorization/roleAssignments") expect(resource.dependsOn).toContain("automationVariables")
+    }
     expect(resources.filter(resource => !audit.includes(resource)).every(resource => resource.condition?.includes("not(parameters('auditOnly'))"))).toBe(true)
     expect(template.outputs.pasteIntoTenuVault).toMatchObject({ condition: "[not(parameters('auditOnly'))]" })
     expect(template.parameters.auditOnly).toMatchObject({ type: "bool", defaultValue: false })

@@ -19,13 +19,13 @@ afterEach(() => { vi.unstubAllGlobals(); setMainAuditSink(undefined); setAuditOu
 const snapshotHash = (snapshot: Item) => createHash('sha256').update(JSON.stringify(comparableSnapshot(snapshot))).digest('base64').slice(0, 22)
 
 /** Stubs token, blob and Graph fetches. `blobs` maps blob names to JSON bodies. */
-function stubFetch(blobs: Record<string, Item>, options: { list?: string[]; token?: string; failedSignIn?: string } = {}) {
+function stubFetch(blobs: Record<string, Item>, options: { list?: string[]; token?: string | ((url: URL, init?: RequestInit) => string); failedSignIn?: string } = {}) {
   const graphWrites: string[] = []
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input))
     if (url.hostname === 'login.microsoftonline.com') {
       if (url.pathname.startsWith(`/${options.failedSignIn}/`)) return new Response(null, { status: 401 })
-      return Response.json({ access_token: options.token ?? 'test' })
+      return Response.json({ access_token: typeof options.token === 'function' ? options.token(url, init) : options.token ?? 'test' })
     }
     if (url.hostname.endsWith('.blob.core.windows.net')) {
       if (url.searchParams.get('comp') === 'list') {
@@ -99,6 +99,68 @@ describe('Restore manifest checks', () => {
       eventType: AuditEventType.RESTORE_COMPLETED, user: { id: actor, tenantId: storageTenant },
       job: { status: 'completed', ...(hasDestinationStorage ? {} : { destinationTenantId: destination }), items: [{ outcome: 'created' }] },
     }])
+  })
+
+  it('executes repeated bulk restore destinations in order and audits each entry', async () => {
+    const source = '11111111-1111-4111-8111-111111111111'
+    const repeated = '22222222-2222-4222-8222-222222222222'
+    const other = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'
+    const appId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const alternateAppId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+    const targetTenants = [
+      { tenantId: repeated, appId },
+      { tenantId: repeated, appId: alternateAppId },
+      { tenantId: other, appId },
+    ]
+    const path = `${backupId}/DeviceCategories/Example.json`
+    const graphWrites = stubFetch({ [path]: { displayName: 'Example' } }, {
+      token: (url, init) => {
+        const tid = url.pathname.split('/')[1]
+        const oid = new URLSearchParams(String(init?.body)).get('client_id')
+        return `test.${Buffer.from(JSON.stringify({ tid, oid })).toString('base64url')}.test`
+      },
+    })
+    const fetchAudit = vi.fn<typeof fetch>(async () => new Response(null, { status: 201 }))
+    const storageAccountName = baseBody.storageAccountName
+    setMainAuditSink(new AuditSink({
+      bind: tenantId => tenantId === source
+        ? { tenantId, storageAccountName, user: { id: 'storage-user', email: '', name: 'Storage user' } }
+        : undefined,
+      transport: async () => new AuditStorageService({ storageAccountName, accessToken: '', provisionContainer: false, fetch: fetchAudit }),
+    }))
+
+    const response = await POST(request({ ...baseBody, tenantId: source, appId, restoreType: 'selective',
+      selectedPolicies: [{ path }], targetTenants }))
+    const body = await response.json()
+    expect(response.status).toBe(200)
+    expect(graphWrites).toEqual(Array(3).fill('POST /beta/deviceManagement/deviceCategories'))
+    const graphActors = vi.mocked(fetch).mock.calls.filter(([input]) => new URL(String(input)).hostname === 'graph.microsoft.com')
+      .map(([, init]) => {
+        const token = new Headers(init?.headers).get('authorization')!.split('.')[1]!
+        const { tid, oid } = JSON.parse(Buffer.from(token, 'base64url').toString())
+        return { tenantId: tid, appId: oid }
+      })
+    expect(graphActors).toEqual(targetTenants)
+    expect(body).toEqual({
+      success: true, status: 'Completed', jobId: expect.any(String), message: 'Copied 3 items to 3 tenants; 0 failed',
+      details: {
+        approvalCount: 0, restoredCount: 3, failedCount: 0, partialCount: 0, skippedCount: 0, unchangedCount: 0,
+        duration: expect.any(Number),
+        results: targetTenants.map(({ tenantId }) => ({
+          path, policyId: 'created', policyName: 'Example', success: true, action: 'created', targetTenantId: tenantId,
+          adminLink: { url: 'https://intune.microsoft.com/#view/Microsoft_Intune_DeviceSettings/DevicesMenu/~/deviceCategories', center: 'Intune', exact: false },
+        })),
+      },
+    })
+
+    await vi.waitFor(() => expect(fetchAudit).toHaveBeenCalledTimes(3))
+    const entries = fetchAudit.mock.calls.map(([, init]) => JSON.parse(String(init?.body)).entries[0])
+    expect(new Set(entries.map(entry => entry.id)).size).toBe(3)
+    expect(entries).toMatchObject(targetTenants.map(({ tenantId, appId }) => ({
+      user: { id: appId }, eventType: AuditEventType.RESTORE_COMPLETED,
+      job: { operationId: body.jobId, runId: body.jobId, stage: 'terminal', destinationTenantId: tenantId,
+        status: 'completed', counts: { created: 1 } },
+    })))
   })
 
   it('restores a copy with its assignments from a plain backup that records this tenant', async () => {

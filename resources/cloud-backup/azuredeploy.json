@@ -206,6 +206,12 @@
       "type": "Microsoft.Authorization/roleDefinitions",
       "apiVersion": "2022-04-01",
       "name": "[variables('auditRoleId')]",
+      "dependsOn": [
+        "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', variables('container')), 'Microsoft.Authorization/roleAssignments', guid(variables('containerScope'), parameters('automationAccountName'), variables('writerRoleName')))]",
+        "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', variables('outcomeContainer')), 'Microsoft.Authorization/roleAssignments', guid(variables('outcomeContainerScope'), parameters('automationAccountName'), variables('writerRoleName')))]",
+        "[resourceId('Microsoft.Automation/automationAccounts/jobSchedules', parameters('automationAccountName'), guid(variables('scheduleName'), variables('runbookName')))]",
+        "automationVariables"
+      ],
       "properties": {
         "roleName": "[variables('auditRoleName')]",
         "description": "TenuVault audit writer: reads and creates blobs. Assigned only on the audit container.",
@@ -229,6 +235,12 @@
       "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
       "apiVersion": "2023-01-01",
       "name": "[concat(parameters('storageAccountName'), '/default/', variables('auditContainer'))]",
+      "dependsOn": [
+        "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', variables('container')), 'Microsoft.Authorization/roleAssignments', guid(variables('containerScope'), parameters('automationAccountName'), variables('writerRoleName')))]",
+        "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', variables('outcomeContainer')), 'Microsoft.Authorization/roleAssignments', guid(variables('outcomeContainerScope'), parameters('automationAccountName'), variables('writerRoleName')))]",
+        "[resourceId('Microsoft.Automation/automationAccounts/jobSchedules', parameters('automationAccountName'), guid(variables('scheduleName'), variables('runbookName')))]",
+        "automationVariables"
+      ],
       "properties": { "publicAccess": "None" }
     },
     {
@@ -240,7 +252,10 @@
       "dependsOn": [
         "[resourceId('Microsoft.Authorization/roleDefinitions', variables('auditRoleId'))]",
         "[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]",
-        "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', variables('auditContainer'))]"
+        "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', variables('auditContainer'))]",
+        "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', variables('container')), 'Microsoft.Authorization/roleAssignments', guid(variables('containerScope'), parameters('automationAccountName'), variables('writerRoleName')))]",
+        "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', variables('outcomeContainer')), 'Microsoft.Authorization/roleAssignments', guid(variables('outcomeContainerScope'), parameters('automationAccountName'), variables('writerRoleName')))]",
+        "[resourceId('Microsoft.Automation/automationAccounts/jobSchedules', parameters('automationAccountName'), guid(variables('scheduleName'), variables('runbookName')))]"
       ],
       "properties": {
         "roleDefinitionId": "[resourceId('Microsoft.Authorization/roleDefinitions', variables('auditRoleId'))]",
